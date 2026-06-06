@@ -4,7 +4,7 @@ import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
 import type {
   ProjectContextCapability,
   ProjectDurableObjectContextClient,
-} from "./iterate-context-capability.ts";
+} from "./project-context-capability.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { AppContext } from "~/context.ts";
 import {

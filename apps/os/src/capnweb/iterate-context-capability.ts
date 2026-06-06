@@ -8,32 +8,19 @@ import {
   localProxyCaller,
 } from "./local-proxy-wrapper.js";
 import localProxyWrapperSource from "./local-proxy-wrapper.js?raw";
+import {
+  ProjectContextCapability,
+  type ProjectDurableObjectContextClient,
+  type ProjectWorkerCapability,
+} from "./project-context-capability.ts";
 import { ProjectsCapability } from "./projects-capability.ts";
+import type { ProjectReposCapability } from "./repos-capability.ts";
+import type { ProjectStreamsCapability } from "./streams-capability.ts";
+import type { ProjectWorkspaceCapability } from "./workspace-capability.ts";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
-import type { ProjectCapabilityApi } from "~/domains/projects/durable-objects/project-durable-object.ts";
-import {
-  ensureIterateConfigInfoForProject,
-  getReposCapability,
-  type ReposCapability,
-  type ReposCapabilityEnv,
-} from "~/domains/repos/entrypoints/repo-capability.ts";
-import {
-  getStreamsCapability,
-  type StreamAppendBatchInput,
-  type StreamAppendInput,
-  type StreamListChildrenInput,
-  type StreamPathInput,
-  type StreamReadInput,
-  type StreamsCapability,
-} from "~/domains/streams/entrypoints/streams-capability.ts";
-import type { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 
 type RuntimeContext = Pick<ExecutionContext, "exports" | "waitUntil">;
-
-export type ProjectDurableObjectContextClient = {
-  getCapability(props?: { scopes?: unknown }): ProjectCapabilityApi;
-};
 
 export type ProjectScopes = {
   projects: "all" | string[];
@@ -75,22 +62,6 @@ export type IterateContextRuntime = {
   projects?: ProjectsCapability;
   props: IterateContextProps;
 };
-
-type ReposClient = Pick<
-  ReposCapability,
-  "create" | "createInfo" | "ensureIterateConfigInfo" | "get" | "getInfo" | "list"
->;
-type RepoCreateInput = { projectSlug?: string; slug: string };
-type RepoEnsureIterateConfigInfoInput = { projectSlug: string | null };
-type RepoGetInput = { slug: string };
-type StreamsClient = Pick<
-  StreamsCapability,
-  "append" | "appendBatch" | "create" | "getState" | "list" | "listChildren" | "read"
->;
-type WorkspaceClient = Pick<
-  WorkspaceCapability,
-  "gitAdd" | "gitClone" | "gitCommit" | "gitPush" | "gitStatus" | "readFile" | "writeFile"
->;
 
 export class IterateContextEntrypoint extends WorkerEntrypoint<Env, IterateContextProps> {
   get context() {
@@ -190,97 +161,6 @@ class IterateCapability extends RpcTarget {
       target.entrypoint != null ? worker.getEntrypoint(target.entrypoint) : worker.getEntrypoint();
     this.#dynamicWorkerTargets.set(cacheKey, entrypoint);
     return entrypoint;
-  }
-}
-
-export class ProjectContextCapability extends RpcTarget {
-  readonly #runtime: IterateContextRuntime;
-  readonly #project: ProjectDurableObjectContextClient;
-  readonly #projectId: string;
-  #connections?: ProjectConnectionsCapability;
-  #projectCapability?: ProjectCapabilityApi;
-  #repos?: ProjectReposCapability;
-  #streams?: ProjectStreamsCapability;
-  #workspace?: ProjectWorkspaceCapability;
-  #worker?: ProjectWorkerCapability;
-
-  constructor(input: {
-    project: ProjectDurableObjectContextClient;
-    projectId: string;
-    runtime: IterateContextRuntime;
-  }) {
-    super();
-    this.#project = input.project;
-    this.#projectId = input.projectId;
-    this.#runtime = input.runtime;
-  }
-
-  get repos(): ProjectReposCapability {
-    return (this.#repos ??= new ProjectReposCapability(this.#runtime));
-  }
-
-  get streams(): ProjectStreamsCapability {
-    return (this.#streams ??= new ProjectStreamsCapability(this.#runtime));
-  }
-
-  get workspace(): ProjectWorkspaceCapability {
-    return (this.#workspace ??= new ProjectWorkspaceCapability(this.#runtime));
-  }
-
-  get worker(): ProjectWorkerCapability {
-    return (this.#worker ??= new ProjectWorkerCapability(this.projectCapability()));
-  }
-
-  get connections(): ProjectConnectionsCapability {
-    return (this.#connections ??= new ProjectConnectionsCapability(this.projectCapability()));
-  }
-
-  async describe() {
-    return await this.projectCapability().describe();
-  }
-
-  async fetch(request: Request) {
-    return await this.projectCapability().fetch(request);
-  }
-
-  async getSummary() {
-    return await this.projectCapability().getSummary();
-  }
-
-  async ingressFetch(request: Request) {
-    return await this.projectCapability().ingressFetch(request);
-  }
-
-  async egressFetch(request: Request) {
-    return await this.projectCapability().egressFetch(request);
-  }
-
-  async ingressUrl() {
-    return await this.projectCapability().ingressUrl();
-  }
-
-  async provideCapability(input: { connectionKey: string; rpcTarget: any }) {
-    // This is intentionally named after the capability model rather than the
-    // current storage detail. It registers a caller-owned RPC target under
-    // ctx.project.connections today; the same idea may eventually become the
-    // general project API for publishing short-lived contextual capabilities.
-    return await this.projectCapability().provideCapability(input);
-  }
-
-  private projectCapability() {
-    return (this.#projectCapability ??= this.#project.getCapability({
-      scopes: { projectId: this.#projectId },
-    }));
-  }
-}
-
-export class ProjectConnectionsCapability extends RpcTarget {
-  constructor(private readonly project: ProjectCapabilityApi) {
-    super();
-  }
-
-  get(connectionKey: string) {
-    return this.project.getConnection(connectionKey);
   }
 }
 
@@ -415,15 +295,11 @@ export function createProjectsCapability(input: { context: AppContext }) {
       userId: "root-context",
     },
     context: input.context,
-    createProjectContext: ({ project, projectId, projects }) =>
+    createProjectContext: ({ project, projectId }) =>
       new ProjectContextCapability({
+        context: input.context,
         project,
         projectId,
-        runtime: {
-          context: input.context,
-          projects,
-          props: { scopes: { projects: [projectId] } },
-        },
       }),
   });
 }
@@ -465,191 +341,10 @@ export function createCapnwebAppContext(input: {
   };
 }
 
-class ProjectReposCapability extends RpcTarget {
-  readonly #context: AppContext;
-  readonly #projectId: string;
-
-  constructor(runtime: IterateContextRuntime) {
-    super();
-    this.#context = runtime.context;
-    this.#projectId = requireRuntimeProjectId(runtime);
-  }
-
-  async create(input: RepoCreateInput) {
-    return await this.#repos().create(input);
-  }
-
-  async createInfo(input: RepoCreateInput) {
-    return await this.#repos().createInfo(input);
-  }
-
-  async ensureIterateConfigInfo(input: RepoEnsureIterateConfigInfoInput) {
-    return await ensureIterateConfigInfoForProject({
-      env: this.#context.callableEnv as Pick<ReposCapabilityEnv, "REPO">,
-      projectId: this.#projectId,
-      projectSlug: input.projectSlug,
-    });
-  }
-
-  async get(input: RepoGetInput) {
-    return await this.#repos().get(input);
-  }
-
-  async getInfo(input: RepoGetInput) {
-    return await this.#repos().getInfo(input);
-  }
-
-  async list() {
-    return await this.#repos().list();
-  }
-
-  #repos(): ReposClient {
-    return getReposCapability({
-      exports: this.#context.workerExports,
-      props: { projectId: this.#projectId },
-    });
-  }
-}
-
-class ProjectStreamsCapability extends RpcTarget {
-  readonly #context: AppContext;
-  readonly #projectId: string;
-
-  constructor(runtime: IterateContextRuntime) {
-    super();
-    this.#context = runtime.context;
-    this.#projectId = requireRuntimeProjectId(runtime);
-  }
-
-  async append(input: StreamAppendInput) {
-    return await this.#streams().append(input);
-  }
-
-  async appendBatch(input: StreamAppendBatchInput) {
-    return await this.#streams().appendBatch(input);
-  }
-
-  async create(input: StreamPathInput) {
-    return await this.#streams().create(input);
-  }
-
-  async getState(input: StreamPathInput) {
-    return await this.#streams().getState(input);
-  }
-
-  async list() {
-    return await this.#streams().list();
-  }
-
-  async listChildren(input: StreamListChildrenInput) {
-    return await this.#streams().listChildren(input);
-  }
-
-  async read(input: StreamReadInput) {
-    return await this.#streams().read(input);
-  }
-
-  #streams(): StreamsClient {
-    return getStreamsCapability({
-      exports: this.#context.workerExports,
-      props: {
-        appendPolicy: { mode: "any" },
-        projectId: this.#projectId,
-      },
-    });
-  }
-}
-
-class ProjectWorkspaceCapability extends RpcTarget {
-  readonly #workspace: WorkspaceClient;
-  #git?: ProjectWorkspaceGitCapability;
-
-  constructor(runtime: IterateContextRuntime) {
-    super();
-    const workspaceCapability = runtime.context.workerExports
-      ?.WorkspaceCapability as unknown as (options: {
-      props: { projectId: string; workspaceId: string };
-    }) => WorkspaceClient;
-    if (!workspaceCapability) throw new Error("WorkspaceCapability export is not available.");
-    const projectId = requireRuntimeProjectId(runtime);
-    this.#workspace = workspaceCapability({
-      props: {
-        projectId,
-        workspaceId: "capnweb",
-      },
-    });
-  }
-
-  get git() {
-    return (this.#git ??= new ProjectWorkspaceGitCapability(this.#workspace));
-  }
-
-  async readFile(path: string) {
-    return await this.#workspace.readFile(path);
-  }
-
-  async writeFile(path: string, content: string) {
-    return await this.#workspace.writeFile(path, content);
-  }
-}
-
-class ProjectWorkspaceGitCapability extends RpcTarget {
-  readonly #workspace: WorkspaceClient;
-
-  constructor(workspace: WorkspaceClient) {
-    super();
-    this.#workspace = workspace;
-  }
-
-  async add(input: Record<string, unknown>) {
-    return await this.#workspace.gitAdd(input);
-  }
-
-  async clone(input: Record<string, unknown>) {
-    return await this.#workspace.gitClone(input);
-  }
-
-  async commit(input: Record<string, unknown>) {
-    return await this.#workspace.gitCommit(input);
-  }
-
-  async push(input: Record<string, unknown>) {
-    return await this.#workspace.gitPush(input);
-  }
-
-  async status(input: Record<string, unknown>) {
-    return await this.#workspace.gitStatus(input);
-  }
-}
-
 function mountedPathCaller(context: IterateContext, path: string[]) {
   return localProxyCaller(async (input) => {
     return await context.callMounted([...path, ...input.path], input.args);
   });
-}
-
-class ProjectWorkerCapability extends RpcTarget {
-  constructor(private readonly project: ProjectCapabilityApi) {
-    super();
-    return new Proxy(this, {
-      get(target, prop, receiver) {
-        if (prop === "then") return undefined;
-        if (typeof prop === "symbol" || prop in target) {
-          return Reflect.get(target, prop, receiver);
-        }
-        return async (...args: unknown[]) => {
-          return await target.project.callConfigWorkerFunction({
-            args,
-            functionName: prop,
-          });
-        };
-      },
-    }) as ProjectWorkerCapability;
-  }
-
-  async fetch(request: Request) {
-    return await this.project.fetch(request);
-  }
 }
 
 function installMountedRootMembers(context: IterateContext, mounts: Mount[]) {

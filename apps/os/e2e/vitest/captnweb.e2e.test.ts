@@ -535,7 +535,7 @@ function withIterateFromNode(input: { auth: RootAccessAuth; ingressUrl: string }
   );
   const ctxHandle = project.getIterateContext() as unknown as RpcStub<IterateContext>;
   const ctx = liftLocalProxies(ctxHandle);
-  void ctxHandle.catch((error) => {
+  void Promise.resolve(ctxHandle).catch((error: unknown) => {
     socket.close();
     project[Symbol.dispose]?.();
     throw error;
