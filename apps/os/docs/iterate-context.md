@@ -81,6 +81,11 @@ tree:
 
 ```ts
 using project = await ctx.project;
+await project.provideCapability({
+  connectionKey: "someConnectionKey",
+  rpcTarget: new ToolsForThisTest(),
+});
+
 using connections = await project.connections;
 using target = await connections.get("someConnectionKey");
 await target.someMethod({ value: 1 });

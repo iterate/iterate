@@ -19,7 +19,6 @@ const egressEchoBaseUrl = requireEgressEchoBaseUrl(baseUrl);
 const auth = rootAccessAuth();
 const ROOT_ITERATE_CONTEXT_PREFIX = "/api/captnweb";
 const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
-const PROJECT_CAPNWEB_CONNECTIONS_PATH = "/__iterate/capnweb/connections";
 
 describe("capnweb", () => {
   const testRunSlugPrefix = `captnweb-${crypto.randomUUID().slice(0, 8)}`;
@@ -104,17 +103,16 @@ describe("capnweb", () => {
     });
     const connectionKey = `connection-${uniqueSuffix()}`;
     const connectionMethodName = `method-${uniqueSuffix()}`;
-    await using connection = await withProjectConnectionFromNode({
-      auth,
+    using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
+    using projectContext = await iterate.ctx.project;
+    await projectContext.provideCapability({
       connectionKey,
-      ingressUrl: project.ingressUrl,
-      target: new ProjectConnectionTestTarget({
+      rpcTarget: new ProjectConnectionTestTarget({
         marker: connectionKey,
         methodName: connectionMethodName,
       }),
     });
 
-    using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
     const fromNode = await runCapnwebFunctionFromNode({
       ctx: iterate.ctx,
       fn: callProjectConnection,
@@ -541,35 +539,6 @@ function withIterateFromNode(input: { auth: RootAccessAuth; ingressUrl: string }
     onWsFrame(_frame: unknown) {},
     [Symbol.dispose]() {
       ctx[Symbol.dispose]?.();
-      socket.close();
-    },
-  };
-}
-
-async function withProjectConnectionFromNode(input: {
-  auth: RootAccessAuth;
-  connectionKey: string;
-  ingressUrl: string;
-  target: RpcTarget;
-}): Promise<Disposable> {
-  const { headers, wsUrl } = projectCapnwebWebSocketRequest({
-    auth: input.auth,
-    ingressUrl: input.ingressUrl,
-    path: PROJECT_CAPNWEB_CONNECTIONS_PATH,
-  });
-  wsUrl.searchParams.set("key", input.connectionKey);
-  const socket = new WebSocket(wsUrl.toString(), { headers });
-  const session = newWebSocketRpcSession(
-    socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
-    input.target,
-  );
-  await new Promise<void>((resolve, reject) => {
-    socket.once("open", resolve);
-    socket.once("error", reject);
-  });
-  return {
-    [Symbol.dispose]() {
-      session[Symbol.dispose]?.();
       socket.close();
     },
   };

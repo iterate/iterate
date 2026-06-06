@@ -259,6 +259,14 @@ export class ProjectContextCapability extends RpcTarget {
     return await this.projectCapability().ingressUrl();
   }
 
+  async provideCapability(input: { connectionKey: string; rpcTarget: any }) {
+    // This is intentionally named after the capability model rather than the
+    // current storage detail. It registers a caller-owned RPC target under
+    // ctx.project.connections today; the same idea may eventually become the
+    // general project API for publishing short-lived contextual capabilities.
+    return await this.projectCapability().provideCapability(input);
+  }
+
   private projectCapability() {
     return (this.#projectCapability ??= this.#project.getCapability({
       scopes: { projectId: this.#projectId },

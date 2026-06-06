@@ -65,7 +65,6 @@ export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/wor
 const CAPTUN_TUNNEL_ROUTE_PREFIX = "/__iterate/captun";
 const EGRESS_ECHO_PATH = "/api/captnweb/egress-echo";
 const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
-const PROJECT_CAPNWEB_CONNECTIONS_PATH = "/__iterate/capnweb/connections";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 const config = parseAppConfigFromEnv({
@@ -130,9 +129,8 @@ export default {
         });
 
         if (ingressMatch) {
-          const pathname = new URL(request.url).pathname;
           if (
-            (pathname === PROJECT_CAPNWEB_PATH || pathname === PROJECT_CAPNWEB_CONNECTIONS_PATH) &&
+            new URL(request.url).pathname === PROJECT_CAPNWEB_PATH &&
             ingressMatch.rule.projectId
           ) {
             return await env.PROJECT.getByName(

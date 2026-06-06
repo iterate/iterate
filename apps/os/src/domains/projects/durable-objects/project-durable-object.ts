@@ -2,7 +2,7 @@ import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createRpcTargetClass } from "@iterate-com/shared/capabilities";
-import { newWebSocketRpcSession, newWorkersRpcResponse, type RpcStub } from "capnweb";
+import { newWorkersRpcResponse, type RpcStub } from "capnweb";
 import { acceptCaptunTunnel, type Fetcher } from "captun";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
@@ -106,6 +106,7 @@ export type ProjectCapabilityApi = Pick<
   | "getSummary"
   | "ingressFetch"
   | "ingressUrl"
+  | "provideCapability"
 > & {
   getCapability(props?: { scopes?: unknown }): ProjectCapabilityApi;
 };
@@ -217,7 +218,6 @@ const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.js";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-04-27";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
-const PROJECT_CAPNWEB_CONNECTIONS_PATH = "/__iterate/capnweb/connections";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 type ProjectConfigWorkspaceName = {
@@ -423,6 +423,34 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return connection.target.dup();
   }
 
+  provideCapability(input: {
+    connectionKey: string;
+    rpcTarget: RpcStub<ProjectCapnwebConnectionTarget>;
+  }) {
+    const connectionKey = input.connectionKey.trim();
+    if (!connectionKey) throw new Error("Project capability connection key is required.");
+
+    // Cap'n Web may release the argument stub when provideCapability() returns.
+    // Store a duplicate so the provided capability remains callable until the
+    // provider's project Cap'n Web session breaks or this key is replaced.
+    const target = input.rpcTarget.dup();
+    const connection: ProjectCapnwebConnection = {
+      target,
+      [Symbol.dispose]: () => {
+        if (this.#capnwebConnections.get(connectionKey) === connection) {
+          this.#capnwebConnections.delete(connectionKey);
+        }
+        target[Symbol.dispose]?.();
+      },
+    };
+
+    this.#capnwebConnections.get(connectionKey)?.[Symbol.dispose]();
+    this.#capnwebConnections.set(connectionKey, connection);
+    target.onRpcBroken?.(() => connection[Symbol.dispose]());
+
+    return { connectionKey, ok: true };
+  }
+
   async getIterateContext(): Promise<IterateContext> {
     await this.ensureStarted();
     const summary = this.requireSummary();
@@ -592,54 +620,10 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   }
 
   private async handleProjectCapnwebFetch(request: Request): Promise<Response | null> {
-    const url = new URL(request.url);
-    if (url.pathname === PROJECT_CAPNWEB_CONNECTIONS_PATH) {
-      return this.acceptProjectCapnwebConnection(request, url);
-    }
-    if (url.pathname !== PROJECT_CAPNWEB_PATH) return null;
+    if (new URL(request.url).pathname !== PROJECT_CAPNWEB_PATH) return null;
     const principal = authenticateAdminApiSecret({ config: this.getAppConfig() }, request);
     if (!principal) return new Response("Unauthorized", { status: 401 });
     return newWorkersRpcResponse(request, await this.getIterateContext());
-  }
-
-  private acceptProjectCapnwebConnection(request: Request, url: URL): Response {
-    const principal = authenticateAdminApiSecret({ config: this.getAppConfig() }, request);
-    if (!principal) return new Response("Unauthorized", { status: 401 });
-
-    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-      return Response.json(
-        { error: "Project Cap'n Web connections require a WebSocket upgrade." },
-        { status: 400 },
-      );
-    }
-
-    const connectionKey = url.searchParams.get("key")?.trim();
-    if (!connectionKey) {
-      return Response.json({ error: "Missing project Cap'n Web connection key." }, { status: 400 });
-    }
-
-    const pair = new WebSocketPair();
-    const [client, server] = Object.values(pair);
-    server.accept();
-
-    const target = newWebSocketRpcSession<ProjectCapnwebConnectionTarget>(server);
-    const connection: ProjectCapnwebConnection = {
-      target,
-      [Symbol.dispose]: () => {
-        if (this.#capnwebConnections.get(connectionKey) === connection) {
-          this.#capnwebConnections.delete(connectionKey);
-        }
-        target[Symbol.dispose]();
-        server.close();
-      },
-    };
-
-    this.#capnwebConnections.get(connectionKey)?.[Symbol.dispose]();
-    this.#capnwebConnections.set(connectionKey, connection);
-    server.addEventListener("close", () => connection[Symbol.dispose]());
-    server.addEventListener("error", () => connection[Symbol.dispose]());
-
-    return new Response(null, { status: 101, webSocket: client });
   }
 
   private acceptProjectEgressInterceptTunnel(request: Request): Response {
