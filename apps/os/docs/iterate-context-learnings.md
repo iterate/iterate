@@ -218,3 +218,15 @@ The Slack `!debug` reply links to the project stream viewer at
 `/projects/<projectSlug>/streams/<streamPath>`, not an organization settings
 route. Tests should assert that direct stream URL and avoid depending on older
 org-scoped navigation.
+
+## `/run` snippets need the explicit-resource-management helpers
+
+Vitest lowers `using` declarations inside test helper functions before
+`fn.toString()` reaches the `/run` dynamic worker. The serialized function body
+therefore references helper globals such as `__using()` and `__callDispose()`,
+but those helpers are not included in the function string.
+
+The `/run` wrapper must provide those helpers if we want the same function body
+to run in Node and in Cloudflare dynamic workers. Local in-process proxy values
+created only for `/run` should expose a no-op `Symbol.dispose`; real RPC stubs
+still use their own disposal behavior.

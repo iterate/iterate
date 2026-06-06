@@ -503,14 +503,9 @@ async function describeProjectThroughProjects({
   ctx,
   vars,
 }: CapnwebFunctionInput<{ projectId: string }>) {
-  const projects = await ctx.projects;
-  const project = await projects.get(vars.projectId);
-  try {
-    return await project.describe();
-  } finally {
-    project[Symbol.dispose]?.();
-    projects[Symbol.dispose]?.();
-  }
+  using projects = await ctx.projects;
+  using project = await projects.get(vars.projectId);
+  return await project.describe();
 }
 
 async function updateIterateConfigWorker({
@@ -522,56 +517,44 @@ async function updateIterateConfigWorker({
   projectId: string;
   workerSource: string;
 }>) {
-  const projects = await ctx.projects;
-  const disposables = [];
-  try {
-    const project = await projects.get(vars.projectId);
-    disposables.push(project);
-    const repos = await project.repos;
-    disposables.push(repos);
-    const workspace = await project.workspace;
-    disposables.push(workspace);
-    const git = await workspace.git;
-    disposables.push(git);
-    const repo = await repos.ensureIterateConfigInfo({ projectSlug: null });
+  using projects = await ctx.projects;
+  using project = await projects.get(vars.projectId);
+  using repos = await project.repos;
+  using workspace = await project.workspace;
+  using git = await workspace.git;
+  const repo = await repos.ensureIterateConfigInfo({ projectSlug: null });
 
-    await git.clone({
-      branch: repo.defaultBranch,
-      depth: 1,
-      dir: vars.dir,
-      url: repo.remote,
-      ...repo.credentials,
-    });
-    await workspace.writeFile(vars.dir + "/worker.js", vars.workerSource);
-    await git.add({ dir: vars.dir, filepath: "worker.js" });
-    await git.commit({
-      author: { name: "Capnweb", email: "captnweb-e2e@iterate.com" },
-      dir: vars.dir,
-      message: "Add capnweb worker proof from /run",
-    });
-    await git.push({
-      dir: vars.dir,
-      ref: repo.defaultBranch,
-      remote: "origin",
-      ...repo.credentials,
-    });
+  await git.clone({
+    branch: repo.defaultBranch,
+    depth: 1,
+    dir: vars.dir,
+    url: repo.remote,
+    ...repo.credentials,
+  });
+  await workspace.writeFile(vars.dir + "/worker.js", vars.workerSource);
+  await git.add({ dir: vars.dir, filepath: "worker.js" });
+  await git.commit({
+    author: { name: "Capnweb", email: "captnweb-e2e@iterate.com" },
+    dir: vars.dir,
+    message: "Add capnweb worker proof from /run",
+  });
+  await git.push({
+    dir: vars.dir,
+    ref: repo.defaultBranch,
+    remote: "origin",
+    ...repo.credentials,
+  });
 
-    const worker = await project.worker;
-    disposables.push(worker);
-    const calledTool = await (worker as unknown as ProjectConfigWorkerTestApi).someFunction({
-      echo: vars.marker,
-    });
+  using worker = await project.worker;
+  const calledTool = await (worker as unknown as ProjectConfigWorkerTestApi).someFunction({
+    echo: vars.marker,
+  });
 
-    return {
-      calledTool,
-      project: await project.describe(),
-      repoSlug: repo.slug,
-    };
-  } finally {
-    for (const disposable of disposables.reverse()) {
-      disposable[Symbol.dispose]?.();
-    }
-  }
+  return {
+    calledTool,
+    project: await project.describe(),
+    repoSlug: repo.slug,
+  };
 }
 
 async function fetchProjectIngressAndEgress({
@@ -644,71 +627,60 @@ async function exerciseMountedContext({
   marker: string;
   streamPath: string;
 }>) {
-  const disposables = [];
-  try {
-    const tools = await ctx.tools;
-    disposables.push(tools);
-    const targetResult = await tools.echo({ marker: vars.marker });
-    const nestedResult = await tools.nested.describe({ marker: vars.marker });
+  using tools = await ctx.tools;
+  const targetResult = await tools.echo({ marker: vars.marker });
+  const nestedResult = await tools.nested.describe({ marker: vars.marker });
 
-    const methodResult = await ctx.rootEcho({ marker: vars.marker });
+  const methodResult = await ctx.rootEcho({ marker: vars.marker });
 
-    const mountedStreams = await ctx.mountedStreams;
-    disposables.push(mountedStreams);
-    const mountedAppendResult = await mountedStreams.append({
-      streamPath: vars.streamPath,
-      event: {
-        type: vars.eventType,
-        payload: { marker: vars.marker, source: "mount-shortcut" },
-      },
-    });
-    const eventsByShortcut = await mountedStreams.read({
-      afterOffset: "start",
-      streamPath: vars.streamPath,
-    });
+  using mountedStreams = await ctx.mountedStreams;
+  const mountedAppendResult = await mountedStreams.append({
+    streamPath: vars.streamPath,
+    event: {
+      type: vars.eventType,
+      payload: { marker: vars.marker, source: "mount-shortcut" },
+    },
+  });
+  const eventsByShortcut = await mountedStreams.read({
+    afterOffset: "start",
+    streamPath: vars.streamPath,
+  });
 
-    const listedByShortcut = await mountedStreams.list();
-    const listedByMethod = await ctx.listStreams();
-    const appendResult = await ctx.append({
-      streamPath: vars.streamPath,
-      event: {
-        type: `${vars.eventType}/method`,
-        payload: { marker: vars.marker, source: "ctx-method-mount" },
-      },
-    });
-    const eventsByMethod = await mountedStreams.read({
-      afterOffset: "start",
-      streamPath: vars.streamPath,
-    });
+  const listedByShortcut = await mountedStreams.list();
+  const listedByMethod = await ctx.listStreams();
+  const appendResult = await ctx.append({
+    streamPath: vars.streamPath,
+    event: {
+      type: `${vars.eventType}/method`,
+      payload: { marker: vars.marker, source: "ctx-method-mount" },
+    },
+  });
+  const eventsByMethod = await mountedStreams.read({
+    afterOffset: "start",
+    streamPath: vars.streamPath,
+  });
 
-    const sdk = await ctx.sdk;
-    disposables.push(sdk);
-    const catchallResult = await sdk.chat.postMessage({ text: vars.marker });
-    const nestedSdk = await ctx.some.path.sdk;
-    disposables.push(nestedSdk);
-    const nestedCatchallResult = await nestedSdk.chat.postMessage({
-      text: vars.marker,
-      via: "nested",
-    });
+  using sdk = await ctx.sdk;
+  const catchallResult = await sdk.chat.postMessage({ text: vars.marker });
+  using nestedSdk = await ctx.some.path.sdk;
+  const nestedCatchallResult = await nestedSdk.chat.postMessage({
+    text: vars.marker,
+    via: "nested",
+  });
 
-    return {
-      appendResult,
-      catchallResult,
-      eventsByMethod,
-      eventsByShortcut,
-      nestedCatchallResult,
-      listedByMethod: listedByMethod.map((stream: { name: string }) => stream.name),
-      listedByShortcut: listedByShortcut.map((stream: { name: string }) => stream.name),
-      methodResult,
-      mountedAppendResult,
-      nestedResult,
-      targetResult,
-    };
-  } finally {
-    for (const disposable of disposables.reverse()) {
-      disposable[Symbol.dispose]?.();
-    }
-  }
+  return {
+    appendResult,
+    catchallResult,
+    eventsByMethod,
+    eventsByShortcut,
+    nestedCatchallResult,
+    listedByMethod: listedByMethod.map((stream: { name: string }) => stream.name),
+    listedByShortcut: listedByShortcut.map((stream: { name: string }) => stream.name),
+    methodResult,
+    mountedAppendResult,
+    nestedResult,
+    targetResult,
+  };
 }
 
 async function runCapnwebFunctionFromNode<Vars extends Record<string, unknown>, Result>(input: {
