@@ -113,7 +113,7 @@ describe("capnweb", () => {
           const streamPath = url.searchParams.get("streamPath");
           const eventType = url.searchParams.get("eventType");
           const marker = url.searchParams.get("marker");
-          const streams = await ctx.streams;
+          using streams = await ctx.streams;
           const beforeStreams = await streams.list();
           const listUntilStreamAppears = async () => {
             for (let attempt = 0; attempt < 8; attempt++) {
@@ -279,7 +279,7 @@ describe("capnweb", () => {
 
         async echo(input) {
           const ctx = await this.env.ITERATE.context;
-          const streams = await ctx.streams;
+          using streams = await ctx.streams;
           const streamList = await streams.list();
           return {
             kind: "target-method",
@@ -571,57 +571,53 @@ async function fetchProjectIngressAndEgress({
   ingressUrl: string;
   secretKey: string;
 }>) {
-  const project = await ctx.project;
-  try {
-    const expectedHomepageText = "Hello from the project config worker";
-    let ingress = { status: 0, text: "" };
-    for (let attempt = 0; attempt < 12; attempt++) {
-      const response = await project.fetch(new Request(vars.ingressUrl + "/"));
-      ingress = {
-        status: response.status,
-        text: await response.text(),
-      };
-      if (ingress.status === 200 && ingress.text === expectedHomepageText) break;
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
-    }
-
-    if (ingress.status !== 200 || ingress.text !== expectedHomepageText) {
-      throw new Error(
-        `Expected project fetch to return default homepage, got ${ingress.status}: ${ingress.text}`,
-      );
-    }
-
-    const headerName = "x-iterate-example-secret";
-    const secretReference = `Bearer getSecret({ key: ${JSON.stringify(vars.secretKey)} })`;
-    const egressResponse = await project.egressFetch(
-      new Request(vars.echoUrl, {
-        headers: {
-          authorization: `Bearer ${vars.echoAuthToken}`,
-          [headerName]: secretReference,
-        },
-      }),
-    );
-    const body = (await egressResponse.json()) as {
-      headers?: Record<string, string | string[] | undefined>;
-      url?: string;
+  using project = await ctx.project;
+  const expectedHomepageText = "Hello from the project config worker";
+  let ingress = { status: 0, text: "" };
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const response = await project.fetch(new Request(vars.ingressUrl + "/"));
+    ingress = {
+      status: response.status,
+      text: await response.text(),
     };
-    const echoedHeader = body.headers?.[headerName] ?? body.headers?.["X-Iterate-Example-Secret"];
-    const echoedSecretHeader = Array.isArray(echoedHeader)
-      ? echoedHeader.join(", ")
-      : String(echoedHeader ?? "");
-
-    return {
-      egress: {
-        echoedSecretHeader,
-        echoUrl: body.url,
-        secretReferenceWasSubstituted: echoedSecretHeader !== secretReference,
-        status: egressResponse.status,
-      },
-      ingress,
-    };
-  } finally {
-    project[Symbol.dispose]?.();
+    if (ingress.status === 200 && ingress.text === expectedHomepageText) break;
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
+
+  if (ingress.status !== 200 || ingress.text !== expectedHomepageText) {
+    throw new Error(
+      `Expected project fetch to return default homepage, got ${ingress.status}: ${ingress.text}`,
+    );
+  }
+
+  const headerName = "x-iterate-example-secret";
+  const secretReference = `Bearer getSecret({ key: ${JSON.stringify(vars.secretKey)} })`;
+  const egressResponse = await project.egressFetch(
+    new Request(vars.echoUrl, {
+      headers: {
+        authorization: `Bearer ${vars.echoAuthToken}`,
+        [headerName]: secretReference,
+      },
+    }),
+  );
+  const body = (await egressResponse.json()) as {
+    headers?: Record<string, string | string[] | undefined>;
+    url?: string;
+  };
+  const echoedHeader = body.headers?.[headerName] ?? body.headers?.["X-Iterate-Example-Secret"];
+  const echoedSecretHeader = Array.isArray(echoedHeader)
+    ? echoedHeader.join(", ")
+    : String(echoedHeader ?? "");
+
+  return {
+    egress: {
+      echoedSecretHeader,
+      echoUrl: body.url,
+      secretReferenceWasSubstituted: echoedSecretHeader !== secretReference,
+      status: egressResponse.status,
+    },
+    ingress,
+  };
 }
 
 async function exerciseMountedContext({
