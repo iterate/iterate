@@ -185,6 +185,26 @@ async function callSlackStyle(input: { args: unknown[]; target: Record<string, u
 export class ConstructorProxyEntrypoint extends WorkerEntrypoint {
   constructor(ctx: never, env: never) {
     super(ctx, env);
+    // POC only: this returns a Proxy from a WorkerEntrypoint constructor to
+    // discover whether a dynamic/remote WorkerEntrypoint can act as a catchall
+    // RPC target without predeclared prototype methods.
+    //
+    // Effect:
+    //   entrypoint.slack.chat.postMessage({ text: "hi" })
+    // records path ["slack", "chat", "postMessage"] and the final call args
+    // via createCallablePathProxy(...).
+    //
+    // This is intentionally not the production design. Production dynamic
+    // mounts keep the dynamic worker owned by the parent with the loader
+    // binding and forward calls through explicit RpcTarget methods, because
+    // server-side Proxy-wrapped RpcTarget/WorkerEntrypoint behavior has had
+    // runtime-specific edge cases.
+    //
+    // References:
+    // - Dynamic Workers API: https://developers.cloudflare.com/dynamic-workers/api-reference/
+    // - Workers RPC docs: https://developers.cloudflare.com/workers/runtime-apis/rpc/
+    // - Server-side Proxy/RpcTarget limitation thread:
+    //   https://github.com/cloudflare/workerd/issues/3184
     return createCatchallProxy([], this) as ConstructorProxyEntrypoint;
   }
 }
@@ -192,6 +212,15 @@ export class ConstructorProxyEntrypoint extends WorkerEntrypoint {
 class ConstructorProxyRpcTarget extends RpcTarget {
   constructor() {
     super();
+    // POC only: same catchall experiment as ConstructorProxyEntrypoint, but for
+    // a plain RpcTarget. The returned Proxy lets the test compare whether
+    // native RpcTarget and WorkerEntrypoint behave the same when the actual
+    // exported object is Proxy-wrapped.
+    //
+    // References:
+    // - Workers RPC docs: https://developers.cloudflare.com/workers/runtime-apis/rpc/
+    // - Server-side Proxy/RpcTarget limitation thread:
+    //   https://github.com/cloudflare/workerd/issues/3184
     return createCatchallProxy([], this) as ConstructorProxyRpcTarget;
   }
 }
@@ -203,6 +232,19 @@ class GetterProxyRpcTarget extends RpcTarget {
 }
 
 function createCatchallProxy(path: string[], target: object): object {
+  // POC only: catchall object wrapper. Real members of the target win, unknown
+  // properties become a callable recorded path.
+  //
+  // Effect:
+  //   proxy.some.path.method(1, 2)
+  // returns:
+  //   { path: ["some", "path", "method"], args: [1, 2] }
+  //
+  // References:
+  // - Workers RPC docs: https://developers.cloudflare.com/workers/runtime-apis/rpc/
+  // - Cap'n Web README: https://github.com/cloudflare/capnweb
+  // - Server-side Proxy/RpcTarget limitation thread:
+  //   https://github.com/cloudflare/workerd/issues/3184
   return new Proxy(target, {
     get(innerTarget, prop, receiver) {
       if (typeof prop === "symbol" || prop in innerTarget) {
@@ -215,6 +257,18 @@ function createCatchallProxy(path: string[], target: object): object {
 
 function createCallablePathProxy(path: string[]): (...args: unknown[]) => unknown {
   const fn = () => undefined;
+  // POC only: infinite local SDK path. Each property read extends `path`; the
+  // final function call returns the recorded path and args. `then` is
+  // deliberately undefined so await/promise assimilation does not accidentally
+  // treat the path recorder as a Promise.
+  //
+  // This is the minimal experiment behind the production Slack-style requirement:
+  //   ctx.slack.chat.postMessage(...)
+  // where the Slack hierarchy is not known ahead of time.
+  //
+  // References:
+  // - Workers RPC docs: https://developers.cloudflare.com/workers/runtime-apis/rpc/
+  // - Cap'n Web README: https://github.com/cloudflare/capnweb
   return new Proxy(fn, {
     get(_target, prop) {
       if (typeof prop === "symbol") return undefined;

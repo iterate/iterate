@@ -66,6 +66,20 @@ export class EvlogHandlerPlugin<T extends EvlogHandlerContext> implements Standa
         return output;
       }
 
+      // @orpc/shared's overlayProxy returns a Proxy-like overlay that keeps the
+      // original async iterator object's public surface while replacing the
+      // iterator behavior with mapEventIterator(...). We use it here so callers
+      // still see the same streamed oRPC response object, but errors raised
+      // while consuming that stream are logged with the request/procedure
+      // context above. Without the overlay, we would either lose non-iterator
+      // members from the original output or have to manually mirror whatever
+      // shape oRPC returns.
+      //
+      // This is not a Workers RPC/Cap'n Web capability proxy; it is an oRPC
+      // client-side stream wrapper. The nearby Cap'n Web code uses the same
+      // JavaScript Proxy mechanism for capability ergonomics, documented here:
+      // - Workers RPC docs: https://developers.cloudflare.com/workers/runtime-apis/rpc/
+      // - Cap'n Web README: https://github.com/cloudflare/capnweb
       return overlayProxy(
         output,
         mapEventIterator(output, {

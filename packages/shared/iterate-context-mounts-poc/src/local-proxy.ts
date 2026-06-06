@@ -11,6 +11,22 @@ export function createLocalCtxProxy(ctx: IterateContextCapability, mounts: Mount
 
   function createPathProxy(basePath: string[]): object {
     const callable = async (...args: unknown[]) => ctx.callMounted(basePath, args);
+    // POC only: local authoring path recorder. Unknown property reads append to
+    // basePath; the final function call forwards that path and args to
+    // ctx.callMounted(...).
+    //
+    // Effect:
+    //   proxy.tools.echo("hi")
+    // calls:
+    //   ctx.callMounted(["tools", "echo"], ["hi"])
+    //
+    // Returning undefined for `then` is mandatory because JavaScript await and
+    // Promise resolution probe that property. If this proxy were thenable,
+    // `await proxy.tools` would accidentally become a mounted call.
+    //
+    // References:
+    // - Workers RPC docs: https://developers.cloudflare.com/workers/runtime-apis/rpc/
+    // - Cap'n Web README: https://github.com/cloudflare/capnweb
     return new Proxy(callable, {
       get(_target, prop) {
         if (prop === "then") return undefined;
@@ -20,6 +36,19 @@ export function createLocalCtxProxy(ctx: IterateContextCapability, mounts: Mount
     });
   }
 
+  // POC only: root context overlay. Built-in properties are read from the real
+  // IterateContextCapability first. If a root name belongs to a function mount,
+  // the proxy returns a function that directly calls ctx.callMounted([root]).
+  // If a root name belongs to an object/path-dispatch mount, it returns the
+  // path recorder above.
+  //
+  // This demonstrates the ergonomics we later narrowed in production: built-in
+  // roots should remain real RpcTarget/WorkerEntrypoint stubs, and only
+  // dynamic/unknown mounted roots need a local path recorder.
+  //
+  // References:
+  // - Dynamic Workers API: https://developers.cloudflare.com/dynamic-workers/api-reference/
+  // - Workers RPC docs: https://developers.cloudflare.com/workers/runtime-apis/rpc/
   return new Proxy(
     {},
     {
