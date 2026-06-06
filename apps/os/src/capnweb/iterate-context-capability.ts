@@ -5,10 +5,7 @@ import { createD1Client } from "sqlfu";
 import { ProjectsCapability } from "./projects-capability.ts";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
-import {
-  getProjectDurableObjectName,
-  type ProjectCapabilityApi,
-} from "~/domains/projects/durable-objects/project-durable-object.ts";
+import type { ProjectCapabilityApi } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import {
   ensureIterateConfigInfoForProject,
   getReposCapability,
@@ -104,8 +101,6 @@ export type ProjectsCapabilityClient = {
 
 export type IterateContextRuntime = {
   context: AppContext;
-  project?: ProjectDurableObjectContextClient;
-  projectId?: string;
   projects?: ProjectsCapabilityClient;
   props: IterateContextProps;
 };
@@ -137,16 +132,8 @@ export class IterateContextEntrypoint extends WorkerEntrypoint<Env, IterateConte
       method: "CAPNWEB",
       path: "capnweb://iterate-context-entrypoint",
     });
-    const projectId = singleProjectIdFromScopes(workerCtx.props.scopes);
-    const project = projectId
-      ? (this.env.PROJECT.getByName(
-          getProjectDurableObjectName(projectId),
-        ) as unknown as ProjectDurableObjectContextClient)
-      : undefined;
     return createIterateContext({
       context: appContext,
-      project,
-      projectId: projectId ?? undefined,
       projects: createProjectsCapability({
         context: appContext,
       }),
@@ -482,8 +469,6 @@ export function createProjectsCapability(input: { context: AppContext }) {
         projectId,
         runtime: {
           context: input.context,
-          project,
-          projectId,
           projects,
           props: { scopes: { projects: [projectId] } },
         },
@@ -919,7 +904,7 @@ export function singleProjectIdFromScopes(scopes: ProjectScopes): string | null 
 }
 
 function requireRuntimeProjectId(runtime: IterateContextRuntime) {
-  const projectId = runtime.projectId ?? singleProjectIdFromScopes(runtime.props.scopes);
+  const projectId = singleProjectIdFromScopes(runtime.props.scopes);
   if (!projectId) {
     throw new Error("This capability requires an IterateContext scoped to exactly one project.");
   }
