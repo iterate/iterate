@@ -233,11 +233,11 @@ still use their own disposal behavior.
 
 ## Local SDK proxies must be marker-only
 
-The helper that turns a catchall mount into `ctx.sdk.chat.postMessage(...)`
-must not broadly wrap every object and function returned by Cap'n Web or
-Workers RPC. Ordinary RPC stubs already have runtime-specific receiver and
-method-call behavior. Rebinding those functions can break mounted prototype
-methods with errors such as:
+The helper that turns a marker-returning target into
+`ctx.sdk.chat.postMessage(...)` must not broadly wrap every object and function
+returned by Cap'n Web or Workers RPC. Ordinary RPC stubs already have
+runtime-specific receiver and method-call behavior. Rebinding those functions
+can break mounted prototype methods with errors such as:
 
 ```text
 TypeError: this.callMounted is not a function
@@ -248,6 +248,13 @@ server-side marker from `localProxyCaller(...)` becomes a local path proxy. That
 keeps `using sdk = await ctx.sdk` and `await sdk.chat.postMessage(...)`
 ergonomic without changing the semantics of built-in calls like
 `await ctx.append(...)` or `await ctx.projects.get(id)`.
+
+SDK-shaped mounts do not need a separate wildcard mount mode. A normal mounted
+target can expose a getter such as `get sdk() { return localProxyCaller(...) }`,
+and the mount resolver can pass the path remainder into that marker. This works
+for root shortcuts like `ctx.sdk.chat.postMessage(...)` and nested shortcuts like
+`ctx.some.path.sdk.chat.postMessage(...)`; the most-specific mount lookup still
+selects the correct target.
 
 The marker's `call` should be a plain function, not a tiny `RpcTarget` with an
 `invoke()` method. Functions already cross Cap'n Web and Workers RPC by

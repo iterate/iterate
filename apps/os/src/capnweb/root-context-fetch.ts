@@ -61,7 +61,12 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
 
   return /* js */ `
   import { WorkerEntrypoint } from "cloudflare:workers";
-  import { liftLocalProxies, localProxyCaller } from "./local-proxy-wrapper.js";
+  import {
+    callLocalProxyCaller,
+    isLocalProxyCaller,
+    liftLocalProxies,
+    localProxyCaller,
+  } from "./local-proxy-wrapper.js";
 
   const snippet = (${input.functionSource});
   const props = ${JSON.stringify(input.props)};
@@ -146,6 +151,18 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
     );
   }
 
+  function exactRootTargetMount(rootName) {
+    return (props.mounts ?? []).find(
+      (mount) =>
+        mount.target.type === "dynamic-worker" &&
+        mount.path.length === 1 &&
+        mount.path[0] === rootName &&
+        (mount.invoke ?? "target") === "target" &&
+        mount.target.call &&
+        mount.target.call.length > 0,
+    );
+  }
+
   function targetKey(target) {
     return JSON.stringify({
       entrypoint: target.entrypoint,
@@ -164,22 +181,32 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
     return exported;
   }
 
-  async function invokeTargetCall(target, call, args) {
+  function resolveTargetCall(target, call) {
     let current = target;
-    for (let index = 0; index < call.length; index++) {
-      const step = call[index];
-      const isLast = index === call.length - 1;
+    for (const step of call) {
+      if (current == null) throw new Error("Cannot resolve target call through " + String(current));
       if (typeof step === "string") {
-        const value = current[step];
-        if (isLast) return await value.apply(current, args);
-        current = value;
+        const parent = current;
+        const value = parent[step];
+        current = typeof value === "function" ? value.bind(parent) : value;
         continue;
       }
-      const result = current[step.method].apply(current, step.args ?? []);
-      if (isLast) return args.length > 0 ? await result(...args) : await result;
-      current = result;
+      const method = current[step.method];
+      if (typeof method !== "function") throw new Error("Target method " + step.method + " is not callable.");
+      current = method.apply(current, step.args ?? []);
     }
-    return await current(...args);
+    return current;
+  }
+
+  async function invokeResolvedMountTarget(target, remainder, args, path) {
+    if (isLocalProxyCaller(target)) {
+      return await callLocalProxyCaller(target, { path: remainder, args });
+    }
+    const method = remainder.length > 0 ? resolveTargetCall(target, remainder) : target;
+    if (typeof method !== "function") {
+      throw new Error("Mounted path " + path.join(".") + " did not resolve to a function.");
+    }
+    return await method(...args);
   }
 
   function ctxWithLocalDynamicMounts(host, ctx) {
@@ -191,6 +218,10 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
           // worker to another. The parent still owns the run worker, but /run
           // executes user dynamic mounts in this same isolate so snippets can
           // call ctx.tools.echo() and ctx.sdk.chat.postMessage() normally.
+          const rootMount = exactRootTargetMount(prop);
+          if (rootMount) {
+            return liftLocalProxies(host.getDynamicMountRoot(rootMount));
+          }
           return liftLocalProxies(
             localProxyCaller(({ path, args }) => host.callDynamicMount([prop, ...path], args)),
           );
@@ -214,15 +245,18 @@ mountModules.set(${JSON.stringify(targetKey)}, mountModule${index});`;
       return localTarget;
     }
 
+    getDynamicMountRoot(mount) {
+      const target = this.localDynamicWorkerTarget(mount.target);
+      return resolveTargetCall(target, mount.target.call ?? []);
+    }
+
     async callDynamicMount(path, args) {
       const mount = dynamicMountForPath(path);
       if (!mount) throw new Error("No dynamic worker mount registered for " + path.join("."));
       const remainder = path.slice(mount.path.length);
       const target = this.localDynamicWorkerTarget(mount.target);
-      if (mount.invoke === "catchall") {
-        return await invokeTargetCall(target, mount.target.call ?? [], [{ path: remainder, args }]);
-      }
-      return await invokeTargetCall(target, [...(mount.target.call ?? []), ...remainder], args);
+      const resolvedTarget = resolveTargetCall(target, mount.target.call ?? []);
+      return await invokeResolvedMountTarget(resolvedTarget, remainder, args, path);
     }
 
     async run({ ctx, vars }) {

@@ -56,13 +56,17 @@ export function liftLocalProxies(value) {
   return lift(value);
 }
 
-function isLocalProxyCaller(value) {
+export function isLocalProxyCaller(value) {
   return (
     value !== null &&
     typeof value === "object" &&
     value[LOCAL_PROXY_CALLER_MARK] === true &&
     typeof value.call === "function"
   );
+}
+
+export function callLocalProxyCaller(value, input) {
+  return value.call(input);
 }
 
 function adapt(value) {

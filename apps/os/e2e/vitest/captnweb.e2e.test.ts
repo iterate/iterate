@@ -254,7 +254,7 @@ describe("capnweb", () => {
     expect(result.egress.echoedSecretHeader).toBe(`Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}`);
   });
 
-  it("applies IterateContext mount props for target, method, catchall, and ctx shortcuts", async () => {
+  it("applies IterateContext mount props for target, method, sdk markers, and ctx shortcuts", async () => {
     using root = withRootIterateContextFromNode({ auth, baseUrl });
     await using project = await createDisposableProject({
       root,
@@ -289,10 +289,15 @@ describe("capnweb", () => {
         }
       }
     `;
-    const catchallScript = dedent`
+    const sdkScript = dedent`
       import { WorkerEntrypoint } from "cloudflare:workers";
+      import { localProxyCaller } from "./local-proxy-wrapper.js";
 
       export default class SdkLikeTarget extends WorkerEntrypoint {
+        get sdk() {
+          return localProxyCaller(({ path, args }) => this.call({ path, args }));
+        }
+
         async call({ path, args }) {
           return {
             args,
@@ -324,20 +329,18 @@ describe("capnweb", () => {
             },
           },
           {
-            invoke: "catchall",
             path: ["sdk"],
             target: {
-              call: ["call"],
-              script: catchallScript,
+              call: ["sdk"],
+              script: sdkScript,
               type: "dynamic-worker",
             },
           },
           {
-            invoke: "catchall",
             path: ["some", "path", "sdk"],
             target: {
-              call: ["call"],
-              script: catchallScript,
+              call: ["sdk"],
+              script: sdkScript,
               type: "dynamic-worker",
             },
           },
@@ -373,10 +376,10 @@ describe("capnweb", () => {
       },
     })) as {
       appendResult: unknown;
-      catchallResult: unknown;
+      sdkResult: unknown;
       eventsByShortcut: unknown[];
       eventsByMethod: unknown[];
-      nestedCatchallResult: unknown;
+      nestedSdkResult: unknown;
       listedByMethod: string[];
       listedByShortcut: string[];
       methodResult: unknown;
@@ -410,11 +413,11 @@ describe("capnweb", () => {
         }),
       ]),
     );
-    expect(result.catchallResult).toEqual({
+    expect(result.sdkResult).toEqual({
       args: [{ text: marker }],
       method: "chat.postMessage",
     });
-    expect(result.nestedCatchallResult).toEqual({
+    expect(result.nestedSdkResult).toEqual({
       args: [{ text: marker, via: "nested" }],
       method: "chat.postMessage",
     });
@@ -662,24 +665,24 @@ async function exerciseMountedContext({
   });
 
   using sdk = await ctx.sdk;
-  const catchallResult = await sdk.chat.postMessage({ text: vars.marker });
+  const sdkResult = await sdk.chat.postMessage({ text: vars.marker });
   using nestedSdk = await ctx.some.path.sdk;
-  const nestedCatchallResult = await nestedSdk.chat.postMessage({
+  const nestedSdkResult = await nestedSdk.chat.postMessage({
     text: vars.marker,
     via: "nested",
   });
 
   return {
     appendResult,
-    catchallResult,
     eventsByMethod,
     eventsByShortcut,
-    nestedCatchallResult,
+    nestedSdkResult,
     listedByMethod: listedByMethod.map((stream: { name: string }) => stream.name),
     listedByShortcut: listedByShortcut.map((stream: { name: string }) => stream.name),
     methodResult,
     mountedAppendResult,
     nestedResult,
+    sdkResult,
     targetResult,
   };
 }

@@ -100,7 +100,7 @@ A mount says: "make this target callable at this path on `ctx`."
 ```ts
 type Mount = {
   path: string[];
-  invoke?: "target" | "method" | "catchall";
+  invoke?: "target" | "method";
   target: MountTarget;
 };
 
@@ -166,19 +166,24 @@ await ctx.append({
 });
 ```
 
-Use `"catchall"` for SDK-shaped APIs whose method hierarchy is not known ahead
-of time:
+For SDK-shaped APIs whose method hierarchy is not known ahead of time, prefer a
+normal target mount whose target returns `localProxyCaller(...)` from a getter or
+method:
 
 ```ts
 {
-  invoke: "catchall",
   path: ["sdk"],
   target: {
     type: "dynamic-worker",
     script: `
       import { WorkerEntrypoint } from "cloudflare:workers";
+      import { localProxyCaller } from "./local-proxy-wrapper.js";
 
       export default class SdkTarget extends WorkerEntrypoint {
+        get sdk() {
+          return localProxyCaller(({ path, args }) => this.call({ path, args }));
+        }
+
         async call({ path, args }) {
           return {
             method: path.join("."),
@@ -187,7 +192,7 @@ of time:
         }
       }
     `,
-    call: ["call"],
+    call: ["sdk"],
   },
 }
 
@@ -203,6 +208,26 @@ await target.call({
   args: [{ channel: "C123", text: "hi" }],
 });
 ```
+
+The same shape works for nested shortcuts:
+
+```ts
+{
+  path: ["some", "path", "sdk"],
+  target: {
+    type: "dynamic-worker",
+    script: sdkWorkerSource,
+    call: ["sdk"],
+  },
+}
+
+using sdk = await ctx.some.path.sdk;
+await sdk.chat.postMessage({ channel: "C123", text: "hi" });
+```
+
+The mount resolver still finds the most specific path. The difference is that
+the target decides whether the returned value is a normal RPC target, a method,
+or an SDK-shaped local proxy marker.
 
 ## Built-In Mounts
 

@@ -2,7 +2,12 @@ import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createRequestLogger } from "@iterate-com/shared/request-logging";
 import { createD1Client } from "sqlfu";
-import { localProxyCaller } from "./local-proxy-wrapper.js";
+import {
+  callLocalProxyCaller,
+  isLocalProxyCaller,
+  localProxyCaller,
+} from "./local-proxy-wrapper.js";
+import localProxyWrapperSource from "./local-proxy-wrapper.js?raw";
 import { ProjectsCapability } from "./projects-capability.ts";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
@@ -41,7 +46,7 @@ export type IterateContextProps = {
 
 export type Mount = {
   path: string[];
-  invoke?: "target" | "method" | "catchall";
+  invoke?: "target" | "method";
   target: MountTarget;
 };
 
@@ -169,6 +174,7 @@ class IterateCapability extends RpcTarget {
       },
       mainModule: "mount-worker.js",
       modules: {
+        "local-proxy-wrapper.js": localProxyWrapperSource,
         "mount-worker.js": target.script,
       },
     };
@@ -296,7 +302,6 @@ export class IterateContext extends RpcTarget {
       try {
         return await this.invokeDynamicWorkerMount({
           args,
-          invoke: match.mount.invoke ?? "target",
           remainder: match.remainder,
           target: match.mount.target,
         });
@@ -308,35 +313,35 @@ export class IterateContext extends RpcTarget {
       }
     }
 
-    const target = this.resolveMountTarget(match.mount.target);
-    if (match.mount.invoke === "catchall") {
-      if (typeof target !== "function") {
-        throw new Error(
-          `Catchall mount ${match.mount.path.join(".")} did not resolve to a function.`,
-        );
-      }
-      return await target({ path: match.remainder, args });
-    }
-
-    const method = match.remainder.length > 0 ? resolveTargetCall(target, match.remainder) : target;
-    if (typeof method !== "function") {
-      throw new Error(`Mounted path ${path.join(".")} did not resolve to a function.`);
-    }
-    return await method(...args);
+    return await invokeResolvedMountTarget({
+      args,
+      path,
+      remainder: match.remainder,
+      target: this.resolveMountTarget(match.mount.target),
+    });
   }
 
   getMounted(path: string[]) {
     const match = this.requireMount(path);
     if (match.mount.target.type === "dynamic-worker") {
+      const invoke = match.mount.invoke ?? "target";
+      if (
+        invoke === "target" &&
+        match.remainder.length === 0 &&
+        match.mount.target.call &&
+        match.mount.target.call.length > 0
+      ) {
+        return resolveTargetCall(
+          this.resolveDynamicWorkerTarget(match.mount.target),
+          match.mount.target.call ?? [],
+        );
+      }
       return mountedPathCaller(this, path);
     }
     const resolved = {
       ...match,
       target: this.resolveMountTarget(match.mount.target),
     };
-    if (resolved.mount.invoke === "catchall") {
-      return mountedPathCaller(this, resolved.mount.path);
-    }
     if (resolved.remainder.length === 0) return resolved.target;
     return resolveTargetCall(resolved.target, resolved.remainder);
   }
@@ -364,20 +369,20 @@ export class IterateContext extends RpcTarget {
 
   private async invokeDynamicWorkerMount(input: {
     args: unknown[];
-    invoke: "target" | "method" | "catchall";
     remainder: string[];
     target: Extract<MountTarget, { type: "dynamic-worker" }>;
   }) {
-    if (input.invoke === "catchall") {
-      return await invokeTargetCall(
+    return await invokeResolvedMountTarget({
+      args: input.args,
+      path: [...(input.target.call ?? []), ...input.remainder].map((step) =>
+        typeof step === "string" ? step : step.method,
+      ),
+      remainder: input.remainder,
+      target: resolveTargetCall(
         this.resolveDynamicWorkerTarget(input.target),
         input.target.call ?? [],
-        [{ path: input.remainder, args: input.args }],
-      );
-    }
-
-    const call = [...(input.target.call ?? []), ...input.remainder];
-    return await invokeTargetCall(this.resolveDynamicWorkerTarget(input.target), call, input.args);
+      ),
+    });
   }
 }
 
@@ -693,9 +698,9 @@ function installMountedRootMembers(context: IterateContext, mounts: Mount[]) {
       continue;
     }
 
-    // Target and catchall mounts are prototype getters on this one context
-    // instance. Different IterateContext instances can therefore expose
-    // different mounted roots without leaking names or mount definitions.
+    // Target mounts are prototype getters on this one context instance. Different
+    // IterateContext instances can therefore expose different mounted roots
+    // without leaking names or mount definitions.
     Object.defineProperty(prototype, rootName, {
       configurable: true,
       get(this: IterateContext) {
@@ -750,52 +755,25 @@ function resolveTargetCall(target: unknown, call: readonly TargetCall[]): unknow
   return current;
 }
 
-async function invokeTargetCall(
-  target: unknown,
-  call: readonly TargetCall[],
-  args: unknown[],
-): Promise<unknown> {
-  let current = target;
-  for (let index = 0; index < call.length; index++) {
-    if (current == null) {
-      throw new Error(`Cannot resolve target call through ${String(current)}.`);
-    }
-
-    const step = call[index]!;
-    const isLast = index === call.length - 1;
-    if (typeof step === "string") {
-      const value = (current as Record<string, unknown>)[step];
-      if (isLast) {
-        if (typeof value !== "function") {
-          throw new Error(`Target method ${step} is not callable.`);
-        }
-        return await value.apply(current, args);
-      }
-      current = value;
-      continue;
-    }
-
-    const method = (current as Record<string, unknown>)[step.method];
-    if (typeof method !== "function") {
-      throw new Error(`Target method ${step.method} is not callable.`);
-    }
-    const result = method.apply(current, step.args ?? []);
-    if (isLast) {
-      if (args.length > 0) {
-        if (typeof result !== "function") {
-          throw new Error(`Target method ${step.method} did not return a callable value.`);
-        }
-        return await result(...args);
-      }
-      return await result;
-    }
-    current = result;
+async function invokeResolvedMountTarget(input: {
+  args: unknown[];
+  path: string[];
+  remainder: string[];
+  target: unknown;
+}) {
+  if (isLocalProxyCaller(input.target)) {
+    return await callLocalProxyCaller(input.target, {
+      args: input.args,
+      path: input.remainder,
+    });
   }
 
-  if (typeof current !== "function") {
-    throw new Error("Mounted target did not resolve to a function.");
+  const method =
+    input.remainder.length > 0 ? resolveTargetCall(input.target, input.remainder) : input.target;
+  if (typeof method !== "function") {
+    throw new Error(`Mounted path ${input.path.join(".")} did not resolve to a function.`);
   }
-  return await current(...args);
+  return await method(...input.args);
 }
 
 export function singleProjectIdFromScopes(scopes: ProjectScopes): string | null {

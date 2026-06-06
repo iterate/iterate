@@ -8,4 +8,13 @@ export function localProxyCaller(call: LocalProxyCall): {
   call: LocalProxyCall;
 };
 
+export function isLocalProxyCaller(
+  value: unknown,
+): value is { __localProxyCaller: true; call: LocalProxyCall };
+
+export function callLocalProxyCaller(
+  value: { __localProxyCaller: true; call: LocalProxyCall },
+  input: LocalProxyCallInput,
+): unknown;
+
 export function liftLocalProxies<T>(value: T): T;

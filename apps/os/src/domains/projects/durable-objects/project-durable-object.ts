@@ -413,8 +413,6 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     });
     return createIterateContext({
       context,
-      project: this,
-      projectId: summary.id,
       projects: createProjectsCapability({ context }),
       props: { scopes: { projects: [summary.id] } },
     });
