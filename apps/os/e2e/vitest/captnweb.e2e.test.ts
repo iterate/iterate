@@ -34,7 +34,7 @@ describe("capnweb", () => {
       slug: `${testRunSlugPrefix}-crud-${uniqueSuffix()}`.slice(0, 40),
     });
     expect(project).toMatchObject({ id: expect.stringMatching(/^proj_/) });
-    const projects = await root.projects;
+    using projects = await root.projects;
     const list = await projects.list({ limit: 1_000 });
     expect(list.projects).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: project.id, slug: project.slug })]),
@@ -82,7 +82,7 @@ describe("capnweb", () => {
     const streamPath = `/capnweb/project-session/${uniqueSuffix()}`;
     const eventType = "events.iterate.com/capnweb/project-session";
     const marker = `project-session-${uniqueSuffix()}`;
-    const streams = await iterate.ctx.streams;
+    using streams = await iterate.ctx.streams;
     const appended = await streams.append({
       event: { type: eventType, payload: { marker } },
       streamPath,
@@ -114,6 +114,17 @@ describe("capnweb", () => {
           const marker = url.searchParams.get("marker");
           const streams = await ctx.streams;
           const beforeStreams = await streams.list();
+          const listUntilStreamAppears = async () => {
+            for (let attempt = 0; attempt < 8; attempt++) {
+              const listedStreams = await streams.list();
+              if (listedStreams.some((stream) => stream.streamPath === streamPath)) {
+                return listedStreams;
+              }
+              // Deployed stream listing can lag a successful append/read by a short interval.
+              await new Promise((resolve) => setTimeout(resolve, 250));
+            }
+            return streams.list();
+          };
           const appended = await streams.append({
             streamPath,
             event: {
@@ -121,7 +132,7 @@ describe("capnweb", () => {
               payload: { marker, source: "iterate-config" },
             },
           });
-          const afterStreams = await streams.list();
+          const afterStreams = await listUntilStreamAppears();
           const events = await streams.read({ afterOffset: "start", streamPath });
           return Response.json({
             appended: {
@@ -180,7 +191,7 @@ describe("capnweb", () => {
     const called = await (worker as unknown as ProjectConfigWorkerTestApi).someFunction({
       echo: marker,
     });
-    const streams = await iterate.ctx.streams;
+    using streams = await iterate.ctx.streams;
     const streamEvents = await streams.read({ afterOffset: "start", streamPath });
 
     expect(called).toEqual({ from: "iterate-config", input: { echo: marker }, marker });
@@ -498,6 +509,7 @@ async function describeProjectThroughProjects({
     return await project.describe();
   } finally {
     project[Symbol.dispose]?.();
+    projects[Symbol.dispose]?.();
   }
 }
 
@@ -767,7 +779,11 @@ async function createDisposableProject(input: { root: RpcStub<IterateContext>; s
   return {
     ...project,
     async [Symbol.asyncDispose]() {
-      await projects.remove({ id: project.id }).catch(() => undefined);
+      try {
+        await projects.remove({ id: project.id }).catch(() => undefined);
+      } finally {
+        projects[Symbol.dispose]?.();
+      }
     },
   };
 }
@@ -776,7 +792,7 @@ async function listProjectsWithSlugPrefix(prefix: string) {
   const matches: Array<{ id: string; slug: string }> = [];
   const limit = 100;
   using root = withRootIterateContextFromNode({ auth, baseUrl });
-  const projects = await root.projects;
+  using projects = await root.projects;
   for (let offset = 0; ; offset += limit) {
     const page = await projects.list({ limit, offset });
     matches.push(...page.projects.filter((project) => project.slug.startsWith(prefix)));
