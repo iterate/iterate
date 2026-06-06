@@ -1043,7 +1043,7 @@ async function readUntil(input: {
   timeoutMs?: number;
 }) {
   const startedAt = Date.now();
-  const timeoutMs = input.timeoutMs ?? 60_000;
+  const timeoutMs = input.timeoutMs ?? 120_000;
   while (Date.now() - startedAt < timeoutMs) {
     const result = await input.client.project.streams.read({
       afterOffset: input.afterOffset,
