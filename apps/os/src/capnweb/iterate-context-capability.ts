@@ -461,11 +461,13 @@ export function createCapnwebAppContext(input: {
 }
 
 class ProjectReposCapability extends RpcTarget {
-  readonly #runtime: IterateContextRuntime;
+  readonly #context: AppContext;
+  readonly #projectId: string;
 
   constructor(runtime: IterateContextRuntime) {
     super();
-    this.#runtime = runtime;
+    this.#context = runtime.context;
+    this.#projectId = requireRuntimeProjectId(runtime);
   }
 
   async create(input: Parameters<ReposClient["create"]>[0]) {
@@ -478,8 +480,8 @@ class ProjectReposCapability extends RpcTarget {
 
   async ensureIterateConfigInfo(input: Parameters<ReposClient["ensureIterateConfigInfo"]>[0]) {
     return await ensureIterateConfigInfoForProject({
-      env: this.#runtime.context.callableEnv as Pick<ReposCapabilityEnv, "REPO">,
-      projectId: requireRuntimeProjectId(this.#runtime),
+      env: this.#context.callableEnv as Pick<ReposCapabilityEnv, "REPO">,
+      projectId: this.#projectId,
       projectSlug: input.projectSlug,
     });
   }
@@ -497,20 +499,21 @@ class ProjectReposCapability extends RpcTarget {
   }
 
   #repos(): ReposClient {
-    const projectId = requireRuntimeProjectId(this.#runtime);
     return getReposCapability({
-      exports: this.#runtime.context.workerExports,
-      props: { projectId },
+      exports: this.#context.workerExports,
+      props: { projectId: this.#projectId },
     });
   }
 }
 
 class ProjectStreamsCapability extends RpcTarget {
-  readonly #runtime: IterateContextRuntime;
+  readonly #context: AppContext;
+  readonly #projectId: string;
 
   constructor(runtime: IterateContextRuntime) {
     super();
-    this.#runtime = runtime;
+    this.#context = runtime.context;
+    this.#projectId = requireRuntimeProjectId(runtime);
   }
 
   async append(input: Parameters<StreamsClient["append"]>[0]) {
@@ -542,12 +545,11 @@ class ProjectStreamsCapability extends RpcTarget {
   }
 
   #streams(): StreamsClient {
-    const projectId = requireRuntimeProjectId(this.#runtime);
     return getStreamsCapability({
-      exports: this.#runtime.context.workerExports,
+      exports: this.#context.workerExports,
       props: {
         appendPolicy: { mode: "any" },
-        projectId,
+        projectId: this.#projectId,
       },
     });
   }
