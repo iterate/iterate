@@ -122,35 +122,6 @@ class IterateCapability extends RpcTarget {
     return this.#runtime.projects;
   }
 
-  get project(): ProjectContextCapability {
-    const projectId = this.requireSingleProjectId();
-    return this.projects.get(projectId);
-  }
-
-  get repos(): ProjectReposCapability {
-    return this.project.repos;
-  }
-
-  get streams(): ProjectStreamsCapability {
-    return this.project.streams;
-  }
-
-  get worker(): ProjectWorkerCapability {
-    return this.project.worker;
-  }
-
-  get workspace(): ProjectWorkspaceCapability {
-    return this.project.workspace;
-  }
-
-  private requireSingleProjectId() {
-    const projectId = singleProjectIdFromScopes(this.#runtime.props.scopes);
-    if (!projectId) {
-      throw new Error("This IterateCapability is not scoped to exactly one project.");
-    }
-    return projectId;
-  }
-
   resolveDynamicWorkerTarget(target: Extract<MountTarget, { type: "dynamic-worker" }>) {
     const cacheKey = JSON.stringify({
       entrypoint: target.entrypoint,
@@ -275,23 +246,23 @@ export class IterateContext extends RpcTarget {
   }
 
   get project(): ProjectContextCapability {
-    return this.#iterateCapability.project;
+    return this.getMounted(["project"]) as ProjectContextCapability;
   }
 
   get repos(): ProjectReposCapability {
-    return this.#iterateCapability.repos;
+    return this.getMounted(["repos"]) as ProjectReposCapability;
   }
 
   get streams(): ProjectStreamsCapability {
-    return this.#iterateCapability.streams;
+    return this.getMounted(["streams"]) as ProjectStreamsCapability;
   }
 
   get worker(): ProjectWorkerCapability {
-    return this.#iterateCapability.worker;
+    return this.getMounted(["worker"]) as ProjectWorkerCapability;
   }
 
   get workspace(): ProjectWorkspaceCapability {
-    return this.#iterateCapability.workspace;
+    return this.getMounted(["workspace"]) as ProjectWorkspaceCapability;
   }
 
   async callMounted(path: string[], args: unknown[] = []) {
@@ -362,7 +333,7 @@ export class IterateContext extends RpcTarget {
       case "dynamic-worker":
         throw new Error("Dynamic-worker mounts must be invoked through callMounted.");
       case "ctx":
-        return resolveTargetCall(this.#iterateCapability, target.call ?? []);
+        return resolveTargetCall(this, target.call ?? []);
     }
   }
 
