@@ -23,6 +23,7 @@ import {
   createIterateContext,
   createProjectsCapability,
   type IterateContext,
+  type IterateContextProps,
 } from "~/capnweb/iterate-context-capability.ts";
 import {
   AGENTS_STREAM_PATH,
@@ -451,7 +452,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return { connectionKey, ok: true };
   }
 
-  async getIterateContext(): Promise<IterateContext> {
+  async getIterateContext(props?: IterateContextProps): Promise<IterateContext> {
     await this.ensureStarted();
     const summary = this.requireSummary();
     const context = createCapnwebAppContext({
@@ -463,7 +464,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return createIterateContext({
       context,
       projects: createProjectsCapability({ context }),
-      props: { scopes: { projects: [summary.id] } },
+      props: props ?? { scopes: { projects: [summary.id] } },
     });
   }
 
@@ -623,7 +624,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     if (new URL(request.url).pathname !== PROJECT_CAPNWEB_PATH) return null;
     const principal = authenticateAdminApiSecret({ config: this.getAppConfig() }, request);
     if (!principal) return new Response("Unauthorized", { status: 401 });
-    return newWorkersRpcResponse(request, await this.getIterateContext());
+    return newWorkersRpcResponse(request, this.getCapability());
   }
 
   private acceptProjectEgressInterceptTunnel(request: Request): Response {

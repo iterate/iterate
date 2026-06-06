@@ -13,6 +13,7 @@ import type {
   IterateContextProps,
 } from "../../src/capnweb/iterate-context-capability.ts";
 import { liftLocalProxies } from "../../src/capnweb/local-proxy-wrapper.js";
+import type { ProjectCapabilityApi } from "../../src/domains/projects/durable-objects/project-durable-object.ts";
 
 const baseUrl = requireBaseUrl();
 const egressEchoBaseUrl = requireEgressEchoBaseUrl(baseUrl);
@@ -529,16 +530,22 @@ function withIterateFromNode(input: { auth: RootAccessAuth; ingressUrl: string }
     path: PROJECT_CAPNWEB_PATH,
   });
   const socket = new WebSocket(wsUrl.toString(), { headers });
-  const ctx = liftLocalProxies(
-    newWebSocketRpcSession<IterateContext>(
-      socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
-    ),
+  const project = newWebSocketRpcSession<ProjectCapabilityApi>(
+    socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
+  const ctxHandle = project.getIterateContext() as unknown as RpcStub<IterateContext>;
+  const ctx = liftLocalProxies(ctxHandle);
+  void ctxHandle.catch((error) => {
+    socket.close();
+    project[Symbol.dispose]?.();
+    throw error;
+  });
   return {
     ctx,
     onWsFrame(_frame: unknown) {},
     [Symbol.dispose]() {
-      ctx[Symbol.dispose]?.();
+      ctxHandle[Symbol.dispose]?.();
+      project[Symbol.dispose]?.();
       socket.close();
     },
   };
