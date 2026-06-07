@@ -1,4 +1,5 @@
 import { newWorkersRpcResponse } from "capnweb";
+import { authenticateCapnwebAdmin, handleCapnwebAdminCookieRequest } from "./admin-auth-cookie.ts";
 import {
   createIterateContext,
   createProjectsCapability,
@@ -7,7 +8,6 @@ import {
 import localProxyWrapperSource from "./local-proxy-wrapper.js?raw";
 import { ProjectsCapability } from "./projects-capability.ts";
 import type { AppConfig } from "~/app.ts";
-import { authenticateRootApiSecret } from "~/auth/middleware.ts";
 import type { AppContext } from "~/context.ts";
 
 export { ProjectsCapability };
@@ -30,7 +30,11 @@ export async function handleRootIterateContextFetch(input: {
     return null;
   }
 
-  const principal = authenticateRootApiSecret({ config: input.config }, input.request);
+  if (url.pathname === `${ROOT_ITERATE_CONTEXT_PREFIX}/admin-cookie`) {
+    return await handleCapnwebAdminCookieRequest({ config: input.config, request: input.request });
+  }
+
+  const principal = authenticateCapnwebAdmin({ config: input.config, request: input.request });
   if (!principal) return new Response("Unauthorized", { status: 401 });
 
   if (url.pathname === `${ROOT_ITERATE_CONTEXT_PREFIX}/run`) {

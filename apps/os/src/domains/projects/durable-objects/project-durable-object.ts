@@ -24,6 +24,10 @@ import {
   type IterateContext,
   type IterateContextProps,
 } from "~/capnweb/iterate-context-capability.ts";
+import {
+  authenticateCapnwebAdmin,
+  handleCapnwebAdminCookieRequest,
+} from "~/capnweb/admin-auth-cookie.ts";
 import { ProjectCapability } from "~/capnweb/project-capability.ts";
 import {
   AGENTS_STREAM_PATH,
@@ -631,8 +635,12 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   }
 
   private async handleProjectCapnwebFetch(request: Request): Promise<Response | null> {
-    if (new URL(request.url).pathname !== PROJECT_CAPNWEB_PATH) return null;
-    const principal = authenticateAdminApiSecret({ config: this.getAppConfig() }, request);
+    const pathname = new URL(request.url).pathname;
+    if (pathname === `${PROJECT_CAPNWEB_PATH}/admin-cookie`) {
+      return await handleCapnwebAdminCookieRequest({ config: this.getAppConfig(), request });
+    }
+    if (pathname !== PROJECT_CAPNWEB_PATH) return null;
+    const principal = authenticateCapnwebAdmin({ config: this.getAppConfig(), request });
     if (!principal) return new Response("Unauthorized", { status: 401 });
     return newWorkersRpcResponse(request, this.getCapability());
   }

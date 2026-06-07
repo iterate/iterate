@@ -129,8 +129,10 @@ export default {
         });
 
         if (ingressMatch) {
+          const pathname = new URL(request.url).pathname;
           if (
-            new URL(request.url).pathname === PROJECT_CAPNWEB_PATH &&
+            (pathname === PROJECT_CAPNWEB_PATH ||
+              pathname === `${PROJECT_CAPNWEB_PATH}/admin-cookie`) &&
             ingressMatch.rule.projectId
           ) {
             return await env.PROJECT.getByName(

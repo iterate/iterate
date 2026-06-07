@@ -40,6 +40,13 @@ dynamic worker with `env.ITERATE`, the dynamic worker resolves
 Call `project.getIterateContext()` when you want the project-scoped
 `IterateContext`.
 
+`/api/captnweb/admin-cookie` and `/__iterate/capnweb/admin-cookie`
+: Test-only browser auth bridge for Cap'n Web. Browser WebSockets cannot set
+custom `Authorization` headers, so the browser e2e helper posts the admin bearer
+token to the same host it is about to open a WebSocket to. That host sets an
+`iterate-admin-auth` cookie, and only the Cap'n Web root/project handlers accept
+that cookie.
+
 ## Context Props
 
 `IterateContextProps` deliberately has only authority and local wiring:
@@ -227,17 +234,19 @@ does not import those helpers.
 
 ## E2E Scenarios
 
-`e2e/vitest/captnweb.e2e.test.ts` is the executable design proof. The main
-scenario scripts loop over the registered tool execution modes: Node over Cap'n
-Web, the `/run` dynamic-worker endpoint, and the makeshift Node CLI in
-`src/capnweb/cli.ts`. A future Workers for Platforms mode should be added to
-that same list. The loop intentionally restricts shared scripts to serializable
-return values and proves the same code can execute in each place.
+`src/capnweb/e2e` is the executable design proof. The scenario code is written
+as shared codemode-shaped functions, then run through the registered execution
+modes: browser Cap'n Web, Node over Cap'n Web, the `/run` dynamic-worker
+endpoint, and the makeshift Node CLI in `src/capnweb/cli.ts`. The browser mode
+runs in Vitest's browser project, while the Node project loops over Node,
+`/run`, and CLI. A future Workers for Platforms mode should be added beside
+those modes. The shared functions intentionally return serializable values and
+prove the same code can execute in each place.
 
 It covers:
 
 - Root project administration through `ctx.projects`.
-- The same script body running from Node, `/run`, and the CLI.
+- The same script body running from browser, Node, `/run`, and the CLI.
 - Direct project ingress at `/__iterate/capnweb`.
 - Project-provided Cap'n Web targets via `project.provideCapability(...)`.
 - Updating iterate-config through `ctx.project.workspace.git`.
