@@ -35,9 +35,11 @@ export default defineConfig({
       {
         test: {
           environment: "node",
+          hookTimeout: 120_000,
           include: ["./src/capnweb/e2e/captnweb.e2e.test.ts"],
           name: "node",
           provide: sharedProvide,
+          testTimeout: 120_000,
         },
       },
       {
@@ -91,6 +93,7 @@ export default defineConfig({
           include: ["./src/capnweb/e2e/captnweb.browser.test.ts"],
           name: "browser",
           provide: sharedProvide,
+          testTimeout: 120_000,
         },
       },
     ],

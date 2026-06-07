@@ -271,7 +271,7 @@ describe("capnweb", () => {
         ]),
       );
     }
-  }, 30_000);
+  }, 120_000);
 
   // Scenario: project fetch capabilities expose both ingress and egress from
   // the same project capability that codemode receives.

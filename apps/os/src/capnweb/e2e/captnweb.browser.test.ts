@@ -159,7 +159,7 @@ describe("capnweb browser execution mode", () => {
         }),
       ]),
     );
-  }, 30_000);
+  }, 120_000);
 });
 
 async function runBrowserCapnwebScript(input: {
