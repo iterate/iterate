@@ -21,10 +21,11 @@ import type { ProjectCapabilityApi } from "../../src/domains/projects/durable-ob
  * These tests are intentionally written as examples of the coding model we want
  * people to copy:
  *
- * - The main scenario scripts run in both Node over a Cap'n Web WebSocket
- *   session and inside the `/api/captnweb/run` dynamic worker. This forces the
- *   shared scripts to return serializable results and proves the symmetric
- *   coding model end to end.
+ * - The main scenario scripts loop over `capnwebToolExecutionModes`: today that
+ *   is Node over a Cap'n Web WebSocket session and the `/api/captnweb/run`
+ *   dynamic worker. A future Workers for Platforms deployment path should be
+ *   another entry in that same list. This forces shared scripts to return
+ *   serializable results and proves the symmetric coding model end to end.
  * - `ctx` is an IterateContext: a scoped wrapper around the root Iterate
  *   capability tree. The scopes decide which project shortcuts and mounts are
  *   available.
@@ -74,18 +75,18 @@ describe("capnweb", () => {
     const describeProjectThroughProjects = async ({ ctx, vars }: CapnwebScriptInput) => {
       using projects = await ctx.projects;
       using project = await projects.get(vars.projectId);
-      return { ...(await project.describe()), runner: vars.runner };
+      return { ...(await project.describe()), executionMode: vars.executionMode };
     };
 
-    for (const runner of capnwebScriptRunners({ ctx: root })) {
+    for (const executionMode of capnwebToolExecutionModes({ ctx: root })) {
       expect(
-        await runner.run({
+        await executionMode.runTool({
           script: describeProjectThroughProjects,
-          vars: { projectId: project.id, runner: runner.name },
+          vars: { executionMode: executionMode.name, projectId: project.id },
         }),
       ).toMatchObject({
+        executionMode: executionMode.name,
         id: project.id,
-        runner: runner.name,
         slug: project.slug,
       });
     }
@@ -110,30 +111,33 @@ describe("capnweb", () => {
     const appendAndReadProjectStream = async ({ ctx, vars }: CapnwebScriptInput) => {
       using streams = await ctx.streams;
       const appended = await streams.append({
-        event: { type: vars.eventType, payload: { marker: vars.marker, runner: vars.runner } },
+        event: {
+          type: vars.eventType,
+          payload: { executionMode: vars.executionMode, marker: vars.marker },
+        },
         streamPath: vars.streamPath,
       });
       const events = await streams.read({ afterOffset: "start", streamPath: vars.streamPath });
-      return { appended, events, runner: vars.runner };
+      return { appended, events, executionMode: vars.executionMode };
     };
 
-    for (const runner of capnwebScriptRunners({
+    for (const executionMode of capnwebToolExecutionModes({
       ctx: iterate.ctx,
       props: { scopes: { projects: [project.id] } },
     })) {
-      const marker = `project-session-${runner.name}-${uniqueSuffix()}`;
-      const result = await runner.run({
+      const marker = `project-session-${executionMode.name}-${uniqueSuffix()}`;
+      const result = await executionMode.runTool({
         script: appendAndReadProjectStream,
-        vars: { eventType, marker, runner: runner.name, streamPath },
+        vars: { eventType, executionMode: executionMode.name, marker, streamPath },
       });
       expect(result.appended).toMatchObject({
-        payload: { marker, runner: runner.name },
+        payload: { executionMode: executionMode.name, marker },
         type: eventType,
       });
       expect(result.events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            payload: { marker, runner: runner.name },
+            payload: { executionMode: executionMode.name, marker },
             type: eventType,
           }),
         ]),
@@ -170,20 +174,24 @@ describe("capnweb", () => {
       return await connection[vars.methodName]({ source: vars.source });
     };
 
-    const runners = capnwebScriptRunners({
+    const executionModes = capnwebToolExecutionModes({
       ctx: iterate.ctx,
       props: { scopes: { projects: [project.id] } },
     });
-    for (const [index, runner] of runners.entries()) {
+    for (const [index, executionMode] of executionModes.entries()) {
       expect(
-        await runner.run({
+        await executionMode.runTool({
           script: callProjectConnection,
-          vars: { connectionKey, methodName: connectionMethodName, source: runner.name },
+          vars: {
+            connectionKey,
+            methodName: connectionMethodName,
+            source: executionMode.name,
+          },
         }),
       ).toMatchObject({
         callCount: index + 1,
         marker: connectionKey,
-        source: runner.name,
+        source: executionMode.name,
       });
     }
   });
@@ -197,11 +205,11 @@ describe("capnweb", () => {
       slug: `${testRunSlugPrefix}-worker-${uniqueSuffix()}`.slice(0, 40),
     });
     using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
-    for (const runner of capnwebScriptRunners({
+    for (const executionMode of capnwebToolExecutionModes({
       ctx: iterate.ctx,
       props: { scopes: { projects: [project.id] } },
     })) {
-      const marker = `capnweb-worker-${runner.name}-${uniqueSuffix()}`;
+      const marker = `capnweb-worker-${executionMode.name}-${uniqueSuffix()}`;
       const streamPath = `/capnweb/worker/${marker}`;
       const eventType = `events.iterate.com/capnweb/worker/${marker}`;
       const workerSource = dedent`
@@ -214,7 +222,7 @@ describe("capnweb", () => {
             const streamPath = url.searchParams.get("streamPath");
             const eventType = url.searchParams.get("eventType");
             const marker = url.searchParams.get("marker");
-            const runner = url.searchParams.get("runner");
+            const executionMode = url.searchParams.get("executionMode");
             using streams = await ctx.streams;
             const beforeStreams = await streams.list();
             const listUntilStreamAppears = async () => {
@@ -232,7 +240,7 @@ describe("capnweb", () => {
               streamPath,
               event: {
                 type: eventType,
-                payload: { marker, runner, source: "iterate-config" },
+                payload: { executionMode, marker, source: "iterate-config" },
               },
             });
             const afterStreams = await listUntilStreamAppears();
@@ -240,9 +248,9 @@ describe("capnweb", () => {
             return Response.json({
               appended: {
                 eventType: appended.type,
+                executionMode: appended.payload.executionMode,
                 marker: appended.payload.marker,
                 offset: appended.offset,
-                runner: appended.payload.runner,
                 streamPath,
               },
               streamNames: afterStreams.map((stream) => stream.name),
@@ -257,7 +265,7 @@ describe("capnweb", () => {
         };
       `;
 
-      const updateResult = await runner.run({
+      const updateResult = await executionMode.runTool({
         script: async ({ ctx, vars }: CapnwebScriptInput) => {
           using project = await ctx.project;
           using repos = await project.repos;
@@ -279,7 +287,7 @@ describe("capnweb", () => {
           await git.commit({
             author: { name: "Capnweb", email: "captnweb-e2e@iterate.com" },
             dir: vars.dir,
-            message: `Add capnweb worker proof from ${vars.runner}`,
+            message: `Add capnweb worker proof from ${vars.executionMode}`,
           });
           await git.push({
             dir: vars.dir,
@@ -291,33 +299,33 @@ describe("capnweb", () => {
           using worker = await project.worker;
           const calledTool = await worker.someFunction({
             echo: vars.marker,
-            runner: vars.runner,
+            executionMode: vars.executionMode,
           });
 
           return {
             calledTool,
+            executionMode: vars.executionMode,
             project: await project.describe(),
             repoSlug: repo.slug,
-            runner: vars.runner,
             workspaceGitPath: "ctx.project.workspace.git",
           };
         },
         vars: {
-          dir: `/iterate-config-${runner.name}-${Date.now()}`,
+          dir: `/iterate-config-${executionMode.name}-${Date.now()}`,
+          executionMode: executionMode.name,
           marker,
-          runner: runner.name,
           workerSource,
         },
       });
       expect(updateResult).toMatchObject({
         calledTool: {
           from: "iterate-config",
-          input: { echo: marker, runner: runner.name },
+          input: { echo: marker, executionMode: executionMode.name },
           marker,
         },
+        executionMode: executionMode.name,
         project: { id: project.id, slug: project.slug },
         repoSlug: "iterate-config",
-        runner: runner.name,
         workspaceGitPath: "ctx.project.workspace.git",
       });
 
@@ -329,8 +337,8 @@ describe("capnweb", () => {
         new Request(
           `https://iterate-config.local/capnweb-fetch/${marker}?${new URLSearchParams({
             eventType,
+            executionMode: executionMode.name,
             marker,
-            runner: runner.name,
             streamPath,
           })}`,
         ),
@@ -339,21 +347,21 @@ describe("capnweb", () => {
       const streamFetch = (await streamFetchResponse.json()) as any;
       const called = await worker.someFunction({
         echo: marker,
-        runner: runner.name,
+        executionMode: executionMode.name,
       });
       using streams = await iterate.ctx.streams;
       const streamEvents = await streams.read({ afterOffset: "start", streamPath });
 
       expect(called).toMatchObject({
         from: "iterate-config",
-        input: { echo: marker, runner: runner.name },
+        input: { echo: marker, executionMode: executionMode.name },
         marker,
       });
       expect(streamFetch.appended).toMatchObject({
         eventType,
+        executionMode: executionMode.name,
         marker,
         offset: expect.any(Number),
-        runner: runner.name,
         streamPath,
       });
       expect(streamFetch.streamWasListedBeforeAppend).toBe(false);
@@ -364,7 +372,7 @@ describe("capnweb", () => {
       expect(streamFetch.events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            payload: { marker, runner: runner.name, source: "iterate-config" },
+            payload: { executionMode: executionMode.name, marker, source: "iterate-config" },
             type: eventType,
           }),
         ]),
@@ -372,7 +380,7 @@ describe("capnweb", () => {
       expect(streamEvents).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            payload: { marker, runner: runner.name, source: "iterate-config" },
+            payload: { executionMode: executionMode.name, marker, source: "iterate-config" },
             type: eventType,
           }),
         ]),
@@ -390,11 +398,11 @@ describe("capnweb", () => {
     });
 
     using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
-    for (const runner of capnwebScriptRunners({
+    for (const executionMode of capnwebToolExecutionModes({
       ctx: iterate.ctx,
       props: { scopes: { projects: [project.id] } },
     })) {
-      const result = await runner.run({
+      const result = await executionMode.runTool({
         script: async ({ ctx, vars }: CapnwebScriptInput) => {
           using project = await ctx.project;
           const expectedHomepageText = "Hello from the project config worker";
@@ -445,15 +453,15 @@ describe("capnweb", () => {
               secretReferenceWasSubstituted: echoedSecretHeader !== secretReference,
               status: egressResponse.status,
             },
+            executionMode: vars.executionMode,
             ingress,
-            runner: vars.runner,
           };
         },
         vars: {
           echoAuthToken: auth.token.exposeSecret(),
           echoUrl: new URL("/api/captnweb/egress-echo", egressEchoBaseUrl).toString(),
+          executionMode: executionMode.name,
           ingressUrl: project.ingressUrl,
-          runner: runner.name,
           secretKey: EXAMPLE_EGRESS_SECRET_KEY,
         },
       });
@@ -467,7 +475,7 @@ describe("capnweb", () => {
         status: 200,
       });
       expect(result.egress.echoedSecretHeader).toBe(`Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}`);
-      expect(result.runner).toBe(runner.name);
+      expect(result.executionMode).toBe(executionMode.name);
     }
   });
 
@@ -876,23 +884,26 @@ class ProjectConnectionTestTarget extends RpcTarget {
 }
 
 type CapnwebScript = (input: CapnwebScriptInput) => any;
-type CapnwebScriptRunner = {
-  name: "node" | "run";
-  run(input: { script: CapnwebScript; vars?: Record<string, unknown> }): Promise<any>;
+type CapnwebToolExecutionMode = {
+  name: "node-capnweb" | "run-endpoint";
+  runTool(input: { script: CapnwebScript; vars?: Record<string, unknown> }): Promise<any>;
 };
 
-function capnwebScriptRunners(input: {
+function capnwebToolExecutionModes(input: {
   ctx: RpcStub<IterateContext>;
   props?: IterateContextProps;
-}): CapnwebScriptRunner[] {
+}): CapnwebToolExecutionMode[] {
+  // This is the registry of places a codemode/tool script must work. Add the
+  // future Workers for Platforms deployment mode here, then the scenario tests
+  // will exercise the same scripts through that path without copying test code.
   return [
     {
-      name: "node",
-      run: ({ script, vars }) => runCapnwebScriptFromNode({ ctx: input.ctx, script, vars }),
+      name: "node-capnweb",
+      runTool: ({ script, vars }) => runCapnwebScriptFromNode({ ctx: input.ctx, script, vars }),
     },
     {
-      name: "run",
-      run: ({ script, vars }) =>
+      name: "run-endpoint",
+      runTool: ({ script, vars }) =>
         runCapnwebScriptInDynamicWorker({ props: input.props, script, vars }),
     },
   ];

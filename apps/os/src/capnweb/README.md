@@ -228,9 +228,11 @@ does not import those helpers.
 ## E2E Scenarios
 
 `e2e/vitest/captnweb.e2e.test.ts` is the executable design proof. The main
-scenario scripts run through both the Node Cap'n Web runner and the `/run`
-dynamic-worker runner. That intentionally restricts those scripts to
-serializable return values and proves the same code can execute in both places.
+scenario scripts loop over the registered tool execution modes: today Node over
+Cap'n Web and the `/run` dynamic-worker endpoint. A future Workers for Platforms
+mode should be added to that same list. The loop intentionally restricts shared
+scripts to serializable return values and proves the same code can execute in
+each place.
 
 It covers:
 
