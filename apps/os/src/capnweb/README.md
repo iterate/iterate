@@ -227,7 +227,12 @@ does not import those helpers.
 
 ## E2E Scenarios
 
-`e2e/vitest/captnweb.e2e.test.ts` is the executable design proof. It covers:
+`e2e/vitest/captnweb.e2e.test.ts` is the executable design proof. The main
+scenario scripts run through both the Node Cap'n Web runner and the `/run`
+dynamic-worker runner. That intentionally restricts those scripts to
+serializable return values and proves the same code can execute in both places.
+
+It covers:
 
 - Root project administration through `ctx.projects`.
 - The same script body running from Node and from `/run`.

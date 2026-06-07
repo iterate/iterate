@@ -21,8 +21,10 @@ import type { ProjectCapabilityApi } from "../../src/domains/projects/durable-ob
  * These tests are intentionally written as examples of the coding model we want
  * people to copy:
  *
- * - A script can run in Node over a Cap'n Web WebSocket session or inside the
- *   `/api/captnweb/run` dynamic worker and use the same `ctx` calls.
+ * - The main scenario scripts run in both Node over a Cap'n Web WebSocket
+ *   session and inside the `/api/captnweb/run` dynamic worker. This forces the
+ *   shared scripts to return serializable results and proves the symmetric
+ *   coding model end to end.
  * - `ctx` is an IterateContext: a scoped wrapper around the root Iterate
  *   capability tree. The scopes decide which project shortcuts and mounts are
  *   available.
@@ -72,30 +74,21 @@ describe("capnweb", () => {
     const describeProjectThroughProjects = async ({ ctx, vars }: CapnwebScriptInput) => {
       using projects = await ctx.projects;
       using project = await projects.get(vars.projectId);
-      return await project.describe();
+      return { ...(await project.describe()), runner: vars.runner };
     };
 
-    // Same script body, two transports: direct Node Cap'n Web session and
-    // `/run` dynamic worker with env.ITERATE.context.
-    expect(
-      await runCapnwebScriptFromNode({
-        ctx: root,
-        script: describeProjectThroughProjects,
-        vars: { projectId: project.id },
-      }),
-    ).toMatchObject({
-      id: project.id,
-      slug: project.slug,
-    });
-    expect(
-      await runCapnwebScriptInDynamicWorker({
-        script: describeProjectThroughProjects,
-        vars: { projectId: project.id },
-      }),
-    ).toMatchObject({
-      id: project.id,
-      slug: project.slug,
-    });
+    for (const runner of capnwebScriptRunners({ ctx: root })) {
+      expect(
+        await runner.run({
+          script: describeProjectThroughProjects,
+          vars: { projectId: project.id, runner: runner.name },
+        }),
+      ).toMatchObject({
+        id: project.id,
+        runner: runner.name,
+        slug: project.slug,
+      });
+    }
     expect(await projects.remove({ id: project.id })).toMatchObject({
       deleted: true,
       id: project.id,
@@ -114,17 +107,38 @@ describe("capnweb", () => {
     using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
     const streamPath = `/capnweb/project-session/${uniqueSuffix()}`;
     const eventType = "events.iterate.com/capnweb/project-session";
-    const marker = `project-session-${uniqueSuffix()}`;
-    using streams = await iterate.ctx.streams;
-    const appended = await streams.append({
-      event: { type: eventType, payload: { marker } },
-      streamPath,
-    });
-    const events = await streams.read({ afterOffset: "start", streamPath });
-    expect(appended).toMatchObject({ payload: { marker }, type: eventType });
-    expect(events).toEqual(
-      expect.arrayContaining([expect.objectContaining({ payload: { marker }, type: eventType })]),
-    );
+    const appendAndReadProjectStream = async ({ ctx, vars }: CapnwebScriptInput) => {
+      using streams = await ctx.streams;
+      const appended = await streams.append({
+        event: { type: vars.eventType, payload: { marker: vars.marker, runner: vars.runner } },
+        streamPath: vars.streamPath,
+      });
+      const events = await streams.read({ afterOffset: "start", streamPath: vars.streamPath });
+      return { appended, events, runner: vars.runner };
+    };
+
+    for (const runner of capnwebScriptRunners({
+      ctx: iterate.ctx,
+      props: { scopes: { projects: [project.id] } },
+    })) {
+      const marker = `project-session-${runner.name}-${uniqueSuffix()}`;
+      const result = await runner.run({
+        script: appendAndReadProjectStream,
+        vars: { eventType, marker, runner: runner.name, streamPath },
+      });
+      expect(result.appended).toMatchObject({
+        payload: { marker, runner: runner.name },
+        type: eventType,
+      });
+      expect(result.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            payload: { marker, runner: runner.name },
+            type: eventType,
+          }),
+        ]),
+      );
+    }
   });
 
   // Scenario: the test runner can provide an RpcTarget to a project, then code
@@ -156,27 +170,22 @@ describe("capnweb", () => {
       return await connection[vars.methodName]({ source: vars.source });
     };
 
-    const fromNode = await runCapnwebScriptFromNode({
+    const runners = capnwebScriptRunners({
       ctx: iterate.ctx,
-      script: callProjectConnection,
-      vars: { connectionKey, methodName: connectionMethodName, source: "node" },
-    });
-    const fromDynamicWorker = await runCapnwebScriptInDynamicWorker({
       props: { scopes: { projects: [project.id] } },
-      script: callProjectConnection,
-      vars: { connectionKey, methodName: connectionMethodName, source: "dynamic-worker" },
     });
-
-    expect(fromNode).toMatchObject({
-      callCount: 1,
-      marker: connectionKey,
-      source: "node",
-    });
-    expect(fromDynamicWorker).toMatchObject({
-      callCount: 2,
-      marker: connectionKey,
-      source: "dynamic-worker",
-    });
+    for (const [index, runner] of runners.entries()) {
+      expect(
+        await runner.run({
+          script: callProjectConnection,
+          vars: { connectionKey, methodName: connectionMethodName, source: runner.name },
+        }),
+      ).toMatchObject({
+        callCount: index + 1,
+        marker: connectionKey,
+        source: runner.name,
+      });
+    }
   });
 
   // Scenario: codemode-style code updates iterate-config in git, then calls
@@ -188,167 +197,187 @@ describe("capnweb", () => {
       slug: `${testRunSlugPrefix}-worker-${uniqueSuffix()}`.slice(0, 40),
     });
     using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
-    const marker = `capnweb-worker-${uniqueSuffix()}`;
-    const streamPath = `/capnweb/worker/${marker}`;
-    const eventType = `events.iterate.com/capnweb/worker/${marker}`;
-    const workerSource = dedent`
-      export default {
-        async fetch(request, env) {
-          const url = new URL(request.url);
-          // The iterate-config worker uses the same context binding as /run and
-          // codemode scripts. No test-only ctx injection is involved.
-          const ctx = await env.ITERATE.context;
-          const streamPath = url.searchParams.get("streamPath");
-          const eventType = url.searchParams.get("eventType");
-          const marker = url.searchParams.get("marker");
-          using streams = await ctx.streams;
-          const beforeStreams = await streams.list();
-          const listUntilStreamAppears = async () => {
-            for (let attempt = 0; attempt < 8; attempt++) {
-              const listedStreams = await streams.list();
-              if (listedStreams.some((stream) => stream.streamPath === streamPath)) {
-                return listedStreams;
-              }
-              // Deployed stream listing can lag a successful append/read by a short interval.
-              await new Promise((resolve) => setTimeout(resolve, 250));
-            }
-            return streams.list();
-          };
-          const appended = await streams.append({
-            streamPath,
-            event: {
-              type: eventType,
-              payload: { marker, source: "iterate-config" },
-            },
-          });
-          const afterStreams = await listUntilStreamAppears();
-          const events = await streams.read({ afterOffset: "start", streamPath });
-          return Response.json({
-            appended: {
-              eventType: appended.type,
-              marker: appended.payload.marker,
-              offset: appended.offset,
-              streamPath,
-            },
-            streamNames: afterStreams.map((stream) => stream.name),
-            streamWasListedBeforeAppend: beforeStreams.some((stream) => stream.streamPath === streamPath),
-            streamWasListedAfterAppend: afterStreams.some((stream) => stream.streamPath === streamPath),
-            events,
-          });
-        },
-        async someFunction(input = {}) {
-          return { from: "iterate-config", input, marker: ${JSON.stringify(marker)} };
-        },
-      };
-    `;
-
-    const dir = `/iterate-config-${Date.now()}`;
-    const updateResult = await runCapnwebScriptInDynamicWorker({
-      script: async ({ ctx, vars }: CapnwebScriptInput) => {
-        using project = await ctx.project;
-        using repos = await project.repos;
-        using workspace = await project.workspace;
-        // This is the intended project-scoped git path for codemode and tests:
-        // the IterateContext shortcut resolves to ctx.projects.get(id).
-        using git = await workspace.git;
-        const repo = await repos.ensureIterateConfigInfo({ projectSlug: null });
-
-        await git.clone({
-          branch: repo.defaultBranch,
-          depth: 1,
-          dir: vars.dir,
-          url: repo.remote,
-          ...repo.credentials,
-        });
-        await workspace.writeFile(vars.dir + "/worker.js", vars.workerSource);
-        await git.add({ dir: vars.dir, filepath: "worker.js" });
-        await git.commit({
-          author: { name: "Capnweb", email: "captnweb-e2e@iterate.com" },
-          dir: vars.dir,
-          message: "Add capnweb worker proof from /run",
-        });
-        await git.push({
-          dir: vars.dir,
-          ref: repo.defaultBranch,
-          remote: "origin",
-          ...repo.credentials,
-        });
-
-        using worker = await project.worker;
-        const calledTool = await worker.someFunction({
-          echo: vars.marker,
-        });
-
-        return {
-          calledTool,
-          project: await project.describe(),
-          repoSlug: repo.slug,
-          workspaceGitPath: "ctx.project.workspace.git",
-        };
-      },
+    for (const runner of capnwebScriptRunners({
+      ctx: iterate.ctx,
       props: { scopes: { projects: [project.id] } },
-      vars: {
-        dir,
-        marker,
-        workerSource,
-      },
-    });
-    expect(updateResult).toMatchObject({
-      calledTool: { from: "iterate-config", input: { echo: marker }, marker },
-      project: { id: project.id, slug: project.slug },
-      repoSlug: "iterate-config",
-      workspaceGitPath: "ctx.project.workspace.git",
-    });
+    })) {
+      const marker = `capnweb-worker-${runner.name}-${uniqueSuffix()}`;
+      const streamPath = `/capnweb/worker/${marker}`;
+      const eventType = `events.iterate.com/capnweb/worker/${marker}`;
+      const workerSource = dedent`
+        export default {
+          async fetch(request, env) {
+            const url = new URL(request.url);
+            // The iterate-config worker uses the same context binding as /run
+            // and codemode scripts. No test-only ctx injection is involved.
+            const ctx = await env.ITERATE.context;
+            const streamPath = url.searchParams.get("streamPath");
+            const eventType = url.searchParams.get("eventType");
+            const marker = url.searchParams.get("marker");
+            const runner = url.searchParams.get("runner");
+            using streams = await ctx.streams;
+            const beforeStreams = await streams.list();
+            const listUntilStreamAppears = async () => {
+              for (let attempt = 0; attempt < 8; attempt++) {
+                const listedStreams = await streams.list();
+                if (listedStreams.some((stream) => stream.streamPath === streamPath)) {
+                  return listedStreams;
+                }
+                // Deployed stream listing can lag a successful append/read by a short interval.
+                await new Promise((resolve) => setTimeout(resolve, 250));
+              }
+              return streams.list();
+            };
+            const appended = await streams.append({
+              streamPath,
+              event: {
+                type: eventType,
+                payload: { marker, runner, source: "iterate-config" },
+              },
+            });
+            const afterStreams = await listUntilStreamAppears();
+            const events = await streams.read({ afterOffset: "start", streamPath });
+            return Response.json({
+              appended: {
+                eventType: appended.type,
+                marker: appended.payload.marker,
+                offset: appended.offset,
+                runner: appended.payload.runner,
+                streamPath,
+              },
+              streamNames: afterStreams.map((stream) => stream.name),
+              streamWasListedBeforeAppend: beforeStreams.some((stream) => stream.streamPath === streamPath),
+              streamWasListedAfterAppend: afterStreams.some((stream) => stream.streamPath === streamPath),
+              events,
+            });
+          },
+          async someFunction(input = {}) {
+            return { from: "iterate-config", input, marker: ${JSON.stringify(marker)} };
+          },
+        };
+      `;
 
-    using projectContext = await iterate.ctx.project;
-    using worker = (await projectContext.worker) as any;
-    // The config worker fetches through the project worker capability; dynamic
-    // methods on the same capability are ordinary tool calls.
-    const streamFetchResponse = await worker.fetch(
-      new Request(
-        `https://iterate-config.local/capnweb-fetch/${marker}?${new URLSearchParams({
-          eventType,
+      const updateResult = await runner.run({
+        script: async ({ ctx, vars }: CapnwebScriptInput) => {
+          using project = await ctx.project;
+          using repos = await project.repos;
+          using workspace = await project.workspace;
+          // This is the intended project-scoped git path for codemode and tests:
+          // the IterateContext shortcut resolves to ctx.projects.get(id).
+          using git = await workspace.git;
+          const repo = await repos.ensureIterateConfigInfo({ projectSlug: null });
+
+          await git.clone({
+            branch: repo.defaultBranch,
+            depth: 1,
+            dir: vars.dir,
+            url: repo.remote,
+            ...repo.credentials,
+          });
+          await workspace.writeFile(vars.dir + "/worker.js", vars.workerSource);
+          await git.add({ dir: vars.dir, filepath: "worker.js" });
+          await git.commit({
+            author: { name: "Capnweb", email: "captnweb-e2e@iterate.com" },
+            dir: vars.dir,
+            message: `Add capnweb worker proof from ${vars.runner}`,
+          });
+          await git.push({
+            dir: vars.dir,
+            ref: repo.defaultBranch,
+            remote: "origin",
+            ...repo.credentials,
+          });
+
+          using worker = await project.worker;
+          const calledTool = await worker.someFunction({
+            echo: vars.marker,
+            runner: vars.runner,
+          });
+
+          return {
+            calledTool,
+            project: await project.describe(),
+            repoSlug: repo.slug,
+            runner: vars.runner,
+            workspaceGitPath: "ctx.project.workspace.git",
+          };
+        },
+        vars: {
+          dir: `/iterate-config-${runner.name}-${Date.now()}`,
           marker,
-          streamPath,
-        })}`,
-      ),
-    );
-    expect(streamFetchResponse.ok).toBe(true);
-    const streamFetch = (await streamFetchResponse.json()) as any;
-    const called = await worker.someFunction({
-      echo: marker,
-    });
-    using streams = await iterate.ctx.streams;
-    const streamEvents = await streams.read({ afterOffset: "start", streamPath });
+          runner: runner.name,
+          workerSource,
+        },
+      });
+      expect(updateResult).toMatchObject({
+        calledTool: {
+          from: "iterate-config",
+          input: { echo: marker, runner: runner.name },
+          marker,
+        },
+        project: { id: project.id, slug: project.slug },
+        repoSlug: "iterate-config",
+        runner: runner.name,
+        workspaceGitPath: "ctx.project.workspace.git",
+      });
 
-    expect(called).toMatchObject({ from: "iterate-config", input: { echo: marker }, marker });
-    expect(streamFetch.appended).toMatchObject({
-      eventType,
-      marker,
-      offset: expect.any(Number),
-      streamPath,
-    });
-    expect(streamFetch.streamWasListedBeforeAppend).toBe(false);
-    expect(streamFetch.streamWasListedAfterAppend).toBe(true);
-    expect(streamFetch.streamNames).toEqual(
-      expect.arrayContaining([`${project.id}:${streamPath}`]),
-    );
-    expect(streamFetch.events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          payload: { marker, source: "iterate-config" },
-          type: eventType,
-        }),
-      ]),
-    );
-    expect(streamEvents).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          payload: { marker, source: "iterate-config" },
-          type: eventType,
-        }),
-      ]),
-    );
+      using projectContext = await iterate.ctx.project;
+      using worker = (await projectContext.worker) as any;
+      // The config worker fetches through the project worker capability; dynamic
+      // methods on the same capability are ordinary tool calls.
+      const streamFetchResponse = await worker.fetch(
+        new Request(
+          `https://iterate-config.local/capnweb-fetch/${marker}?${new URLSearchParams({
+            eventType,
+            marker,
+            runner: runner.name,
+            streamPath,
+          })}`,
+        ),
+      );
+      expect(streamFetchResponse.ok).toBe(true);
+      const streamFetch = (await streamFetchResponse.json()) as any;
+      const called = await worker.someFunction({
+        echo: marker,
+        runner: runner.name,
+      });
+      using streams = await iterate.ctx.streams;
+      const streamEvents = await streams.read({ afterOffset: "start", streamPath });
+
+      expect(called).toMatchObject({
+        from: "iterate-config",
+        input: { echo: marker, runner: runner.name },
+        marker,
+      });
+      expect(streamFetch.appended).toMatchObject({
+        eventType,
+        marker,
+        offset: expect.any(Number),
+        runner: runner.name,
+        streamPath,
+      });
+      expect(streamFetch.streamWasListedBeforeAppend).toBe(false);
+      expect(streamFetch.streamWasListedAfterAppend).toBe(true);
+      expect(streamFetch.streamNames).toEqual(
+        expect.arrayContaining([`${project.id}:${streamPath}`]),
+      );
+      expect(streamFetch.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            payload: { marker, runner: runner.name, source: "iterate-config" },
+            type: eventType,
+          }),
+        ]),
+      );
+      expect(streamEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            payload: { marker, runner: runner.name, source: "iterate-config" },
+            type: eventType,
+          }),
+        ]),
+      );
+    }
   });
 
   // Scenario: project fetch capabilities expose both ingress and egress from
@@ -360,78 +389,86 @@ describe("capnweb", () => {
       slug: `${testRunSlugPrefix}-project-fetch-${uniqueSuffix()}`.slice(0, 40),
     });
 
-    const result = await runCapnwebScriptInDynamicWorker({
-      script: async ({ ctx, vars }: CapnwebScriptInput) => {
-        using project = await ctx.project;
-        const expectedHomepageText = "Hello from the project config worker";
-        let ingress = { status: 0, text: "" };
-        for (let attempt = 0; attempt < 12; attempt++) {
-          // ctx.project.fetch is the Project Durable Object ingress fetch.
-          const response = await project.fetch(new Request(vars.ingressUrl + "/"));
-          ingress = {
-            status: response.status,
-            text: await response.text(),
-          };
-          if (ingress.status === 200 && ingress.text === expectedHomepageText) break;
-          await new Promise((resolve) => setTimeout(resolve, 1_000));
-        }
-
-        if (ingress.status !== 200 || ingress.text !== expectedHomepageText) {
-          throw new Error(
-            `Expected project fetch to return default homepage, got ${ingress.status}: ${ingress.text}`,
-          );
-        }
-
-        const headerName = "x-iterate-example-secret";
-        const secretReference = `Bearer getSecret({ key: ${JSON.stringify(vars.secretKey)} })`;
-        // ctx.project.egressFetch is the Project Durable Object egress path,
-        // including project secret substitution.
-        const egressResponse = await project.egressFetch(
-          new Request(vars.echoUrl, {
-            headers: {
-              authorization: `Bearer ${vars.echoAuthToken}`,
-              [headerName]: secretReference,
-            },
-          }),
-        );
-        const body = (await egressResponse.json()) as {
-          headers?: Record<string, string | string[] | undefined>;
-          url?: string;
-        };
-        const echoedHeader =
-          body.headers?.[headerName] ?? body.headers?.["X-Iterate-Example-Secret"];
-        const echoedSecretHeader = Array.isArray(echoedHeader)
-          ? echoedHeader.join(", ")
-          : String(echoedHeader ?? "");
-
-        return {
-          egress: {
-            echoedSecretHeader,
-            echoUrl: body.url,
-            secretReferenceWasSubstituted: echoedSecretHeader !== secretReference,
-            status: egressResponse.status,
-          },
-          ingress,
-        };
-      },
+    using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
+    for (const runner of capnwebScriptRunners({
+      ctx: iterate.ctx,
       props: { scopes: { projects: [project.id] } },
-      vars: {
-        echoAuthToken: auth.token.exposeSecret(),
-        echoUrl: new URL("/api/captnweb/egress-echo", egressEchoBaseUrl).toString(),
-        ingressUrl: project.ingressUrl,
-        secretKey: EXAMPLE_EGRESS_SECRET_KEY,
-      },
-    });
+    })) {
+      const result = await runner.run({
+        script: async ({ ctx, vars }: CapnwebScriptInput) => {
+          using project = await ctx.project;
+          const expectedHomepageText = "Hello from the project config worker";
+          let ingress = { status: 0, text: "" };
+          for (let attempt = 0; attempt < 12; attempt++) {
+            // ctx.project.fetch is the Project Durable Object ingress fetch.
+            const response = await project.fetch(new Request(vars.ingressUrl + "/"));
+            ingress = {
+              status: response.status,
+              text: await response.text(),
+            };
+            if (ingress.status === 200 && ingress.text === expectedHomepageText) break;
+            await new Promise((resolve) => setTimeout(resolve, 1_000));
+          }
 
-    expect(result.ingress).toMatchObject({
-      status: 200,
-      text: "Hello from the project config worker",
-    });
-    expect(result.egress).toMatchObject({
-      secretReferenceWasSubstituted: true,
-      status: 200,
-    });
-    expect(result.egress.echoedSecretHeader).toBe(`Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}`);
+          if (ingress.status !== 200 || ingress.text !== expectedHomepageText) {
+            throw new Error(
+              `Expected project fetch to return default homepage, got ${ingress.status}: ${ingress.text}`,
+            );
+          }
+
+          const headerName = "x-iterate-example-secret";
+          const secretReference = `Bearer getSecret({ key: ${JSON.stringify(vars.secretKey)} })`;
+          // ctx.project.egressFetch is the Project Durable Object egress path,
+          // including project secret substitution.
+          const egressResponse = await project.egressFetch(
+            new Request(vars.echoUrl, {
+              headers: {
+                authorization: `Bearer ${vars.echoAuthToken}`,
+                [headerName]: secretReference,
+              },
+            }),
+          );
+          const body = (await egressResponse.json()) as {
+            headers?: Record<string, string | string[] | undefined>;
+            url?: string;
+          };
+          const echoedHeader =
+            body.headers?.[headerName] ?? body.headers?.["X-Iterate-Example-Secret"];
+          const echoedSecretHeader = Array.isArray(echoedHeader)
+            ? echoedHeader.join(", ")
+            : String(echoedHeader ?? "");
+
+          return {
+            egress: {
+              echoedSecretHeader,
+              echoUrl: body.url,
+              secretReferenceWasSubstituted: echoedSecretHeader !== secretReference,
+              status: egressResponse.status,
+            },
+            ingress,
+            runner: vars.runner,
+          };
+        },
+        vars: {
+          echoAuthToken: auth.token.exposeSecret(),
+          echoUrl: new URL("/api/captnweb/egress-echo", egressEchoBaseUrl).toString(),
+          ingressUrl: project.ingressUrl,
+          runner: runner.name,
+          secretKey: EXAMPLE_EGRESS_SECRET_KEY,
+        },
+      });
+
+      expect(result.ingress).toMatchObject({
+        status: 200,
+        text: "Hello from the project config worker",
+      });
+      expect(result.egress).toMatchObject({
+        secretReferenceWasSubstituted: true,
+        status: 200,
+      });
+      expect(result.egress.echoedSecretHeader).toBe(`Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}`);
+      expect(result.runner).toBe(runner.name);
+    }
   });
 
   // Scenario: mounts add ergonomic shortcuts without changing the capability
@@ -839,6 +876,27 @@ class ProjectConnectionTestTarget extends RpcTarget {
 }
 
 type CapnwebScript = (input: CapnwebScriptInput) => any;
+type CapnwebScriptRunner = {
+  name: "node" | "run";
+  run(input: { script: CapnwebScript; vars?: Record<string, unknown> }): Promise<any>;
+};
+
+function capnwebScriptRunners(input: {
+  ctx: RpcStub<IterateContext>;
+  props?: IterateContextProps;
+}): CapnwebScriptRunner[] {
+  return [
+    {
+      name: "node",
+      run: ({ script, vars }) => runCapnwebScriptFromNode({ ctx: input.ctx, script, vars }),
+    },
+    {
+      name: "run",
+      run: ({ script, vars }) =>
+        runCapnwebScriptInDynamicWorker({ props: input.props, script, vars }),
+    },
+  ];
+}
 
 async function runCapnwebScriptFromNode(input: {
   ctx: RpcStub<IterateContext>;
