@@ -355,3 +355,46 @@ export const fetchAndEgressProject = capnwebScript
       ingress,
     };
   });
+
+/**
+ * Project-context script: calls bare global `fetch(...)` with a getSecret(...)
+ * header.
+ *
+ * This is the codemode-global-fetch proof. The script does not mention
+ * `ctx.project.egressFetch`; each runner must install global fetch as the
+ * project egress gateway. The node e2e test runs this same function through
+ * Vitest's direct runner, `/api/captnweb/run`, and `src/capnweb/cli.ts`.
+ */
+export const globalFetchUsesProjectEgress = capnwebScript
+  .vars<{
+    echoAuthToken: string;
+    echoUrl: string;
+    executionMode: string;
+    secretKey: string;
+  }>()
+  .define(async ({ vars }) => {
+    const headerName = "x-iterate-global-fetch-secret";
+    const secretReference = `Bearer getSecret({ key: ${JSON.stringify(vars.secretKey)} })`;
+    const response = await fetch(vars.echoUrl, {
+      headers: {
+        authorization: `Bearer ${vars.echoAuthToken}`,
+        [headerName]: secretReference,
+      },
+    });
+    const body = (await response.json()) as {
+      headers?: Record<string, string | string[] | undefined>;
+      url?: string;
+    };
+    const echoedHeader =
+      body.headers?.[headerName] ?? body.headers?.["X-Iterate-Global-Fetch-Secret"];
+    const echoedSecretHeader = Array.isArray(echoedHeader)
+      ? echoedHeader.join(", ")
+      : String(echoedHeader ?? "");
+
+    return {
+      echoedSecretHeader,
+      executionMode: vars.executionMode,
+      secretReferenceWasSubstituted: echoedSecretHeader !== secretReference,
+      status: response.status,
+    };
+  });

@@ -95,15 +95,40 @@ function rootRunWorkerSrc(input: { dynamicMountRoots: string[]; functionSource: 
     });
   }
 
+  async function projectEgressFetch(ctx, ...args) {
+    using project = await ctx.project;
+    return await project.egressFetch(new Request(args[0], args[1]));
+  }
+
+  async function runWithProjectEgressFetch(ctx, run) {
+    // Dynamic Workers normally have a host-controlled outbound fetch gate. The
+    // /run worker is our tiny codemode-shaped harness, so it installs the same
+    // rule at the runner boundary: bare fetch() goes through the Project Durable
+    // Object egress path, including getSecret(...) header substitution.
+    //
+    // This is intentionally scoped to the snippet invocation and restored in a
+    // finally block. Built-in project ingress fetch remains available as
+    // ctx.project.fetch(...); this hook is only the global outbound fetch.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (...args) => projectEgressFetch(ctx, ...args);
+    try {
+      return await run();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
   export default class extends WorkerEntrypoint {
     async run(vars) {
       try {
         const ctx = contextForRun(this, await this.env.ITERATE.context);
-        const result = await snippet({
-          ctx,
-          env: this.env,
-          vars,
-        });
+        const result = await runWithProjectEgressFetch(ctx, () =>
+          snippet({
+            ctx,
+            env: this.env,
+            vars,
+          })
+        );
         return JSON.stringify({ ok: true, result });
       } catch (error) {
         return JSON.stringify({

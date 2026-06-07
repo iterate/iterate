@@ -46,11 +46,40 @@ async function main() {
       env: Record<string, unknown>;
       vars: Record<string, unknown>;
     }) => unknown;
-    const result = await fn({ ctx, env: {}, vars: parseJsonObject(flags.vars ?? "{}") });
+    const result = await runWithProjectEgressFetch(ctx, () =>
+      fn({ ctx, env: {}, vars: parseJsonObject(flags.vars ?? "{}") }),
+    );
     console.log(JSON.stringify(result));
   } finally {
     for (const socket of sockets) socket.close();
   }
+}
+
+async function runWithProjectEgressFetch<T>(
+  ctx: RpcStub<IterateContext>,
+  run: () => T | Promise<T>,
+): Promise<T> {
+  // The CLI is a codemode runner, not a generic Node script runner. To keep the
+  // same authoring model as /run and real codemode workers, bare fetch() is the
+  // project egress gateway whenever the CLI was opened with --project-id.
+  // Root-only CLI snippets that call fetch() will fail at ctx.project, which is
+  // the right signal: there is no project egress context to supply secrets.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (...args) => projectEgressFetch(ctx, ...args);
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+async function projectEgressFetch(
+  ctx: RpcStub<IterateContext>,
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) {
+  using project = await ctx.project;
+  return await project.egressFetch(new Request(input, init));
 }
 
 async function projectContext(input: {

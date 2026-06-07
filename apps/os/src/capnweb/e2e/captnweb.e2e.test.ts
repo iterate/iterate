@@ -24,6 +24,7 @@ import {
   callProjectConnection,
   describeProjectThroughProjects,
   fetchAndEgressProject,
+  globalFetchUsesProjectEgress,
   updateIterateConfigAndCallWorker,
   capnwebScript,
   type CapnwebScript,
@@ -396,6 +397,40 @@ describe("capnweb", () => {
       });
       expect(result.egress.echoedSecretHeader).toBe(`Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}`);
       expect(result.executionMode).toBe(executionMode.name);
+    }
+  });
+
+  // Scenario: codemode scripts should use bare fetch() for outbound HTTP, and
+  // each runner should route that fetch through project egress so getSecret(...)
+  // substitutions happen. This is intentionally node-only for now: it covers
+  // the direct Vitest runner, /run dynamic worker, and the makeshift CLI.
+  it("routes codemode global fetch through project egress in node, /run, and cli", async () => {
+    using root = withRootIterateContextFromNode({ auth, baseUrl });
+    await using project = await createDisposableProject({
+      root,
+      slug: `${testRunSlugPrefix}-global-fetch-${uniqueSuffix()}`.slice(0, 40),
+    });
+    using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
+
+    for (const executionMode of capnwebToolExecutionModes({
+      ctx: iterate.ctx,
+      props: { scopes: { projects: [project.id] } },
+    })) {
+      const result = await executionMode.runTool({
+        script: globalFetchUsesProjectEgress,
+        vars: {
+          echoAuthToken: auth.token.exposeSecret(),
+          echoUrl: new URL("/api/captnweb/egress-echo", egressEchoBaseUrl).toString(),
+          executionMode: executionMode.name,
+          secretKey: EXAMPLE_EGRESS_SECRET_KEY,
+        },
+      });
+      expect(result).toMatchObject({
+        echoedSecretHeader: `Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}`,
+        executionMode: executionMode.name,
+        secretReferenceWasSubstituted: true,
+        status: 200,
+      });
     }
   });
 
@@ -858,7 +893,36 @@ async function runCapnwebScriptFromNode(input: {
   script: RunnableCapnwebScript;
   vars?: Record<string, unknown>;
 }): Promise<any> {
-  return await input.script({ ctx: input.ctx, env: {}, vars: input.vars ?? {} });
+  return await runWithProjectEgressFetch(input.ctx, () =>
+    input.script({ ctx: input.ctx, env: {}, vars: input.vars ?? {} }),
+  );
+}
+
+async function runWithProjectEgressFetch<T>(
+  ctx: RpcStub<IterateContext>,
+  run: () => T | Promise<T>,
+): Promise<T> {
+  // This is the Vitest-node equivalent of codemode's global outbound gateway.
+  // It gives tests the same authoring model as /run and the CLI: script code
+  // can call fetch(...) directly, while the runner routes that request through
+  // ctx.project.egressFetch so project secrets are substituted. The override is
+  // scoped to one script invocation and restored even if the script throws.
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (...args) => projectEgressFetch(ctx, ...args);
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+async function projectEgressFetch(
+  ctx: RpcStub<IterateContext>,
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) {
+  using project = await ctx.project;
+  return await project.egressFetch(new Request(input, init));
 }
 
 async function runCapnwebScriptInDynamicWorker(input: {
