@@ -195,7 +195,7 @@ export class IterateContext extends IterateCapability {
       args,
       path,
       remainder: match.remainder,
-      target: this.resolveMountTarget(match.mount.target),
+      target: await this.resolveMountTarget(match.mount.target),
     });
   }
 
@@ -220,12 +220,12 @@ export class IterateContext extends IterateCapability {
     return match;
   }
 
-  private resolveMountTarget(target: Mount["target"]): unknown {
+  private async resolveMountTarget(target: Mount["target"]): Promise<unknown> {
     switch (target.type) {
       case "dynamic-worker":
         throw new Error("Dynamic-worker mounts must be invoked through callMounted.");
       case "ctx":
-        return resolveTargetCall(this, target.call ?? []);
+        return await resolveTargetCall(this, target.call ?? []);
     }
   }
 
@@ -376,9 +376,10 @@ function isPathPrefix(prefix: string[], path: string[]) {
   return prefix.every((segment, index) => path[index] === segment);
 }
 
-function resolveTargetCall(target: unknown, call: readonly TargetCall[]): unknown {
+async function resolveTargetCall(target: unknown, call: readonly TargetCall[]): Promise<unknown> {
   let current = target;
   for (const step of call) {
+    current = await current;
     if (current == null) {
       throw new Error(`Cannot resolve target call through ${String(current)}.`);
     }
@@ -386,7 +387,10 @@ function resolveTargetCall(target: unknown, call: readonly TargetCall[]): unknow
     if (typeof step === "string") {
       const parent = current;
       const value = (parent as Record<string, unknown>)[step];
-      current = typeof value === "function" ? value.bind(parent) : value;
+      current =
+        typeof value === "function" && typeof value.bind === "function"
+          ? value.bind(parent)
+          : value;
       continue;
     }
 
@@ -394,9 +398,9 @@ function resolveTargetCall(target: unknown, call: readonly TargetCall[]): unknow
     if (typeof method !== "function") {
       throw new Error(`Target method ${step.method} is not callable.`);
     }
-    current = method.apply(current, step.args ?? []);
+    current = Reflect.apply(method, current, step.args ?? []);
   }
-  return current;
+  return await current;
 }
 
 async function invokeResolvedMountTarget(input: {
@@ -413,7 +417,9 @@ async function invokeResolvedMountTarget(input: {
   }
 
   const method =
-    input.remainder.length > 0 ? resolveTargetCall(input.target, input.remainder) : input.target;
+    input.remainder.length > 0
+      ? await resolveTargetCall(input.target, input.remainder)
+      : input.target;
   if (typeof method !== "function") {
     throw new Error(`Mounted path ${input.path.join(".")} did not resolve to a function.`);
   }

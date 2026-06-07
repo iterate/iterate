@@ -36,7 +36,10 @@ export default defineConfig({
         test: {
           environment: "node",
           hookTimeout: 120_000,
-          include: ["./src/capnweb/e2e/captnweb.e2e.test.ts"],
+          include: [
+            "./src/capnweb/e2e/captnweb.e2e.test.ts",
+            "./src/capnweb/e2e/captnweb-slack-sdk.e2e.test.ts",
+          ],
           name: "node",
           provide: sharedProvide,
           testTimeout: 120_000,
