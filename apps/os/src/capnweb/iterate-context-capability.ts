@@ -72,6 +72,7 @@ export class IterateContextEntrypoint extends WorkerEntrypoint<Env, IterateConte
       context: appContext,
       projects: createProjectsCapability({
         context: appContext,
+        iterateContextProps: workerCtx.props,
       }),
       props: workerCtx.props,
     });
@@ -250,7 +251,10 @@ export function createIterateContext(input: IterateContextRuntime) {
   return new IterateContext(input);
 }
 
-export function createProjectsCapability(input: { context: AppContext }) {
+export function createProjectsCapability(input: {
+  context: AppContext;
+  iterateContextProps?: IterateContextProps;
+}) {
   return new ProjectsCapability({
     activeOrganization: {
       isAdminApi: true,
@@ -262,6 +266,7 @@ export function createProjectsCapability(input: { context: AppContext }) {
       userId: "root-context",
     },
     context: input.context,
+    iterateContextProps: input.iterateContextProps,
   });
 }
 

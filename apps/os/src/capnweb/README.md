@@ -176,6 +176,49 @@ Mount lookup uses the most specific path. Runtime mounted members are installed
 on a per-instance prototype, not on `IterateContext.prototype`, so mounted names
 cannot leak between contexts.
 
+## Iterate-Config Context Props
+
+The project `worker.js` may export `getIterateContextProps()` to describe mounts
+that should exist inside its own RPC-style tools:
+
+```ts
+import { WorkerEntrypoint } from "cloudflare:workers";
+
+export default class Worker extends WorkerEntrypoint {
+  getIterateContextProps() {
+    return {
+      mounts: [
+        {
+          path: ["slack"],
+          target: {
+            type: "ctx",
+            call: ["project", "connections", { method: "get", args: ["slack-sdk"] }, "sdk"],
+          },
+        },
+      ],
+    };
+  }
+
+  async postDailyReport(input) {
+    const ctx = await this.env.ITERATE.context;
+    using slack = await ctx.slack;
+    return await slack.chat.postMessage(input);
+  }
+}
+```
+
+This hook is deliberately not an authority hook. The Project Durable Object
+accepts `mounts` from `worker.js`, then overwrites `scopes` with the current
+project before constructing `env.ITERATE.context`. Config code can define local
+shortcuts for capabilities it can already reach, but it cannot grant itself
+access to other projects.
+
+Because Dynamic Worker env bindings are fixed at load time, tool calls use a
+two-step load when this hook exists: load once with the default project context,
+read `getIterateContextProps()`, then load the same worker code for the actual
+tool call with the mounted context. Ingress `fetch` keeps using the normal
+cached project worker.
+
 ## Dynamic Worker Mounts
 
 Dynamic-worker mounts are loaded and invoked by the parent worker that owns the

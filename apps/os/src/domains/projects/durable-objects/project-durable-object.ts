@@ -158,8 +158,10 @@ type ProjectIngressRouteRow = {
 
 export type ProjectDynamicWorkerEntrypoint = {
   [key: string]: any;
+  [Symbol.dispose]?(): void;
   fetch(request: Request): Response | Promise<Response>;
   afterAppend?(input: { event: Event }): unknown | Promise<unknown>;
+  getIterateContextProps?(): Partial<IterateContextProps> | Promise<Partial<IterateContextProps>>;
 };
 
 type ProjectDynamicWorkerModule =
@@ -186,6 +188,9 @@ type ProjectDynamicWorkerLoader = {
     name: string,
     getCode: () => ProjectDynamicWorkerCode,
   ): {
+    getEntrypoint(): unknown;
+  };
+  load(code: ProjectDynamicWorkerCode): {
     getEntrypoint(): unknown;
   };
 };
@@ -477,7 +482,10 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     });
     return createIterateContext({
       context,
-      projects: createProjectsCapability({ context }),
+      projects: createProjectsCapability({
+        context,
+        iterateContextProps: props ?? { scopes: { projects: [summary.id] } },
+      }),
       props: props ?? { scopes: { projects: [summary.id] } },
     });
   }
@@ -612,16 +620,61 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   async callConfigWorkerFunction(input: {
     args?: unknown[];
     functionName: string;
+    iterateContextProps?: IterateContextProps;
   }): Promise<unknown> {
     await this.ensureStarted();
     const summary = this.requireSummary();
-    const entrypoint = await this.getFreshProjectDynamicWorkerEntrypoint(summary);
-    const fn = entrypoint[input.functionName];
-    if (typeof fn !== "function") {
-      throw new Error(`Project config worker does not export ${input.functionName}.`);
-    }
+    const checkout = await this.buildFreshProjectDynamicWorker(summary);
+    // Tool calls need one subtle extra step compared with ingress fetch.
+    //
+    // The project config worker may export getIterateContextProps() to describe
+    // context mounts it wants during RPC-style tool execution. That is useful
+    // for project-local tools such as:
+    //
+    //   postDailyReport() {
+    //     const ctx = await env.ITERATE.context;
+    //     return ctx.slack.chat.postMessage(...);
+    //   }
+    //
+    // where ctx.slack is not a built-in domain capability, but a mount pointing
+    // at a live parent-provided RpcTarget registered through
+    // ctx.project.connections.
+    //
+    // Dynamic worker env bindings are fixed when the worker is loaded, so the
+    // host has to load the worker once with the ordinary project context, ask
+    // for its desired mount props, then load the same code again with
+    // env.ITERATE constructed from those props for the actual tool call.
+    const defaultEntrypoint = this.loadProjectDynamicWorkerEntrypoint({
+      checkout,
+      projectId: summary.id,
+    });
+    const iterateContextProps =
+      input.iterateContextProps ??
+      (await this.resolveProjectConfigIterateContextProps({
+        entrypoint: defaultEntrypoint,
+        projectId: summary.id,
+      }));
+    const entrypoint =
+      iterateContextProps == null
+        ? defaultEntrypoint
+        : this.loadProjectDynamicWorkerEntrypoint({
+            checkout,
+            iterateContextProps,
+            projectId: summary.id,
+          });
 
-    return await Reflect.apply(fn, entrypoint, input.args ?? []);
+    try {
+      const fn = entrypoint[input.functionName];
+      if (typeof fn !== "function") {
+        throw new Error(`Project config worker does not export ${input.functionName}.`);
+      }
+
+      return await Reflect.apply(fn, entrypoint, input.args ?? []);
+    } finally {
+      if (entrypoint !== defaultEntrypoint) {
+        entrypoint[Symbol.dispose]?.();
+      }
+    }
   }
 
   async getConfigWorker(): Promise<ProjectDynamicWorkerEntrypoint> {
@@ -765,43 +818,91 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
   }
 
+  private async resolveProjectConfigIterateContextProps(input: {
+    entrypoint: ProjectDynamicWorkerEntrypoint;
+    projectId: string;
+  }): Promise<IterateContextProps | undefined> {
+    let configProps: Partial<IterateContextProps>;
+    try {
+      // Workers RPC stubs do not give us a trustworthy optional-method probe:
+      // reading a missing method can still produce a callable stub, and the
+      // runtime reports "does not implement the method" only when that stub is
+      // invoked. Calling and handling that one RPC error keeps worker.js simple:
+      // export getIterateContextProps() when you want mounts; omit it otherwise.
+      configProps = await input.entrypoint.getIterateContextProps!();
+    } catch (error) {
+      if (isMissingProjectConfigEntrypointMethod(error, "getIterateContextProps")) {
+        return undefined;
+      }
+      throw error;
+    }
+
+    // This hook is intentionally one-way: project config code can contribute
+    // ergonomic mounts, but the host owns authority. In particular:
+    //
+    // - We accept only `mounts` from the worker result.
+    // - We always overwrite scopes with this project id.
+    // - A malicious or buggy worker returning `{ scopes: { projects: "all" } }`
+    //   is therefore harmless here.
+    //
+    // That keeps the future "worker.js defines its IterateContext shape" model
+    // compatible with object-capability security: config code may name
+    // capabilities it can already reach through project-local mounts, but it
+    // cannot mint new project access.
+    return {
+      mounts: Array.isArray(configProps.mounts) ? configProps.mounts : undefined,
+      scopes: { projects: [input.projectId] },
+    };
+  }
+
   private loadProjectDynamicWorkerEntrypoint(input: {
     checkout: ProjectConfigCheckout;
+    iterateContextProps?: IterateContextProps;
     projectId: string;
   }): ProjectDynamicWorkerEntrypoint {
     const { checkout } = input;
-    if (this.#dynamicWorkerEntrypoint?.commitOid === checkout.commitOid) {
+    if (
+      !input.iterateContextProps &&
+      this.#dynamicWorkerEntrypoint?.commitOid === checkout.commitOid
+    ) {
       return this.#dynamicWorkerEntrypoint.entrypoint;
     }
 
     const loader = projectRuntimeEnv(this.env).LOADER;
-    const entrypoint = loader
-      .get(
-        projectDynamicWorkerId({
-          commitOid: checkout.commitOid,
-          projectId: input.projectId,
-        }),
-        () =>
-          projectDynamicWorkerCodeWithStreams({
-            iterate: readLoopbackExports(this.ctx).IterateContextEntrypoint({
-              props: { scopes: { projects: [input.projectId] } },
-            }),
-            streams: readLoopbackExports(this.ctx).StreamsCapability({
-              props: { projectId: input.projectId },
-            }),
-            workerCode: checkout.workerCode,
+    const workerCode = projectDynamicWorkerCodeWithStreams({
+      iterate: readLoopbackExports(this.ctx).IterateContextEntrypoint({
+        props: input.iterateContextProps ?? { scopes: { projects: [input.projectId] } },
+      }),
+      streams: readLoopbackExports(this.ctx).StreamsCapability({
+        props: { projectId: input.projectId },
+      }),
+      workerCode: checkout.workerCode,
+    });
+    const worker = input.iterateContextProps
+      ? // Custom context props may include per-call mounts, so they cannot share
+        // the cached ingress/config-worker instance keyed only by commit oid. Use
+        // load() for this one invocation, dispose it after the method returns, and
+        // leave the normal cached get() path for ingress/default tool calls.
+        loader.load(workerCode)
+      : loader.get(
+          projectDynamicWorkerId({
+            commitOid: checkout.commitOid,
+            projectId: input.projectId,
           }),
-      )
-      .getEntrypoint();
+          () => workerCode,
+        );
+    const entrypoint = worker.getEntrypoint();
 
     if (!isProjectDynamicWorkerEntrypoint(entrypoint)) {
       throw new Error("Project dynamic worker entrypoint is missing fetch.");
     }
 
-    this.#dynamicWorkerEntrypoint = {
-      commitOid: checkout.commitOid,
-      entrypoint,
-    };
+    if (!input.iterateContextProps) {
+      this.#dynamicWorkerEntrypoint = {
+        commitOid: checkout.commitOid,
+        entrypoint,
+      };
+    }
     return entrypoint;
   }
 
@@ -1315,6 +1416,10 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isMissingProjectConfigEntrypointMethod(error: unknown, methodName: string) {
+  return errorMessage(error).includes(`does not implement the method "${methodName}"`);
+}
+
 async function bundledProjectDynamicWorkerCode(
   files: Record<string, string>,
 ): Promise<ProjectDynamicWorkerCode> {
@@ -1488,13 +1593,7 @@ function projectRuntimeEnv(env: ProjectEnv): ProjectRuntimeEnv {
 
 function readLoopbackExports(ctx: DurableObjectState) {
   return ctx.exports as unknown as Cloudflare.Exports & {
-    IterateContextEntrypoint(input: {
-      props: {
-        scopes: {
-          projects: string[];
-        };
-      };
-    }): Fetcher;
+    IterateContextEntrypoint(input: { props: IterateContextProps }): Fetcher;
     StreamsCapability(input: { props: StreamsCapabilityProps }): Fetcher;
   };
 }

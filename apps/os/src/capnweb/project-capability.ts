@@ -2,6 +2,7 @@ import { RpcTarget } from "cloudflare:workers";
 import { ProjectReposCapability } from "./repos-capability.ts";
 import { ProjectStreamsCapability } from "./streams-capability.ts";
 import { ProjectWorkspaceCapability } from "./workspace-capability.ts";
+import type { IterateContextProps } from "./iterate-context-capability.ts";
 import type { AppContext } from "~/context.ts";
 import type { ProjectCapabilityApi } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
@@ -15,6 +16,7 @@ export class ProjectCapability extends RpcTarget {
   constructor(
     private readonly input: {
       context: AppContext;
+      iterateContextProps?: IterateContextProps;
       project: ProjectCapabilityApi;
       projectId: string;
     },
@@ -48,7 +50,21 @@ export class ProjectCapability extends RpcTarget {
   }
 
   get worker(): ProjectWorkerCapability {
-    return (this.#worker ??= new ProjectWorkerCapability(this.input.project));
+    return (this.#worker ??= new ProjectWorkerCapability({
+      // Project worker calls are made from a particular IterateContext. If that
+      // context has mounts, the iterate-config worker should see the same
+      // ergonomic tree through env.ITERATE.context. This is what lets a caller
+      // mount a parent-provided capability at ctx.slack and then call a config
+      // tool that uses ctx.slack internally.
+      //
+      // The worker child does not get to preserve arbitrary authority. Before
+      // these props reach the Project Durable Object, projectConfigWorkerProps()
+      // below rewrites scopes to this one project and only carries mounts
+      // forward.
+      iterateContextProps: this.input.iterateContextProps,
+      project: this.input.project,
+      projectId: this.input.projectId,
+    }));
   }
 
   afterAppend(...args: Parameters<ProjectCapabilityApi["afterAppend"]>) {
@@ -129,7 +145,13 @@ export class ProjectConnectionsCapability extends RpcTarget {
 }
 
 export class ProjectWorkerCapability extends RpcTarget {
-  constructor(private readonly project: ProjectCapabilityApi) {
+  constructor(
+    private readonly input: {
+      iterateContextProps?: IterateContextProps;
+      project: ProjectCapabilityApi;
+      projectId: string;
+    },
+  ) {
     super();
     // This RpcTarget deliberately returns a Proxy from its constructor.
     //
@@ -163,9 +185,13 @@ export class ProjectWorkerCapability extends RpcTarget {
           return Reflect.get(target, prop, receiver);
         }
         return async (...args: unknown[]) => {
-          return await target.project.callConfigWorkerFunction({
+          return await target.input.project.callConfigWorkerFunction({
             args,
             functionName: prop,
+            iterateContextProps: projectConfigWorkerProps({
+              iterateContextProps: target.input.iterateContextProps,
+              projectId: target.input.projectId,
+            }),
           });
         };
       },
@@ -173,6 +199,21 @@ export class ProjectWorkerCapability extends RpcTarget {
   }
 
   async fetch(request: Request) {
-    return await this.project.fetch(request);
+    return await this.input.project.fetch(request);
   }
+}
+
+function projectConfigWorkerProps(input: {
+  iterateContextProps?: IterateContextProps;
+  projectId: string;
+}): IterateContextProps | undefined {
+  // Preserve caller mounts so ctx.project.worker.someTool() and the tool's own
+  // env.ITERATE.context expose the same shortcut tree. Do not preserve caller
+  // scopes: the project config worker is project-owned code, so it receives a
+  // project-scoped context even when an all-projects/root context invoked it.
+  if (!input.iterateContextProps?.mounts?.length) return undefined;
+  return {
+    mounts: input.iterateContextProps.mounts,
+    scopes: { projects: [input.projectId] },
+  };
 }

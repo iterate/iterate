@@ -2,6 +2,7 @@ import { RpcTarget } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
 import { ProjectCapability } from "./project-capability.ts";
+import type { IterateContextProps } from "./iterate-context-capability.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { AppContext } from "~/context.ts";
 import {
@@ -49,6 +50,7 @@ export class ProjectsCapability extends RpcTarget {
     private readonly props: {
       activeOrganization?: ActiveOrganizationAuth;
       context: AppContext;
+      iterateContextProps?: IterateContextProps;
     },
   ) {
     super();
@@ -61,6 +63,7 @@ export class ProjectsCapability extends RpcTarget {
     ) as unknown as ProjectDurableObjectContextClient;
     return new ProjectCapability({
       context: this.props.context,
+      iterateContextProps: this.props.iterateContextProps,
       project: project.getCapability({ scopes: { projects: [projectId] } }),
       projectId,
     });

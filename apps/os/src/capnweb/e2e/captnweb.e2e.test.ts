@@ -188,6 +188,94 @@ describe("capnweb", () => {
     }
   });
 
+  // Scenario: iterate-config owns the ergonomic context shape for its tools.
+  // The worker exports getIterateContextProps(), the Project Durable Object
+  // forces the project scope, and env.ITERATE.context inside the config worker
+  // receives the worker-defined mount.
+  it("lets iterate-config worker.js define mounts used by its own tools", async () => {
+    using root = withRootIterateContextFromNode({ auth, baseUrl });
+    await using project = await createDisposableProject({
+      root,
+      slug: `${testRunSlugPrefix}-config-mount-${uniqueSuffix()}`.slice(0, 40),
+    });
+    const connectionKey = `config-mount-${uniqueSuffix()}`;
+    const marker = `config-mount-${uniqueSuffix()}`;
+    const mountName = `mountedConnection${uniqueSuffix().replaceAll("-", "")}`;
+    using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
+    using projectContext = await iterate.ctx.project;
+    await projectContext.provideCapability({
+      connectionKey,
+      rpcTarget: new ConfigWorkerMountTarget({ marker }),
+    });
+
+    const workerSource = dedent`
+      import { WorkerEntrypoint } from "cloudflare:workers";
+
+      export default class ConfigWorkerMountProof extends WorkerEntrypoint {
+        getIterateContextProps() {
+          // The config worker declares the context shape its own tools want.
+          // The host accepts this mount data but overwrites scopes with this
+          // project id before constructing env.ITERATE.context.
+          return {
+            mounts: [
+              {
+                path: [${JSON.stringify(mountName)}],
+                target: {
+                  type: "ctx",
+                  call: [
+                    "project",
+                    "connections",
+                    { method: "get", args: [${JSON.stringify(connectionKey)}] },
+                  ],
+                },
+              },
+            ],
+          };
+        }
+
+        async someFunction(input = {}) {
+          return { from: "iterate-config", input, marker: ${JSON.stringify(marker)} };
+        }
+
+        async callMountedConnection(input = {}) {
+          const ctx = await this.env.ITERATE.context;
+          using mountedConnection = await ctx[${JSON.stringify(mountName)}];
+          return await mountedConnection.echo(input);
+        }
+
+        async fetch() {
+          return Response.json({ ok: true });
+        }
+      }
+    `;
+
+    await runCapnwebScriptFromNode({
+      ctx: iterate.ctx,
+      script: updateIterateConfigAndCallWorker,
+      vars: {
+        dir: `/iterate-config-config-mount-${Date.now()}`,
+        executionMode: "node-capnweb",
+        marker,
+        workerSource,
+      },
+    });
+
+    using worker = (await projectContext.worker) as any;
+    expect(
+      await worker.callMountedConnection({
+        marker,
+        source: "iterate-config-tool",
+      }),
+    ).toMatchObject({
+      callCount: 1,
+      input: {
+        marker,
+        source: "iterate-config-tool",
+      },
+      marker,
+    });
+  });
+
   // Scenario: codemode-style code updates iterate-config in git, then calls
   // the new config worker through ctx.project.worker.
   it("updates iterate-config and calls env.ITERATE.context from dynamic worker fetch", async () => {
@@ -710,6 +798,23 @@ class ProjectConnectionTestTarget extends RpcTarget {
         };
       },
     });
+  }
+}
+
+class ConfigWorkerMountTarget extends RpcTarget {
+  #callCount = 0;
+
+  constructor(private readonly input: { marker: string }) {
+    super();
+  }
+
+  echo(input: Record<string, unknown>) {
+    this.#callCount += 1;
+    return {
+      callCount: this.#callCount,
+      input,
+      marker: this.input.marker,
+    };
   }
 }
 
