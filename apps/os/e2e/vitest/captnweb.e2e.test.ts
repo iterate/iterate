@@ -1,4 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import dedent from "dedent";
 import WebSocket from "ws";
@@ -21,11 +23,12 @@ import type { ProjectCapabilityApi } from "../../src/domains/projects/durable-ob
  * These tests are intentionally written as examples of the coding model we want
  * people to copy:
  *
- * - The main scenario scripts loop over `capnwebToolExecutionModes`: today that
- *   is Node over a Cap'n Web WebSocket session and the `/api/captnweb/run`
- *   dynamic worker. A future Workers for Platforms deployment path should be
- *   another entry in that same list. This forces shared scripts to return
- *   serializable results and proves the symmetric coding model end to end.
+ * - The main scenario scripts loop over `capnwebToolExecutionModes`: Node over
+ *   a Cap'n Web WebSocket session, the `/api/captnweb/run` dynamic worker, and
+ *   the makeshift Node CLI. A future Workers for Platforms deployment path
+ *   should be another entry in that same list. This forces shared scripts to
+ *   return serializable results and proves the symmetric coding model end to
+ *   end.
  * - `ctx` is an IterateContext: a scoped wrapper around the root Iterate
  *   capability tree. The scopes decide which project shortcuts and mounts are
  *   available.
@@ -41,6 +44,7 @@ const egressEchoBaseUrl = requireEgressEchoBaseUrl(baseUrl);
 const auth = rootAccessAuth();
 const ROOT_ITERATE_CONTEXT_PREFIX = "/api/captnweb";
 const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
+const execFileAsync = promisify(execFile);
 
 describe("capnweb", () => {
   const testRunSlugPrefix = `captnweb-${crypto.randomUUID().slice(0, 8)}`;
@@ -885,7 +889,7 @@ class ProjectConnectionTestTarget extends RpcTarget {
 
 type CapnwebScript = (input: CapnwebScriptInput) => any;
 type CapnwebToolExecutionMode = {
-  name: "node-capnweb" | "run-endpoint";
+  name: "cli" | "node-capnweb" | "run-endpoint";
   runTool(input: { script: CapnwebScript; vars?: Record<string, unknown> }): Promise<any>;
 };
 
@@ -893,9 +897,9 @@ function capnwebToolExecutionModes(input: {
   ctx: RpcStub<IterateContext>;
   props?: IterateContextProps;
 }): CapnwebToolExecutionMode[] {
-  // This is the registry of places a codemode/tool script must work. Add the
-  // future Workers for Platforms deployment mode here, then the scenario tests
-  // will exercise the same scripts through that path without copying test code.
+  // This is the registry of places a codemode/tool script must work. The CLI is
+  // deliberately just another execution mode; add the future Workers for
+  // Platforms deployment mode here instead of copying scenario tests.
   return [
     {
       name: "node-capnweb",
@@ -905,6 +909,15 @@ function capnwebToolExecutionModes(input: {
       name: "run-endpoint",
       runTool: ({ script, vars }) =>
         runCapnwebScriptInDynamicWorker({ props: input.props, script, vars }),
+    },
+    {
+      name: "cli",
+      runTool: ({ script, vars }) =>
+        runCapnwebScriptInCli({
+          projectId: singleProjectIdFromProps(input.props),
+          script,
+          vars,
+        }),
     },
   ];
 }
@@ -940,6 +953,34 @@ async function runCapnwebScriptInDynamicWorker(input: {
     throw new Error(JSON.stringify(body));
   }
   return body;
+}
+
+async function runCapnwebScriptInCli(input: {
+  projectId?: string;
+  script: CapnwebScript;
+  vars?: Record<string, unknown>;
+}) {
+  const args = [
+    "exec",
+    "tsx",
+    "src/capnweb/cli.ts",
+    "-e",
+    serializeCapnwebScriptForDynamicWorker(input.script),
+    "--vars",
+    JSON.stringify(input.vars ?? {}),
+  ];
+  if (input.projectId) args.push("--project-id", input.projectId);
+  const { stdout } = await execFileAsync("pnpm", args, {
+    env: process.env,
+    maxBuffer: 20 * 1024 * 1024,
+  });
+  return JSON.parse(stdout.trim());
+}
+
+function singleProjectIdFromProps(props: IterateContextProps | undefined) {
+  return Array.isArray(props?.scopes.projects) && props.scopes.projects.length === 1
+    ? props.scopes.projects[0]
+    : undefined;
 }
 
 function serializeCapnwebScriptForDynamicWorker(fn: { toString(): string }) {

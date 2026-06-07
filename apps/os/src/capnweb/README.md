@@ -228,16 +228,16 @@ does not import those helpers.
 ## E2E Scenarios
 
 `e2e/vitest/captnweb.e2e.test.ts` is the executable design proof. The main
-scenario scripts loop over the registered tool execution modes: today Node over
-Cap'n Web and the `/run` dynamic-worker endpoint. A future Workers for Platforms
-mode should be added to that same list. The loop intentionally restricts shared
-scripts to serializable return values and proves the same code can execute in
-each place.
+scenario scripts loop over the registered tool execution modes: Node over Cap'n
+Web, the `/run` dynamic-worker endpoint, and the makeshift Node CLI in
+`src/capnweb/cli.ts`. A future Workers for Platforms mode should be added to
+that same list. The loop intentionally restricts shared scripts to serializable
+return values and proves the same code can execute in each place.
 
 It covers:
 
 - Root project administration through `ctx.projects`.
-- The same script body running from Node and from `/run`.
+- The same script body running from Node, `/run`, and the CLI.
 - Direct project ingress at `/__iterate/capnweb`.
 - Project-provided Cap'n Web targets via `project.provideCapability(...)`.
 - Updating iterate-config through `ctx.project.workspace.git`.
