@@ -86,8 +86,6 @@ overrides:
   "ws": "8.19.0"
   "baseline-browser-mapping": "^2.9.14"
   "@babel/parser": "^7.28.0"
-  "@types/react": "19.2.14"
-  "@types/react-dom": "19.2.3"
   "@tanstack/query-core": "5.91.0"
   "@tanstack/react-query": "5.91.0"
   "trpc-cli": "0.14.0"
