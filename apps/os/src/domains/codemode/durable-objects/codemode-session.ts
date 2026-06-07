@@ -1,7 +1,7 @@
 import { DurableObject, RpcTarget } from "cloudflare:workers";
 import { z } from "zod";
 import {
-  type Event,
+  Event,
   type EventInput,
   type StreamCursor,
   StreamPath,
@@ -114,7 +114,10 @@ export type CodemodeSessionEnv = {
   STREAM_PROCESSOR_RUNNER: DurableObjectNamespace<StreamProcessorRunner>;
 } & Record<string, unknown>;
 
-type CodemodeSessionStreamApi = ProcessorStreamApi<typeof CodemodeProcessorContract> & {
+type CodemodeSessionStreamApi = Omit<
+  ProcessorStreamApi<typeof CodemodeProcessorContract>,
+  "append" | "appendBatch" | "read" | "subscribe"
+> & {
   append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
   appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
   read(args?: {
@@ -459,7 +462,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     ).runtimeState();
   }
 
-  private streamsEntrypoint() {
+  private streamsEntrypoint(): CodemodeSessionStreamApi {
     return processorStreamApiFromNamespace({
       namespace: this.structuredName.projectId,
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
@@ -779,10 +782,11 @@ function processorStreamApiFromNamespace(args: {
           pathInput: input.streamPath,
         }),
       });
-      return await stream.history({
+      const events = await stream.history({
         after: toEventsCursor(input.afterOffset),
         before: toEventsCursor(input.beforeOffset ?? "end"),
       });
+      return events.map((event) => Event.parse(event));
     },
     async *subscribe(input = {}) {
       void input;
