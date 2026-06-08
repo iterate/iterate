@@ -1,6 +1,6 @@
 import { ORPCError } from "@orpc/server";
-import { withStreamConnectionFromWorkers } from "@iterate-com/streams/workers/connect";
 import { createStreamSubscription } from "@iterate-com/streams/subscription";
+import type { StreamRpc } from "@iterate-com/streams/types";
 import type { AppContext } from "~/context.ts";
 import {
   getStreamsCapability,
@@ -10,7 +10,6 @@ import {
   getStreamDurableObjectName,
   toLegacyEvent,
   toNewAfterOffset,
-  type StreamDurableObject,
   type StreamDurableObjectNamespace,
 } from "~/domains/streams/new-stream-runtime.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
@@ -125,11 +124,7 @@ async function* subscribeProjectStreamEvents(input: {
       namespace: input.projectId,
       path: streamPath,
     }),
-  );
-  using connection = await withStreamConnectionFromWorkers({
-    url: "https://stream.local/",
-    fetch: (request) => fetchDurableObjectWebSocket(streamStub, request),
-  });
+  ) as unknown as StreamRpc;
   let handle: { unsubscribe(): void } | undefined;
   await using subscription = createStreamSubscription({
     onDispose: () => handle?.unsubscribe(),
@@ -142,7 +137,7 @@ async function* subscribeProjectStreamEvents(input: {
   try {
     if (input.signal?.aborted) return;
     input.signal?.addEventListener("abort", onAbort, { once: true });
-    handle = await connection.stream.subscribe({
+    handle = await streamStub.subscribe({
       processEventBatch: subscription.processEventBatch,
       replayAfterOffset: toNewAfterOffset(input.afterOffset),
     });
@@ -156,21 +151,6 @@ async function* subscribeProjectStreamEvents(input: {
   } finally {
     input.signal?.removeEventListener("abort", onAbort);
   }
-}
-
-function fetchDurableObjectWebSocket(
-  stub: DurableObjectStub<StreamDurableObject>,
-  request: Request,
-) {
-  const url = new URL(request.url);
-  if (url.protocol === "wss:") url.protocol = "https:";
-  if (url.protocol === "ws:") url.protocol = "http:";
-  return stub.fetch(
-    new Request(url, {
-      headers: new Headers(request.headers),
-      method: request.method,
-    }),
-  );
 }
 
 function requireStreamNamespace(context: AppContext): StreamDurableObjectNamespace {
