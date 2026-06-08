@@ -1,6 +1,7 @@
 import { RpcStub, RpcTarget } from "capnweb";
 import { describe, expect, test, vi } from "vitest";
 import {
+  BROWSER_REPL_EXAMPLES,
   DEFAULT_BROWSER_REPL_CODE,
   evalBrowserReplCode,
   evalBrowserReplSessionCode,
@@ -48,5 +49,46 @@ describe("browser Cap'n Web REPL", () => {
         scope,
       }),
     ).resolves.toBe(42);
+  });
+
+  test("provideCapability example registers and calls a browser-owned target", async () => {
+    const providedTargets = new Map<string, unknown>();
+    const alert = vi.fn();
+    const project = {
+      connections: {
+        get(connectionKey: string) {
+          return providedTargets.get(connectionKey);
+        },
+      },
+      provideCapability(input: { connectionKey: string; rpcTarget: unknown }) {
+        providedTargets.set(input.connectionKey, input.rpcTarget);
+        return { connectionKey: input.connectionKey, ok: true };
+      },
+    };
+    const ctx = {
+      projects: {
+        get(projectId: string) {
+          if (projectId !== "proj_123") throw new Error(`Unexpected project ${projectId}`);
+          return project;
+        },
+        list() {
+          return { projects: [{ id: "proj_123" }], total: 1 };
+        },
+      },
+    };
+
+    const example = BROWSER_REPL_EXAMPLES.find((candidate) => {
+      return candidate.id === "provide-alert-capability";
+    });
+    if (!example) throw new Error("Missing provideCapability browser REPL example.");
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: example.code,
+        ctx,
+        scope: { alert, RpcTarget },
+      }),
+    ).resolves.toBe("alerted");
+    expect(alert).toHaveBeenCalledWith("The answer is 42");
   });
 });

@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import { Play } from "lucide-react";
+import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
+import { BookOpen, Play } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { ScrollArea } from "@iterate-com/ui/components/scroll-area";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@iterate-com/ui/components/sheet";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import {
+  BROWSER_REPL_EXAMPLES,
   DEFAULT_BROWSER_REPL_CODE,
   evalBrowserReplSessionCode,
   formatBrowserReplResult,
@@ -31,8 +39,9 @@ function CapnwebReplPage() {
   const [ctx, setCtx] = useState<RpcStub<IterateContext> | null>(null);
   const [status, setStatus] = useState("Connecting...");
   const [entries, setEntries] = useState<ReplEntry[]>([]);
+  const [examplesOpen, setExamplesOpen] = useState(false);
   const envRef = useRef<Record<string, unknown>>({});
-  const scopeRef = useRef<Record<string, unknown>>({});
+  const scopeRef = useRef<Record<string, unknown>>({ RpcTarget });
 
   useEffect(() => {
     const wsUrl = new URL("/api/captnweb", window.location.href);
@@ -86,6 +95,11 @@ function CapnwebReplPage() {
     }
   }
 
+  function selectExample(exampleCode: string) {
+    setCode(exampleCode);
+    setExamplesOpen(false);
+  }
+
   return (
     <main className="flex h-full min-h-0 flex-col bg-background">
       <section className="flex min-h-0 flex-1 flex-col">
@@ -132,18 +146,57 @@ function CapnwebReplPage() {
               onModEnter={() => void run()}
               showCopyButton={false}
             />
-            <Button
-              className="self-end"
-              disabled={!ctx || status === "Running..." || code.trim() === ""}
-              onClick={() => void run()}
-              size="sm"
-            >
-              <Play data-icon="inline-start" />
-              Run
-            </Button>
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="outline" onClick={() => setExamplesOpen(true)} size="sm">
+                <BookOpen data-icon="inline-start" />
+                Examples
+              </Button>
+              <Button
+                disabled={!ctx || status === "Running..." || code.trim() === ""}
+                onClick={() => void run()}
+                size="sm"
+              >
+                <Play data-icon="inline-start" />
+                Run
+              </Button>
+            </div>
           </div>
         </div>
       </section>
+      <Sheet open={examplesOpen} onOpenChange={setExamplesOpen}>
+        <SheetContent className="w-full gap-0 data-[side=right]:sm:w-[min(92vw,48rem)] data-[side=right]:sm:max-w-[min(92vw,48rem)]">
+          <SheetHeader className="border-b px-4 py-3 pr-14">
+            <SheetTitle>Examples</SheetTitle>
+            <SheetDescription>Runnable snippets for the current REPL session.</SheetDescription>
+          </SheetHeader>
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="flex flex-col gap-4 p-4">
+              {BROWSER_REPL_EXAMPLES.map((example) => (
+                <article key={example.id} className="flex flex-col gap-3 rounded-md border p-3">
+                  <div className="flex flex-col gap-1">
+                    <h3 className="text-sm font-medium">{example.title}</h3>
+                    <p className="text-sm text-muted-foreground">{example.description}</p>
+                  </div>
+                  <SourceCodeBlock
+                    code={example.code}
+                    className="h-80"
+                    language="typescript"
+                    showCopyButton
+                  />
+                  <Button
+                    className="self-end"
+                    onClick={() => selectExample(example.code)}
+                    size="sm"
+                    variant="outline"
+                  >
+                    Use snippet
+                  </Button>
+                </article>
+              ))}
+            </div>
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
     </main>
   );
 }

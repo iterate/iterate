@@ -11,7 +11,7 @@ describe("liftLocalProxies", () => {
     }
 
     class Projects extends RpcTarget {
-      get(id: string) {
+      get(_id: string) {
         return new Project();
       }
 
