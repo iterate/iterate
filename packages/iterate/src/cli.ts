@@ -24,9 +24,6 @@ const XDG_CONFIG_PARENT = join(
 );
 
 const CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
-const DEFAULT_CHAT_PROJECT_SLUG_OR_ID = "iterate";
-const DEFAULT_CHAT_STREAM_PATH = "/agents/demo";
-const DEFAULT_CHAT_OS_BASE_URL = "https://os.iterate.com";
 
 /** Superadmin impersonation strategy — for CI/automation. Requires admin password env var. */
 const SuperadminStrategy = z.object({
@@ -52,9 +49,6 @@ const Session = z.object({
 /** A named config — describes which server to talk to and how to authenticate. */
 const Config = z.object({
   osBaseUrl: z.string(),
-  authBaseUrl: z.string().optional(),
-  daemonBaseUrl: z.string().optional(),
-  auth: AuthStrategy,
   session: Session.optional(),
 });
 
@@ -271,34 +265,7 @@ const resolveConfig = (workspacePath: string): { name: string; config: Config } 
   }
   // Normalize: strip trailing slashes from URLs to avoid double-slash issues
   parsed.data.osBaseUrl = parsed.data.osBaseUrl.replace(/\/+$/, "");
-  if (parsed.data.authBaseUrl) {
-    parsed.data.authBaseUrl = parsed.data.authBaseUrl.replace(/\/+$/, "");
-  }
-  if (parsed.data.daemonBaseUrl) {
-    parsed.data.daemonBaseUrl = parsed.data.daemonBaseUrl.replace(/\/+$/, "");
-  }
   return { name, config: parsed.data };
-};
-
-const resolveAuthBaseUrl = (config: Config): string => {
-  if (config.authBaseUrl) {
-    return config.authBaseUrl;
-  }
-
-  const osUrl = new URL(config.osBaseUrl);
-  if (osUrl.hostname === "os.iterate.com") {
-    return "https://auth.iterate.com";
-  }
-  if (osUrl.hostname === "localhost" || osUrl.hostname === "127.0.0.1") {
-    return "http://localhost:7101";
-  }
-  if (osUrl.hostname.endsWith(".iterate-dev.com")) {
-    return "http://localhost:7101";
-  }
-
-  throw new Error(
-    `No authBaseUrl configured for ${config.osBaseUrl}. Set one with \`iterate config set --auth-base-url ...\`.`,
-  );
 };
 
 const getLocalConfigDefaults = () => {
@@ -306,12 +273,13 @@ const getLocalConfigDefaults = () => {
   return {
     name: "local",
     osBaseUrl: `https://${username}.iterate-dev.com`,
-    authBaseUrl: "http://localhost:7101",
-    daemonBaseUrl: "http://localhost:3001",
-    auth: {
-      strategy: "device" as const,
-    },
   };
+};
+
+const resolveAuthBaseUrl = async (config: Config) => {
+  const res = await fetch(`${config.osBaseUrl}/api/auth/base-url`);
+  const {authBaseUrl} = await res.json();
+  return String(authBaseUrl.slice());
 };
 
 const storeSession = (configName: string, session: Config["session"]): void => {
@@ -343,146 +311,6 @@ const setCookiesToCookieHeader = (setCookies: string[] | undefined): string => {
   return [...byName.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
 };
 
-const impersonationUserIdCache = new Map<string, string>();
-
-const resolveImpersonationUserId = async ({
-  superadminAuthClient,
-  userEmail,
-  baseUrl,
-}: {
-  superadminAuthClient: any;
-  userEmail: string;
-  baseUrl: string;
-}): Promise<string> => {
-  const normalizedEmail = userEmail.trim().toLowerCase();
-  const cacheKey = `${baseUrl}::${normalizedEmail}`;
-  const cachedUserId = impersonationUserIdCache.get(cacheKey);
-  if (cachedUserId) {
-    return cachedUserId;
-  }
-
-  let users: any[] = [];
-
-  try {
-    const result = await superadminAuthClient.admin.listUsers({
-      query: {
-        filterField: "email",
-        filterOperator: "eq",
-        filterValue: normalizedEmail,
-        limit: 10,
-      },
-      fetchOptions: {
-        throw: true,
-      },
-    });
-    users = Array.isArray(result?.users) ? result.users : [];
-  } catch {
-    const result = await superadminAuthClient.admin.listUsers({
-      query: {
-        searchField: "email",
-        searchOperator: "contains",
-        searchValue: normalizedEmail,
-        limit: 100,
-      },
-      fetchOptions: {
-        throw: true,
-      },
-    });
-    users = Array.isArray(result?.users) ? result.users : [];
-  }
-
-  const exactMatches = users.filter(
-    (user) =>
-      user &&
-      typeof user === "object" &&
-      "email" in user &&
-      typeof user.email === "string" &&
-      user.email.toLowerCase() === normalizedEmail &&
-      "id" in user &&
-      typeof user.id === "string",
-  );
-
-  if (exactMatches.length === 0) {
-    throw new Error(`No user found with email ${userEmail}`);
-  }
-  if (exactMatches.length > 1) {
-    throw new Error(`Multiple users found with email ${userEmail}`);
-  }
-
-  const resolvedUserId = exactMatches[0].id as string;
-  impersonationUserIdCache.set(cacheKey, resolvedUserId);
-  return resolvedUserId;
-};
-
-const superadminAuthDance = async (config: Config & { auth: { strategy: "superadmin" } }) => {
-  let superadminSetCookie: string[] | undefined;
-  const authClient = createAuthClient({
-    baseURL: config.osBaseUrl,
-    fetchOptions: {
-      throw: true,
-    },
-  });
-  const password = process.env[config.auth.adminPasswordEnvVarName];
-  if (!password) {
-    throw new Error(`Password not found in env var ${config.auth.adminPasswordEnvVarName}`);
-  }
-
-  await authClient.signIn.email({
-    email: "superadmin@nustom.com",
-    password,
-    fetchOptions: {
-      throw: true,
-      onResponse: (ctx: { response: Response }) => {
-        superadminSetCookie = ctx.response.headers.getSetCookie();
-      },
-    },
-  });
-
-  const superadminAuthClient = createAuthClient({
-    baseURL: config.osBaseUrl,
-    fetchOptions: {
-      throw: true,
-      onRequest: (ctx: { headers: Headers }) => {
-        ctx.headers.set("origin", config.osBaseUrl);
-        ctx.headers.set("cookie", setCookiesToCookieHeader(superadminSetCookie));
-      },
-    },
-    plugins: [adminClient()],
-  });
-
-  const userId = await resolveImpersonationUserId({
-    superadminAuthClient,
-    userEmail: config.auth.userEmail,
-    baseUrl: config.osBaseUrl,
-  });
-
-  let impersonateSetCookie: string[] | undefined;
-  await superadminAuthClient.admin.impersonateUser({
-    userId,
-    fetchOptions: {
-      throw: true,
-      onResponse: (ctx: { response: Response }) => {
-        impersonateSetCookie = ctx.response.headers.getSetCookie();
-      },
-    },
-  });
-
-  const userCookies = setCookiesToCookieHeader(impersonateSetCookie);
-
-  const userClient = createAuthClient({
-    baseURL: config.osBaseUrl,
-    fetchOptions: {
-      throw: true,
-      onRequest: (ctx: { headers: Headers }) => {
-        ctx.headers.set("origin", config.osBaseUrl);
-        ctx.headers.set("cookie", userCookies);
-      },
-    },
-  });
-
-  return { userCookies, userClient };
-};
-
 /**
  * Get auth headers for OS API calls based on the resolved config's auth strategy.
  * Returns either a cookie header (superadmin) or Authorization: Bearer header (device flow).
@@ -490,34 +318,25 @@ const superadminAuthDance = async (config: Config & { auth: { strategy: "superad
 const getOsAuthHeaders = async (
   config: Config,
 ): Promise<{ cookie?: string; authorization?: string }> => {
-  if (config.auth.strategy === "superadmin") {
-    const { userCookies } = await superadminAuthDance(
-      config as Config & { auth: { strategy: "superadmin" } },
-    );
-    return { cookie: userCookies };
+  const session = config.session;
+  if (!session) {
+    throw new Error(`Not logged in to ${config.osBaseUrl}. Run \`iterate login\` first.`);
   }
-  if (config.auth.strategy === "device") {
-    const session = config.session;
-    if (!session) {
-      throw new Error(`Not logged in to ${config.osBaseUrl}. Run \`iterate login\` first.`);
-    }
-    if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
-      throw new Error(`Session expired for ${config.osBaseUrl}. Run \`iterate login\` again.`);
-    }
-    if (session.token) {
-      return { authorization: `Bearer ${session.token}` };
-    }
-    if (session.cookie) {
-      return { cookie: session.cookie };
-    }
-    throw new Error(`Stored session for ${config.osBaseUrl} has no token or cookie.`);
+  if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
+    throw new Error(`Session expired for ${config.osBaseUrl}. Run \`iterate login\` again.`);
   }
-  throw new Error(`Unknown auth strategy: ${(config.auth as any).strategy}`);
+  if (session.token) {
+    return { authorization: `Bearer ${session.token}` };
+  }
+  if (session.cookie) {
+    return { cookie: session.cookie };
+  }
+  throw new Error(`Stored session for ${config.osBaseUrl} has no token or cookie.`);
 };
 
 /** Get an authenticated better-auth client for whoami/getSession etc. */
 const getAuthenticatedClient = async (config: Config) => {
-  const baseURL = config.auth.strategy === "device" ? resolveAuthBaseUrl(config) : config.osBaseUrl;
+  const baseURL = await resolveAuthBaseUrl(config)
   const headers = await getOsAuthHeaders(config);
   return createAuthClient({
     baseURL,
@@ -535,9 +354,6 @@ const getAuthenticatedClient = async (config: Config) => {
 const getAuthWorkerHeaders = async (
   config: Config,
 ): Promise<{ cookie?: string; authorization?: string }> => {
-  if (config.auth.strategy !== "device") {
-    throw new Error("Auth worker commands currently require device auth strategy.");
-  }
   const session = config.session;
   if (!session) {
     throw new Error(`Not logged in to ${resolveAuthBaseUrl(config)}. Run \`iterate login\` first.`);
@@ -580,7 +396,7 @@ const DEVICE_CLIENT_ID = "iterate-cli";
 const deviceFlowLogin = async (
   config: Config,
 ): Promise<{ token?: string; cookie?: string; expiresAt?: string }> => {
-  const authBaseUrl = resolveAuthBaseUrl(config);
+  const authBaseUrl = await resolveAuthBaseUrl(config);
   // Step 1: Request device code (RFC 8628 — all fields are snake_case)
   const codeRes = await fetch(`${authBaseUrl}/api/auth/device/code`, {
     method: "POST",
@@ -862,24 +678,6 @@ const launcherProcedures = {
       if (resolved instanceof Error) throw resolved;
       const { config } = resolved;
 
-      if (input.superadmin || config.auth.strategy === "superadmin") {
-        if (config.auth.strategy !== "superadmin") {
-          throw new Error(
-            "Config is not using superadmin strategy. Remove --superadmin or change config.",
-          );
-        }
-        const typedConfig = config as Config & {
-          auth: { strategy: "superadmin" };
-        };
-        const { userCookies, userClient } = await superadminAuthDance(typedConfig);
-        storeSession(resolved.name, { cookie: userCookies });
-        const session = await userClient.getSession();
-        return {
-          message: "Logged in via superadmin impersonation",
-          user: (session as any)?.data?.user ?? (session as any)?.user,
-        };
-      }
-
       // Device flow
       console.error(`Logging in to ${resolveAuthBaseUrl(config)}...`);
       const deviceResult = await deviceFlowLogin(config);
@@ -920,14 +718,12 @@ const launcherProcedures = {
           .string()
           .trim()
           .min(1)
-          .default(DEFAULT_CHAT_PROJECT_SLUG_OR_ID)
           .describe("OS project slug or ID"),
         streamPath: z
           .string()
           .trim()
           .min(1)
           .startsWith("/")
-          .default(DEFAULT_CHAT_STREAM_PATH)
           .describe("Project stream path to open"),
         osBaseUrl: z
           .string()
@@ -941,10 +737,12 @@ const launcherProcedures = {
       description: "Open the Iterate chat terminal UI",
     })
     .handler(async ({ input }) => {
-      const resolved = resolveConfig(process.cwd());
-      const osBaseUrl =
-        input.osBaseUrl ||
-        (resolved instanceof Error ? DEFAULT_CHAT_OS_BASE_URL : resolved.config.osBaseUrl);
+      let osBaseUrl = input.osBaseUrl;
+      if (!osBaseUrl) {
+        const resolved = resolveConfig(process.cwd());
+        if (resolved instanceof Error) throw resolved;
+        osBaseUrl = resolved.config.osBaseUrl;
+      }
       const command = buildChatCommand({
         osBaseUrl,
         projectSlugOrId: input.projectSlugOrId,
@@ -976,9 +774,6 @@ const launcherProcedures = {
             name,
             {
               osBaseUrl: cfg.osBaseUrl,
-              authBaseUrl: cfg.authBaseUrl,
-              daemonBaseUrl: cfg.daemonBaseUrl,
-              strategy: cfg.auth.strategy,
               active: name === currentName ? true : undefined,
             },
           ]),
@@ -1029,9 +824,6 @@ const launcherProcedures = {
 
         configFile.configs[input.name] = {
           osBaseUrl: input.osBaseUrl,
-          authBaseUrl: input.authBaseUrl,
-          daemonBaseUrl: input.daemonBaseUrl,
-          auth,
         };
 
         if (input.setDefault) {
@@ -1104,9 +896,6 @@ const launcherProcedures = {
 
         configFile.configs[name] = {
           osBaseUrl: defaults.osBaseUrl,
-          authBaseUrl: defaults.authBaseUrl,
-          daemonBaseUrl: defaults.daemonBaseUrl,
-          auth: defaults.auth,
         };
 
         if (input.setDefault ?? true) {
@@ -1161,29 +950,15 @@ export const getCli = async () => {
       const { config } = resolved;
       const settledResults = await Promise.allSettled([
         getOsProcedures({ baseUrl: config.osBaseUrl, config }),
-        config.daemonBaseUrl
-          ? getDaemonProcedures({ daemonBaseUrl: config.daemonBaseUrl })
-          : Promise.reject(new Error("No daemonBaseUrl configured")),
       ]);
 
-      const [osProcedures, daemonProcedures] = settledResults;
+      const [osProcedures] = settledResults;
 
       if (osProcedures.status === "fulfilled") {
         routers.push({ os: osProcedures.value });
       } else {
         const message = `Couldn't connect to os at ${config.osBaseUrl}`;
         routers.push({ os: errorProcedure(message)(osProcedures.reason) });
-      }
-      if (daemonProcedures.status === "fulfilled") {
-        // don't nest daemon procedures under "daemon"
-        routers.push(daemonProcedures.value);
-      } else {
-        const message = config.daemonBaseUrl
-          ? `Couldn't connect to daemon at ${config.daemonBaseUrl}`
-          : `No daemonBaseUrl configured`;
-        routers.push({
-          daemon: errorProcedure(message)(daemonProcedures.reason),
-        });
       }
     }
   }
