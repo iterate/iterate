@@ -135,15 +135,15 @@ async function seedProject(input: { adminApiSecret: string; baseUrl: URL }) {
 function projectMcpUrlFor(input: { baseUrl: URL; project: Project }) {
   const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(input.baseUrl.hostname);
   if (previewMatch) {
-    return new URL(`https://mcp__${input.project.slug}.iterate-preview-${previewMatch[1]}.app/`);
+    return new URL(`https://mcp.iterate-preview-${previewMatch[1]}.com/`);
   }
 
   if (input.baseUrl.hostname === "os.iterate.com") {
-    return new URL(`https://mcp__${input.project.slug}.iterate.app/`);
+    return new URL("https://mcp.iterate.com/");
   }
 
   throw new Error(
-    `Cannot derive project MCP URL for ${input.project.slug} from OS base ${input.baseUrl}. Set OS_PROJECT_MCP_URL explicitly.`,
+    `Cannot derive the MCP URL from OS base ${input.baseUrl}. Set OS_PROJECT_MCP_URL explicitly.`,
   );
 }
 
@@ -156,8 +156,7 @@ async function seedProjectMcpUrl(input: { adminApiSecret: string; baseUrl: URL }
   return projectMcpUrlFor({ baseUrl: input.baseUrl, project });
 }
 
-// TODO: Re-enable once preview smoke follows the canonical /mcp route instead of
-// the retired project MCP hostname flow.
+// TODO: Re-enable once preview smoke has a stable deployed-preview auth fixture.
 test.skip("OS preview smoke", async () => {
   const baseUrl = requireBaseUrl();
   const projectMcpUrlOverride = readProjectMcpUrlOverride();

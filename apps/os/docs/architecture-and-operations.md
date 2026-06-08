@@ -155,8 +155,8 @@ Primary surfaces:
 - UI: project codemode session pages.
 - oRPC: `project.codemode.createSession`,
   `project.codemode.executeScript`, and `project.streams` reads.
-- MCP: `exec_js` on a project MCP route, such as
-  `https://mcp__demo.iterate.app`.
+- MCP: `exec_js` on the canonical MCP endpoint, such as
+  `https://mcp.iterate.com`.
 
 Default providers are registered for every session. The important built-ins are
 `ctx.fetch`, `ctx.console`, `ctx.streams`, worker AI examples, OpenAPI examples,
@@ -267,7 +267,7 @@ Full browser smoke with Clerk and `agent-browser`:
 Codemode MCP provider-stack smoke:
 
 ```bash
-OS_E2E_MCP_URL=https://mcp__demo.iterate-preview-2.app \
+OS_E2E_MCP_URL=https://mcp.iterate-preview-2.com \
 doppler run --project os --config preview_2 -- pnpm e2e -t "project MCP exec_js"
 ```
 

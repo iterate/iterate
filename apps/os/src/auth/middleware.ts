@@ -1,6 +1,7 @@
 import { createIterateAuth, type AuthenticatedSession } from "@iterate-com/auth/server";
 import { createMiddleware } from "@tanstack/react-start";
 import type { AppContext } from "~/context.ts";
+import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import {
   adminPrincipal,
   principalFromAccessToken,
@@ -150,13 +151,19 @@ function createOsIterateAuth(context: AppContext, request: Request) {
 
   const requestOrigin = new URL(request.url).origin;
   const resource = (config.resource ?? context.config.baseUrl ?? requestOrigin).replace(/\/+$/, "");
+  const mcpResource = resolveMcpBaseUrl({
+    appBaseUrl: context.config.baseUrl,
+    mcpBaseUrl: context.config.mcp?.baseUrl,
+    requestUrl: request.url,
+  });
+  const resources = mcpResource ? [resource, mcpResource] : [resource];
 
   return createIterateAuth({
     issuer: config.issuer,
     clientId: config.clientId,
     clientSecret: config.clientSecret.exposeSecret(),
     redirectURI: `${(context.config.baseUrl ?? requestOrigin).replace(/\/+$/, "")}/api/iterate-auth/callback`,
-    resource: [resource, `${resource}/mcp`],
+    resource: resources,
     logoutReturnToOrigins: context.config.baseUrl ? [context.config.baseUrl] : undefined,
   });
 }
