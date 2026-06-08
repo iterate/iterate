@@ -67,8 +67,8 @@ export type StreamBrowserStore = Disposable & {
   appendBatch(args: { events: StreamEventInput[] }): RpcPromise<StreamEvent[]>;
   runtimeState(): RpcPromise<StreamRuntimeState>;
   clearLocalDatabase(): Promise<void>;
-  kill(): RpcPromise<void>;
-  reset(): RpcPromise<void>;
+  kill(): Promise<void>;
+  reset(): Promise<void>;
   getSnapshot(): StreamBrowserSnapshot;
   getServerSnapshot(): StreamBrowserSnapshot;
   subscribe(listener: () => void): () => void;
@@ -348,13 +348,16 @@ function createStreamRuntime(
         const streamSubscription = createStreamSubscription({ subscriptionKey });
         subscription = streamSubscription;
         processing = processorRunner.run({ subscription: streamSubscription });
-        return { replayAfterOffset: checkpoint?.offset ?? 0, sink: streamSubscription.sink };
+        return {
+          replayAfterOffset: checkpoint?.offset ?? 0,
+          processEventBatch: streamSubscription.processEventBatch,
+        };
       })
       .then((ready) => {
         if (ready === undefined || disposed || stream !== election.connection) return undefined;
         return election.connection.stream.subscribe({
           subscriptionKey,
-          sink: ready.sink,
+          processEventBatch: ready.processEventBatch,
           replayAfterOffset: ready.replayAfterOffset,
         });
       })
@@ -390,6 +393,22 @@ function createStreamRuntime(
     writerRole = undefined;
     snapshot = { ...snapshot, subscriptionStatus: "idle" };
     if (!disposed) emitSnapshot();
+  }
+
+  async function runControlAndReconnect(control: "kill" | "reset") {
+    reconnectNow();
+    if (stream === undefined) throw new Error("stream connection is disposed");
+    const controlledStream = stream;
+    try {
+      await controlledStream.stream[control]();
+    } finally {
+      if (stream === controlledStream) {
+        stopSubscriptionElection();
+        controlledStream[Symbol.dispose]();
+        stream = undefined;
+        reconnectAfter(`stream ${control} requested`);
+      }
+    }
   }
 
   function start() {
@@ -448,14 +467,10 @@ function createStreamRuntime(
       reconnectNow();
     },
     kill() {
-      reconnectNow();
-      if (stream === undefined) throw new Error("stream connection is disposed");
-      return stream.stream.kill();
+      return runControlAndReconnect("kill");
     },
     reset() {
-      reconnectNow();
-      if (stream === undefined) throw new Error("stream connection is disposed");
-      return stream.stream.reset();
+      return runControlAndReconnect("reset");
     },
     getSnapshot: () => snapshot,
     getServerSnapshot: () => snapshot,

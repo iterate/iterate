@@ -8,21 +8,13 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";
 
-const OutboundSubscriber = z.discriminatedUnion("type", [
-  z.object({
-    type: z.literal("built-in"),
-    transport: z.literal("capnweb-websocket"),
-    processorSlug: z.string().trim().min(1),
-  }),
-  z.object({
-    type: z.literal("external-url"),
-    transport: z.literal("capnweb-websocket"),
-    url: z.url(),
-    headers: z.record(z.string(), z.string()).optional(),
-  }),
-  // TODO: Add dynamic-worker when a worker-name/entrypoint dialer exists.
-  // TODO: Add webhooks only if we want non-capnweb delivery semantics.
-]);
+const OutboundSubscriber = z.object({
+  type: z.literal("built-in"),
+  transport: z.literal("workers-rpc"),
+  processorSlug: z.string().trim().min(1),
+});
+// TODO: Add dynamic-worker when a worker-name/entrypoint dialer exists.
+// TODO: Add webhooks only if we want non-capnweb delivery semantics.
 
 export const coreProcessorContract = defineProcessorContract({
   slug: "core",

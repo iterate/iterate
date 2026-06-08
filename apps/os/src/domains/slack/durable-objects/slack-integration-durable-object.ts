@@ -135,7 +135,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
         subscriptionKey: slackIntegrationProcessorSubscriptionKey(projectId),
         subscriber: {
           type: "built-in",
-          transport: "capnweb-websocket",
+          transport: "workers-rpc",
           processorSlug: SlackProcessorContract.slug,
         },
       },
@@ -161,7 +161,7 @@ export function routedStreamBootstrapEvents(input: {
         }),
         subscriber: {
           type: "built-in",
-          transport: "capnweb-websocket",
+          transport: "workers-rpc",
           processorSlug: "slack-agent",
         },
       },
@@ -176,7 +176,7 @@ export function routedStreamBootstrapEvents(input: {
         }),
         subscriber: {
           type: "built-in",
-          transport: "capnweb-websocket",
+          transport: "workers-rpc",
           processorSlug: CodemodeProcessorContract.slug,
         },
       },

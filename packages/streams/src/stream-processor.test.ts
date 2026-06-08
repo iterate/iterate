@@ -114,6 +114,8 @@ describe("subscription processor (node, in-process)", () => {
     });
 
     await runner.processEventBatch({
+      namespace: "test",
+      path: "/test",
       events: [event({ type: "test.input", payload: { path: "/x" }, offset: 2 })],
       streamMaxOffset: 2,
     });
@@ -132,6 +134,8 @@ describe("subscription processor (node, in-process)", () => {
       stream,
     });
     await runner.processEventBatch({
+      namespace: "test",
+      path: "/test",
       events: [event({ type: "test.input", payload: { path: "/x" }, offset: 3 })],
       streamMaxOffset: 5,
     });
@@ -149,6 +153,8 @@ describe("subscription processor (node, in-process)", () => {
     });
 
     await runner.processEventBatch({
+      namespace: "test",
+      path: "/test",
       events: [
         event({
           type: "events.iterate.com/echo-example/input-received",
@@ -237,6 +243,8 @@ describe("durable processor (blockProcessorUntil)", () => {
     });
 
     const processed = runner.processEventBatch({
+      namespace: "test",
+      path: "/test",
       events: [event({ type: "test.audio", payload: { url: "/a" }, offset: 2 })],
       streamMaxOffset: 2,
     });
@@ -286,10 +294,14 @@ describe("projector processor (consumes everything, writes to a db port)", () =>
       stream,
     });
     await runner.processEventBatch({
+      namespace: "test",
+      path: "/test",
       events: [event({ type: "a", offset: 0, payload: {} })],
       streamMaxOffset: 1,
     });
     await runner.processEventBatch({
+      namespace: "test",
+      path: "/test",
       events: [event({ type: "b", offset: 1, payload: {} })],
       streamMaxOffset: 1,
     });
@@ -323,6 +335,8 @@ describe("projector processor (consumes everything, writes to a db port)", () =>
     });
 
     const processed = runner.processEventBatch({
+      namespace: "test",
+      path: "/test",
       events: [
         event({ type: "a", offset: 1, payload: {} }),
         event({ type: "b", offset: 2, payload: {} }),
@@ -361,6 +375,8 @@ describe("projector processor (consumes everything, writes to a db port)", () =>
     });
 
     await runner.processEventBatch({
+      namespace: "test",
+      path: "/test",
       events: [
         event({ type: "a", offset: 8, payload: {}, createdAtMs: 0 }),
         event({ type: "b", offset: 9, payload: {}, createdAtMs: 5_000 }),
@@ -488,9 +504,9 @@ describe("core stream state and subscription processors", () => {
       payload: {
         subscriptionKey: "circuit-breaker",
         subscriber: {
-          type: "external-url",
-          transport: "capnweb-websocket",
-          url: "https://example.com/circuit-breaker",
+          type: "built-in",
+          transport: "workers-rpc",
+          processorSlug: "circuit-breaker",
         },
       },
     });
@@ -522,6 +538,8 @@ describe("core stream state and subscription processors", () => {
     });
 
     await runner.processEventBatch({
+      namespace: "test",
+      path: "/test",
       events: [...entry.events],
       streamMaxOffset: entry.coreProcessorState.maxOffset,
     });
@@ -548,6 +566,8 @@ describe("core stream state and subscription processors", () => {
     });
 
     await runner.processEventBatch({
+      namespace: "test",
+      path: "/test",
       events: [
         event({
           type: "events.iterate.com/circuit-breaker/configured",

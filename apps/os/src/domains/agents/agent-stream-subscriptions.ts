@@ -51,7 +51,7 @@ export function agentProcessorSubscriptionConfiguredEvent(input: {
       subscriptionKey: agentProcessorSubscriptionKey(input),
       subscriber: {
         type: "built-in",
-        transport: "capnweb-websocket",
+        transport: "workers-rpc",
         processorSlug: input.processorSlug,
       },
     },

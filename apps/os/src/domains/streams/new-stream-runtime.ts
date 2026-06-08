@@ -82,14 +82,16 @@ export async function getInitializedStreamStub(input: {
   };
 }
 
-function toLegacyStreamState(runtimeState: ReturnType<StreamRpc["runtimeState"]>): StreamState {
+function toLegacyStreamState(
+  runtimeState: Awaited<ReturnType<StreamRpc["runtimeState"]>>,
+): StreamState {
   const core = runtimeState.coreProcessorState;
   const circuitBreaker = circuitBreakerProcessor.initialState;
   return {
     namespace: core.namespace,
     path: StreamPath.parse(core.path),
     eventCount: core.eventCount,
-    childPaths: core.childPaths.map((path) => StreamPath.parse(path)),
+    childPaths: core.childPaths.map((childPath: string) => StreamPath.parse(childPath)),
     metadata: core.metadata as StreamState["metadata"],
     processors: {
       "circuit-breaker": {

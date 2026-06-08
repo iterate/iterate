@@ -11,15 +11,13 @@ import type { Processor } from "@iterate-com/streams/processor";
 import { implementProcessor } from "@iterate-com/streams/processor";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/streams/shared/event";
 import { makeRpcTargetClass } from "@iterate-com/streams/shared/rpc-target";
-import {
-  createStreamSubscription,
-  type StreamSubscription,
-} from "@iterate-com/streams/subscription";
+import { createStreamSubscription } from "@iterate-com/streams/subscription";
 import type {
+  ProcessEventBatch,
   StreamCoreProcessorState,
   StreamProcessorRunnerRpc,
   StreamRpc,
-  SubscriptionSink,
+  StreamSubscriptionHandle,
 } from "@iterate-com/streams/types";
 import type { Callable } from "@iterate-com/shared/callable/types.ts";
 import { StreamPath, type StreamCursor } from "@iterate-com/shared/streams/types";
@@ -111,15 +109,15 @@ type OsProcessorBinding = {
 export class StreamProcessorRunner extends DurableObject {
   #stream: RpcStub<StreamRpc> | undefined;
   #runner: ProcessorRunner | undefined;
-  #subscription: StreamSubscription | undefined;
-  #processing: AsyncDisposable | undefined;
+  #subscriptionHandle: StreamSubscriptionHandle | undefined;
+  #processing: Promise<void> = Promise.resolve();
 
   async fetch(request: Request) {
     return newWorkersRpcResponse(request, new StreamProcessorRunnerRpcTarget(this));
   }
 
   async requestSubscription(args: {
-    stream: RpcStub<StreamRpc>;
+    stream: StreamRpc;
     subscriptionKey: string;
     streamMaxOffset: number;
     subscriptionConfiguredEvent: {
@@ -134,23 +132,23 @@ export class StreamProcessorRunner extends DurableObject {
       };
     };
     streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
-  }): Promise<{ sink: SubscriptionSink; replayAfterOffset?: number }> {
+  }): Promise<void> {
     const subscriber = args.subscriptionConfiguredEvent.payload.subscriber;
     if (subscriber.type !== "built-in") {
       throw new Error("OS StreamProcessorRunner only supports built-in subscribers.");
     }
-    if (subscriber.transport !== "capnweb-websocket") {
-      throw new Error("OS StreamProcessorRunner only supports capnweb-websocket subscribers.");
+    if (subscriber.transport !== "workers-rpc") {
+      throw new Error("OS StreamProcessorRunner only supports workers-rpc subscribers.");
     }
     if (!subscriber.processorSlug) {
       throw new Error("Built-in subscriber is missing processorSlug.");
     }
 
-    await this.#processing?.[Symbol.asyncDispose]();
-    await this.#subscription?.[Symbol.asyncDispose]();
+    this.#subscriptionHandle?.unsubscribe();
+    await this.#processing.catch(() => {});
     this.#stream?.[Symbol.dispose]();
 
-    this.#stream = args.stream.dup();
+    this.#stream = retainStreamRpc(args.stream);
     const processor = getOsProcessor({
       ctx: this.ctx,
       env: this.env as StreamProcessorRunnerEnv,
@@ -178,17 +176,22 @@ export class StreamProcessorRunner extends DurableObject {
     });
 
     const snapshot = await this.#runner.snapshot();
-    this.#subscription = createStreamSubscription({
-      subscriptionKey: args.subscriptionKey,
-    });
-    this.#processing = this.#runner.run({
-      subscription: this.#subscription,
-    });
-
-    return {
-      sink: this.#subscription.sink,
-      replayAfterOffset: snapshot?.offset ?? 0,
+    const processEventBatch: ProcessEventBatch = (batch) => {
+      const currentRunner = this.#runner;
+      if (currentRunner === undefined) return;
+      const next = this.#processing.then(
+        () => currentRunner.processEventBatch(batch),
+        () => currentRunner.processEventBatch(batch),
+      );
+      this.#processing = next.catch(() => {});
+      this.ctx.waitUntil(next);
     };
+
+    this.#subscriptionHandle = await (this.#stream as OutboundStreamRpc).subscribeOutbound({
+      subscriptionKey: args.subscriptionKey,
+      processEventBatch,
+      replayAfterOffset: snapshot?.offset ?? args.subscriptionConfiguredEvent.offset,
+    });
   }
 
   runtimeState() {
@@ -208,6 +211,29 @@ export const StreamProcessorRunnerRpcTarget = makeRpcTargetClass<
   StreamProcessorRunnerRpc,
   StreamProcessorRunner
 >(StreamProcessorRunner);
+
+type RetainedStreamRpc = RpcStub<StreamRpc> & Disposable;
+type OutboundStreamRpc = RetainedStreamRpc & {
+  subscribeOutbound(
+    args: Parameters<StreamRpc["subscribe"]>[0],
+  ): ReturnType<StreamRpc["subscribe"]>;
+};
+
+type RetainableStreamRpc = StreamRpc &
+  Partial<Disposable> & {
+    dup?(): RetainedStreamRpc;
+  };
+
+function retainStreamRpc(stream: StreamRpc): RetainedStreamRpc {
+  const retainable = stream as RetainableStreamRpc;
+  const retained = retainable.dup?.() ?? retainable;
+  const dispose = retained[Symbol.dispose]?.bind(retained);
+  return Object.assign(retained, {
+    [Symbol.dispose]() {
+      dispose?.();
+    },
+  }) as RetainedStreamRpc;
+}
 
 function getOsProcessor(args: {
   ctx: DurableObjectState;
@@ -621,7 +647,7 @@ async function* subscribeSharedProcessorStreamApi(args: {
   streamPath: StreamPath;
 }) {
   const stream = streamRpcForPath(args);
-  let handle: ReturnType<StreamRpc["subscribe"]> | undefined;
+  let handle: StreamSubscriptionHandle | undefined;
   const subscription = createStreamSubscription({
     onDispose: () => handle?.unsubscribe(),
   });
@@ -629,7 +655,7 @@ async function* subscribeSharedProcessorStreamApi(args: {
   args.signal?.addEventListener("abort", abort, { once: true });
   try {
     handle = await stream.subscribe({
-      sink: subscription.sink as RpcStub<SubscriptionSink>,
+      processEventBatch: subscription.processEventBatch,
       replayAfterOffset: toNewAfterOffset(args.afterOffset),
     });
 
