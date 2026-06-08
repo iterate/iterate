@@ -35,15 +35,6 @@ export type ProjectConnectionsRow = {
   updated_at: string;
 };
 
-export type ProjectPermissionsRow = {
-  project_id: string;
-  principal_type: string;
-  principal_id: string;
-  role: string;
-  created_at: string;
-  updated_at: string;
-};
-
 export type ProjectSecretsRow = {
   id: string;
   project_id: string;

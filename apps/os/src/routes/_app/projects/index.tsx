@@ -230,20 +230,14 @@ function ProjectsIndexPage() {
                 className="grid min-w-[900px] grid-cols-[220px_160px_220px_minmax(220px,1fr)_190px_96px] items-start gap-3 border-b px-3 py-3 text-sm last:border-b-0"
               >
                 <Identifier value={project.id} textClassName="text-xs text-muted-foreground" />
-                <Link
-                  to="/projects/$projectSlug"
-                  params={{
-                    projectSlug: project.slug,
-                  }}
-                  className="truncate font-medium hover:underline"
-                >
-                  {project.slug}
-                </Link>
+                <ProjectSlugCell project={project} />
                 <div className="truncate text-xs text-muted-foreground">
-                  {project.customHostname ?? "None"}
+                  {project.isOrphanedProjectFromAuthService
+                    ? "Not created in OS"
+                    : (project.customHostname ?? "None")}
                 </div>
                 <div className="truncate text-xs">
-                  {hostname ? (
+                  {!project.isOrphanedProjectFromAuthService && hostname ? (
                     <a
                       href={`https://${hostname}`}
                       target="_blank"
@@ -256,23 +250,58 @@ function ProjectsIndexPage() {
                     <span className="text-muted-foreground">-</span>
                   )}
                 </div>
-                <div className="text-xs text-muted-foreground">{project.createdAt}</div>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={() => deleteProject.mutate({ id: project.id })}
-                  disabled={deleteProject.isPending && deleteProject.variables?.id === project.id}
-                >
-                  {deleteProject.isPending && deleteProject.variables?.id === project.id
-                    ? "Deleting..."
-                    : "Delete"}
-                </Button>
+                <div className="text-xs text-muted-foreground">{project.createdAt ?? "-"}</div>
+                {project.isOrphanedProjectFromAuthService ? (
+                  <Button
+                    size="sm"
+                    onClick={() => createProject.mutate({ id: project.id, slug: project.slug })}
+                    disabled={createProject.isPending && createProject.variables?.id === project.id}
+                  >
+                    {createProject.isPending && createProject.variables?.id === project.id
+                      ? "Creating..."
+                      : "Create"}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => deleteProject.mutate({ id: project.id })}
+                    disabled={deleteProject.isPending && deleteProject.variables?.id === project.id}
+                  >
+                    {deleteProject.isPending && deleteProject.variables?.id === project.id
+                      ? "Deleting..."
+                      : "Delete"}
+                  </Button>
+                )}
               </div>
             );
           })}
         </div>
       )}
     </section>
+  );
+}
+
+function ProjectSlugCell({ project }: { project: Project }) {
+  if (project.isOrphanedProjectFromAuthService) {
+    return (
+      <div className="min-w-0">
+        <div className="truncate font-medium">{project.slug}</div>
+        <div className="text-xs text-muted-foreground">Available from Auth</div>
+      </div>
+    );
+  }
+
+  return (
+    <Link
+      to="/projects/$projectSlug"
+      params={{
+        projectSlug: project.slug,
+      }}
+      className="truncate font-medium hover:underline"
+    >
+      {project.slug}
+    </Link>
   );
 }
 
@@ -292,6 +321,7 @@ function cacheCreatedProjectQueries(input: {
     customHostname: input.project.customHostname,
     createdAt: input.project.createdAt,
     updatedAt: input.project.updatedAt,
+    isOrphanedProjectFromAuthService: input.project.isOrphanedProjectFromAuthService,
   };
 
   for (const listInput of [
@@ -301,7 +331,14 @@ function cacheCreatedProjectQueries(input: {
     const listQuery = orpc.projects.list.queryOptions({ input: listInput });
     input.queryClient.setQueryData<ProjectsListData>(listQuery.queryKey, (existing) => {
       if (!existing) return existing;
-      if (existing.projects.some((project) => project.id === input.project.id)) return existing;
+      if (existing.projects.some((project) => project.id === input.project.id)) {
+        return {
+          ...existing,
+          projects: existing.projects.map((project) =>
+            project.id === input.project.id ? listProject : project,
+          ),
+        };
+      }
 
       return {
         ...existing,

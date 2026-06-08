@@ -75,10 +75,6 @@ export class ProjectCapability extends RpcTarget {
     return this.input.project.callConfigWorkerFunction(...args);
   }
 
-  checkAccess(...args: Parameters<ProjectCapabilityApi["checkAccess"]>) {
-    return this.input.project.checkAccess(...args);
-  }
-
   createProject(...args: Parameters<ProjectCapabilityApi["createProject"]>) {
     return this.input.project.createProject(...args);
   }

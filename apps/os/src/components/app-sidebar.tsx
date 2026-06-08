@@ -132,7 +132,8 @@ function AppSidebarNav() {
     ...orpc.projects.list.queryOptions({ input: { limit: 100, offset: 0 } }),
     staleTime: 30_000,
   });
-  const projects = data?.projects ?? [];
+  const projects =
+    data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
 
   return (
     <>
