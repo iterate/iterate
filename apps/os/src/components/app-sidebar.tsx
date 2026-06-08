@@ -1,5 +1,6 @@
+import { useMemo, useState } from "react";
 import { Link, useMatchRoute } from "@tanstack/react-router";
-import { Building2, ChevronsUpDown, ExternalLink, LogOut, UserCircle } from "lucide-react";
+import { Bug, Building2, ChevronsUpDown, ExternalLink, LogOut, UserCircle } from "lucide-react";
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { useQuery } from "@tanstack/react-query";
@@ -12,6 +13,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@iterate-com/ui/components/dropdown-menu";
+import { ScrollArea } from "@iterate-com/ui/components/scroll-area";
+import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@iterate-com/ui/components/sheet";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -92,36 +102,85 @@ function AppSidebarOrganization({ organizationSlug }: AppSidebarProps) {
 }
 
 function AppSidebarUser() {
-  const { session, signOut } = useAuthClient();
+  const { loading, session, signOut } = useAuthClient();
+  const config = useConfig<PublicConfig>();
+  const [debugOpen, setDebugOpen] = useState(false);
   const user = session?.authenticated ? session.user : null;
   const label = user?.name ?? user?.email ?? "Account";
+  const debugInfo = useMemo(
+    () => ({
+      auth: {
+        loading,
+        session,
+      },
+      config,
+      browser:
+        typeof window === "undefined"
+          ? null
+          : {
+              href: window.location.href,
+              origin: window.location.origin,
+              pathname: window.location.pathname,
+              timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              userAgent: window.navigator.userAgent,
+            },
+    }),
+    [config, loading, session],
+  );
 
   return (
-    <SidebarMenu>
-      <SidebarMenuItem>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <SidebarMenuButton className="h-10 gap-2 data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground">
-                <UserCircle className="size-4" />
-                <span className="truncate">{label}</span>
-                <ChevronsUpDown className="ml-auto size-4" />
-              </SidebarMenuButton>
-            }
-          />
-          <DropdownMenuContent side="top" align="start" className="w-56">
-            <DropdownMenuGroup>
-              <DropdownMenuLabel className="truncate">{label}</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => void signOut()}>
-                <LogOut />
-                <span>Sign out</span>
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </SidebarMenuItem>
-    </SidebarMenu>
+    <>
+      <SidebarMenu>
+        <SidebarMenuItem>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <SidebarMenuButton className="h-10 gap-2 data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground">
+                  <UserCircle className="size-4" />
+                  <span className="truncate">{label}</span>
+                  <ChevronsUpDown className="ml-auto size-4" />
+                </SidebarMenuButton>
+              }
+            />
+            <DropdownMenuContent side="top" align="start" className="w-56">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="truncate">{label}</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setDebugOpen(true)}>
+                  <Bug />
+                  <span>View debug info</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void signOut()}>
+                  <LogOut />
+                  <span>Sign out</span>
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </SidebarMenuItem>
+      </SidebarMenu>
+
+      <Sheet open={debugOpen} onOpenChange={setDebugOpen}>
+        <SheetContent className="w-full gap-0 data-[side=right]:sm:w-[min(92vw,44rem)] data-[side=right]:sm:max-w-[min(92vw,44rem)]">
+          <SheetHeader className="border-b px-4 py-3 pr-14">
+            <SheetTitle>Debug info</SheetTitle>
+            <SheetDescription>
+              Current client session, app config, and browser context.
+            </SheetDescription>
+          </SheetHeader>
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="p-4">
+              <SerializedObjectCodeBlock
+                data={debugInfo}
+                className="min-h-[calc(100svh-8rem)]"
+                initialFormat="json"
+                showToggle
+              />
+            </div>
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }
 
@@ -158,7 +217,7 @@ function AppSidebarNav() {
                 render={<Link to="/capnweb-repl" />}
                 isActive={Boolean(matchRoute({ to: "/capnweb-repl", fuzzy: false }))}
               >
-                <span>Capnweb REPL</span>
+                <span>Repl</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>

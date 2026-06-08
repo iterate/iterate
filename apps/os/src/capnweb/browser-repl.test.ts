@@ -1,6 +1,10 @@
 import { RpcStub, RpcTarget } from "capnweb";
 import { describe, expect, test, vi } from "vitest";
-import { DEFAULT_BROWSER_REPL_CODE, evalBrowserReplCode } from "./browser-repl.ts";
+import {
+  DEFAULT_BROWSER_REPL_CODE,
+  evalBrowserReplCode,
+  evalBrowserReplSessionCode,
+} from "./browser-repl.ts";
 import { liftLocalProxies } from "./local-proxy-wrapper.js";
 
 describe("browser Cap'n Web REPL", () => {
@@ -24,5 +28,25 @@ describe("browser Cap'n Web REPL", () => {
       items: [{ id: "proj_123" }],
     });
     expect(list).toHaveBeenCalledWith({ limit: 5 });
+  });
+
+  test("session snippets can reference previous local variables", async () => {
+    const scope: Record<string, unknown> = {};
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "const answer = 41",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "answer + 1",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBe(42);
   });
 });
