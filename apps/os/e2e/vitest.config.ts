@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import {
@@ -10,6 +11,7 @@ import { E2E_REPO_ROOT_KEY, E2E_RUN_SLUG_KEY } from "./test-support/provide-keys
 import { createVitestRunSlug } from "./test-support/vitest-naming.ts";
 
 const e2eRoot = fileURLToPath(new URL(".", import.meta.url));
+const appRoot = fileURLToPath(new URL("..", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 
 const vitestRunSlug = process.env.OS_E2E_RUN_SLUG?.trim() || createVitestRunSlug();
@@ -19,6 +21,11 @@ console.log(`[vitest-artifacts] run root: ${vitestRunRoot}`);
 console.log(`[vitest] run slug: ${vitestRunSlug}`);
 
 export default defineConfig({
+  resolve: {
+    alias: {
+      "~": resolve(appRoot, "src"),
+    },
+  },
   test: {
     environment: "node",
     fileParallelism: false,

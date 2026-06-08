@@ -156,8 +156,7 @@ async function seedProjectMcpUrl(input: { adminApiSecret: string; baseUrl: URL }
   return projectMcpUrlFor({ baseUrl: input.baseUrl, project });
 }
 
-// TODO: Re-enable once preview smoke has a stable deployed-preview auth fixture.
-test.skip("OS preview smoke", async () => {
+test("OS preview smoke", async () => {
   const baseUrl = requireBaseUrl();
   const projectMcpUrlOverride = readProjectMcpUrlOverride();
   const adminApiSecret = readAdminApiSecret();
@@ -211,8 +210,11 @@ test.skip("OS preview smoke", async () => {
     status: 200,
   });
   const metadata = (await metadataResponse.json()) as { resource?: string };
-  if (metadata.resource !== projectMcpUrl.toString()) {
-    throw new Error(`Expected MCP metadata resource ${projectMcpUrl}; got ${metadata.resource}.`);
+  const expectedResource = projectMcpUrl.toString().replace(/\/+$/, "");
+  if (metadata.resource !== expectedResource) {
+    throw new Error(
+      `Expected MCP metadata resource ${expectedResource}; got ${metadata.resource}.`,
+    );
   }
 
   console.log(`OS preview smoke passed for ${baseUrl.toString()}`);
