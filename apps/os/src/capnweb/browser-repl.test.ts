@@ -5,6 +5,7 @@ import {
   DEFAULT_BROWSER_REPL_CODE,
   evalBrowserReplCode,
   evalBrowserReplSessionCode,
+  runBrowserReplEntry,
 } from "./browser-repl.ts";
 import { liftLocalProxies } from "./local-proxy-wrapper.js";
 
@@ -29,6 +30,28 @@ describe("browser Cap'n Web REPL", () => {
       items: [{ id: "proj_123" }],
     });
     expect(list).toHaveBeenCalledWith({ limit: 5 });
+  });
+
+  test("route entry runner succeeds for the default project list snippet", async () => {
+    const ctx = liftLocalProxies({
+      projects: {
+        list(input: { limit: number }) {
+          return { projects: [{ id: "proj_123" }], total: 1, limit: input.limit };
+        },
+      },
+    });
+
+    await expect(
+      runBrowserReplEntry({
+        code: DEFAULT_BROWSER_REPL_CODE,
+        ctx,
+        scope: {},
+      }),
+    ).resolves.toEqual({
+      code: DEFAULT_BROWSER_REPL_CODE,
+      output: JSON.stringify({ projects: [{ id: "proj_123" }], total: 1, limit: 5 }, null, 2),
+      status: "success",
+    });
   });
 
   test("session snippets can reference previous local variables", async () => {

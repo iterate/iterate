@@ -3,6 +3,24 @@ import { describe, expect, test } from "vitest";
 import { liftLocalProxies, localProxyCaller } from "./local-proxy-wrapper.js";
 
 describe("liftLocalProxies", () => {
+  test("does not treat ordinary callable proxy targets as promises just because they expose then", () => {
+    let thenCalls = 0;
+    const rpcStub = Object.assign(() => undefined, {
+      projects: {
+        list: () => ({ projects: [], total: 0 }),
+      },
+      then: () => {
+        thenCalls += 1;
+        throw new Error("remote then should not be called");
+      },
+    });
+
+    const lifted = liftLocalProxies(rpcStub) as typeof rpcStub;
+
+    expect(lifted.projects.list()).toEqual({ projects: [], total: 0 });
+    expect(thenCalls).toBe(0);
+  });
+
   test("preserves direct calls through Cap'n Web promise properties", async () => {
     class Project extends RpcTarget {
       describe() {

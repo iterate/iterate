@@ -15,8 +15,8 @@ import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import {
   BROWSER_REPL_EXAMPLES,
   DEFAULT_BROWSER_REPL_CODE,
-  evalBrowserReplSessionCode,
-  formatBrowserReplResult,
+  runBrowserReplEntry,
+  type BrowserReplEntry,
 } from "~/capnweb/browser-repl.ts";
 import { liftLocalProxies } from "~/capnweb/local-proxy-wrapper.js";
 import type { IterateContext } from "~/capnweb/iterate-context-capability.ts";
@@ -28,17 +28,11 @@ export const Route = createFileRoute("/_app/capnweb-repl")({
   component: CapnwebReplPage,
 });
 
-type ReplEntry = {
-  code: string;
-  output: string;
-  status: "error" | "success";
-};
-
 function CapnwebReplPage() {
   const [code, setCode] = useState(DEFAULT_BROWSER_REPL_CODE);
   const [ctx, setCtx] = useState<RpcStub<IterateContext> | null>(null);
   const [status, setStatus] = useState("Connecting...");
-  const [entries, setEntries] = useState<ReplEntry[]>([]);
+  const [entries, setEntries] = useState<BrowserReplEntry[]>([]);
   const [examplesOpen, setExamplesOpen] = useState(false);
   const envRef = useRef<Record<string, unknown>>({});
   const scopeRef = useRef<Record<string, unknown>>({ RpcTarget });
@@ -69,30 +63,15 @@ function CapnwebReplPage() {
     const trimmedCode = code.trim();
     if (!ctx || trimmedCode === "") return;
     setStatus("Running...");
-    try {
-      const result = await evalBrowserReplSessionCode({
-        code: trimmedCode,
-        ctx,
-        env: envRef.current,
-        scope: scopeRef.current,
-      });
-      setEntries((current) => [
-        ...current,
-        { code: trimmedCode, output: formatBrowserReplResult(result), status: "success" },
-      ]);
-      setCode("");
-      setStatus("Connected");
-    } catch (error) {
-      setEntries((current) => [
-        ...current,
-        {
-          code: trimmedCode,
-          output: error instanceof Error ? (error.stack ?? error.message) : String(error),
-          status: "error",
-        },
-      ]);
-      setStatus("Connected");
-    }
+    const entry = await runBrowserReplEntry({
+      code: trimmedCode,
+      ctx,
+      env: envRef.current,
+      scope: scopeRef.current,
+    });
+    setEntries((current) => [...current, entry]);
+    if (entry.status === "success") setCode("");
+    setStatus("Connected");
   }
 
   function selectExample(exampleCode: string) {

@@ -89,7 +89,7 @@ function lift(value) {
   if ((typeof value !== "object" && typeof value !== "function") || value === null) {
     return value;
   }
-  if (isThenable(value)) return pendingValueProxy(value, value, []);
+  if (isThenable(value) && typeof value !== "function") return pendingValueProxy(value, value, []);
 
   // This Proxy is client-side only. Cloudflare Workers RPC and Cap'n Web both
   // already use JavaScript Proxy objects for remote stubs:
@@ -105,20 +105,12 @@ function lift(value) {
   // unknown paths such as ctx.slack.chat.postMessage(...).
   return new Proxy(value, {
     get(target, key, receiver) {
-      if (key === "then" && typeof target.then === "function") {
-        return (onFulfilled, onRejected) =>
-          target.then(
-            (resolved) => (onFulfilled ? onFulfilled(adapt(resolved)) : adapt(resolved)),
-            (error) => onRejected?.(error),
-          );
-      }
-
       const member = Reflect.get(target, key, receiver);
       if (typeof key === "string" && TRANSPARENT_RPC_ROOTS.has(key)) {
         return member;
       }
       if (isLocalProxyCaller(member) || isThenable(member)) {
-        return lift(member);
+        return isThenable(member) ? pendingValueProxy(member, member, []) : lift(member);
       }
       return member;
     },
