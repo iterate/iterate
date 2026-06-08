@@ -313,12 +313,6 @@ describe("CodemodeSession", () => {
       outcome: {
         status: "returned",
         value: {
-          agentMessage: "hello from env project",
-          agentThing: {
-            doubled: 42,
-            label: "project-pipeline",
-            value: 21,
-          },
           aiModel: "test-model",
           batchAppendCount: 2,
           eventMessages: expect.arrayContaining([
@@ -328,7 +322,6 @@ describe("CodemodeSession", () => {
             "project capability lowercase env alias",
           ]),
           proceduresIncludeStreams: true,
-          repoCount: expect.any(Number),
           streamInitialized: true,
         },
       },

@@ -1272,7 +1272,7 @@ function StreamControlTool({
               subscriptionKey,
               subscriber: {
                 type: "built-in",
-                transport: "capnweb-websocket",
+                transport: "workers-rpc",
                 processorSlug: "circuit-breaker",
               },
             },

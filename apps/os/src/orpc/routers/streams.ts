@@ -143,7 +143,7 @@ async function* subscribeProjectStreamEvents(input: {
     if (input.signal?.aborted) return;
     input.signal?.addEventListener("abort", onAbort, { once: true });
     handle = await connection.stream.subscribe({
-      sink: subscription.sink,
+      processEventBatch: subscription.processEventBatch,
       replayAfterOffset: toNewAfterOffset(input.afterOffset),
     });
 

@@ -24,8 +24,8 @@ not a websocket, not a live connection, and not necessarily unique to one stream
 
 Subscriber spec: the `subscriber` object inside a `subscription-configured` event. It tells the stream
 what kind of subscriber should exist and how to connect to it. The transport is a property of this
-object. For now we only support capnweb-WebSocket (`capnweb-websocket`), but later subscriber
-specs can describe dynamic workers, external URLs, webhooks, etc.
+object. For now outbound subscribers are same-account Workers RPC built-ins; later subscriber specs
+can describe dynamic workers, external URLs, webhooks, etc.
 
 Subscription: the configured edge from a stream node to a subscriber node. `subscriptionKey` identifies
 this edge within one stream. The same subscriber implementation can appear behind many subscriptions.
@@ -34,28 +34,28 @@ Subscription configuration: the latest `events.iterate.com/stream/subscription-c
 given `subscriptionKey`. The built-in core processor stores this exact event in stream reduced state.
 
 Subscription connection: a live runtime connection used to deliver events for a subscription. It has
-a direction, a transport, an optional `subscriptionKey`, and a subscription sink. It is not persisted;
-it can be recreated from stream reduced state and runtime handshakes.
+a direction, a transport, an optional `subscriptionKey`, and a batch callback. It is not persisted; it
+can be recreated from stream reduced state and runtime handshakes.
 
 Inbound subscription connection: a subscriber connects into the stream and passes the stream a
-subscription sink by calling `subscribe()`. Direction is always from the `Stream` durable object's
+batch callback by calling `subscribe()`. Direction is always from the `Stream` durable object's
 perspective. Browser tabs and vitest-hosted stream processors use this in tests.
 
 Outbound subscription connection: the stream connects out to a subscriber described by a persisted
 subscription configuration. Direction is always from the `Stream` durable object's perspective. Built-in
 stream processors normally use this.
 
-Subscription sink: the RPC capability provided by the subscriber side for one live subscription
-connection. The stream stores this target in memory and calls `processEventBatch({ events })` on it
-to deliver batches.
+Subscription callback: the RPC function provided by the subscriber side for one live subscription
+connection. The stream stores this function in memory and calls `processEventBatch({ events })` to
+deliver batches.
 
 capnweb session: a live capnweb connection to the stream. A session can become a subscription
-connection if the subscription handshake yields a subscription sink, but debug/control sessions
+connection if the subscription handshake yields a batch callback, but debug/control sessions
 can exist without being subscriptions.
 
 Stream runtime state: The current serializable state of the stream that is useful to a subscriber at
 subscription start or to a UI/test for introspection. This is the union of persisted reduced state and
-interesting runtime state such as connected subscription sinks. It does not include event rows; use
+interesting runtime state such as connected subscription callbacks. It does not include event rows; use
 `getEvent()` / `getEvents()` for events.
 
 Stream reduced state: The stream durable object's persisted projection over its own event log. The
@@ -161,9 +161,9 @@ configure itself from committed stream state.
   payload: {
     subscriptionKey: "transcribe-audio",
     subscriber: {
-      type: "external-url",
-      transport: "capnweb-websocket",
-      url: "https://processor.example.com/transcribe-audio",
+      type: "built-in",
+      transport: "workers-rpc",
+      processorSlug: "transcribe-audio",
     },
   },
   createdAt: "2026-06-01T12:00:00.003Z",
@@ -174,10 +174,10 @@ configure itself from committed stream state.
 within a stream. If a later `subscription-configured` event uses the same `subscriptionKey`, it replaces
 the previous configuration for that subscription. The same subscriber implementation can appear in
 multiple subscriptions.
-`subscriber` describes what kind of subscriber should be connected and how to connect to it. The
-initial subscriber types are `built-in`, which uses `processorSlug` to select a built-in stream
-processor runner, and `external-url`, which dials a configured public URL using the same capnweb
-WebSocket protocol.
+`subscriber` describes what kind of subscriber should be connected and how to connect to it. For now
+outbound delivery is Workers RPC only: `built-in` uses `processorSlug` to select a built-in stream
+processor runner. External websocket/http subscribers can come back when there is a concrete product
+need.
 
 ```ts
 {
@@ -185,12 +185,9 @@ WebSocket protocol.
   payload: {
     subscriptionKey: "external-runner",
     subscriber: {
-      type: "external-url",
-      transport: "capnweb-websocket",
-      url: "https://example.com/stream-processor",
-      headers: {
-        "x-stream-token": "test-token",
-      },
+      type: "built-in",
+      transport: "workers-rpc",
+      processorSlug: "external-runner",
     },
   },
 }
@@ -242,7 +239,7 @@ Future instrumentation should cover:
 
 For any stream
 
-- All active subscription connections with direction (inbound vs outbound), transport (`capnweb-websocket`), status (connected or not)
+- All active subscription connections with direction (inbound vs outbound), transport (`workers-rpc` for outbound), status (connected or not)
 - age
 - number of events
 - storage size
@@ -302,41 +299,41 @@ The failure of any one processor should not affect other processors. This means,
   Subscription management is stream-owned core behavior, not a separate user processor.
 
 - The stream has a subscription reconciler that uses the stream reduced state to know which outbound
-  subscription connections should exist, and uses runtime state to know which capnweb sessions /
-  subscription sinks are currently connected.
+  subscription connections should exist, and uses runtime state to know which batch callbacks are
+  currently connected.
 
 ## capnweb API
 
-The primary way to interact with the stream is via a capnweb API.
+The primary browser/external way to interact with the stream is via a capnweb API. Same-account
+Worker and Durable Object code uses Workers RPC directly.
 
-The subscription handshake should be symmetrical:
+The delivery model is shared even though connection setup differs:
 
 - For inbound subscriptions, the subscriber calls `subscribe()` on the stream and passes its
-  subscription sink plus optional `replayAfterOffset`.
-- For outbound subscriptions, the stream calls `requestSubscription()` on the subscriber and passes
-  its stream RPC target, the `subscription-configured` event, and `runtimeState()`. The subscriber
-  returns the same request shape used by inbound subscriptions, so the stream can call `subscribe()`
-  and start delivery.
-- In both cases, the stream ends up storing a subscription sink in memory and delivering event batches
-  to it.
+  `processEventBatch` callback plus optional `replayAfterOffset`.
+- For outbound built-in subscriptions, the stream calls `requestSubscription()` on the runner DO over
+  Workers RPC. The runner then calls the stream's internal `subscribeOutbound()` with its
+  `processEventBatch` callback.
+- In both cases, the stream stores a callback in memory and delivers ordered event batches to it.
 
 The subscription connection lifecycle is:
 
 1. The stream reduced state says which durable subscriptions should exist, or an inbound caller asks to
    subscribe directly.
-2. One side opens a capnweb session.
+2. One side opens the appropriate RPC path: Cap'n Web for inbound clients, Workers RPC for built-in
+   outbound runners.
 3. The initiating side calls the appropriate request/subscribe method.
-4. The subscriber side provides a subscription sink and optional `replayAfterOffset`.
+4. The subscriber side provides a batch callback and optional `replayAfterOffset`.
 5. The stream stores a subscription connection in memory and starts replay/live delivery from
    `replayAfterOffset + 1`.
-6. When the capnweb session breaks, the stream forgets the runtime connection. The durable
+6. When the RPC peer breaks or unsubscribes, the stream forgets the runtime connection. The durable
    subscription configuration remains in stream reduced state.
 
 The subscription request shape is:
 
 ```ts
 {
-  sink,
+  processEventBatch,
   replayAfterOffset?,
 }
 ```
@@ -344,12 +341,12 @@ The subscription request shape is:
 `replayAfterOffset` is owned by the subscriber and is optional. If omitted, the stream treats it as
 `"start"`, meaning "start before the first event". For inbound subscriptions, the subscriber sends it
 directly to `subscribe()`. For outbound subscriptions, the subscriber returns it from
-`requestSubscription()` after looking at `runtimeState()` and the `subscription-configured` event. The
-stream then starts replay/live delivery from `replayAfterOffset + 1`.
+`requestSubscription()` after looking at `runtimeState()` and the `subscription-configured` event.
+The stream then starts replay/live delivery from `replayAfterOffset + 1`.
 
 Not every capnweb session is a subscription connection. Debug and control clients can open
-capnweb sessions and call RPC methods without providing a subscription sink. A capnweb session
-becomes a subscription connection only when the handshake gives the stream a subscription sink to
+capnweb sessions and call RPC methods without providing a batch callback. A capnweb session
+becomes a subscription connection only when the handshake gives the stream a batch callback to
 store for event delivery.
 
 `runtimeState()` should return the stream reduced state plus serializable runtime state, including
@@ -357,7 +354,7 @@ active capnweb sessions, active subscription connections, subscription keys, dir
 transports, and connection status. Event rows are not included; callers use `getEvent()` or
 `getEvents()` for event data.
 
-The subscription sink should expose a batch-shaped delivery method:
+The subscription callback should expose a batch-shaped delivery method:
 
 ```ts
 processEventBatch({ events });
@@ -384,7 +381,7 @@ in  ["stream",["pipeline",1,["write"],[eventBatch]]]
 out ["resolve",2,["undefined"]]
 ```
 
-The subscription sink shape avoids that write/resolve pair when the caller does not observe the
+The subscription callback shape avoids that write/resolve pair when the caller does not observe the
 result. The expected post-init wire shape is one-way event delivery from stream to subscriber:
 
 ```txt
@@ -456,10 +453,9 @@ Working reference implementation: `src/stream-processor.ts (+ stream-processor.t
   class inheritance (method override OR field arrow, generic or concrete base) does NOT
   get contextual param typing — so the contract+implementation split is functional, not
   a base class.
-- **Exactly one runner and one transport.** Processors connect to a stream only via a
-  capnweb subscription: the stream calls `processEventBatch({ events, streamMaxOffset })` on a sink the
-  processor supplied. Identical for inbound (browser/node call `subscribe()`) and
-  outbound (stream dials the runner DO) connections.
+- **Exactly one runner and one delivery path.** Processors consume events through
+  `processEventBatch({ events, streamMaxOffset })`. Browser/node clients call `subscribe()`; built-in
+  outbound runners call `subscribeOutbound()` after the stream wakes them over Workers RPC.
 - **The runner consumes a subscription.** No `catchUp()` / `readHistory` / catch-up-vs-live split:
   the stream replays history through the _same_ `processEventBatch` channel, so the
   runner processes one event at a time through `processorRunner.run({ subscription })`.
@@ -467,9 +463,9 @@ Working reference implementation: `src/stream-processor.ts (+ stream-processor.t
   persist the `{ state, offset }` snapshot via a storage port, and append side effects
   through the exact stream API.
 - **Runtimes differ only in connection setup and storage.** Browser and Node call
-  `stream.subscribe({ sink: subscription.sink, replayAfterOffset })`; the outbound
-  StreamProcessorRunner DO returns `{ sink: subscription.sink, replayAfterOffset }` to
-  the Stream DO. After that, all three call `processorRunner.run({ subscription })`.
+  `stream.subscribe({ processEventBatch: subscription.processEventBatch, replayAfterOffset })`; the
+  outbound StreamProcessorRunner DO calls `stream.subscribeOutbound(...)`. After that, all three
+  process the same event batches.
 - **The browser SQLite projector** is `consumes: ["*"]`, no `reduce`, and an `afterAppend`
   that does a fire-and-forget `db.write(event)` (the db coalesces into batched
   transactions). Its resume cursor is the side-effect target itself —
@@ -517,7 +513,7 @@ Working reference implementation: `src/stream-processor.ts (+ stream-processor.t
   when that event is delivered back in `processEventBatch`, latency = `Date.now() -
 appendedAtMs`. No correlation map, no await — `append` stays fire-and-forget. Exact for
   the self-loop (same isolate appends and receives); cross-isolate is subject to clock
-  skew. Stamping is opt-in (only when an `onAppendRoundTrip` sink is provided) so normal
+  skew. Stamping is opt-in (only when an `onAppendRoundTrip` callback is provided) so normal
   events stay clean. CF note: `Date.now()` is frozen within a turn and advances on IO, so
   the append-turn vs deliver-turn correctly capture elapsed wall-clock across the network.
   Demonstrated + executed in the trial via `exampleAppendRoundTrip` (loopback stream).
@@ -617,7 +613,7 @@ Disposal should be async: dispose the capnweb session, then close the underlying
 
 ### Level 2: subscriptions
 
-`createStreamSubscription()` should wrap the caller's callback/iterator as a subscription sink
+`createStreamSubscription()` should wrap the caller's callback/iterator as a subscription callback
 with `processEventBatch({ events })`, then call `subscribe()` on the stream RPC target. The Durable
 Object stores that runtime target and starts delivering replay/live batches from `replayAfterOffset + 1`.
 
@@ -635,9 +631,7 @@ The underlying protocol is batch-first:
 
 ```ts
 subscribe(args: {
-  sink: {
-    processEventBatch(args: { events: StreamEvent[] }): unknown;
-  };
+  processEventBatch(args: { events: StreamEvent[] }): unknown;
   replayAfterOffset?: number | "start";
 }): Promise<{
   unsubscribe(): Promise<void>;
@@ -785,10 +779,10 @@ This layer should share the contract-aware event resolution/parsing used by type
 - Use `AsyncIterable` plus `waitForEvent()` for subscriptions.
 - Do not use Node `EventEmitter` as the primary subscription API.
 - Keep OS project/codemode fixtures out of the client library; those helpers can wrap this client.
-- For inbound subscribers, the client calls `subscribe()` with a `processEventBatch` sink and does
+- For inbound subscribers, the client calls `subscribe()` with a `processEventBatch` callback and does
   not need to expose `requestSubscription()` on its own capnweb main object.
 - Durable Object stream delivery only cares that the capnweb peer provides a
-  subscription sink; it does not care whether that peer is a browser, Node script, Worker, or
+  subscription callback; it does not care whether that peer is a browser, Node script, Worker, or
   Durable Object.
 - In the browser SQLite viewer, CapnWeb connections and subscriptions are deliberately separate:
   every tab gets its own stream connection for commands, but only one elected tab per stream path

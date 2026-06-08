@@ -98,15 +98,8 @@ Run the same end-to-end tests against the deployed worker:
 WORKER_URL=https://stream-staging-area.iterate-dev-preview.workers.dev STREAM_STAGING_E2E=true pnpm --dir packages/streams/example-app vitest
 ```
 
-The cloudflared-gated test verifies an `external-url` capnweb subscriber reached through a
-quick tunnel. It needs the `cloudflared` binary and a worker that can dial out to the public
-tunnel, so run it against the deployed worker:
-
-```sh
-WORKER_URL=https://stream-staging-area.iterate-dev-preview.workers.dev \
-  STREAM_STAGING_E2E=true STREAM_STAGING_CLOUDFLARED_E2E=true \
-  pnpm --dir packages/streams/example-app vitest
-```
+Outbound processor subscriptions are Workers RPC only for now. External websocket/http
+delivery was removed until there is a concrete product need for it again.
 
 ## Evaluate
 

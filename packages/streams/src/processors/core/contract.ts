@@ -8,7 +8,16 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";
 
-const OutboundSubscriber = z.discriminatedUnion("type", [
+const SupportedOutboundSubscriber = z.object({
+  type: z.literal("built-in"),
+  transport: z.literal("workers-rpc"),
+  processorSlug: z.string().trim().min(1),
+});
+// TODO: Add dynamic-worker when a worker-name/entrypoint dialer exists.
+// TODO: Add webhooks only if we want non-capnweb delivery semantics.
+
+const HistoricalOutboundSubscriber = z.union([
+  SupportedOutboundSubscriber,
   z.object({
     type: z.literal("built-in"),
     transport: z.literal("capnweb-websocket"),
@@ -20,9 +29,50 @@ const OutboundSubscriber = z.discriminatedUnion("type", [
     url: z.url(),
     headers: z.record(z.string(), z.string()).optional(),
   }),
-  // TODO: Add dynamic-worker when a worker-name/entrypoint dialer exists.
-  // TODO: Add webhooks only if we want non-capnweb delivery semantics.
 ]);
+
+const SupportedSubscriptionConfiguredEvent = z.object({
+  offset: z.number().int().min(0),
+  type: z.literal("events.iterate.com/stream/subscription-configured"),
+  payload: z.object({
+    subscriptionKey: z.string().trim().min(1),
+    subscriber: SupportedOutboundSubscriber,
+  }),
+  createdAt: z.string(),
+});
+
+const HistoricalSubscriptionConfiguredEvent = z.object({
+  offset: z.number().int().min(0),
+  type: z.literal("events.iterate.com/stream/subscription-configured"),
+  payload: z.object({
+    subscriptionKey: z.string().trim().min(1),
+    subscriber: HistoricalOutboundSubscriber,
+  }),
+  createdAt: z.string(),
+});
+
+const SubscriptionsByKey = z
+  .record(z.string(), z.object({ latestConfiguredEvent: HistoricalSubscriptionConfiguredEvent }))
+  .transform(
+    (
+      subscriptions,
+    ): Record<
+      string,
+      { latestConfiguredEvent: z.output<typeof SupportedSubscriptionConfiguredEvent> }
+    > => {
+      const supported: Record<
+        string,
+        { latestConfiguredEvent: z.output<typeof SupportedSubscriptionConfiguredEvent> }
+      > = {};
+      for (const [subscriptionKey, subscription] of Object.entries(subscriptions)) {
+        const parsed = SupportedSubscriptionConfiguredEvent.safeParse(
+          subscription.latestConfiguredEvent,
+        );
+        if (parsed.success) supported[subscriptionKey] = { latestConfiguredEvent: parsed.data };
+      }
+      return supported;
+    },
+  );
 
 export const coreProcessorContract = defineProcessorContract({
   slug: "core",
@@ -66,20 +116,7 @@ export const coreProcessorContract = defineProcessorContract({
         }),
       }),
     ),
-    subscriptionsByKey: z.record(
-      z.string(),
-      z.object({
-        latestConfiguredEvent: z.object({
-          offset: z.number().int().min(0),
-          type: z.literal("events.iterate.com/stream/subscription-configured"),
-          payload: z.object({
-            subscriptionKey: z.string().trim().min(1),
-            subscriber: OutboundSubscriber,
-          }),
-          createdAt: z.string(),
-        }),
-      }),
-    ),
+    subscriptionsByKey: SubscriptionsByKey,
   }),
   initialState: {
     namespace: "uninitialized",
@@ -136,7 +173,7 @@ export const coreProcessorContract = defineProcessorContract({
       description: "Configures or replaces an outbound subscription for this stream.",
       payloadSchema: z.object({
         subscriptionKey: z.string().trim().min(1),
-        subscriber: OutboundSubscriber,
+        subscriber: HistoricalOutboundSubscriber,
       }),
     },
     "events.iterate.com/stream/processor-registered": {
@@ -265,14 +302,21 @@ export const coreProcessorContract = defineProcessorContract({
         };
       }
 
-      case "events.iterate.com/stream/subscription-configured":
+      case "events.iterate.com/stream/subscription-configured": {
+        const parsed = SupportedSubscriptionConfiguredEvent.safeParse(event);
+        if (!parsed.success) {
+          const { [event.payload.subscriptionKey]: _removed, ...subscriptionsByKey } =
+            next.subscriptionsByKey;
+          return { ...next, subscriptionsByKey };
+        }
         return {
           ...next,
           subscriptionsByKey: {
             ...next.subscriptionsByKey,
-            [event.payload.subscriptionKey]: { latestConfiguredEvent: event },
+            [event.payload.subscriptionKey]: { latestConfiguredEvent: parsed.data },
           },
         };
+      }
 
       case "events.iterate.com/stream/processor-registered":
         return {

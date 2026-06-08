@@ -444,7 +444,7 @@ async function* liveNamespaceStreamEvents(args: {
     onDispose: () => handle?.unsubscribe(),
   });
   handle = await connection.stream.subscribe({
-    sink: subscription.sink,
+    processEventBatch: subscription.processEventBatch,
     replayAfterOffset: toNewAfterOffset(args.afterOffset),
   });
 
