@@ -1,5 +1,5 @@
 export const LOCAL_PROXY_CALLER_MARK = "__localProxyCaller";
-const TRANSPARENT_RPC_ROOTS = new Set([
+const BUILT_IN_RPC_ROOTS = new Set([
   "project",
   "projects",
   "repos",
@@ -46,9 +46,10 @@ const TRANSPARENT_RPC_ROOTS = new Set([
  *
  *      const ctx = liftLocalProxies(await env.ITERATE.context)
  *
- * 3. When `ctx.slack.chat.postMessage(...)` reaches a marker, this wrapper
- *    uses a local path proxy. Every property read after the marker root records
- *    another path segment, and the final function call invokes:
+ * 3. When `ctx.slack.chat.postMessage(...)` starts from an unresolved RPC
+ *    promise, this wrapper records the path but does not assume Slack yet. The
+ *    final function call waits for the original promise. Only if that promise
+ *    resolves to a marker do we invoke:
  *
  *      call({ path: ["chat", "postMessage"], args: [{ channel, text }] })
  *
@@ -81,6 +82,16 @@ export function callLocalProxyCaller(value, input) {
 
 function adapt(value) {
   if (!isLocalProxyCaller(value)) return value;
+  // Regression guard:
+  // - Unit: local-proxy-wrapper.test.ts
+  //   "supports SDK-shaped calls through a pending ... local proxy marker"
+  // - Browser e2e: captnweb.browser.test.ts
+  //   "calls a browser-owned Slack SDK-shaped local proxy marker"
+  //
+  // This is the only place where the helper intentionally changes a value's
+  // behavior. A marker is plain data saying "turn this one awaited value into
+  // an SDK-shaped path recorder". Ordinary Cap'n Web / Workers RPC stubs must
+  // not come through here.
   return pathProxy(value.call);
 }
 
@@ -89,44 +100,109 @@ function lift(value) {
   if ((typeof value !== "object" && typeof value !== "function") || value === null) {
     return value;
   }
-  if (isThenable(value) && typeof value !== "function") return pendingValueProxy(value, value, []);
+  // Native promises are not callable, so treating a top-level one as a pending
+  // marker candidate cannot reproduce the production REPL bug. The regression
+  // was specifically a callable Cap'n Web root (`newWebSocketRpcSession(...)`)
+  // whose synthetic `.then` member made the old helper think the whole root was
+  // a promise before `ctx.projects.list({ limit: 5 })` had a chance to dispatch.
+  //
+  // Regression guard:
+  // - local-proxy-wrapper.test.ts
+  //   "does not even read a callable RPC root then member..."
+  if (typeof value === "object" && isThenable(value)) {
+    return pendingValueProxy(value, value, []);
+  }
 
-  // This Proxy is client-side only. Cloudflare Workers RPC and Cap'n Web both
-  // already use JavaScript Proxy objects for remote stubs:
+  // This Proxy is client-side only and deliberately transparent for built-in
+  // Cap'n Web roots. The one exception is unknown top-level roots, which are
+  // how mounted provider SDKs enter the context. Example: `ctx.slack` is not a
+  // real IterateContext prototype method, it is a mounted root that resolves to
+  // localProxyCaller(...).
+  //
+  // Cloudflare Workers RPC and Cap'n Web both already use JavaScript Proxy
+  // objects for remote stubs:
   // - https://developers.cloudflare.com/workers/runtime-apis/rpc/
   // - https://github.com/cloudflare/capnweb
   //
-  // We wrap the stub/promise locally so property reads on an unresolved RPC
-  // promise still pipeline through to the eventual value, but we do not change
-  // ordinary RPC semantics. The only special case is a value marked by
-  // localProxyCaller(), which becomes an SDK-shaped local path proxy. This is
-  // why normal calls such as ctx.projects.get(id).describe() still dispatch
-  // through the runtime stub, while marker values can support Slack-style
-  // unknown paths such as ctx.slack.chat.postMessage(...).
+  // Built-in roots stay raw so normal RPC promise-pipelining remains owned by
+  // Cap'n Web:
+  //
+  //   await ctx.projects.list({ limit: 5 })
+  //   await ctx.projects.get(id).describe()
+  //
+  // Unknown roots get pending SDK recording:
+  //
+  //   await ctx.slack.chat.postMessage({ channel, text })
+  //
+  // The pending recorder still waits for `ctx.slack` to resolve before doing
+  // anything. If that value is not localProxyCaller(...), it falls back to the
+  // captured normal member/call path.
+  //
+  // Regression guard:
+  // - Unit: local-proxy-wrapper.test.ts
+  //   "does not treat ordinary callable proxy targets as promises..."
+  // - Unit: browser-repl.test.ts
+  //   "default snippet uses Cap'n Web promise pipelining"
+  // - Browser e2e: captnweb.browser.test.ts
+  //   "runs the default browser REPL project list expression"
+  //
+  // Those tests cover the production failure where the browser REPL evaluated
+  // `await ctx.projects.list({ limit: 5 })` and the wrapper accidentally
+  // treated a callable Cap'n Web root proxy's synthetic `then` member as a
+  // promise. The built-in root table is intentionally a narrow boundary: known
+  // Iterate RPC roots are left to Cap'n Web, while unknown mounted roots can
+  // still opt into the SDK recorder by resolving to localProxyCaller(...).
   return new Proxy(value, {
     get(target, key, receiver) {
+      if (key === "then" && typeof target === "function") {
+        // Promise machinery probes `.then`. Cap'n Web's callable root proxies
+        // can synthesize arbitrary string members, including `then`, but that
+        // must not make the lifted root itself thenable. This exact probe is
+        // pinned by local-proxy-wrapper.test.ts:
+        // "does not even read a callable RPC root then member..."
+        return undefined;
+      }
+
       const member = Reflect.get(target, key, receiver);
-      if (typeof key === "string" && TRANSPARENT_RPC_ROOTS.has(key)) {
+      if (typeof key === "string" && BUILT_IN_RPC_ROOTS.has(key)) {
         return member;
       }
-      if (isLocalProxyCaller(member) || isThenable(member)) {
-        return isThenable(member) ? pendingValueProxy(member, member, []) : lift(member);
-      }
-      return member;
+      return liftReturnValue(member);
     },
 
     apply(target, thisArg, args) {
-      return lift(Reflect.apply(target, thisArg, args));
+      return liftReturnValue(Reflect.apply(target, thisArg, args));
     },
   });
 }
 
+function liftReturnValue(value) {
+  if (isLocalProxyCaller(value)) return adapt(value);
+  // This is where unknown roots such as `ctx.slack` become eligible for
+  // SDK-shaped path recording. Known Iterate roots are filtered out one level
+  // above, so ordinary Cap'n Web promises below `ctx.projects` / `ctx.project`
+  // do not pass through this helper at all.
+  //
+  // Regression guard:
+  // - local-proxy-wrapper.test.ts
+  //   "supports SDK-shaped calls through a pending ... local proxy marker"
+  // - browser-repl.test.ts
+  //   "REPL supports pre-await Slack SDK-shaped local proxy calls"
+  if (isThenable(value)) return pendingValueProxy(value, value, []);
+  return value;
+}
+
 function isThenable(value) {
-  return (
-    value !== null &&
-    (typeof value === "object" || typeof value === "function") &&
-    typeof value.then === "function"
-  );
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return false;
+  try {
+    return typeof value.then === "function";
+  } catch {
+    // Unit test "does not even read a callable RPC root then member..." uses a
+    // throwing getter to make this failure mode loud. If a random object makes
+    // `.then` hostile, it is safer to leave it alone than to classify it as an
+    // SDK marker candidate.
+    return false;
+  }
 }
 
 function pendingValueProxy(value, rootPromise, path) {
@@ -154,6 +230,16 @@ function pendingValueProxy(value, rootPromise, path) {
         return Reflect.get(target, key, receiver);
       }
 
+      // This is the pending Slack SDK path recorder. The key rule is that
+      // recording does not mean execution. `ctx.slack.chat.postMessage` records
+      // ["chat", "postMessage"], but invokePendingValue below still waits for
+      // `ctx.slack` and only calls the recorded path when it resolves to a
+      // localProxyCaller marker. If it resolves to a normal RPC/JS object,
+      // fallback dispatch uses the captured member or the resolved object path.
+      //
+      // Regression guard:
+      // - captnweb.browser.test.ts
+      //   "calls a browser-owned Slack SDK-shaped local proxy marker"
       const member = value == null ? undefined : Reflect.get(value, key);
       return pendingValueProxy(member, rootPromise, [...path, key]);
     },

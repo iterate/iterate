@@ -7,7 +7,7 @@ import {
   evalBrowserReplSessionCode,
   runBrowserReplEntry,
 } from "./browser-repl.ts";
-import { liftLocalProxies } from "./local-proxy-wrapper.js";
+import { liftLocalProxies, localProxyCaller } from "./local-proxy-wrapper.js";
 
 describe("browser Cap'n Web REPL", () => {
   test("default snippet uses Cap'n Web promise pipelining", async () => {
@@ -32,6 +32,32 @@ describe("browser Cap'n Web REPL", () => {
     expect(list).toHaveBeenCalledWith({ limit: 5 });
   });
 
+  test("default snippet does not probe a callable RPC root then member", async () => {
+    let thenReads = 0;
+    const rpcRoot = Object.assign(() => undefined, {
+      projects: {
+        list(input: { limit: number }) {
+          return { projects: [], total: 0, limit: input.limit };
+        },
+      },
+    });
+    Object.defineProperty(rpcRoot, "then", {
+      configurable: true,
+      get() {
+        thenReads += 1;
+        throw new Error("remote then should not be read");
+      },
+    });
+
+    await expect(
+      evalBrowserReplCode({
+        code: DEFAULT_BROWSER_REPL_CODE,
+        ctx: liftLocalProxies(rpcRoot),
+      }),
+    ).resolves.toEqual({ projects: [], total: 0, limit: 5 });
+    expect(thenReads).toBe(0);
+  });
+
   test("route entry runner succeeds for the default project list snippet", async () => {
     const ctx = liftLocalProxies({
       projects: {
@@ -52,6 +78,24 @@ describe("browser Cap'n Web REPL", () => {
       output: JSON.stringify({ projects: [{ id: "proj_123" }], total: 1, limit: 5 }, null, 2),
       status: "success",
     });
+  });
+
+  test("REPL supports pre-await Slack SDK-shaped local proxy calls", async () => {
+    const call = vi.fn(async (input: { args: unknown[]; path: string[] }) => input);
+    const ctx = liftLocalProxies({
+      slack: Promise.resolve(localProxyCaller(call)),
+    });
+
+    await expect(
+      evalBrowserReplCode({
+        code: `await ctx.slack.chat.postMessage({ channel: "C123", text: "hi" })`,
+        ctx,
+      }),
+    ).resolves.toEqual({
+      args: [{ channel: "C123", text: "hi" }],
+      path: ["chat", "postMessage"],
+    });
+    expect(call).toHaveBeenCalledTimes(1);
   });
 
   test("session snippets can reference previous local variables", async () => {

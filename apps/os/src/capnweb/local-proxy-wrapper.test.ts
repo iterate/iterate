@@ -21,6 +21,27 @@ describe("liftLocalProxies", () => {
     expect(thenCalls).toBe(0);
   });
 
+  test("does not even read a callable RPC root then member while calling normal members", () => {
+    let thenReads = 0;
+    const rpcStub = Object.assign(() => undefined, {
+      projects: {
+        list: () => ({ projects: [], total: 0 }),
+      },
+    });
+    Object.defineProperty(rpcStub, "then", {
+      configurable: true,
+      get() {
+        thenReads += 1;
+        throw new Error("remote then should not be read");
+      },
+    });
+
+    const lifted = liftLocalProxies(rpcStub) as typeof rpcStub;
+
+    expect(lifted.projects.list()).toEqual({ projects: [], total: 0 });
+    expect(thenReads).toBe(0);
+  });
+
   test("preserves direct calls through Cap'n Web promise properties", async () => {
     class Project extends RpcTarget {
       describe() {
@@ -60,7 +81,7 @@ describe("liftLocalProxies", () => {
     await expect(ctx.projects.get("proj_123").describe()).resolves.toEqual({ id: "proj_123" });
   });
 
-  test("supports pipelined SDK-shaped calls through a pending local proxy marker", async () => {
+  test("supports SDK-shaped calls through a native pending local proxy marker", async () => {
     const call = async (input: { args: unknown[]; path: string[] }) => input;
     const ctx = liftLocalProxies({
       slack: Promise.resolve(localProxyCaller(call)),
@@ -78,7 +99,7 @@ describe("liftLocalProxies", () => {
     });
   });
 
-  test("supports SDK-shaped calls through a Cap'n Web promise marker", async () => {
+  test("supports SDK-shaped calls through a pending Cap'n Web local proxy marker", async () => {
     const call = async (input: { args: unknown[]; path: string[] }) => input;
 
     class Context extends RpcTarget {

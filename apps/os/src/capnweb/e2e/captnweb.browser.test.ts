@@ -246,10 +246,10 @@ describe("capnweb browser execution mode", () => {
     });
 
     const connection = (await projectContext.connections.get(connectionKey)) as any;
-    const slack = liftLocalProxies(await connection.sdk()) as any;
+    const ctxWithSlack = liftLocalProxies({ slack: connection.sdk() }) as any;
 
     await expect(
-      slack.chat.postMessage({
+      ctxWithSlack.slack.chat.postMessage({
         channel: "C_BROWSER",
         text: "hello from browser",
       }),
