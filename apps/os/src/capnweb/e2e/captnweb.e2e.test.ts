@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
@@ -143,6 +144,29 @@ describe("capnweb", () => {
         ]),
       );
     }
+  });
+
+  it("starts a normal Node REPL with ctx available", async () => {
+    using root = withRootIterateContextFromNode({ auth, baseUrl });
+    await using project = await createDisposableProject({
+      root,
+      slug: `${testRunSlugPrefix}-repl-${uniqueSuffix()}`.slice(0, 40),
+    });
+
+    const output = await runCapnwebRepl({
+      input: [
+        "const description = await (await ctx.project).describe()",
+        "description.id",
+        "let localStream = new ReadableStream()",
+        "localStream instanceof ReadableStream",
+        ".exit",
+        "",
+      ].join("\n"),
+      projectId: project.id,
+    });
+
+    expect(output).toContain(project.id);
+    expect(output).toContain("true");
   });
 
   // Scenario: the test runner can provide an RpcTarget to a project, then code
@@ -975,6 +999,47 @@ async function runCapnwebScriptInCli(input: {
     maxBuffer: 20 * 1024 * 1024,
   });
   return JSON.parse(stdout.trim());
+}
+
+async function runCapnwebRepl(input: { input: string; projectId?: string }) {
+  const args = ["exec", "tsx", "src/capnweb/repl.ts"];
+  if (input.projectId) args.push("--project-id", input.projectId);
+  const child = spawn("pnpm", args, {
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  child.stdin.end(input.input);
+
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`Capnweb REPL timed out.\nstdout:\n${stdout}\nstderr:\n${stderr}`));
+    }, 30_000);
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timeout);
+      resolve(code);
+    });
+  });
+  if (exitCode !== 0) {
+    throw new Error(
+      `Capnweb REPL exited with ${exitCode}.\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+    );
+  }
+  return stdout;
 }
 
 function singleProjectIdFromProps(props: IterateContextProps | undefined) {

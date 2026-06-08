@@ -275,6 +275,36 @@ problem. The e2e helper wraps lowered function strings with esbuild's
 explicit-resource-management helper preamble before posting to `/run`; `/run`
 does not import those helpers.
 
+## Node CLI And REPL
+
+`src/capnweb/cli.ts` is the one-shot JSON executor. It runs a codemode-shaped
+function with `{ ctx, env, vars }` and exits:
+
+```bash
+doppler run --project os --config preview_5 -- pnpm exec tsx src/capnweb/cli.ts \
+  --project-id proj_123 \
+  -e 'async ({ ctx }) => await (await ctx.project).describe()'
+```
+
+`src/capnweb/repl.ts` is the persistent Node REPL. It opens the same Cap'n Web
+session, installs `ctx` and `env`, and then lets Node's normal REPL keep local
+variables alive across expressions:
+
+```bash
+doppler run --project os --config preview_5 -- pnpm exec tsx src/capnweb/repl.ts --project-id proj_123
+```
+
+```js
+using project = await ctx.project;
+await project.describe();
+let stream = new ReadableStream();
+stream instanceof ReadableStream;
+```
+
+The REPL uses Node's global realm on purpose. Cap'n Web expects plain objects
+from the same realm as the client; object literals created inside a separate
+`vm` context are not serializable RPC arguments.
+
 ## E2E Scenarios
 
 `src/capnweb/e2e` is the executable design proof. The scenario code is written
@@ -292,6 +322,7 @@ It covers:
 - The same script body running from browser, Node, `/run`, and the CLI.
 - Direct project ingress at `/__iterate/capnweb`.
 - Project-provided Cap'n Web targets via `project.provideCapability(...)`.
+- The normal Node REPL with `ctx` in scope and persistent local values.
 - Updating iterate-config through `ctx.project.workspace.git`.
 - Calling iterate-config tools through `ctx.project.worker.someTool(...)`.
 - `ctx.project.fetch(...)` and `ctx.project.egressFetch(...)`.
