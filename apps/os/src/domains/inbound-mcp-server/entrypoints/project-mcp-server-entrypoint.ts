@@ -14,7 +14,7 @@ export class ProjectMcpServerEntrypoint extends WorkerEntrypoint {
       return new Response(null, { headers: mcpCorsHeaders });
     }
 
-    return new Response("Project MCP hostnames have moved to the OS /mcp endpoint.", {
+    return new Response("Project MCP hostnames have moved to the canonical MCP endpoint.", {
       status: 410,
       headers: mcpCorsHeaders,
     });

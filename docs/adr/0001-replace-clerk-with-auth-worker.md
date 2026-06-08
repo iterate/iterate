@@ -27,9 +27,10 @@ not just MCP.
    and hands them in so it can derive Durable Object names and infrastructure from the ID
    before the auth record exists. The auth app stores the ID opaquely.
 
-3. **Single MCP endpoint at `os.iterate.com/mcp`.** Per-project MCP hostnames
-   (`mcp__<slug>.iterate.app`) are removed. The `.well-known/oauth-protected-resource`
-   metadata at `os.iterate.com` points to the auth worker.
+3. **Single MCP endpoint.** Per-project MCP hostnames (`mcp__<slug>.iterate.app`)
+   are removed. This ADR originally placed the endpoint at `os.iterate.com/mcp`;
+   the canonical endpoint later moved to `mcp.iterate.com`. The
+   `.well-known/oauth-protected-resource` metadata points to the auth worker.
 
 4. **One auth middleware, one principal model.** A single middleware resolves any request
    (web cookie, MCP bearer, admin API secret) into a Principal (User or Admin). User

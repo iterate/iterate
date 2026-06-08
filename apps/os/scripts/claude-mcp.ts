@@ -3,8 +3,9 @@ import process from "node:process";
 
 import { os } from "@orpc/server";
 import { z } from "zod";
+import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 
-const DEFAULT_BASE_URL = "https://os.iterate.com";
+const DEFAULT_MCP_BASE_URL = "https://mcp.iterate.com";
 const SERVER_NAME = "iterate";
 const DEFAULT_INITIAL_PROMPT = "describe the MCP tools you have available";
 
@@ -21,9 +22,7 @@ const ClaudeMcpInput = z.object({
     .trim()
     .min(1)
     .optional()
-    .describe(
-      "Deprecated. OS base hostname or URL, e.g. os.iterate.com (default: APP_CONFIG_BASE_URL or https://os.iterate.com)",
-    ),
+    .describe("MCP base hostname or URL, e.g. mcp.iterate.com or mcp.example.com/iterate."),
   prompt: z
     .string()
     .trim()
@@ -40,8 +39,7 @@ export const claudeMcpScript = os
   })
   .handler(async ({ input }) => {
     const adminToken = requireEnv("APP_CONFIG_ADMIN_API_SECRET");
-    const baseUrl = input.baseHost ? normalizeBaseUrl(input.baseHost) : defaultBaseUrlFromEnv();
-    const mcpUrl = buildProjectMcpUrl({ baseUrl });
+    const mcpUrl = input.baseHost ? mcpUrlFromBaseHost(input.baseHost) : defaultMcpUrlFromEnv();
     await assertMcpAdminBearerAccepted({ mcpUrl, token: adminToken });
     const command = buildClaudeShellCommand([
       "--mcp-config",
@@ -63,8 +61,14 @@ export const claudeMcpScript = os
     );
   });
 
-function defaultBaseUrlFromEnv() {
-  return normalizeBaseUrl(process.env.APP_CONFIG_BASE_URL?.trim() || DEFAULT_BASE_URL);
+function defaultMcpUrlFromEnv() {
+  const resolvedMcpBaseUrl = resolveMcpBaseUrl({
+    appBaseUrl: process.env.APP_CONFIG_BASE_URL,
+    mcpBaseUrl: process.env.APP_CONFIG_MCP__BASE_URL,
+  });
+  if (resolvedMcpBaseUrl) return resolvedMcpBaseUrl;
+
+  return normalizeBaseUrl(DEFAULT_MCP_BASE_URL);
 }
 
 function requireEnv(name: string) {
@@ -75,9 +79,8 @@ function requireEnv(name: string) {
   return value;
 }
 
-function buildProjectMcpUrl(input: { baseUrl: string }) {
-  const url = new URL("/mcp", normalizeBaseUrl(input.baseUrl));
-  return url.toString();
+function mcpUrlFromBaseHost(value: string) {
+  return normalizeBaseUrl(value);
 }
 
 function normalizeBaseUrl(value: string) {
@@ -87,7 +90,10 @@ function normalizeBaseUrl(value: string) {
     throw new Error("--base-host must not include a query or hash.");
   }
 
-  return parsed.origin;
+  parsed.search = "";
+  parsed.hash = "";
+  parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+  return parsed.toString().replace(/\/$/, "");
 }
 
 export async function assertMcpAdminBearerAccepted(input: { mcpUrl: string; token: string }) {

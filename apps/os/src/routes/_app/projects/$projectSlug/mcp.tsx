@@ -45,6 +45,7 @@ function ProjectMcpPage() {
   });
   const mcpUrl = buildProjectMcpUrl({
     baseUrl: config.baseUrl,
+    mcpBaseUrl: config.mcp?.baseUrl,
     projectSlug: project.slug,
     projectHostnameBases: config.projectHostnameBases,
   });
@@ -55,7 +56,7 @@ function ProjectMcpPage() {
       <section className="max-w-md space-y-3 p-4">
         <h2 className="text-sm font-semibold">MCP</h2>
         <p className="text-sm text-muted-foreground">
-          This deployment does not have a project hostname base configured.
+          This deployment does not have an MCP base URL configured.
         </p>
       </section>
     );
@@ -63,8 +64,8 @@ function ProjectMcpPage() {
 
   const claudeCommand = `claude mcp add --transport http ${project.slug} ${mcpUrl}`;
   const cliBaseHostFlag =
-    config.baseUrl && config.baseUrl !== "https://os.iterate.com"
-      ? ` --base-host ${config.baseUrl}`
+    config.mcp?.baseUrl && config.mcp.baseUrl !== "https://mcp.iterate.com"
+      ? ` --base-host ${config.mcp.baseUrl}`
       : "";
   const cliCommand = `cd apps/os && pnpm cli claude-mcp${cliBaseHostFlag}`;
   const cliCommandHint =

@@ -103,7 +103,7 @@ The OS MCP resource is served by the OS app at `/mcp`. Admin-token sessions
 expose all projects and the `exec_js` tool requires a project slug when it runs.
 
 ```txt
-https://os.iterate.com/mcp
+https://mcp.iterate.com
 ```
 
 Start Claude with that MCP server preconfigured:

@@ -247,7 +247,8 @@ function requireMcpUrl(input: { projectSlug: string }) {
   if (override) return new URL(override);
 
   const mcpUrl = buildProjectMcpUrl({
-    baseUrl: requireBaseUrl(),
+    baseUrl: process.env.APP_CONFIG_BASE_URL,
+    mcpBaseUrl: process.env.APP_CONFIG_MCP__BASE_URL,
     projectHostnameBases: requireProjectHostnameBases(),
     projectSlug: input.projectSlug,
   });
@@ -257,14 +258,6 @@ function requireMcpUrl(input: { projectSlug: string }) {
     );
   }
   return new URL(mcpUrl);
-}
-
-function requireBaseUrl() {
-  const baseUrl = process.env.APP_CONFIG_BASE_URL?.trim();
-  if (!baseUrl) {
-    throw new Error("APP_CONFIG_BASE_URL is required for project MCP e2e.");
-  }
-  return baseUrl;
 }
 
 function requireProjectHostnameBases() {
