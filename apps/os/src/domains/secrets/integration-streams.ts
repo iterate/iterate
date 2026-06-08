@@ -19,7 +19,7 @@ type IntegrationProvider = "google" | "slack";
 
 type AppendIntegrationEventInput = {
   event: EventInput;
-  projectId: string;
+  namespace: string;
   provider: IntegrationProvider;
 };
 
@@ -39,7 +39,7 @@ export async function appendIntegrationEvent(
     exports: context.workerExports,
     props: {
       appendPolicy: { mode: "stream" },
-      projectId: input.projectId,
+      namespace: input.projectId,
       streamPath,
     },
   }).append({

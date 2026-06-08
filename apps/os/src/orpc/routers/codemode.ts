@@ -32,7 +32,7 @@ export const projectCodemodeRouter = {
     .handler(async ({ input, context }) => {
       const project = requireProjectScope(context);
       const providers = attachRequestScopedProviderProps({
-        projectId: project.id,
+        namespace: project.id,
         providers: parseToolProviders(input.providers),
       });
       const streamPath =
@@ -41,7 +41,7 @@ export const projectCodemodeRouter = {
         code: input.code,
         context,
         events: input.events,
-        projectId: project.id,
+        namespace: project.id,
         providers,
         streamPath,
       });
@@ -55,10 +55,10 @@ export const projectCodemodeRouter = {
           createdAt: now,
           lastWokenAt: now,
           name: codemodeSessionName({
-            projectId: project.id,
+            namespace: project.id,
             streamPath: StreamPath.parse(streamPath),
           }),
-          projectId: project.id,
+          namespace: project.id,
           streamPath: StreamPath.parse(streamPath),
         },
       };
@@ -69,14 +69,14 @@ export const projectCodemodeRouter = {
     .handler(async ({ input, context }) => {
       const project = requireProjectScope(context);
       const providers = attachRequestScopedProviderProps({
-        projectId: project.id,
+        namespace: project.id,
         providers: parseToolProviders(input.providers),
       });
       const result = await executeScriptOnSession({
         code: input.code,
         context,
         events: input.events,
-        projectId: project.id,
+        namespace: project.id,
         providers,
         streamPath: input.streamPath ?? defaultStreamPathForProjectBlock(generateBlockId()),
       });
@@ -95,7 +95,7 @@ export const projectCodemodeRouter = {
         exports: context.workerExports,
         props: {
           appendPolicy: { mode: "stream" },
-          projectId: project.id,
+          namespace: project.id,
           streamPath: input.streamPath,
         },
       }).stream({
@@ -114,7 +114,7 @@ export const projectCodemodeRouter = {
     .handler(async ({ input, context }) => {
       const project = requireProjectScope(context);
       const providers = attachRequestScopedProviderProps({
-        projectId: project.id,
+        namespace: project.id,
         providers: parseToolProviders(input.providers),
       });
 
@@ -145,20 +145,20 @@ function parseToolProviders(providers: unknown[]): ToolProviderRegistration[] {
 }
 
 function attachRequestScopedProviderProps(input: {
-  projectId: string;
+  namespace: string;
   providers: ToolProviderRegistration[];
 }): ToolProviderRegistration[] {
   return input.providers.map((provider) =>
     attachOrpcCapabilityProps({
       provider,
-      projectId: input.projectId,
+      namespace: input.projectId,
     }),
   );
 }
 
 function attachOrpcCapabilityProps(input: {
   provider: ToolProviderRegistration;
-  projectId: string;
+  namespace: string;
 }): ToolProviderRegistration {
   const invocation = input.provider.invocation;
   if (invocation.kind !== "rpc") return input.provider;
@@ -188,7 +188,7 @@ function attachOrpcCapabilityProps(input: {
           // only this server route knows the resolved stable Project ID.
           props: {
             ...readRecordProps(via.props),
-            projectId: input.projectId,
+            namespace: input.projectId,
           },
         },
       },
@@ -207,7 +207,7 @@ async function executeScriptOnSession(input: {
   code: string;
   context: AppContext;
   events: EventInput[];
-  projectId: string;
+  namespace: string;
   providers: ToolProviderRegistration[];
   streamPath: string;
 }) {
@@ -219,7 +219,7 @@ async function executeScriptOnSession(input: {
   }
 
   requireCodemodeStreamPathProject({
-    projectId: input.projectId,
+    namespace: input.projectId,
     streamPath: input.streamPath,
   });
 
@@ -234,7 +234,7 @@ async function executeScriptOnSession(input: {
     code: input.code,
     events: input.events,
     namespace: context.codemodeSession,
-    projectId: input.projectId,
+    namespace: input.projectId,
     providers: input.providers,
     streamPath: StreamPath.parse(input.streamPath),
   });
@@ -244,7 +244,7 @@ async function createSession(input: {
   code?: string;
   context: AppContext;
   events: EventInput[];
-  projectId: string;
+  namespace: string;
   providers: ToolProviderRegistration[];
   streamPath: string;
 }) {
@@ -256,7 +256,7 @@ async function createSession(input: {
   }
 
   requireCodemodeStreamPathProject({
-    projectId: input.projectId,
+    namespace: input.projectId,
     streamPath: input.streamPath,
   });
 
@@ -271,7 +271,7 @@ async function createSession(input: {
     code: input.code,
     events: input.events,
     namespace: context.codemodeSession,
-    projectId: input.projectId,
+    namespace: input.projectId,
     providers: input.providers,
     streamPath: StreamPath.parse(input.streamPath),
   });
@@ -316,7 +316,7 @@ async function* decodeStreamEventLines(stream: ReadableStream<Uint8Array>, signa
  * the path itself is intentionally project-local and must not redundantly encode
  * `/projects/:projectId`.
  */
-function requireCodemodeStreamPathProject(input: { projectId: string; streamPath: string }) {
+function requireCodemodeStreamPathProject(input: { namespace: string; streamPath: string }) {
   const path = StreamPath.parse(input.streamPath);
   if (path === "/") {
     throw new ORPCError("BAD_REQUEST", {
@@ -348,9 +348,9 @@ function generateSessionSlug() {
   return id;
 }
 
-function codemodeSessionName(input: { projectId: string; streamPath: StreamPath }) {
+function codemodeSessionName(input: { namespace: string; streamPath: StreamPath }) {
   return deriveDurableObjectNameFromStructuredName({
-    structuredName: { projectId: input.projectId, streamPath: input.streamPath },
+    structuredName: { namespace: input.projectId, streamPath: input.streamPath },
   });
 }
 

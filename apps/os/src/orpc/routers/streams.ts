@@ -78,7 +78,7 @@ export const projectStreamsRouter = {
       for await (const event of subscribeProjectStreamEvents({
         afterOffset: input.afterOffset,
         context,
-        projectId: project.id,
+        namespace: project.id,
         signal,
         streamPath: input.streamPath,
       })) {
@@ -106,7 +106,7 @@ function getProjectStreamsCapability(context: AppContext, projectId: string) {
     exports: context.workerExports,
     props: {
       appendPolicy: { mode: "any" },
-      projectId,
+      namespace: projectId,
     },
   });
 }
@@ -114,7 +114,7 @@ function getProjectStreamsCapability(context: AppContext, projectId: string) {
 async function* subscribeProjectStreamEvents(input: {
   afterOffset?: Parameters<typeof toNewAfterOffset>[0];
   context: AppContext;
-  projectId: string;
+  namespace: string;
   signal?: AbortSignal;
   streamPath: string;
 }) {

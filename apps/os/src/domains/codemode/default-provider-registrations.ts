@@ -63,7 +63,7 @@ export function createDefaultCodemodeProviderRegistrations(input: {
             bindingType: "service",
             exportName: "StreamsCapability",
             props: {
-              projectId: input.projectId,
+              namespace: input.projectId,
               streamPath: input.streamPath,
               appendPolicy: { mode: "any" },
             },

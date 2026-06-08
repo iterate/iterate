@@ -46,7 +46,7 @@ interface McpServerEnv {
 }
 
 export interface ProjectMcpServerConnectionProps extends Record<string, unknown> {
-  projectId: string | null;
+  namespace: string | null;
   projectSlug: string | null;
   userId: string;
   orgId: string | null;
@@ -69,7 +69,7 @@ export interface ProjectMcpServerConnectionProject {
 }
 
 export type ProjectMcpServerConnectionStructuredName = {
-  projectId: string;
+  namespace: string;
   projectSlug: string | null;
   orgId: string;
   orgSlug: string | null;
@@ -80,7 +80,7 @@ export type ProjectMcpServerConnectionStructuredName = {
 };
 
 const ProjectMcpServerConnectionStructuredName = z.object({
-  projectId: z.string(),
+  namespace: z.string(),
   projectSlug: z.string().nullable(),
   orgId: z.string(),
   orgSlug: z.string().nullable(),
@@ -215,7 +215,7 @@ export class ProjectMcpServerConnection extends McpAgent<
           auth: summarizeAuthProps(auth),
           input: { code, providerCount: staticProviders.length },
           invocationId,
-          projectId: auth.projectId,
+          namespace: auth.projectId,
           projectSlug: auth.projectSlug,
           streamPath,
           toolName: "exec_js",
@@ -226,14 +226,14 @@ export class ProjectMcpServerConnection extends McpAgent<
             code,
             events: [],
             namespace: this.env.CODEMODE_SESSION,
-            projectId: auth.projectId,
+            namespace: auth.projectId,
             providers: staticProviders,
             streamPath,
           });
           const output = await waitForScriptExecutionFinished({
             afterOffset: started.event.offset,
             exports: this.workerExports(),
-            projectId: auth.projectId,
+            namespace: auth.projectId,
             scriptExecutionId: String(
               (started.event.payload as { scriptExecutionId?: unknown }).scriptExecutionId,
             ),
@@ -262,7 +262,7 @@ export class ProjectMcpServerConnection extends McpAgent<
             },
             invocationId,
             output: response,
-            projectId: auth.projectId,
+            namespace: auth.projectId,
             projectSlug: auth.projectSlug,
             result: output,
             scriptExecutionId: (started.event.payload as { scriptExecutionId?: unknown })
@@ -283,7 +283,7 @@ export class ProjectMcpServerConnection extends McpAgent<
             },
             invocationId,
             isError: true,
-            projectId: auth.projectId,
+            namespace: auth.projectId,
             projectSlug: auth.projectSlug,
             streamPath,
             toolName: "exec_js",
@@ -296,7 +296,7 @@ export class ProjectMcpServerConnection extends McpAgent<
   }
 
   private createStaticCodemodeToolProviders(
-    auth: ProjectMcpServerConnectionProps & { orgId: string; projectId: string },
+    auth: ProjectMcpServerConnectionProps & { orgId: string; namespace: string },
   ): ToolProviderRegistration[] {
     const providers = createExampleCapabilityProviders({
       activeOrganization: {
@@ -307,10 +307,10 @@ export class ProjectMcpServerConnection extends McpAgent<
         sessionId: this.getSessionId(),
         userId: auth.userId,
       },
-      projectId: auth.projectId,
+      namespace: auth.projectId,
     });
 
-    providers.push(createGmailProviderRegistration({ projectId: auth.projectId }));
+    providers.push(createGmailProviderRegistration({ namespace: auth.projectId }));
 
     const providerMatrixBaseUrl = this.env.MOCK_PROVIDER_BASE_URL?.replace(/\/+$/, "");
     providers.push(
@@ -472,7 +472,7 @@ export class ProjectMcpServerConnection extends McpAgent<
     const clientInfo = await this.getClientInfo();
     const rawClientName = isRecord(clientInfo) ? clientInfo.name : undefined;
     const structuredName = ProjectMcpServerConnectionStructuredName.parse({
-      projectId: auth.projectId,
+      namespace: auth.projectId,
       projectSlug: auth.projectSlug,
       orgId: auth.orgId,
       orgSlug: auth.orgSlug,
@@ -488,7 +488,7 @@ export class ProjectMcpServerConnection extends McpAgent<
       id: this.ctx.id.toString(),
       indexes: {
         orgId: (params) => params.orgId,
-        projectId: (params) => params.projectId,
+        namespace: (params) => params.projectId,
       },
       name,
       structuredName,
@@ -564,14 +564,14 @@ export class ProjectMcpServerConnection extends McpAgent<
   private authForProject(
     auth: ProjectMcpServerConnectionProps,
     project: ProjectMcpServerConnectionProject,
-  ): ProjectMcpServerConnectionProps & { orgId: string; projectId: string } {
+  ): ProjectMcpServerConnectionProps & { orgId: string; namespace: string } {
     return {
       ...auth,
       orgId: project.organizationId,
       orgPermissions: project.organizationPermissions,
       orgRole: project.organizationRole,
       orgSlug: project.organizationSlug,
-      projectId: project.id,
+      namespace: project.id,
       projectSlug: project.slug,
     };
   }
@@ -597,7 +597,7 @@ function summarizeAuthProps(props: ProjectMcpServerConnectionProps) {
     orgId: props.orgId,
     orgRole: props.orgRole,
     orgSlug: props.orgSlug,
-    projectId: props.projectId,
+    namespace: props.projectId,
     projectSlug: props.projectSlug,
     scopes: props.scopes,
     userId: props.userId,
@@ -617,12 +617,12 @@ function serializeError(error: unknown) {
 }
 
 function streamCapabilityProps(input: {
-  projectId: string;
+  namespace: string;
   streamPath: StreamPath;
 }): StreamsCapabilityProps {
   return {
     appendPolicy: { mode: "stream" },
-    projectId: input.projectId,
+    namespace: input.namespace,
     streamPath: input.streamPath,
   };
 }
@@ -695,7 +695,7 @@ async function* decodeStreamEventLines(stream: ReadableStream<Uint8Array>, signa
 async function waitForScriptExecutionFinished(input: {
   afterOffset: number;
   exports: Cloudflare.Exports | undefined;
-  projectId: string;
+  namespace: string;
   scriptExecutionId: string;
   streamPath: StreamPath;
 }) {
@@ -703,7 +703,7 @@ async function waitForScriptExecutionFinished(input: {
   const response = await getStreamsCapability({
     exports: input.exports,
     props: streamCapabilityProps({
-      projectId: input.projectId,
+      namespace: input.namespace,
       streamPath: input.streamPath,
     }),
   }).stream({

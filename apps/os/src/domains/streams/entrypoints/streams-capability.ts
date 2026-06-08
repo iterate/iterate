@@ -31,7 +31,7 @@ export type StreamAppendPolicy =
 export type StreamsCapabilityProps = {
   appendMetadata?: Record<string, unknown>;
   appendPolicy?: StreamAppendPolicy;
-  projectId?: string;
+  namespace?: string;
   streamPath?: string;
 };
 
@@ -84,7 +84,7 @@ type StreamsCapabilityClient = Pick<
  * Capability-based stream access for OS code that needs to read or append
  * namespace-owned events. The only ambient authority is the `STREAM` namespace
  * binding; callers receive a narrowed Cloudflare WorkerEntrypoint binding with
- * props such as `projectId` and optional `streamPath`.
+ * props such as optional `namespace` and `streamPath`.
  *
  * This is an example of Cloudflare Workers capability-based security: instead
  * of passing a global Events URL/client around, OS passes a capability whose
@@ -130,7 +130,7 @@ export class StreamsCapability extends WorkerEntrypoint<
     const event = await appendNamespaceStreamEvent({
       durableObjectNamespace: this.env.STREAM,
       path,
-      namespace: this.requireProjectNamespace(),
+      namespace: this.requireBoundNamespace(),
       event: {
         ...input.event,
         metadata: {
@@ -148,7 +148,7 @@ export class StreamsCapability extends WorkerEntrypoint<
     return await appendNamespaceStreamEventBatch({
       durableObjectNamespace: this.env.STREAM,
       path,
-      namespace: this.requireProjectNamespace(),
+      namespace: this.requireBoundNamespace(),
       events: input.events.map(
         (event) =>
           ({
@@ -166,18 +166,18 @@ export class StreamsCapability extends WorkerEntrypoint<
     return await getNamespaceStreamState({
       durableObjectNamespace: this.env.STREAM,
       path: this.resolveNamespacePath(input),
-      namespace: this.requireProjectNamespace(),
+      namespace: this.requireBoundNamespace(),
     });
   }
 
   async list() {
     const paths = await listNamespaceStreamPaths({
       durableObjectNamespace: this.env.STREAM,
-      namespace: this.requireProjectNamespace(),
+      namespace: this.requireBoundNamespace(),
     });
     return paths.map((path) => ({
-      name: `${this.requireProjectNamespace()}:${path}`,
-      namespace: this.requireProjectNamespace(),
+      name: `${this.requireBoundNamespace()}:${path}`,
+      namespace: this.requireBoundNamespace(),
       streamPath: StreamPath.parse(path),
       createdAt: new Date(0).toISOString(),
       lastWokenAt: new Date(0).toISOString(),
@@ -188,7 +188,7 @@ export class StreamsCapability extends WorkerEntrypoint<
     return await readNamespaceStreamEvents({
       durableObjectNamespace: this.env.STREAM,
       path: this.resolveNamespacePath(input),
-      namespace: this.requireProjectNamespace(),
+      namespace: this.requireBoundNamespace(),
       afterOffset: input.afterOffset,
       beforeOffset: input.beforeOffset ?? "end",
     });
@@ -201,14 +201,14 @@ export class StreamsCapability extends WorkerEntrypoint<
         ? streamNamespaceStreamEvents({
             durableObjectNamespace: this.env.STREAM,
             path,
-            namespace: this.requireProjectNamespace(),
+            namespace: this.requireBoundNamespace(),
             afterOffset: input.afterOffset,
             beforeOffset: input.beforeOffset,
           })
         : liveNamespaceStreamEvents({
             durableObjectNamespace: this.env.STREAM,
             path,
-            namespace: this.requireProjectNamespace(),
+            namespace: this.requireBoundNamespace(),
             afterOffset: input.afterOffset,
           });
 
@@ -224,7 +224,7 @@ export class StreamsCapability extends WorkerEntrypoint<
     return await getNamespaceStreamState({
       durableObjectNamespace: this.env.STREAM,
       path: this.resolveNamespacePath(input),
-      namespace: this.requireProjectNamespace(),
+      namespace: this.requireBoundNamespace(),
     });
   }
 
@@ -233,7 +233,7 @@ export class StreamsCapability extends WorkerEntrypoint<
     const state = await getNamespaceStreamState({
       durableObjectNamespace: this.env.STREAM,
       path,
-      namespace: this.requireProjectNamespace(),
+      namespace: this.requireBoundNamespace(),
     });
     return state.childPaths
       .map((childPath) => ({
@@ -251,13 +251,13 @@ export class StreamsCapability extends WorkerEntrypoint<
   }
 
   private resolveNamespace(namespaceInput: string | undefined) {
-    const projectId = this.ctx.props.projectId;
-    if (projectId != null) {
-      if (namespaceInput != null && namespaceInput !== projectId) {
-        throw new Error("Project-scoped streams capability cannot cross namespaces.");
+    const boundNamespace = this.ctx.props.namespace;
+    if (boundNamespace != null) {
+      if (namespaceInput != null && namespaceInput !== boundNamespace) {
+        throw new Error("Bound streams capability cannot cross namespaces.");
       }
 
-      return projectId;
+      return boundNamespace;
     }
 
     const namespace = namespaceInput?.trim();
@@ -268,7 +268,7 @@ export class StreamsCapability extends WorkerEntrypoint<
     return namespace;
   }
 
-  private requireProjectNamespace() {
+  private requireBoundNamespace() {
     return this.resolveNamespace(undefined);
   }
 

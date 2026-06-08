@@ -59,7 +59,7 @@ export class ProjectCapability extends WorkerEntrypoint<
 
   streams() {
     return this.ctx.exports.StreamsCapability({
-      props: { projectId: this.ctx.props.projectId },
+      props: { namespace: this.ctx.props.projectId },
     });
   }
 
