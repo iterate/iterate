@@ -5,8 +5,12 @@ import {
   EXAMPLE_EGRESS_SECRET_KEY,
   EXAMPLE_EGRESS_SECRET_MATERIAL,
 } from "../../domains/secrets/example-secret.ts";
-import { BROWSER_REPL_EXAMPLES, evalBrowserReplSessionCode } from "../browser-repl.ts";
-import { liftLocalProxies } from "../local-proxy-wrapper.js";
+import {
+  BROWSER_REPL_EXAMPLES,
+  DEFAULT_BROWSER_REPL_CODE,
+  evalBrowserReplSessionCode,
+} from "../browser-repl.ts";
+import { liftLocalProxies, localProxyCaller } from "../local-proxy-wrapper.js";
 import type { IterateContext } from "../iterate-context-capability.ts";
 import type { ProjectCapabilityApi } from "../../domains/projects/durable-objects/project-durable-object.ts";
 import {
@@ -37,6 +41,22 @@ describe("capnweb browser execution mode", () => {
       await projects.remove({ id }).catch(() => {});
     }
   });
+
+  it("runs the default browser REPL project list expression", async () => {
+    using root = await withRootIterateFromBrowser();
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: DEFAULT_BROWSER_REPL_CODE,
+        ctx: root,
+        env: {},
+        scope: {},
+      }),
+    ).resolves.toMatchObject({
+      projects: expect.any(Array),
+      total: expect.any(Number),
+    });
+  }, 60_000);
 
   it("runs codemode-shaped scripts through browser Cap'n Web stubs", async () => {
     using root = await withRootIterateFromBrowser();
@@ -196,6 +216,48 @@ describe("capnweb browser execution mode", () => {
     }
 
     expect(alertMessages).toEqual(["The answer is 42"]);
+  }, 60_000);
+
+  it("calls a browser-owned Slack SDK-shaped local proxy marker", async () => {
+    using root = await withRootIterateFromBrowser();
+    using projects = await root.projects;
+    const project = await projects.create({
+      slug: `captnweb-browser-slack-${uniqueSuffix()}`.slice(0, 40),
+    });
+    createdProjectIds.push(project.id);
+
+    using iterate = await withIterateFromBrowser({ ingressUrl: project.ingressUrl });
+    using projectContext = await iterate.ctx.project;
+    const connectionKey = `browser-slack-sdk-${uniqueSuffix()}`;
+
+    class BrowserSlackSdkTarget extends RpcTarget {
+      sdk() {
+        return localProxyCaller(({ path, args }) => ({
+          args,
+          ok: true,
+          path,
+        }));
+      }
+    }
+
+    await projectContext.provideCapability({
+      connectionKey,
+      rpcTarget: new BrowserSlackSdkTarget(),
+    });
+
+    const connection = (await projectContext.connections.get(connectionKey)) as any;
+    const ctxWithSlack = liftLocalProxies({ slack: connection.sdk() }) as any;
+
+    await expect(
+      ctxWithSlack.slack.chat.postMessage({
+        channel: "C_BROWSER",
+        text: "hello from browser",
+      }),
+    ).resolves.toEqual({
+      args: [{ channel: "C_BROWSER", text: "hello from browser" }],
+      ok: true,
+      path: ["chat", "postMessage"],
+    });
   }, 60_000);
 });
 

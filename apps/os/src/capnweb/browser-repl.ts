@@ -7,6 +7,12 @@ export type BrowserReplExample = {
   title: string;
 };
 
+export type BrowserReplEntry = {
+  code: string;
+  output: string;
+  status: "error" | "success";
+};
+
 // These are intentionally ordinary REPL snippets for now. They should
 // eventually become living tests: the actual e2e test snippets appear here, and
 // this replaces codemode snippets entirely.
@@ -51,6 +57,34 @@ export async function evalBrowserReplSessionCode(input: {
   scope: Record<string, unknown>;
 }) {
   return await compileBrowserReplFunction(input.code)(input.ctx, input.env ?? {}, input.scope);
+}
+
+export async function runBrowserReplEntry(input: {
+  code: string;
+  ctx: unknown;
+  env?: object;
+  scope: Record<string, unknown>;
+}): Promise<BrowserReplEntry> {
+  const trimmedCode = input.code.trim();
+  try {
+    const result = await evalBrowserReplSessionCode({
+      code: trimmedCode,
+      ctx: input.ctx,
+      env: input.env,
+      scope: input.scope,
+    });
+    return {
+      code: trimmedCode,
+      output: formatBrowserReplResult(result),
+      status: "success",
+    };
+  } catch (error) {
+    return {
+      code: trimmedCode,
+      output: error instanceof Error ? (error.stack ?? error.message) : String(error),
+      status: "error",
+    };
+  }
 }
 
 export function compileBrowserReplFunction(code: string) {
