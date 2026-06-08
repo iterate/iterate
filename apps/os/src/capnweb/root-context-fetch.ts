@@ -9,6 +9,8 @@ import localProxyWrapperSource from "./local-proxy-wrapper.js?raw";
 import { ProjectsCapability } from "./projects-capability.ts";
 import type { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
+import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
+import type { Principal } from "~/auth/principal.ts";
 
 export { ProjectsCapability };
 
@@ -34,21 +36,63 @@ export async function handleRootIterateContextFetch(input: {
     return await handleCapnwebAdminCookieRequest({ config: input.config, request: input.request });
   }
 
-  const principal = authenticateCapnwebAdmin({ config: input.config, request: input.request });
-  if (!principal) return new Response("Unauthorized", { status: 401 });
+  const auth = await authenticateRootCapnwebRequest({
+    config: input.config,
+    context: input.context,
+    request: input.request,
+  });
+  if (!auth.principal) return new Response("Unauthorized", { status: 401 });
+
+  const context = {
+    ...input.context,
+    iterateAuthSession: auth.session,
+    principal: auth.principal,
+  };
 
   if (url.pathname === `${ROOT_ITERATE_CONTEXT_PREFIX}/run`) {
-    return await handleRootRunLeg(input);
+    return await handleRootRunLeg({ ...input, context });
   }
 
-  return newWorkersRpcResponse(
+  const response = await newWorkersRpcResponse(
     input.request,
     createIterateContext({
-      context: input.context,
-      projects: createProjectsCapability({ context: input.context }),
-      props: { scopes: { projects: "all" } },
+      context,
+      projects: createProjectsCapability({ context }),
+      props: { scopes: scopesForPrincipal(auth.principal) },
     }),
   );
+  appendAuthHeaders(response.headers, auth.responseHeaders);
+  return response;
+}
+
+async function authenticateRootCapnwebRequest(input: {
+  config: AppConfig;
+  context: AppContext;
+  request: Request;
+}): Promise<{
+  principal: Principal | null;
+  responseHeaders: Headers;
+  session: AppContext["iterateAuthSession"];
+}> {
+  const admin = authenticateCapnwebAdmin({ config: input.config, request: input.request });
+  if (admin) return { principal: admin, responseHeaders: new Headers(), session: null };
+
+  return await resolveRequestAuth({
+    auth: createOsIterateAuth(input.context, input.request),
+    context: input.context,
+    request: input.request,
+  });
+}
+
+function scopesForPrincipal(principal: Principal): IterateContextProps["scopes"] {
+  return {
+    projects: principal.type === "admin" ? "all" : principal.projects.map((project) => project.id),
+  };
+}
+
+function appendAuthHeaders(headers: Headers, authHeaders: Headers) {
+  const setCookie = authHeaders.get("set-cookie");
+  if (setCookie) headers.append("set-cookie", setCookie);
 }
 
 function rootRunWorkerSrc(input: { dynamicMountRoots: string[]; functionSource: string }) {
@@ -164,7 +208,9 @@ async function handleRootRunLeg(input: { context: AppContext; env: Env; request:
       { status: 503 },
     );
   }
-  const props = body.props ?? { scopes: { projects: "all" } };
+  const principal = input.context.principal;
+  if (!principal) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const props = body.props ?? { scopes: scopesForPrincipal(principal) };
   const dynamicMountRoots = [
     ...new Set(
       (props.mounts ?? [])

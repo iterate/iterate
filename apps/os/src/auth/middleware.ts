@@ -53,7 +53,7 @@ function handleAuthHandlerRequest(input: {
   return input.auth.handler(input.request);
 }
 
-async function resolveRequestAuth(input: {
+export async function resolveRequestAuth(input: {
   auth: ReturnType<typeof createOsIterateAuth>;
   context: Pick<AppContext, "config">;
   request: Request;
@@ -152,7 +152,7 @@ export function authenticateRootApiSecret(
   return authenticateAdminApiSecret(context, request);
 }
 
-function createOsIterateAuth(context: AppContext, request: Request) {
+export function createOsIterateAuth(context: AppContext, request: Request) {
   const config = context.config.iterateAuth;
   if (!config) return null;
 

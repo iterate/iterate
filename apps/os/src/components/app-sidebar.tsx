@@ -152,6 +152,14 @@ function AppSidebarNav() {
                 <span>Projects</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                render={<Link to="/capnweb-repl" />}
+                isActive={Boolean(matchRoute({ to: "/capnweb-repl", fuzzy: false }))}
+              >
+                <span>Capnweb REPL</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
