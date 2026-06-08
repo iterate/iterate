@@ -1,6 +1,6 @@
-import { afterAll, describe, expect, it } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { afterAll, describe, expect, it } from "vitest";
 import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import dedent from "dedent";
 import WebSocket from "ws";
