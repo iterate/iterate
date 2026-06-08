@@ -4,8 +4,12 @@
   "type": "module",
   "exports": {
     "./connection": "./src/connection.ts",
+    "./browser/hooks/use-stream-query": "./src/browser/hooks/use-stream-query.ts",
+    "./browser/stream-browser-db": "./src/browser/stream-browser-db.ts",
+    "./browser/stream-browser-store": "./src/browser/stream-browser-store.ts",
     "./processor": "./src/processor.ts",
     "./processor-runner": "./src/processor-runner.ts",
+    "./processors/browser-raw-events/implementation": "./src/processors/browser-raw-events/implementation.ts",
     "./processors/core/contract": "./src/processors/core/contract.ts",
     "./shared/event": "./src/shared/event.ts",
     "./shared/rpc-target": "./src/shared/rpc-target.ts",
