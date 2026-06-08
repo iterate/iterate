@@ -4,12 +4,19 @@ import {
   hasWildcardProjectScope,
   listProjectScopeIds,
 } from "@iterate-com/shared/auth-claims";
+import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
 import { McpAgent } from "agents/mcp";
 import { createD1Client } from "sqlfu";
 import type { AppConfig } from "~/app.ts";
 import { principalFromAccessToken, type Principal } from "~/auth/principal.ts";
 import { listAllProjects } from "~/db/queries/.generated/index.ts";
 import { isBrowserMcpInstructionsRequest } from "~/domains/inbound-mcp-server/mcp-instructions-request.ts";
+import {
+  matchMcpRequestUrl,
+  normalizeMcpBaseUrl,
+  stripTrailingSlash,
+} from "~/domains/inbound-mcp-server/mcp-url-routing.ts";
+import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import type {
   ProjectMcpServerConnectionProject,
   ProjectMcpServerConnectionProps,
@@ -22,7 +29,10 @@ type McpHandlerInput = {
   config: AppConfig;
 };
 
-const mcpHandler = McpAgent.serve("/mcp", { binding: "PROJECT_MCP_SERVER_CONNECTION" });
+const internalMcpHandlerPath = "/__iterate/internal-mcp";
+const mcpHandler = McpAgent.serve(internalMcpHandlerPath, {
+  binding: "PROJECT_MCP_SERVER_CONNECTION",
+});
 
 export const mcpCorsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -33,18 +43,18 @@ export const mcpCorsHeaders = {
 };
 
 export async function handleMcpFetch(input: McpHandlerInput): Promise<Response | null> {
-  const url = new URL(input.request.url);
-  if (!isMcpPath(url.pathname)) return null;
+  const routeMatch = matchConfiguredMcpBaseUrl(input);
+  if (!routeMatch) return null;
 
   if (input.request.method === "OPTIONS") {
     return new Response(null, { headers: mcpCorsHeaders });
   }
 
-  if (isMcpProtectedResourceMetadataPath(url.pathname)) {
+  if (isMcpProtectedResourceMetadataPath(routeMatch.relativePathname)) {
     return Response.json(buildProtectedResourceMetadata(input), { headers: mcpCorsHeaders });
   }
 
-  if (url.pathname !== "/mcp") {
+  if (routeMatch.relativePathname !== "/") {
     return new Response("Not found", { status: 404, headers: mcpCorsHeaders });
   }
 
@@ -61,7 +71,9 @@ export async function handleMcpFetch(input: McpHandlerInput): Promise<Response |
       props?: ProjectMcpServerConnectionProps;
     };
     ctxWithProps.props = adminProps;
-    return withCorsHeaders(await mcpHandler.fetch(input.request, input.env, input.ctx));
+    return withCorsHeaders(
+      await mcpHandler.fetch(mcpHandlerRequest(input.request), input.env, input.ctx),
+    );
   }
 
   const auth = createMcpIterateAuth(input);
@@ -112,7 +124,9 @@ export async function handleMcpFetch(input: McpHandlerInput): Promise<Response |
     scopes,
   });
 
-  return withCorsHeaders(await mcpHandler.fetch(input.request, input.env, input.ctx));
+  return withCorsHeaders(
+    await mcpHandler.fetch(mcpHandlerRequest(input.request), input.env, input.ctx),
+  );
 }
 
 async function authenticateAdminMcpRequest(input: McpHandlerInput) {
@@ -151,15 +165,22 @@ async function authenticateAdminMcpRequest(input: McpHandlerInput) {
   } satisfies ProjectMcpServerConnectionProps;
 }
 
-function isMcpPath(pathname: string) {
-  return pathname === "/mcp" || isMcpProtectedResourceMetadataPath(pathname);
+function isMcpProtectedResourceMetadataPath(pathname: string) {
+  return pathname === "/.well-known/oauth-protected-resource";
 }
 
-function isMcpProtectedResourceMetadataPath(pathname: string) {
-  return (
-    pathname === "/.well-known/oauth-protected-resource" ||
-    pathname === "/.well-known/oauth-protected-resource/mcp"
-  );
+function matchConfiguredMcpBaseUrl(input: McpHandlerInput) {
+  return matchMcpRequestUrl({
+    appBaseUrl: input.config.baseUrl,
+    mcpBaseUrl: input.config.mcp?.baseUrl,
+    requestUrl: input.request.url,
+  });
+}
+
+function mcpHandlerRequest(request: Request) {
+  const url = new URL(request.url);
+  url.pathname = internalMcpHandlerPath;
+  return new Request(url, request);
 }
 
 function createMcpIterateAuth(input: McpHandlerInput) {
@@ -172,7 +193,7 @@ function createMcpIterateAuth(input: McpHandlerInput) {
     clientId: config.clientId,
     clientSecret: config.clientSecret.exposeSecret(),
     redirectURI: `${baseUrl}/api/iterate-auth/callback`,
-    resource: canonicalMcpResourceUrl(input),
+    resource: oauthResourceAudienceVariants(canonicalMcpResourceUrl(input)),
   });
 }
 
@@ -226,7 +247,14 @@ function readBearerToken(headerValue: string | null) {
 }
 
 function canonicalMcpResourceUrl(input: McpHandlerInput) {
-  return `${getRequestBaseUrl(input)}/mcp`;
+  const rawUrl = resolveMcpBaseUrl({
+    appBaseUrl: input.config.baseUrl,
+    mcpBaseUrl: input.config.mcp?.baseUrl,
+    requestUrl: input.request.url,
+  });
+  if (!rawUrl) throw new Error("APP_CONFIG_MCP__BASE_URL is required for MCP requests.");
+  const baseUrl = normalizeMcpBaseUrl(rawUrl);
+  return stripTrailingSlash(baseUrl.toString());
 }
 
 function getRequestBaseUrl(input: McpHandlerInput) {
@@ -235,8 +263,8 @@ function getRequestBaseUrl(input: McpHandlerInput) {
 
 function unauthorizedMcpResponse(input: McpHandlerInput, message: string) {
   const metadataUrl = new URL(
-    "/.well-known/oauth-protected-resource/mcp",
-    input.config.baseUrl ?? input.request.url,
+    ".well-known/oauth-protected-resource",
+    `${canonicalMcpResourceUrl(input)}/`,
   ).toString();
   return new Response(message, {
     status: 401,
@@ -250,8 +278,8 @@ function unauthorizedMcpResponse(input: McpHandlerInput, message: string) {
 function mcpInstructionsPageResponse(input: McpHandlerInput) {
   const mcpUrl = canonicalMcpResourceUrl(input);
   const metadataUrl = new URL(
-    "/.well-known/oauth-protected-resource/mcp",
-    input.config.baseUrl ?? input.request.url,
+    ".well-known/oauth-protected-resource",
+    `${canonicalMcpResourceUrl(input)}/`,
   ).toString();
   const claudeCommand = `claude mcp add --transport http iterate ${mcpUrl}`;
 

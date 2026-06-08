@@ -9,7 +9,8 @@ import {
   runProcessorReduce,
   type ProcessorState,
 } from "./shared/stream-processors.ts";
-import type { StreamEventBatch, StreamSubscription } from "./subscription.ts";
+import type { StreamSubscription } from "./subscription.ts";
+import type { StreamEventBatch } from "./types.ts";
 import type {
   Processor,
   ProcessorSideEffectAnchor,

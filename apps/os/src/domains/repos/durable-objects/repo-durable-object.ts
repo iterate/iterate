@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { type Event } from "@iterate-com/shared/streams/types";
@@ -14,11 +15,13 @@ import {
   type CloudflareArtifactRepo,
   type CloudflareArtifactsBinding,
   artifactRemoteUrl,
+  createCloudflareArtifactsRestBinding,
   createArtifactToken,
   pushInitialReadme,
   repoArtifactName,
   stripArtifactTokenQuery,
 } from "~/domains/repos/artifacts.ts";
+import { AppConfig } from "~/app.ts";
 import {
   RepoStreamProcessorContract,
   repoStreamPath,
@@ -68,6 +71,7 @@ const RepoStructuredName = z.object({
 });
 
 type RepoEnv = {
+  APP_CONFIG?: string;
   ARTIFACTS?: CloudflareArtifactsBinding;
   ARTIFACTS_ACCOUNT_ID?: string;
   ARTIFACTS_NAMESPACE?: string;
@@ -269,11 +273,28 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
   }
 
   private requireArtifacts() {
+    const apiToken = this.getAppConfig().cloudflare.apiToken?.exposeSecret();
+    if (apiToken && this.env.ARTIFACTS_ACCOUNT_ID && this.env.ARTIFACTS_NAMESPACE) {
+      return createCloudflareArtifactsRestBinding({
+        accountId: this.env.ARTIFACTS_ACCOUNT_ID,
+        apiToken,
+        namespace: this.env.ARTIFACTS_NAMESPACE,
+      });
+    }
+
     if (!this.env.ARTIFACTS) {
       throw new Error("ARTIFACTS binding is not configured.");
     }
 
     return this.env.ARTIFACTS;
+  }
+
+  private getAppConfig() {
+    return parseAppConfigFromEnv({
+      configSchema: AppConfig,
+      prefix: "APP_CONFIG_",
+      env: this.env as Record<string, unknown>,
+    });
   }
 
   private artifactRemote(artifactName: string) {
@@ -335,12 +356,12 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `repo-subscription:${params.projectId}:${params.repoSlug}`,
+      idempotencyKey: `repo-subscription:${params.projectId}:${params.repoSlug}:workers-rpc`,
       payload: {
         subscriptionKey: repoProcessorSubscriptionKey(params),
         subscriber: {
           type: "built-in",
-          transport: "capnweb-websocket",
+          transport: "workers-rpc",
           processorSlug: RepoStreamProcessorContract.slug,
         },
       },

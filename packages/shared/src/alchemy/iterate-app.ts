@@ -132,11 +132,12 @@ export async function IterateApp<B extends Bindings>(
   if (app.local && baseUrlHostname && !baseUrlHostname.startsWith("localhost") && worker.url) {
     tunnelVitePort = Number(new URL(worker.url).port || "5173");
 
-    // Wildcard hostnames from extraRouteHostnames (e.g. *.iterate.app)
-    const wildcardHosts = (props.extraRouteHostnames ?? []).filter((h) => h.startsWith("*."));
+    const tunnelExtraHosts = (props.extraRouteHostnames ?? []).filter(
+      (hostname) => hostname !== baseUrlHostname,
+    );
 
     console.log(
-      `Creating dev tunnel: ${[baseUrlHostname, ...wildcardHosts].join(", ")} -> localhost:${tunnelVitePort}`,
+      `Creating dev tunnel: ${[baseUrlHostname, ...tunnelExtraHosts].join(", ")} -> localhost:${tunnelVitePort}`,
     );
 
     const tunnel = await Tunnel(`dev-tunnel-${app.stage}`, {
@@ -147,7 +148,7 @@ export async function IterateApp<B extends Bindings>(
       delete: false,
       ingress: [
         { hostname: baseUrlHostname, service: `http://localhost:${tunnelVitePort}` },
-        ...wildcardHosts.map((hostname) => ({
+        ...tunnelExtraHosts.map((hostname) => ({
           hostname,
           service: `http://localhost:${tunnelVitePort}`,
         })),
@@ -158,16 +159,18 @@ export async function IterateApp<B extends Bindings>(
 
     const cloudflareApi = await createCloudflareApi({});
     await Promise.all(
-      wildcardHosts.map(async (hostname) => {
-        const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
-        await ensureDevTunnelWildcardDnsRecord({
-          cloudflareApi,
-          zoneId,
-          name: hostname,
-          target: `${tunnel.tunnelId}.cfargotunnel.com`,
-          comment: `Managed by ${manifest.slug} dev tunnel (${app.stage}).`,
-        });
-      }),
+      tunnelExtraHosts
+        .filter((hostname) => hostname.startsWith("*."))
+        .map(async (hostname) => {
+          const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
+          await ensureDevTunnelWildcardDnsRecord({
+            cloudflareApi,
+            zoneId,
+            name: hostname,
+            target: `${tunnel.tunnelId}.cfargotunnel.com`,
+            comment: `Managed by ${manifest.slug} dev tunnel (${app.stage}).`,
+          });
+        }),
     );
 
     tunnelToken = tunnel.token.unencrypted;

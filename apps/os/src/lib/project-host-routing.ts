@@ -1,3 +1,5 @@
+import { resolveMcpBaseUrl } from "./mcp-base-url.ts";
+
 const projectSlugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const hostnamePattern =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -52,14 +54,17 @@ export function resolveProjectSlugFromHostname(
 
 export function buildProjectMcpUrl(input: {
   baseUrl?: string;
+  mcpBaseUrl?: string;
   projectSlug: string;
   projectHostnameBases: readonly string[];
 }) {
-  const baseUrl = input.baseUrl?.trim();
-  if (!baseUrl) return null;
-
   try {
-    return new URL("/mcp", baseUrl).toString();
+    return (
+      resolveMcpBaseUrl({
+        appBaseUrl: input.baseUrl,
+        mcpBaseUrl: input.mcpBaseUrl,
+      }) ?? null
+    );
   } catch {
     return null;
   }

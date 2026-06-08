@@ -48,6 +48,7 @@ const db = await D1Database("os-db", {
 // iterate-preview-N.com zone (`os.iterate-preview-N.com`) so project/MCP hosts
 // can own the iterate-preview-N.app zone cleanly.
 const projectHostnameBases = ctx.runtimeConfig.projectHostnameBases ?? [];
+const mcpRouteHostname = routeHostnameForUrl(ctx.runtimeConfig.mcp?.baseUrl);
 const artifactsAccountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
 const artifactsNamespace = `${ctx.workerName}-repos`;
 const outboundMcpFromOurClientCapability =
@@ -148,7 +149,10 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
   // subrequests bypass Worker routes and go to origin, which breaks auth-worker
   // discovery on production iterate.com hostnames.
   compatibilityFlags: ["global_fetch_strictly_public"],
-  extraRouteHostnames: projectHostnameBases.flatMap(projectRouteHostnamesForBase),
+  extraRouteHostnames: [
+    ...(mcpRouteHostname ? [mcpRouteHostname] : []),
+    ...projectHostnameBases.flatMap(projectRouteHostnamesForBase),
+  ],
 });
 
 export { worker };
@@ -166,6 +170,11 @@ if (!ctx.app.local) process.exit(0);
  */
 function projectRouteHostnamesForBase(base: string) {
   return [base, `*.${base}`];
+}
+
+function routeHostnameForUrl(url: string | undefined) {
+  if (!url) return undefined;
+  return new URL(url).hostname;
 }
 
 function requireEnv(name: string) {

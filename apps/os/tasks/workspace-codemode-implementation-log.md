@@ -122,7 +122,7 @@ inbound MCP provider stack already loaded.
 Real MCP codemode proof:
 
 ```sh
-OS_E2E_MCP_URL=https://mcp__workspace-mcp-proof-3dbbcbf7.iterate-preview-2.app/ \
+OS_E2E_MCP_URL=https://mcp.iterate-preview-2.com/ \
   pnpm --dir apps/os exec tsx /tmp/os-workspace-mcp-proof.ts
 ```
 

@@ -103,15 +103,15 @@ async function fetchProjectBySlug(input: { adminApiSecret: string; baseUrl: URL;
 function projectMcpUrlFor(input: { baseUrl: URL; project: Project }) {
   const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(input.baseUrl.hostname);
   if (previewMatch) {
-    return new URL(`https://mcp__${input.project.slug}.iterate-preview-${previewMatch[1]}.app/`);
+    return new URL(`https://mcp.iterate-preview-${previewMatch[1]}.com`);
   }
 
   if (input.baseUrl.hostname === "os.iterate.com") {
-    return new URL(`https://mcp__${input.project.slug}.iterate.app/`);
+    return new URL("https://mcp.iterate.com");
   }
 
   throw new Error(
-    `Cannot derive project MCP URL for ${input.project.slug} from ${input.baseUrl}. Set APP_CONFIG_BASE_URL to a known OS deployment.`,
+    `Cannot derive the MCP URL from ${input.baseUrl}. Set APP_CONFIG_MCP__BASE_URL or pass a known OS deployment.`,
   );
 }
 

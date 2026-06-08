@@ -35,19 +35,19 @@ export type StreamsCapabilityProps = {
   streamPath?: string;
 };
 
-type StreamPathInput = {
+export type StreamPathInput = {
   streamPath?: string;
 };
 
-type StreamAppendInput = StreamPathInput & {
+export type StreamAppendInput = StreamPathInput & {
   event: EventInput;
 };
 
-type StreamAppendBatchInput = StreamPathInput & {
+export type StreamAppendBatchInput = StreamPathInput & {
   events: EventInput[];
 };
 
-type StreamReadInput = StreamPathInput & {
+export type StreamReadInput = StreamPathInput & {
   afterOffset?: StreamCursor;
   beforeOffset?: StreamCursor;
 };
@@ -57,7 +57,7 @@ type StreamEventsInput = StreamPathInput & {
   beforeOffset?: StreamCursor;
 };
 
-type StreamListChildrenInput = StreamPathInput;
+export type StreamListChildrenInput = StreamPathInput;
 type StreamsCapabilityClient = Pick<
   StreamsCapability,
   "append" | "appendBatch" | "create" | "getState" | "list" | "listChildren" | "read" | "stream"
@@ -444,7 +444,7 @@ async function* liveNamespaceStreamEvents(args: {
     onDispose: () => handle?.unsubscribe(),
   });
   handle = await connection.stream.subscribe({
-    sink: subscription.sink,
+    processEventBatch: subscription.processEventBatch,
     replayAfterOffset: toNewAfterOffset(args.afterOffset),
   });
 

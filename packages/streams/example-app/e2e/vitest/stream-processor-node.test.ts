@@ -36,7 +36,7 @@ describe("node-hosted stream processor (e2e)", () => {
     handle = await connection.stream.subscribe({
       subscriptionKey: "node-echo",
       replayAfterOffset: (await processorRunner.snapshot())?.offset ?? 0,
-      sink: subscription.sink,
+      processEventBatch: subscription.processEventBatch,
     });
     await using _processing = processorRunner.run({ subscription });
 
@@ -86,7 +86,7 @@ describe("node-hosted stream processor (e2e)", () => {
       handle = await connection.stream.subscribe({
         subscriptionKey: "resume",
         replayAfterOffset: (await processorRunner.snapshot())?.offset ?? 0,
-        sink: subscription.sink,
+        processEventBatch: subscription.processEventBatch,
       });
       await using _processing = processorRunner.run({ subscription });
       await connection.stream.append({
@@ -117,7 +117,7 @@ describe("node-hosted stream processor (e2e)", () => {
       handle = await connection.stream.subscribe({
         subscriptionKey: "resume",
         replayAfterOffset: (await processorRunner.snapshot())?.offset ?? 0,
-        sink: subscription.sink,
+        processEventBatch: subscription.processEventBatch,
       });
       await using _processing = processorRunner.run({ subscription });
       await connection.stream.append({

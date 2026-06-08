@@ -1,5 +1,7 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
+import { newWorkersRpcResponse } from "capnweb";
 import { env } from "cloudflare:workers";
+import { PublicStreamRpcTarget } from "../../src/workers/durable-objects/stream.ts";
 
 export { Stream } from "../../src/workers/durable-objects/stream.ts";
 export { StreamProcessorRunner } from "../../src/workers/durable-objects/stream-processor-runner.ts";
@@ -19,7 +21,10 @@ export default createServerEntry({
           ? "/"
           : decodeURIComponent(url.pathname.slice("/api/streams/".length));
       // Stream DOs are named `${namespace}:${path}`; the browser namespace is "default".
-      return env.STREAM.getByName(`default:${path}`).fetch(request);
+      return newWorkersRpcResponse(
+        request,
+        new PublicStreamRpcTarget(env.STREAM.getByName(`default:${path}`)),
+      );
     }
 
     // No COOP/COEP on purpose: the browser SQLite mirror uses wa-sqlite's OPFSCoopSyncVFS,

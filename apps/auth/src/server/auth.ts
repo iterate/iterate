@@ -6,8 +6,14 @@ import { generateDefaultAvatar } from "@iterate-com/shared/default-avatar";
 import { env } from "./env.ts";
 import { getAuthPlugins } from "./auth-plugins.ts";
 
+const LOCAL_OAUTH_CLIENT_ORIGINS = [
+  "http://localhost:6274",
+  "http://127.0.0.1:6274",
+  "http://[::1]:6274",
+] as const;
+
 export function getAllowedBrowserOrigins() {
-  return [env.VITE_AUTH_APP_ORIGIN, env.VITE_PUBLIC_URL];
+  return [env.VITE_AUTH_APP_ORIGIN, env.VITE_PUBLIC_URL, ...LOCAL_OAUTH_CLIENT_ORIGINS];
 }
 
 function isAllowedBrowserOrigin(origin: string | null | undefined) {

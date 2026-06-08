@@ -16,7 +16,7 @@ import type { RpcPromise, RpcStub } from "capnweb";
 import type { StreamEvent, StreamEventInput } from "../shared/event.ts";
 import { createProcessorRunner } from "../processor-runner.ts";
 import type { Processor } from "../processor.ts";
-import type { StreamPersistedProcessorState, StreamRpc } from "../types.ts";
+import type { StreamCoreProcessorState, StreamRpc } from "../types.ts";
 import { createStreamSubscription, type StreamSubscription } from "../subscription.ts";
 import {
   withStreamConnectionFromBrowser,
@@ -56,7 +56,7 @@ export type BrowserProcessorConfig = {
 };
 
 export type StreamRuntimeState = {
-  state: StreamPersistedProcessorState;
+  coreProcessorState: StreamCoreProcessorState;
   runtime: {
     connections: Record<string, unknown>;
   };
@@ -67,8 +67,8 @@ export type StreamBrowserStore = Disposable & {
   appendBatch(args: { events: StreamEventInput[] }): RpcPromise<StreamEvent[]>;
   runtimeState(): RpcPromise<StreamRuntimeState>;
   clearLocalDatabase(): Promise<void>;
-  kill(): RpcPromise<void>;
-  reset(): RpcPromise<void>;
+  kill(): Promise<void>;
+  reset(): Promise<void>;
   getSnapshot(): StreamBrowserSnapshot;
   getServerSnapshot(): StreamBrowserSnapshot;
   subscribe(listener: () => void): () => void;
@@ -264,11 +264,11 @@ function createStreamRuntime(
     const checkpoint = await loadCheckpoint(sql);
     const localMaxOffset = checkpoint?.offset ?? -1;
     if (localMaxOffset < 0) return;
-    const { state: serverState } = await rpc.runtimeState();
-    if (serverState.core.maxOffset >= localMaxOffset) return;
+    const { coreProcessorState } = await rpc.runtimeState();
+    if (coreProcessorState.maxOffset >= localMaxOffset) return;
     console.warn(
       `[stream ${args.streamPath}] Server has fewer events than the local mirror; discarding local ${slug} tables.`,
-      { serverMaxOffset: serverState.core.maxOffset, localMaxOffset },
+      { serverMaxOffset: coreProcessorState.maxOffset, localMaxOffset },
     );
     await discardLocalMirror();
   }
@@ -348,13 +348,16 @@ function createStreamRuntime(
         const streamSubscription = createStreamSubscription({ subscriptionKey });
         subscription = streamSubscription;
         processing = processorRunner.run({ subscription: streamSubscription });
-        return { replayAfterOffset: checkpoint?.offset ?? 0, sink: streamSubscription.sink };
+        return {
+          replayAfterOffset: checkpoint?.offset ?? 0,
+          processEventBatch: streamSubscription.processEventBatch,
+        };
       })
       .then((ready) => {
         if (ready === undefined || disposed || stream !== election.connection) return undefined;
         return election.connection.stream.subscribe({
           subscriptionKey,
-          sink: ready.sink,
+          processEventBatch: ready.processEventBatch,
           replayAfterOffset: ready.replayAfterOffset,
         });
       })
@@ -390,6 +393,22 @@ function createStreamRuntime(
     writerRole = undefined;
     snapshot = { ...snapshot, subscriptionStatus: "idle" };
     if (!disposed) emitSnapshot();
+  }
+
+  async function runControlAndReconnect(control: "kill" | "reset") {
+    reconnectNow();
+    if (stream === undefined) throw new Error("stream connection is disposed");
+    const controlledStream = stream;
+    try {
+      await controlledStream.stream[control]();
+    } finally {
+      if (stream === controlledStream) {
+        stopSubscriptionElection();
+        controlledStream[Symbol.dispose]();
+        stream = undefined;
+        reconnectAfter(`stream ${control} requested`);
+      }
+    }
   }
 
   function start() {
@@ -448,14 +467,10 @@ function createStreamRuntime(
       reconnectNow();
     },
     kill() {
-      reconnectNow();
-      if (stream === undefined) throw new Error("stream connection is disposed");
-      return stream.stream.kill();
+      return runControlAndReconnect("kill");
     },
     reset() {
-      reconnectNow();
-      if (stream === undefined) throw new Error("stream connection is disposed");
-      return stream.stream.reset();
+      return runControlAndReconnect("reset");
     },
     getSnapshot: () => snapshot,
     getServerSnapshot: () => snapshot,

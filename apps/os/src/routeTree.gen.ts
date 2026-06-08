@@ -20,6 +20,7 @@ import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppLogStreamRouteImport } from './routes/_app/log-stream'
 import { Route as AppDebugRouteImport } from './routes/_app/debug'
+import { Route as AppCapnwebReplRouteImport } from './routes/_app/capnweb-repl'
 import { Route as AppProjectsRouteRouteImport } from './routes/_app/projects/route'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
 import { Route as SignUpTasksChooseOrganizationRouteImport } from './routes/sign-up.tasks.choose-organization'
@@ -102,6 +103,11 @@ const AppLogStreamRoute = AppLogStreamRouteImport.update({
 const AppDebugRoute = AppDebugRouteImport.update({
   id: '/debug',
   path: '/debug',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppCapnwebReplRoute = AppCapnwebReplRouteImport.update({
+  id: '/capnweb-repl',
+  path: '/capnweb-repl',
   getParentRoute: () => AppRoute,
 } as any)
 const AppProjectsRouteRoute = AppProjectsRouteRouteImport.update({
@@ -274,6 +280,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/organization': typeof OrganizationRoute
   '/projects': typeof AppProjectsRouteRouteWithChildren
+  '/capnweb-repl': typeof AppCapnwebReplRoute
   '/debug': typeof AppDebugRoute
   '/log-stream': typeof AppLogStreamRoute
   '/api/$': typeof ApiSplatRoute
@@ -313,6 +320,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/organization': typeof OrganizationRoute
+  '/capnweb-repl': typeof AppCapnwebReplRoute
   '/debug': typeof AppDebugRoute
   '/log-stream': typeof AppLogStreamRoute
   '/api/$': typeof ApiSplatRoute
@@ -351,6 +359,7 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/organization': typeof OrganizationRoute
   '/_app/projects': typeof AppProjectsRouteRouteWithChildren
+  '/_app/capnweb-repl': typeof AppCapnwebReplRoute
   '/_app/debug': typeof AppDebugRoute
   '/_app/log-stream': typeof AppLogStreamRoute
   '/api/$': typeof ApiSplatRoute
@@ -393,6 +402,7 @@ export interface FileRouteTypes {
     | '/'
     | '/organization'
     | '/projects'
+    | '/capnweb-repl'
     | '/debug'
     | '/log-stream'
     | '/api/$'
@@ -432,6 +442,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/organization'
+    | '/capnweb-repl'
     | '/debug'
     | '/log-stream'
     | '/api/$'
@@ -469,6 +480,7 @@ export interface FileRouteTypes {
     | '/_app'
     | '/organization'
     | '/_app/projects'
+    | '/_app/capnweb-repl'
     | '/_app/debug'
     | '/_app/log-stream'
     | '/api/$'
@@ -598,6 +610,13 @@ declare module '@tanstack/react-router' {
       path: '/debug'
       fullPath: '/debug'
       preLoaderRoute: typeof AppDebugRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/capnweb-repl': {
+      id: '/_app/capnweb-repl'
+      path: '/capnweb-repl'
+      fullPath: '/capnweb-repl'
+      preLoaderRoute: typeof AppCapnwebReplRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/projects': {
@@ -920,6 +939,7 @@ const AppOrgOrganizationSlugRouteRouteWithChildren =
 
 interface AppRouteChildren {
   AppProjectsRouteRoute: typeof AppProjectsRouteRouteWithChildren
+  AppCapnwebReplRoute: typeof AppCapnwebReplRoute
   AppDebugRoute: typeof AppDebugRoute
   AppLogStreamRoute: typeof AppLogStreamRoute
   AppOrgOrganizationSlugRouteRoute: typeof AppOrgOrganizationSlugRouteRouteWithChildren
@@ -927,6 +947,7 @@ interface AppRouteChildren {
 
 const AppRouteChildren: AppRouteChildren = {
   AppProjectsRouteRoute: AppProjectsRouteRouteWithChildren,
+  AppCapnwebReplRoute: AppCapnwebReplRoute,
   AppDebugRoute: AppDebugRoute,
   AppLogStreamRoute: AppLogStreamRoute,
   AppOrgOrganizationSlugRouteRoute:

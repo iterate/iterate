@@ -4,6 +4,7 @@ import {
   deriveDurableObjectNameFromStructuredName,
   NotInitializedError,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { SlackProcessorContract } from "@iterate-com/shared/stream-processors/slack/contract";
 import { type Event } from "@iterate-com/shared/streams/types";
 import {
@@ -12,6 +13,12 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/new-stream-runtime.ts";
 import { type AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
+import {
+  AGENT_HOST_PROCESSOR_SLUG,
+  agentProcessorSubscriptionConfiguredEvent,
+} from "~/domains/agents/agent-stream-subscriptions.ts";
+import { codemodeProcessorSubscriptionKey } from "~/domains/codemode/durable-objects/codemode-session.ts";
+import { createCodemodeSessionStartupEvents } from "~/domains/codemode/codemode-session-rpc.ts";
 import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-streams.ts";
 import { type SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
@@ -123,12 +130,12 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `slack-subscription:${projectId}`,
+      idempotencyKey: `slack-subscription:${projectId}:workers-rpc`,
       payload: {
         subscriptionKey: slackIntegrationProcessorSubscriptionKey(projectId),
         subscriber: {
           type: "built-in",
-          transport: "capnweb-websocket",
+          transport: "workers-rpc",
           processorSlug: SlackProcessorContract.slug,
         },
       },
@@ -142,34 +149,56 @@ export function routedStreamBootstrapEvents(input: {
   slackAgentDurableObjectName: string;
   streamPath: string;
 }) {
+  const streamPath = resolveStreamPath(input.streamPath);
   return [
     {
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.streamPath}`,
+      idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.streamPath}:workers-rpc`,
       payload: {
         subscriptionKey: slackAgentProcessorSubscriptionKey({
           projectId: input.projectId,
-          streamPath: resolveStreamPath(input.streamPath),
+          streamPath,
         }),
         subscriber: {
           type: "built-in",
-          transport: "capnweb-websocket",
+          transport: "workers-rpc",
           processorSlug: "slack-agent",
         },
       },
     },
     {
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `agent-subscription:${input.projectId}:${input.streamPath}`,
+      idempotencyKey: `codemode-session-processor-subscription:${input.projectId}:${streamPath}:workers-rpc`,
       payload: {
-        subscriptionKey: `agent:${input.projectId}:${input.streamPath}`,
+        subscriptionKey: codemodeProcessorSubscriptionKey({
+          projectId: input.projectId,
+          streamPath,
+        }),
         subscriber: {
           type: "built-in",
-          transport: "capnweb-websocket",
-          processorSlug: "agent-host",
+          transport: "workers-rpc",
+          processorSlug: CodemodeProcessorContract.slug,
         },
       },
     },
+    // The forwarded Slack webhook can immediately become a bang-command
+    // codemode script. Keep codemode subscribed, with its default providers
+    // registered, before that webhook enters the routed stream.
+    ...createCodemodeSessionStartupEvents({
+      events: [],
+      projectId: input.projectId,
+      providers: [],
+      streamPath,
+    }),
+    // Subscribe the agent host using the same subscription key the AgentDurableObject uses, so the
+    // host this bootstrap starts and the one AgentDurableObject.onInstanceWake re-declares dedupe to
+    // a single runner. The host wakes the AgentDurableObject for this stream (see
+    // `ensureAgentRunnerForOwnStream`), which registers the LLM processors and agent setup events.
+    agentProcessorSubscriptionConfiguredEvent({
+      agentPath: streamPath,
+      processorSlug: AGENT_HOST_PROCESSOR_SLUG,
+      projectId: input.projectId,
+    }),
   ];
 }
 

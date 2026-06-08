@@ -1,7 +1,7 @@
 import { DurableObject, RpcTarget } from "cloudflare:workers";
 import { z } from "zod";
 import {
-  type Event,
+  Event,
   type EventInput,
   type StreamCursor,
   StreamPath,
@@ -114,7 +114,10 @@ export type CodemodeSessionEnv = {
   STREAM_PROCESSOR_RUNNER: DurableObjectNamespace<StreamProcessorRunner>;
 } & Record<string, unknown>;
 
-type CodemodeSessionStreamApi = ProcessorStreamApi<typeof CodemodeProcessorContract> & {
+type CodemodeSessionStreamApi = Omit<
+  ProcessorStreamApi<typeof CodemodeProcessorContract>,
+  "append" | "appendBatch" | "read" | "subscribe"
+> & {
   append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
   appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
   read(args?: {
@@ -201,8 +204,12 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
   async afterAppend(input: { event: Event }) {
     await this.ensureStarted();
-    await this.waitForProcessorCatchUp();
+    // Event-mediated providers complete by appending function-call-completed
+    // back to the stream. Resolve the live script waiter before waiting for the
+    // codemode processor to catch up; otherwise the processor can be waiting on
+    // the script that is waiting on this completion.
     this.resolvePendingFunctionCallFromEvent(input.event);
+    await this.waitForProcessorCatchUp();
     return await this.getRunnerState();
   }
 
@@ -343,11 +350,6 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     }
 
     const provider = await this.resolveRegisteredProvider(input.path);
-    const pending =
-      provider.invocation.kind === "event"
-        ? this.ensurePendingFunctionCallResult(functionCallId)
-        : null;
-
     const requestedEvent = await this.appendAndConsume({
       type: "events.iterate.com/codemode/function-call-requested",
       payload: {
@@ -415,13 +417,10 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
       }
     }
 
-    this.resolvePendingFunctionCallFromEvent(requestedEvent);
-
-    try {
-      return await pending!.promise;
-    } finally {
-      this.#pendingFunctionCallResults.delete(functionCallId);
-    }
+    return await this.waitForEventProviderResult({
+      afterOffset: requestedEvent.offset,
+      functionCallId,
+    });
   }
 
   async receiveFunctionCallResult(input: ReceiveFunctionCallResultInput) {
@@ -463,7 +462,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     ).runtimeState();
   }
 
-  private streamsEntrypoint() {
+  private streamsEntrypoint(): CodemodeSessionStreamApi {
     return processorStreamApiFromNamespace({
       namespace: this.structuredName.projectId,
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
@@ -480,7 +479,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `codemode-session-processor-subscription:${this.name}`,
+      idempotencyKey: `codemode-session-processor-subscription:${this.name}:workers-rpc`,
       payload: {
         subscriptionKey: codemodeProcessorSubscriptionKey({
           projectId: this.structuredName.projectId,
@@ -488,7 +487,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
         }),
         subscriber: {
           type: "built-in",
-          transport: "capnweb-websocket",
+          transport: "workers-rpc",
           processorSlug: CodemodeProcessorContract.slug,
         },
       },
@@ -515,6 +514,24 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
     await this.waitForProcessorCatchUp();
     this.resolvePendingFunctionCallFromEvent(event);
     return event;
+  }
+
+  private async waitForEventProviderResult(input: { afterOffset: number; functionCallId: string }) {
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      const result = findFunctionCallCompletedEvent({
+        events: await this.streamsEntrypoint().read({
+          afterOffset: input.afterOffset,
+          beforeOffset: "end",
+        }),
+        functionCallId: input.functionCallId,
+      });
+      if (result?.outcome.status === "returned") return result.outcome.value;
+      if (result?.outcome.status === "threw") throw new Error(String(result.outcome.error));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    throw new Error(`Timed out waiting for event provider call ${input.functionCallId}.`);
   }
 
   createSessionCapabilityCallable(): Callable {
@@ -765,10 +782,11 @@ function processorStreamApiFromNamespace(args: {
           pathInput: input.streamPath,
         }),
       });
-      return await stream.history({
+      const events = await stream.history({
         after: toEventsCursor(input.afterOffset),
         before: toEventsCursor(input.beforeOffset ?? "end"),
       });
+      return events.map((event) => Event.parse(event));
     },
     async *subscribe(input = {}) {
       void input;
@@ -776,6 +794,31 @@ function processorStreamApiFromNamespace(args: {
       throw new Error("CodemodeSession processors receive live events through afterAppend RPC.");
     },
   };
+}
+
+function findFunctionCallCompletedEvent(input: {
+  events: readonly Event[];
+  functionCallId: string;
+}):
+  | {
+      outcome: { status: "returned"; value: unknown } | { status: "threw"; error: unknown };
+    }
+  | undefined {
+  for (const event of input.events) {
+    if (event.type !== "events.iterate.com/codemode/function-call-completed") continue;
+    const payload = event.payload as {
+      functionCallId?: unknown;
+      outcome?: unknown;
+    };
+    if (payload.functionCallId !== input.functionCallId) continue;
+    const outcome = payload.outcome as
+      | { status: "returned"; value: unknown }
+      | { status: "threw"; error: unknown }
+      | undefined;
+    if (outcome?.status === "returned" || outcome?.status === "threw") {
+      return { outcome };
+    }
+  }
 }
 
 function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: string }) {
@@ -987,6 +1030,25 @@ function __stringify(value) {
 	    return result;
 	  }
 
+	  // This Proxy is the codemode "ctx" object given to user-authored snippets.
+	  // It is intentionally not a real RpcTarget stub. Codemode needs an open
+	  // tool namespace where an LLM can write ctx.workspace.git.status(...),
+	  // ctx.fetch(...), or future provider paths without the host predeclaring
+	  // every method as a JavaScript class member. Each property read appends a
+	  // path segment; the final function call sends { path, args } to the owning
+	  // CodemodeSession Durable Object via callFunction(...). The host then
+	  // resolves the provider and records/disposes any returned RPC stubs.
+	  //
+	  // Returning undefined for then/catch/finally is required. Promise
+	  // machinery probes those names; if the path proxy looked thenable, "await
+	  // ctx.workspace" would call the tool path instead of preserving the path
+	  // recorder.
+	  //
+	  // References:
+	  // - Workers RPC stubs use Proxy objects:
+	  //   https://developers.cloudflare.com/workers/runtime-apis/rpc/
+	  // - Cap'n Web documents the same proxy/stub model:
+	  //   https://github.com/cloudflare/capnweb
 	  const make = (path = []) => new Proxy(async () => {}, {
 	    get: (_target, key) => {
 	      if (key === "then" || key === "catch" || key === "finally") return undefined;

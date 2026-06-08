@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { coreProcessorContract } from "./contract.ts";
-import { assertStreamAppendAllowed, getAncestorStreamPaths } from "./implementation.ts";
+import {
+  assertStreamAppendAllowed,
+  catchUpCoreProcessorState,
+  getAncestorStreamPaths,
+  reduceCoreProcessorStateFromEvents,
+} from "./implementation.ts";
 
 const reduce = coreProcessorContract.reduce;
 if (reduce === undefined) throw new Error("core processor must have a reducer");
@@ -57,7 +62,7 @@ describe("core processor contract", () => {
             subscriptionKey: "echo",
             subscriber: {
               type: "built-in",
-              transport: "capnweb-websocket",
+              transport: "workers-rpc",
               processorSlug: "echo-example",
             },
           },
@@ -99,6 +104,73 @@ describe("core processor contract", () => {
         { type: "events.iterate.com/echo-example/output-echoed", description: "Output." },
       ],
     });
+  });
+
+  it("drops historical outbound subscription transports from reduced state", () => {
+    let state = coreProcessorContract.stateSchema.parse(coreProcessorContract.initialState);
+    state = coreProcessorContract.stateSchema.parse(
+      reduce({
+        contract: coreProcessorContract,
+        state,
+        event: {
+          offset: 1,
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            subscriptionKey: "echo",
+            subscriber: {
+              type: "built-in",
+              transport: "workers-rpc",
+              processorSlug: "echo-example",
+            },
+          },
+          createdAt: "2026-06-01T12:00:01.000Z",
+        },
+      }),
+    );
+
+    state = coreProcessorContract.stateSchema.parse(
+      reduce({
+        contract: coreProcessorContract,
+        state,
+        event: {
+          offset: 2,
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            subscriptionKey: "echo",
+            subscriber: {
+              type: "built-in",
+              transport: "capnweb-websocket",
+              processorSlug: "echo-example",
+            },
+          },
+          createdAt: "2026-06-01T12:00:02.000Z",
+        },
+      }),
+    );
+
+    expect(state.subscriptionsByKey.echo).toBeUndefined();
+
+    const stored = coreProcessorContract.stateSchema.parse({
+      ...state,
+      subscriptionsByKey: {
+        external: {
+          latestConfiguredEvent: {
+            offset: 3,
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              subscriptionKey: "external",
+              subscriber: {
+                type: "external-url",
+                transport: "capnweb-websocket",
+                url: "https://example.com/processor",
+              },
+            },
+            createdAt: "2026-06-01T12:00:03.000Z",
+          },
+        },
+      },
+    });
+    expect(stored.subscriptionsByKey).toEqual({});
   });
 
   it("owns pause/resume and beforeAppend door logic", () => {
@@ -177,5 +249,83 @@ describe("core processor contract", () => {
     expect(state.metadata).toEqual({ title: "Demo stream" });
     expect(state.maxOffset).toBe(3);
     expect(getAncestorStreamPaths("/a/b/c")).toEqual(["/", "/a", "/a/b"]);
+  });
+
+  it("rebuilds state by replaying committed events", () => {
+    const state = reduceCoreProcessorStateFromEvents([
+      {
+        offset: 1,
+        type: "events.iterate.com/stream/created",
+        payload: { namespace: "default", path: "/agents" },
+        createdAt: "2026-06-01T12:00:00.000Z",
+      },
+      {
+        offset: 2,
+        type: "events.iterate.com/stream/woken",
+        payload: { incarnationId: "incarnation-1" },
+        createdAt: "2026-06-01T12:00:00.001Z",
+      },
+      {
+        offset: 3,
+        type: "events.iterate.com/stream/child-stream-created",
+        idempotencyKey: "child-stream-created:/agents:/agents/debug",
+        payload: { childPath: "/agents/debug" },
+        createdAt: "2026-06-01T12:00:01.000Z",
+      },
+    ]);
+
+    expect(state).toMatchObject({
+      namespace: "default",
+      path: "/agents",
+      incarnationId: "incarnation-1",
+      eventCount: 3,
+      maxOffset: 3,
+      childPaths: ["/agents/debug"],
+    });
+  });
+
+  it("catches up stored state from events after the stored max offset", () => {
+    const stored = reduceCoreProcessorStateFromEvents([
+      {
+        offset: 1,
+        type: "events.iterate.com/stream/created",
+        payload: { namespace: "default", path: "/agents" },
+        createdAt: "2026-06-01T12:00:00.000Z",
+      },
+      {
+        offset: 2,
+        type: "events.iterate.com/stream/woken",
+        payload: { incarnationId: "incarnation-1" },
+        createdAt: "2026-06-01T12:00:00.001Z",
+      },
+    ]);
+
+    const state = catchUpCoreProcessorState({
+      state: stored,
+      events: [
+        {
+          offset: 1,
+          type: "events.iterate.com/stream/created",
+          payload: { namespace: "wrong", path: "/wrong" },
+          createdAt: "2026-06-01T12:00:00.000Z",
+        },
+        {
+          offset: 3,
+          type: "events.iterate.com/stream/child-stream-created",
+          idempotencyKey: "child-stream-created:/agents:/agents/debug",
+          payload: { childPath: "/agents/debug" },
+          createdAt: "2026-06-01T12:00:01.000Z",
+        },
+      ],
+    });
+
+    expect(state).toMatchObject({
+      namespace: "default",
+      path: "/agents",
+      incarnationId: "incarnation-1",
+      eventCount: 3,
+      maxOffset: 3,
+      childPaths: ["/agents/debug"],
+    });
   });
 });

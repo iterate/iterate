@@ -64,24 +64,44 @@ describe("project host routing", () => {
     expect(isReservedProjectHostname("alpha.example.com", ["os.iterate.com"])).toBe(false);
   });
 
-  it("builds the canonical MCP URL from the OS base URL", () => {
+  it("builds the canonical MCP URL from the MCP base URL", () => {
     expect(
       buildProjectMcpUrl({
-        baseUrl: "https://os.iterate.com",
+        mcpBaseUrl: "https://mcp.iterate.com",
         projectSlug: "demo",
         projectHostnameBases: ["iterate.app"],
       }),
-    ).toBe("https://os.iterate.com/mcp");
+    ).toBe("https://mcp.iterate.com");
     expect(
       buildProjectMcpUrl({
-        baseUrl: "https://os.iterate-preview-3.com",
+        mcpBaseUrl: "https://mcp.iterate-preview-3.com",
         projectSlug: "demo",
         projectHostnameBases: ["*.iterate-preview-3.app"],
       }),
-    ).toBe("https://os.iterate-preview-3.com/mcp");
+    ).toBe("https://mcp.iterate-preview-3.com");
   });
 
-  it("does not invent MCP URLs without an OS base URL", () => {
+  it("preserves path-mounted MCP base URLs", () => {
+    expect(
+      buildProjectMcpUrl({
+        mcpBaseUrl: "http://localhost:5176/api/__mcp/",
+        projectSlug: "demo",
+        projectHostnameBases: ["iterate.localhost"],
+      }),
+    ).toBe("http://localhost:5176/api/__mcp");
+  });
+
+  it("defaults localhost deployments to the local MCP path", () => {
+    expect(
+      buildProjectMcpUrl({
+        baseUrl: "http://localhost:5176",
+        projectSlug: "demo",
+        projectHostnameBases: ["iterate.localhost"],
+      }),
+    ).toBe("http://localhost:5176/api/__mcp");
+  });
+
+  it("does not invent MCP URLs without an MCP base URL", () => {
     expect(buildProjectMcpUrl({ projectSlug: "demo", projectHostnameBases: [] })).toBeNull();
   });
 });

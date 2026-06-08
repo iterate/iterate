@@ -1,7 +1,5 @@
-import type { RpcStub, RpcTarget } from "capnweb";
 import type { StreamEvent, StreamEventInput } from "./shared/event.ts";
 import type { Snapshot } from "./processor-runner.ts";
-import type { CircuitBreakerProcessorState } from "./processors/circuit-breaker/contract.ts";
 import type {
   CoreProcessorState,
   SubscriptionConfiguredEvent,
@@ -9,19 +7,20 @@ import type {
 
 type MaybePromise<T> = T | Promise<T>;
 
-export type StreamPersistedProcessorState = {
-  core: CoreProcessorState;
-  "circuit-breaker": CircuitBreakerProcessorState;
+export type StreamCoreProcessorState = CoreProcessorState;
+
+export type StreamEventBatch = {
+  namespace: string;
+  path: string;
+  events: StreamEvent[];
+  /**
+   * Piggybacked on each delivery so subscribers can compute lag without an
+   * extra runtimeState() round trip.
+   */
+  streamMaxOffset: number;
 };
 
-/**
- * The subscriber-side capnweb RPC target that receives stream event batches.
- * The stream piggybacks its current max offset so subscribers can compute lag
- * without an extra round trip.
- */
-export type SubscriptionSink = RpcTarget & {
-  processEventBatch(args: { events: StreamEvent[]; streamMaxOffset: number }): unknown;
-};
+export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 
 export type StreamRpc = {
   append(args: { streamPath?: string; event: StreamEventInput }): MaybePromise<StreamEvent>;
@@ -31,7 +30,7 @@ export type StreamRpc = {
   }): MaybePromise<StreamEvent[]>;
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
-  ): StreamEvent | undefined;
+  ): MaybePromise<StreamEvent | undefined>;
   /**
    * Reads events by numeric offset boundaries. Type filtering belongs here later,
    * but the first SQLite rewrite keeps the read API offset-only.
@@ -40,32 +39,38 @@ export type StreamRpc = {
     afterOffset?: number;
     beforeOffset?: number | null;
     limit?: number;
-  }): StreamEvent[];
+  }): MaybePromise<StreamEvent[]>;
   /**
    * Subscribes to catch-up then live event batches. Type-filtered subscriptions
    * are planned, but not part of this first simplified storage shape.
    */
   subscribe(args: {
     subscriptionKey?: SubscriptionKey;
-    sink: RpcStub<SubscriptionSink>;
+    processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
-  }): { subscriptionKey: SubscriptionKey; streamMaxOffset: number; unsubscribe(): void };
-  runtimeState(): {
-    state: StreamPersistedProcessorState;
+  }): MaybePromise<StreamSubscriptionHandle>;
+  runtimeState(): MaybePromise<{
+    coreProcessorState: StreamCoreProcessorState;
     runtime: {
       connections: Record<SubscriptionKey, ConnectionInfo>;
     };
-  };
-  kill(): void;
+  }>;
+  kill(): MaybePromise<void>;
   /** Clears all durable storage for this stream, then aborts the current incarnation. */
   reset(): Promise<void>;
   reduce(args: {
     event: StreamEvent;
-    state?: StreamPersistedProcessorState;
-  }): StreamPersistedProcessorState;
+    coreProcessorState?: StreamCoreProcessorState;
+  }): MaybePromise<StreamCoreProcessorState>;
 };
 
 export type SubscriptionKey = string;
+
+export type StreamSubscriptionHandle = {
+  subscriptionKey: SubscriptionKey;
+  streamMaxOffset: number;
+  unsubscribe(): void;
+};
 
 /** Serializable debug view of a live delivery connection, returned by `runtimeState()`. */
 export type ConnectionInfo = {
@@ -86,11 +91,11 @@ export type StreamProcessorRunnerRuntimeState = {
 
 export type StreamProcessorRunnerRpc = {
   requestSubscription(args: {
-    stream: RpcStub<StreamRpc>;
+    stream: StreamRpc;
     subscriptionKey: SubscriptionKey;
     streamMaxOffset: number;
     subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
-    streamRuntimeState: { state: StreamPersistedProcessorState };
-  }): { sink: SubscriptionSink; replayAfterOffset?: number };
+    streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
+  }): MaybePromise<void>;
   runtimeState(): StreamProcessorRunnerRuntimeState;
 };

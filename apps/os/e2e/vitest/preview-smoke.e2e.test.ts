@@ -135,15 +135,15 @@ async function seedProject(input: { adminApiSecret: string; baseUrl: URL }) {
 function projectMcpUrlFor(input: { baseUrl: URL; project: Project }) {
   const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(input.baseUrl.hostname);
   if (previewMatch) {
-    return new URL(`https://mcp__${input.project.slug}.iterate-preview-${previewMatch[1]}.app/`);
+    return new URL(`https://mcp.iterate-preview-${previewMatch[1]}.com`);
   }
 
   if (input.baseUrl.hostname === "os.iterate.com") {
-    return new URL(`https://mcp__${input.project.slug}.iterate.app/`);
+    return new URL("https://mcp.iterate.com");
   }
 
   throw new Error(
-    `Cannot derive project MCP URL for ${input.project.slug} from OS base ${input.baseUrl}. Set OS_PROJECT_MCP_URL explicitly.`,
+    `Cannot derive the MCP URL from OS base ${input.baseUrl}. Set OS_PROJECT_MCP_URL explicitly.`,
   );
 }
 
@@ -156,15 +156,14 @@ async function seedProjectMcpUrl(input: { adminApiSecret: string; baseUrl: URL }
   return projectMcpUrlFor({ baseUrl: input.baseUrl, project });
 }
 
-// TODO: Re-enable once preview smoke follows the canonical /mcp route instead of
-// the retired project MCP hostname flow.
-test.skip("OS preview smoke", async () => {
+test("OS preview smoke", async () => {
   const baseUrl = requireBaseUrl();
   const projectMcpUrlOverride = readProjectMcpUrlOverride();
   const adminApiSecret = readAdminApiSecret();
 
   // Keep the dashboard checks unauthenticated, then use the admin preview hook to
-  // seed one deterministic project/MCP hostname. That makes the preview proof
+  // seed one deterministic project before checking the canonical MCP endpoint.
+  // That makes the preview proof
   // repeatable without relying on a human Clerk session.
   await expectStatus({
     url: new URL("/api/__internal/health", baseUrl),
@@ -193,7 +192,10 @@ test.skip("OS preview smoke", async () => {
     headers: { accept: "text/html" },
     url: projectMcpUrl,
   });
-  if (!instructionsHtml.includes("Connect an MCP client to this project endpoint")) {
+  if (
+    !instructionsHtml.includes("Connect an MCP client to Iterate OS") ||
+    !instructionsHtml.includes(projectMcpUrl.toString().replace(/\/+$/, ""))
+  ) {
     throw new Error(`MCP instructions page did not contain setup text: ${instructionsHtml}`);
   }
 
@@ -202,7 +204,10 @@ test.skip("OS preview smoke", async () => {
     status: 401,
   });
   const wwwAuthenticate = projectMcpResponse.headers.get("www-authenticate") ?? "";
-  const metadataUrl = new URL("/.well-known/oauth-protected-resource", projectMcpUrl.origin);
+  const metadataUrl = new URL(
+    ".well-known/oauth-protected-resource",
+    `${projectMcpUrl.toString().replace(/\/+$/, "")}/`,
+  );
   if (!wwwAuthenticate.includes(`resource_metadata="${metadataUrl.toString()}"`)) {
     throw new Error(`Unexpected MCP WWW-Authenticate header: ${wwwAuthenticate}`);
   }
@@ -212,8 +217,11 @@ test.skip("OS preview smoke", async () => {
     status: 200,
   });
   const metadata = (await metadataResponse.json()) as { resource?: string };
-  if (metadata.resource !== projectMcpUrl.toString()) {
-    throw new Error(`Expected MCP metadata resource ${projectMcpUrl}; got ${metadata.resource}.`);
+  const expectedResource = projectMcpUrl.toString().replace(/\/+$/, "");
+  if (metadata.resource !== expectedResource) {
+    throw new Error(
+      `Expected MCP metadata resource ${expectedResource}; got ${metadata.resource}.`,
+    );
   }
 
   console.log(`OS preview smoke passed for ${baseUrl.toString()}`);

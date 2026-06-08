@@ -21,7 +21,7 @@ import {
   ITERATE_CONFIG_REPO_SLUG,
 } from "~/domains/repos/iterate-config-repo.ts";
 
-type ReposCapabilityEnv = {
+export type ReposCapabilityEnv = {
   DO_CATALOG?: D1Database;
   REPO?: DurableObjectNamespace<RepoDurableObject>;
 };
@@ -146,64 +146,11 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
   }
 
   async ensureIterateConfigInfo(input: { projectSlug: string | null }): Promise<RepoInfo> {
-    const key = `${this.ctx.props.projectId}:${ITERATE_CONFIG_REPO_SLUG}`;
-    const existingPromise = iterateConfigInfoPromises.get(key);
-    if (existingPromise) return await existingPromise;
-
-    const promise = this.createOrReadIterateConfigInfo(input);
-    iterateConfigInfoPromises.set(key, promise);
-    try {
-      return await promise;
-    } finally {
-      if (iterateConfigInfoPromises.get(key) === promise) {
-        iterateConfigInfoPromises.delete(key);
-      }
-    }
-  }
-
-  private async createOrReadIterateConfigInfo(input: {
-    projectSlug: string | null;
-  }): Promise<RepoInfo> {
-    const namespace = this.requireRepoNamespace();
-    const name = this.repoName(ITERATE_CONFIG_REPO_SLUG);
-    const existing = await getInitializedDoStub({
-      allowCreate: false,
-      namespace,
-      name,
+    return await ensureIterateConfigInfoForProject({
+      env: this.env,
+      projectId: this.ctx.props.projectId,
+      projectSlug: input.projectSlug,
     });
-
-    if (existing !== null) {
-      try {
-        return await existing.getInfo();
-      } catch (error) {
-        if (!isRepoNotCreatedError(error)) {
-          throw error;
-        }
-      }
-    }
-
-    const repo = await getInitializedDoStub({
-      allowCreate: true,
-      namespace,
-      name,
-    });
-
-    try {
-      return await repo.createRepo({
-        projectSlug: input.projectSlug || undefined,
-        source: {
-          artifactName: ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
-          description: `Iterate config repo for ${input.projectSlug || this.ctx.props.projectId}`,
-          kind: "artifact-fork",
-        },
-      });
-    } catch (error) {
-      if (isRepoAlreadyExistsError(error)) {
-        return await repo.getInfo();
-      }
-
-      throw error;
-    }
   }
 
   async list(): Promise<RepoCatalogRecord[]> {
@@ -254,6 +201,76 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
 
 export { ReposCapability as RepoCapability };
 
+export async function ensureIterateConfigInfoForProject(input: {
+  env: Pick<ReposCapabilityEnv, "REPO">;
+  projectId: string;
+  projectSlug: string | null;
+}): Promise<RepoInfo> {
+  const key = `${input.projectId}:${ITERATE_CONFIG_REPO_SLUG}`;
+  const existingPromise = iterateConfigInfoPromises.get(key);
+  if (existingPromise) return await existingPromise;
+
+  const promise = createOrReadIterateConfigInfoForProject(input);
+  iterateConfigInfoPromises.set(key, promise);
+  try {
+    return await promise;
+  } finally {
+    if (iterateConfigInfoPromises.get(key) === promise) {
+      iterateConfigInfoPromises.delete(key);
+    }
+  }
+}
+
+async function createOrReadIterateConfigInfoForProject(input: {
+  env: Pick<ReposCapabilityEnv, "REPO">;
+  projectId: string;
+  projectSlug: string | null;
+}): Promise<RepoInfo> {
+  const namespace = requireRepoNamespace(input.env);
+  const name: RepoStructuredName = {
+    projectId: input.projectId,
+    repoSlug: ITERATE_CONFIG_REPO_SLUG,
+  };
+  const existing = await getInitializedDoStub({
+    allowCreate: false,
+    namespace,
+    name,
+  });
+
+  if (existing !== null) {
+    try {
+      return await existing.getInfo();
+    } catch (error) {
+      if (!isRepoNotCreatedError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  const repo = await getInitializedDoStub({
+    allowCreate: true,
+    namespace,
+    name,
+  });
+
+  try {
+    return await repo.createRepo({
+      projectSlug: input.projectSlug || undefined,
+      source: {
+        artifactName: ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
+        description: `Iterate config repo for ${input.projectSlug || input.projectId}`,
+        kind: "artifact-fork",
+      },
+    });
+  } catch (error) {
+    if (isRepoAlreadyExistsError(error)) {
+      return await repo.getInfo();
+    }
+
+    throw error;
+  }
+}
+
 export function getReposCapability(input: {
   exports: Pick<Cloudflare.Exports, "ReposCapability"> | undefined;
   props: ReposCapabilityProps;
@@ -290,6 +307,14 @@ function readSlug(value: unknown) {
   }
 
   return slug;
+}
+
+function requireRepoNamespace(env: Pick<ReposCapabilityEnv, "REPO">) {
+  if (!env.REPO) {
+    throw new Error("REPO Durable Object namespace is not configured.");
+  }
+
+  return env.REPO;
 }
 
 function readOptionalString(value: unknown) {

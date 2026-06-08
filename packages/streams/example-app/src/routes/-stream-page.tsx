@@ -1222,8 +1222,7 @@ function StreamControlTool({
   streamStore: StreamBrowserStore;
 }) {
   const { runtimeState, pollError } = useStreamRuntimeState(streamStore, snapshot.connectionStatus);
-  const core = runtimeState?.state.core;
-  const circuitBreaker = runtimeState?.state["circuit-breaker"];
+  const core = runtimeState?.coreProcessorState;
   const paused = core?.paused ?? false;
   const pauseReason = core?.pauseReason ?? null;
 
@@ -1236,19 +1235,6 @@ function StreamControlTool({
   const [controlAction, setControlAction] = useState<
     "idle" | "resuming" | "configuring" | "done" | "error"
   >("idle");
-
-  const circuitBreakerBurstCapacity = circuitBreaker?.burstCapacity;
-  const circuitBreakerRefillRatePerMinute = circuitBreaker?.refillRatePerMinute;
-  useEffect(() => {
-    if (
-      circuitBreakerBurstCapacity === undefined ||
-      circuitBreakerRefillRatePerMinute === undefined
-    ) {
-      return;
-    }
-    setBurstCapacity(String(circuitBreakerBurstCapacity));
-    setRefillRatePerMinute(String(circuitBreakerRefillRatePerMinute));
-  }, [circuitBreakerBurstCapacity, circuitBreakerRefillRatePerMinute]);
 
   async function resumeStream() {
     setControlAction("resuming");
@@ -1268,16 +1254,30 @@ function StreamControlTool({
   }
 
   async function applyCircuitBreakerConfig() {
+    if (core === undefined) return;
     const burst = Math.floor(Number(burstCapacity));
     const refill = Math.floor(Number(refillRatePerMinute));
     if (!Number.isFinite(burst) || burst <= 0 || !Number.isFinite(refill) || refill <= 0) {
       return;
     }
 
+    const subscriptionKey = "circuit-breaker";
     setControlAction("configuring");
     try {
       await streamStore.appendBatch({
         events: [
+          {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              subscriptionKey,
+              subscriber: {
+                type: "built-in",
+                transport: "workers-rpc",
+                processorSlug: "circuit-breaker",
+              },
+            },
+            idempotencyKey: `subscription:${subscriptionKey}`,
+          },
           {
             type: "events.iterate.com/circuit-breaker/configured",
             payload: { burstCapacity: burst, refillRatePerMinute: refill },
@@ -1321,19 +1321,6 @@ function StreamControlTool({
                 data-testid="stream-pause-reason"
               >
                 {pauseReason}
-              </output>
-            </dd>
-          </div>
-        )}
-        {circuitBreaker === undefined ? null : (
-          <div title="Token-bucket balance after the latest committed event. Trips below zero and appends stream/paused.">
-            <dt>Tokens</dt>
-            <dd>
-              <output
-                className="whitespace-nowrap font-mono text-[11px] text-[#263142]"
-                data-testid="circuit-breaker-tokens"
-              >
-                {circuitBreaker.availableTokens} / {circuitBreaker.burstCapacity}
               </output>
             </dd>
           </div>

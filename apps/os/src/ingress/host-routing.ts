@@ -16,7 +16,7 @@ export async function matchIngressRequest(input: {
   lookupRule: LookupIngressRule;
   fallbackRules?: readonly ExactHostIngressRule[];
 }): Promise<IngressMatch | null> {
-  const requestHost = normalizeIngressHost(new URL(input.request.url).hostname);
+  const requestHost = normalizeIngressHost(ingressHostnameFromRequest(input.request));
   const directRule = await input.lookupRule(requestHost);
   if (directRule) return { requestHost, rule: directRule };
 

@@ -35,6 +35,28 @@ export interface ToolFunctionProxy {
 }
 
 function createPathProxy(path: string[], options: CreateCodemodeContextOptions): ToolFunctionProxy {
+  // This is the original local codemode path recorder. It is intentionally a
+  // Proxy because tool names are not known when the script is authored: the
+  // user can write ctx.workspace.git.status(), ctx.project.deploy(), or any
+  // provider-defined nested path, and each property read extends the recorded
+  // path without requiring us to generate a TypeScript/JavaScript object tree.
+  //
+  // Effect:
+  //   ctx.workspace.git.status("--short")
+  // records:
+  //   { path: ["workspace", "git", "status"], args: ["--short"] }
+  // and forwards that to the Codemode Session capability's callFunction(...).
+  //
+  // This is not a Workers RPC or Cap'n Web remote stub; it is the older
+  // in-process codemode equivalent of the same ergonomic idea. The newer
+  // Cap'n Web path uses real RpcTarget/WorkerEntrypoint stubs where possible,
+  // and only uses local proxies for unknown dynamic SDK paths. The important
+  // semantic match is that arbitrary property chains are captured lazily and
+  // invoked only when the final function call happens.
+  //
+  // References for the RPC/stub model this mirrors:
+  // - Workers RPC docs: https://developers.cloudflare.com/workers/runtime-apis/rpc/
+  // - Cap'n Web README: https://github.com/cloudflare/capnweb
   return new Proxy(async () => undefined, {
     get(_target, key) {
       // Promise utilities probe `then`/`catch`/`finally` to detect thenables.

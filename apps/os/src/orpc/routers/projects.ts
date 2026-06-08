@@ -5,19 +5,10 @@ import {
   getD1ObjectCatalogRecord,
   listD1ObjectCatalogRecordsByIndex,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
 import type { AppContext } from "~/context.ts";
 import {
-  countAllProjects,
-  countProjects,
-  deleteProject,
   getProjectById,
   getProjectPermission,
-  getProjectBySlug,
-  insertProject,
-  insertProjectPermission,
-  listAllProjects,
-  listProjects,
   updateProjectConfig,
 } from "~/db/queries/.generated/index.ts";
 import type { CodemodeSessionStructuredName } from "~/domains/codemode/durable-objects/codemode-session.ts";
@@ -32,7 +23,6 @@ import {
   isValidCustomHostname,
   normalizeCustomHostname,
 } from "~/lib/project-host-routing.ts";
-import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 import { activeOrganizationMiddleware, os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
@@ -42,6 +32,7 @@ import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
 import { projectSecretsRouter } from "~/orpc/routers/secrets.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
+import { ProjectsCapability } from "~/capnweb/projects-capability.ts";
 
 type ProjectRow = {
   id: string;
@@ -124,138 +115,35 @@ function isUniqueConstraintError(error: unknown) {
   return error instanceof Error && error.message.includes("UNIQUE constraint failed");
 }
 
-function resolveProjectId(input: { id?: string; context: Pick<AppContext, "config"> }) {
-  if (input.id) {
-    if (!isValidTypeId(input.id, "proj")) {
-      throw new ORPCError("BAD_REQUEST", {
-        message: "Project ID must be a valid TypeID with prefix proj.",
-      });
-    }
-    return input.id;
-  }
-
-  return typeid({
-    env: { TYPEID_PREFIX: input.context.config.typeIdPrefix.exposeSecret() },
-    prefix: "proj",
-  });
-}
-
 export const projectsRouter = {
   projects: {
     create: os.projects.create
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {
-        const auth = context.activeOrganization;
-        const id = resolveProjectId({ id: input.id, context });
-        const existing = await getProjectBySlug(context.db, { slug: input.slug });
-        if (existing) {
-          throw new ORPCError("CONFLICT", {
-            message: `A project with slug ${input.slug} already exists.`,
-          });
-        }
-        if (input.id && (await getProjectById(context.db, { id: input.id }))) {
-          throw new ORPCError("CONFLICT", {
-            message: `A project with ID ${input.id} already exists.`,
-          });
-        }
-
-        if (!auth.isAdminApi) {
-          const authWorker = createAuthWorkerServiceClient(context);
-          await authWorker.internal.project.createForOrganization({
-            id,
-            organizationSlug: auth.orgSlug,
-            name: input.slug,
-            slug: input.slug,
-            metadata: { osProjectId: id },
-          });
-        }
-
-        let project: ProjectRow;
-
-        try {
-          project = await insertProject(context.db, {
-            id,
-            slug: input.slug,
-          });
-          if (!auth.isAdminApi) {
-            await insertProjectPermission(context.db, {
-              principalId: auth.orgId,
-              principalType: "clerk_organization",
-              projectId: id,
-              role: "owner",
-            });
-          }
-        } catch (error) {
-          if (isUniqueConstraintError(error)) {
-            throw new ORPCError("CONFLICT", {
-              message: `A project with slug ${input.slug} already exists.`,
-            });
-          }
-
-          throw error;
-        }
-
-        try {
-          await projectDurableObject(context, id).createProject({
-            projectId: id,
-            slug: input.slug,
-          });
-        } catch (error) {
-          await deleteProject(context.db, { id }).catch((cleanupError) => {
-            console.error(
-              `[projects.create] Failed to clean up partial project ${id} after bootstrap failure:`,
-              cleanupError,
-            );
-          });
-          throw error;
-        }
-
-        return await toProjectWithIngressUrl(context, project);
+        return await new ProjectsCapability({
+          activeOrganization: context.activeOrganization,
+          context,
+        }).create(input);
       }),
     list: os.projects.list.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
-      const auth = context.activeOrganization;
-      const [totalRow, rows] = await Promise.all([
-        auth.isAdminApi
-          ? countAllProjects(context.db)
-          : countProjects(context.db, {
-              principalId: auth.orgId,
-              principalType: "clerk_organization",
-            }),
-        auth.isAdminApi
-          ? listAllProjects(context.db, { limit: input.limit, offset: input.offset })
-          : listProjects(context.db, {
-              limit: input.limit,
-              offset: input.offset,
-              principalId: auth.orgId,
-              principalType: "clerk_organization",
-            }),
-      ]);
-
-      return { projects: rows.map(toProject), total: totalRow?.total ?? 0 };
-    }),
-    find: os.projects.find.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
-      const row = await requireProject({
+      return await new ProjectsCapability({
         activeOrganization: context.activeOrganization,
         context,
-        projectId: input.id,
-      });
-      return await toProjectWithIngressUrl(context, row);
+      }).list(input);
+    }),
+    find: os.projects.find.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
+      return await new ProjectsCapability({
+        activeOrganization: context.activeOrganization,
+        context,
+      }).find(input);
     }),
     findBySlug: os.projects.findBySlug
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {
-        const row = await getProjectBySlug(context.db, { slug: input.slug });
-
-        if (!row) {
-          throw new ORPCError("NOT_FOUND", { message: `Project ${input.slug} not found` });
-        }
-
-        await requireProject({
+        return await new ProjectsCapability({
           activeOrganization: context.activeOrganization,
           context,
-          projectId: row.id,
-        });
-        return await toProjectWithIngressUrl(context, row);
+        }).findBySlug(input);
       }),
     updateConfig: os.projects.updateConfig
       .use(activeOrganizationMiddleware)
@@ -356,25 +244,10 @@ export const projectsRouter = {
     remove: os.projects.remove
       .use(activeOrganizationMiddleware)
       .handler(async ({ context, input }) => {
-        try {
-          await requireProject({
-            activeOrganization: context.activeOrganization,
-            context,
-            projectId: input.id,
-          });
-        } catch (error) {
-          if (error instanceof ORPCError && error.code === "NOT_FOUND") {
-            return { ok: true as const, id: input.id, deleted: false };
-          }
-          throw error;
-        }
-
-        await deleteProject(context.db, { id: input.id });
-        const existing = await getProjectById(context.db, { id: input.id });
-        if (existing) {
-          return { ok: true as const, id: input.id, deleted: false };
-        }
-        return { ok: true as const, id: input.id, deleted: true };
+        return await new ProjectsCapability({
+          activeOrganization: context.activeOrganization,
+          context,
+        }).remove(input);
       }),
   },
   project: {

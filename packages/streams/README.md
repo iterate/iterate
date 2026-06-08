@@ -98,15 +98,8 @@ Run the same end-to-end tests against the deployed worker:
 WORKER_URL=https://stream-staging-area.iterate-dev-preview.workers.dev STREAM_STAGING_E2E=true pnpm --dir packages/streams/example-app vitest
 ```
 
-The cloudflared-gated test verifies an `external-url` capnweb subscriber reached through a
-quick tunnel. It needs the `cloudflared` binary and a worker that can dial out to the public
-tunnel, so run it against the deployed worker:
-
-```sh
-WORKER_URL=https://stream-staging-area.iterate-dev-preview.workers.dev \
-  STREAM_STAGING_E2E=true STREAM_STAGING_CLOUDFLARED_E2E=true \
-  pnpm --dir packages/streams/example-app vitest
-```
+Outbound processor subscriptions are Workers RPC only for now. External websocket/http
+delivery was removed until there is a concrete product need for it again.
 
 ## Evaluate
 
@@ -116,8 +109,8 @@ main repo:
 - appends are expressed as event batches
 - subscribers consume event batches through a `processEventBatch({ events, streamMaxOffset })` RPC method
 - stream delivery does not await each subscriber's `processEventBatch` result
-- stream state is reduced by built-in processors keyed by slug (`core`, `circuit-breaker`)
-- outbound built-in subscribers are reconciled from `subscription-configured` events
+- stream state is the reduced state of the inline core processor
+- outbound subscribers are reconciled from `subscription-configured` events
 
 ## Stream Processor Abstraction
 
@@ -220,7 +213,7 @@ shouldApplySideEffects({
 });
 ```
 
-For built-in outbound processors, the anchor is the
+For outbound processors configured by the stream, the anchor is the
 `events.iterate.com/stream/subscription-configured` event.
 
 - With no anchor, it returns `true`; the runner has no subscription boundary.

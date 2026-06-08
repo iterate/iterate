@@ -16,7 +16,7 @@ De facto source entrypoints:
 - Typed processor contract helpers: `packages/streams/src/shared/stream-processors.ts`.
 - Active processor authoring API used by the runner: `packages/streams/src/processor.ts`.
 - Runtime-agnostic processor runner: `packages/streams/src/processor-runner.ts`.
-- Subscription sink/async iterable adapter: `packages/streams/src/subscription.ts`.
+- Subscription callback/async iterable adapter: `packages/streams/src/subscription.ts`.
 - CapnWeb stream RPC types: `packages/streams/src/types.ts`.
 - WebSocket/CapnWeb connection wrapper: `packages/streams/src/connection.ts`.
 - Node client entrypoints: `packages/streams/src/node/connect.ts` and `packages/streams/src/node/connect-processor-runner.ts`.
@@ -27,23 +27,23 @@ De facto source entrypoints:
 
 ## Durable Object Classes
 
-`Stream` in `packages/streams/src/workers/durable-objects/stream.ts` is the stream append log and stream RPC endpoint.
+`Stream` in `packages/streams/src/workers/durable-objects/stream.ts` is the stream append log and Workers RPC endpoint.
 
-- `fetch()` exposes the object over CapnWeb with `newWorkersRpcResponse(...)`.
+- CapnWeb HTTP/WebSocket termination is owned by the fronting Worker, which wraps the stream stub in `PublicStreamRpcTarget`; the Durable Object itself stays focused on storage and Workers RPC.
 - Constructor initializes two Durable Object SQL tables, `events` and `processor_state`, then reads inline processor state, appends a first `events.iterate.com/stream/created` event when empty, appends a `woken` event on each incarnation, and starts outbound reconciliation.
 - `append()` delegates to `appendBatch()`. `appendBatch()` validates input, handles idempotency keys, assigns offsets, reduces inline built-ins, persists event rows and processor state, then wakes delivery connections.
 - Stream paths are resolved by `resolveStreamPath()` and addressed as Durable Object names `${namespace}:${path}`.
-- `subscribe()` accepts a CapnWeb `SubscriptionSink`, delivers catch-up then live batches from SQL, replaces existing connections by `subscriptionKey`, and returns `unsubscribe()`.
+- `subscribe()` accepts a CapnWeb-hosted `processEventBatch` callback, delivers catch-up then live batches from SQL, replaces existing inbound connections by `subscriptionKey`, and returns `unsubscribe()`.
 - `runtimeState()` returns inline reduced state plus connection counters; `reset()` clears Durable Object storage and aborts; `kill()` aborts the current incarnation.
-- Outbound subscriptions are persisted in core state and reconciled on boot or `subscription-configured` events. Built-in subscribers dial `env.STREAM_PROCESSOR_RUNNER`; external URL subscribers are fetched directly with a WebSocket upgrade.
+- Outbound subscriptions are persisted in core state and reconciled on boot or `subscription-configured` events. Built-in subscribers dial `env.STREAM_PROCESSOR_RUNNER` over Workers RPC. External URL/WebSocket outbound subscribers are intentionally cut for now and can be brought back when there is a concrete need.
 
 `StreamProcessorRunner` in `packages/streams/src/workers/durable-objects/stream-processor-runner.ts` hosts built-in processors outside the stream object.
 
 - `fetch()` exposes the runner over CapnWeb.
 - `requestSubscription()` is called by `Stream` during outbound reconciliation. It receives the stream RPC stub, subscription key, stream max offset, the `subscription-configured` anchor event, and stream reduced state.
-- It currently supports only built-in `capnweb-websocket` subscribers and only maps `processorSlug === "echo-example"` to `echoExampleProcessor`.
+- It currently supports only built-in `workers-rpc` subscribers and only maps `processorSlug === "echo-example"` to `echoExampleProcessor`.
 - It builds `createProcessorRunner(...)` with Durable Object KV storage for `{ state, offset }`, a duplicated stream RPC stub, and `sideEffectAnchor` from the subscription-configured event.
-- It returns `{ sink, replayAfterOffset }`, where `sink` is a `createStreamSubscription()` sink and `replayAfterOffset` is the persisted runner checkpoint or `0`.
+- It calls `subscribeOutbound({ processEventBatch, replayAfterOffset })` on the stream stub, where `processEventBatch` is backed by `createStreamSubscription()` and `replayAfterOffset` is the persisted runner checkpoint or `0`.
 - `runtimeState()` exposes `processorSlug` and the saved snapshot for tests/operator inspection.
 
 ## Processor Runner Model
@@ -121,7 +121,7 @@ The example app repeats these in `packages/streams/example-app/src/env.d.ts` and
 
 `packages/streams/example-app/src/worker.ts` exports both Durable Object classes and routes:
 
-- `/api/streams` and `/api/streams/...` to `env.STREAM.getByName("default:${path}")`.
+- `/api/streams` and `/api/streams/...` to `newWorkersRpcResponse(request, new PublicStreamRpcTarget(env.STREAM.getByName("default:${path}")))`.
 - `/stream-processor-runner/...` to `env.STREAM_PROCESSOR_RUNNER.getByName(name)`.
 - All other requests to the TanStack Start handler.
 

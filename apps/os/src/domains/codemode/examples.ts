@@ -128,27 +128,14 @@ const codemodeExampleSeeds = [
   const aiPromise = ctx.env.PROJECT.ai().run("test-model", {
     prompt: "show that nested project capability RPC works",
   });
-  const agentMessagePromise = ctx.env.PROJECT.agents().create().sendMessage({
-    message: "hello from env project",
-    subPath: "project-capability-pipelining",
-  });
-  const agentThingPromise = project.agents().create().doThing({
-    label: "project-pipeline",
-    value: 21,
-  });
-  const reposPromise = project.repos().list();
   const proceduresPromise = project.orpc().listProcedures();
 
-  const [firstAppend, batchAppends, ai, agentMessage, agentThing, repos, procedures] =
-    await Promise.all([
-      firstAppendPromise,
-      batchAppendPromise,
-      aiPromise,
-      agentMessagePromise,
-      agentThingPromise,
-      reposPromise,
-      proceduresPromise,
-    ]);
+  const [firstAppend, batchAppends, ai, procedures] = await Promise.all([
+    firstAppendPromise,
+    batchAppendPromise,
+    aiPromise,
+    proceduresPromise,
+  ]);
 
   const lowerCaseAppend = await lowerCaseProject.streams().append({
     streamPath,
@@ -164,15 +151,12 @@ const codemodeExampleSeeds = [
 
   return {
     aiModel: ai.model,
-    agentMessage: agentMessage.message,
-    agentThing,
     batchAppendCount: batchAppends.length,
     eventMessages: events
       .filter((event) => event.type === "events.iterate.com/codemode/example-note")
       .map((event) => event.payload.message),
     firstAppendOffset: firstAppend.offset,
     lowerCaseAppendOffset: lowerCaseAppend.offset,
-    repoCount: repos.length,
     streamInitialized: state != null,
     proceduresIncludeStreams: procedures.includes("streams") && procedures.includes("list"),
   };
