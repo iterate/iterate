@@ -10,6 +10,7 @@ import type {
   StreamState,
   StreamCursor,
 } from "@iterate-com/shared/streams/types";
+import { circuitBreakerProcessor } from "@iterate-com/shared/streams/circuit-breaker";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 
 export type StreamDurableObject = Stream;
@@ -82,8 +83,8 @@ export async function getInitializedStreamStub(input: {
 }
 
 function toLegacyStreamState(runtimeState: ReturnType<StreamRpc["runtimeState"]>): StreamState {
-  const core = runtimeState.state.core;
-  const circuitBreaker = runtimeState.state["circuit-breaker"];
+  const core = runtimeState.coreProcessorState;
+  const circuitBreaker = circuitBreakerProcessor.initialState;
   return {
     namespace: core.namespace,
     path: StreamPath.parse(core.path),
@@ -96,8 +97,8 @@ function toLegacyStreamState(runtimeState: ReturnType<StreamRpc["runtimeState"]>
         pauseReason: core.pauseReason,
         pausedAt: null,
         config: {
-          burstCapacity: circuitBreaker.burstCapacity,
-          refillRatePerMinute: circuitBreaker.refillRatePerMinute,
+          burstCapacity: circuitBreaker.config.burstCapacity,
+          refillRatePerMinute: circuitBreaker.config.refillRatePerMinute,
         },
         availableTokens: circuitBreaker.availableTokens,
         lastRefillAtMs: circuitBreaker.lastRefillAtMs,

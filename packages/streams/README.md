@@ -116,8 +116,8 @@ main repo:
 - appends are expressed as event batches
 - subscribers consume event batches through a `processEventBatch({ events, streamMaxOffset })` RPC method
 - stream delivery does not await each subscriber's `processEventBatch` result
-- stream state is reduced by built-in processors keyed by slug (`core`, `circuit-breaker`)
-- outbound built-in subscribers are reconciled from `subscription-configured` events
+- stream state is the reduced state of the inline core processor
+- outbound subscribers are reconciled from `subscription-configured` events
 
 ## Stream Processor Abstraction
 
@@ -220,7 +220,7 @@ shouldApplySideEffects({
 });
 ```
 
-For built-in outbound processors, the anchor is the
+For outbound processors configured by the stream, the anchor is the
 `events.iterate.com/stream/subscription-configured` event.
 
 - With no anchor, it returns `true`; the runner has no subscription boundary.

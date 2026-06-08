@@ -7,14 +7,15 @@ import {
   type ProcessorRunner,
   type Snapshot,
 } from "../../processor-runner.ts";
-// The SAME processor the Node e2e (inbound) and the browser tab (inbound) run.
 import { echoExampleProcessor } from "../../processors/examples/echo/implementation.ts";
-import type { EchoExampleState } from "../../processors/examples/echo/contract.ts";
-import type { StreamPersistedProcessorState } from "../../types.ts";
+import { circuitBreakerProcessor } from "../../processors/circuit-breaker/implementation.ts";
+import type { StreamCoreProcessorState } from "../../types.ts";
 import type { SubscriptionConfiguredEvent } from "../../processors/core/contract.ts";
 import type { StreamProcessorRunnerRpc, StreamRpc, SubscriptionSink } from "../../types.ts";
+import type { Processor } from "../../processor.ts";
 
-type EchoExampleRunnerSnapshot = Snapshot<EchoExampleState>;
+type HostedProcessor = Processor<any, undefined>;
+type HostedProcessorRunnerSnapshot = Snapshot<unknown>;
 
 export class StreamProcessorRunner extends DurableObject {
   #stream: RpcStub<StreamRpc> | undefined;
@@ -31,14 +32,12 @@ export class StreamProcessorRunner extends DurableObject {
 
   // The Stream Durable Object calls this method and we have to return an RpcTarget
   // that implements processEventBatch.
-  // The Stream durable object helpfully shares the subscriptionConfiguredEvent with us,
-  // so we can decide which built-in processor implementation to use.
   async requestSubscription(args: {
     stream: RpcStub<StreamRpc>;
     subscriptionKey: string;
     streamMaxOffset: number;
     subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
-    streamRuntimeState: { state: StreamPersistedProcessorState };
+    streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
   }): Promise<{ sink: SubscriptionSink; replayAfterOffset?: number }> {
     const subscriber = args.subscriptionConfiguredEvent.payload.subscriber;
     if (subscriber.type !== "built-in") {
@@ -63,7 +62,7 @@ export class StreamProcessorRunner extends DurableObject {
       processor,
       deps: undefined,
       storage: {
-        load: () => this.ctx.storage.kv.get<EchoExampleRunnerSnapshot>("snapshot"),
+        load: () => this.ctx.storage.kv.get<HostedProcessorRunnerSnapshot>("snapshot"),
         save: (snapshot) => void this.ctx.storage.kv.put("snapshot", snapshot),
       },
       stream: this.#stream,
@@ -81,7 +80,7 @@ export class StreamProcessorRunner extends DurableObject {
     });
     return {
       sink: this.#subscription.sink,
-      replayAfterOffset: snapshot?.offset ?? 0,
+      replayAfterOffset: snapshot?.offset,
     };
   }
 
@@ -89,7 +88,7 @@ export class StreamProcessorRunner extends DurableObject {
   runtimeState() {
     return {
       processorSlug: this.ctx.storage.kv.get<string>("processorSlug"),
-      snapshot: this.ctx.storage.kv.get<EchoExampleRunnerSnapshot>("snapshot"),
+      snapshot: this.ctx.storage.kv.get<HostedProcessorRunnerSnapshot>("snapshot"),
     };
   }
 }
@@ -99,7 +98,8 @@ export const StreamProcessorRunnerRpcTarget = makeRpcTargetClass<
   StreamProcessorRunner
 >(StreamProcessorRunner);
 
-function getBuiltInProcessor(slug: string) {
+function getBuiltInProcessor(slug: string): HostedProcessor | undefined {
   if (slug === "echo-example") return echoExampleProcessor;
+  if (slug === "circuit-breaker") return circuitBreakerProcessor;
   return undefined;
 }

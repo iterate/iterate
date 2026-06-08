@@ -16,7 +16,7 @@ import type { RpcPromise, RpcStub } from "capnweb";
 import type { StreamEvent, StreamEventInput } from "../shared/event.ts";
 import { createProcessorRunner } from "../processor-runner.ts";
 import type { Processor } from "../processor.ts";
-import type { StreamPersistedProcessorState, StreamRpc } from "../types.ts";
+import type { StreamCoreProcessorState, StreamRpc } from "../types.ts";
 import { createStreamSubscription, type StreamSubscription } from "../subscription.ts";
 import {
   withStreamConnectionFromBrowser,
@@ -56,7 +56,7 @@ export type BrowserProcessorConfig = {
 };
 
 export type StreamRuntimeState = {
-  state: StreamPersistedProcessorState;
+  coreProcessorState: StreamCoreProcessorState;
   runtime: {
     connections: Record<string, unknown>;
   };
@@ -264,11 +264,11 @@ function createStreamRuntime(
     const checkpoint = await loadCheckpoint(sql);
     const localMaxOffset = checkpoint?.offset ?? -1;
     if (localMaxOffset < 0) return;
-    const { state: serverState } = await rpc.runtimeState();
-    if (serverState.core.maxOffset >= localMaxOffset) return;
+    const { coreProcessorState } = await rpc.runtimeState();
+    if (coreProcessorState.maxOffset >= localMaxOffset) return;
     console.warn(
       `[stream ${args.streamPath}] Server has fewer events than the local mirror; discarding local ${slug} tables.`,
-      { serverMaxOffset: serverState.core.maxOffset, localMaxOffset },
+      { serverMaxOffset: coreProcessorState.maxOffset, localMaxOffset },
     );
     await discardLocalMirror();
   }

@@ -161,9 +161,9 @@ configure itself from committed stream state.
   payload: {
     subscriptionKey: "transcribe-audio",
     subscriber: {
-      type: "built-in",
+      type: "external-url",
       transport: "capnweb-websocket",
-      processorSlug: "transcribe-audio",
+      url: "https://processor.example.com/transcribe-audio",
     },
   },
   createdAt: "2026-06-01T12:00:00.003Z",
@@ -490,12 +490,13 @@ Working reference implementation: `src/stream-processor.ts (+ stream-processor.t
     would smear admission logic into the pure reducer that ships to browser projections.
     Reference: os `packages/shared/src/streams/circuit-breaker.ts`. `beforeAppend` is sync
     today (matches os); async is a future extension if authorization needs I/O.
-- **The Stream DO runs multiple built-in processors inline, keyed by slug.**
+- **The Stream DO runs only the core processor inline.**
   The `core` processor owns stream bookkeeping, child-stream topology, and the
-  paused/resumed door (`beforeAppend`). The `circuit-breaker` processor owns token-bucket
-  metering and the `events.iterate.com/circuit-breaker/configured` event; when it trips, it
-  appends `events.iterate.com/stream/paused`, and the `core` processor shuts the door.
-  More complex circuit breakers could sit elsewhere in the network and use the same
+  paused/resumed door (`beforeAppend`). The `circuit-breaker` processor is an outbound
+  subscription processor; it owns token-bucket metering and the
+  `events.iterate.com/circuit-breaker/configured` event. When it trips, it appends
+  `events.iterate.com/stream/paused`, and the `core` processor shuts the door.
+  More complex circuit breakers can sit elsewhere in the network and use the same
   paused/resumed contract.
 
 - **Ordinary processors include standard processor behavior by copying the shared pieces.**

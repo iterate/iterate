@@ -6,7 +6,7 @@ import { circuitBreakerProcessorContract, shouldTripCircuitBreaker } from "./con
 const coreReduce = coreProcessorContract.reduce;
 const circuitBreakerReduce = circuitBreakerProcessorContract.reduce;
 if (coreReduce === undefined || circuitBreakerReduce === undefined) {
-  throw new Error("builtin processors must have reducers");
+  throw new Error("core and circuit breaker processors must have reducers");
 }
 
 describe("circuit breaker processor", () => {
