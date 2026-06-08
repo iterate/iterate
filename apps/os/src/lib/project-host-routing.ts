@@ -1,4 +1,4 @@
-import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
+import { resolveMcpBaseUrl } from "./mcp-base-url.ts";
 
 const projectSlugPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const hostnamePattern =
