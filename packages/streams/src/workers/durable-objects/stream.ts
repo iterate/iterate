@@ -25,6 +25,13 @@ import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecyc
  * HTTP/WebSocket Cap'n Web termination belongs at the fronting Worker, which
  * exposes this DO through `StreamRpcTarget`.
  */
+
+// Cloudflare Durable Objects cap each SQLite string/blob/table row at 2 MB.
+// BLOB columns do not raise that ceiling, and SQL-side substr(?) chunking would
+// still require binding the oversized value first, so event JSON is chunked in JS.
+const EVENT_CHUNK_SIZE = 512 * 1024;
+const textEncoder = new TextEncoder();
+
 export class Stream extends DurableObject<Env> implements StreamRpc {
   #coreProcessorState: StreamCoreProcessorState;
   #coreProcessor = coreProcessor.build({
@@ -40,17 +47,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.ctx.storage.sql.exec(`
-      -- Stream-owned append log. This is the same replay source that external
-      -- StreamProcessorRunner DOs consume over subscribe().
-      create table if not exists events (
-        offset integer primary key autoincrement,
-        type text not null,
-        created_at text not null,
-        idempotency_key text unique,
-        raw_json text not null
-      );
-    `);
+    this.#ensureStorageSchema();
 
     this.#coreProcessorState = this.readCoreProcessorState();
 
@@ -81,6 +78,41 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     // Restore outbound connections this stream should have. Without this, a stream
     // that wakes with configured subscriptions but no new appends never reconnects.
     this.#reconcile();
+  }
+
+  #ensureStorageSchema(): void {
+    // Keep storage normalized:
+    // - `events` is the offset-ordered metadata/index table.
+    // - `event_chunks` stores the full event JSON as bounded UTF-8 byte rows.
+    this.#createEventsTable();
+    this.#createEventChunksTable();
+  }
+
+  #createEventsTable(): void {
+    this.ctx.storage.sql.exec(`
+      -- Stream-owned append log metadata. Full event JSON is stored in event_chunks.
+      -- offset is the replay cursor; idempotency_key's unique constraint is its lookup index.
+      create table if not exists events (
+        offset integer primary key autoincrement,
+        type text not null,
+        created_at text not null,
+        idempotency_key text unique
+      )
+    `);
+  }
+
+  #createEventChunksTable(): void {
+    this.ctx.storage.sql.exec(`
+      -- Full committed event JSON split into ordered byte chunks. The WITHOUT ROWID
+      -- primary key is the lookup index used by point reads and range replay.
+      create table if not exists event_chunks (
+        offset integer not null,
+        chunk_index integer not null,
+        chunk_bytes blob not null,
+        primary key (offset, chunk_index),
+        foreign key (offset) references events(offset) on delete cascade
+      ) without rowid
+    `);
   }
 
   protected readCoreProcessorState(): StreamCoreProcessorState {
@@ -127,25 +159,41 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   #appendEventRows(events: StreamEvent[]): void {
     for (const event of events) {
+      const rawJson = JSON.stringify(event);
       this.ctx.storage.sql.exec(
         `
-          insert into events (offset, type, created_at, idempotency_key, raw_json)
-          values (?, ?, ?, ?, ?)
+          insert into events (offset, type, created_at, idempotency_key)
+          values (?, ?, ?, ?)
         `,
         event.offset,
         event.type,
         event.createdAt,
         event.idempotencyKey ?? null,
-        JSON.stringify(event),
+      );
+      this.#insertEventChunks(event.offset, rawJson);
+    }
+  }
+
+  #insertEventChunks(offset: number, rawJson: string): void {
+    const rawJsonBytes = textEncoder.encode(rawJson);
+    for (const [chunkIndex, chunk] of chunkBytes(rawJsonBytes, EVENT_CHUNK_SIZE)) {
+      this.ctx.storage.sql.exec(
+        `
+          insert into event_chunks (offset, chunk_index, chunk_bytes)
+          values (?, ?, ?)
+        `,
+        offset,
+        chunkIndex,
+        chunk,
       );
     }
   }
 
   #readEventByOffset(offset: number): StreamEvent | undefined {
     const row = this.ctx.storage.sql
-      .exec<{ rawJson: string }>(
+      .exec<{ offset: number }>(
         `
-          select raw_json as rawJson
+          select offset
           from events
           where offset = ?
           limit 1
@@ -153,14 +201,15 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         offset,
       )
       .toArray()[0];
-    return row === undefined ? undefined : StreamEventSchema.parse(JSON.parse(row.rawJson));
+    if (row === undefined) return undefined;
+    return this.#readEventFromChunks(row.offset);
   }
 
   #readEventByIdempotencyKey(idempotencyKey: string): StreamEvent | undefined {
     const row = this.ctx.storage.sql
-      .exec<{ rawJson: string }>(
+      .exec<{ offset: number }>(
         `
-          select raw_json as rawJson
+          select offset
           from events
           where idempotency_key = ?
           limit 1
@@ -168,7 +217,27 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         idempotencyKey,
       )
       .toArray()[0];
-    return row === undefined ? undefined : StreamEventSchema.parse(JSON.parse(row.rawJson));
+    if (row === undefined) return undefined;
+    return this.#readEventFromChunks(row.offset);
+  }
+
+  #readEventFromChunks(offset: number): StreamEvent {
+    // Do not use group_concat here: it would recreate a multi-MiB SQLite result cell.
+    // Returning bounded chunk rows and joining in JS keeps SQLite row sizes predictable.
+    const chunks = this.ctx.storage.sql
+      .exec<{ chunkBytes: ArrayBuffer }>(
+        `
+          select chunk_bytes as chunkBytes
+          from event_chunks
+          where offset = ?
+          order by chunk_index asc
+        `,
+        offset,
+      )
+      .toArray()
+      .map((row) => row.chunkBytes);
+    const rawJson = decodeChunks(chunks);
+    return StreamEventSchema.parse(JSON.parse(rawJson));
   }
 
   #readEventsInRange(args: {
@@ -176,22 +245,40 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     beforeOffset: number;
     limit: number;
   }): StreamEvent[] {
-    return this.ctx.storage.sql
-      .exec<{ rawJson: string }>(
+    // One indexed metadata subquery picks the replay window; the join then streams each
+    // event's chunks in primary-key order (offset, chunk_index).
+    const chunks = this.ctx.storage.sql
+      .exec<{ offset: number; chunkBytes: ArrayBuffer }>(
         `
-          select raw_json as rawJson
-          from events
-          where offset > ?
-            and offset < ?
-          order by offset asc
-          limit ?
+          select selected.offset as offset, event_chunks.chunk_bytes as chunkBytes
+          from (
+            select offset
+            from events
+            where offset > ?
+              and offset < ?
+            order by offset asc
+            limit ?
+          ) selected
+          join event_chunks on event_chunks.offset = selected.offset
+          order by selected.offset asc, event_chunks.chunk_index asc
         `,
         args.afterOffset,
         args.beforeOffset,
         args.limit,
       )
-      .toArray()
-      .map((row) => StreamEventSchema.parse(JSON.parse(row.rawJson)));
+      .toArray();
+    const chunksByOffset = new Map<number, ArrayBuffer[]>();
+    for (const chunk of chunks) {
+      const eventChunks = chunksByOffset.get(chunk.offset);
+      if (eventChunks === undefined) {
+        chunksByOffset.set(chunk.offset, [chunk.chunkBytes]);
+      } else {
+        eventChunks.push(chunk.chunkBytes);
+      }
+    }
+    return [...chunksByOffset.values()].map((eventChunks) =>
+      StreamEventSchema.parse(JSON.parse(decodeChunks(eventChunks))),
+    );
   }
 
   #recoverCoreProcessorStateFromEventLog(): StreamCoreProcessorState | undefined {
@@ -764,6 +851,28 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
     segments.push(segment);
   }
   return `/${segments.join("/")}`;
+}
+
+function* chunkBytes(value: Uint8Array, chunkSize: number): Generator<[number, ArrayBuffer]> {
+  if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
+    throw new Error("chunkSize must be a positive integer.");
+  }
+  let chunkIndex = 0;
+  for (let start = 0; start < value.byteLength; start += chunkSize) {
+    const end = Math.min(start + chunkSize, value.byteLength);
+    const chunk = new ArrayBuffer(end - start);
+    new Uint8Array(chunk).set(value.subarray(start, end));
+    yield [chunkIndex, chunk];
+    chunkIndex += 1;
+  }
+  if (chunkIndex === 0) yield [0, new ArrayBuffer(0)];
+}
+
+function decodeChunks(chunks: ArrayBuffer[]): string {
+  const textDecoder = new TextDecoder();
+  let value = "";
+  for (const chunk of chunks) value += textDecoder.decode(chunk, { stream: true });
+  return value + textDecoder.decode();
 }
 
 /**
