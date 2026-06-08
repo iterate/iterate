@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { withStreamConnectionFromWorkers } from "@iterate-com/streams/workers/connect";
 import { createStreamSubscription } from "@iterate-com/streams/subscription";
+import type { StreamRpc } from "@iterate-com/streams/types";
 import {
   type Event,
   type EventInput,
@@ -434,16 +434,12 @@ async function* liveNamespaceStreamEvents(args: {
       namespace: args.namespace,
       path: args.path,
     }),
-  );
-  using connection = await withStreamConnectionFromWorkers({
-    url: "https://stream.local/",
-    fetch: (request) => fetchDurableObjectWebSocket(streamStub, request),
-  });
+  ) as unknown as StreamRpc;
   let handle: { unsubscribe(): void } | undefined;
   await using subscription = createStreamSubscription({
     onDispose: () => handle?.unsubscribe(),
   });
-  handle = await connection.stream.subscribe({
+  handle = await streamStub.subscribe({
     processEventBatch: subscription.processEventBatch,
     replayAfterOffset: toNewAfterOffset(args.afterOffset),
   });
@@ -453,21 +449,6 @@ async function* liveNamespaceStreamEvents(args: {
       yield toLegacyEvent(event, args.path);
     }
   }
-}
-
-function fetchDurableObjectWebSocket(
-  stub: DurableObjectStub<StreamDurableObject>,
-  request: Request,
-) {
-  const url = new URL(request.url);
-  if (url.protocol === "wss:") url.protocol = "https:";
-  if (url.protocol === "ws:") url.protocol = "http:";
-  return stub.fetch(
-    new Request(url, {
-      headers: new Headers(request.headers),
-      method: request.method,
-    }),
-  );
 }
 
 function eventsToNdjsonStream(events: AsyncIterable<Event>) {
