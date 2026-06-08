@@ -411,25 +411,6 @@ function errorProcedure(message: string) {
 }
 
 function orpcToTrpcStyleClient(orpcClient: unknown) {
-  // The CLI still supports a small compatibility adapter for callers that
-  // expect the older tRPC-style client shape:
-  //
-  //   client["projects.list"].query(input)
-  //
-  // while the underlying oRPC client is a nested callable object:
-  //
-  //   client.projects.list(input)
-  //
-  // A Proxy is the smallest adapter because the procedure path is supplied as
-  // the property name at runtime. Each property read splits that dotted path,
-  // walks the real oRPC client, and returns query/mutate wrappers that both
-  // invoke the resolved oRPC procedure. This Proxy does not cross a Workers RPC
-  // or Cap'n Web boundary; it is a local CLI compatibility shim.
-  //
-  // References for the broader proxy-backed RPC style used elsewhere in this
-  // repo:
-  // - Workers RPC docs: https://developers.cloudflare.com/workers/runtime-apis/rpc/
-  // - Cap'n Web README: https://github.com/cloudflare/capnweb
   return new Proxy(
     {},
     {
