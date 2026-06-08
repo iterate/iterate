@@ -8,6 +8,7 @@ import type { WebSocketFrame } from "../../../src/connection.ts";
 
 const workerUrl = process.env.WORKER_URL ?? "http://localhost:5173";
 const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
+const e2eItFails = process.env.STREAM_STAGING_E2E === "true" ? it.fails : it.skip;
 
 class TestSubscriptionCallback extends RpcTarget {
   readonly batches: StreamEvent[][] = [];
@@ -55,6 +56,71 @@ describe("stream capnweb protocol", () => {
       createdAt: expect.any(String),
     });
   });
+
+  e2eIt("appends, reads, and keeps running after event rows larger than 2 MiB", async () => {
+    const path = `stream-capnweb-large-row-${crypto.randomUUID()}`;
+    using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
+    // Large enough to exceed the old single-row SQLite target and span multiple
+    // storage chunks. Keep this below Cloudflare's 32 MiB inbound WebSocket frame
+    // ceiling: that limit applies to client append calls, while stream-to-sink
+    // `processEventBatch` fan-out can still deliver larger events once stored.
+    const body = "x".repeat(2 * 1024 * 1024 + 256 * 1024);
+    const event: StreamEventInput = {
+      type: "test.stream.capnweb-large-row",
+      payload: { body },
+    };
+
+    expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeGreaterThan(2 * 1024 * 1024);
+
+    const appended = await stream.stream.append({ event });
+    expect(appended).toMatchObject({
+      type: "test.stream.capnweb-large-row",
+      offset: 3,
+      createdAt: expect.any(String),
+    });
+    expectLargePayload(appended, body.length);
+
+    const byOffset = await stream.stream.getEvent({ offset: appended.offset });
+    if (byOffset === undefined) throw new Error("large event was not readable by offset");
+    expect(byOffset.offset).toBe(appended.offset);
+    expectLargePayload(byOffset, body.length);
+
+    const events = await stream.stream.getEvents({ afterOffset: appended.offset - 1, limit: 1 });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.offset).toBe(appended.offset);
+    expectLargePayload(events[0], body.length);
+
+    const afterLargeRow = await stream.stream.append({
+      event: {
+        type: "test.stream.capnweb-after-large-row",
+        payload: { path },
+      },
+    });
+    expect(afterLargeRow).toMatchObject({
+      type: "test.stream.capnweb-after-large-row",
+      offset: appended.offset + 1,
+      payload: { path },
+    });
+  });
+
+  e2eItFails(
+    "documents Cloudflare's 32 MiB inbound WebSocket frame ceiling for capnweb appends",
+    async () => {
+      const path = `stream-capnweb-inbound-frame-limit-${crypto.randomUUID()}`;
+      using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
+      const event: StreamEventInput = {
+        type: "test.stream.capnweb-inbound-frame-limit",
+        payload: { body: "x".repeat(32 * 1024 * 1024) },
+      };
+
+      expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeGreaterThan(32 * 1024 * 1024);
+
+      // This is expected to fail before stream storage sees the event: Cloudflare
+      // accepts inbound WebSocket messages up to 32 MiB, and capnweb serializes
+      // a single append call into one WebSocket message.
+      await stream.stream.append({ event });
+    },
+  );
 
   // Cross-stream append must land on the same leading-slash DO name the rest of the
   // system uses. The regressed `#resolveStream` stripped the leading slash, so an event
@@ -604,6 +670,20 @@ function isPushOrReleaseFrame(value: unknown) {
 
 function isPushFrame(value: unknown) {
   return Array.isArray(value) && value[0] === "push";
+}
+
+function expectLargePayload(event: StreamEvent | undefined, expectedBodyLength: number) {
+  if (event === undefined) throw new Error("expected event to be defined");
+  const payload = event.payload;
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    !("body" in payload) ||
+    typeof payload.body !== "string"
+  ) {
+    throw new Error("expected event payload.body to be a string");
+  }
+  expect(payload.body).toHaveLength(expectedBodyLength);
 }
 
 async function waitFor(assertion: () => boolean | Promise<boolean>, timeoutMs: number) {
