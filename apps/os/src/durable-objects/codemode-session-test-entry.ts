@@ -158,21 +158,6 @@ async function ensureD1Schema(db: D1Database) {
       created_at text not null default current_timestamp,
       updated_at text not null default current_timestamp
     )`),
-    db.prepare(`CREATE TABLE IF NOT EXISTS project_permissions (
-      project_id text not null references projects (id) on delete cascade,
-      principal_type text not null check (principal_type in ('clerk_organization')),
-      principal_id text not null,
-      role text not null check (role in ('owner')),
-      created_at text not null default current_timestamp,
-      updated_at text not null default current_timestamp,
-      primary key (project_id, principal_type, principal_id)
-    )`),
-    db.prepare(
-      `CREATE INDEX IF NOT EXISTS idx_project_permissions_project_id ON project_permissions (project_id)`,
-    ),
-    db.prepare(
-      `CREATE INDEX IF NOT EXISTS idx_project_permissions_principal ON project_permissions (principal_type, principal_id)`,
-    ),
     db.prepare(`CREATE TABLE IF NOT EXISTS ingress_routes (
       id text primary key not null,
       host text not null unique,

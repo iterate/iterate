@@ -493,21 +493,16 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   private async readDebugProjectInfo(): Promise<DebugProjectInfo | null> {
     try {
       const row = await this.env.DO_CATALOG.prepare(
-        `select p.id, p.slug, pp.principal_id as organization_id
+        `select p.id, p.slug
          from projects p
-         left join project_permissions pp
-           on pp.project_id = p.id
-          and pp.principal_type = 'clerk_organization'
          where p.id = ?
-         order by pp.created_at asc
          limit 1`,
       )
         .bind(this.structuredName.projectId)
-        .first<{ id: string; slug: string; organization_id: string | null }>();
+        .first<{ id: string; slug: string }>();
       if (row == null) return null;
       return {
         id: row.id,
-        organizationId: row.organization_id ?? undefined,
         organizationSlug: null,
         slug: row.slug,
       };

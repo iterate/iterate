@@ -99,7 +99,6 @@ export type ProjectCapabilityApi = Pick<
   ProjectDurableObject,
   | "afterAppend"
   | "callConfigWorkerFunction"
-  | "checkAccess"
   | "createProject"
   | "describe"
   | "egressFetch"
@@ -119,11 +118,6 @@ export type ProjectCapabilityApi = Pick<
 export type CreateProjectInput = {
   projectId: string;
   slug: string;
-};
-
-export type ProjectAccessPrincipal = {
-  orgId: string;
-  userId: string;
 };
 
 type ProjectEnv = {
@@ -383,26 +377,6 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       material: EXAMPLE_EGRESS_SECRET_MATERIAL,
       metadata: EXAMPLE_EGRESS_SECRET_METADATA,
     });
-  }
-
-  async checkAccess(input: { principal: ProjectAccessPrincipal }): Promise<ProjectSummary> {
-    await this.ensureStarted();
-    const summary = this.requireSummary();
-    const row = await this.env.DB.prepare(
-      `SELECT project_id FROM project_permissions
-       WHERE project_id = ?
-         AND principal_type = 'clerk_organization'
-         AND principal_id = ?
-       LIMIT 1`,
-    )
-      .bind(summary.id, input.principal.orgId)
-      .first<{ project_id: string }>();
-
-    if (!row) {
-      throw new Error(`Project ${summary.id} is not available to this principal.`);
-    }
-
-    return summary;
   }
 
   async getSummary(): Promise<ProjectSummary> {

@@ -7,15 +7,11 @@ import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { AppContext } from "~/context.ts";
 import {
   countAllProjects,
-  countProjects,
   deleteProject,
   getProjectById,
   getProjectBySlug,
-  getProjectPermission,
   insertProject,
-  insertProjectPermission,
   listAllProjects,
-  listProjects,
 } from "~/db/queries/.generated/index.ts";
 import {
   getProjectDurableObjectName,
@@ -32,12 +28,21 @@ type ProjectRow = {
   updated_at: string;
 };
 
+type ProjectListItem = {
+  id: string;
+  slug: string;
+  customHostname: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  isOrphanedProjectFromAuthService: boolean;
+};
+
 type ProjectListResult = {
-  projects: ReturnType<typeof toProject>[];
+  projects: ProjectListItem[];
   total: number;
 };
 
-type ProjectWithIngressUrl = ReturnType<typeof toProject> & {
+type ProjectWithIngressUrl = ProjectListItem & {
   ingressUrl: string;
 };
 
@@ -74,50 +79,81 @@ export class ProjectsCapability extends RpcTarget {
     const activeOrganization = this.props.activeOrganization;
     const limit = input.limit ?? 100;
     const offset = input.offset ?? 0;
-    const [totalRow, rows] = await Promise.all([
-      activeOrganization?.isAdminApi
-        ? countAllProjects(context.db)
-        : countProjects(context.db, {
-            principalId: requireActiveOrganization(activeOrganization).orgId,
-            principalType: "clerk_organization",
-          }),
-      activeOrganization?.isAdminApi
-        ? listAllProjects(context.db, { limit, offset })
-        : listProjects(context.db, {
-            limit,
-            offset,
-            principalId: requireActiveOrganization(activeOrganization).orgId,
-            principalType: "clerk_organization",
-          }),
-    ]);
+    if (activeOrganization?.isAdminApi) {
+      const [totalRow, rows] = await Promise.all([
+        countAllProjects(context.db),
+        listAllProjects(context.db, { limit, offset }),
+      ]);
 
-    return { projects: rows.map(toProject), total: totalRow?.total ?? 0 };
+      return { projects: rows.map(toProject), total: totalRow?.total ?? 0 };
+    }
+
+    const authProjects = await listAuthProjectsForActiveOrganization({
+      activeOrganization: requireActiveOrganization(activeOrganization),
+      context,
+    });
+    const page = authProjects.slice(offset, offset + limit);
+    const projects = await Promise.all(
+      page.map(async (authProject) => {
+        const row = await getProjectById(context.db, { id: authProject.id });
+        return row ? toProject(row) : toOrphanedProjectFromAuthService(authProject);
+      }),
+    );
+
+    return { projects, total: authProjects.length };
   }
 
   async create(input: { id?: string; slug: string }): Promise<ProjectWithIngressUrl> {
     const context = this.props.context;
     const activeOrganization = this.props.activeOrganization;
-    const id = resolveProjectId({ id: input.id, context });
-    const existing = await getProjectBySlug(context.db, { slug: input.slug });
-    if (existing) {
-      throw new ORPCError("CONFLICT", {
-        message: `A project with slug ${input.slug} already exists.`,
-      });
-    }
-    if (input.id && (await getProjectById(context.db, { id: input.id }))) {
-      throw new ORPCError("CONFLICT", {
-        message: `A project with ID ${input.id} already exists.`,
+    const authProject =
+      activeOrganization && !activeOrganization.isAdminApi && input.id
+        ? await getAccessibleAuthProject({
+            activeOrganization,
+            context,
+            projectId: input.id,
+          })
+        : null;
+
+    if (activeOrganization && !activeOrganization.isAdminApi && input.id && !authProject) {
+      throw new ORPCError("FORBIDDEN", {
+        message: `Project ${input.id} is not available to this organization.`,
       });
     }
 
-    if (activeOrganization && !activeOrganization.isAdminApi) {
+    const id = authProject?.id ?? resolveProjectId({ id: input.id, context });
+    let slug = authProject?.slug ?? input.slug;
+    const existingById = await getProjectById(context.db, { id });
+    if (existingById) {
+      if (existingById.slug !== slug) {
+        throw new ORPCError("CONFLICT", {
+          message: `Project ${id} already exists with slug ${existingById.slug}.`,
+        });
+      }
+      return await toProjectWithIngressUrl(context, existingById);
+    }
+
+    if (activeOrganization && !activeOrganization.isAdminApi && !authProject) {
       const authWorker = createAuthWorkerServiceClient(context);
-      await authWorker.internal.project.createForOrganization({
+      const createdAuthProject = await authWorker.internal.project.createForOrganization({
         id,
         organizationSlug: activeOrganization.orgSlug,
-        name: input.slug,
-        slug: input.slug,
+        name: slug,
+        slug,
         metadata: { osProjectId: id },
+      });
+      if (createdAuthProject.id !== id) {
+        throw new Error(
+          `Auth project creation returned ${createdAuthProject.id} instead of requested ${id}.`,
+        );
+      }
+      slug = createdAuthProject.slug;
+    }
+
+    const existing = await getProjectBySlug(context.db, { slug });
+    if (existing) {
+      throw new ORPCError("CONFLICT", {
+        message: `A project with slug ${slug} already exists.`,
       });
     }
 
@@ -125,20 +161,12 @@ export class ProjectsCapability extends RpcTarget {
     try {
       project = await insertProject(context.db, {
         id,
-        slug: input.slug,
+        slug,
       });
-      if (activeOrganization && !activeOrganization.isAdminApi) {
-        await insertProjectPermission(context.db, {
-          principalId: activeOrganization.orgId,
-          principalType: "clerk_organization",
-          projectId: id,
-          role: "owner",
-        });
-      }
     } catch (error) {
       if (isUniqueConstraintError(error)) {
         throw new ORPCError("CONFLICT", {
-          message: `A project with slug ${input.slug} already exists.`,
+          message: `A project with slug ${slug} already exists.`,
         });
       }
       throw error;
@@ -147,7 +175,7 @@ export class ProjectsCapability extends RpcTarget {
     try {
       await projectDurableObject(context, id).createProject({
         projectId: id,
-        slug: input.slug,
+        slug,
       });
     } catch (error) {
       await deleteProject(context.db, { id }).catch((cleanupError) => {
@@ -207,13 +235,14 @@ export class ProjectsCapability extends RpcTarget {
   }
 }
 
-export function toProject(row: ProjectRow) {
+export function toProject(row: ProjectRow): ProjectListItem {
   return {
     id: row.id,
     slug: row.slug,
     customHostname: row.custom_hostname ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    isOrphanedProjectFromAuthService: false,
   };
 }
 
@@ -239,13 +268,19 @@ export async function requireProject(input: {
 
   if (input.activeOrganization?.isAdminApi) return project;
 
-  if (input.activeOrganization) {
-    const permission = await getProjectPermission(input.context.db, {
-      principalId: input.activeOrganization.orgId,
-      principalType: "clerk_organization",
+  if (input.context.principal?.can("read", { projectId: input.projectId })) {
+    return project;
+  }
+
+  if (
+    input.activeOrganization &&
+    (await getAccessibleAuthProject({
+      activeOrganization: input.activeOrganization,
+      context: input.context,
       projectId: input.projectId,
-    });
-    if (permission) return project;
+    }))
+  ) {
+    return project;
   }
 
   throw new ORPCError("FORBIDDEN", {
@@ -289,4 +324,51 @@ function requireActiveOrganization(activeOrganization: ActiveOrganizationAuth | 
 
 function isUniqueConstraintError(error: unknown) {
   return error instanceof Error && error.message.includes("UNIQUE constraint failed");
+}
+
+export type AuthProject = {
+  id: string;
+  slug: string;
+  organizationId: string;
+};
+
+function toOrphanedProjectFromAuthService(project: AuthProject): ProjectListItem {
+  return {
+    id: project.id,
+    slug: project.slug,
+    customHostname: null,
+    createdAt: null,
+    updatedAt: null,
+    isOrphanedProjectFromAuthService: true,
+  };
+}
+
+async function listAuthProjectsForActiveOrganization(input: {
+  activeOrganization: ActiveOrganizationAuth;
+  context: AppContext;
+}): Promise<AuthProject[]> {
+  if (input.context.principal?.type === "user") {
+    const authWorker = createAuthWorkerServiceClient(input.context, {
+      asUserId: input.context.principal.userId,
+    });
+    const projects = await authWorker.project.list({
+      organizationSlug: input.activeOrganization.orgSlug,
+    });
+    return sortAuthProjects(projects);
+  }
+
+  return [];
+}
+
+export async function getAccessibleAuthProject(input: {
+  activeOrganization: ActiveOrganizationAuth;
+  context: AppContext;
+  projectId: string;
+}) {
+  const projects = await listAuthProjectsForActiveOrganization(input);
+  return projects.find((project) => project.id === input.projectId) ?? null;
+}
+
+function sortAuthProjects<T extends Pick<AuthProject, "slug">>(projects: T[]) {
+  return [...projects].sort((a, b) => a.slug.localeCompare(b.slug));
 }
