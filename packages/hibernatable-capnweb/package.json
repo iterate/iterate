@@ -1,0 +1,30 @@
+{
+  "name": "hibernatable-capnweb",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./adapters": "./src/adapters.ts",
+    "./client": "./src/client.ts",
+    "./host": "./src/host.ts",
+    "./protocol": "./src/protocol.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "prove:miniflare": "tsx ./src/e2e/run-miniflare-proof.ts",
+    "prove:url": "tsx ./src/e2e/prove.ts",
+    "deploy:proof": "wrangler deploy --config ./src/e2e/wrangler.proof.jsonc",
+    "delete:proof": "wrangler delete --config ./src/e2e/wrangler.proof.jsonc --force"
+  },
+  "dependencies": {
+    "capnweb": "^0.8.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "@types/node": "^25.0.10",
+    "get-port": "^7.1.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "wrangler": "catalog:cloudflare"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hibernatable-capnweb-proof",
+  "main": "./worker.ts",
+  "compatibility_date": "2026-04-01",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PROOF_DO",
+        "class_name": "ProofDurableObject",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ProofDurableObject"],
+    },
+  ],
+}
