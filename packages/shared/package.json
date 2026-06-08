@@ -107,6 +107,7 @@
     "./codemode/json-schema-types": "./src/codemode/json-schema-types.ts",
     "./project-ingress": "./src/project-ingress.ts",
     "./auth-claims": "./src/auth-claims.ts",
+    "./oauth-resource": "./src/oauth-resource.ts",
     "./bearer": "./src/bearer.ts",
     "./slug": "./src/slug.ts",
     "./default-avatar": "./src/default-avatar.ts",

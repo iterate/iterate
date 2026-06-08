@@ -1,5 +1,9 @@
 import { contextStorage } from "hono/context-storage";
 import {
+  OAUTH_RESOURCE_PARAMETER,
+  copyMissingSearchParams,
+} from "@iterate-com/shared/oauth-resource";
+import {
   oauthProviderOpenIdConfigMetadata,
   oauthProviderAuthServerMetadata,
 } from "@better-auth/oauth-provider";
@@ -44,6 +48,9 @@ app.get("/api/auth/.well-known/oauth-authorization-server", (c) =>
 );
 app.get(`/.well-known/oauth-authorization-server${AUTH_ISSUER_PATH}`, (c) =>
   oauthProviderAuthServerMetadata(auth)(c.req.raw),
+);
+app.all("/api/auth/oauth2/authorize", async (c) =>
+  preserveOAuthResourceRedirect(c.req.raw, await auth.handler(c.req.raw)),
 );
 app.all("/api/auth/*", (c) => auth.handler(c.req.raw));
 
@@ -114,5 +121,46 @@ app.all("*", (c) =>
     },
   }),
 );
+
+export function preserveOAuthResourceRedirect(request: Request, response: Response) {
+  return preserveRedirectSearchParams(request, response, [OAUTH_RESOURCE_PARAMETER]);
+}
+
+function preserveRedirectSearchParams(
+  request: Request,
+  response: Response,
+  paramNames: Iterable<string>,
+) {
+  if (!isRedirectStatus(response.status)) return response;
+
+  const requestUrl = new URL(request.url);
+  const location = response.headers.get("Location");
+  if (!location) return response;
+
+  const redirectUrl = copyMissingSearchParams({
+    targetUrl: location,
+    sourceSearch: requestUrl.searchParams,
+    paramNames,
+    baseUrl: requestUrl,
+  });
+  const originalRedirectUrl = new URL(location, requestUrl);
+  if (redirectUrl.href === originalRedirectUrl.href) return response;
+
+  const headers = new Headers(response.headers);
+  headers.set(
+    "Location",
+    location.startsWith("/") ? `${redirectUrl.pathname}${redirectUrl.search}` : redirectUrl.href,
+  );
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function isRedirectStatus(status: number) {
+  return status >= 300 && status < 400;
+}
 
 export default app;

@@ -1,3 +1,5 @@
+import { expandOAuthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
+
 export function getOsResourceBases() {
   return [
     "https://os.iterate.com",
@@ -11,7 +13,7 @@ export function getOsResourceBases() {
 }
 
 export function getOsMcpResourceBases() {
-  return [
+  return expandOAuthResourceAudienceVariants([
     "https://mcp.iterate.com",
     "https://mcp.iterate-dev-jonas.com",
     "https://mcp.iterate-dev-misha.com",
@@ -20,5 +22,5 @@ export function getOsMcpResourceBases() {
       (previewNumber) => `https://mcp.iterate-preview-${previewNumber}.com`,
     ),
     "http://localhost:7301/api/__mcp",
-  ];
+  ]);
 }
