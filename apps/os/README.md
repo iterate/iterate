@@ -62,6 +62,12 @@ production `APP_CONFIG_ADMIN_API_SECRET`:
 doppler run --config prd -- pnpm cli claude-mcp
 ```
 
+The canonical MCP endpoint comes from `APP_CONFIG_MCP__BASE_URL`, for example
+`https://mcp.iterate.com` in production or
+`https://mcp.iterate-dev-jonas.com` in local tunnel configs. `APP_CONFIG_BASE_URL`
+remains the dashboard URL. Localhost-oriented dev defaults MCP to
+`<APP_CONFIG_BASE_URL>/api/__mcp`, for example `http://localhost:5176/api/__mcp`.
+
 The script pattern is documented in
 [`docs/doppler-backed-scripts.md`](./docs/doppler-backed-scripts.md).
 

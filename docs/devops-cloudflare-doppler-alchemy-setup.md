@@ -128,12 +128,15 @@ OS dev configs usually mirror production with two hostnames:
 | Role               | Pattern                            | Example                      |
 | ------------------ | ---------------------------------- | ---------------------------- |
 | Dashboard          | `os.iterate-dev-<user>.com`        | `os.iterate-dev-jonas.com`   |
+| MCP server         | `mcp.iterate-dev-<user>.com`       | `mcp.iterate-dev-jonas.com`  |
 | Project subdomains | `<project>.iterate-dev-<user>.app` | `demo.iterate-dev-jonas.app` |
 
 When `APP_CONFIG_BASE_URL` points at a real hostname, Alchemy creates the
 Cloudflare Tunnel, DNS records, and local `cloudflared` process. If
 `APP_CONFIG_BASE_URL` is absent or localhost-oriented, Vite runs locally without
-a tunnel.
+a tunnel. For localhost-oriented dev, OS defaults MCP to `/api/__mcp` on the
+configured app base URL, such as `http://localhost:5176/api/__mcp`; `mcp.localhost`
+is not portable across local resolvers.
 
 ## Environment Configs
 
@@ -151,6 +154,8 @@ For OS, domain identity comes from App Config:
 
 - `APP_CONFIG_BASE_URL`: canonical dashboard URL, such as
   `https://os.iterate.com`.
+- `APP_CONFIG_MCP__BASE_URL`: canonical MCP server URL, such as
+  `https://mcp.iterate.com`.
 - `APP_CONFIG_PROJECT_HOSTNAME_BASES`: project host bases, such as
   `["iterate.app"]`.
 
@@ -174,8 +179,9 @@ Current preview slots are `preview_1` through `preview_9`. Each slot needs two
 Cloudflare zones in the dev/preview account:
 
 - `iterate-preview-N.com` for dashboard hosts such as
-  `os.iterate-preview-N.com`.
-- `iterate-preview-N.app` for project/MCP hosts such as
+  `os.iterate-preview-N.com` and MCP hosts such as
+  `mcp.iterate-preview-N.com`.
+- `iterate-preview-N.app` for project hosts such as
   `<project>.iterate-preview-N.app`.
 
 Use the repo preview CLI for PRs so Semaphore owns the lease:
@@ -288,6 +294,7 @@ OS routing has two layers:
 `apps/os/alchemy.run.ts` manages routes derived from App Config:
 
 - `APP_CONFIG_BASE_URL` -> dashboard host, such as `os.iterate.com`.
+- `APP_CONFIG_MCP__BASE_URL` -> MCP host, such as `mcp.iterate.com`.
 - `APP_CONFIG_PROJECT_HOSTNAME_BASES` -> project host base and wildcard, such
   as `iterate.app` and `*.iterate.app`.
 
@@ -301,6 +308,7 @@ Production manual routes on `iterate.com`:
 | ------------------- | ----------------- | -------------------------------------------- |
 | `iterate.com/*`     | `os-prd`          | Apex website served by the `iterate` project |
 | `*.iterate.com/*`   | `os-prd`          | Single-label project app subdomains          |
+| `mcp.iterate.com/*` | `os-prd`          | MCP server, Alchemy-managed                  |
 | `os.iterate.com/*`  | `os-prd`          | OS dashboard, Alchemy-managed                |
 | `www.iterate.com/*` | `iterate-website` | Marketing site                               |
 

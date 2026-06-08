@@ -6,6 +6,7 @@ import { SERVICE_TOKEN_HEADER, type AuthContractClient } from "@iterate-com/auth
 type Target = {
   dopplerConfig: string;
   baseUrl: string;
+  mcpBaseUrl: string;
   projectHostnameBase: string;
 };
 
@@ -13,29 +14,34 @@ const targets: Target[] = [
   {
     dopplerConfig: "dev_jonas",
     baseUrl: "https://os.iterate-dev-jonas.com",
+    mcpBaseUrl: "https://mcp.iterate-dev-jonas.com",
     projectHostnameBase: "iterate-dev-jonas.app",
   },
   {
     dopplerConfig: "dev_misha",
     baseUrl: "https://os.iterate-dev-misha.com",
+    mcpBaseUrl: "https://mcp.iterate-dev-misha.com",
     projectHostnameBase: "iterate-dev-misha.app",
   },
   {
     dopplerConfig: "dev_rahul",
     baseUrl: "https://os.iterate-dev-rahul.com",
+    mcpBaseUrl: "https://mcp.iterate-dev-rahul.com",
     projectHostnameBase: "iterate-dev-rahul.app",
   },
-  ...[2, 3, 4, 5, 6, 7, 8, 9].map(
+  ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(
     (previewNumber) =>
       ({
         dopplerConfig: `preview_${previewNumber}`,
         baseUrl: `https://os.iterate-preview-${previewNumber}.com`,
+        mcpBaseUrl: `https://mcp.iterate-preview-${previewNumber}.com`,
         projectHostnameBase: `iterate-preview-${previewNumber}.app`,
       }) satisfies Target,
   ),
   {
     dopplerConfig: "prd",
     baseUrl: "https://os.iterate.com",
+    mcpBaseUrl: "https://mcp.iterate.com",
     projectHostnameBase: "iterate.app",
   },
 ];
@@ -106,6 +112,7 @@ for (const target of targets) {
 
   setDopplerSecrets(target, {
     APP_CONFIG_BASE_URL: target.baseUrl,
+    APP_CONFIG_MCP__BASE_URL: target.mcpBaseUrl,
     APP_CONFIG_PROJECT_HOSTNAME_BASES: JSON.stringify([target.projectHostnameBase]),
     ITERATE_OAUTH_ISSUER: authIssuer,
     ITERATE_OAUTH_CLIENT_ID: webClient.clientId,

@@ -246,6 +246,7 @@ function requireMcpUrl(input: { projectSlug: string }) {
   if (override) return new URL(override);
 
   const mcpUrl = buildProjectMcpUrl({
+    mcpBaseUrl: process.env.APP_CONFIG_MCP__BASE_URL,
     projectHostnameBases: requireProjectHostnameBases(),
     projectSlug: input.projectSlug,
   });

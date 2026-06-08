@@ -1,7 +1,9 @@
 # Plan: Replace Clerk with Auth Worker
 
 Replaces Clerk entirely in `apps/os` with the Iterate Auth Worker (`apps/auth`).
-Unifies MCP under a single `os.iterate.com/mcp` endpoint. Restructures URLs.
+Unifies MCP under a single endpoint. This historical plan originally used
+`os.iterate.com/mcp`; the canonical endpoint later moved to `mcp.iterate.com`
+without keeping the old route as public compatibility.
 
 See: [ADR: Replace Clerk with Auth Worker](adr/0001-replace-clerk-with-auth-worker.md)
 
@@ -31,10 +33,12 @@ See: [ADR: Replace Clerk with Auth Worker](adr/0001-replace-clerk-with-auth-work
                  |                            |
                  |  /projects/:slug  (UI)     |
                  |  /org/:slug       (org)    |
-                 |  /mcp             (MCP)    |
                  |  /api/orpc/*      (API)    |
                  |  /api/iterate-auth/* (OAuth|
                  |                   callback)|
+                 +---------------------------+
+                 |    mcp.iterate.com         |
+                 |    /              (MCP)    |
                  +---------------------------+
                               |
                     +---------+---------+
@@ -240,7 +244,8 @@ already exists — just unify it with the new principal model.
 
 ### Phase C: MCP endpoint migration
 
-Move MCP from per-project hostnames to `os.iterate.com/mcp`.
+Move MCP from per-project hostnames to a single endpoint. This phase used
+`os.iterate.com/mcp`; the canonical endpoint is now `mcp.iterate.com`.
 
 #### C1: Create `/mcp` route handler
 
@@ -260,7 +265,7 @@ Handles `GET`, `POST`, `DELETE`, `OPTIONS` at `/mcp`.
 
 ```json
 {
-  "resource": "https://os.iterate.com/mcp",
+  "resource": "https://mcp.iterate.com",
   "authorization_servers": ["https://auth.iterate.com/api/auth"],
   "scopes_supported": ["openid", "profile", "email", "offline_access", "project"],
   "bearer_methods_supported": ["header"]
@@ -286,7 +291,7 @@ fields. Fill from Principal instead.
 
 **Files:**
 
-- `apps/os/scripts/claude-mcp.ts` — update URL to `os.iterate.com/mcp`
+- `apps/os/scripts/claude-mcp.ts` — update URL to the canonical MCP endpoint
 - MCP settings page — update instructions and endpoint URL display
 
 ---
@@ -482,14 +487,14 @@ Phase F is last.
   targets, then writes the resulting web/MCP client credentials and OS URL
   config back to Doppler. It is intended to run through the production auth
   worker Doppler config so preview/dev OS can target `https://auth.iterate.com`.
-- Migrated inbound MCP to the OS `/mcp` resource. `entry.workerd.ts` now handles
+- Migrated inbound MCP to a single MCP resource. `entry.workerd.ts` now handles
   `/mcp` and `/.well-known/oauth-protected-resource/mcp`, verifies auth-worker
   bearer tokens against the MCP audience, and passes the token's project claims
   into `ProjectMcpServerConnection`. The MCP tool schema requires a `project`
   argument only when the token grants multiple projects.
 - Removed per-project MCP host registration and replaced the old Clerk-based
   project MCP entrypoint with a tombstone response. The CLI and UI now point to
-  the OS base URL `/mcp`; the CLI keeps its admin-token preflight by adding a
+  the canonical MCP endpoint; the CLI keeps its admin-token preflight by adding a
   `?project=<slug-or-id>` selector.
 - Removed OS's Clerk runtime config, Alchemy bindings, dependencies,
   `sync-clerk-apps.ts`, and the last runtime Clerk API lookup. Remaining

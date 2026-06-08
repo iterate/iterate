@@ -10,7 +10,7 @@ function request(input: { accept?: string; authorization?: string; method?: stri
     headers.set("authorization", input.authorization);
   }
 
-  return new Request("https://os.iterate.com/mcp", {
+  return new Request("https://mcp.iterate.com/", {
     method: input.method ?? "GET",
     headers,
   });

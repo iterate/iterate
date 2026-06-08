@@ -160,6 +160,7 @@ function AppSidebarNav() {
         <ProjectSidebarGroup
           key={project.id}
           customHostname={project.customHostname}
+          mcpBaseUrl={config.mcp?.baseUrl}
           projectSlug={project.slug}
           baseUrl={config.baseUrl}
           projectHostnameBases={config.projectHostnameBases}
@@ -172,16 +173,18 @@ function AppSidebarNav() {
 function ProjectSidebarGroup({
   baseUrl,
   customHostname,
+  mcpBaseUrl,
   projectHostnameBases,
   projectSlug,
 }: {
   baseUrl?: string;
   customHostname: string | null;
+  mcpBaseUrl?: string;
   projectHostnameBases: readonly string[];
   projectSlug: string;
 }) {
   const matchRoute = useMatchRoute();
-  const mcpUrl = buildProjectMcpUrl({ baseUrl, projectSlug, projectHostnameBases });
+  const mcpUrl = buildProjectMcpUrl({ baseUrl, mcpBaseUrl, projectSlug, projectHostnameBases });
   const customWorkerUrl = buildProjectWorkerUrl({
     projectSlug,
     customHostname,
