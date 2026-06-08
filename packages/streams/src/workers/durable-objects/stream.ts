@@ -19,6 +19,12 @@ import type { StreamRpc } from "../../types.ts";
 import { makeRpcTargetClass } from "../../shared/rpc-target.ts";
 import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecycle.ts";
 
+/**
+ * Durable stream storage and Workers RPC surface.
+ *
+ * HTTP/WebSocket Cap'n Web termination belongs at the fronting Worker via
+ * `StreamCapability`, keeping this DO focused on stream state and delivery.
+ */
 export class Stream extends DurableObject<Env> implements StreamRpc {
   #coreProcessorState: StreamCoreProcessorState;
   #coreProcessor = coreProcessor.build({
