@@ -16,7 +16,6 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/new-stream-runtime.ts";
 import { AppConfig } from "~/app.ts";
-import { authenticateAdminApiSecret } from "~/auth/middleware.ts";
 import {
   createCapnwebAppContext,
   createIterateContext,

@@ -732,9 +732,14 @@ describe("capnweb", () => {
     });
     expect(serialized).toContain("var __using");
 
-    const snippet = new Function(`return ${serialized}`)() as (input: {
-      vars: { disposed: boolean; value: string };
-    }) => Promise<{ disposedBeforeReturn: boolean; value: string }>;
+    const snippetModule = (await import(
+      `data:text/javascript;charset=utf-8,${encodeURIComponent(`export default ${serialized};`)}`
+    )) as {
+      default: (input: {
+        vars: { disposed: boolean; value: string };
+      }) => Promise<{ disposedBeforeReturn: boolean; value: string }>;
+    };
+    const snippet = snippetModule.default;
     const vars = { disposed: false, value: "ok" };
 
     await expect(snippet({ vars })).resolves.toEqual({
