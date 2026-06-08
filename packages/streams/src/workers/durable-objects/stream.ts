@@ -674,11 +674,59 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 }
 
-// Wraps the Stream Durable Object in an RpcTarget that can be passed across
-// Workers RPC boundaries without attempting to structured-clone the DO itself.
 export const StreamRpcTarget = makeRpcTargetClass<StreamRpc, StreamRpc>(
   Stream as { prototype: StreamRpc },
+  { exclude: ["subscribe"] },
 );
+
+Object.defineProperty(StreamRpcTarget.prototype, "subscribe", {
+  async value(this: { source: StreamRpc }, args: Parameters<StreamRpc["subscribe"]>[0]) {
+    // The generated target can proxy ordinary methods directly. subscribe() is
+    // the only special case because it receives a callback that lives beyond the
+    // subscribe RPC return; keep that callback local to this Worker and forward a
+    // fire-and-forget callback to the DO so batch delivery produces no client
+    // `resolve(undefined)` traffic.
+    const clientProcessEventBatch = retainProcessEventBatch(args.processEventBatch);
+    let disposed = false;
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
+      clientProcessEventBatch[Symbol.dispose]();
+    };
+    const processEventBatch: ProcessEventBatch & Disposable = Object.assign(
+      (batch: Parameters<ProcessEventBatch>[0]) => {
+        const pendingBatch = clientProcessEventBatch(batch);
+        disposeIgnoredRpcResult(pendingBatch);
+      },
+      { [Symbol.dispose]: dispose },
+    );
+
+    try {
+      const subscription = await this.source.subscribe({
+        subscriptionKey: args.subscriptionKey,
+        replayAfterOffset: args.replayAfterOffset,
+        processEventBatch,
+      });
+
+      clientProcessEventBatch.onRpcBroken?.(() => {
+        disposeIgnoredRpcResult(subscription.unsubscribe());
+        dispose();
+      });
+
+      return {
+        subscriptionKey: subscription.subscriptionKey,
+        streamMaxOffset: subscription.streamMaxOffset,
+        unsubscribe() {
+          disposeIgnoredRpcResult(subscription.unsubscribe());
+          dispose();
+        },
+      };
+    } catch (error) {
+      clientProcessEventBatch[Symbol.dispose]();
+      throw error;
+    }
+  },
+});
 
 /**
  * Resolves `streamPath` against the current stream's path into a canonical

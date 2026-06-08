@@ -18,7 +18,10 @@ export function retainProcessEventBatch(
   const retained = retainable.dup?.() ?? retainable;
   const dispose = retained[Symbol.dispose]?.bind(retained);
   const callback: RetainedProcessEventBatch = Object.assign(
-    (batch: Parameters<ProcessEventBatch>[0]) => retained(batch),
+    (batch: Parameters<ProcessEventBatch>[0]) => {
+      const result = retained(batch);
+      disposeIgnoredRpcResult(result);
+    },
     {
       [Symbol.dispose]() {
         dispose?.();
