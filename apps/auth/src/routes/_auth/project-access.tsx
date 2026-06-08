@@ -134,7 +134,7 @@ function RouteComponent() {
         throw new Error("Could not continue the OAuth redirect");
       }
 
-      window.location.href = result.url;
+      window.location.href = preserveOAuthResourceSearchParam(result.url);
       return result;
     },
   });
@@ -559,6 +559,17 @@ function SignedInUserRow(props: {
       </Button>
     </div>
   );
+}
+
+function preserveOAuthResourceSearchParam(rawUrl: string) {
+  const url = new URL(rawUrl, window.location.origin);
+  const currentSearchParams = new URLSearchParams(window.location.search);
+  if (!url.searchParams.has("resource")) {
+    for (const resource of currentSearchParams.getAll("resource")) {
+      url.searchParams.append("resource", resource);
+    }
+  }
+  return url.toString();
 }
 
 function CreateProjectForm(props: {

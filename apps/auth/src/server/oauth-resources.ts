@@ -11,7 +11,7 @@ export function getOsResourceBases() {
 }
 
 export function getOsMcpResourceBases() {
-  return [
+  return withRootUrlSlashVariants([
     "https://mcp.iterate.com",
     "https://mcp.iterate-dev-jonas.com",
     "https://mcp.iterate-dev-misha.com",
@@ -20,5 +20,15 @@ export function getOsMcpResourceBases() {
       (previewNumber) => `https://mcp.iterate-preview-${previewNumber}.com`,
     ),
     "http://localhost:7301/api/__mcp",
-  ];
+  ]);
+}
+
+function withRootUrlSlashVariants(resources: string[]) {
+  return [...new Set(resources.flatMap((resource) => [resource, rootUrlSlashVariant(resource)]))];
+}
+
+function rootUrlSlashVariant(resource: string) {
+  const url = new URL(resource);
+  if (url.pathname !== "/") return resource;
+  return `${url.origin}/`;
 }

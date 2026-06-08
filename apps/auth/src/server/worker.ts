@@ -45,6 +45,9 @@ app.get("/api/auth/.well-known/oauth-authorization-server", (c) =>
 app.get(`/.well-known/oauth-authorization-server${AUTH_ISSUER_PATH}`, (c) =>
   oauthProviderAuthServerMetadata(auth)(c.req.raw),
 );
+app.all("/api/auth/oauth2/authorize", async (c) =>
+  preserveOAuthResourceRedirect(c.req.raw, await auth.handler(c.req.raw)),
+);
 app.all("/api/auth/*", (c) => auth.handler(c.req.raw));
 
 app.get("/logout", async (c) => {
@@ -114,5 +117,39 @@ app.all("*", (c) =>
     },
   }),
 );
+
+export function preserveOAuthResourceRedirect(request: Request, response: Response) {
+  if (!isRedirectStatus(response.status)) return response;
+
+  const requestUrl = new URL(request.url);
+  const resources = requestUrl.searchParams.getAll("resource").filter(Boolean);
+  if (resources.length === 0) return response;
+
+  const location = response.headers.get("Location");
+  if (!location) return response;
+
+  const redirectUrl = new URL(location, requestUrl);
+  if (redirectUrl.searchParams.has("resource")) return response;
+
+  for (const resource of resources) {
+    redirectUrl.searchParams.append("resource", resource);
+  }
+
+  const headers = new Headers(response.headers);
+  headers.set(
+    "Location",
+    location.startsWith("/") ? `${redirectUrl.pathname}${redirectUrl.search}` : redirectUrl.href,
+  );
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function isRedirectStatus(status: number) {
+  return status >= 300 && status < 400;
+}
 
 export default app;

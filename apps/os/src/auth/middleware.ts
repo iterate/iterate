@@ -163,7 +163,9 @@ export function createOsIterateAuth(context: AppContext, request: Request) {
     mcpBaseUrl: context.config.mcp?.baseUrl,
     requestUrl: request.url,
   });
-  const resources = mcpResource ? [resource, mcpResource] : [resource];
+  const resources = mcpResource
+    ? [resource, ...oauthResourceAudienceVariants(mcpResource)]
+    : [resource];
 
   return createIterateAuth({
     issuer: config.issuer,
@@ -173,4 +175,10 @@ export function createOsIterateAuth(context: AppContext, request: Request) {
     resource: resources,
     logoutReturnToOrigins: context.config.baseUrl ? [context.config.baseUrl] : undefined,
   });
+}
+
+function oauthResourceAudienceVariants(resource: string) {
+  const url = new URL(resource);
+  if (url.pathname !== "/") return [resource];
+  return [resource, `${url.origin}/`];
 }

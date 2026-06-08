@@ -192,8 +192,14 @@ function createMcpIterateAuth(input: McpHandlerInput) {
     clientId: config.clientId,
     clientSecret: config.clientSecret.exposeSecret(),
     redirectURI: `${baseUrl}/api/iterate-auth/callback`,
-    resource: canonicalMcpResourceUrl(input),
+    resource: oauthResourceAudienceVariants(canonicalMcpResourceUrl(input)),
   });
+}
+
+function oauthResourceAudienceVariants(resource: string) {
+  const url = new URL(resource);
+  if (url.pathname !== "/") return [resource];
+  return [resource, `${url.origin}/`];
 }
 
 function propsFromPrincipal(input: {
