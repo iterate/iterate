@@ -1,4 +1,12 @@
 export const LOCAL_PROXY_CALLER_MARK = "__localProxyCaller";
+const TRANSPARENT_RPC_ROOTS = new Set([
+  "project",
+  "projects",
+  "repos",
+  "streams",
+  "worker",
+  "workspace",
+]);
 
 /**
  * This file is intentionally a small JavaScript indulgence.
@@ -38,9 +46,9 @@ export const LOCAL_PROXY_CALLER_MARK = "__localProxyCaller";
  *
  *      const ctx = liftLocalProxies(await env.ITERATE.context)
  *
- * 3. When `await ctx.slack` resolves to the marker, this wrapper swaps it for a
- *    local path proxy. Every property read just records another path segment,
- *    and the final function call invokes:
+ * 3. When `ctx.slack.chat.postMessage(...)` reaches a marker, this wrapper
+ *    uses a local path proxy. Every property read after the marker root records
+ *    another path segment, and the final function call invokes:
  *
  *      call({ path: ["chat", "postMessage"], args: [{ channel, text }] })
  *
@@ -48,7 +56,7 @@ export const LOCAL_PROXY_CALLER_MARK = "__localProxyCaller";
  * model clean. No marker means no SDK path proxy. If this helper is absent,
  * callers can still use the boring explicit shape, for example:
  *
- *   await ctx.slack.call({ path: ["chat", "postMessage"], args: [{ channel, text }] })
+ *   await (await ctx.slack).call({ path: ["chat", "postMessage"], args: [{ channel, text }] })
  */
 export function localProxyCaller(call) {
   return { [LOCAL_PROXY_CALLER_MARK]: true, call };
@@ -81,6 +89,7 @@ function lift(value) {
   if ((typeof value !== "object" && typeof value !== "function") || value === null) {
     return value;
   }
+  if (isThenable(value)) return pendingValueProxy(value, value, []);
 
   // This Proxy is client-side only. Cloudflare Workers RPC and Cap'n Web both
   // already use JavaScript Proxy objects for remote stubs:
@@ -104,27 +113,82 @@ function lift(value) {
           );
       }
 
-      if (typeof target.then === "function") {
-        return lift(target.then((resolved) => Reflect.get(adapt(resolved), key)));
-      }
-
       const member = Reflect.get(target, key, receiver);
-      if (
-        isLocalProxyCaller(member) ||
-        (member && typeof member === "object" && typeof member.then === "function")
-      ) {
+      if (typeof key === "string" && TRANSPARENT_RPC_ROOTS.has(key)) {
+        return member;
+      }
+      if (isLocalProxyCaller(member) || isThenable(member)) {
         return lift(member);
       }
       return member;
     },
 
     apply(target, thisArg, args) {
-      if (typeof target.then === "function") {
-        return lift(target.then((resolved) => Reflect.apply(adapt(resolved), undefined, args)));
-      }
       return lift(Reflect.apply(target, thisArg, args));
     },
   });
+}
+
+function isThenable(value) {
+  return (
+    value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof value.then === "function"
+  );
+}
+
+function pendingValueProxy(value, rootPromise, path) {
+  const fn = (...args) => invokePendingValue(value, rootPromise, path, args);
+  return new Proxy(fn, {
+    get(target, key, receiver) {
+      if (key === "then") {
+        return (onFulfilled, onRejected) =>
+          rootPromise.then(
+            (resolved) => {
+              const next = isLocalProxyCaller(resolved)
+                ? pathProxy(resolved.call, path)
+                : path.length === 0
+                  ? resolved
+                  : (value ?? resolvePath(resolved, path));
+              return Promise.resolve(next).then((final) =>
+                onFulfilled ? onFulfilled(adapt(final)) : adapt(final),
+              );
+            },
+            (error) => onRejected?.(error),
+          );
+      }
+
+      if (typeof key === "symbol" || key in target) {
+        return Reflect.get(target, key, receiver);
+      }
+
+      const member = value == null ? undefined : Reflect.get(value, key);
+      return pendingValueProxy(member, rootPromise, [...path, key]);
+    },
+
+    apply(_target, _thisArg, args) {
+      return invokePendingValue(value, rootPromise, path, args);
+    },
+  });
+}
+
+function invokePendingValue(value, rootPromise, path, args) {
+  return lift(
+    rootPromise.then((resolved) => {
+      if (isLocalProxyCaller(resolved)) {
+        return callLocalProxyCaller(resolved, { path, args });
+      }
+      return Reflect.apply(value ?? resolvePath(resolved, path), undefined, args);
+    }),
+  );
+}
+
+function resolvePath(value, path) {
+  let current = value;
+  for (const part of path) {
+    current = Reflect.get(current, part);
+  }
+  return current;
 }
 
 function pathProxy(call, path = []) {
@@ -133,8 +197,7 @@ function pathProxy(call, path = []) {
   // The path proxy is a local convenience object, not the server capability
   // itself. Disposing it should release the by-reference `call` stub when the
   // underlying RPC implementation exposes a disposer. If it does not, disposal
-  // is intentionally a no-op so `using sdk = await ctx.slack` works in both
-  // Node and dynamic workers.
+  // is intentionally a no-op.
   Object.defineProperty(fn, Symbol.dispose, {
     configurable: true,
     value() {

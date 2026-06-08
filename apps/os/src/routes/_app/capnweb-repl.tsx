@@ -3,6 +3,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import { Button } from "@iterate-com/ui/components/button";
 import { useAuthClient } from "~/auth/client-context.ts";
+import {
+  DEFAULT_BROWSER_REPL_CODE,
+  evalBrowserReplCode,
+  formatBrowserReplResult,
+} from "~/capnweb/browser-repl.ts";
 import { liftLocalProxies } from "~/capnweb/local-proxy-wrapper.js";
 import type { IterateContext } from "~/capnweb/iterate-context-capability.ts";
 
@@ -15,7 +20,7 @@ export const Route = createFileRoute("/_app/capnweb-repl")({
 
 function CapnwebReplPage() {
   const { session } = useAuthClient();
-  const [code, setCode] = useState("await ctx.projects.list({ limit: 5 })");
+  const [code, setCode] = useState(DEFAULT_BROWSER_REPL_CODE);
   const [ctx, setCtx] = useState<RpcStub<IterateContext> | null>(null);
   const [status, setStatus] = useState("Connecting...");
   const [output, setOutput] = useState("");
@@ -46,8 +51,8 @@ function CapnwebReplPage() {
     if (!ctx) return;
     setStatus("Running...");
     try {
-      const result = await evalInBrowser({ code, ctx });
-      setOutput(formatResult(result));
+      const result = await evalBrowserReplCode({ code, ctx });
+      setOutput(formatBrowserReplResult(result));
       setStatus("Connected");
     } catch (error) {
       setOutput(error instanceof Error ? (error.stack ?? error.message) : String(error));
@@ -101,31 +106,4 @@ function CapnwebReplPage() {
       </section>
     </main>
   );
-}
-
-async function evalInBrowser(input: { code: string; ctx: RpcStub<IterateContext> }) {
-  const env = {};
-  return await compileBrowserReplFunction(input.code)(input.ctx, env);
-}
-
-function compileBrowserReplFunction(code: string) {
-  try {
-    // oxlint-disable-next-line no-new-func -- This page is explicitly a browser-local REPL.
-    return new Function("ctx", "env", `return (async () => (${code}))()`) as ReplFunction;
-  } catch {
-    // oxlint-disable-next-line no-new-func -- Statement-mode fallback for the browser-local REPL.
-    return new Function("ctx", "env", `return (async () => {${code}})()`) as ReplFunction;
-  }
-}
-
-type ReplFunction = (ctx: RpcStub<IterateContext>, env: object) => Promise<unknown>;
-
-function formatResult(result: unknown) {
-  if (result === undefined) return "undefined";
-  if (typeof result === "string") return result;
-  try {
-    return JSON.stringify(result, null, 2);
-  } catch {
-    return String(result);
-  }
 }

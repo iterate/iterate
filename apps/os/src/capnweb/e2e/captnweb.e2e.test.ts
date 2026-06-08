@@ -155,7 +155,7 @@ describe("capnweb", () => {
 
     const output = await runCapnwebRepl({
       input: [
-        "const description = await (await ctx.project).describe()",
+        "const description = await ctx.project.describe()",
         "description.id",
         "let localStream = new ReadableStream()",
         "localStream instanceof ReadableStream",
@@ -498,8 +498,7 @@ describe("capnweb", () => {
 
         async echo(input) {
           const ctx = await this.env.ITERATE.context;
-          using streams = await ctx.streams;
-          const streamList = await streams.list();
+          const streamList = await ctx.streams.list();
           return {
             kind: "target-method",
             input,
@@ -950,8 +949,7 @@ async function projectEgressFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ) {
-  using project = await ctx.project;
-  return await project.egressFetch(new Request(input, init));
+  return await ctx.project.egressFetch(new Request(input, init));
 }
 
 async function runCapnwebScriptInDynamicWorker(input: {
@@ -1062,7 +1060,7 @@ function serializeCapnwebScriptForDynamicWorker(fn: { toString(): string }) {
   // The awkward case is Vitest/Vite/esbuild transforming this test module
   // before fn.toString() runs. If esbuild lowers:
   //
-  //   using project = await ctx.project
+  //   const project = await ctx.project
   //
   // then the function string contains calls to module-scoped helpers like
   // __using(...) and __callDispose(...), but fn.toString() does not include the

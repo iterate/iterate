@@ -92,8 +92,7 @@ describe("capnweb Slack SDK mount proof", () => {
         workerSource,
       });
 
-      using worker = (await projectContext.worker) as any;
-      const result = await worker.postDailyReport({
+      const result = await (projectContext.worker as any).postDailyReport({
         channel: "CFAKE",
         text: "daily report from iterate-config",
       });
@@ -222,12 +221,11 @@ function slackConfigWorkerSource(input: { connectionKey: string }) {
       }
 
       async postDailyReport(input) {
-        const ctx = await this.env.ITERATE.context;
+        const ctx = liftLocalProxies(await this.env.ITERATE.context);
         // ctx.slack is a mounted localProxyCaller marker. The config worker
         // lifts that marker into the SDK-shaped path proxy, so this tool can
         // call the natural Slack SDK shape without knowing the Slack hierarchy.
-        using slack = liftLocalProxies(await ctx.slack);
-        return await slack.chat.postMessage({
+        return await ctx.slack.chat.postMessage({
           channel: input.channel,
           text: input.text,
         });
@@ -245,27 +243,23 @@ async function updateIterateConfigWorker(input: {
   dir: string;
   workerSource: string;
 }) {
-  using project = await input.ctx.project;
-  using repos = await project.repos;
-  using workspace = await project.workspace;
-  using git = await workspace.git;
-  const repo = await repos.ensureIterateConfigInfo({ projectSlug: null });
+  const repo = await input.ctx.project.repos.ensureIterateConfigInfo({ projectSlug: null });
 
-  await git.clone({
+  await input.ctx.project.workspace.git.clone({
     branch: repo.defaultBranch,
     depth: 1,
     dir: input.dir,
     url: repo.remote,
     ...repo.credentials,
   });
-  await workspace.writeFile(input.dir + "/worker.js", input.workerSource);
-  await git.add({ dir: input.dir, filepath: "worker.js" });
-  await git.commit({
+  await input.ctx.project.workspace.writeFile(input.dir + "/worker.js", input.workerSource);
+  await input.ctx.project.workspace.git.add({ dir: input.dir, filepath: "worker.js" });
+  await input.ctx.project.workspace.git.commit({
     author: { name: "Capnweb", email: "captnweb-slack-e2e@iterate.com" },
     dir: input.dir,
     message: "Add Slack SDK Capnweb proof worker",
   });
-  await git.push({
+  await input.ctx.project.workspace.git.push({
     dir: input.dir,
     ref: repo.defaultBranch,
     remote: "origin",
@@ -291,8 +285,7 @@ async function projectEgressFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ) {
-  using project = await ctx.project;
-  return await project.egressFetch(new Request(input, init));
+  return await ctx.project.egressFetch(new Request(input, init));
 }
 
 function withRootIterateContextFromNode(input: {

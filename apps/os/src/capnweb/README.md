@@ -13,14 +13,10 @@ The design goal is a single scoped capability tree that can be used from:
 The same authoring model should work everywhere:
 
 ```ts
-using project = await ctx.project;
-using workspace = await project.workspace;
-using git = await workspace.git;
-await git.add({ dir, filepath: "worker.js" });
-await git.push({ dir, remote: "origin", ref });
+await ctx.project.workspace.git.add({ dir, filepath: "worker.js" });
+await ctx.project.workspace.git.push({ dir, remote: "origin", ref });
 
-using worker = await project.worker;
-await worker.someTool({ value: 1 });
+await ctx.project.worker.someTool({ value: 1 });
 ```
 
 ## Entrypoints
@@ -153,8 +149,7 @@ Default `invoke` is `"target"`:
   target: { type: "dynamic-worker", script: toolsWorkerSource },
 }
 
-using tools = await ctx.tools;
-await tools.echo({ text: "hi" });
+await ctx.tools.echo({ text: "hi" });
 ```
 
 Use `invoke: "method"` when the mount itself should be callable:
@@ -200,9 +195,8 @@ export default class Worker extends WorkerEntrypoint {
   }
 
   async postDailyReport(input) {
-    const ctx = await this.env.ITERATE.context;
-    using slack = await ctx.slack;
-    return await slack.chat.postMessage(input);
+    const ctx = liftLocalProxies(await this.env.ITERATE.context);
+    return await ctx.slack.chat.postMessage(input);
   }
 }
 ```
@@ -256,8 +250,7 @@ export default class SlackTarget extends WorkerEntrypoint {
 Mounted with `call: ["sdk"]`, this lets callers write:
 
 ```ts
-using slack = await ctx.slack;
-await slack.chat.postMessage({ channel: "C123", text: "hi" });
+await ctx.slack.chat.postMessage({ channel: "C123", text: "hi" });
 ```
 
 Only marker values get this local path-proxy behavior. Normal Cap'n Web and
@@ -283,7 +276,7 @@ function with `{ ctx, env, vars }` and exits:
 ```bash
 doppler run --project os --config preview_5 -- pnpm exec tsx src/capnweb/cli.ts \
   --project-id proj_123 \
-  -e 'async ({ ctx }) => await (await ctx.project).describe()'
+  -e 'async ({ ctx }) => await ctx.project.describe()'
 ```
 
 `src/capnweb/repl.ts` is the persistent Node REPL. It opens the same Cap'n Web
@@ -295,8 +288,7 @@ doppler run --project os --config preview_5 -- pnpm exec tsx src/capnweb/repl.ts
 ```
 
 ```js
-using project = await ctx.project;
-await project.describe();
+await ctx.project.describe();
 let stream = new ReadableStream();
 stream instanceof ReadableStream;
 ```

@@ -29,12 +29,12 @@ async function main() {
   // `useGlobal: true` matters for Cap'n Web: object literals created inside a
   // separate vm context have a different Object prototype, and Cap'n Web's
   // serializer rejects them as non-plain objects. Running in Node's global realm
-  // keeps `await projects.list({ limit: 1 })` serializable while still letting
+  // keeps `await ctx.projects.list({ limit: 1 })` serializable while still letting
   // variables remain live across expressions:
   //
-  //   using project = await ctx.project
+  //   const project = await ctx.project
   //   stream = new ReadableStream()
-  //   await (await ctx.streams).list()
+  //   await ctx.streams.list()
   //
   // That persistence is exactly what /run cannot provide because /run returns
   // JSON and tears down the dynamic worker after each invocation.
@@ -74,10 +74,8 @@ function printUsage() {
   doppler run -- pnpm exec tsx src/capnweb/repl.ts --project-id <proj_...>
 
 Examples inside the REPL:
-  using projects = await ctx.projects
-  await projects.list({ limit: 5 })
+  await ctx.projects.list({ limit: 5 })
 
-  using project = await ctx.project
-  await project.describe()
+  await ctx.project.describe()
 `);
 }
