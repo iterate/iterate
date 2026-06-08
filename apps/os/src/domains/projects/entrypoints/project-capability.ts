@@ -76,7 +76,7 @@ export class ProjectCapability extends WorkerEntrypoint<
   }
 
   async fetch(request: Request): Promise<Response> {
-    return await this.project().egressFetch(request);
+    return await this.project().ingressFetch(request);
   }
 
   private get projectProps() {

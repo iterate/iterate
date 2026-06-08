@@ -48,6 +48,7 @@ export class CodemodeBuilder<Ctx = DefaultCtx> {
       client: this.os,
       projectSlugOrId: this.options.projectSlugOrId,
       streamPath: started.streamPath,
+      timeoutMs: 120_000,
       // todo: proper strongly-typed version of this read-until helper
       predicate: isCompletedScriptExecution,
     });

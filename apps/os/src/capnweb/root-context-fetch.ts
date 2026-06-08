@@ -1,0 +1,261 @@
+import { newWorkersRpcResponse } from "capnweb";
+import { authenticateCapnwebAdmin, handleCapnwebAdminCookieRequest } from "./admin-auth-cookie.ts";
+import {
+  createIterateContext,
+  createProjectsCapability,
+  type IterateContextProps,
+} from "./iterate-context-capability.ts";
+import localProxyWrapperSource from "./local-proxy-wrapper.js?raw";
+import { ProjectsCapability } from "./projects-capability.ts";
+import type { AppConfig } from "~/app.ts";
+import type { AppContext } from "~/context.ts";
+import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
+import type { Principal } from "~/auth/principal.ts";
+
+export { ProjectsCapability };
+
+export const ROOT_ITERATE_CONTEXT_PREFIX = "/api/captnweb";
+
+type CaptnwebVars = Record<string, unknown>;
+
+export async function handleRootIterateContextFetch(input: {
+  config: AppConfig;
+  context: AppContext;
+  env: Env;
+  request: Request;
+}): Promise<Response | null> {
+  const url = new URL(input.request.url);
+  if (
+    url.pathname !== ROOT_ITERATE_CONTEXT_PREFIX &&
+    !url.pathname.startsWith(`${ROOT_ITERATE_CONTEXT_PREFIX}/`)
+  ) {
+    return null;
+  }
+
+  if (url.pathname === `${ROOT_ITERATE_CONTEXT_PREFIX}/admin-cookie`) {
+    return await handleCapnwebAdminCookieRequest({ config: input.config, request: input.request });
+  }
+
+  const auth = await authenticateRootCapnwebRequest({
+    config: input.config,
+    context: input.context,
+    request: input.request,
+  });
+  if (!auth.principal) return new Response("Unauthorized", { status: 401 });
+
+  const context = {
+    ...input.context,
+    iterateAuthSession: auth.session,
+    principal: auth.principal,
+  };
+
+  if (url.pathname === `${ROOT_ITERATE_CONTEXT_PREFIX}/run`) {
+    return await handleRootRunLeg({ ...input, context });
+  }
+
+  const response = await newWorkersRpcResponse(
+    input.request,
+    createIterateContext({
+      context,
+      projects: createProjectsCapability({ context }),
+      props: { scopes: scopesForPrincipal(auth.principal) },
+    }),
+  );
+  appendAuthHeaders(response.headers, auth.responseHeaders);
+  return response;
+}
+
+async function authenticateRootCapnwebRequest(input: {
+  config: AppConfig;
+  context: AppContext;
+  request: Request;
+}): Promise<{
+  principal: Principal | null;
+  responseHeaders: Headers;
+  session: AppContext["iterateAuthSession"];
+}> {
+  const admin = authenticateCapnwebAdmin({ config: input.config, request: input.request });
+  if (admin) return { principal: admin, responseHeaders: new Headers(), session: null };
+
+  return await resolveRequestAuth({
+    auth: createOsIterateAuth(input.context, input.request),
+    context: input.context,
+    request: input.request,
+  });
+}
+
+function scopesForPrincipal(principal: Principal): IterateContextProps["scopes"] {
+  return {
+    projects: principal.type === "admin" ? "all" : principal.projects.map((project) => project.id),
+  };
+}
+
+function appendAuthHeaders(headers: Headers, authHeaders: Headers) {
+  const setCookie = authHeaders.get("set-cookie");
+  if (setCookie) headers.append("set-cookie", setCookie);
+}
+
+function rootRunWorkerSrc(input: { dynamicMountRoots: string[]; functionSource: string }) {
+  return /* js */ `
+  import { WorkerEntrypoint } from "cloudflare:workers";
+  import { liftLocalProxies, localProxyCaller } from "./local-proxy-wrapper.js";
+
+  const snippet = (${input.functionSource});
+  const dynamicMountRoots = new Set(${JSON.stringify(input.dynamicMountRoots)});
+
+  function contextForRun(host, ctx) {
+    const lifted = liftLocalProxies(ctx);
+    if (dynamicMountRoots.size === 0) return lifted;
+    // This Proxy is a narrow /run compatibility overlay, not the canonical
+    // context object. The /run worker gets ctx from env.ITERATE.context so
+    // built-in roots like ctx.projects and ctx.project are the normal
+    // parent-provided RPC stubs. Dynamic-worker mounts are different: their
+    // actual WorkerEntrypoint is owned by the parent worker with the LOADER
+    // binding and cannot be transferred into this /run worker. For just those
+    // root names, this proxy returns a local SDK-style marker that forwards the
+    // eventual call back to the parent-owned env.ITERATE.callMounted(...).
+    //
+    // Effect:
+    //   ctx.tools.echo(arg)
+    // becomes:
+    //   env.ITERATE.callMounted(["tools", "echo"], [arg])
+    //
+    // Normal properties fall through untouched. This keeps the symmetric
+    // snippet model ("const ctx = await env.ITERATE.context") while preserving
+    // the dynamic-worker mount rule that the loader owner forwards the call.
+    //
+    // References:
+    // - Dynamic Workers API: https://developers.cloudflare.com/dynamic-workers/api-reference/
+    // - Workers RPC stubs: https://developers.cloudflare.com/workers/runtime-apis/rpc/
+    return new Proxy(lifted, {
+      get(target, prop, receiver) {
+        if (typeof prop === "string" && dynamicMountRoots.has(prop)) {
+          return liftLocalProxies(localProxyCaller(({ path, args }) =>
+            host.env.ITERATE.callMounted([prop, ...path], args)
+          ));
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+  }
+
+  async function projectEgressFetch(ctx, ...args) {
+    using project = await ctx.project;
+    return await project.egressFetch(new Request(args[0], args[1]));
+  }
+
+  async function runWithProjectEgressFetch(ctx, run) {
+    // Dynamic Workers normally have a host-controlled outbound fetch gate. The
+    // /run worker is our tiny codemode-shaped harness, so it installs the same
+    // rule at the runner boundary: bare fetch() goes through the Project Durable
+    // Object egress path, including getSecret(...) header substitution.
+    //
+    // This is intentionally scoped to the snippet invocation and restored in a
+    // finally block. Built-in project ingress fetch remains available as
+    // ctx.project.fetch(...); this hook is only the global outbound fetch.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (...args) => projectEgressFetch(ctx, ...args);
+    try {
+      return await run();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  export default class extends WorkerEntrypoint {
+    async run(vars) {
+      try {
+        const ctx = contextForRun(this, await this.env.ITERATE.context);
+        const result = await runWithProjectEgressFetch(ctx, () =>
+          snippet({
+            ctx,
+            env: this.env,
+            vars,
+          })
+        );
+        return JSON.stringify({ ok: true, result });
+      } catch (error) {
+        return JSON.stringify({
+          error: error instanceof Error ? error.message : String(error),
+          ok: false,
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+      }
+    }
+  }
+`;
+}
+
+async function handleRootRunLeg(input: { context: AppContext; env: Env; request: Request }) {
+  if (!input.env.LOADER) {
+    return Response.json({ error: "LOADER binding not available" }, { status: 503 });
+  }
+
+  const body = (await input.request.json()) as {
+    functionSource?: string;
+    props?: IterateContextProps;
+    vars?: CaptnwebVars;
+  };
+  if (typeof body.functionSource !== "string" || body.functionSource.trim() === "") {
+    return Response.json({ error: "functionSource is required" }, { status: 400 });
+  }
+  const iterateEntrypoint = input.context.workerExports?.IterateContextEntrypoint as
+    | ((options: { props: IterateContextProps }) => unknown)
+    | undefined;
+  if (!iterateEntrypoint) {
+    return Response.json(
+      { error: "IterateContextEntrypoint export is not available" },
+      { status: 503 },
+    );
+  }
+  const principal = input.context.principal;
+  if (!principal) return Response.json({ error: "Unauthorized" }, { status: 401 });
+  const props = body.props ?? { scopes: scopesForPrincipal(principal) };
+  const dynamicMountRoots = [
+    ...new Set(
+      (props.mounts ?? [])
+        .filter((mount) => mount.target.type === "dynamic-worker")
+        .map((mount) => mount.path[0])
+        .filter((root): root is string => root != null),
+    ),
+  ];
+  const worker = input.env.LOADER.load({
+    compatibilityDate: "2026-04-27",
+    env: {
+      ITERATE: iterateEntrypoint({
+        props,
+      }),
+    },
+    mainModule: "worker.js",
+    modules: {
+      "worker.js": rootRunWorkerSrc({
+        dynamicMountRoots,
+        functionSource: body.functionSource,
+      }),
+      "local-proxy-wrapper.js": localProxyWrapperSource,
+    },
+  });
+  const entry = worker.getEntrypoint() as unknown as {
+    run(vars: CaptnwebVars): string | Promise<string>;
+  } & Partial<Disposable>;
+  try {
+    const json = await entry.run(body.vars ?? {});
+    const runResult = JSON.parse(json) as
+      | { ok: true; result: unknown }
+      | { error: string; ok: false; stack?: string };
+    if (!runResult.ok) {
+      return Response.json({ error: runResult.error, stack: runResult.stack }, { status: 500 });
+    }
+    return Response.json(runResult.result);
+  } catch (error) {
+    return Response.json(
+      {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      },
+      { status: 500 },
+    );
+  } finally {
+    entry[Symbol.dispose]?.();
+  }
+}

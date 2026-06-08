@@ -46,12 +46,41 @@ export type CloudflareArtifactsBinding = {
   get(name: string): Promise<CloudflareArtifactRepo>;
 };
 
+type CloudflareArtifactsRestBindingInput = {
+  accountId: string;
+  apiToken: string;
+  namespace: string;
+};
+
 export const REPO_DEFAULT_BRANCH = "main";
 export const REPO_README_PATH = "README.md";
 export const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 
 export function artifactRemoteUrl(input: { accountId: string; name: string; namespace: string }) {
   return `https://${input.accountId}.artifacts.cloudflare.net/git/${input.namespace}/${input.name}.git`;
+}
+
+export function createCloudflareArtifactsRestBinding(
+  input: CloudflareArtifactsRestBindingInput,
+): CloudflareArtifactsBinding {
+  return {
+    async create(name, options) {
+      const repo = await artifactsApi<CloudflareArtifactRepo>(input, "POST", "/repos", {
+        default_branch:
+          options?.defaultBranch ?? options?.default_branch ?? options?.setDefaultBranch,
+        name,
+      });
+      return withRestRepoMethods(input, repo);
+    },
+    async get(name) {
+      const repo = await artifactsApi<CloudflareArtifactRepo>(
+        input,
+        "GET",
+        `/repos/${encodeURIComponent(name)}`,
+      );
+      return withRestRepoMethods(input, repo);
+    },
+  };
 }
 
 export function normalizeArtifactToken(token: CloudflareArtifactToken) {
@@ -154,4 +183,111 @@ function expiresAtFromTokenQuery(token: string): number | null {
 
 export function stripArtifactTokenQuery(token: string) {
   return token.split("?expires=")[0] ?? token;
+}
+
+function withRestRepoMethods(
+  input: CloudflareArtifactsRestBindingInput,
+  repo: CloudflareArtifactRepo,
+): CloudflareArtifactRepo {
+  return {
+    ...repo,
+    async createToken(scope, ttlSeconds) {
+      return await artifactsApi<CloudflareArtifactToken>(input, "POST", "/tokens", {
+        repo: repo.name,
+        scope,
+        ttl: ttlSeconds,
+      });
+    },
+    async fork(name, options) {
+      let forked: CloudflareArtifactRepo;
+      try {
+        forked = await artifactsApi<CloudflareArtifactRepo>(
+          input,
+          "POST",
+          `/repos/${encodeURIComponent(repo.name)}/fork`,
+          {
+            default_branch_only: options?.defaultBranchOnly ?? options?.default_branch_only,
+            description: options?.description,
+            name,
+            read_only: options?.readOnly ?? options?.read_only,
+          },
+        );
+      } catch (error) {
+        if (error instanceof CloudflareArtifactsRestError && error.status === 409) {
+          forked = await waitForRestRepo(input, name);
+        } else {
+          throw error;
+        }
+      }
+      return withRestRepoMethods(input, forked);
+    },
+  };
+}
+
+async function artifactsApi<T>(
+  input: CloudflareArtifactsRestBindingInput,
+  method: string,
+  apiPath: string,
+  body?: Record<string, unknown>,
+): Promise<T> {
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${input.accountId}/artifacts/namespaces/${input.namespace}${apiPath}`,
+    {
+      body: body == null ? undefined : JSON.stringify(dropUndefinedValues(body)),
+      headers: {
+        authorization: `Bearer ${input.apiToken}`,
+        "content-type": "application/json",
+      },
+      method,
+    },
+  );
+  const json = (await response.json()) as CloudflareApiEnvelope<T>;
+  if (!response.ok || json.success !== true || json.result == null) {
+    throw new CloudflareArtifactsRestError(response.status, apiPath, cloudflareErrorMessage(json));
+  }
+  return json.result;
+}
+
+class CloudflareArtifactsRestError extends Error {
+  constructor(
+    readonly status: number,
+    apiPath: string,
+    message: string,
+  ) {
+    super(`Cloudflare Artifacts request failed (${status} ${apiPath}): ${message}`);
+  }
+}
+
+async function waitForRestRepo(input: CloudflareArtifactsRestBindingInput, name: string) {
+  const apiPath = `/repos/${encodeURIComponent(name)}`;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      return await artifactsApi<CloudflareArtifactRepo>(input, "GET", apiPath);
+    } catch (error) {
+      if (!(error instanceof CloudflareArtifactsRestError) || error.status !== 409) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+    }
+  }
+
+  return await artifactsApi<CloudflareArtifactRepo>(input, "GET", apiPath);
+}
+
+type CloudflareApiEnvelope<T> = {
+  errors?: Array<{ message?: string }>;
+  messages?: Array<{ message?: string }>;
+  result?: T | null;
+  success?: boolean;
+};
+
+function cloudflareErrorMessage(payload: CloudflareApiEnvelope<unknown>) {
+  const messages = [...(payload.errors ?? []), ...(payload.messages ?? [])]
+    .map((entry) => entry.message)
+    .filter((message) => typeof message === "string" && message.length > 0);
+  return messages.length > 0 ? messages.join("; ") : JSON.stringify(payload);
+}
+
+function dropUndefinedValues(input: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }

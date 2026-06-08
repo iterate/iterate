@@ -1,4 +1,4 @@
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import {
@@ -25,6 +25,54 @@ export class WorkspaceCapability extends WorkerEntrypoint<
   WorkspaceCapabilityEnv,
   WorkspaceCapabilityProps
 > {
+  #git?: WorkspaceGitCapability;
+
+  get git() {
+    return (this.#git ??= new WorkspaceGitCapability({
+      getGit: async () => await (await this.workspace()).cloudflareShellGit(),
+    }));
+  }
+
+  async gitAdd(input: Record<string, unknown>) {
+    return await this.#callGit("add", input);
+  }
+
+  async gitClone(input: Record<string, unknown>) {
+    return await this.#callGit("clone", input);
+  }
+
+  async gitCommit(input: Record<string, unknown>) {
+    return await this.#callGit("commit", input);
+  }
+
+  async gitPush(input: Record<string, unknown>) {
+    return await this.#callGit("push", input);
+  }
+
+  async gitStatus(input: Record<string, unknown>) {
+    return await this.#callGit("status", input);
+  }
+
+  async readFile(path: string) {
+    const state = await (await this.workspace()).cloudflareShellState();
+    return await callMethod({
+      args: [path],
+      method: "readFile",
+      namespace: "ctx.workspace",
+      target: state as {},
+    });
+  }
+
+  async writeFile(path: string, content: string) {
+    const state = await (await this.workspace()).cloudflareShellState();
+    return await callMethod({
+      args: [path, content],
+      method: "writeFile",
+      namespace: "ctx.workspace",
+      target: state as {},
+    });
+  }
+
   async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
     if (input.functionPath.length === 0) {
       throw new Error("WorkspaceCapability requires a workspace method path.");
@@ -74,6 +122,56 @@ export class WorkspaceCapability extends WorkerEntrypoint<
     }
 
     return this.env.WORKSPACE;
+  }
+
+  async #callGit(method: string, input: Record<string, unknown>) {
+    const git = await (await this.workspace()).cloudflareShellGit();
+    return await callMethod({
+      args: [input],
+      method,
+      namespace: "ctx.workspace.git",
+      target: git,
+    });
+  }
+}
+
+class WorkspaceGitCapability extends RpcTarget {
+  readonly #getGit: () => Promise<Record<string, (...args: unknown[]) => Promise<unknown>>>;
+
+  constructor(input: {
+    getGit: () => Promise<Record<string, (...args: unknown[]) => Promise<unknown>>>;
+  }) {
+    super();
+    this.#getGit = input.getGit;
+  }
+
+  async add(input: Record<string, unknown>) {
+    return await this.#call("add", [input]);
+  }
+
+  async clone(input: Record<string, unknown>) {
+    return await this.#call("clone", [input]);
+  }
+
+  async commit(input: Record<string, unknown>) {
+    return await this.#call("commit", [input]);
+  }
+
+  async push(input: Record<string, unknown>) {
+    return await this.#call("push", [input]);
+  }
+
+  async status(input: Record<string, unknown>) {
+    return await this.#call("status", [input]);
+  }
+
+  async #call(method: string, args: unknown[]) {
+    return await callMethod({
+      args,
+      method,
+      namespace: "ctx.workspace.git",
+      target: await this.#getGit(),
+    });
   }
 }
 

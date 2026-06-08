@@ -1,13 +1,13 @@
 /**
- * Deployment-targeted codemode proof over the project MCP route.
+ * Deployment-targeted codemode proof over the canonical OS MCP route.
  *
  * This test intentionally does not mock the internet or inject providers. Point
- * it at any running OS project MCP endpoint and it uses the server's static
+ * it at any running OS MCP endpoint and it uses the server's static
  * inbound-MCP provider stack through the public MCP tool shape:
  *
  *   doppler run --config preview_2 -- pnpm e2e -t "project MCP exec_js"
  *
- * OS_E2E_MCP_URL can override the fixture-created project MCP URL. When that is
+ * OS_E2E_MCP_URL can override the fixture-created MCP URL. When that is
  * set, OS_E2E_MCP_BEARER_TOKEN may be an auth-worker OAuth access token or an
  * OS admin token.
  *
@@ -165,6 +165,7 @@ describe("project MCP exec_js static codemode provider stack", () => {
       name: "exec_js",
       arguments: {
         code: codemodeScript.code.replaceAll("SLACK_CHANNEL_ID_PLACEHOLDER", slackChannelId || ""),
+        project: fixture.project.slug,
       },
     });
 
@@ -246,13 +247,14 @@ function requireMcpUrl(input: { projectSlug: string }) {
   if (override) return new URL(override);
 
   const mcpUrl = buildProjectMcpUrl({
+    baseUrl: process.env.APP_CONFIG_BASE_URL,
     mcpBaseUrl: process.env.APP_CONFIG_MCP__BASE_URL,
     projectHostnameBases: requireProjectHostnameBases(),
     projectSlug: input.projectSlug,
   });
   if (!mcpUrl) {
     throw new Error(
-      `Could not derive an MCP URL for project ${input.projectSlug}; check APP_CONFIG_PROJECT_HOSTNAME_BASES.`,
+      `Could not derive an MCP URL for project ${input.projectSlug}; check APP_CONFIG_BASE_URL.`,
     );
   }
   return new URL(mcpUrl);

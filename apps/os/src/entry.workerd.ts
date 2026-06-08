@@ -28,6 +28,8 @@ import { getProjectCustomHostnameIngressRule } from "~/ingress/project-custom-ho
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
+import { handleRootIterateContextFetch } from "~/capnweb/root-context-fetch.ts";
+import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 // Re-export rpc-targets used by OS's existing loopback callable paths.
 // Stream processor subscriptions do not use these exports; they target Durable
@@ -46,6 +48,7 @@ export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.t
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
+export { IterateContextEntrypoint } from "~/capnweb/iterate-context-capability.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
@@ -60,6 +63,8 @@ export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 
 const CAPTUN_TUNNEL_ROUTE_PREFIX = "/__iterate/captun";
+const EGRESS_ECHO_PATH = "/api/captnweb/egress-echo";
+const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 const config = parseAppConfigFromEnv({
@@ -72,6 +77,9 @@ export default {
   async fetch(request: Request, env: Env, cfCtx: ExecutionContext) {
     const captunTunnelResponse = await handleCaptunTunnelFetch({ env, request });
     if (captunTunnelResponse) return captunTunnelResponse;
+
+    const egressEchoResponse = handleEgressEchoFetch({ request });
+    if (egressEchoResponse) return egressEchoResponse;
 
     const debugAppendChainResponse = await handleDebugAppendChainFetch({ request, env });
     if (debugAppendChainResponse) return debugAppendChainResponse;
@@ -88,9 +96,6 @@ export default {
       async ({ log }) => {
         const mcpResponse = await handleMcpFetch({ request, env, ctx: cfCtx, config });
         if (mcpResponse) return mcpResponse;
-
-        const durableObjectDebugResponse = await handleDurableObjectDebugFetch({ request, env });
-        if (durableObjectDebugResponse) return durableObjectDebugResponse;
 
         const db = createD1Client(env.DB);
         const requestConfig = config.baseUrl
@@ -124,6 +129,16 @@ export default {
         });
 
         if (ingressMatch) {
+          const pathname = new URL(request.url).pathname;
+          if (
+            (pathname === PROJECT_CAPNWEB_PATH ||
+              pathname === `${PROJECT_CAPNWEB_PATH}/admin-cookie`) &&
+            ingressMatch.rule.projectId
+          ) {
+            return await env.PROJECT.getByName(
+              getProjectDurableObjectName(ingressMatch.rule.projectId),
+            ).fetch(request);
+          }
           return await dispatchFetchCallable({
             callable: ingressMatch.rule.callable,
             context: {
@@ -157,6 +172,17 @@ export default {
           workerExports: cfCtx.exports,
         };
 
+        const captnwebResponse = await handleRootIterateContextFetch({
+          request,
+          env,
+          context,
+          config,
+        });
+        if (captnwebResponse) return captnwebResponse;
+
+        const durableObjectDebugResponse = await handleDurableObjectDebugFetch({ request, env });
+        if (durableObjectDebugResponse) return durableObjectDebugResponse;
+
         const response = await handler.fetch(request, {
           context,
         });
@@ -175,6 +201,25 @@ export default {
     });
   },
 };
+
+function handleEgressEchoFetch(input: { request: Request }) {
+  const url = new URL(input.request.url);
+  if (url.pathname !== EGRESS_ECHO_PATH) return null;
+
+  const expectedToken = config.adminApiSecret?.exposeSecret();
+  if (
+    expectedToken == null ||
+    input.request.headers.get("authorization") !== `Bearer ${expectedToken}`
+  ) {
+    return Response.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  return Response.json({
+    headers: Object.fromEntries(input.request.headers),
+    method: input.request.method,
+    url: url.toString(),
+  });
+}
 
 async function handleCaptunTunnelFetch(input: { env: Env; request: Request }) {
   const url = new URL(input.request.url);
