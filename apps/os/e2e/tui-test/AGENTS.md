@@ -14,8 +14,8 @@ still launch the real app CLI:
 
 ```ts
 program: {
-  file: "pnpm",
-  args: ["--dir", "../..", "cli", "stream-tui", "..."],
+  file: "node",
+  args: ["../../../../packages/iterate/bin/iterate.js", "chat", "..."],
 }
 ```
 

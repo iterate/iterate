@@ -1,8 +1,9 @@
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import * as prompts from "@clack/prompts";
 import { createORPCClient } from "@orpc/client";
@@ -10,7 +11,7 @@ import { RPCLink } from "@orpc/client/fetch";
 import { os } from "@orpc/server";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
-import { createCli, parseRouter, type AnyRouter } from "trpc-cli";
+import { createCli, parseRouter, type AnyRouter, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod/v4";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 import type { AuthContractClient } from "../../../apps/auth-contract/src/index.ts";
@@ -23,6 +24,9 @@ const XDG_CONFIG_PARENT = join(
 );
 
 const CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
+const DEFAULT_CHAT_PROJECT_SLUG_OR_ID = "iterate";
+const DEFAULT_CHAT_STREAM_PATH = "/agents/demo";
+const DEFAULT_CHAT_OS_BASE_URL = "https://os.iterate.com";
 
 /** Superadmin impersonation strategy — for CI/automation. Requires admin password env var. */
 const SuperadminStrategy = z.object({
@@ -116,6 +120,14 @@ const consumeCliStringFlag = (flagName: string): string | undefined => {
   return value;
 };
 
+const firstNonFlagArgument = (args: string[]): string | undefined => {
+  for (const arg of args) {
+    if (arg === "--") return undefined;
+    if (!arg.startsWith("-")) return arg;
+  }
+  return undefined;
+};
+
 /**
  * Temporary compatibility for root-owned preview commands.
  * App CLIs should use packages/shared/src/apps/cli.ts instead of iterate --local-router,
@@ -138,6 +150,63 @@ const loadLocalRouter = async (routerPath: string) => {
     );
   }
   return router;
+};
+
+const resolveStreamTuiEntrypointPath = () => {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    join(moduleDir, "stream-tui/event-stream-terminal.tsx"),
+    join(moduleDir, "stream-tui/event-stream-terminal.mjs"),
+    join(moduleDir, "stream-tui/event-stream-terminal.js"),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+
+  throw new Error("Could not find the Iterate stream TUI entrypoint.");
+};
+
+export const buildChatCommand = (input: {
+  osBaseUrl: string;
+  projectSlugOrId: string;
+  streamPath: string;
+  entrypointPath: string;
+}) => ({
+  command: "bun",
+  args: [
+    input.entrypointPath,
+    "--base-url",
+    input.osBaseUrl,
+    "--project-slug-or-id",
+    input.projectSlugOrId,
+    "--stream-path",
+    input.streamPath,
+  ],
+});
+
+const runInheritedProcess = async (input: {
+  command: string;
+  args: string[];
+}): Promise<void> => {
+  const child = spawn(input.command, input.args, {
+    stdio: "inherit",
+    env: process.env,
+  });
+
+  const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve, reject) => {
+      child.on("error", reject);
+      child.on("exit", (code, signal) => resolve({ code, signal }));
+    },
+  );
+
+  if (result.signal) {
+    throw new Error(`${input.command} exited with signal ${result.signal}.`);
+  }
+  if (result.code !== 0) {
+    throw new Error(`${input.command} exited with code ${result.code ?? "unknown"}.`);
+  }
 };
 
 /**
@@ -844,6 +913,49 @@ const launcherProcedures = {
     return await client.getSession();
   }),
 
+  chat: os
+    .input(
+      z.object({
+        projectSlugOrId: z
+          .string()
+          .trim()
+          .min(1)
+          .default(DEFAULT_CHAT_PROJECT_SLUG_OR_ID)
+          .describe("OS project slug or ID"),
+        streamPath: z
+          .string()
+          .trim()
+          .min(1)
+          .startsWith("/")
+          .default(DEFAULT_CHAT_STREAM_PATH)
+          .describe("Project stream path to open"),
+        osBaseUrl: z
+          .string()
+          .trim()
+          .url()
+          .optional()
+          .describe("OS base URL. Defaults to the active iterate config or production."),
+      }),
+    )
+    .meta({
+      description: "Open the Iterate chat terminal UI",
+    })
+    .handler(async ({ input }) => {
+      const resolved = resolveConfig(process.cwd());
+      const osBaseUrl =
+        input.osBaseUrl ||
+        (resolved instanceof Error ? DEFAULT_CHAT_OS_BASE_URL : resolved.config.osBaseUrl);
+      const command = buildChatCommand({
+        osBaseUrl,
+        projectSlugOrId: input.projectSlugOrId,
+        streamPath: input.streamPath,
+        entrypointPath: resolveStreamTuiEntrypointPath(),
+      });
+      await runInheritedProcess({
+        ...command,
+      });
+    }),
+
   orgs: {
     list: os.meta({ description: "List organizations from the auth worker" }).handler(async () => {
       const resolved = resolveConfig(process.cwd());
@@ -1019,8 +1131,10 @@ export const getCli = async () => {
   // Parse custom top-level flags early, before trpc-cli sees the args.
   configFlagOverride = consumeCliStringFlag("--config");
   const localRouterPath = consumeCliStringFlag("--local-router");
-
-  const resolved = resolveConfig(process.cwd());
+  const requestedRootCommand = firstNonFlagArgument(process.argv.slice(2));
+  const shouldLoadRemoteRouters =
+    !requestedRootCommand ||
+    !Object.prototype.hasOwnProperty.call(launcherProcedures, requestedRootCommand);
 
   const errorProcedure = (problem: string) => (e: Error) => {
     const message = `${problem}: ${e.message}`;
@@ -1036,36 +1150,41 @@ export const getCli = async () => {
     routers.push({ "local-router": localRouter });
   }
 
-  if (resolved instanceof Error) {
-    const procedure = errorProcedure(`Invalid config`)(resolved);
-    routers.push({ os: procedure, daemon: procedure });
-  } else {
-    const { config } = resolved;
-    const settledResults = await Promise.allSettled([
-      getOsProcedures({ baseUrl: config.osBaseUrl, config }),
-      config.daemonBaseUrl
-        ? getDaemonProcedures({ daemonBaseUrl: config.daemonBaseUrl })
-        : Promise.reject(new Error("No daemonBaseUrl configured")),
-    ]);
-
-    const [osProcedures, daemonProcedures] = settledResults;
-
-    if (osProcedures.status === "fulfilled") {
-      routers.push({ os: osProcedures.value });
+  // Launcher commands are fully local and should not wait on remote discovery before
+  // they can run or print command-specific help.
+  if (shouldLoadRemoteRouters) {
+    const resolved = resolveConfig(process.cwd());
+    if (resolved instanceof Error) {
+      const procedure = errorProcedure(`Invalid config`)(resolved);
+      routers.push({ os: procedure, daemon: procedure });
     } else {
-      const message = `Couldn't connect to os at ${config.osBaseUrl}`;
-      routers.push({ os: errorProcedure(message)(osProcedures.reason) });
-    }
-    if (daemonProcedures.status === "fulfilled") {
-      // don't nest daemon procedures under "daemon"
-      routers.push(daemonProcedures.value);
-    } else {
-      const message = config.daemonBaseUrl
-        ? `Couldn't connect to daemon at ${config.daemonBaseUrl}`
-        : `No daemonBaseUrl configured`;
-      routers.push({
-        daemon: errorProcedure(message)(daemonProcedures.reason),
-      });
+      const { config } = resolved;
+      const settledResults = await Promise.allSettled([
+        getOsProcedures({ baseUrl: config.osBaseUrl, config }),
+        config.daemonBaseUrl
+          ? getDaemonProcedures({ daemonBaseUrl: config.daemonBaseUrl })
+          : Promise.reject(new Error("No daemonBaseUrl configured")),
+      ]);
+
+      const [osProcedures, daemonProcedures] = settledResults;
+
+      if (osProcedures.status === "fulfilled") {
+        routers.push({ os: osProcedures.value });
+      } else {
+        const message = `Couldn't connect to os at ${config.osBaseUrl}`;
+        routers.push({ os: errorProcedure(message)(osProcedures.reason) });
+      }
+      if (daemonProcedures.status === "fulfilled") {
+        // don't nest daemon procedures under "daemon"
+        routers.push(daemonProcedures.value);
+      } else {
+        const message = config.daemonBaseUrl
+          ? `Couldn't connect to daemon at ${config.daemonBaseUrl}`
+          : `No daemonBaseUrl configured`;
+        routers.push({
+          daemon: errorProcedure(message)(daemonProcedures.reason),
+        });
+      }
     }
   }
 
@@ -1083,7 +1202,7 @@ export const getCli = async () => {
 
 export const runCli = async () => {
   const { cli, prompts: cliPrompts } = await getCli();
-  await cli.run({ prompts: cliPrompts });
+  await cli.run({ prompts: cliPrompts, logger: yamlTableConsoleLogger });
 };
 
 // todo: move this to trpc-cli

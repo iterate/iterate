@@ -42,6 +42,7 @@ Then run commands:
 ```bash
 npx iterate config local
 npx iterate login
+npx iterate chat
 npx iterate whoami
 npx iterate orgs list
 npx iterate os project list
@@ -50,6 +51,7 @@ npx iterate os project list
 ## Commands
 
 - `iterate setup` - configure auth + launcher defaults
+- `iterate chat` - open the production Iterate chat terminal UI
 - `iterate doctor` - print resolved config/runtime info
 - `iterate install` - force clone/install for resolved checkout
 - `iterate whoami`

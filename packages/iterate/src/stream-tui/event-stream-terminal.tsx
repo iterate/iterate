@@ -17,24 +17,23 @@ import { getInitialProcessorState } from "@iterate-com/shared/stream-processors"
 import { createCliRenderer, type KeyEvent } from "@opentui/core";
 import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
 import { createORPCClient } from "@orpc/client";
+import type { ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { ORPCError } from "@orpc/server";
-import type { RouterClient } from "@orpc/server";
 import { osContract } from "@iterate-com/os-contract";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { appRouter } from "../src/orpc/root.ts";
 import {
   acceptedSlashInput,
   findSlashCommand as findDiscoveredSlashCommand,
   formatSlashCommandLabelSegments,
   parseSlashAutocompleteQuery,
   suggestSlashCommands,
-} from "../src/stream-tui/command-discovery.ts";
+} from "./command-discovery.ts";
 import {
   MissingCommandArgumentsError,
   parseSlashCommandInput,
   parseSlashInvocation,
-} from "../src/stream-tui/command-invocation.ts";
+} from "./command-invocation.ts";
 import {
   commandEntries,
   runCommand as runTuiCommand,
@@ -42,14 +41,14 @@ import {
   type CommandEntry,
   type StreamApi,
   type StreamSummary,
-} from "../src/stream-tui/command-router.ts";
-import { TuiEventsStreamView } from "../src/stream-tui/react-stream-renderers.tsx";
+} from "./command-router.ts";
+import { TuiEventsStreamView } from "./react-stream-renderers.tsx";
 import {
   formatCommandDocsForTui,
   getRawEventRowTargetsForTui,
   getRawEventSummariesForTui,
   type TuiSlashSuggestion,
-} from "../src/stream-tui/react-stream-view-model.ts";
+} from "./react-stream-view-model.ts";
 import {
   focusStreamTuiComposer,
   focusStreamTuiFeed,
@@ -57,16 +56,16 @@ import {
   initialStreamTuiNavigationState,
   setStreamTuiView,
   type StreamTuiView,
-} from "../src/stream-tui/navigation-state.ts";
-import { resolveStreamPath as resolveStreamPathForCurrent } from "../src/stream-tui/stream-paths.ts";
-import { getDefaultExpandedStreamPaths, getStreamTreeRows } from "../src/stream-tui/stream-tree.ts";
+} from "./navigation-state.ts";
+import { resolveStreamPath as resolveStreamPathForCurrent } from "./stream-paths.ts";
+import { getDefaultExpandedStreamPaths, getStreamTreeRows } from "./stream-tree.ts";
 
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
   throw new Error("stream-tui requires an interactive terminal.");
 }
 
 const args = parseArgs(process.argv.slice(2));
-type OrpcClient = RouterClient<typeof appRouter>;
+type OrpcClient = ContractRouterClient<typeof osContract>;
 const ROOT_STREAM_PATH = StreamPath.parse("/");
 
 const feedModes = {
@@ -832,7 +831,7 @@ function parseArgs(argv: string[]) {
 
   if (baseUrl == null || projectSlugOrId == null) {
     throw new Error(
-      "Usage: bun scripts/event-stream-terminal.tsx --base-url <url> --project-slug-or-id <slug-or-id> [--stream-path <path>]",
+      "Usage: bun event-stream-terminal.tsx --base-url <url> --project-slug-or-id <slug-or-id> [--stream-path <path>]",
     );
   }
 

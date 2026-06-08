@@ -13,15 +13,15 @@ test.use({
   columns: 100,
   rows: 32,
   // TUI Test owns only the terminal harness. The app still starts through the
-  // same iterate-app-cli path a user runs from the repo root.
+  // same iterate CLI path a user runs from the repo root.
   // Primary API reference: https://github.com/microsoft/tui-test#terminal-program
   program: {
-    file: "pnpm",
+    file: "node",
     args: [
-      "--dir",
-      "../..",
-      "cli",
-      "stream-tui",
+      "../../../../packages/iterate/bin/iterate.js",
+      "chat",
+      "--os-base-url",
+      process.env.APP_CONFIG_BASE_URL || "https://os.iterate.com",
       "--project-slug-or-id",
       projectSlugOrId,
       "--stream-path",

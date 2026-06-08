@@ -31,8 +31,8 @@
     "access": "public",
     "exports": {
       ".": {
-        "import": "./dist/index.js",
-        "types": "./dist/index.d.ts"
+        "import": "./dist/index.mjs",
+        "types": "./dist/index.d.mts"
       }
     }
   },
@@ -42,20 +42,32 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsgo",
+    "build": "tsdown",
     "typecheck": "tsgo --noEmit",
     "prepack": "pnpm build"
   },
   "dependencies": {
-    "@iterate-com/auth-contract": "workspace:*",
     "@clack/prompts": "^1.0.0",
+    "@opentui/core": "0.1.102",
+    "@opentui/react": "0.1.102",
     "@orpc/client": "1.13.14",
+    "@orpc/contract": "1.13.14",
+    "@orpc/openapi-client": "1.13.14",
     "@orpc/server": "1.13.14",
     "better-auth": "1.4.3",
+    "react": "^19.2.0",
     "trpc-cli": "0.14.0",
+    "yaml": "^2.8.3",
     "zod": "4.1.12"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0"
+    "@iterate-com/auth-contract": "workspace:*",
+    "@iterate-com/os-contract": "workspace:*",
+    "@iterate-com/shared": "workspace:*",
+    "@iterate-com/ui": "workspace:*",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.14",
+    "tsdown": "0.22.2",
+    "vitest": "4.0.15"
   }
 }

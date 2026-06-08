@@ -217,7 +217,7 @@ End-to-end and UI-adjacent stream tests:
 - `apps/os/e2e/vitest/codemode.e2e.test.ts:124` verifies codemode description output.
 - `apps/os/e2e/vitest/codemode-mcp-provider-stack.e2e.test.ts` exercises public MCP `exec_js` with built-in, RPC, OpenAPI, stream, and Slack providers; it calls `os.streams.list`, `streams.append`, and `streams.read`.
 - `apps/os/e2e/tui-test/stream-tui.spec.ts` covers the stream TUI command flow.
-- `apps/os/src/stream-tui/command-router.test.ts`, `apps/os/src/stream-tui/command-discovery.test.ts`, `apps/os/src/stream-tui/command-invocation.test.ts`, `apps/os/src/stream-tui/feed-formatting.test.ts`, `apps/os/src/stream-tui/navigation-state.test.ts`, `apps/os/src/stream-tui/pilotty-command.test.ts`, `apps/os/src/stream-tui/stream-paths.test.ts`, and `apps/os/src/stream-tui/stream-tree.test.ts` cover stream TUI parsing, routing, formatting, and navigation behavior.
+- `packages/iterate/src/stream-tui/command-router.test.ts`, `packages/iterate/src/stream-tui/command-discovery.test.ts`, `packages/iterate/src/stream-tui/command-invocation.test.ts`, `packages/iterate/src/stream-tui/feed-formatting.test.ts`, `packages/iterate/src/stream-tui/navigation-state.test.ts`, `packages/iterate/src/stream-tui/pilotty-command.test.ts`, `packages/iterate/src/stream-tui/stream-paths.test.ts`, and `packages/iterate/src/stream-tui/stream-tree.test.ts` cover stream TUI parsing, routing, formatting, and navigation behavior.
 - `apps/os/src/lib/stream-viewer-url.test.ts`, `apps/os/src/lib/events-links.test.ts`, and `apps/os/src/lib/agent-links.test.ts` cover stream/event/agent URL construction.
 
 Test config and scripts:

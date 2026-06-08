@@ -8,6 +8,10 @@ import { claudeMcpScript } from "./claude-mcp.ts";
 
 const DEFAULT_APP_CONFIG_BASE_URL = "https://os.iterate.com";
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
+const streamTuiEntrypointPath = join(
+  scriptsDir,
+  "../../../packages/iterate/src/stream-tui/event-stream-terminal.tsx",
+);
 
 const StreamTuiInput = z.object({
   projectSlugOrId: z.string().trim().min(1).describe("OS project slug or ID"),
@@ -33,19 +37,16 @@ export const router = os.router({
       description: "Open an OpenTUI project stream viewer",
     })
     .handler(async ({ input }) => {
-      const scriptPath = join(scriptsDir, "event-stream-terminal.tsx");
       const streamPathArgs = input.streamPath ? ["--stream-path", input.streamPath] : [];
       // OpenTUI is currently Bun-only: https://opentui.com/docs/getting-started/
       await runInheritedProcess("bun", [
-        scriptPath,
+        streamTuiEntrypointPath,
         "--base-url",
         input.osBaseUrl,
         "--project-slug-or-id",
         input.projectSlugOrId,
         ...streamPathArgs,
       ]);
-
-      return { ok: true as const };
     }),
 });
 

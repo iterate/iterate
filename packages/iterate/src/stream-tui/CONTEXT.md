@@ -1,6 +1,6 @@
 # Stream TUI
 
-This folder contains the pure Modules behind `apps/os`'s OpenTUI stream CLI. The CLI script is the OpenTUI Adapter; it should call these Modules instead of owning command discovery, navigation, path semantics, and test harness details directly.
+This folder contains the modules behind the published `iterate chat` OpenTUI stream CLI. The CLI script is the OpenTUI Adapter; it should call these Modules instead of owning command discovery, navigation, path semantics, and test harness details directly.
 
 ## Language
 
@@ -53,7 +53,7 @@ _Avoid_: tmux pane, shell session
 - A **Terminal Automation Run** owns exactly one **Pilotty Session** per scenario.
 - A **Pilotty Session** is created before user-visible assertions and killed during cleanup.
 - A **Terminal Automation Run** should inspect visible text or screen snapshots, not internal reducer state.
-- **Terminal Behavior Specs** use Microsoft TUI Test and launch the real `stream-tui` CLI command through a PTY.
+- **Terminal Behavior Specs** use Microsoft TUI Test and launch the real `iterate chat` command through a PTY.
 - **Terminal Rendering Specs** are expected to use a screen-aware runner such as Termless if its spike succeeds.
 
 ## Rules
@@ -62,5 +62,5 @@ _Avoid_: tmux pane, shell session
 - Keep command discovery slash-first; terminal-wide shortcuts are optional polish.
 - Let the local oRPC command router remain the source of truth for command hierarchy, handlers, input schemas, and TUI metadata.
 - Prefer unit tests for Modules, **Terminal Behavior Specs** for workflows, and **Terminal Rendering Specs** for screen invariants.
-- In `pilotty`, flags go before positionals: `pilotty spawn --name stream-tui pnpm --dir apps/os ...`.
+- In `pilotty`, flags go before positionals: `pilotty spawn --name stream-tui node packages/iterate/bin/iterate.js chat ...`.
 - Do not add a command result envelope. Commands call app context for UI effects and rely on oRPC/Zod errors for failures.
