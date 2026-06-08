@@ -162,7 +162,8 @@ test("OS preview smoke", async () => {
   const adminApiSecret = readAdminApiSecret();
 
   // Keep the dashboard checks unauthenticated, then use the admin preview hook to
-  // seed one deterministic project/MCP hostname. That makes the preview proof
+  // seed one deterministic project before checking the canonical MCP endpoint.
+  // That makes the preview proof
   // repeatable without relying on a human Clerk session.
   await expectStatus({
     url: new URL("/api/__internal/health", baseUrl),
@@ -191,7 +192,10 @@ test("OS preview smoke", async () => {
     headers: { accept: "text/html" },
     url: projectMcpUrl,
   });
-  if (!instructionsHtml.includes("Connect an MCP client to this project endpoint")) {
+  if (
+    !instructionsHtml.includes("Connect an MCP client to Iterate OS") ||
+    !instructionsHtml.includes(projectMcpUrl.toString().replace(/\/+$/, ""))
+  ) {
     throw new Error(`MCP instructions page did not contain setup text: ${instructionsHtml}`);
   }
 
