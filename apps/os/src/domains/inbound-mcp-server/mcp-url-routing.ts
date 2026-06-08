@@ -14,7 +14,7 @@ export function matchMcpRequestUrl(input: {
 
   const requestUrl = new URL(input.requestUrl);
   const baseUrl = normalizeMcpBaseUrl(mcpBaseUrl);
-  if (requestUrl.origin !== baseUrl.origin) return null;
+  if (!sameOriginOrLocalhostEquivalent(requestUrl, baseUrl)) return null;
 
   const basePathname = stripTrailingSlash(baseUrl.pathname);
   const requestPathname = stripTrailingSlash(requestUrl.pathname);
@@ -44,4 +44,19 @@ export function normalizeMcpBaseUrl(rawUrl: string) {
 
 export function stripTrailingSlash(pathname: string) {
   return pathname.replace(/\/+$/, "");
+}
+
+function sameOriginOrLocalhostEquivalent(requestUrl: URL, baseUrl: URL) {
+  if (requestUrl.origin === baseUrl.origin) return true;
+
+  return (
+    requestUrl.protocol === baseUrl.protocol &&
+    requestUrl.port === baseUrl.port &&
+    isLocalhostEquivalent(requestUrl.hostname) &&
+    isLocalhostEquivalent(baseUrl.hostname)
+  );
+}
+
+function isLocalhostEquivalent(hostname: string) {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }

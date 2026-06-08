@@ -29,6 +29,15 @@ describe("matchMcpRequestUrl", () => {
     ).toEqual({ relativePathname: "/" });
   });
 
+  it("treats localhost and loopback addresses as equivalent for local defaults", () => {
+    expect(
+      matchMcpRequestUrl({
+        appBaseUrl: "http://localhost:5176",
+        requestUrl: "http://127.0.0.1:5176/api/__mcp",
+      }),
+    ).toEqual({ relativePathname: "/" });
+  });
+
   it("does not match the old dashboard /mcp URL unless it is explicitly configured", () => {
     expect(
       matchMcpRequestUrl({
