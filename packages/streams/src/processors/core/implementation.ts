@@ -3,8 +3,9 @@
 // of through a subscription runner, because stream bookkeeping must be updated
 // before committed events are delivered to subscribers.
 
-import type { StreamEventInput } from "../../shared/event.ts";
+import type { StreamEvent, StreamEventInput } from "../../shared/event.ts";
 import { implementBuiltinProcessor } from "../../processor.ts";
+import { getInitialProcessorState, runProcessorReduce } from "../../shared/stream-processors.ts";
 import { coreProcessorContract, type CoreProcessorState } from "./contract.ts";
 
 export const coreProcessor = implementBuiltinProcessor(
@@ -45,4 +46,33 @@ export function getAncestorStreamPaths(path: string): string[] {
     ancestors.push(`/${segments.slice(0, index).join("/")}`);
   }
   return ancestors;
+}
+
+export function catchUpCoreProcessorState(args: {
+  state: CoreProcessorState;
+  events: readonly StreamEvent[];
+}): CoreProcessorState {
+  let state = args.state;
+  for (const event of args.events) {
+    if (event.offset <= state.maxOffset) continue;
+    const reduction = runProcessorReduce({
+      processor: { contract: coreProcessorContract },
+      event,
+      state,
+    });
+    if (reduction === undefined) {
+      throw new Error(`core processor cannot reduce event type "${event.type}"`);
+    }
+    state = coreProcessorContract.stateSchema.parse(reduction.state);
+  }
+  return state;
+}
+
+export function reduceCoreProcessorStateFromEvents(
+  events: readonly StreamEvent[],
+): CoreProcessorState {
+  return catchUpCoreProcessorState({
+    state: getInitialProcessorState(coreProcessorContract),
+    events,
+  });
 }
