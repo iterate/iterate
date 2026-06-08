@@ -83,11 +83,8 @@ export class StreamProcessorRunner extends DurableObject {
     const processEventBatch: ProcessEventBatch = (batch) => {
       const currentRunner = this.#runner;
       if (currentRunner === undefined) return;
-      const next = this.#processing.then(
-        () => currentRunner.processEventBatch(batch),
-        () => currentRunner.processEventBatch(batch),
-      );
-      this.#processing = next.catch(() => {});
+      const next = this.#processing.then(() => currentRunner.processEventBatch(batch));
+      this.#processing = next;
       this.ctx.waitUntil(next);
     };
 
