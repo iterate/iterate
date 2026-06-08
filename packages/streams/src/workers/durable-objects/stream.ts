@@ -22,8 +22,8 @@ import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecyc
 /**
  * Durable stream storage and Workers RPC surface.
  *
- * HTTP/WebSocket Cap'n Web termination belongs at the fronting Worker via
- * `StreamCapability`, keeping this DO focused on stream state and delivery.
+ * HTTP/WebSocket Cap'n Web termination belongs at the fronting Worker, which
+ * exposes this DO through `StreamRpcTarget`.
  */
 export class Stream extends DurableObject<Env> implements StreamRpc {
   #coreProcessorState: StreamCoreProcessorState;
@@ -676,7 +676,9 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
 // Wraps the Stream Durable Object in an RpcTarget that can be passed across
 // Workers RPC boundaries without attempting to structured-clone the DO itself.
-export const StreamRpcTarget = makeRpcTargetClass(Stream);
+export const StreamRpcTarget = makeRpcTargetClass<StreamRpc, StreamRpc>(
+  Stream as { prototype: StreamRpc },
+);
 
 /**
  * Resolves `streamPath` against the current stream's path into a canonical

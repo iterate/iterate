@@ -29,7 +29,7 @@ De facto source entrypoints:
 
 `Stream` in `packages/streams/src/workers/durable-objects/stream.ts` is the stream append log and Workers RPC endpoint.
 
-- CapnWeb HTTP/WebSocket termination is owned by the fronting Worker, which wraps the stream stub in `StreamCapability`; the Durable Object itself stays focused on storage and Workers RPC.
+- CapnWeb HTTP/WebSocket termination is owned by the fronting Worker, which wraps the stream stub in `StreamRpcTarget`; the Durable Object itself stays focused on storage and Workers RPC.
 - Constructor initializes two Durable Object SQL tables, `events` and `processor_state`, then reads inline processor state, appends a first `events.iterate.com/stream/created` event when empty, appends a `woken` event on each incarnation, and starts outbound reconciliation.
 - `append()` delegates to `appendBatch()`. `appendBatch()` validates input, handles idempotency keys, assigns offsets, reduces inline built-ins, persists event rows and processor state, then wakes delivery connections.
 - Stream paths are resolved by `resolveStreamPath()` and addressed as Durable Object names `${namespace}:${path}`.
@@ -121,7 +121,7 @@ The example app repeats these in `packages/streams/example-app/src/env.d.ts` and
 
 `packages/streams/example-app/src/worker.ts` exports both Durable Object classes and routes:
 
-- `/api/streams` and `/api/streams/...` to `newWorkersRpcResponse(request, new StreamCapability(env.STREAM.getByName("default:${path}")))`.
+- `/api/streams` and `/api/streams/...` to `newWorkersRpcResponse(request, new StreamRpcTarget(env.STREAM.getByName("default:${path}")))`.
 - `/stream-processor-runner/...` to `env.STREAM_PROCESSOR_RUNNER.getByName(name)`.
 - All other requests to the TanStack Start handler.
 

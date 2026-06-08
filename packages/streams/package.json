@@ -13,7 +13,6 @@
     "./subscription": "./src/subscription.ts",
     "./types": "./src/types.ts",
     "./workers/connect": "./src/workers/connect.ts",
-    "./workers/stream-capability": "./src/workers/stream-capability.ts",
     "./workers/durable-objects/stream": "./src/workers/durable-objects/stream.ts",
     "./workers/durable-objects/stream-processor-runner": "./src/workers/durable-objects/stream-processor-runner.ts"
   },

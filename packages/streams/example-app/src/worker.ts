@@ -1,7 +1,7 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { newWorkersRpcResponse } from "capnweb";
 import { env } from "cloudflare:workers";
-import { StreamCapability } from "../../src/workers/stream-capability.ts";
+import { StreamRpcTarget } from "../../src/workers/durable-objects/stream.ts";
 
 export { Stream } from "../../src/workers/durable-objects/stream.ts";
 export { StreamProcessorRunner } from "../../src/workers/durable-objects/stream-processor-runner.ts";
@@ -23,7 +23,7 @@ export default createServerEntry({
       // Stream DOs are named `${namespace}:${path}`; the browser namespace is "default".
       return newWorkersRpcResponse(
         request,
-        new StreamCapability(env.STREAM.getByName(`default:${path}`)),
+        new StreamRpcTarget(env.STREAM.getByName(`default:${path}`)),
       );
     }
 
