@@ -588,7 +588,10 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     };
 
     this.#connections.set(subscriptionKey, connection);
-    processEventBatch.onRpcBroken?.(() => connection.close());
+    processEventBatch.onRpcBroken?.(() => {
+      connection.close();
+      if (args.direction === "outbound") this.#reconcile();
+    });
     connection.wake();
 
     return {
