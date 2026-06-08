@@ -106,7 +106,7 @@ type OsProcessorBinding = {
   deps: unknown;
 };
 
-const PROCESSOR_RUNNER_SNAPSHOT_KEY = "snapshot:v4";
+const PROCESSOR_RUNNER_SNAPSHOT_KEY = "snapshot:v5";
 
 export class StreamProcessorRunner extends DurableObject {
   #stream: RpcStub<StreamRpc> | undefined;
@@ -258,6 +258,7 @@ function getOsProcessor(args: {
     return {
       processor: adaptSharedProcessor(
         createCodemodeProcessor(codemodeProcessorDeps({ ...args, projectId, streamPath })),
+        { detachedSideEffects: true },
       ),
       deps: {
         env: args.env,
@@ -486,6 +487,7 @@ type SharedProcessorAdapterDeps = {
 
 function adaptSharedProcessor(
   sharedProcessor: SharedProcessor<any>,
+  options: { detachedSideEffects?: boolean } = {},
 ): Processor<any, SharedProcessorAdapterDeps> {
   return {
     contract: sharedProcessor.contract,
@@ -515,7 +517,9 @@ function adaptSharedProcessor(
                 streamPath: deps.streamPath,
               }) as never,
               signal: abortController.signal,
-              waitUntil: (promise) => args.keepAlive(promise),
+              ...(options.detachedSideEffects === true
+                ? { waitUntil: (promise: Promise<unknown>) => args.keepAlive(promise) }
+                : {}),
             });
           });
         },

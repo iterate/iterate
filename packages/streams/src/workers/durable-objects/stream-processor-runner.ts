@@ -21,7 +21,7 @@ import type { Processor } from "../../processor.ts";
 type HostedProcessor = Processor<any, undefined>;
 type HostedProcessorRunnerSnapshot = Snapshot<unknown>;
 
-const PROCESSOR_RUNNER_SNAPSHOT_KEY = "snapshot:v4";
+const PROCESSOR_RUNNER_SNAPSHOT_KEY = "snapshot:v5";
 
 export class StreamProcessorRunner extends DurableObject {
   #stream: RetainedStreamRpc | undefined;
