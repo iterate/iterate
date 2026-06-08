@@ -16,7 +16,7 @@ import {
 } from "../../processors/core/implementation.ts";
 import { coreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
 import type { StreamRpc } from "../../types.ts";
-import { makeRpcTargetClass } from "../../shared/rpc-target.ts";
+import { makeRpcTargetClass, type RpcTargetClass } from "../../shared/rpc-target.ts";
 import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecycle.ts";
 
 /**
@@ -676,57 +676,66 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
 export const StreamRpcTarget = makeRpcTargetClass<StreamRpc, StreamRpc>(
   Stream as { prototype: StreamRpc },
+  { exclude: ["subscribe"] },
+);
+installSubscribeRpcTargetOverride(StreamRpcTarget);
+
+export const PublicStreamRpcTarget = makeRpcTargetClass<StreamRpc, StreamRpc>(
+  Stream as { prototype: StreamRpc },
   { exclude: ["subscribe", "subscribeOutbound"] },
 );
+installSubscribeRpcTargetOverride(PublicStreamRpcTarget);
 
-Object.defineProperty(StreamRpcTarget.prototype, "subscribe", {
-  async value(this: { source: StreamRpc }, args: Parameters<StreamRpc["subscribe"]>[0]) {
-    // The generated target can proxy ordinary methods directly. subscribe() is
-    // the only special case because it receives a callback that lives beyond the
-    // subscribe RPC return; keep that callback local to this Worker and forward a
-    // fire-and-forget callback to the DO so batch delivery produces no client
-    // `resolve(undefined)` traffic.
-    const clientProcessEventBatch = retainProcessEventBatch(args.processEventBatch);
-    let disposed = false;
-    const dispose = () => {
-      if (disposed) return;
-      disposed = true;
-      clientProcessEventBatch[Symbol.dispose]();
-    };
-    const processEventBatch: ProcessEventBatch & Disposable = Object.assign(
-      (batch: Parameters<ProcessEventBatch>[0]) => {
-        const pendingBatch = clientProcessEventBatch(batch);
-        disposeIgnoredRpcResult(pendingBatch);
-      },
-      { [Symbol.dispose]: dispose },
-    );
+function installSubscribeRpcTargetOverride(target: RpcTargetClass<StreamRpc, StreamRpc>) {
+  Object.defineProperty(target.prototype, "subscribe", {
+    async value(this: { source: StreamRpc }, args: Parameters<StreamRpc["subscribe"]>[0]) {
+      // The generated target can proxy ordinary methods directly. subscribe() is
+      // the only special case because it receives a callback that lives beyond the
+      // subscribe RPC return; keep that callback local to this Worker and forward a
+      // fire-and-forget callback to the DO so batch delivery produces no client
+      // `resolve(undefined)` traffic.
+      const clientProcessEventBatch = retainProcessEventBatch(args.processEventBatch);
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        clientProcessEventBatch[Symbol.dispose]();
+      };
+      const processEventBatch: ProcessEventBatch & Disposable = Object.assign(
+        (batch: Parameters<ProcessEventBatch>[0]) => {
+          const pendingBatch = clientProcessEventBatch(batch);
+          disposeIgnoredRpcResult(pendingBatch);
+        },
+        { [Symbol.dispose]: dispose },
+      );
 
-    try {
-      const subscription = await this.source.subscribe({
-        subscriptionKey: args.subscriptionKey,
-        replayAfterOffset: args.replayAfterOffset,
-        processEventBatch,
-      });
+      try {
+        const subscription = await this.source.subscribe({
+          subscriptionKey: args.subscriptionKey,
+          replayAfterOffset: args.replayAfterOffset,
+          processEventBatch,
+        });
 
-      clientProcessEventBatch.onRpcBroken?.(() => {
-        disposeIgnoredRpcResult(subscription.unsubscribe());
-        dispose();
-      });
-
-      return {
-        subscriptionKey: subscription.subscriptionKey,
-        streamMaxOffset: subscription.streamMaxOffset,
-        unsubscribe() {
+        clientProcessEventBatch.onRpcBroken?.(() => {
           disposeIgnoredRpcResult(subscription.unsubscribe());
           dispose();
-        },
-      };
-    } catch (error) {
-      clientProcessEventBatch[Symbol.dispose]();
-      throw error;
-    }
-  },
-});
+        });
+
+        return {
+          subscriptionKey: subscription.subscriptionKey,
+          streamMaxOffset: subscription.streamMaxOffset,
+          unsubscribe() {
+            disposeIgnoredRpcResult(subscription.unsubscribe());
+            dispose();
+          },
+        };
+      } catch (error) {
+        clientProcessEventBatch[Symbol.dispose]();
+        throw error;
+      }
+    },
+  });
+}
 
 /**
  * Resolves `streamPath` against the current stream's path into a canonical
