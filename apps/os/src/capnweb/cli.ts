@@ -59,7 +59,7 @@ function parseJsonObject(value: string) {
 
 function printUsage() {
   console.log(`Usage:
-  doppler run -- pnpm exec tsx src/capnweb/cli.ts --project-id <proj_...> -e "async ({ ctx }) => await (await ctx.project).describe()"
-  doppler run -- pnpm exec tsx src/capnweb/cli.ts -e "async ({ ctx }) => await (await ctx.projects).list()"
+  doppler run -- pnpm exec tsx src/capnweb/cli.ts --project-id <proj_...> -e "async ({ ctx }) => await ctx.project.describe()"
+  doppler run -- pnpm exec tsx src/capnweb/cli.ts -e "async ({ ctx }) => await ctx.projects.list()"
 `);
 }

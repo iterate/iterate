@@ -140,8 +140,7 @@ function rootRunWorkerSrc(input: { dynamicMountRoots: string[]; functionSource: 
   }
 
   async function projectEgressFetch(ctx, ...args) {
-    using project = await ctx.project;
-    return await project.egressFetch(new Request(args[0], args[1]));
+    return await ctx.project.egressFetch(new Request(args[0], args[1]));
   }
 
   async function runWithProjectEgressFetch(ctx, run) {

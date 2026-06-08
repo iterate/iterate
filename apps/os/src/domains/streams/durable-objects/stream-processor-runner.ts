@@ -166,7 +166,7 @@ export class StreamProcessorRunner extends DurableObject {
       deps: processor.deps,
       storage: {
         load: () => this.ctx.storage.kv.get<RunnerSnapshot>("snapshot"),
-        save: (snapshot) => void this.ctx.storage.kv.put("snapshot", snapshot),
+        save: (snapshot) => this.ctx.storage.kv.put("snapshot", snapshot),
       },
       stream: this.#stream,
       sideEffectAnchor: {
@@ -191,7 +191,8 @@ export class StreamProcessorRunner extends DurableObject {
     });
   }
 
-  runtimeState() {
+  async runtimeState() {
+    await this.#processing;
     const processorSlug = this.ctx.storage.kv.get<string>("processorSlug");
     const snapshot = this.ctx.storage.kv.get<RunnerSnapshot>("snapshot");
     return {

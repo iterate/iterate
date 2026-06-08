@@ -64,8 +64,7 @@ export async function projectEgressFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ) {
-  using project = await ctx.project;
-  return await project.egressFetch(new Request(input, init));
+  return await ctx.project.egressFetch(new Request(input, init));
 }
 
 async function projectContext(input: {

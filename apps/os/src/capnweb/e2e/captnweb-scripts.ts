@@ -65,20 +65,19 @@ export default {
     const eventType = url.searchParams.get("eventType");
     const marker = url.searchParams.get("marker");
     const executionMode = url.searchParams.get("executionMode");
-    using streams = await ctx.streams;
-    const beforeStreams = await streams.list();
+    const beforeStreams = await ctx.streams.list();
     const listUntilStreamAppears = async () => {
       for (let attempt = 0; attempt < 8; attempt++) {
-        const listedStreams = await streams.list();
+        const listedStreams = await ctx.streams.list();
         if (listedStreams.some((stream) => stream.streamPath === streamPath)) {
           return listedStreams;
         }
         // Deployed stream listing can lag a successful append/read by a short interval.
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
-      return streams.list();
+      return ctx.streams.list();
     };
-    const appended = await streams.append({
+    const appended = await ctx.streams.append({
       streamPath,
       event: {
         type: eventType,
@@ -86,7 +85,7 @@ export default {
       },
     });
     const afterStreams = await listUntilStreamAppears();
-    const events = await streams.read({ afterOffset: "start", streamPath });
+    const events = await ctx.streams.read({ afterOffset: "start", streamPath });
     return Response.json({
       appended: {
         eventType: appended.type,
@@ -124,9 +123,10 @@ export default {
 export const describeProjectThroughProjects = capnwebScript
   .vars<{ executionMode: string; projectId: string }>()
   .define(async ({ ctx, vars }) => {
-    using projects = await ctx.projects;
-    using project = await projects.get(vars.projectId);
-    return { ...(await project.describe()), executionMode: vars.executionMode };
+    return {
+      ...(await ctx.projects.get(vars.projectId).describe()),
+      executionMode: vars.executionMode,
+    };
   });
 
 /**
@@ -145,15 +145,14 @@ export const appendAndReadProjectStream = capnwebScript
     streamPath: string;
   }>()
   .define(async ({ ctx, vars }) => {
-    using streams = await ctx.streams;
-    const appended = await streams.append({
+    const appended = await ctx.streams.append({
       event: {
         type: vars.eventType,
         payload: { executionMode: vars.executionMode, marker: vars.marker },
       },
       streamPath: vars.streamPath,
     });
-    const events = await streams.read({ afterOffset: "start", streamPath: vars.streamPath });
+    const events = await ctx.streams.read({ afterOffset: "start", streamPath: vars.streamPath });
     return { appended, events, executionMode: vars.executionMode };
   });
 
@@ -168,12 +167,11 @@ export const appendAndReadProjectStream = capnwebScript
 export const callProjectConnection = capnwebScript
   .vars<{ connectionKey: string; methodName: string; source: string }>()
   .define(async ({ ctx, vars }) => {
-    using project = await ctx.project;
-    using connections = await project.connections;
-    using connection = await connections.get(vars.connectionKey);
     // The built-in type proves `ctx.project.connections` exists. The method name
     // is intentionally provided by the test-owned RpcTarget at runtime.
-    return await (connection as Record<string, any>)[vars.methodName]({ source: vars.source });
+    return await (ctx.project.connections.get(vars.connectionKey) as any)[vars.methodName]({
+      source: vars.source,
+    });
   });
 
 /**
@@ -194,37 +192,32 @@ export const updateIterateConfigAndCallWorker = capnwebScript
     workerSource: string;
   }>()
   .define(async ({ ctx, vars }) => {
-    using project = await ctx.project;
-    using repos = await project.repos;
-    using workspace = await project.workspace;
     // This is the intended project-scoped git path for codemode and tests:
     // the IterateContext shortcut resolves to ctx.projects.get(id).
-    using git = await workspace.git;
-    const repo = await repos.ensureIterateConfigInfo({ projectSlug: null });
+    const repo = await ctx.project.repos.ensureIterateConfigInfo({ projectSlug: null });
 
-    await git.clone({
+    await ctx.project.workspace.git.clone({
       branch: repo.defaultBranch,
       depth: 1,
       dir: vars.dir,
       url: repo.remote,
       ...repo.credentials,
     });
-    await workspace.writeFile(vars.dir + "/worker.js", vars.workerSource);
-    await git.add({ dir: vars.dir, filepath: "worker.js" });
-    await git.commit({
+    await ctx.project.workspace.writeFile(vars.dir + "/worker.js", vars.workerSource);
+    await ctx.project.workspace.git.add({ dir: vars.dir, filepath: "worker.js" });
+    await ctx.project.workspace.git.commit({
       author: { name: "Capnweb", email: "captnweb-e2e@iterate.com" },
       dir: vars.dir,
       message: `Add capnweb worker proof from ${vars.executionMode}`,
     });
-    await git.push({
+    await ctx.project.workspace.git.push({
       dir: vars.dir,
       ref: repo.defaultBranch,
       remote: "origin",
       ...repo.credentials,
     });
 
-    using worker = (await project.worker) as any;
-    const calledTool = await worker.someFunction({
+    const calledTool = await (ctx.project.worker as any).someFunction({
       echo: vars.marker,
       executionMode: vars.executionMode,
     });
@@ -232,7 +225,7 @@ export const updateIterateConfigAndCallWorker = capnwebScript
     return {
       calledTool,
       executionMode: vars.executionMode,
-      project: await project.describe(),
+      project: await ctx.project.describe(),
       repoSlug: repo.slug,
       workspaceGitPath: "ctx.project.workspace.git",
     };
@@ -256,9 +249,7 @@ export const callUpdatedIterateConfigWorker = capnwebScript
     streamPath: string;
   }>()
   .define(async ({ ctx, vars }) => {
-    using project = await ctx.project;
-    using worker = (await project.worker) as any;
-    const streamFetchResponse = await worker.fetch(
+    const streamFetchResponse = await (ctx.project.worker as any).fetch(
       new Request(
         `https://iterate-config.local/capnweb-fetch/${vars.marker}?${new URLSearchParams({
           eventType: vars.eventType,
@@ -275,12 +266,14 @@ export const callUpdatedIterateConfigWorker = capnwebScript
     }
 
     const streamFetch = await streamFetchResponse.json();
-    const called = await worker.someFunction({
+    const called = await (ctx.project.worker as any).someFunction({
       echo: vars.marker,
       executionMode: vars.executionMode,
     });
-    using streams = await ctx.streams;
-    const streamEvents = await streams.read({ afterOffset: "start", streamPath: vars.streamPath });
+    const streamEvents = await ctx.streams.read({
+      afterOffset: "start",
+      streamPath: vars.streamPath,
+    });
 
     return { called, streamEvents, streamFetch };
   });
@@ -303,12 +296,11 @@ export const fetchAndEgressProject = capnwebScript
     secretKey: string;
   }>()
   .define(async ({ ctx, vars }) => {
-    using project = await ctx.project;
     const expectedHomepageText = "Hello from the project config worker";
     let ingress = { status: 0, text: "" };
     for (let attempt = 0; attempt < 12; attempt++) {
       // ctx.project.fetch is the Project Durable Object ingress fetch.
-      const response = await project.fetch(new Request(vars.ingressUrl + "/"));
+      const response = await ctx.project.fetch(new Request(vars.ingressUrl + "/"));
       ingress = {
         status: response.status,
         text: await response.text(),
@@ -327,7 +319,7 @@ export const fetchAndEgressProject = capnwebScript
     const secretReference = `Bearer getSecret({ key: ${JSON.stringify(vars.secretKey)} })`;
     // ctx.project.egressFetch is the Project Durable Object egress path,
     // including project secret substitution.
-    const egressResponse = await project.egressFetch(
+    const egressResponse = await ctx.project.egressFetch(
       new Request(vars.echoUrl, {
         headers: {
           authorization: `Bearer ${vars.echoAuthToken}`,

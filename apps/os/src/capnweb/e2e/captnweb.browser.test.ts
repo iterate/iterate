@@ -1,10 +1,11 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { commands } from "vitest/browser";
-import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import {
   EXAMPLE_EGRESS_SECRET_KEY,
   EXAMPLE_EGRESS_SECRET_MATERIAL,
 } from "../../domains/secrets/example-secret.ts";
+import { BROWSER_REPL_EXAMPLES, evalBrowserReplSessionCode } from "../browser-repl.ts";
 import { liftLocalProxies } from "../local-proxy-wrapper.js";
 import type { IterateContext } from "../iterate-context-capability.ts";
 import type { ProjectCapabilityApi } from "../../domains/projects/durable-objects/project-durable-object.ts";
@@ -160,6 +161,42 @@ describe("capnweb browser execution mode", () => {
       ]),
     );
   }, 120_000);
+
+  it("runs the provideCapability browser REPL example and calls the provided target", async () => {
+    using root = await withRootIterateFromBrowser();
+    using projects = await root.projects;
+    const project = await projects.create({
+      slug: `captnweb-repl-example-${uniqueSuffix()}`.slice(0, 40),
+    });
+    createdProjectIds.push(project.id);
+
+    using iterate = await withIterateFromBrowser({ ingressUrl: project.ingressUrl });
+    const example = BROWSER_REPL_EXAMPLES.find((candidate) => {
+      return candidate.id === "provide-alert-capability";
+    });
+    if (!example) throw new Error("Missing provideCapability browser REPL example.");
+
+    const alertMessages: string[] = [];
+    const originalAlert = globalThis.alert;
+    globalThis.alert = (message?: unknown) => {
+      alertMessages.push(String(message));
+    };
+
+    try {
+      await expect(
+        evalBrowserReplSessionCode({
+          code: example.code,
+          ctx: iterate.ctx,
+          env: {},
+          scope: { projectId: project.id, RpcTarget },
+        }),
+      ).resolves.toBe("alerted");
+    } finally {
+      globalThis.alert = originalAlert;
+    }
+
+    expect(alertMessages).toEqual(["The answer is 42"]);
+  }, 60_000);
 });
 
 async function runBrowserCapnwebScript(input: {

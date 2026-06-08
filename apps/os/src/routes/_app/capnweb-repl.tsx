@@ -1,24 +1,47 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
+import { BookOpen, Play } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { useAuthClient } from "~/auth/client-context.ts";
+import { ScrollArea } from "@iterate-com/ui/components/scroll-area";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@iterate-com/ui/components/sheet";
+import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
+import {
+  BROWSER_REPL_EXAMPLES,
+  DEFAULT_BROWSER_REPL_CODE,
+  evalBrowserReplSessionCode,
+  formatBrowserReplResult,
+} from "~/capnweb/browser-repl.ts";
 import { liftLocalProxies } from "~/capnweb/local-proxy-wrapper.js";
 import type { IterateContext } from "~/capnweb/iterate-context-capability.ts";
 
 export const Route = createFileRoute("/_app/capnweb-repl")({
   staticData: {
-    breadcrumb: "Capnweb REPL",
+    breadcrumb: "Repl",
   },
   component: CapnwebReplPage,
 });
 
+type ReplEntry = {
+  code: string;
+  output: string;
+  status: "error" | "success";
+};
+
 function CapnwebReplPage() {
-  const { session } = useAuthClient();
-  const [code, setCode] = useState("await ctx.projects.list({ limit: 5 })");
+  const [code, setCode] = useState(DEFAULT_BROWSER_REPL_CODE);
   const [ctx, setCtx] = useState<RpcStub<IterateContext> | null>(null);
   const [status, setStatus] = useState("Connecting...");
-  const [output, setOutput] = useState("");
+  const [entries, setEntries] = useState<ReplEntry[]>([]);
+  const [examplesOpen, setExamplesOpen] = useState(false);
+  const envRef = useRef<Record<string, unknown>>({});
+  const scopeRef = useRef<Record<string, unknown>>({ RpcTarget });
 
   useEffect(() => {
     const wsUrl = new URL("/api/captnweb", window.location.href);
@@ -31,7 +54,7 @@ function CapnwebReplPage() {
       env?: object;
     };
     globals.ctx = lifted;
-    globals.env = {};
+    globals.env = envRef.current;
     setCtx(lifted);
     setStatus("Connected");
     return () => {
@@ -43,89 +66,137 @@ function CapnwebReplPage() {
   }, []);
 
   async function run() {
-    if (!ctx) return;
+    const trimmedCode = code.trim();
+    if (!ctx || trimmedCode === "") return;
     setStatus("Running...");
     try {
-      const result = await evalInBrowser({ code, ctx });
-      setOutput(formatResult(result));
+      const result = await evalBrowserReplSessionCode({
+        code: trimmedCode,
+        ctx,
+        env: envRef.current,
+        scope: scopeRef.current,
+      });
+      setEntries((current) => [
+        ...current,
+        { code: trimmedCode, output: formatBrowserReplResult(result), status: "success" },
+      ]);
+      setCode("");
       setStatus("Connected");
     } catch (error) {
-      setOutput(error instanceof Error ? (error.stack ?? error.message) : String(error));
+      setEntries((current) => [
+        ...current,
+        {
+          code: trimmedCode,
+          output: error instanceof Error ? (error.stack ?? error.message) : String(error),
+          status: "error",
+        },
+      ]);
       setStatus("Connected");
     }
   }
 
-  const scopes =
-    session?.authenticated === true
-      ? {
-          organizations: session.session.organizations.map(({ id, role, slug }) => ({
-            id,
-            role,
-            slug,
-          })),
-          projects: session.session.projects.map(({ id, organizationId, slug }) => ({
-            id,
-            organizationId,
-            slug,
-          })),
-        }
-      : null;
+  function selectExample(exampleCode: string) {
+    setCode(exampleCode);
+    setExamplesOpen(false);
+  }
 
   return (
-    <main className="flex h-full min-h-0 flex-col gap-4 p-4">
-      <section className="space-y-2">
-        <div className="flex items-center justify-between gap-3">
-          <h1 className="text-lg font-semibold">Capnweb REPL</h1>
-          <span className="text-sm text-muted-foreground">{status}</span>
-        </div>
-        <pre className="max-h-44 overflow-auto rounded-md border bg-muted p-3 text-xs">
-          {JSON.stringify(scopes, null, 2)}
-        </pre>
-      </section>
+    <main className="flex h-full min-h-0 flex-col bg-background">
+      <section className="flex min-h-0 flex-1 flex-col">
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="mx-auto flex w-full max-w-5xl flex-col gap-5 px-4 py-5">
+            {entries.length === 0 ? (
+              <div className="rounded-md border bg-muted/40 px-3 py-2 font-mono text-sm text-muted-foreground">
+                iterate&gt;
+              </div>
+            ) : (
+              entries.map((entry, index) => (
+                <div key={index} className="flex flex-col gap-2 font-mono text-sm">
+                  <pre className="overflow-x-auto whitespace-pre-wrap text-foreground">
+                    <span className="select-none text-muted-foreground">iterate&gt; </span>
+                    {entry.code}
+                  </pre>
+                  <pre
+                    className={
+                      entry.status === "error"
+                        ? "overflow-x-auto whitespace-pre-wrap text-destructive"
+                        : "overflow-x-auto whitespace-pre-wrap text-muted-foreground"
+                    }
+                  >
+                    {entry.output}
+                  </pre>
+                </div>
+              ))
+            )}
+          </div>
+        </ScrollArea>
 
-      <section className="grid min-h-0 flex-1 gap-3 lg:grid-cols-2">
-        <div className="flex min-h-0 flex-col gap-2">
-          <textarea
-            className="min-h-72 flex-1 resize-none rounded-md border bg-background p-3 font-mono text-sm outline-none focus:ring-2 focus:ring-ring"
-            spellCheck={false}
-            value={code}
-            onChange={(event) => setCode(event.target.value)}
-          />
-          <Button className="self-start" disabled={!ctx || status === "Running..."} onClick={run}>
-            Run
-          </Button>
+        <div className="border-t bg-background">
+          <div className="mx-auto flex w-full max-w-5xl flex-col gap-2 px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-mono text-xs text-muted-foreground">iterate&gt;</span>
+              <span className="text-xs text-muted-foreground">{status}</span>
+            </div>
+            <SourceCodeBlock
+              code={code}
+              className="min-h-24"
+              editable
+              language="typescript"
+              onChange={setCode}
+              onModEnter={() => void run()}
+              showCopyButton={false}
+            />
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="outline" onClick={() => setExamplesOpen(true)} size="sm">
+                <BookOpen data-icon="inline-start" />
+                Examples
+              </Button>
+              <Button
+                disabled={!ctx || status === "Running..." || code.trim() === ""}
+                onClick={() => void run()}
+                size="sm"
+              >
+                <Play data-icon="inline-start" />
+                Run
+              </Button>
+            </div>
+          </div>
         </div>
-        <pre className="min-h-72 overflow-auto rounded-md border bg-muted p-3 text-sm">
-          {output || "Result appears here."}
-        </pre>
       </section>
+      <Sheet open={examplesOpen} onOpenChange={setExamplesOpen}>
+        <SheetContent className="w-full gap-0 data-[side=right]:sm:w-[min(92vw,48rem)] data-[side=right]:sm:max-w-[min(92vw,48rem)]">
+          <SheetHeader className="border-b px-4 py-3 pr-14">
+            <SheetTitle>Examples</SheetTitle>
+            <SheetDescription>Runnable snippets for the current REPL session.</SheetDescription>
+          </SheetHeader>
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="flex flex-col gap-4 p-4">
+              {BROWSER_REPL_EXAMPLES.map((example) => (
+                <article key={example.id} className="flex flex-col gap-3 rounded-md border p-3">
+                  <div className="flex flex-col gap-1">
+                    <h3 className="text-sm font-medium">{example.title}</h3>
+                    <p className="text-sm text-muted-foreground">{example.description}</p>
+                  </div>
+                  <SourceCodeBlock
+                    code={example.code}
+                    className="h-80"
+                    language="typescript"
+                    showCopyButton
+                  />
+                  <Button
+                    className="self-end"
+                    onClick={() => selectExample(example.code)}
+                    size="sm"
+                    variant="outline"
+                  >
+                    Use snippet
+                  </Button>
+                </article>
+              ))}
+            </div>
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
     </main>
   );
-}
-
-async function evalInBrowser(input: { code: string; ctx: RpcStub<IterateContext> }) {
-  const env = {};
-  return await compileBrowserReplFunction(input.code)(input.ctx, env);
-}
-
-function compileBrowserReplFunction(code: string) {
-  try {
-    // oxlint-disable-next-line no-new-func -- This page is explicitly a browser-local REPL.
-    return new Function("ctx", "env", `return (async () => (${code}))()`) as ReplFunction;
-  } catch {
-    // oxlint-disable-next-line no-new-func -- Statement-mode fallback for the browser-local REPL.
-    return new Function("ctx", "env", `return (async () => {${code}})()`) as ReplFunction;
-  }
-}
-
-type ReplFunction = (ctx: RpcStub<IterateContext>, env: object) => Promise<unknown>;
-
-function formatResult(result: unknown) {
-  if (result === undefined) return "undefined";
-  if (typeof result === "string") return result;
-  try {
-    return JSON.stringify(result, null, 2);
-  } catch {
-    return String(result);
-  }
 }
