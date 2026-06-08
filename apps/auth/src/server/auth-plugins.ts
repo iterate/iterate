@@ -28,7 +28,7 @@ import {
   parseOAuthProjectSelectionReferenceId,
   resolveStoredProjectSelection,
 } from "./oauth-project-selection.ts";
-import { getOsResourceBases } from "./oauth-resources.ts";
+import { getOsMcpResourceBases, getOsResourceBases } from "./oauth-resources.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
@@ -98,12 +98,7 @@ async function listProjectClaims(
 
 export function getAuthPlugins(env: Record<string, unknown>) {
   const osResourceBases = getOsResourceBases();
-  const validAudiences = [
-    ...osResourceBases,
-    ...osResourceBases.map((baseUrl) => `${baseUrl}/mcp`),
-    "https://mcp.iterate.com/mcp",
-    "http://localhost:7301/mcp",
-  ];
+  const validAudiences = [...osResourceBases, ...getOsMcpResourceBases()];
 
   return [
     jwt(),
