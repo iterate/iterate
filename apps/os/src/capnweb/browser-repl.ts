@@ -92,26 +92,164 @@ function startsWithTopLevelDeclaration(code: string) {
 }
 
 function transformTopLevelDeclarations(code: string) {
-  return code
-    .replace(
-      /(^|[;\n]\s*)(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/g,
-      (_match, prefix: string, name: string) => `${prefix}${scopeAssignmentTarget(name)} =`,
-    )
-    .replace(
-      /(^|[;\n]\s*)async\s+function\s+([A-Za-z_$][\w$]*)\s*\(/g,
-      (_match, prefix: string, name: string) =>
-        `${prefix}${scopeAssignmentTarget(name)} = async function ${name}(`,
-    )
-    .replace(
-      /(^|[;\n]\s*)function\s+([A-Za-z_$][\w$]*)\s*\(/g,
-      (_match, prefix: string, name: string) =>
-        `${prefix}${scopeAssignmentTarget(name)} = function ${name}(`,
-    )
-    .replace(
-      /(^|[;\n]\s*)class\s+([A-Za-z_$][\w$]*)\b/g,
-      (_match, prefix: string, name: string) =>
-        `${prefix}${scopeAssignmentTarget(name)} = class ${name}`,
-    );
+  const replacements: Array<{ end: number; start: number; text: string }> = [];
+  let state:
+    | "code"
+    | "line-comment"
+    | "block-comment"
+    | "single-quote"
+    | "double-quote"
+    | "template" = "code";
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let parenDepth = 0;
+
+  for (let index = 0; index < code.length; index += 1) {
+    const char = code[index];
+    const next = code[index + 1];
+
+    if (state === "line-comment") {
+      if (char === "\n") state = "code";
+      continue;
+    }
+    if (state === "block-comment") {
+      if (char === "*" && next === "/") {
+        state = "code";
+        index += 1;
+      }
+      continue;
+    }
+    if (state === "single-quote") {
+      if (char === "\\") index += 1;
+      else if (char === "'") state = "code";
+      continue;
+    }
+    if (state === "double-quote") {
+      if (char === "\\") index += 1;
+      else if (char === '"') state = "code";
+      continue;
+    }
+    if (state === "template") {
+      if (char === "\\") index += 1;
+      else if (char === "`") state = "code";
+      continue;
+    }
+
+    if (char === "/" && next === "/") {
+      state = "line-comment";
+      index += 1;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      state = "block-comment";
+      index += 1;
+      continue;
+    }
+    if (char === "'") {
+      state = "single-quote";
+      continue;
+    }
+    if (char === '"') {
+      state = "double-quote";
+      continue;
+    }
+    if (char === "`") {
+      state = "template";
+      continue;
+    }
+
+    if (char === "{") braceDepth += 1;
+    else if (char === "}") braceDepth = Math.max(0, braceDepth - 1);
+    else if (char === "[") bracketDepth += 1;
+    else if (char === "]") bracketDepth = Math.max(0, bracketDepth - 1);
+    else if (char === "(") parenDepth += 1;
+    else if (char === ")") parenDepth = Math.max(0, parenDepth - 1);
+
+    if (braceDepth !== 0 || bracketDepth !== 0 || parenDepth !== 0) continue;
+    if (!isTopLevelStatementBoundary(code, index)) continue;
+
+    const replacement = readTopLevelDeclarationReplacement(code, index);
+    if (!replacement) continue;
+
+    replacements.push(replacement);
+    index = replacement.end - 1;
+  }
+
+  let transformed = code;
+  for (const replacement of replacements.toReversed()) {
+    transformed =
+      transformed.slice(0, replacement.start) +
+      replacement.text +
+      transformed.slice(replacement.end);
+  }
+
+  return transformed;
+}
+
+function readTopLevelDeclarationReplacement(
+  code: string,
+  index: number,
+): { end: number; start: number; text: string } | null {
+  const source = code.slice(index);
+  const variable = /^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/.exec(source);
+  if (variable?.[1]) {
+    const equalsIndex = index + variable[0].length - 1;
+    return {
+      start: index,
+      end: equalsIndex,
+      text: `${scopeAssignmentTarget(variable[1])} `,
+    };
+  }
+
+  const asyncFunction = /^async\s+function\s+([A-Za-z_$][\w$]*)\s*\(/.exec(source);
+  if (asyncFunction?.[1]) {
+    const parenIndex = index + asyncFunction[0].length - 1;
+    return {
+      start: index,
+      end: parenIndex,
+      text: `${scopeAssignmentTarget(asyncFunction[1])} = async function ${asyncFunction[1]}`,
+    };
+  }
+
+  const namedFunction = /^function\s+([A-Za-z_$][\w$]*)\s*\(/.exec(source);
+  if (namedFunction?.[1]) {
+    const parenIndex = index + namedFunction[0].length - 1;
+    return {
+      start: index,
+      end: parenIndex,
+      text: `${scopeAssignmentTarget(namedFunction[1])} = function ${namedFunction[1]}`,
+    };
+  }
+
+  const namedClass = /^class\s+([A-Za-z_$][\w$]*)\b/.exec(source);
+  if (namedClass?.[1]) {
+    return {
+      start: index,
+      end: index + namedClass[0].length,
+      text: `${scopeAssignmentTarget(namedClass[1])} = class ${namedClass[1]}`,
+    };
+  }
+
+  return null;
+}
+
+function isTopLevelStatementBoundary(code: string, index: number) {
+  if (!isIdentifierStart(code[index] ?? "")) return false;
+
+  let previous = index - 1;
+  let crossedLineBreak = false;
+  while (previous >= 0 && /\s/.test(code[previous] ?? "")) {
+    crossedLineBreak ||= code[previous] === "\n" || code[previous] === "\r";
+    previous -= 1;
+  }
+  if (previous < 0) return true;
+  if (crossedLineBreak) return true;
+
+  return [";", "}"].includes(code[previous] ?? "");
+}
+
+function isIdentifierStart(value: string) {
+  return /^[A-Za-z_$]$/.test(value);
 }
 
 function scopeAssignmentTarget(name: string) {

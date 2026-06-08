@@ -49,6 +49,42 @@ describe("browser Cap'n Web REPL", () => {
         scope,
       }),
     ).resolves.toBe(42);
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "const secondAnswer = answer + 1",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "secondAnswer",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBe(42);
+  });
+
+  test("session snippets persist multiple top-level variables across lines", async () => {
+    const scope: Record<string, unknown> = {};
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "const first = 20\nconst second = 22",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "first + second",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBe(42);
   });
 
   test("session snippets persist function and class declarations", async () => {
@@ -98,6 +134,29 @@ describe("browser Cap'n Web REPL", () => {
         scope,
       }),
     ).resolves.toBe(42);
+  });
+
+  test("session snippets do not rewrite nested local declarations", async () => {
+    const scope: Record<string, unknown> = {};
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: `
+function answer() {
+  const nested = 42;
+  return nested;
+}
+if (answer() !== 42) throw new Error("nested local declaration broke");
+const persisted = answer();
+`.trim(),
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(scope).toHaveProperty("answer");
+    expect(scope).toHaveProperty("persisted", 42);
+    expect(scope).not.toHaveProperty("nested");
   });
 
   test("session snippets cannot shadow injected ctx or env bindings", async () => {
