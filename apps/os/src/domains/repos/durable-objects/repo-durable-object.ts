@@ -356,7 +356,7 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `repo-subscription:${params.projectId}:${params.repoSlug}`,
+      idempotencyKey: `repo-subscription:${params.projectId}:${params.repoSlug}:workers-rpc`,
       payload: {
         subscriptionKey: repoProcessorSubscriptionKey(params),
         subscriber: {

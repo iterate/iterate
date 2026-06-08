@@ -479,7 +479,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `codemode-session-processor-subscription:${this.name}`,
+      idempotencyKey: `codemode-session-processor-subscription:${this.name}:workers-rpc`,
       payload: {
         subscriptionKey: codemodeProcessorSubscriptionKey({
           projectId: this.structuredName.projectId,

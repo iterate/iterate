@@ -130,7 +130,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `slack-subscription:${projectId}`,
+      idempotencyKey: `slack-subscription:${projectId}:workers-rpc`,
       payload: {
         subscriptionKey: slackIntegrationProcessorSubscriptionKey(projectId),
         subscriber: {
@@ -153,7 +153,7 @@ export function routedStreamBootstrapEvents(input: {
   return [
     {
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.streamPath}`,
+      idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.streamPath}:workers-rpc`,
       payload: {
         subscriptionKey: slackAgentProcessorSubscriptionKey({
           projectId: input.projectId,
@@ -168,7 +168,7 @@ export function routedStreamBootstrapEvents(input: {
     },
     {
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `codemode-session-processor-subscription:${input.projectId}:${streamPath}`,
+      idempotencyKey: `codemode-session-processor-subscription:${input.projectId}:${streamPath}:workers-rpc`,
       payload: {
         subscriptionKey: codemodeProcessorSubscriptionKey({
           projectId: input.projectId,

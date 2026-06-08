@@ -1294,7 +1294,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `project-lifecycle-subscription:${projectId}`,
+      idempotencyKey: `project-lifecycle-subscription:${projectId}:workers-rpc`,
       payload: {
         subscriptionKey: projectLifecycleSubscriptionKey(projectId),
         subscriber: {
