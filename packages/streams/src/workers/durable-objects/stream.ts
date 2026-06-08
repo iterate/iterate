@@ -10,7 +10,11 @@ import { getInitialProcessorState, runProcessorReduce } from "../../shared/strea
 import { makeRpcTargetClass } from "../../shared/rpc-target.ts";
 import type { StreamCoreProcessorState } from "../../types.ts";
 import type { ProcessorStream } from "../../processor-runner.ts";
-import { getAncestorStreamPaths, coreProcessor } from "../../processors/core/implementation.ts";
+import {
+  getAncestorStreamPaths,
+  catchUpCoreProcessorState,
+  coreProcessor,
+} from "../../processors/core/implementation.ts";
 import { coreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
 import type { StreamProcessorRunnerRpc, StreamRpc, SubscriptionSink } from "../../types.ts";
 
@@ -74,13 +78,42 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   protected readCoreProcessorState(): StreamCoreProcessorState {
     const stored = this.ctx.storage.kv.get<unknown>("state");
-    return stored === undefined
-      ? getInitialProcessorState(coreProcessorContract)
-      : coreProcessorContract.stateSchema.parse(stored);
+    const storedState =
+      stored === undefined
+        ? getInitialProcessorState(coreProcessorContract)
+        : coreProcessorContract.stateSchema.parse(stored);
+    const state = this.#catchUpCoreProcessorState(storedState);
+
+    if (state.maxOffset !== storedState.maxOffset) {
+      this.writeCoreProcessorState(state);
+    }
+    return state;
   }
 
   protected writeCoreProcessorState(state: StreamCoreProcessorState): void {
     this.ctx.storage.kv.put("state", state);
+  }
+
+  #catchUpCoreProcessorState(state: StreamCoreProcessorState): StreamCoreProcessorState {
+    const highestOffset = this.#readHighestEventOffset();
+    if (highestOffset <= state.maxOffset) return state;
+
+    return catchUpCoreProcessorState({
+      state,
+      events: this.#readEventsInRange({
+        afterOffset: state.maxOffset,
+        beforeOffset: highestOffset + 1,
+        limit: highestOffset - state.maxOffset,
+      }),
+    });
+  }
+
+  #readHighestEventOffset(): number {
+    return (
+      this.ctx.storage.sql
+        .exec<{ offset: number | null }>("select max(offset) as offset from events")
+        .toArray()[0]?.offset ?? 0
+    );
   }
 
   #appendEventRows(events: StreamEvent[]): void {
