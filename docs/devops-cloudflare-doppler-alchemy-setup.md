@@ -294,7 +294,8 @@ OS routing has two layers:
 `apps/os/alchemy.run.ts` manages routes derived from App Config:
 
 - `APP_CONFIG_BASE_URL` -> dashboard host, such as `os.iterate.com`.
-- `APP_CONFIG_MCP__BASE_URL` -> MCP host, such as `mcp.iterate.com`.
+- `APP_CONFIG_MCP__BASE_URL` -> MCP endpoint, such as
+  `https://mcp.iterate.com`.
 - `APP_CONFIG_PROJECT_HOSTNAME_BASES` -> project host base and wildcard, such
   as `iterate.app` and `*.iterate.app`.
 

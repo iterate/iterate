@@ -11,6 +11,24 @@ describe("matchMcpRequestUrl", () => {
     ).toEqual({ relativePathname: "/" });
   });
 
+  it("matches metadata paths below the canonical root mount", () => {
+    expect(
+      matchMcpRequestUrl({
+        mcpBaseUrl: "https://mcp.iterate.com",
+        requestUrl: "https://mcp.iterate.com/.well-known/oauth-protected-resource",
+      }),
+    ).toEqual({ relativePathname: "/.well-known/oauth-protected-resource" });
+  });
+
+  it("preserves explicit path-mounted MCP URLs", () => {
+    expect(
+      matchMcpRequestUrl({
+        mcpBaseUrl: "https://mcp.iterate.com/mcp",
+        requestUrl: "https://mcp.iterate.com/mcp/.well-known/oauth-protected-resource",
+      }),
+    ).toEqual({ relativePathname: "/.well-known/oauth-protected-resource" });
+  });
+
   it("matches paths relative to a path-mounted MCP base URL", () => {
     expect(
       matchMcpRequestUrl({
