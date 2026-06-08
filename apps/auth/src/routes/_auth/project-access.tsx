@@ -1,6 +1,10 @@
 import { Button } from "@iterate-com/ui/components/button";
 import { ITERATE_PROJECT_SELECTION_SCOPE } from "@iterate-com/shared/auth-claims";
 import {
+  OAUTH_RESOURCE_PARAMETER,
+  copyMissingSearchParams,
+} from "@iterate-com/shared/oauth-resource";
+import {
   Card,
   CardContent,
   CardDescription,
@@ -134,7 +138,7 @@ function RouteComponent() {
         throw new Error("Could not continue the OAuth redirect");
       }
 
-      window.location.href = result.url;
+      window.location.href = preserveOAuthResourceSearchParam(result.url);
       return result;
     },
   });
@@ -559,6 +563,15 @@ function SignedInUserRow(props: {
       </Button>
     </div>
   );
+}
+
+function preserveOAuthResourceSearchParam(rawUrl: string) {
+  return copyMissingSearchParams({
+    targetUrl: rawUrl,
+    sourceSearch: window.location.search,
+    paramNames: [OAUTH_RESOURCE_PARAMETER],
+    baseUrl: window.location.origin,
+  }).toString();
 }
 
 function CreateProjectForm(props: {

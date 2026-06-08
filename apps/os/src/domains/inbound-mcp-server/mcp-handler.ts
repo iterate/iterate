@@ -4,6 +4,7 @@ import {
   hasWildcardProjectScope,
   listProjectScopeIds,
 } from "@iterate-com/shared/auth-claims";
+import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
 import { McpAgent } from "agents/mcp";
 import { createD1Client } from "sqlfu";
 import type { AppConfig } from "~/app.ts";
@@ -192,7 +193,7 @@ function createMcpIterateAuth(input: McpHandlerInput) {
     clientId: config.clientId,
     clientSecret: config.clientSecret.exposeSecret(),
     redirectURI: `${baseUrl}/api/iterate-auth/callback`,
-    resource: canonicalMcpResourceUrl(input),
+    resource: oauthResourceAudienceVariants(canonicalMcpResourceUrl(input)),
   });
 }
 

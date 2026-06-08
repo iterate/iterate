@@ -1,4 +1,5 @@
 import { createIterateAuth, type AuthenticatedSession } from "@iterate-com/auth/server";
+import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
 import { createMiddleware } from "@tanstack/react-start";
 import type { AppContext } from "~/context.ts";
 import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
@@ -163,7 +164,9 @@ export function createOsIterateAuth(context: AppContext, request: Request) {
     mcpBaseUrl: context.config.mcp?.baseUrl,
     requestUrl: request.url,
   });
-  const resources = mcpResource ? [resource, mcpResource] : [resource];
+  const resources = mcpResource
+    ? [resource, ...oauthResourceAudienceVariants(mcpResource)]
+    : [resource];
 
   return createIterateAuth({
     issuer: config.issuer,
