@@ -20,7 +20,7 @@ describe("e2e test map", () => {
     /**
      * - MCP e2e
     - I can connect to MCP with admin token
-        - `pnpm cli claude-mcp` script in apps/os/scripts that starts claude and points it at an MCP server using an admin token from doppler
+        - `pnpm cli claude-mcp` command in packages/iterate/src/os that points Claude at an MCP server using an admin token from doppler
     - I can connect to MCP via oauth flow (requires playwright + MCP inspector or something)
     - Normally what I do is run the “**RPC capability tour”** or similar through `exec_js` with a codemode block
     - The largest surface area of all would be exposed if you prompted claude to “Start a subagent using ctx.agents.create() and ask it to do something for you and wait for the response”

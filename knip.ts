@@ -72,12 +72,10 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     ...base,
     entry: [
-      ...(base.entry ?? []),
+      ...(base.entry ?? []).filter((entry) => entry !== "scripts/router.ts"),
       "e2e/vitest.config.ts",
       "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",
-      "scripts/claude-mcp.ts",
-      "scripts/event-stream-terminal.tsx",
       "scripts/sync-clerk-apps.ts",
       "sqlfu.config.ts",
       "src/durable-objects/codemode-session.vitest.config.ts",
@@ -195,8 +193,6 @@ const config: KnipConfig = {
     "apps/os/src/durable-objects/mock-artifacts-binding.ts": ["exports"],
     "apps/os/src/durable-objects/test-stream-durable-object.ts": ["files", "exports"],
     "apps/os/src/domains/codemode/examples.ts": ["exports"],
-    "apps/os/src/stream-tui/react-stream-renderers.tsx": ["exports"],
-    "apps/os/src/stream-tui/react-stream-view-model.ts": ["exports"],
     "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
     "apps/os/e2e/test-support/create-local-dev-server.ts": ["files", "exports"],
     "apps/os/src/**": ["exports", "types"],

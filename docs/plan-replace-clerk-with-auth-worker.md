@@ -286,7 +286,7 @@ fields. Fill from Principal instead.
 
 **Files:**
 
-- `apps/os/scripts/claude-mcp.ts` — update URL to `os.iterate.com/mcp`
+- `packages/iterate/src/os/claude-mcp.ts` — update URL to `os.iterate.com/mcp`
 - MCP settings page — update instructions and endpoint URL display
 
 ---

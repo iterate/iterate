@@ -51,7 +51,8 @@ pnpm cf:deploy           # production deploy
 ```
 
 `pnpm cli` uses `scripts/cli.ts`: if already inside `doppler run`, it preserves
-that config; otherwise it enters Doppler using the local `apps/os` setup. Use
+that config; otherwise it enters Doppler using the local `apps/os` setup. Local
+CLI commands are loaded from `packages/iterate/src/os/router.ts`. Use
 `doppler run --config <config> -- <command>` when you want preview/prd app
 config explicitly.
 
