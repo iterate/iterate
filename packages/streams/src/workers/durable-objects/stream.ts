@@ -676,7 +676,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
 export const StreamRpcTarget = makeRpcTargetClass<StreamRpc, StreamRpc>(
   Stream as { prototype: StreamRpc },
-  { exclude: ["subscribe"] },
+  { exclude: ["subscribe", "subscribeOutbound"] },
 );
 
 Object.defineProperty(StreamRpcTarget.prototype, "subscribe", {
