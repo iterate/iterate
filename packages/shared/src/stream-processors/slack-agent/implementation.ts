@@ -11,6 +11,8 @@ export type SlackAgentProcessorDeps = {
 
 export function createSlackAgentProcessor(deps: SlackAgentProcessorDeps = {}) {
   return implementProcessor(SlackAgentProcessorContract, {
+    firstAttachAfterAppend: { mode: "lookback", milliseconds: 60_000 },
+
     async afterAppend({ event, state, streamApi }) {
       await standardProcessorBehavior.afterAppend({
         contract: SlackAgentProcessorContract,
@@ -64,13 +66,6 @@ export function createSlackAgentProcessor(deps: SlackAgentProcessorDeps = {}) {
 
           const slackEvent = parsed.data.event as unknown as SlackEvent;
           const target = slackAgentTargetFromWebhookPayload(event.payload);
-          if (target != null && !target.isBotMessage && !target.isReactionEvent) {
-            await callSlackApi(deps, "reactions.add", {
-              channel: target.channel,
-              name: "eyes",
-              timestamp: target.messageTs,
-            });
-          }
           if (isBotMessage(slackEvent)) return;
           if (isBotAction(slackEvent, state.botUserId)) return;
 
@@ -102,6 +97,7 @@ export function createSlackAgentProcessor(deps: SlackAgentProcessorDeps = {}) {
                 },
               },
             });
+            await addEyesReactionForMessageTarget(deps, target);
             return;
           }
 
@@ -118,6 +114,7 @@ export function createSlackAgentProcessor(deps: SlackAgentProcessorDeps = {}) {
               },
             },
           });
+          await addEyesReactionForMessageTarget(deps, target);
           return;
         }
         case "events.iterate.com/codemode/function-call-requested":
@@ -182,6 +179,18 @@ export function createSlackAgentProcessor(deps: SlackAgentProcessorDeps = {}) {
           return;
       }
     },
+  });
+}
+
+async function addEyesReactionForMessageTarget(
+  deps: SlackAgentProcessorDeps,
+  target: SlackAgentTarget | null,
+) {
+  if (target == null || target.isBotMessage || target.isReactionEvent) return;
+  await callSlackApi(deps, "reactions.add", {
+    channel: target.channel,
+    name: "eyes",
+    timestamp: target.messageTs,
   });
 }
 

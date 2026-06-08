@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { GenericMessageEvent } from "@slack/types";
 import {
+  catchUpProcessorFromStream,
+  createStoredProcessorState,
   getInitialProcessorState,
   reduceProcessorEvents,
   type ConsumedEvent,
@@ -197,6 +199,89 @@ describe("createSlackAgentProcessor", () => {
     expect(content).not.toContain("Reply requirement:");
     expect(content).not.toContain("ctx.slack.chat.postMessage({ channel, thread_ts, text })");
     expect(content).not.toContain("Do not use `ctx.chat.sendMessage`");
+  });
+
+  it("commits agent input before adding the Slack eyes reaction", async () => {
+    const calls: unknown[] = [];
+    const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
+    const event = webhookEvent({
+      offset: 43,
+      text: "please look at this",
+    });
+
+    await createSlackAgentProcessor({
+      callSlackApi: async (method, body) => {
+        calls.push(["slack", method, body]);
+      },
+    }).implementation.afterAppend?.({
+      event,
+      previousState: registeredSlackAgentState(),
+      state: registeredSlackAgentState({
+        channel: "C123",
+        latestMessageTs: "1772136259.000000",
+        threadTs: "1772136258.963519",
+      }),
+      streamApi: {
+        ...testSlackAgentStreamApi(appended),
+        append: async ({ event, streamPath }) => {
+          calls.push(["append", event.type, event.idempotencyKey]);
+          appended.push({ event, streamPath });
+          return committedEvent(event, streamPath);
+        },
+      },
+      signal: new AbortController().signal,
+    });
+
+    expect(calls).toEqual([
+      [
+        "append",
+        "events.iterate.com/agent/input-added",
+        "slack-agent/slack-webhook-to-agent-input@43",
+      ],
+      [
+        "slack",
+        "reactions.add",
+        {
+          channel: "C123",
+          name: "eyes",
+          timestamp: "1772136259.000000",
+        },
+      ],
+    ]);
+  });
+
+  it("runs Slack webhook afterAppend during delayed first attach", async () => {
+    const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
+    const processor = createSlackAgentProcessor();
+    const route = routeEvent();
+    const webhook = webhookEvent({
+      offset: 2,
+      text: "please look at this",
+    });
+
+    const storedState = await catchUpProcessorFromStream({
+      processor,
+      storedState: createStoredProcessorState({ contract: SlackAgentProcessorContract }),
+      saveStoredProcessorState: async () => {},
+      streamApi: {
+        ...testSlackAgentStreamApi(appended),
+        read: async () => [route, webhook],
+      },
+      signal: new AbortController().signal,
+      now: new Date("2026-01-01T00:00:30.000Z"),
+    });
+
+    expect(storedState.afterAppendCompletedThroughOffset).toBe(2);
+    const slackSpecificAppends = appended.filter(
+      ({ event }) => event.type !== "events.iterate.com/core/stream-processor-registered",
+    );
+    expect(slackSpecificAppends.map(({ event }) => event.type)).toEqual([
+      "events.iterate.com/codemode/tool-provider-registered",
+      "events.iterate.com/agent/input-added",
+    ]);
+    expect(slackSpecificAppends[1].event).toMatchObject({
+      idempotencyKey: "slack-agent/slack-webhook-to-agent-input@2",
+    });
   });
 
   it("emits agent input for raw Slack interactivity payloads", async () => {

@@ -106,6 +106,8 @@ type OsProcessorBinding = {
   deps: unknown;
 };
 
+const PROCESSOR_RUNNER_SNAPSHOT_KEY = "snapshot:v4";
+
 export class StreamProcessorRunner extends DurableObject {
   #stream: RpcStub<StreamRpc> | undefined;
   #runner: ProcessorRunner | undefined;
@@ -165,13 +167,13 @@ export class StreamProcessorRunner extends DurableObject {
       processor: processor.processor,
       deps: processor.deps,
       storage: {
-        load: () => this.ctx.storage.kv.get<RunnerSnapshot>("snapshot"),
-        save: (snapshot) => this.ctx.storage.kv.put("snapshot", snapshot),
+        load: () => this.ctx.storage.kv.get<RunnerSnapshot>(PROCESSOR_RUNNER_SNAPSHOT_KEY),
+        save: (snapshot) => this.ctx.storage.kv.put(PROCESSOR_RUNNER_SNAPSHOT_KEY, snapshot),
       },
       stream: this.#stream,
       sideEffectAnchor: {
-        offset: args.subscriptionConfiguredEvent.offset,
-        createdAt: args.subscriptionConfiguredEvent.createdAt,
+        offset: args.streamMaxOffset,
+        createdAt: new Date().toISOString(),
       },
     });
 
@@ -187,14 +189,14 @@ export class StreamProcessorRunner extends DurableObject {
     this.#subscriptionHandle = await (this.#stream as OutboundStreamRpc).subscribeOutbound({
       subscriptionKey: args.subscriptionKey,
       processEventBatch,
-      replayAfterOffset: snapshot?.offset ?? args.subscriptionConfiguredEvent.offset,
+      replayAfterOffset: snapshot?.offset ?? 0,
     });
   }
 
   async runtimeState() {
     await this.#processing;
     const processorSlug = this.ctx.storage.kv.get<string>("processorSlug");
-    const snapshot = this.ctx.storage.kv.get<RunnerSnapshot>("snapshot");
+    const snapshot = this.ctx.storage.kv.get<RunnerSnapshot>(PROCESSOR_RUNNER_SNAPSHOT_KEY);
     return {
       processorSlug,
       snapshot,
@@ -421,6 +423,8 @@ const AgentHostProcessorContract = {
 function createAgentHostProcessor(): Processor<any, AgentHostProcessorDeps> {
   return implementProcessor(AgentHostProcessorContract as any, (deps: AgentHostProcessorDeps) => ({
     afterAppend(args) {
+      if (!args.shouldApplySideEffects({ event: args.event as StreamEvent })) return;
+
       const event = toLegacyEvent(args.event as StreamEvent, deps.streamPath);
       // Wake this stream's agent WITHOUT blocking the host's checkpoint. The agent's
       // onInstanceWake waits for every processor on the stream (including this agent-host) to
@@ -488,6 +492,16 @@ function adaptSharedProcessor(
     build(deps: SharedProcessorAdapterDeps) {
       return {
         afterAppend(args: any) {
+          if (
+            !shouldApplySharedProcessorSideEffects({
+              event: args.event as StreamEvent,
+              sharedProcessor,
+              shouldApplySideEffects: args.shouldApplySideEffects,
+            })
+          ) {
+            return;
+          }
+
           const abortController = new AbortController();
           args.blockProcessorUntil(async () => {
             await sharedProcessor.implementation.afterAppend?.({
@@ -508,6 +522,20 @@ function adaptSharedProcessor(
       };
     },
   } as unknown as Processor<any, SharedProcessorAdapterDeps>;
+}
+
+function shouldApplySharedProcessorSideEffects(args: {
+  event: StreamEvent;
+  sharedProcessor: SharedProcessor<any>;
+  shouldApplySideEffects(input: { event: StreamEvent; gracePeriodMs?: number }): boolean;
+}) {
+  const policy = args.sharedProcessor.implementation.firstAttachAfterAppend;
+  if (policy?.mode === "all") return true;
+  if (policy?.mode === "none") return args.shouldApplySideEffects({ event: args.event });
+  return args.shouldApplySideEffects({
+    event: args.event,
+    gracePeriodMs: policy?.milliseconds ?? 250,
+  });
 }
 
 function codemodeProcessorDeps(args: {
