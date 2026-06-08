@@ -54,6 +54,10 @@ export async function evalBrowserReplSessionCode(input: {
 }
 
 export function compileBrowserReplFunction(code: string) {
+  if (startsWithTopLevelDeclaration(code)) {
+    return compileBrowserReplStatements(code);
+  }
+
   const expressionSource = `return (async () => (${code}))()`;
   try {
     // oxlint-disable-next-line no-new-func -- This helper backs the explicit browser-local REPL.
@@ -64,24 +68,58 @@ export function compileBrowserReplFunction(code: string) {
       `with (scope) { ${expressionSource} }`,
     ) as ReplFunction;
   } catch {
-    const statementSource = transformTopLevelDeclarations(code);
-    // oxlint-disable-next-line no-new-func -- Statement-mode fallback for the explicit browser-local REPL.
-    return new Function(
-      "ctx",
-      "env",
-      "scope",
-      `with (scope) { return (async () => {${statementSource}})() }`,
-    ) as ReplFunction;
+    return compileBrowserReplStatements(code);
   }
 }
 
 type ReplFunction = (ctx: unknown, env: object, scope: Record<string, unknown>) => Promise<unknown>;
 
+const RESERVED_TOP_LEVEL_BINDINGS = new Set(["ctx", "env", "scope"]);
+
+function compileBrowserReplStatements(code: string) {
+  const statementSource = transformTopLevelDeclarations(code);
+  // oxlint-disable-next-line no-new-func -- Statement-mode fallback for the explicit browser-local REPL.
+  return new Function(
+    "ctx",
+    "env",
+    "scope",
+    `with (scope) { return (async () => {${statementSource}})() }`,
+  ) as ReplFunction;
+}
+
+function startsWithTopLevelDeclaration(code: string) {
+  return /^\s*(?:async\s+function|function|class)\s+[A-Za-z_$][\w$]*/.test(code);
+}
+
 function transformTopLevelDeclarations(code: string) {
   return code
-    .replace(/(^|[;\n]\s*)(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/g, "$1scope.$2 =")
-    .replace(/(^|[;\n]\s*)function\s+([A-Za-z_$][\w$]*)\s*\(/g, "$1scope.$2 = function (")
-    .replace(/(^|[;\n]\s*)class\s+([A-Za-z_$][\w$]*)\b/g, "$1scope.$2 = class $2");
+    .replace(
+      /(^|[;\n]\s*)(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/g,
+      (_match, prefix: string, name: string) => `${prefix}${scopeAssignmentTarget(name)} =`,
+    )
+    .replace(
+      /(^|[;\n]\s*)async\s+function\s+([A-Za-z_$][\w$]*)\s*\(/g,
+      (_match, prefix: string, name: string) =>
+        `${prefix}${scopeAssignmentTarget(name)} = async function ${name}(`,
+    )
+    .replace(
+      /(^|[;\n]\s*)function\s+([A-Za-z_$][\w$]*)\s*\(/g,
+      (_match, prefix: string, name: string) =>
+        `${prefix}${scopeAssignmentTarget(name)} = function ${name}(`,
+    )
+    .replace(
+      /(^|[;\n]\s*)class\s+([A-Za-z_$][\w$]*)\b/g,
+      (_match, prefix: string, name: string) =>
+        `${prefix}${scopeAssignmentTarget(name)} = class ${name}`,
+    );
+}
+
+function scopeAssignmentTarget(name: string) {
+  if (RESERVED_TOP_LEVEL_BINDINGS.has(name)) {
+    throw new Error(`REPL binding ${JSON.stringify(name)} is reserved.`);
+  }
+
+  return `scope.${name}`;
 }
 
 export function formatBrowserReplResult(result: unknown) {

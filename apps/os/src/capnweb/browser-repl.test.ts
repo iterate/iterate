@@ -51,6 +51,86 @@ describe("browser Cap'n Web REPL", () => {
     ).resolves.toBe(42);
   });
 
+  test("session snippets persist function and class declarations", async () => {
+    const scope: Record<string, unknown> = {};
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "function answer() { return 42; }",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "answer()",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBe(42);
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "class Box { value() { return answer(); } }",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "new Box().value()",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBe(42);
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "async function asyncAnswer() { return answer(); }",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "await asyncAnswer()",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBe(42);
+  });
+
+  test("session snippets cannot shadow injected ctx or env bindings", async () => {
+    const scope: Record<string, unknown> = {};
+    const ctx = { marker: "injected ctx" };
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "const ctx = { marker: 'shadowed' }",
+        ctx,
+        scope,
+      }),
+    ).rejects.toThrow('REPL binding "ctx" is reserved.');
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "ctx.marker",
+        ctx,
+        scope,
+      }),
+    ).resolves.toBe("injected ctx");
+    expect(scope).not.toHaveProperty("ctx");
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "function env() {}",
+        ctx,
+        scope,
+      }),
+    ).rejects.toThrow('REPL binding "env" is reserved.');
+    expect(scope).not.toHaveProperty("env");
+  });
+
   test("provideCapability example registers and calls a browser-owned target", async () => {
     const providedTargets = new Map<string, unknown>();
     const alert = vi.fn();

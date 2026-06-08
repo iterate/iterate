@@ -6,6 +6,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { os as orpc } from "@orpc/server";
+import { z } from "zod";
+
 import { ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME } from "../src/domains/repos/iterate-config-repo.ts";
 import {
   REPO_DEFAULT_BRANCH,
@@ -24,6 +27,7 @@ type Options = {
   holderDir: string;
   namespace: string;
   repoName: string;
+  verifyFork: boolean;
 };
 
 type ArtifactRepoAccess = {
@@ -31,13 +35,60 @@ type ArtifactRepoAccess = {
   token?: string;
 };
 
-async function main() {
-  const options = parseOptions(process.argv.slice(2));
+const SeedConfigBaseInput = z.object({
+  accountId: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("Cloudflare account ID. Defaults to CLOUDFLARE_ACCOUNT_ID."),
+  apiToken: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe(
+      "Cloudflare API token. Defaults to CLOUDFLARE_API_TOKEN_DEV_JONAS or CLOUDFLARE_API_TOKEN.",
+    ),
+  holder: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("Source directory. Defaults to apps/os/iterate-config-repo."),
+  namespace: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("Cloudflare Artifacts namespace. Defaults to the active Doppler/Alchemy stage."),
+  repo: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe("Base Artifact repo name. Defaults to iterate-config-base."),
+  verifyFork: z
+    .boolean()
+    .default(true)
+    .describe("Create and delete a temporary fork to prove project setup can fork the base repo."),
+});
+
+export const seedIterateConfigBaseRepoScript = orpc
+  .input(SeedConfigBaseInput)
+  .meta({
+    description:
+      "Seed the Iterate config base Artifact repo and verify that new project artifact forks work",
+  })
+  .handler(async ({ input }) => seedIterateConfigBaseRepoForCli(resolveOptions(input)));
+
+async function seedIterateConfigBaseRepoForCli(options: Options) {
   const holderDir = path.resolve(options.holderDir);
   if (!fs.existsSync(holderDir) || !fs.statSync(holderDir).isDirectory()) {
     throw new Error(`Iterate config repo holder is not a directory: ${holderDir}`);
   }
 
+  console.info(`Using Cloudflare Artifacts namespace ${options.namespace}`);
   const artifact = await getOrCreateArtifactRepo(options);
   const token = artifact.token ?? (await createArtifactToken(options));
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "iterate-config-base-"));
@@ -53,41 +104,40 @@ async function main() {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 
-  console.info(`Seeded ${options.namespace}/${options.repoName} from ${holderDir}`);
-}
+  await verifyArtifactGitAccess({
+    remote: artifact.remote,
+    repoName: options.repoName,
+    token,
+  });
 
-function parseOptions(args: string[]): Options {
-  const values = new Map<string, string>();
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === "--") continue;
-    if (!arg?.startsWith("--")) {
-      throw new Error(`Unexpected argument: ${arg ?? ""}`);
-    }
-
-    const value = args[index + 1];
-    if (!value || value.startsWith("--")) {
-      throw new Error(`Missing value for ${arg}`);
-    }
-
-    values.set(arg.slice(2), value);
-    index += 1;
+  if (options.verifyFork) {
+    await verifyArtifactFork(options);
   }
 
+  console.info(`Seeded ${options.namespace}/${options.repoName} from ${holderDir}`);
   return {
-    accountId: values.get("account-id") ?? requireEnv("CLOUDFLARE_ACCOUNT_ID"),
+    namespace: options.namespace,
+    repo: options.repoName,
+    verifiedFork: options.verifyFork,
+  };
+}
+
+function resolveOptions(input: z.infer<typeof SeedConfigBaseInput>): Options {
+  return {
+    accountId: input.accountId ?? requireEnv("CLOUDFLARE_ACCOUNT_ID"),
     apiToken:
-      values.get("api-token") ??
+      input.apiToken ??
       process.env.CLOUDFLARE_API_TOKEN_DEV_JONAS ??
       requireEnv("CLOUDFLARE_API_TOKEN"),
-    holderDir: values.get("holder") ?? DEFAULT_HOLDER_DIR,
+    holderDir: input.holder ?? DEFAULT_HOLDER_DIR,
     namespace:
-      values.get("namespace") ??
+      input.namespace ??
       process.env.OS_ARTIFACTS_NAMESPACE ??
       inferArtifactsNamespaceFromAlchemyStage() ??
       inferArtifactsNamespaceFromBaseUrl() ??
       requireEnv("OS_ARTIFACTS_NAMESPACE"),
-    repoName: values.get("repo") ?? ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
+    repoName: input.repo ?? ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
+    verifyFork: input.verifyFork,
   };
 }
 
@@ -156,6 +206,69 @@ async function createArtifactToken(options: Options): Promise<string> {
   }
 
   return readToken(token.result ?? token);
+}
+
+async function verifyArtifactFork(options: Options) {
+  const forkName = `${options.repoName}-verify-${Date.now()}-${process.pid}`;
+  let forkCreated = false;
+  try {
+    const forked = await forkArtifactRepo(options, forkName);
+    forkCreated = true;
+    const token = await createArtifactToken({ ...options, repoName: forkName });
+    await verifyArtifactGitAccess({
+      remote: forked.remote,
+      repoName: forkName,
+      token,
+    });
+    console.info(`Verified fork ${options.namespace}/${forkName}`);
+  } finally {
+    if (forkCreated) {
+      await deleteArtifactRepo(options, forkName);
+    }
+  }
+}
+
+async function forkArtifactRepo(options: Options, forkName: string): Promise<ArtifactRepoAccess> {
+  const forked = await artifactsApi(
+    options,
+    "POST",
+    `/repos/${encodeURIComponent(options.repoName)}/fork`,
+    {
+      default_branch_only: true,
+      description: `Temporary fork verification for ${options.repoName}`,
+      name: forkName,
+      read_only: false,
+    },
+  );
+  if (!forked.success) {
+    throw new Error(`Failed to fork Artifact repo: ${JSON.stringify(forked)}`);
+  }
+
+  return readArtifactRepoAccess(forked.result ?? forked);
+}
+
+async function deleteArtifactRepo(options: Options, repoName: string) {
+  const deleted = await artifactsApi(options, "DELETE", `/repos/${encodeURIComponent(repoName)}`);
+  if (!deleted.success) {
+    throw new Error(`Failed to delete verification Artifact repo: ${JSON.stringify(deleted)}`);
+  }
+}
+
+async function verifyArtifactGitAccess(input: { remote: string; repoName: string; token: string }) {
+  try {
+    const refs = execFileSync("git", ["ls-remote", input.remote, "HEAD"], {
+      encoding: "utf8",
+      env: gitAuthEnv(input.token),
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+    if (!refs) {
+      throw new Error("git ls-remote returned no refs");
+    }
+    console.info(`Verified Git access for ${input.repoName}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Could not verify Git access for ${input.repoName}: ${message}`);
+  }
 }
 
 async function artifactsApi(
@@ -241,6 +354,15 @@ function runGit(cwd: string, args: string[]) {
   execFileSync("git", args, { cwd, stdio: "inherit" });
 }
 
+function gitAuthEnv(token: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.extraHeader",
+    GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
+  };
+}
+
 function remoteWithToken(input: { remote: string; token: string }) {
   const url = new URL(input.remote);
   url.username = "x";
@@ -283,5 +405,3 @@ function requireEnv(name: string) {
 
   return value;
 }
-
-await main();

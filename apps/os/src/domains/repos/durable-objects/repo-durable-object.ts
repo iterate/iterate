@@ -211,7 +211,7 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
   }
 
   private async currentRepo() {
-    return (await this.getRepoRunnerState()).state.repo;
+    return (await this.getRepoRunnerState()).state?.repo ?? null;
   }
 
   private async getRepoRunnerState() {
@@ -377,7 +377,7 @@ type RepoInfoSource = {
 };
 
 type RepoProcessorRuntimeState = {
-  state: { repo: RepoInfoSource | null };
+  state: { repo: RepoInfoSource | null } | null;
   reducedThroughOffset: number;
 };
 

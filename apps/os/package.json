@@ -31,7 +31,6 @@
     "test:project-mcp-server-connection": "OS_ITERATE_MCP_SERVER_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os/src/durable-objects/iterate-mcp-server.vitest.config.ts",
     "e2e": "vitest --config e2e/vitest.config.ts",
     "example:workspace-codemode-preview": "tsx ./e2e/workspace-codemode-preview-example.ts",
-    "artifacts:seed-config-base": "tsx ./scripts/seed-iterate-config-base-repo.ts",
     "auth:sync-clients": "tsx ./scripts/sync-auth-clients.ts",
     "benchmark:agent-stream": "tsx ./scripts/benchmark-agent-stream.ts",
     "benchmark:intercept-tunnel": "tsx ./scripts/benchmark-project-egress-intercept-tunnel.ts",
