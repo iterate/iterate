@@ -451,7 +451,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       typeof systemPromptPayload?.systemPrompt === "string" ? systemPromptPayload.systemPrompt : "";
     if (
       !hasSetupPrompt &&
-      (!systemPrompt || systemPrompt.includes("ctx.streams.append({ event:"))
+      (!systemPrompt ||
+        systemPrompt.includes("ctx.streams.append({ event:") ||
+        systemPrompt.includes("ctx.streams.read()"))
     ) {
       await streamApi.append({
         event: {

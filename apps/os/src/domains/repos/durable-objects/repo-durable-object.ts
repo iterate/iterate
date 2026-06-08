@@ -340,7 +340,7 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
         subscriptionKey: repoProcessorSubscriptionKey(params),
         subscriber: {
           type: "built-in",
-          transport: "capnweb-websocket",
+          transport: "workers-rpc",
           processorSlug: RepoStreamProcessorContract.slug,
         },
       },

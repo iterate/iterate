@@ -11,7 +11,7 @@ import {
   echoExampleProcessorContract,
   type EchoExampleState,
 } from "./processors/examples/echo/contract.ts";
-import type { StreamRpc } from "./types.ts";
+import type { StreamEventBatch, StreamRpc } from "./types.ts";
 
 const iso = (ms = 0) => new Date(ms).toISOString();
 const input = (offset: number): StreamEvent => ({
@@ -19,6 +19,12 @@ const input = (offset: number): StreamEvent => ({
   payload: {},
   offset,
   createdAt: iso(),
+});
+const batch = (events: StreamEvent[], streamMaxOffset: number): StreamEventBatch => ({
+  namespace: "test",
+  path: "/test",
+  events,
+  streamMaxOffset,
 });
 
 function memoryStream() {
@@ -68,11 +74,11 @@ describe("failure conditions (in-process runner)", () => {
     });
 
     // A re-delivered historical event (offset 4 <= snapshot 5) must be ignored.
-    await runner.processEventBatch({ events: [input(4)], streamMaxOffset: 6 });
+    await runner.processEventBatch(batch([input(4)], 6));
     expect(committed).toHaveLength(0);
 
     // A genuinely new event resumes from the persisted count.
-    await runner.processEventBatch({ events: [input(6)], streamMaxOffset: 6 });
+    await runner.processEventBatch(batch([input(6)], 6));
     expect(committed).toMatchObject([
       { type: "events.iterate.com/echo-example/output-echoed", payload: { seen: 3 } },
     ]);
@@ -89,8 +95,8 @@ describe("failure conditions (in-process runner)", () => {
       stream,
     });
 
-    await runner.processEventBatch({ events: [input(1)], streamMaxOffset: 1 });
-    await runner.processEventBatch({ events: [input(1)], streamMaxOffset: 1 }); // exact re-delivery (e.g. after a reconnect)
+    await runner.processEventBatch(batch([input(1)], 1));
+    await runner.processEventBatch(batch([input(1)], 1)); // exact re-delivery (e.g. after a reconnect)
     expect(committed).toMatchObject([
       { type: "events.iterate.com/stream/processor-registered" },
       { type: "events.iterate.com/echo-example/output-echoed", payload: { seen: 1 } },
@@ -127,9 +133,7 @@ describe("failure conditions (in-process runner)", () => {
 
     // Runner 1: the blocker throws, so the batch rejects and nothing is checkpointed.
     const runner1 = createProcessorRunner({ processor: durable, deps: undefined, storage, stream });
-    await expect(
-      runner1.processEventBatch({ events: [input(1)], streamMaxOffset: 1 }),
-    ).rejects.toThrow();
+    await expect(runner1.processEventBatch(batch([input(1)], 1))).rejects.toThrow();
     expect(saved).toBeUndefined();
     expect(committed).toMatchObject([
       {
@@ -144,7 +148,7 @@ describe("failure conditions (in-process runner)", () => {
 
     // Runner 2 (restart): the same event is re-delivered; this time the work succeeds.
     const runner2 = createProcessorRunner({ processor: durable, deps: undefined, storage, stream });
-    await runner2.processEventBatch({ events: [input(1)], streamMaxOffset: 1 });
+    await runner2.processEventBatch(batch([input(1)], 1));
     expect(committed).toMatchObject([
       { type: "events.iterate.com/stream/error-occurred" },
       { type: "events.iterate.com/echo-example/output-echoed", payload: { seen: 0 } },

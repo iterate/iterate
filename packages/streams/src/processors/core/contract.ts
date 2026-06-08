@@ -11,7 +11,7 @@ import { defineProcessorContract } from "../../shared/stream-processors.ts";
 const OutboundSubscriber = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("built-in"),
-    transport: z.literal("capnweb-websocket"),
+    transport: z.literal("workers-rpc"),
     processorSlug: z.string().trim().min(1),
   }),
   z.object({

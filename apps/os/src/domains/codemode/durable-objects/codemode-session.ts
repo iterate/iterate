@@ -488,7 +488,7 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
         }),
         subscriber: {
           type: "built-in",
-          transport: "capnweb-websocket",
+          transport: "workers-rpc",
           processorSlug: CodemodeProcessorContract.slug,
         },
       },

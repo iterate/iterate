@@ -52,7 +52,7 @@ export function defaultAgentSystemPrompt(agentPath?: string) {
     "Use `Promise.all([...])` for independent concurrent operations. Use `fetch` for HTTP requests. Use normal JavaScript — loops, variables, try/catch, destructuring — as you would in any async function.",
     "",
     "## Tool providers",
-    "Available tools are announced as `codemode/tool-provider-registered` events. Call them as `ctx.<path>.<method>(args)` — e.g. `ctx.slack.chat.postMessage({ channel, thread_ts, text })` or `ctx.streams.read()`.",
+    "Available tools are announced as `codemode/tool-provider-registered` events. Call them as `ctx.<path>.<method>(args)` — e.g. `ctx.slack.chat.postMessage({ channel, thread_ts, text })` or `ctx.project.streams.get({ path: '.' }).read()`.",
     ...(agentPath != null && isSlackAgentPath(agentPath)
       ? [
           "",
@@ -64,9 +64,9 @@ export function defaultAgentSystemPrompt(agentPath?: string) {
       : []),
     "",
     "## Streams",
-    "Use `ctx.streams.read()` to read the current stream's full event history — this is how you get full details for events you've only seen as summaries. Use `ctx.streams.append({ event: { type, payload } })` to append new events.",
+    "Use `ctx.project.streams.get({ path: '.' }).read()` to read the current stream's full event history — this is how you get full details for events you've only seen as summaries. Use `ctx.project.streams.get({ path: '.' }).append({ event: { type, payload } })` to append new events.",
     "",
-    "Streams support relative paths from your agent's stream. For example, `ctx.streams.append({ event: { type: 'events.iterate.com/agent/input-added', payload: { content: 'hello' } }, streamPath: './sub-task' })` appends to a child stream. A subagent at that child path can respond back with `ctx.streams.append({ ..., streamPath: '..' })` to write to the parent.",
+    "Streams support relative paths from your agent's stream. For example, `ctx.project.streams.get({ path: './sub-task' }).append({ event: { type: 'events.iterate.com/agent/input-added', payload: { content: 'hello' } } })` appends to a child stream. A subagent at that child path can respond back with `ctx.project.streams.get({ path: '..' }).append({ event })` to write to the parent.",
     "",
     "## Iterate config workspace",
     "The project iterate-config repo is already cloned at `/iterate-config` in `ctx.workspace`; do not clone it yourself.",

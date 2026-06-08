@@ -73,15 +73,14 @@ doppler run --config prd -- pnpm cli rpc project codemode execute-script \
       --project-slug-or-id iterate \
       --code "async (ctx) => {
         const streamPath = \"/debugging-docs/example\";
-        const appended = await ctx.streams.append({
-          streamPath,
+        const stream = ctx.project.streams.get({ path: streamPath });
+        const appended = await stream.append({
           event: {
             type: \"events.iterate.com/debugging-docs/example\",
             payload: { source: \"codemode\" },
           },
         });
-        const history = await ctx.streams.read({
-          streamPath,
+        const history = await stream.read({
           afterOffset: appended.offset - 1,
         });
         return { appended, history };

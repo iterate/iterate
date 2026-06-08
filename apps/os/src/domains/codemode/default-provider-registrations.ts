@@ -34,7 +34,26 @@ export function createDefaultCodemodeProviderRegistrations(input: {
     {
       path: ["streams"],
       instructions:
-        "ctx.streams.read({ streamPath?, afterOffset?, beforeOffset? }) reads event history. ctx.streams.append({ event: { type, payload }, streamPath? }) appends. Omit streamPath for the current stream; use relative paths (e.g. './child') for other streams.",
+        "Use ctx.streams.get({ namespace, path }) for namespace-explicit stream access, then call handle methods such as read({ afterOffset?, beforeOffset? }), append({ event: { type, payload } }), appendBatch({ events }), getState(), or listChildren().",
+      invocation: {
+        kind: "rpc",
+        callable: {
+          type: "workers-rpc",
+          via: {
+            type: "loopback-binding",
+            bindingType: "service",
+            exportName: "StreamsCapability",
+            props: { appendPolicy: { mode: "any" } },
+          },
+          rpcMethod: "executeCodemodeFunctionCall",
+          argsMode: "object",
+        },
+      },
+    },
+    {
+      path: ["project", "streams"],
+      instructions:
+        "Use ctx.project.streams.get({ path }) for current-project stream access, then call handle methods such as read({ afterOffset?, beforeOffset? }), append({ event: { type, payload } }), appendBatch({ events }), getState(), or listChildren(). Use path: '.' for the current stream and relative paths like './child' or '..' from the current stream.",
       invocation: {
         kind: "rpc",
         callable: {

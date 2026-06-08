@@ -176,7 +176,7 @@ export const CodemodeProcessorContract = defineProcessorContract({
           payload: {
             code: [
               "async (ctx) => {",
-              "  const events = await ctx.streams.read()",
+              "  const events = await ctx.project.streams.get({ path: '.' }).read()",
               "  const summary = events.map(e => `${e.offset}: ${e.type}`).join('\\n')",
               "  await ctx.chat.sendMessage({ message: summary })",
               "}",

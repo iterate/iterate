@@ -720,9 +720,9 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - For an **RPC Tool Provider**, the **Codemode Processor** appends both the function-call-requested event and the function-call-completed event around `executeCodemodeFunctionCall(...)`.
 - For an **Event-Mediated Tool Provider**, the **Codemode Processor** appends the function-call-requested event, but the Tool Function Implementation owns appending the matching function-call-completed event.
 - `ctx.<provider>.<toolFunction>(payload)` calls a **Tool Function**.
-- Built-in stream operations, such as append, are ordinary **Tool Functions** under paths like `ctx.streams.append(...)`.
-- A **StreamsCapability** defaults operations to its narrowed **Event Stream Path** when the caller omits a path.
-- In a narrowed **StreamsCapability**, stream paths without a leading slash, including `./` paths, resolve relative to the narrowed **Event Stream Path**.
+- Built-in stream operations, such as append, are ordinary **Tool Functions** reached through handles like `ctx.project.streams.get({ path: "." }).append(...)`.
+- A **StreamsCapability** selects a stream through `get(...)` before operations run. Root `ctx.streams.get({ namespace, path })` is namespace-explicit; project `ctx.project.streams.get({ path })` is project-scoped.
+- In a project-scoped **StreamsCapability**, stream paths without a leading slash, including `./` and `..` paths, resolve relative to the narrowed **Event Stream Path**.
 - In a narrowed **StreamsCapability**, stream paths with a leading slash resolve as absolute project-scoped **Event Stream Paths** and remain subject to capability policy.
 - Navigating to an **Event Stream Path** in the Project Stream Explorer may initialize that stream; users do not need a separate create-stream command.
 - The **Project Stream Explorer** lists every initialized **Event Stream Path**, including `/`, as a flat list rather than a tree.
@@ -935,16 +935,20 @@ const png = await ctx.browserRun.page({ session: "checkout" }).screenshot();
 The Browser Run session case targets an **RPC Tool Provider** backed by a Durable Object that owns or reuses a live browser session and returns promise-pipelineable **Live Tool Handles**.
 
 ```ts
-await ctx.streams.append({
-  path: "/projects/proj_123/audit",
-  event: {
-    type: "events.example.com/audit/note-added",
-    payload: { message: "hello" },
-  },
-});
+await ctx.streams
+  .get({
+    namespace: "proj_123",
+    path: "/audit",
+  })
+  .append({
+    event: {
+      type: "events.example.com/audit/note-added",
+      payload: { message: "hello" },
+    },
+  });
 ```
 
-The streams case targets low-level stream operations as Tool Functions: codemode may append to the current Event Stream Path by default, and may append to another allowed Event Stream Path when a path is provided.
+The streams case targets low-level stream operations as Tool Functions: codemode first obtains a stream handle with `get(...)`, then calls operations on that handle.
 
 ```ts
 await ctx.providerA.composeFromProviderB({ value: "hello" });
@@ -957,8 +961,8 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Dev:** "When a script runs `ctx.linear.createIssue(...)`, is that a tool execution?"
 > **Domain expert:** "It is a **Tool Function Call**. The **Codemode Session** calls the **Tool Function**, and the **Tool Provider** executes it."
 
-> **Dev:** "Is `ctx.streams.append(...)` also a Tool Function Call?"
-> **Domain expert:** "Yes. Stream append is just another path-addressed function; the runtime appends function-call-requested and waits for the corresponding function-call-completed event."
+> **Dev:** "Is `ctx.project.streams.get({ path: '.' }).append(...)` also a Tool Function Call?"
+> **Domain expert:** "Yes. The stream handle lookup is the recorded Tool Function Call, and the returned live handle performs the stream append through Workers RPC."
 
 > **Dev:** "If Provider B calls Provider A while executing a Tool Function, is that a private provider call?"
 > **Domain expert:** "No. Provider B uses the **Codemode Session Capability** to make another **Tool Function Call**, so the **Codemode Session** records the same lifecycle events as any other Tool Function Call."

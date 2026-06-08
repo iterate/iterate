@@ -861,7 +861,7 @@ test("completes slack-agent event-mode codemode calls without blocking the strea
   const started = await client.project.codemode.executeScript({
     code: `async (ctx) => {
   const thread = await ctx.slack.agent.threadInfo();
-  await ctx.streams.append({
+  await ctx.project.streams.get({ path: "." }).append({
     event: {
       type: ${JSON.stringify(proofType)},
       payload: thread

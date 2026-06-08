@@ -1040,7 +1040,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
         subscriptionKey: projectLifecycleSubscriptionKey(projectId),
         subscriber: {
           type: "built-in",
-          transport: "capnweb-websocket",
+          transport: "workers-rpc",
           processorSlug: ProjectLifecycleProcessorContract.slug,
         },
       },

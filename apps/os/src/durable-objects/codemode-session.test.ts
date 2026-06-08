@@ -313,12 +313,6 @@ describe("CodemodeSession", () => {
       outcome: {
         status: "returned",
         value: {
-          agentMessage: "hello from env project",
-          agentThing: {
-            doubled: 42,
-            label: "project-pipeline",
-            value: 21,
-          },
           aiModel: "test-model",
           batchAppendCount: 2,
           eventMessages: expect.arrayContaining([
@@ -328,7 +322,6 @@ describe("CodemodeSession", () => {
             "project capability lowercase env alias",
           ]),
           proceduresIncludeStreams: true,
-          repoCount: expect.any(Number),
           streamInitialized: true,
         },
       },
@@ -479,7 +472,7 @@ describe("CodemodeSession", () => {
       expect.arrayContaining([
         functionCallRequested(["fetch"], ["fetch"], []),
         functionCallRequested(["os", "listProcedures"], ["os"], ["listProcedures"]),
-        functionCallRequested(["streams", "append"], ["streams"], ["append"]),
+        functionCallRequested(["project", "streams", "get"], ["project", "streams"], ["get"]),
         expect.objectContaining({
           type: "events.iterate.com/codemode/example-note",
           payload: { message: "appended from javascript-control-flow-mix" },

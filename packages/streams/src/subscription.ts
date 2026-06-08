@@ -1,17 +1,11 @@
-import { RpcTarget } from "capnweb";
 import type { StreamEvent } from "./shared/event.ts";
-import type { SubscriptionSink } from "./types.ts";
-
-export type StreamEventBatch = {
-  events: StreamEvent[];
-  streamMaxOffset: number;
-};
+import type { ProcessEventBatch, StreamEventBatch } from "./types.ts";
 
 export type StreamSubscription = AsyncDisposable &
   AsyncIterable<StreamEventBatch> & {
     readonly subscriptionKey: string | undefined;
     readonly streamMaxOffset: number | undefined;
-    readonly sink: SubscriptionSink;
+    readonly processEventBatch: ProcessEventBatch;
     waitForEvent<T extends StreamEvent>(args: {
       predicate: (event: StreamEvent) => event is T;
       timeoutMs?: number;
@@ -33,7 +27,7 @@ export function createStreamSubscription(
   }>();
   let streamMaxOffset: number | undefined;
   let disposed = false;
-  const sink = new ClientSubscriptionSink((batch) => {
+  const processEventBatch: ProcessEventBatch = (batch) => {
     streamMaxOffset = batch.streamMaxOffset;
     inbox.push(batch);
 
@@ -46,7 +40,7 @@ export function createStreamSubscription(
         waiter.resolve(event);
       }
     }
-  });
+  };
 
   const subscription = {
     get subscriptionKey() {
@@ -55,8 +49,8 @@ export function createStreamSubscription(
     get streamMaxOffset() {
       return streamMaxOffset;
     },
-    get sink() {
-      return sink;
+    get processEventBatch() {
+      return processEventBatch;
     },
     waitForEvent<T extends StreamEvent>(waitArgs: {
       predicate: (event: StreamEvent) => event is T;
@@ -93,21 +87,6 @@ export function createStreamSubscription(
   };
 
   return subscription;
-}
-
-class ClientSubscriptionSink extends RpcTarget implements SubscriptionSink {
-  readonly #processEventBatch: (args: { events: StreamEvent[]; streamMaxOffset: number }) => void;
-
-  constructor(
-    processEventBatch: (args: { events: StreamEvent[]; streamMaxOffset: number }) => void,
-  ) {
-    super();
-    this.#processEventBatch = processEventBatch;
-  }
-
-  processEventBatch(args: { events: StreamEvent[]; streamMaxOffset: number }): undefined {
-    this.#processEventBatch(args);
-  }
 }
 
 function messageInbox<T>(): AsyncIterableIterator<T> & {

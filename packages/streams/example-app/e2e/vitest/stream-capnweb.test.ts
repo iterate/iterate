@@ -1,21 +1,6 @@
-import { spawn, type ChildProcessByStdio } from "node:child_process";
-import type { IncomingMessage } from "node:http";
-import type { Readable } from "node:stream";
-import { WebSocket as WsWebSocket, WebSocketServer } from "ws";
-import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
+import { RpcTarget } from "capnweb";
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "../../../src/shared/event.ts";
-import type { StreamCoreProcessorState } from "../../../src/types.ts";
-import type { SubscriptionConfiguredEvent } from "../../../src/processors/core/contract.ts";
-import type { StreamProcessorRunnerRpc, StreamRpc, SubscriptionSink } from "../../../src/types.ts";
-import { createStreamSubscription, type StreamSubscription } from "../../../src/subscription.ts";
-import {
-  createProcessorRunner,
-  type ProcessorRunner,
-  type Snapshot,
-} from "../../../src/processor-runner.ts";
-import { circuitBreakerProcessor } from "../../../src/processors/circuit-breaker/implementation.ts";
-import type { CircuitBreakerProcessorState } from "../../../src/processors/circuit-breaker/contract.ts";
 import { connectStreamProcessorRunner } from "../../../src/node/connect-processor-runner.ts";
 import { withStreamConnectionFromBrowser } from "../../../src/browser/connect.ts";
 import { withStreamConnectionFromNode } from "../../../src/node/connect.ts";
@@ -23,111 +8,12 @@ import type { WebSocketFrame } from "../../../src/connection.ts";
 
 const workerUrl = process.env.WORKER_URL ?? "http://localhost:5173";
 const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
-const localWorkerE2eIt =
-  process.env.STREAM_STAGING_E2E === "true" &&
-  ["localhost", "127.0.0.1"].includes(new URL(workerUrl).hostname)
-    ? it
-    : it.skip;
-const cloudflaredE2eIt =
-  process.env.STREAM_STAGING_E2E === "true" && process.env.STREAM_STAGING_CLOUDFLARED_E2E === "true"
-    ? it
-    : it.skip;
-const externalRunnerPort = Number(process.env.STREAM_STAGING_EXTERNAL_RUNNER_PORT ?? 0);
 
-class TestSubscriptionSink extends RpcTarget implements SubscriptionSink {
+class TestSubscriptionSink extends RpcTarget {
   readonly batches: StreamEvent[][] = [];
 
   processEventBatch(args: { events: StreamEvent[]; streamMaxOffset: number }): undefined {
     this.batches.push(args.events);
-  }
-}
-
-class NodeStreamProcessorRunner extends RpcTarget implements StreamProcessorRunnerRpc {
-  readonly requestHeaders: Headers[] = [];
-  readonly batches: StreamEvent[][] = [];
-  subscriptionConfiguredEvent: SubscriptionConfiguredEvent | undefined;
-  streamRuntimeState: { coreProcessorState: StreamCoreProcessorState } | undefined;
-
-  requestSubscription(args: {
-    stream: RpcStub<StreamRpc>;
-    subscriptionKey: string;
-    streamMaxOffset: number;
-    subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
-    streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
-  }): { sink: SubscriptionSink; replayAfterOffset?: number } {
-    this.subscriptionConfiguredEvent = args.subscriptionConfiguredEvent;
-    this.streamRuntimeState = args.streamRuntimeState;
-    return { sink: this };
-  }
-
-  processEventBatch(args: { events: StreamEvent[]; streamMaxOffset: number }): undefined {
-    this.batches.push(args.events);
-  }
-
-  runtimeState() {
-    return {
-      processorSlug: undefined,
-      snapshot: undefined,
-    };
-  }
-}
-
-class CircuitBreakerNodeStreamProcessorRunner
-  extends RpcTarget
-  implements StreamProcessorRunnerRpc
-{
-  readonly requestHeaders: Headers[] = [];
-  subscriptionConfiguredEvent: SubscriptionConfiguredEvent | undefined;
-  streamRuntimeState: { coreProcessorState: StreamCoreProcessorState } | undefined;
-
-  #stream: RpcStub<StreamRpc> | undefined;
-  #runner: ProcessorRunner | undefined;
-  #subscription: StreamSubscription | undefined;
-  #processing: AsyncDisposable | undefined;
-  #snapshot: Snapshot<CircuitBreakerProcessorState> | undefined;
-
-  async requestSubscription(args: {
-    stream: RpcStub<StreamRpc>;
-    subscriptionKey: string;
-    streamMaxOffset: number;
-    subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
-    streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
-  }): Promise<{ sink: SubscriptionSink; replayAfterOffset?: number }> {
-    this.subscriptionConfiguredEvent = args.subscriptionConfiguredEvent;
-    this.streamRuntimeState = args.streamRuntimeState;
-
-    await this.#processing?.[Symbol.asyncDispose]();
-    await this.#subscription?.[Symbol.asyncDispose]();
-    this.#stream?.[Symbol.dispose]();
-    this.#stream = args.stream.dup();
-
-    this.#runner = createProcessorRunner({
-      processor: circuitBreakerProcessor,
-      deps: undefined,
-      storage: {
-        load: () => this.#snapshot,
-        save: (snapshot) => void (this.#snapshot = snapshot),
-      },
-      stream: this.#stream,
-      sideEffectAnchor: {
-        offset: args.subscriptionConfiguredEvent.offset,
-        createdAt: args.subscriptionConfiguredEvent.createdAt,
-      },
-    });
-    const snapshot = await this.#runner.snapshot();
-    this.#subscription = createStreamSubscription({ subscriptionKey: args.subscriptionKey });
-    this.#processing = this.#runner.run({ subscription: this.#subscription });
-    return {
-      sink: this.#subscription.sink,
-      replayAfterOffset: snapshot?.offset,
-    };
-  }
-
-  runtimeState() {
-    return {
-      processorSlug: "circuit-breaker",
-      snapshot: this.#snapshot,
-    };
   }
 }
 
@@ -408,7 +294,11 @@ describe("stream capnweb protocol", () => {
     });
 
     const sink = new TestSubscriptionSink();
-    await stream.stream.subscribe({ subscriptionKey: "replay", sink, replayAfterOffset: 0 });
+    await stream.stream.subscribe({
+      subscriptionKey: "replay",
+      processEventBatch: (batch) => sink.processEventBatch(batch),
+      replayAfterOffset: 0,
+    });
     await waitFor(() => sink.batches.length === 1, 1_000);
 
     const second = await stream.stream.append({
@@ -449,8 +339,12 @@ describe("stream capnweb protocol", () => {
 
     const sinkA = new TestSubscriptionSink();
     const sinkB = new TestSubscriptionSink();
-    const first = await stream.stream.subscribe({ sink: sinkA });
-    const second = await stream.stream.subscribe({ sink: sinkB });
+    const first = await stream.stream.subscribe({
+      processEventBatch: (batch) => sinkA.processEventBatch(batch),
+    });
+    const second = await stream.stream.subscribe({
+      processEventBatch: (batch) => sinkB.processEventBatch(batch),
+    });
 
     expect(first.subscriptionKey).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
@@ -507,7 +401,7 @@ describe("stream capnweb protocol", () => {
           subscriptionKey,
           subscriber: {
             type: "built-in",
-            transport: "capnweb-websocket",
+            transport: "workers-rpc",
             processorSlug: "echo-example",
           },
         },
@@ -555,7 +449,7 @@ describe("stream capnweb protocol", () => {
           subscriptionKey,
           subscriber: {
             type: "built-in",
-            transport: "capnweb-websocket",
+            transport: "workers-rpc",
             processorSlug: "circuit-breaker",
           },
         },
@@ -599,239 +493,6 @@ describe("stream capnweb protocol", () => {
     ).rejects.toThrow("stream paused");
   });
 
-  localWorkerE2eIt(
-    "runs an external-url capnweb websocket processor from a node server",
-    async () => {
-      const path = `stream-capnweb-node-runner-${crypto.randomUUID()}`;
-      const subscriptionKey = "node-runner";
-      const headerValue = crypto.randomUUID();
-      const runner = new NodeStreamProcessorRunner();
-      await using runnerServer = await startNodeStreamProcessorRunnerServer({
-        port: externalRunnerPort,
-        runner,
-      });
-      using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
-
-      const configured = await stream.stream.append({
-        event: {
-          type: "events.iterate.com/stream/subscription-configured",
-          idempotencyKey: `subscription:${subscriptionKey}`,
-          payload: {
-            subscriptionKey,
-            subscriber: {
-              type: "external-url",
-              transport: "capnweb-websocket",
-              url: runnerServer.url,
-              headers: {
-                "x-stream-test": headerValue,
-              },
-            },
-          },
-        },
-      });
-
-      await waitFor(
-        () =>
-          runner.subscriptionConfiguredEvent?.offset === configured.offset &&
-          runner.streamRuntimeState?.coreProcessorState.path === path &&
-          runner.requestHeaders.some((headers) => headers.get("x-stream-test") === headerValue),
-        10_000,
-      );
-
-      const appended = await stream.stream.append({
-        event: {
-          type: "test.processor.node-runner-input",
-          payload: { path },
-        },
-      });
-
-      await waitFor(
-        () =>
-          runner.batches.some((batch) => batch.some((event) => event.offset === appended.offset)),
-        10_000,
-      );
-      expect(runner.batches.flat()).toContainEqual(appended);
-    },
-  );
-
-  localWorkerE2eIt(
-    "runs circuit breaker from a subscription-configured external-url processor",
-    async () => {
-      const path = `stream-capnweb-circuit-breaker-${crypto.randomUUID()}`;
-      const subscriptionKey = "circuit-breaker";
-      const runner = new CircuitBreakerNodeStreamProcessorRunner();
-      await using runnerServer = await startNodeStreamProcessorRunnerServer({
-        port: externalRunnerPort,
-        runner,
-      });
-      using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
-
-      const configured = await stream.stream.append({
-        event: {
-          type: "events.iterate.com/stream/subscription-configured",
-          idempotencyKey: `subscription:${subscriptionKey}`,
-          payload: {
-            subscriptionKey,
-            subscriber: {
-              type: "external-url",
-              transport: "capnweb-websocket",
-              url: runnerServer.url,
-            },
-          },
-        },
-      });
-
-      await stream.stream.append({
-        event: {
-          type: "events.iterate.com/circuit-breaker/configured",
-          payload: { burstCapacity: 1, refillRatePerMinute: 1 },
-        },
-      });
-      await stream.stream.append({
-        event: { type: "test.circuit-breaker.input", payload: { n: 1 } },
-      });
-      await stream.stream.append({
-        event: { type: "test.circuit-breaker.input", payload: { n: 2 } },
-      });
-
-      await waitFor(async () => {
-        const runtime = await stream.stream.runtimeState();
-        return (
-          runner.subscriptionConfiguredEvent?.offset === configured.offset &&
-          runner.streamRuntimeState?.coreProcessorState.path === path &&
-          runtime.coreProcessorState.paused
-        );
-      }, 10_000);
-
-      await expect(
-        stream.stream.append({
-          event: { type: "test.circuit-breaker.rejected", payload: { path } },
-        }),
-      ).rejects.toThrow("stream paused");
-    },
-  );
-
-  cloudflaredE2eIt(
-    "runs an external-url capnweb websocket processor through cloudflared",
-    async () => {
-      const path = `stream-capnweb-cloudflared-${crypto.randomUUID()}`;
-      const subscriptionKey = "cloudflared";
-      const headerValue = crypto.randomUUID();
-      const runner = new NodeStreamProcessorRunner();
-      await using runnerServer = await startNodeStreamProcessorRunnerServer({
-        port: externalRunnerPort,
-        runner,
-      });
-      await using tunnel = await startCloudflaredTunnel(runnerServer.url);
-      using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
-
-      const configured = await stream.stream.append({
-        event: {
-          type: "events.iterate.com/stream/subscription-configured",
-          idempotencyKey: `subscription:${subscriptionKey}`,
-          payload: {
-            subscriptionKey,
-            subscriber: {
-              type: "external-url",
-              transport: "capnweb-websocket",
-              url: tunnel.url,
-              headers: {
-                "x-stream-test": headerValue,
-              },
-            },
-          },
-        },
-      });
-
-      await waitFor(
-        () =>
-          runner.subscriptionConfiguredEvent?.offset === configured.offset &&
-          runner.streamRuntimeState?.coreProcessorState.path === path &&
-          runner.requestHeaders.some((headers) => headers.get("x-stream-test") === headerValue),
-        30_000,
-      );
-
-      const appended = await stream.stream.append({
-        event: {
-          type: "test.processor.cloudflared-input",
-          payload: { path },
-        },
-      });
-
-      await waitFor(
-        () =>
-          runner.batches.some((batch) => batch.some((event) => event.offset === appended.offset)),
-        30_000,
-      );
-      expect(runner.batches.flat()).toContainEqual(appended);
-    },
-    // Quick-tunnel startup + edge-registration + propagation buffer plus delivery
-    // through cloudflared (slower under concurrent load / when two tunnels run in one
-    // suite) far exceeds the file's default 30s test timeout.
-    180_000,
-  );
-
-  cloudflaredE2eIt(
-    "replays events committed in the subscription-configured -> dial gap (external-url through cloudflared)",
-    async () => {
-      const path = `stream-capnweb-cloudflared-gap-${crypto.randomUUID()}`;
-      const subscriptionKey = "cloudflared-gap";
-      const headerValue = crypto.randomUUID();
-      const runner = new NodeStreamProcessorRunner();
-      await using runnerServer = await startNodeStreamProcessorRunnerServer({
-        port: externalRunnerPort,
-        runner,
-      });
-      await using tunnel = await startCloudflaredTunnel(runnerServer.url);
-      using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl(path) });
-
-      // Configure the outbound subscription and then immediately append an event,
-      // WITHOUT waiting for the worker's outbound dial to complete. Dialing the
-      // subscriber runs through cloudflared (worker -> edge -> tunnel -> node server
-      // -> websocket upgrade), which is far slower than this direct capnweb append,
-      // so this event commits in the gap between the `subscription-configured`
-      // append and a successful dial.
-      const configured = await stream.stream.append({
-        event: {
-          type: "events.iterate.com/stream/subscription-configured",
-          idempotencyKey: `subscription:${subscriptionKey}`,
-          payload: {
-            subscriptionKey,
-            subscriber: {
-              type: "external-url",
-              transport: "capnweb-websocket",
-              url: tunnel.url,
-              headers: {
-                "x-stream-test": headerValue,
-              },
-            },
-          },
-        },
-      });
-
-      const gapEvent = await stream.stream.append({
-        event: {
-          type: "test.processor.cloudflared-gap-input",
-          payload: { path },
-        },
-      });
-      expect(gapEvent.offset).toBeGreaterThan(configured.offset);
-
-      // The regressed behavior defaulted the outbound connection's `replayAfterOffset`
-      // to `streamMaxOffset` at dial time, which already included `gapEvent`, so the
-      // single dial skipped it forever (reconciliation only re-dials on topology
-      // change or RPC break). The fix defaults to the subscription-configured offset,
-      // so every event after the subscription was added is replayed.
-      await waitFor(
-        () =>
-          runner.batches.some((batch) => batch.some((event) => event.offset === gapEvent.offset)),
-        30_000,
-      );
-      expect(runner.batches.flat()).toContainEqual(gapEvent);
-    },
-    180_000,
-  );
-
   e2eIt("delivers event batches without subscriber-originated return traffic", async () => {
     const path = `stream-capnweb-wire-${crypto.randomUUID()}`;
     const sink = new TestSubscriptionSink();
@@ -841,7 +502,7 @@ describe("stream capnweb protocol", () => {
     subscriber.onWebSocketFrame((frame) => frames.push(frame));
     await subscriber.stream.subscribe({
       subscriptionKey: "wire",
-      sink,
+      processEventBatch: (batch) => sink.processEventBatch(batch),
       replayAfterOffset: 2,
     });
     const afterSubscribe = frames.length;
@@ -875,7 +536,7 @@ describe("stream capnweb protocol", () => {
           [
             "pipeline",
             expect.any(Number),
-            ["processEventBatch"],
+            [],
             [
               {
                 events: [
@@ -896,176 +557,6 @@ describe("stream capnweb protocol", () => {
     ]);
   });
 });
-
-async function startNodeStreamProcessorRunnerServer(args: {
-  port: number;
-  runner: StreamProcessorRunnerRpc & { requestHeaders: Headers[] };
-}): Promise<
-  AsyncDisposable & {
-    url: string;
-  }
-> {
-  const sessions = new Set<Disposable>();
-  const server = new WebSocketServer({
-    host: "127.0.0.1",
-    port: args.port,
-  });
-
-  server.on("connection", (socket: WsWebSocket, request: IncomingMessage) => {
-    args.runner.requestHeaders.push(headersFromIncomingMessage(request));
-    const session = newWebSocketRpcSession(socket as unknown as globalThis.WebSocket, args.runner);
-    sessions.add(session);
-    socket.once("close", () => {
-      sessions.delete(session);
-      session[Symbol.dispose]();
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("listening", resolve);
-    server.once("error", reject);
-  });
-
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error(`unexpected WebSocket server address: ${String(address)}`);
-  }
-
-  return {
-    url: `http://127.0.0.1:${address.port}/`,
-    async [Symbol.asyncDispose]() {
-      for (const session of sessions) session[Symbol.dispose]();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error === undefined ? resolve() : reject(error)));
-      });
-    },
-  };
-}
-
-function headersFromIncomingMessage(request: IncomingMessage) {
-  const headers = new Headers();
-  for (const [name, value] of Object.entries(request.headers)) {
-    if (value === undefined) continue;
-    if (Array.isArray(value)) {
-      for (const item of value) headers.append(name, item);
-    } else {
-      headers.set(name, value);
-    }
-  }
-  return headers;
-}
-
-async function startCloudflaredTunnel(originUrl: string): Promise<
-  AsyncDisposable & {
-    url: string;
-  }
-> {
-  const child = spawn("cloudflared", ["tunnel", "--url", originUrl, "--no-autoupdate"], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const output: string[] = [];
-  const url = await waitForCloudflaredUrl(child, output);
-  // cloudflared prints the quick-tunnel URL ~1s before it registers an edge
-  // connection, and a freshly registered quick tunnel still 530s for a few more
-  // seconds while edge routing propagates. The stream worker dials the subscriber
-  // URL exactly once when `subscription-configured` is appended (reconciliation
-  // only re-dials on a topology change or RPC break), so that single dial must
-  // land on an already-routable tunnel. We wait for the edge registration log,
-  // then a propagation buffer. (We can't poll the URL from here: the test host's
-  // resolver does not resolve fresh *.trycloudflare.com names, while the deployed
-  // worker reaches them through Cloudflare's own resolver.)
-  await waitForCloudflaredRegistered(child, output);
-  await new Promise((resolve) => setTimeout(resolve, 8_000));
-
-  return {
-    url,
-    async [Symbol.asyncDispose]() {
-      child.kill();
-      await new Promise<void>((resolve) => {
-        child.once("exit", () => resolve());
-        setTimeout(resolve, 1_000);
-      });
-    },
-  };
-}
-
-async function waitForCloudflaredUrl(
-  child: ChildProcessByStdio<null, Readable, Readable>,
-  output: string[],
-): Promise<string> {
-  const urlPattern = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/;
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error(`timed out waiting for cloudflared URL:\n${output.join("")}`));
-    }, 20_000);
-
-    const onData = (data: Buffer) => {
-      const text = data.toString("utf8");
-      output.push(text);
-      const url = text.match(urlPattern)?.[0] ?? output.join("").match(urlPattern)?.[0];
-      if (url === undefined) return;
-      cleanup();
-      resolve(url);
-    };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(
-        new Error(
-          `cloudflared exited before URL (code=${code}, signal=${signal}):\n${output.join("")}`,
-        ),
-      );
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.stdout.off("data", onData);
-      child.stderr.off("data", onData);
-      child.off("exit", onExit);
-    };
-
-    child.stdout.on("data", onData);
-    child.stderr.on("data", onData);
-    child.once("exit", onExit);
-  });
-}
-
-async function waitForCloudflaredRegistered(
-  child: ChildProcessByStdio<null, Readable, Readable>,
-  output: string[],
-): Promise<void> {
-  const registeredPattern = /Registered tunnel connection/;
-  if (output.join("").match(registeredPattern)) return;
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error(`timed out waiting for cloudflared edge connection:\n${output.join("")}`));
-    }, 20_000);
-
-    const onData = (data: Buffer) => {
-      const text = data.toString("utf8");
-      output.push(text);
-      if (!text.match(registeredPattern)) return;
-      cleanup();
-      resolve();
-    };
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
-      cleanup();
-      reject(
-        new Error(
-          `cloudflared exited before registering (code=${code}, signal=${signal}):\n${output.join("")}`,
-        ),
-      );
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      child.stdout.off("data", onData);
-      child.stderr.off("data", onData);
-      child.off("exit", onExit);
-    };
-
-    child.stdout.on("data", onData);
-    child.stderr.on("data", onData);
-    child.once("exit", onExit);
-  });
-}
 
 function toStreamWebSocketUrl(path: string) {
   const url = new URL(workerUrl);

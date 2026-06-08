@@ -161,9 +161,9 @@ configure itself from committed stream state.
   payload: {
     subscriptionKey: "transcribe-audio",
     subscriber: {
-      type: "external-url",
-      transport: "capnweb-websocket",
-      url: "https://processor.example.com/transcribe-audio",
+      type: "built-in",
+      transport: "workers-rpc",
+      processorSlug: "transcribe-audio",
     },
   },
   createdAt: "2026-06-01T12:00:00.003Z",
@@ -174,10 +174,10 @@ configure itself from committed stream state.
 within a stream. If a later `subscription-configured` event uses the same `subscriptionKey`, it replaces
 the previous configuration for that subscription. The same subscriber implementation can appear in
 multiple subscriptions.
-`subscriber` describes what kind of subscriber should be connected and how to connect to it. The
-initial subscriber types are `built-in`, which uses `processorSlug` to select a built-in stream
-processor runner, and `external-url`, which dials a configured public URL using the same capnweb
-WebSocket protocol.
+`subscriber` describes what kind of subscriber should be connected and how to connect to it. For now
+outbound delivery is workers-rpc only: `built-in` uses `processorSlug` to select a built-in stream
+processor runner. External websocket/http subscribers were removed until there is a concrete need for
+them again.
 
 ```ts
 {
@@ -185,12 +185,9 @@ WebSocket protocol.
   payload: {
     subscriptionKey: "external-runner",
     subscriber: {
-      type: "external-url",
-      transport: "capnweb-websocket",
-      url: "https://example.com/stream-processor",
-      headers: {
-        "x-stream-token": "test-token",
-      },
+      type: "built-in",
+      transport: "workers-rpc",
+      processorSlug: "external-runner",
     },
   },
 }
@@ -242,7 +239,7 @@ Future instrumentation should cover:
 
 For any stream
 
-- All active subscription connections with direction (inbound vs outbound), transport (`capnweb-websocket`), status (connected or not)
+- All active subscription connections with direction (inbound vs outbound), transport (`workers-rpc` for outbound), status (connected or not)
 - age
 - number of events
 - storage size

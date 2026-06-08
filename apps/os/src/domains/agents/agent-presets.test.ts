@@ -232,7 +232,7 @@ describe("agent presets", () => {
     expect(prompt).toContain("Promise.all");
     expect(prompt).toContain("ctx.<path>.<method>(args)");
     expect(prompt).toContain("ctx.slack.chat.postMessage({ channel, thread_ts, text })");
-    expect(prompt).toContain("ctx.streams.read()");
+    expect(prompt).toContain("ctx.project.streams.get({ path: '.' }).read()");
   });
 
   it("tells Slack agents not to reply to FYI-only thread events", () => {

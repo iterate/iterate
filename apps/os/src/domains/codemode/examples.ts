@@ -128,25 +128,13 @@ const codemodeExampleSeeds = [
   const aiPromise = ctx.env.PROJECT.ai().run("test-model", {
     prompt: "show that nested project capability RPC works",
   });
-  const agentMessagePromise = ctx.env.PROJECT.agents().create().sendMessage({
-    message: "hello from env project",
-    subPath: "project-capability-pipelining",
-  });
-  const agentThingPromise = project.agents().create().doThing({
-    label: "project-pipeline",
-    value: 21,
-  });
-  const reposPromise = project.repos().list();
   const proceduresPromise = project.orpc().listProcedures();
 
-  const [firstAppend, batchAppends, ai, agentMessage, agentThing, repos, procedures] =
+  const [firstAppend, batchAppends, ai, procedures] =
     await Promise.all([
       firstAppendPromise,
       batchAppendPromise,
       aiPromise,
-      agentMessagePromise,
-      agentThingPromise,
-      reposPromise,
       proceduresPromise,
     ]);
 
@@ -164,15 +152,12 @@ const codemodeExampleSeeds = [
 
   return {
     aiModel: ai.model,
-    agentMessage: agentMessage.message,
-    agentThing,
     batchAppendCount: batchAppends.length,
     eventMessages: events
       .filter((event) => event.type === "events.iterate.com/codemode/example-note")
       .map((event) => event.payload.message),
     firstAppendOffset: firstAppend.offset,
     lowerCaseAppendOffset: lowerCaseAppend.offset,
-    repoCount: repos.length,
     streamInitialized: state != null,
     proceduresIncludeStreams: procedures.includes("streams") && procedures.includes("list"),
   };
@@ -463,13 +448,13 @@ const codemodeExampleSeeds = [
   {
     slug: "stream-append-tool",
     name: "Append to a project stream",
-    description: "Use ctx.streams.append as a normal codemode function call.",
+    description: "Use ctx.project.streams.get({ path }) as a normal codemode function call.",
     providers: [],
     code: `async (ctx) => {
-  const event = await ctx.streams.append({
+  const event = await ctx.project.streams.get({ path: "." }).append({
     event: {
       type: "events.iterate.com/codemode/example-note",
-      payload: { message: "appended via ctx.streams.append" },
+      payload: { message: "appended via ctx.project.streams" },
     },
   });
 
@@ -555,7 +540,7 @@ const codemodeExampleSeeds = [
       "Destructure ctx, use timers, Promise.all, Promise.race, try/catch, fetch, console, streams, and oRPC in one script.",
     providers: [{ type: "example-capabilities" }],
     code: `async (ctx) => {
-  const { fetch, console, streams, os } = ctx;
+  const { fetch, console, project, os } = ctx;
 
   const wait = (ms, value) =>
     new Promise((resolve) => setTimeout(() => resolve(value), ms));
@@ -583,7 +568,7 @@ const codemodeExampleSeeds = [
   const [response, procedures, appended] = await Promise.all([
     fetch("data:application/json,%7B%22hello%22%3A%22codemode%22%7D"),
     os.listProcedures(),
-    streams.append({
+    project.streams.get({ path: "." }).append({
       event: {
         type: "events.iterate.com/codemode/example-note",
         payload: { message: "appended from javascript-control-flow-mix" },
@@ -766,7 +751,7 @@ const codemodeExampleSeeds = [
       "List project secrets, read Slack/Google connection metadata, and inspect integration lifecycle/webhook streams.",
     providers: [],
     code: `async (ctx) => {
-  const { console, secrets, streams } = ctx;
+  const { console, project, secrets } = ctx;
 
   const secretSummaries = await secrets.list({});
   const integrationSecrets = secretSummaries.filter((secret) =>
@@ -787,9 +772,9 @@ const codemodeExampleSeeds = [
   }
 
   const [slackLifecycle, googleLifecycle, slackWebhooks] = await Promise.all([
-    streams.read({ streamPath: "/integrations/slack", afterOffset: "start" }),
-    streams.read({ streamPath: "/integrations/google", afterOffset: "start" }),
-    streams.read({ streamPath: "/integrations/slack", afterOffset: "start" }),
+    project.streams.get({ path: "/integrations/slack" }).read({ afterOffset: "start" }),
+    project.streams.get({ path: "/integrations/google" }).read({ afterOffset: "start" }),
+    project.streams.get({ path: "/integrations/slack" }).read({ afterOffset: "start" }),
   ]);
 
   console.log("integration secrets", integrationSecrets.map((secret) => secret.key));
@@ -813,7 +798,7 @@ const codemodeExampleSeeds = [
         type: "events.iterate.com/codemode/example-note",
         payload: {
           message:
-            "Uses default ctx.secrets and ctx.streams providers to inspect project-scoped integration state.",
+            "Uses default ctx.secrets and ctx.project.streams providers to inspect project-scoped integration state.",
         },
       },
     ],
