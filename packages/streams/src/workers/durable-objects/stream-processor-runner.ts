@@ -21,6 +21,8 @@ import type { Processor } from "../../processor.ts";
 type HostedProcessor = Processor<any, undefined>;
 type HostedProcessorRunnerSnapshot = Snapshot<unknown>;
 
+const PROCESSOR_RUNNER_SNAPSHOT_KEY = "snapshot:v4";
+
 export class StreamProcessorRunner extends DurableObject {
   #stream: RetainedStreamRpc | undefined;
   #runner: ProcessorRunner | undefined;
@@ -69,13 +71,14 @@ export class StreamProcessorRunner extends DurableObject {
       processor,
       deps: undefined,
       storage: {
-        load: () => this.ctx.storage.kv.get<HostedProcessorRunnerSnapshot>("snapshot"),
-        save: (snapshot) => void this.ctx.storage.kv.put("snapshot", snapshot),
+        load: () =>
+          this.ctx.storage.kv.get<HostedProcessorRunnerSnapshot>(PROCESSOR_RUNNER_SNAPSHOT_KEY),
+        save: (snapshot) => void this.ctx.storage.kv.put(PROCESSOR_RUNNER_SNAPSHOT_KEY, snapshot),
       },
       stream: this.#stream,
       sideEffectAnchor: {
-        offset: args.subscriptionConfiguredEvent.offset,
-        createdAt: args.subscriptionConfiguredEvent.createdAt,
+        offset: args.streamMaxOffset,
+        createdAt: new Date().toISOString(),
       },
     });
     const snapshot = await this.#runner.snapshot();
@@ -91,7 +94,7 @@ export class StreamProcessorRunner extends DurableObject {
     this.#subscriptionHandle = await (this.#stream as OutboundStreamRpc).subscribeOutbound({
       subscriptionKey: args.subscriptionKey,
       processEventBatch,
-      replayAfterOffset: snapshot?.offset ?? args.subscriptionConfiguredEvent.offset,
+      replayAfterOffset: snapshot?.offset ?? 0,
     });
   }
 
@@ -99,7 +102,9 @@ export class StreamProcessorRunner extends DurableObject {
   runtimeState() {
     return {
       processorSlug: this.ctx.storage.kv.get<string>("processorSlug"),
-      snapshot: this.ctx.storage.kv.get<HostedProcessorRunnerSnapshot>("snapshot"),
+      snapshot: this.ctx.storage.kv.get<HostedProcessorRunnerSnapshot>(
+        PROCESSOR_RUNNER_SNAPSHOT_KEY,
+      ),
     };
   }
 }
