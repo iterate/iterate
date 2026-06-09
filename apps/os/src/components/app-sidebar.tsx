@@ -140,7 +140,7 @@ function AppSidebarHeader() {
                   variant="ghost"
                   size="icon-xs"
                   aria-label="New project"
-                  render={<Link to="/projects/new" />}
+                  render={<Link to="/new-project" />}
                 >
                   <Plus />
                 </Button>
@@ -352,57 +352,66 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   }
 
   return (
-    <SidebarGroup>
-      <SidebarGroupContent>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip="Projects"
-              render={<Link to="/projects" />}
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects",
-                  fuzzy: false,
-                }),
-              )}
-            >
-              <ScrollText />
-              <span>Projects</span>
-            </SidebarMenuButton>
-            <SidebarMenuSub>
-              {projects.map((project) => (
-                <SidebarMenuSubItem key={project.id}>
-                  <SidebarMenuSubButton
-                    isActive={Boolean(
-                      matchRoute({
-                        to: "/projects/$projectSlug",
-                        params: { projectSlug: project.slug },
-                        fuzzy: true,
-                      }),
-                    )}
-                    render={
-                      <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} />
-                    }
-                  >
-                    <span>{project.slug}</span>
-                  </SidebarMenuSubButton>
-                </SidebarMenuSubItem>
-              ))}
-            </SidebarMenuSub>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip="Repl"
-              render={<Link to="/capnweb-repl" />}
-              isActive={Boolean(matchRoute({ to: "/capnweb-repl", fuzzy: false }))}
-            >
-              <SquareTerminal />
-              <span>Repl</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
+    <>
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip="Projects"
+                render={<Link to="/projects" />}
+                isActive={Boolean(
+                  matchRoute({
+                    to: "/projects",
+                    fuzzy: false,
+                  }),
+                )}
+              >
+                <ScrollText />
+                <span>Projects</span>
+              </SidebarMenuButton>
+              <SidebarMenuSub>
+                {projects.map((project) => (
+                  <SidebarMenuSubItem key={project.id}>
+                    <SidebarMenuSubButton
+                      isActive={Boolean(
+                        matchRoute({
+                          to: "/projects/$projectSlug",
+                          params: { projectSlug: project.slug },
+                          fuzzy: true,
+                        }),
+                      )}
+                      render={
+                        <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} />
+                      }
+                    >
+                      <span>{project.slug}</span>
+                    </SidebarMenuSubButton>
+                  </SidebarMenuSubItem>
+                ))}
+              </SidebarMenuSub>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+      <SidebarSeparator />
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip="Repl"
+                render={<Link to="/capnweb-repl" />}
+                isActive={Boolean(matchRoute({ to: "/capnweb-repl", fuzzy: false }))}
+              >
+                <SquareTerminal />
+                <span>Repl</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    </>
   );
 }
 

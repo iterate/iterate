@@ -15,7 +15,10 @@ import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
 import { AuthClientProvider, type PublicSessionResponse } from "@iterate-com/auth/client";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
 import iterateLogoAsset from "@iterate-com/ui/assets/iterate-logo.svg";
-import { DefaultErrorComponent } from "@iterate-com/ui/components/route-defaults";
+import {
+  DefaultErrorComponent,
+  DefaultNotFoundComponent,
+} from "@iterate-com/ui/components/route-defaults";
 import { AppConfig } from "../app.ts";
 import { orpcClient } from "../orpc/client.ts";
 import appCss from "../styles.css?url";
@@ -89,6 +92,10 @@ export const Route = createRootRouteWithContext<RouterContext>()({
   shellComponent: RootDocument,
   component: RootComponent,
   errorComponent: RootErrorComponent,
+  // defaultNotFoundComponent on the router already covers this, but the
+  // reference implementation sets it explicitly on the root route too:
+  // https://github.com/TanStack/router/blob/main/examples/react/start-basic/src/routes/__root.tsx
+  notFoundComponent: DefaultNotFoundComponent,
 });
 
 function toPublicSession(

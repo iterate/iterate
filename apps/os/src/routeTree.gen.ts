@@ -16,13 +16,13 @@ import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
 import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
+import { Route as AppNewProjectRouteImport } from './routes/_app/new-project'
 import { Route as AppLogStreamRouteImport } from './routes/_app/log-stream'
 import { Route as AppDebugRouteImport } from './routes/_app/debug'
 import { Route as AppCapnwebReplRouteImport } from './routes/_app/capnweb-repl'
 import { Route as AppProjectsRouteRouteImport } from './routes/_app/projects/route'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
-import { Route as AppProjectsNewRouteImport } from './routes/_app/projects/[_]new'
 import { Route as AppProjectsProjectSlugRouteRouteImport } from './routes/_app/projects/$projectSlug/route'
 import { Route as AppProjectsProjectSlugIndexRouteImport } from './routes/_app/projects/$projectSlug/index'
 import { Route as AppProjectsProjectSlugSettingsRouteImport } from './routes/_app/projects/$projectSlug/settings'
@@ -79,6 +79,11 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppNewProjectRoute = AppNewProjectRouteImport.update({
+  id: '/new-project',
+  path: '/new-project',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppLogStreamRoute = AppLogStreamRouteImport.update({
   id: '/log-stream',
   path: '/log-stream',
@@ -108,11 +113,6 @@ const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
   id: '/api/orpc/$',
   path: '/api/orpc/$',
   getParentRoute: () => rootRouteImport,
-} as any)
-const AppProjectsNewRoute = AppProjectsNewRouteImport.update({
-  id: '/_new',
-  path: '',
-  getParentRoute: () => AppProjectsRouteRoute,
 } as any)
 const AppProjectsProjectSlugRouteRoute =
   AppProjectsProjectSlugRouteRouteImport.update({
@@ -247,13 +247,13 @@ export interface FileRoutesByFullPath {
   '/capnweb-repl': typeof AppCapnwebReplRoute
   '/debug': typeof AppDebugRoute
   '/log-stream': typeof AppLogStreamRoute
+  '/new-project': typeof AppNewProjectRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
-  '/projects/new': typeof AppProjectsNewRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/projects/': typeof AppProjectsIndexRoute
   '/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
@@ -282,12 +282,12 @@ export interface FileRoutesByTo {
   '/capnweb-repl': typeof AppCapnwebReplRoute
   '/debug': typeof AppDebugRoute
   '/log-stream': typeof AppLogStreamRoute
+  '/new-project': typeof AppNewProjectRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/projects/new': typeof AppProjectsNewRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/projects': typeof AppProjectsIndexRoute
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
@@ -317,13 +317,13 @@ export interface FileRoutesById {
   '/_app/capnweb-repl': typeof AppCapnwebReplRoute
   '/_app/debug': typeof AppDebugRoute
   '/_app/log-stream': typeof AppLogStreamRoute
+  '/_app/new-project': typeof AppNewProjectRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/_app/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
-  '/_app/projects/_new': typeof AppProjectsNewRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/projects/': typeof AppProjectsIndexRoute
   '/_app/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
@@ -355,13 +355,13 @@ export interface FileRouteTypes {
     | '/capnweb-repl'
     | '/debug'
     | '/log-stream'
+    | '/new-project'
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/projects/$projectSlug'
-    | '/projects/new'
     | '/api/orpc/$'
     | '/projects/'
     | '/projects/$projectSlug/agents'
@@ -390,12 +390,12 @@ export interface FileRouteTypes {
     | '/capnweb-repl'
     | '/debug'
     | '/log-stream'
+    | '/new-project'
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
-    | '/projects/new'
     | '/api/orpc/$'
     | '/projects'
     | '/projects/$projectSlug/integrations'
@@ -424,13 +424,13 @@ export interface FileRouteTypes {
     | '/_app/capnweb-repl'
     | '/_app/debug'
     | '/_app/log-stream'
+    | '/_app/new-project'
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/_app/projects/$projectSlug'
-    | '/_app/projects/_new'
     | '/api/orpc/$'
     | '/_app/projects/'
     | '/_app/projects/$projectSlug/agents'
@@ -517,6 +517,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/new-project': {
+      id: '/_app/new-project'
+      path: '/new-project'
+      fullPath: '/new-project'
+      preLoaderRoute: typeof AppNewProjectRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/log-stream': {
       id: '/_app/log-stream'
       path: '/log-stream'
@@ -558,13 +565,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/orpc/$'
       preLoaderRoute: typeof ApiOrpcSplatRouteImport
       parentRoute: typeof rootRouteImport
-    }
-    '/_app/projects/_new': {
-      id: '/_app/projects/_new'
-      path: ''
-      fullPath: '/projects/new'
-      preLoaderRoute: typeof AppProjectsNewRouteImport
-      parentRoute: typeof AppProjectsRouteRoute
     }
     '/_app/projects/$projectSlug': {
       id: '/_app/projects/$projectSlug'
@@ -809,14 +809,12 @@ const AppProjectsProjectSlugRouteRouteWithChildren =
 
 interface AppProjectsRouteRouteChildren {
   AppProjectsProjectSlugRouteRoute: typeof AppProjectsProjectSlugRouteRouteWithChildren
-  AppProjectsNewRoute: typeof AppProjectsNewRoute
   AppProjectsIndexRoute: typeof AppProjectsIndexRoute
 }
 
 const AppProjectsRouteRouteChildren: AppProjectsRouteRouteChildren = {
   AppProjectsProjectSlugRouteRoute:
     AppProjectsProjectSlugRouteRouteWithChildren,
-  AppProjectsNewRoute: AppProjectsNewRoute,
   AppProjectsIndexRoute: AppProjectsIndexRoute,
 }
 
@@ -828,6 +826,7 @@ interface AppRouteChildren {
   AppCapnwebReplRoute: typeof AppCapnwebReplRoute
   AppDebugRoute: typeof AppDebugRoute
   AppLogStreamRoute: typeof AppLogStreamRoute
+  AppNewProjectRoute: typeof AppNewProjectRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -835,6 +834,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppCapnwebReplRoute: AppCapnwebReplRoute,
   AppDebugRoute: AppDebugRoute,
   AppLogStreamRoute: AppLogStreamRoute,
+  AppNewProjectRoute: AppNewProjectRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
@@ -852,13 +852,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}

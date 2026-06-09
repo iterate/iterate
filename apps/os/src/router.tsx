@@ -32,6 +32,9 @@ export function getRouter() {
     context: { queryClient },
     defaultPreload: "intent",
     defaultNotFoundComponent: DefaultNotFoundComponent,
+    // Restore scroll position on back/forward like a regular MPA would:
+    // https://tanstack.com/router/latest/docs/framework/react/guide/scroll-restoration
+    scrollRestoration: true,
   });
 
   // Let route loaders and components share the same query client on server and client.
