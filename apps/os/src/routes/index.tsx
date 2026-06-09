@@ -3,18 +3,10 @@ import { requireAuthenticatedRootRedirectTarget } from "../lib/auth.ts";
 
 export const Route = createFileRoute("/")({
   loader: async () => {
-    const target = await requireAuthenticatedRootRedirectTarget();
-    if (target.projectSlug) {
-      throw redirect({
-        to: "/projects/$projectSlug/codemode-sessions/new",
-        params: { projectSlug: target.projectSlug },
-        replace: true,
-      });
-    }
+    await requireAuthenticatedRootRedirectTarget();
 
     throw redirect({
-      to: "/org/$organizationSlug",
-      params: { organizationSlug: target.orgSlug },
+      to: "/projects",
       replace: true,
     });
   },
