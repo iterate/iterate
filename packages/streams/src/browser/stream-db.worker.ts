@@ -50,7 +50,7 @@ async function open(path: string): Promise<void> {
   databasePath = path;
   try {
     db = await openWithRetry(path);
-  } catch (error) {
+  } catch (_error) {
     await deleteDatabaseFiles(path);
     db = await openWithRetry(path);
   }
