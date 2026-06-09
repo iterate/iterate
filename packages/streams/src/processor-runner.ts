@@ -3,14 +3,14 @@
 // whether events arrive from browser/node inbound subscribe or from a Durable
 // Object outbound requestSubscription handshake.
 
-import type { StreamEvent, StreamEventInput } from "./shared/event.ts";
+import type { StreamEvent } from "./shared/event.ts";
 import {
   getInitialProcessorState,
   runProcessorReduce,
   type ProcessorState,
 } from "./shared/stream-processors.ts";
 import type { StreamSubscription } from "./subscription.ts";
-import type { StreamEventBatch } from "./types.ts";
+import type { ProcessorStream, StreamEventBatch } from "./types.ts";
 import type {
   Processor,
   ProcessorSideEffectAnchor,
@@ -25,7 +25,6 @@ export type ProcessorStorage<State> = {
   save(snapshot: Snapshot<State>): Promise<void> | void;
 };
 
-import type { ProcessorStream } from "./types.ts";
 export type { ProcessorStream } from "./types.ts";
 
 export function createProcessorRunner<Contract extends RunnableContract<Contract>, Deps>(args: {
