@@ -40,11 +40,15 @@ export async function getItxCapHostIngressRule(input: {
 
     const prefix = host.slice(0, host.length - base.length - 1);
     if (prefix.includes(".")) continue;
-    const separatorIndex = prefix.indexOf("--");
-    if (separatorIndex <= 0) continue;
 
-    const cap = prefix.slice(0, separatorIndex);
-    const projectIdentifier = prefix.slice(separatorIndex + 2);
+    // Only the project-level form `{cap}--{project}` is implemented. The spec
+    // also reserves `{cap}--{ctxId}--{project}` for child-context caps; that
+    // routing isn't built yet, so we require EXACTLY two `--`-separated parts
+    // and let any other shape fall through (fails closed → 404) rather than
+    // mis-parsing `ctxId--project` as a project identifier.
+    const parts = prefix.split("--");
+    if (parts.length !== 2) continue;
+    const [cap, projectIdentifier] = parts;
     if (!cap || !projectIdentifier) continue;
 
     const project = await input.db

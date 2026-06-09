@@ -52,7 +52,7 @@ export class ContextDO extends DurableObject<Env> {
 
   /** Idempotent: fork() calls this once; later connects just read. */
   initialize(input: { id: string; name?: string; parent: string; projectId: string }) {
-    this.ctx.storage.sql.exec(
+    const cursor = this.ctx.storage.sql.exec(
       `INSERT INTO itx_context (id, project_id, parent, name, created_at_ms)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(id) DO NOTHING`,
@@ -62,7 +62,11 @@ export class ContextDO extends DurableObject<Env> {
       input.name ?? null,
       Date.now(),
     );
-    this.audit(ITX_EVENT_TYPES.contextForked, { id: input.id, parent: input.parent });
+    // Only emit the fork event when a row was actually inserted — a re-init or
+    // retry (ON CONFLICT DO NOTHING) must not append a duplicate audit event.
+    if (cursor.rowsWritten > 0) {
+      this.audit(ITX_EVENT_TYPES.contextForked, { id: input.id, parent: input.parent });
+    }
     return this.descriptor();
   }
 
