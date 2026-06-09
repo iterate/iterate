@@ -12,10 +12,21 @@ import {
   type ProcessorState,
 } from "./shared/stream-processors.ts";
 
+/**
+ * Platform capabilities the host hands every processor, exposed to subclasses
+ * as `this.ctx`. Today that is just the stream append surface; richer hosts can
+ * substitute their own context type via the class's `IterateContext` parameter.
+ */
 export type StreamProcessorIterateContext = {
   stream: ProcessorStream;
 };
 
+/**
+ * The structural slice of a processor contract that the class needs. Contracts
+ * built with `defineProcessorContract(...)` satisfy this; the full contract
+ * type flows through the `Contract` type parameter so event/state inference
+ * reaches the hooks.
+ */
 export type StreamProcessorContract = {
   slug: string;
   stateSchema: z.ZodType;
@@ -25,6 +36,12 @@ export type StreamProcessorContract = {
   consumes: readonly string[];
 };
 
+/**
+ * Host-provided constructor dependencies shared by every processor:
+ * the iterate context, optional checkpoint storage (`readState`/`writeState`),
+ * and an optional `keepAliveWhile` hook for hosts whose runtime would otherwise
+ * shut down while async work is in flight (e.g. a Durable Object).
+ */
 export type StreamProcessorBaseDeps<Contract, IterateContext> = {
   iterateContext: IterateContext;
   keepAliveWhile?: (work: () => Promise<unknown>) => void;
@@ -77,6 +94,10 @@ type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
   checkpointOffset: number;
 };
 
+/**
+ * A durable checkpoint: the reduced state plus the highest stream offset that
+ * has been fully reduced and processed. Written atomically per batch.
+ */
 export type StreamProcessorSnapshot<State> = {
   offset: number;
   state: State;
@@ -84,11 +105,22 @@ export type StreamProcessorSnapshot<State> = {
 
 type MaybePromise<T> = T | Promise<T>;
 
+/**
+ * Where checkpoints live. Hosts inject these; when omitted the processor keeps
+ * an in-memory snapshot, which is enough for tests and stateless experiments.
+ * `readState` is called once, lazily, before the first batch; `writeState` is
+ * called after each successful batch.
+ */
 export type StreamProcessorStateStorage<State> = {
   readState?: () => MaybePromise<StreamProcessorSnapshot<State> | undefined>;
   writeState?: (snapshot: StreamProcessorSnapshot<State>) => MaybePromise<void>;
 };
 
+/**
+ * Constructor args are the base deps plus the subclass's own `Deps` flattened
+ * into one object, e.g. `new BrowserRawEventsProcessor({ iterateContext, sql,
+ * readState, writeState })`.
+ */
 export type StreamProcessorConstructorArgs<
   Contract extends StreamProcessorContract,
   Deps extends object,
@@ -146,6 +178,7 @@ export abstract class StreamProcessor<
 
   constructor(args: StreamProcessorConstructorArgs<Contract, Deps, IterateContext>) {
     super();
+    // Base deps are destructured out; everything else is the subclass's Deps.
     const { iterateContext, keepAliveWhile, readState, writeState, ...deps } = args;
     this.ctx = iterateContext;
     this.deps = deps as Deps;
@@ -158,14 +191,17 @@ export abstract class StreamProcessor<
       });
   }
 
+  /** Current reduced state. Initial state until the first batch loads/reduces. */
   get state(): ProcessorState<Contract> {
     return this.#getState();
   }
 
+  /** Highest stream offset this processor has durably processed through. */
   get checkpointOffset(): number {
     return this.#checkpointOffset;
   }
 
+  /** Loads (once) and returns the current checkpoint. Hosts use the offset as the replay cursor. */
   async snapshot(): Promise<StreamProcessorSnapshot<ProcessorState<Contract>>> {
     await this.#loadState();
     return {
@@ -185,7 +221,10 @@ export abstract class StreamProcessor<
     return await next;
   }
 
-  /** Pure projection of one consumed event into the next state. Defaults to identity. */
+  /**
+   * Pure projection of one consumed event into the next state. Defaults to
+   * identity; returning `null`/`undefined` also keeps the current state.
+   */
   protected reduce(args: ReduceArgs<Contract>): ProcessorState<Contract> | null | undefined {
     return args.state;
   }
@@ -296,6 +335,9 @@ export abstract class StreamProcessor<
     await this.#saveSnapshot();
   }
 
+  // keepAliveWhile is fire-and-forget from the host's point of view (it only
+  // keeps the runtime alive while the work runs), so this bridges the work's
+  // result/failure back into a promise the batch loop can await.
   async #runKeepAliveBackedWork(work: () => Promise<unknown>): Promise<unknown> {
     if (this.#keepAliveWhile === undefined) return await work();
 

@@ -33,6 +33,11 @@ import {
 
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
 
+/**
+ * The slice of `StreamProcessor` the browser runtime drives: read the
+ * checkpoint to pick the replay cursor, then feed delivered batches into
+ * `ingest`. Structural so views construct whatever processor class they like.
+ */
 type BrowserHostedProcessor = {
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
   ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void>;

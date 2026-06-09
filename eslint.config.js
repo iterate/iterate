@@ -111,6 +111,11 @@ function compactTypeText(text) {
 }
 
 /**
+ * Extracts the contract type argument from `class X extends StreamProcessor<Contract, ...>`.
+ * Text-based on purpose (no type checker in lint): it reads the first type argument up to a
+ * `,`, `>`, or newline, which works because contracts are concrete `typeof` aliases by
+ * convention — a contract type expression containing its own `<`/`,` would not be matched.
+ *
  * @param {import("eslint").Rule.RuleContext} context
  * @param {import("estree").ClassDeclaration | import("estree").ClassExpression} node
  */

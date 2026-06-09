@@ -1,3 +1,10 @@
+// Shared checkpoint table for browser-hosted stream processors: one row per
+// (processor slug, subscription key) holding the JSON reduced state and the
+// max processed offset. Keeping checkpoints here — separate from each
+// processor's projection tables — gives every processor the same resume and
+// reset story; the cost is that projection writes and the checkpoint are not
+// in one transaction, so processors must tolerate at-least-once redelivery.
+
 import type { StreamProcessorSnapshot, StreamProcessorStateStorage } from "../stream-processor.ts";
 import { createSchemaEnsurer } from "./ensure-schema-once.ts";
 import type { SqlClient } from "./stream-browser-db.ts";
@@ -25,6 +32,10 @@ export const ensureBrowserProcessorStateSchema = createSchemaEnsurer({
     ),
 });
 
+/**
+ * `readState`/`writeState` backed by the shared `processor_state` table, ready
+ * to pass into a `StreamProcessor` constructor.
+ */
 export function browserProcessorStateStorage<State>(args: {
   sql: SqlClient;
   processorSlug: string;

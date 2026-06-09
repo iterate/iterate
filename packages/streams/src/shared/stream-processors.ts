@@ -1332,6 +1332,11 @@ function shouldRunAfterAppendDuringCatchUp(args: {
   );
 }
 
+/**
+ * Enforces the invariant that reduced processor state is object-shaped (so
+ * state slices can evolve safely and hooks never branch on primitive state).
+ * Runners and the `StreamProcessor` class call this after every reduce.
+ */
 export function assertObjectProcessorState(args: { processorSlug: string; value: unknown }) {
   if (typeof args.value === "object" && args.value !== null && !Array.isArray(args.value)) {
     return;
@@ -1340,6 +1345,13 @@ export function assertObjectProcessorState(args: { processorSlug: string; value:
   throw new Error(`Processor "${args.processorSlug}" state must be an object.`);
 }
 
+/**
+ * Resolve the payload schema a processor should use for an incoming event:
+ * the named definition (from local `events` or `processorDeps`) when the type
+ * is listed in `consumes`, a permissive `z.unknown()` definition when the
+ * contract consumes `"*"`, and `undefined` when the event is not consumed at
+ * all. This is the runtime counterpart of `ConsumedEvent<Contract>`.
+ */
 export function getConsumedEventDefinition(args: {
   contract: {
     events: EventCatalog;

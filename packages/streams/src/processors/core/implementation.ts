@@ -17,21 +17,18 @@ export type CoreProcessorContract = typeof CoreProcessorContract;
 export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> {
   readonly contract = CoreProcessorContract;
 
-  // This is an extra method that other stream processors don't have that is called straight
-  // from the durable object. It lets us reject events before they are appended to the stream.
-  //
-  // The idea is that we have a single stream/paused event that is used _by any other processor_
-  // to tell this stream processor to stop accepting events. That event, alongside its counterparty stream/resumed
-  // is reduced into state.paused.
-  //
-  // That way the complicated
-  // loop detection / circuit breaker logic that we will no doubt need can live in other processors.
-
-  // Over time we might make stream/paused more expressive to allow blocking of just certain events from certain
-  // processors.
-  //
-  // This validateAppend method is also where we will implement permissions in the future to ensure not everyone
-  // can append every conceivable event to a stream.
+  /**
+   * Pre-append gate, called by the Durable Object before an event is committed.
+   * Core-only: no other processor can reject appends.
+   *
+   * The pause door is deliberately dumb: any processor can append
+   * `stream/paused` / `stream/resumed`, which reduce into `state.paused`, so
+   * complicated policies (loop detection, circuit breakers) live in those
+   * processors rather than here. Resume/error/woken events pass through a
+   * paused stream so it can recover. This is also where append permissions
+   * will eventually live, and `stream/paused` may grow more expressive (e.g.
+   * blocking only certain events from certain processors).
+   */
   validateAppend(args: { event: StreamEventInput; state: CoreProcessorState }): void {
     if (!args.state.paused) return;
 
@@ -46,13 +43,21 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
   }
 
   // The Stream Durable Object runs this processor inline during append with
-  // externally-owned state (its own KV/SQL recovery path), so these two methods
-  // take and return state explicitly instead of using the batch/checkpoint
-  // lifecycle that ordinary hosted processors get from the base class.
+  // externally-owned state (its own KV/SQL recovery path), so the two methods
+  // below take and return state explicitly instead of using the batch/
+  // checkpoint lifecycle that ordinary hosted processors get from the base
+  // class.
+
+  /** Reduce one committed event against caller-owned state. */
   reduceEvent(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
     return this.reduceRawEvent(args)?.state ?? args.state;
   }
 
+  /**
+   * Run `processEvent` side effects for one already-reduced event. Inline
+   * appends are synchronous, so blocking work is unavailable here — side
+   * effects must use `runInBackground` and be idempotent.
+   */
   processReducedEvent(args: {
     event: StreamEvent;
     previousState: CoreProcessorState;
@@ -73,7 +78,9 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
     });
   }
 
-  public override reduce(args: Parameters<StreamProcessor<CoreProcessorContract>["reduce"]>[0]) {
+  // The exit parse validates every state transition and applies schema
+  // transforms (e.g. dropping unsupported subscription transports).
+  override reduce(args: Parameters<StreamProcessor<CoreProcessorContract>["reduce"]>[0]) {
     const state = args.state;
     let next: CoreProcessorState = {
       ...state,
@@ -219,37 +226,35 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
     return this.contract.stateSchema.parse(next);
   }
 
+  // Stream-internal side effects. Today that is one thing: when a stream is
+  // created, announce it to every ancestor stream so each maintains its
+  // childPaths. The appends are idempotency-keyed and run in the background,
+  // so replays and partial failures are safe.
   protected override processEvent(
     args: Parameters<StreamProcessor<CoreProcessorContract>["processEvent"]>[0],
   ): void {
-    switch (args.event.type) {
-      case "events.iterate.com/stream/created": {
-        if (args.state.path === "/") return;
+    if (args.event.type !== "events.iterate.com/stream/created") return;
+    if (args.state.path === "/") return;
 
-        const pathSegments = args.state.path.split("/").filter(Boolean);
-        const ancestorPaths = ["/"];
-        for (let index = 1; index < pathSegments.length; index += 1) {
-          ancestorPaths.push(`/${pathSegments.slice(0, index).join("/")}`);
-        }
-
-        args.runInBackground(async () => {
-          await Promise.all(
-            ancestorPaths.map((ancestorPath) =>
-              this.ctx.stream.append({
-                streamPath: ancestorPath,
-                event: {
-                  type: "events.iterate.com/stream/child-stream-created",
-                  idempotencyKey: `child-stream-created:${ancestorPath}:${args.state.path}`,
-                  payload: { childPath: args.state.path },
-                },
-              }),
-            ),
-          );
-        });
-        return;
-      }
-      default:
-        return;
+    const pathSegments = args.state.path.split("/").filter(Boolean);
+    const ancestorPaths = ["/"];
+    for (let index = 1; index < pathSegments.length; index += 1) {
+      ancestorPaths.push(`/${pathSegments.slice(0, index).join("/")}`);
     }
+
+    args.runInBackground(async () => {
+      await Promise.all(
+        ancestorPaths.map((ancestorPath) =>
+          this.ctx.stream.append({
+            streamPath: ancestorPath,
+            event: {
+              type: "events.iterate.com/stream/child-stream-created",
+              idempotencyKey: `child-stream-created:${ancestorPath}:${args.state.path}`,
+              payload: { childPath: args.state.path },
+            },
+          }),
+        ),
+      );
+    });
   }
 }

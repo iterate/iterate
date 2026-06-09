@@ -14,6 +14,11 @@ export type BrowserRawEventsProcessorDeps = {
   sql: SqlClient;
 };
 
+/**
+ * Mirrors raw stream events into the browser's `events` SQLite table, one
+ * transaction per delivered batch. Stateless apart from the checkpoint: the
+ * table itself is the projection.
+ */
 export class BrowserRawEventsProcessor extends StreamProcessor<
   BrowserRawEventsContract,
   BrowserRawEventsProcessorDeps

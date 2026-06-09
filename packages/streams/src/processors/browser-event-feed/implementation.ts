@@ -18,6 +18,13 @@ export type BrowserEventFeedProcessorDeps = {
   sql: SqlClient;
 };
 
+/**
+ * Folds stream events into grouped `feed_items` rows for the browser feed UI.
+ * The grouping logic lives in the pure `planFeedOps` helper: `reduce` runs it
+ * one event at a time to advance state, and `processEventBatch` runs it over
+ * the whole batch (from the same batch-entry state) to produce one SQLite
+ * transaction — keeping the two in lockstep by construction.
+ */
 export class BrowserEventFeedProcessor extends StreamProcessor<
   BrowserEventFeedContract,
   BrowserEventFeedProcessorDeps
