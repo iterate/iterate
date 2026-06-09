@@ -1,10 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
+import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,
   type StreamEvent,
   type StreamEventInput,
 } from "../../shared/event.ts";
+import type { StreamSubscriptionHandshake } from "../stream-processor-host.ts";
 import { getInitialProcessorState } from "../../shared/stream-processors.ts";
 import type { ProcessEventBatch, StreamCoreProcessorState } from "../../types.ts";
 import { CoreStreamProcessor } from "../../processors/core/implementation.ts";
@@ -498,9 +500,9 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     subscriptionKey?: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    /** Only deliver these event types. Omit (or include `"*"`) for everything. */
+    eventTypes?: readonly string[];
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
-    // Type-filtered subscriptions belong here later. For now every subscription
-    // observes the stream's full ordered event log after its offset boundary.
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
     return this.#openConnection({ ...args, subscriptionKey, direction: "inbound" });
   }
@@ -509,6 +511,8 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     subscriptionKey: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    /** Only deliver these event types. Omit (or include `"*"`) for everything. */
+    eventTypes?: readonly string[];
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     return this.#openConnection({ ...args, direction: "outbound" });
   }
@@ -576,6 +580,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     subscriptionKey: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    eventTypes?: readonly string[];
     onClose?: () => void;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     const subscriptionKey = args.subscriptionKey.trim();
@@ -583,6 +588,15 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
     // Replacing any existing connection for this key.
     this.#connections.get(subscriptionKey)?.close();
+
+    // Optional event-type filter (processor hosts pass their contract's
+    // `consumes`). The cursor still advances past non-matching events — they
+    // are skipped, not deferred — so a subscriber's resume offset can sit on a
+    // filtered-out event without ever re-delivering it.
+    const eventTypeFilter =
+      args.eventTypes === undefined || args.eventTypes.includes("*")
+        ? undefined
+        : new Set(args.eventTypes);
 
     // Workers RPC disposes parameter stubs when an RPC method returns unless the
     // callee duplicates them. Keep a retained callback because this stream calls
@@ -608,10 +622,15 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
       draining = true;
       try {
         while (open) {
-          const events = this.getEvents({ afterOffset: cursor, limit: 100 }); // limit hardcoded for now
-          const lastOffset = events.at(-1)?.offset;
+          const readEvents = this.getEvents({ afterOffset: cursor, limit: 100 }); // limit hardcoded for now
+          const lastOffset = readEvents.at(-1)?.offset;
           if (lastOffset === undefined) return; // caught up; the next append wakes us again
           cursor = lastOffset;
+          const events =
+            eventTypeFilter === undefined
+              ? readEvents
+              : readEvents.filter((event) => eventTypeFilter.has(event.type));
+          if (events.length === 0) continue; // whole batch filtered out; keep draining
           connection.batchesSent += 1;
           connection.eventsSent += events.length;
           connection.lastDeliveredAt = new Date().toISOString();
@@ -718,19 +737,30 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     }
   }
 
+  /**
+   * Dials a configured subscriber by dispatching its Callable descriptor with
+   * the subscription handshake. The payload carries a live stream RpcTarget —
+   * Callable's workers-rpc dispatch is plain Workers RPC, so the stub survives —
+   * and the host is expected to call back `subscribeOutbound` to start
+   * receiving batches.
+   */
   async #connectOutboundConnection(args: {
     configured: CoreProcessorState["subscriptionsByKey"][string];
     subscriptionKey: string;
   }) {
-    const streamName = `${this.#coreProcessorState.namespace}:${this.#coreProcessorState.path}`;
-    await this.env.STREAM_PROCESSOR_RUNNER.getByName(
-      `${streamName}:${args.subscriptionKey}`,
-    ).requestSubscription({
-      stream: new StreamRpcTarget(this) as unknown as StreamRpc,
-      subscriptionKey: args.subscriptionKey,
-      streamMaxOffset: this.#coreProcessorState.maxOffset,
-      subscriptionConfiguredEvent: args.configured.latestConfiguredEvent,
-      streamRuntimeState: { coreProcessorState: this.#coreProcessorState },
+    await dispatchCallable({
+      callable: args.configured.latestConfiguredEvent.payload.subscriber.callable,
+      ctx: {
+        env: this.env as unknown as Record<string, unknown>,
+        exports: (this.ctx as { exports?: Record<string, unknown> }).exports,
+      },
+      payload: {
+        stream: new StreamRpcTarget(this) as unknown as StreamRpc,
+        subscriptionKey: args.subscriptionKey,
+        streamMaxOffset: this.#coreProcessorState.maxOffset,
+        subscriptionConfiguredEvent: args.configured.latestConfiguredEvent,
+        streamRuntimeState: { coreProcessorState: this.#coreProcessorState },
+      } satisfies StreamSubscriptionHandshake,
     });
   }
 }

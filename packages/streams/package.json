@@ -10,6 +10,7 @@
     "./browser/stream-browser-store": "./src/browser/stream-browser-store.ts",
     "./processor": "./src/processor.ts",
     "./processor-runner": "./src/processor-runner.ts",
+    "./workers/stream-processor-host": "./src/workers/stream-processor-host.ts",
     "./stream-processor": "./src/stream-processor.ts",
     "./processors/browser-event-feed/implementation": "./src/processors/browser-event-feed/implementation.ts",
     "./processors/browser-raw-events/implementation": "./src/processors/browser-raw-events/implementation.ts",
@@ -18,6 +19,7 @@
     "./processors/core/contract": "./src/processors/core/contract.ts",
     "./processors/core/implementation": "./src/processors/core/implementation.ts",
     "./processors/examples/echo/implementation": "./src/processors/examples/echo/implementation.ts",
+    "./shared/callable-subscriber": "./src/shared/callable-subscriber.ts",
     "./shared/event": "./src/shared/event.ts",
     "./shared/rpc-target": "./src/shared/rpc-target.ts",
     "./shared/stream-processors": "./src/shared/stream-processors.ts",
@@ -37,6 +39,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@iterate-com/shared": "workspace:*",
     "@journeyapps/wa-sqlite": "^1.7.0",
     "capnweb": "^0.8.0",
     "react": "^19.2.0",

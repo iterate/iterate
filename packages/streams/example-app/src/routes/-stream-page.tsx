@@ -11,6 +11,7 @@ import {
 import { ClientOnly, useNavigate } from "@tanstack/react-router";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { DEFAULT_STREAM_NAMESPACE } from "../../../src/browser/connect.ts";
+import { durableObjectProcessorSubscriber } from "../../../src/shared/callable-subscriber.ts";
 import {
   acquireStreamRuntime,
   type BrowserProcessorConfig,
@@ -1424,11 +1425,11 @@ function StreamControlTool({
             type: "events.iterate.com/stream/subscription-configured",
             payload: {
               subscriptionKey,
-              subscriber: {
-                type: "built-in",
-                transport: "workers-rpc",
-                processorSlug: "circuit-breaker",
-              },
+              subscriber: durableObjectProcessorSubscriber({
+                bindingName: "STREAM_PROCESSOR_RUNNER",
+                durableObjectName: `${core.path}:${subscriptionKey}`,
+                processorName: "circuit-breaker",
+              }),
             },
             idempotencyKey: `subscription:${subscriptionKey}`,
           },

@@ -48,6 +48,8 @@ export type StreamRpc = {
     subscriptionKey?: SubscriptionKey;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    /** Only deliver these event types. Omit (or include `"*"`) for everything. */
+    eventTypes?: readonly string[];
   }): MaybePromise<StreamSubscriptionHandle>;
   runtimeState(): MaybePromise<{
     coreProcessorState: StreamCoreProcessorState;

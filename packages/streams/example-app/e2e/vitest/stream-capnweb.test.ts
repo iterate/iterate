@@ -5,6 +5,7 @@ import { withStreamConnectionFromBrowser } from "../../../src/browser/connect.ts
 import { withStreamConnectionFromNode } from "../../../src/node/connect.ts";
 import type { WebSocketFrame } from "../../../src/connection.ts";
 import { e2eStreamPath, e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
+import { durableObjectProcessorSubscriber } from "../../../src/shared/callable-subscriber.ts";
 const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
 const e2eItFails = process.env.STREAM_STAGING_E2E === "true" ? it.fails : it.skip;
 
@@ -468,11 +469,11 @@ describe("stream capnweb protocol", () => {
         idempotencyKey: `subscription:${subscriptionKey}`,
         payload: {
           subscriptionKey,
-          subscriber: {
-            type: "built-in",
-            transport: "workers-rpc",
-            processorSlug: "echo-example",
-          },
+          subscriber: durableObjectProcessorSubscriber({
+            bindingName: "STREAM_PROCESSOR_RUNNER",
+            durableObjectName: `${path}:${subscriptionKey}`,
+            processorName: "echo-example",
+          }),
         },
       },
     });
@@ -501,11 +502,11 @@ describe("stream capnweb protocol", () => {
         idempotencyKey: `subscription:${subscriptionKey}`,
         payload: {
           subscriptionKey,
-          subscriber: {
-            type: "built-in",
-            transport: "workers-rpc",
-            processorSlug: "circuit-breaker",
-          },
+          subscriber: durableObjectProcessorSubscriber({
+            bindingName: "STREAM_PROCESSOR_RUNNER",
+            durableObjectName: `${path}:${subscriptionKey}`,
+            processorName: "circuit-breaker",
+          }),
         },
       },
     });

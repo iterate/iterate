@@ -45,6 +45,15 @@ export type StreamProcessorContract = {
 export type StreamProcessorBaseDeps<Contract, IterateContext> = {
   iterateContext: IterateContext;
   keepAliveWhile?: (work: () => Promise<unknown>) => void;
+  /**
+   * Side-effect anchor: events at or below this offset are reduced into state
+   * but skipped by the default `processEvent` fan-out. Hosts set it to the
+   * offset where this processor was attached to the stream, so attaching to an
+   * existing stream rebuilds state from history without re-running historical
+   * side effects (e.g. re-firing LLM requests). A function so the host can
+   * re-anchor on re-subscription. Defaults to `() => 0` (everything is live).
+   */
+  sideEffectsAfterOffset?: () => number;
 } & StreamProcessorStateStorage<ProcessorState<Contract>>;
 
 // These arg shapes are intentionally not exported: subclass overrides annotate their
@@ -92,6 +101,13 @@ type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
   state: ProcessorState<Contract>;
   streamMaxOffset: number;
   checkpointOffset: number;
+  /**
+   * The side-effect anchor for this batch (see `StreamProcessorBaseDeps`).
+   * The default implementation skips `processEvent` for reduced events at or
+   * below it; batch overrides should apply the same rule to their own side
+   * effects (pure projections can ignore it).
+   */
+  sideEffectsAfterOffset: number;
 };
 
 /**
@@ -172,6 +188,7 @@ export abstract class StreamProcessor<
   #state: ProcessorState<Contract> | undefined;
   #memorySnapshot: StreamProcessorSnapshot<ProcessorState<Contract>> | undefined;
   readonly #keepAliveWhile: ((work: () => Promise<unknown>) => void) | undefined;
+  readonly #sideEffectsAfterOffset: () => number;
   readonly #readState: () => MaybePromise<
     StreamProcessorSnapshot<ProcessorState<Contract>> | undefined
   >;
@@ -182,10 +199,18 @@ export abstract class StreamProcessor<
   constructor(args: StreamProcessorConstructorArgs<Contract, Deps, IterateContext>) {
     super();
     // Base deps are destructured out; everything else is the subclass's Deps.
-    const { iterateContext, keepAliveWhile, readState, writeState, ...deps } = args;
+    const {
+      iterateContext,
+      keepAliveWhile,
+      sideEffectsAfterOffset,
+      readState,
+      writeState,
+      ...deps
+    } = args;
     this.ctx = iterateContext;
     this.deps = deps as Deps;
     this.#keepAliveWhile = keepAliveWhile;
+    this.#sideEffectsAfterOffset = sideEffectsAfterOffset ?? (() => 0);
     this.#readState = readState ?? (() => this.#memorySnapshot);
     this.#writeState =
       writeState ??
@@ -252,6 +277,9 @@ export abstract class StreamProcessor<
    */
   protected async processEventBatch(args: ProcessEventBatchArgs<Contract>): Promise<void> {
     for (const reducedEvent of args.reducedEvents) {
+      // Events at or below the anchor are historical replay: reduced into
+      // state (already done by the batch loop) but no side effects.
+      if (reducedEvent.event.offset <= args.sideEffectsAfterOffset) continue;
       this.processEvent({
         ...reducedEvent,
         streamMaxOffset: args.streamMaxOffset,
@@ -329,6 +357,7 @@ export abstract class StreamProcessor<
         state,
         streamMaxOffset: args.streamMaxOffset,
         checkpointOffset,
+        sideEffectsAfterOffset: this.#sideEffectsAfterOffset(),
         blockProcessorWhile: (work) => {
           blockingWork.push(this.#runKeepAliveBackedWork(work));
         },
