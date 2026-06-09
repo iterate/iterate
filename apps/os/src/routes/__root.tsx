@@ -27,21 +27,45 @@ import type { RouterContext } from "~/router.tsx";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 
+const ROOT_AUTH_SNAPSHOT_QUERY_KEY = ["__root-auth-snapshot"] as const;
+
+type RootAuthSnapshot = {
+  authSession: PublicSessionResponse;
+  iterateAuthIssuer: string | undefined;
+  currentProjectHostSlug: string | null;
+};
+
 export const Route = createRootRouteWithContext<RouterContext>()({
   beforeLoad: ({ context }) => {
+    // Server requests always carry a start context with the authenticated
+    // session (or null when signed out). Client-side navigations don't run
+    // the server middleware, so reuse the snapshot the SSR pass dehydrated
+    // into the query cache.
     const startContext = getGlobalStartContext();
-    const authSession = context.authSession ?? toPublicSession(startContext?.iterateAuthSession);
-    return {
-      authSession,
-      iterateAuthIssuer: context.iterateAuthIssuer ?? startContext?.config.iterateAuth?.issuer,
-      currentProjectHostSlug:
-        context.currentProjectHostSlug ??
-        resolveCurrentProjectHostSlug({
-          baseUrl: startContext?.config.baseUrl,
-          projectHostnameBases: startContext?.projectHostnameBases ?? [],
-          requestUrl: startContext?.rawRequest?.url,
-        }),
+    if (startContext?.iterateAuthSession === undefined) {
+      const cached = context.queryClient.getQueryData<RootAuthSnapshot>(
+        ROOT_AUTH_SNAPSHOT_QUERY_KEY,
+      );
+      return (
+        cached ?? {
+          authSession: { authenticated: false } satisfies PublicSessionResponse,
+          iterateAuthIssuer: undefined,
+          currentProjectHostSlug: null,
+        }
+      );
+    }
+
+    const snapshot: RootAuthSnapshot = {
+      authSession: toPublicSession(startContext.iterateAuthSession),
+      iterateAuthIssuer: startContext.config.iterateAuth?.issuer,
+      currentProjectHostSlug: resolveCurrentProjectHostSlug({
+        baseUrl: startContext.config.baseUrl,
+        projectHostnameBases: startContext.projectHostnameBases ?? [],
+        requestUrl: startContext.rawRequest?.url,
+      }),
     };
+    context.queryClient.setQueryData(ROOT_AUTH_SNAPSHOT_QUERY_KEY, snapshot);
+    return snapshot;
   },
   loader: async ({ context }) => {
     const config = PublicConfigSchema.parse(await orpcClient.__internal.publicConfig({}));
