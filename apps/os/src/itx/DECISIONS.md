@@ -114,3 +114,13 @@ Errors crossing the Workers RPC boundary back to remote callers can be
 masked as "internal error; reference = …". `ContextRegistry.invoke` logs the
 real error (cap, kind, path, context) before rethrowing — the supervisor is
 the one place the truth is always visible.
+
+## D15: agents.e2e "slack-agent event-mode codemode" timeout is pre-existing
+
+The e2e test "completes slack-agent event-mode codemode calls without
+blocking the stream callable queue" times out waiting for the slack-agent
+processor chain to emit tool-provider-registered on the routed agent stream.
+Verified by running the IDENTICAL test from origin/main (3cc317ad8) against a
+main-code dev server: it times out there too. Not caused by the itx branch;
+also failed on the itx preview deployment, consistent with an upstream
+slack-agent/stream-subscription regression that predates this work.
