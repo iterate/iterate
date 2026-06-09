@@ -4,8 +4,6 @@ packages:
   - apps/os-contract
   - apps/semaphore
   - apps/semaphore-contract
-  - apps/example
-  - apps/example-contract
   - apps/*
   - packages/*
   - packages/*/example-app

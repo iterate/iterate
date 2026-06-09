@@ -12,8 +12,6 @@ setup:
     path: ./
   - project: iterate-com
     path: apps/iterate-com/
-  - project: example
-    path: apps/example/
   - project: os
     path: apps/os/
   - project: semaphore

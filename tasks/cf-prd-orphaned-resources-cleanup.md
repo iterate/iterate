@@ -35,7 +35,7 @@ Preview account (`376ef7ed81b0573f93524de763666c15`) is **out of scope** unless 
 
 Use Cloudflare dashboard or API / MCP. For each category, list **all** resources, mark keep vs delete.
 
-- [ ] **Workers** — scripts not in active deploy set (`os-prd`, `auth-*`, `events-*`, `semaphore-*`, `agents-*`, `example-*`, …)
+- [ ] **Workers** — scripts not in active deploy set (`os-prd`, `auth-*`, `events-*`, `semaphore-*`, `agents-*`, …)
 - [ ] **Worker routes** — `os.iterate.com`, `*.iterate.app`, stale `os.*`, deleted-app hostnames
 - [ ] **D1 databases** — `*-db` with no bound worker or wrong worker name
 - [ ] **R2 buckets** — `*-repos`, legacy artifact buckets
@@ -75,10 +75,9 @@ Most workers are abandoned **estate / `*-production-*` / `*-state-store`** exper
 | `agents-prd`    | `agents-prd-db`                |
 | `auth-prd`      | `auth-prd-auth-db`             |
 | `events-prd`    | `events-prd-db`                |
-| `example-prd`   | `example-prd-db`               |
 | `semaphore-prd` | `semaphore-prd-resources`      |
 
-Preview workers in **same account** (confirm before delete): `os-preview-*`, `agents-preview-*`, `events-preview-*`, `semaphore-preview-*`, `example-preview-*`.
+Preview workers in **same account** (confirm before delete): `os-preview-*`, `agents-preview-*`, `events-preview-*`, `semaphore-preview-*`.
 
 ### Delete candidates — OS / OS legacy (prd)
 
@@ -99,11 +98,11 @@ Preview workers in **same account** (confirm before delete): `os-preview-*`, `ag
 
 ### Delete candidates — cfg / proof deploys
 
-`cfgfinalprd-example`, `cfgproofprd-example`, `cfgretestprd*`, `spacfgprd-example`, `example-proof-*` (+ D1s).
+`cfgretestprd*` (+ D1s).
 
 ### Delete candidates — dev/stg scripts in prd account
 
-`dev-events`, `dev-events2`, `dev-example`, `dev-example-v2`, `events-stg`, `semaphore-stg`, `prd-events2`, `prd-example`, `prd-example-v2`, `dev-*` (long tail).
+`dev-events`, `dev-events2`, `events-stg`, `semaphore-stg`, `prd-events2`, `dev-*` (long tail).
 
 ### Delete candidates — estate platform cruft (~800+ workers)
 

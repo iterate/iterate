@@ -6,11 +6,10 @@ When multiple branches add migrations, merge conflicts can occur. This guide cov
 
 ## Where Drizzle Still Lives
 
-This repo no longer uses Drizzle for the main OS app. Remaining Drizzle packages include:
-
-- `apps/example/src/db/`
-
-The main product app (`apps/os`) uses **sqlfu + D1** — see `apps/os/src/db/definitions.sql` and `pnpm --dir apps/os sqlfu:generate`.
+This repo no longer uses Drizzle for the main OS app, and there are no active
+Drizzle app packages at the moment. The main product app (`apps/os`) uses
+**sqlfu + D1** — see `apps/os/src/db/definitions.sql` and
+`pnpm --dir apps/os sqlfu:generate`.
 
 ## How Drizzle Migrations Work
 
