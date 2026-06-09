@@ -5,22 +5,16 @@ import {
   Bug,
   Check,
   ChevronsUpDown,
-  CircleDot,
-  Code2,
   ExternalLink,
-  GitBranch,
-  House,
-  KeyRound,
   LogOut,
-  Network,
-  Plug,
-  Radio,
   ScrollText,
   Settings2,
   SquareTerminal,
   UserCircle,
   type LucideIcon,
 } from "lucide-react";
+import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { useConfig } from "@iterate-com/ui/apps/config";
@@ -59,12 +53,15 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
+  SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
 import type { AppConfig } from "~/app.ts";
-import { buildProjectMcpUrl, buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
+import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
+import type { RouteBreadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
+import { streamPathToSplat } from "~/lib/stream-links.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
 
@@ -333,9 +330,7 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
     return (
       <ProjectSidebarGroup
         customHostname={activeProject?.customHostname ?? null}
-        mcpBaseUrl={routeConfig.mcpBaseUrl}
         projectSlug={activeProjectSlug}
-        baseUrl={routeConfig.baseUrl}
         projectHostnameBases={routeConfig.projectHostnameBases}
       />
     );
@@ -409,20 +404,17 @@ function getActiveProjectSlug(matches: ReturnType<typeof useMatches>) {
 }
 
 function ProjectSidebarGroup({
-  baseUrl,
   customHostname,
-  mcpBaseUrl,
   projectHostnameBases,
   projectSlug,
 }: {
-  baseUrl?: string;
   customHostname: string | null;
-  mcpBaseUrl?: string;
   projectHostnameBases: readonly string[];
   projectSlug: string;
 }) {
   const matchRoute = useMatchRoute();
-  const mcpUrl = buildProjectMcpUrl({ baseUrl, mcpBaseUrl, projectSlug, projectHostnameBases });
+  const matches = useMatches();
+  const activeStreamPath = getActiveStreamPath(matches);
   const customWorkerUrl = buildProjectWorkerUrl({
     projectSlug,
     customHostname,
@@ -434,46 +426,29 @@ function ProjectSidebarGroup({
       <SidebarGroup>
         <SidebarGroupContent>
           <SidebarMenu>
-            {PROJECT_SIDEBAR_ITEMS.map((item) => (
-              <ProjectSidebarMenuItem
+            {PROJECT_STREAM_NAV_ITEMS.map((item) => (
+              <ProjectStreamNavItem
                 key={item.label}
-                icon={item.icon}
+                isActive={
+                  item.useProjectHome
+                    ? Boolean(
+                        matchRoute({
+                          to: "/projects/$projectSlug",
+                          params: { projectSlug },
+                          fuzzy: false,
+                        }),
+                      ) || activeStreamPath === "/"
+                    : activeStreamPath != null &&
+                      (activeStreamPath === item.streamPath ||
+                        activeStreamPath.startsWith(`${item.streamPath}/`))
+                }
                 label={item.label}
-                render={<Link to={item.to} params={{ projectSlug }} />}
-                isActive={Boolean(
-                  matchRoute({
-                    to: item.to,
-                    params: { projectSlug },
-                    fuzzy: item.fuzzy,
-                  }),
-                )}
+                projectSlug={projectSlug}
+                streamPath={item.streamPath}
+                useProjectHome={item.useProjectHome ?? false}
               />
             ))}
-            {mcpUrl ? (
-              <ProjectSidebarMenuItem
-                icon={Network}
-                label="MCP"
-                render={<Link to="/projects/$projectSlug/mcp" params={{ projectSlug }} />}
-                isActive={Boolean(
-                  matchRoute({
-                    to: "/projects/$projectSlug/mcp",
-                    params: { projectSlug },
-                  }),
-                )}
-              />
-            ) : null}
-            <ProjectSidebarMenuItem
-              icon={Radio}
-              label="Streams"
-              render={<Link to="/projects/$projectSlug/streams" params={{ projectSlug }} />}
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$projectSlug/streams",
-                  params: { projectSlug },
-                  fuzzy: true,
-                }),
-              )}
-            />
+            <SidebarSeparator />
             <ProjectSidebarMenuItem
               icon={Settings2}
               label="Settings"
@@ -485,13 +460,24 @@ function ProjectSidebarGroup({
                 }),
               )}
             />
+            <ProjectSidebarMenuItem
+              icon={SquareTerminal}
+              label="Repl"
+              render={<Link to="/projects/$projectSlug/repl" params={{ projectSlug }} />}
+              isActive={Boolean(
+                matchRoute({
+                  to: "/projects/$projectSlug/repl",
+                  params: { projectSlug },
+                }),
+              )}
+            />
             {customWorkerUrl ? (
               <SidebarMenuItem>
                 <SidebarMenuButton
-                  tooltip="Custom worker"
+                  tooltip="Project worker"
                   render={
                     <a
-                      aria-label={`Open ${projectSlug} custom worker`}
+                      aria-label={`Open ${projectSlug} project worker`}
                       href={customWorkerUrl}
                       target="_blank"
                       rel="noreferrer"
@@ -499,7 +485,7 @@ function ProjectSidebarGroup({
                   }
                 >
                   <ExternalLink />
-                  <span>Custom worker</span>
+                  <span>Project worker</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ) : null}
@@ -527,56 +513,87 @@ function ProjectSidebarGroup({
   );
 }
 
-const PROJECT_SIDEBAR_ITEMS = [
+type ProjectStreamNavItemConfig = {
+  label: string;
+  streamPath: StreamPathType;
+  useProjectHome?: boolean;
+};
+
+const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
   {
-    fuzzy: false,
-    icon: House,
-    label: "Home",
-    to: "/projects/$projectSlug",
+    label: "/",
+    streamPath: StreamPath.parse("/"),
+    useProjectHome: true,
   },
   {
-    fuzzy: true,
-    icon: CircleDot,
-    label: "Agents",
-    to: "/projects/$projectSlug/agents",
+    label: "/agents/",
+    streamPath: StreamPath.parse("/agents"),
   },
   {
-    fuzzy: true,
-    icon: Code2,
-    label: "Codemode Sessions",
-    to: "/projects/$projectSlug/codemode-sessions",
+    label: "/integrations/",
+    streamPath: StreamPath.parse("/integrations"),
   },
   {
-    fuzzy: true,
-    icon: GitBranch,
-    label: "Repos",
-    to: "/projects/$projectSlug/repos",
+    label: "/secrets/",
+    streamPath: StreamPath.parse("/secrets"),
   },
   {
-    fuzzy: true,
-    icon: KeyRound,
-    label: "Secrets",
-    to: "/projects/$projectSlug/secrets",
+    label: "/repos/",
+    streamPath: StreamPath.parse("/repos"),
   },
   {
-    fuzzy: false,
-    icon: SquareTerminal,
-    label: "Repl",
-    to: "/projects/$projectSlug/repl",
+    label: "/streams/",
+    streamPath: StreamPath.parse("/streams"),
   },
   {
-    fuzzy: false,
-    icon: ScrollText,
-    label: "Examples",
-    to: "/projects/$projectSlug/examples",
+    label: "/mcp/",
+    streamPath: StreamPath.parse("/mcp"),
   },
-  {
-    fuzzy: false,
-    icon: Plug,
-    label: "Integrations",
-    to: "/projects/$projectSlug/integrations",
-  },
-] as const;
+];
+
+function getActiveStreamPath(matches: ReturnType<typeof useMatches>) {
+  return matches
+    .map(
+      (match) =>
+        (match.loaderData as RouteBreadcrumbLoaderData | undefined)?.streamBreadcrumb?.streamPath,
+    )
+    .filter((streamPath): streamPath is StreamPathType => streamPath != null)
+    .at(-1);
+}
+
+function ProjectStreamNavItem({
+  isActive,
+  label,
+  projectSlug,
+  streamPath,
+  useProjectHome,
+}: {
+  isActive: boolean;
+  label: string;
+  projectSlug: string;
+  streamPath: StreamPathType;
+  useProjectHome: boolean;
+}) {
+  const render = useProjectHome ? (
+    <Link to="/projects/$projectSlug" params={{ projectSlug }} />
+  ) : (
+    <Link
+      to="/projects/$projectSlug/streams/$"
+      params={{
+        projectSlug,
+        _splat: streamPathToSplat(streamPath),
+      }}
+    />
+  );
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton render={render} isActive={isActive} tooltip={label}>
+        <EventsStreamPathLabel className="text-xs" label={label} path={streamPath} />
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
 
 function ProjectSidebarMenuItem({
   icon: Icon,
