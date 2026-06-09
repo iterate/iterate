@@ -45,7 +45,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
   }
 
   public override reduce(args: Parameters<StreamProcessor<CoreProcessorContract>["reduce"]>[0]) {
-    const state = this.contract.stateSchema.parse(args.state);
+    const state = args.state as CoreProcessorState;
     let next: CoreProcessorState = {
       ...state,
       eventCount: state.eventCount + 1,
@@ -187,7 +187,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
       default:
         break;
     }
-    return this.contract.stateSchema.parse(next ?? state);
+    return this.contract.stateSchema.parse(next);
   }
 
   protected override processEvent(

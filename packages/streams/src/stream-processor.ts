@@ -3,8 +3,10 @@ import type { z } from "zod";
 import type { ProcessorStream } from "./processor-runner.ts";
 import type { StreamEvent } from "./shared/event.ts";
 import {
+  assertObjectProcessorState,
+  getConsumedEventDefinition,
+  getEventSchema,
   getInitialProcessorState,
-  runProcessorReduce,
   type ConsumedEvent,
   type EventCatalog,
   type ProcessorState,
@@ -22,7 +24,7 @@ export type StreamProcessorIterateContext = {
   stream: ProcessorStream;
 };
 
-export type StreamProcessorContract<_Self> = {
+export type StreamProcessorContract = {
   slug: string;
   stateSchema: z.ZodType;
   initialState?: unknown;
@@ -35,25 +37,32 @@ type ProcessorEvent<Contract> = ConsumedEvent<Contract>;
 
 export type StreamProcessorBaseDeps<Contract, IterateContext> = {
   iterateContext: IterateContext;
-  keepAliveWhile?: <Result>(work: () => Promise<Result>) => void;
+  keepAliveWhile?: (work: () => Promise<unknown>) => void;
 } & StreamProcessorStateStorage<ProcessorState<Contract>>;
 
-export type ReducedEvent<Contract> = {
+// These arg shapes are intentionally not exported: subclass overrides annotate their
+// args as `Parameters<StreamProcessor<Contract>["method"]>[0]` (enforced by the
+// `iterate/stream-processor-override-args` lint rule) so there is exactly one spelling.
+type ReducedEvent<Contract> = {
   event: DeepReadonly<ProcessorEvent<Contract>>;
   previousState: DeepReadonly<ProcessorState<Contract>>;
   state: DeepReadonly<ProcessorState<Contract>>;
 };
 
-export type ReduceArgs<Contract> = {
+type ReduceArgs<Contract> = {
   event: DeepReadonly<ProcessorEvent<Contract>>;
   state: DeepReadonly<ProcessorState<Contract>>;
 };
 
-export type ProcessEventArgs<Contract> = ReducedEvent<Contract> & {
+type ProcessEventArgs<Contract> = ReducedEvent<Contract> & {
   streamMaxOffset: number;
+  /**
+   * The offset this batch will checkpoint through once all blocking work
+   * completes — the last event offset in the batch, not this event's offset.
+   */
   checkpointOffset: number;
-  blockProcessorWhile: <Result>(work: () => Promise<Result>) => void;
-  runInBackground: <Result>(work: () => Promise<Result>) => void;
+  blockProcessorWhile: (work: () => Promise<unknown>) => void;
+  runInBackground: (work: () => Promise<unknown>) => void;
 };
 
 export type StreamProcessorSnapshot<State> = {
@@ -69,7 +78,7 @@ export type StreamProcessorStateStorage<State> = {
 };
 
 export type StreamProcessorConstructorArgs<
-  Contract extends StreamProcessorContract<Contract>,
+  Contract extends StreamProcessorContract,
   Deps extends object,
   IterateContext = StreamProcessorIterateContext,
 > = {
@@ -81,7 +90,7 @@ export type StreamProcessorConstructorArgs<
 // The processing model should not fundamentally depend on RPC; we may remove this base
 // class dependency once processor hosting has settled.
 export abstract class StreamProcessor<
-  Contract extends StreamProcessorContract<Contract>,
+  Contract extends StreamProcessorContract,
   Deps extends object = object,
   IterateContext = StreamProcessorIterateContext,
 > extends RpcTarget {
@@ -95,9 +104,8 @@ export abstract class StreamProcessor<
   #loaded: Promise<void> | undefined;
   #processing: Promise<void> = Promise.resolve();
   #state: ProcessorState<Contract> | undefined;
-  #blockingWork: Promise<unknown>[] = [];
   #memorySnapshot: StreamProcessorSnapshot<ProcessorState<Contract>> | undefined;
-  readonly #keepAliveWhile: (<Result>(work: () => Promise<Result>) => void) | undefined;
+  readonly #keepAliveWhile: ((work: () => Promise<unknown>) => void) | undefined;
   readonly #readState: () => MaybePromise<
     StreamProcessorSnapshot<ProcessorState<Contract>> | undefined
   >;
@@ -157,33 +165,35 @@ export abstract class StreamProcessor<
     event: StreamEvent;
     state: ProcessorState<Contract>;
   }): ProcessorState<Contract> {
-    return this.#reduce(args)?.state ?? args.state;
+    return (this.#reduce(args)?.state ?? args.state) as ProcessorState<Contract>;
   }
 
   #reduce(args: {
     event: StreamEvent;
     state: ProcessorState<Contract>;
-  }): ReturnType<typeof runProcessorReduce<Contract>> {
-    return runProcessorReduce({
-      event: args.event,
-      processor: {
-        contract: {
-          ...this.contract,
-          reduce: ({
-            state,
-            event,
-          }: {
-            state: ProcessorState<Contract>;
-            event: ConsumedEvent<Contract>;
-          }) =>
-            this.reduce({
-              event: event as DeepReadonly<ProcessorEvent<Contract>>,
-              state: state as DeepReadonly<ProcessorState<Contract>>,
-            }),
-        },
-      },
-      state: args.state,
+  }): ReducedEvent<Contract> | undefined {
+    const eventDefinition = getConsumedEventDefinition({
+      contract: this.contract,
+      eventType: args.event.type,
     });
+    if (eventDefinition === undefined) return undefined;
+
+    // Rebuilding the parser from the catalog key and payload schema keeps replay
+    // and live delivery on the same validation path.
+    const event = getEventSchema({
+      type: args.event.type,
+      payloadSchema: eventDefinition.payloadSchema,
+    }).parse(args.event) as DeepReadonly<ProcessorEvent<Contract>>;
+
+    const previousState = args.state as DeepReadonly<ProcessorState<Contract>>;
+    const state = this.reduce({ event, state: previousState }) ?? previousState;
+    assertObjectProcessorState({ processorSlug: this.contract.slug, value: state });
+
+    return {
+      event,
+      previousState,
+      state: state as DeepReadonly<ProcessorState<Contract>>,
+    };
   }
 
   protected processEvent(_args: ProcessEventArgs<Contract>): void {}
@@ -231,29 +241,34 @@ export abstract class StreamProcessor<
 
       if (reduction === undefined) continue;
 
-      reducedEvents.push({
-        event: reduction.event as DeepReadonly<ProcessorEvent<Contract>>,
-        previousState: nextState as DeepReadonly<ProcessorState<Contract>>,
-        state: reduction.state as DeepReadonly<ProcessorState<Contract>>,
-      });
-      nextState = reduction.state;
+      reducedEvents.push(reduction);
+      nextState = reduction.state as ProcessorState<Contract>;
     }
 
     if (checkpointOffset === this.#checkpointOffset) return;
 
     if (reducedEvents.length > 0) {
-      this.#blockingWork = [];
-      for (const reducedEvent of reducedEvents) {
-        this.processEvent({
-          ...reducedEvent,
-          checkpointOffset,
-          streamMaxOffset: args.streamMaxOffset,
-          blockProcessorWhile: (work) => this.#blockProcessorWhile(work),
-          runInBackground: (work) => this.#runInBackground(work),
-        });
+      const blockingWork: Promise<unknown>[] = [];
+      try {
+        for (const reducedEvent of reducedEvents) {
+          this.processEvent({
+            ...reducedEvent,
+            checkpointOffset,
+            streamMaxOffset: args.streamMaxOffset,
+            blockProcessorWhile: (work) => {
+              blockingWork.push(this.#runKeepAliveBackedWork(work));
+            },
+            runInBackground: (work) => this.#runInBackground(work),
+          });
+        }
+      } catch (error) {
+        // A processEvent throw fails the batch, but work already registered for
+        // earlier events must still be settled so it cannot reject unobserved.
+        await Promise.allSettled(blockingWork);
+        throw error;
       }
 
-      await this.#awaitBlockingWork();
+      await Promise.all(blockingWork);
     }
 
     this.#state = nextState;
@@ -261,20 +276,16 @@ export abstract class StreamProcessor<
     await this.#saveSnapshot();
   }
 
-  #blockProcessorWhile<Result>(work: () => Promise<Result>): void {
-    this.#blockingWork.push(this.#runKeepAliveBackedWork(work));
-  }
-
-  #runInBackground<Result>(work: () => Promise<Result>): void {
+  #runInBackground(work: () => Promise<unknown>): void {
     this.#runKeepAliveBackedWork(work).catch((error: unknown) => {
       console.error("stream processor background work failed", error);
     });
   }
 
-  async #runKeepAliveBackedWork<Result>(work: () => Promise<Result>): Promise<Result> {
+  async #runKeepAliveBackedWork(work: () => Promise<unknown>): Promise<unknown> {
     if (this.#keepAliveWhile === undefined) return await work();
 
-    return await new Promise<Result>((resolve, reject) => {
+    return await new Promise<unknown>((resolve, reject) => {
       this.#keepAliveWhile!(async () => {
         try {
           const result = await work();
@@ -288,11 +299,6 @@ export abstract class StreamProcessor<
     });
   }
 
-  async #awaitBlockingWork(): Promise<void> {
-    if (this.#blockingWork.length === 0) return;
-    await Promise.all(this.#blockingWork);
-  }
-
   async #loadState(): Promise<void> {
     this.#loaded ??= (async () => {
       const snapshot = await this.#readState();
@@ -302,7 +308,12 @@ export abstract class StreamProcessor<
       }
       this.#state = this.contract.stateSchema.parse(snapshot.state) as ProcessorState<Contract>;
       this.#checkpointOffset = snapshot.offset;
-    })();
+    })().catch((error: unknown) => {
+      // Clear the memoized load so a later batch retries the snapshot read
+      // instead of replaying this rejection forever.
+      this.#loaded = undefined;
+      throw error;
+    });
     await this.#loaded;
   }
 

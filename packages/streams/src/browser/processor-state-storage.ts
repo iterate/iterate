@@ -77,18 +77,25 @@ export function browserProcessorStateStorage<State>(args: {
   };
 }
 
+/** Deletes stored processor state; with no `subscriptionKey`, all rows for the slug. */
 export async function deleteBrowserProcessorState(args: {
   sql: SqlClient;
   processorSlug: string;
   subscriptionKey?: string;
 }): Promise<void> {
   await ensureBrowserProcessorStateSchema(args.sql);
+  if (args.subscriptionKey === undefined) {
+    await args.sql.exec(`DELETE FROM processor_state WHERE processor_slug = ?`, [
+      args.processorSlug,
+    ]);
+    return;
+  }
   await args.sql.exec(
     `
       DELETE FROM processor_state
       WHERE processor_slug = ?
         AND subscription_key = ?
     `,
-    [args.processorSlug, args.subscriptionKey ?? DEFAULT_SUBSCRIPTION_KEY],
+    [args.processorSlug, args.subscriptionKey],
   );
 }

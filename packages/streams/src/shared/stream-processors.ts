@@ -1303,7 +1303,7 @@ function shouldRunAfterAppendDuringCatchUp(args: {
   );
 }
 
-function assertObjectProcessorState(args: { processorSlug: string; value: unknown }) {
+export function assertObjectProcessorState(args: { processorSlug: string; value: unknown }) {
   if (typeof args.value === "object" && args.value !== null && !Array.isArray(args.value)) {
     return;
   }
@@ -1311,7 +1311,7 @@ function assertObjectProcessorState(args: { processorSlug: string; value: unknow
   throw new Error(`Processor "${args.processorSlug}" state must be an object.`);
 }
 
-function getConsumedEventDefinition(args: {
+export function getConsumedEventDefinition(args: {
   contract: {
     events: EventCatalog;
     processorDeps?: readonly unknown[];

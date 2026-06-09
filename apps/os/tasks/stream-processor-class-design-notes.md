@@ -23,10 +23,14 @@ questions as design work, not half-wired runtime behavior.
 - `processEventBatch({ events, streamMaxOffset })` is the public sink.
 - The base serializes batches in memory. A later batch never starts until the previous batch has
   either completed or failed.
-- The base reduces events first, then calls `processEvents(...)`.
-- The default `processEvents(...)` loops and calls `processEvent(...)`.
+- The base reduces every new event in the batch first, then calls `processEvent(...)` once per
+  reduced event.
 - `processEvent(...)` is synchronous. Async side effects must be registered through one of the
   provided helpers.
+- Subclass overrides annotate their args as
+  `Parameters<StreamProcessor<Contract>["method"]>[0]` — the single sanctioned spelling,
+  enforced by the `iterate/stream-processor-override-args` lint rule. The arg shapes are
+  deliberately not exported as named types.
 
 ## Async Side Effects
 
@@ -91,8 +95,8 @@ The stream core is not an ordinary subscription processor:
 For that reason the class exposes explicit inline methods used by the `Stream` Durable Object:
 
 - `validateAppend({ event, state })`
-- `reduce({ event, state })`
-- `processEvent({ event, state })`
+- `reduceEvent({ event, state })`
+- `processReducedEvent({ event, previousState, state })`
 
 Open question: should the inline core eventually have a sibling base class, or is this explicit
 inline surface enough?

@@ -1,5 +1,6 @@
 import { StreamProcessor } from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
+import { deleteBrowserProcessorState } from "../../browser/processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserRawEventsContract } from "./contract.ts";
 export { BrowserRawEventsContract } from "./contract.ts";
@@ -18,6 +19,14 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
   BrowserRawEventsProcessorDeps
 > {
   readonly contract = BrowserRawEventsContract;
+
+  // The schema ensurer also handles version resets (drop table + clear checkpoint),
+  // so it must run before the first checkpoint read — otherwise a stale checkpoint
+  // gets memoized and reported to the server as the replay cursor.
+  override async snapshot() {
+    await ensureBrowserRawEventsSchema(this.deps.sql);
+    return await super.snapshot();
+  }
 
   override async processEventBatch(
     args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEventBatch"]>[0],
@@ -44,6 +53,12 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
   run: async (sql) => {
     const [schemaVersion] = await sql.exec(`PRAGMA user_version`);
     if (Number(schemaVersion?.user_version ?? 0) !== BROWSER_RAW_EVENTS_SCHEMA_VERSION) {
+      // The resume checkpoint lives in processor_state, not in the events table,
+      // so it must be cleared together with the table. A stale checkpoint over an
+      // empty table would skip historical replay and then trip the continuity
+      // trigger on the first new event. Deleted before the user_version write so
+      // a crash in between re-runs this reset on the next load.
+      await deleteBrowserProcessorState({ sql, processorSlug: BrowserRawEventsContract.slug });
       await sql.batch(
         [
           { sql: `DROP TRIGGER IF EXISTS events_before_insert` },
