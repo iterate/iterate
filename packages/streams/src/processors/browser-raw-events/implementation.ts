@@ -1,18 +1,62 @@
-// Implements the "browser-raw-events" processor.
-// Owns the browser `events` table schema and writes each delivered batch of events
-// in one SQLite transaction (afterAppendBatch + the batch write API).
-
-import { implementProcessor } from "../../processor.ts";
+import { StreamProcessor } from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
+import { deleteBrowserProcessorState } from "../../browser/processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
-import { browserRawEventsContract } from "./contract.ts";
+import { BrowserRawEventsContract } from "./contract.ts";
+export { BrowserRawEventsContract } from "./contract.ts";
 
 export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 4;
+
+export type BrowserRawEventsContract = typeof BrowserRawEventsContract;
+export type BrowserRawEventsState = Record<string, never>;
+
+export type BrowserRawEventsProcessorDeps = {
+  sql: SqlClient;
+};
+
+/**
+ * Mirrors raw stream events into the browser's `events` SQLite table, one
+ * transaction per delivered batch. Stateless apart from the checkpoint: the
+ * table itself is the projection.
+ */
+export class BrowserRawEventsProcessor extends StreamProcessor<
+  BrowserRawEventsContract,
+  BrowserRawEventsProcessorDeps
+> {
+  readonly contract = BrowserRawEventsContract;
+
+  // The schema ensurer also handles version resets (drop table + clear checkpoint),
+  // so it must run before the checkpoint is first read — otherwise a stale offset
+  // gets memoized and reported to the server as the replay cursor, and the first
+  // insert into the freshly-reset table trips the continuity trigger.
+  protected override async prepare(): Promise<void> {
+    await ensureBrowserRawEventsSchema(this.deps.sql);
+  }
+
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    await this.deps.sql.batch(
+      args.events.map((event) => ({
+        sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
+        params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
+      })),
+      { transaction: true },
+    );
+    await super.processEventBatch(args);
+  }
+}
 
 const ensureBrowserRawEventsSchema = createSchemaEnsurer({
   run: async (sql) => {
     const [schemaVersion] = await sql.exec(`PRAGMA user_version`);
     if (Number(schemaVersion?.user_version ?? 0) !== BROWSER_RAW_EVENTS_SCHEMA_VERSION) {
+      // The resume checkpoint lives in processor_state, not in the events table,
+      // so it must be cleared together with the table. A stale checkpoint over an
+      // empty table would skip historical replay and then trip the continuity
+      // trigger on the first new event. Deleted before the user_version write so
+      // a crash in between re-runs this reset on the next load.
+      await deleteBrowserProcessorState({ sql, processorSlug: BrowserRawEventsContract.slug });
       await sql.batch(
         [
           { sql: `DROP TRIGGER IF EXISTS events_before_insert` },
@@ -85,36 +129,5 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
     );
   },
 });
-
-/** Resume cursor for this processor: the max committed offset in the events table. */
-export async function loadBrowserRawEventsCheckpoint(
-  sql: SqlClient,
-): Promise<{ state: Record<string, never>; offset: number } | undefined> {
-  await ensureBrowserRawEventsSchema(sql);
-  const [row] = await sql.exec(`SELECT MAX(offset) AS max_offset FROM events`);
-  const max = Number(row?.max_offset ?? -1);
-  return max < 0 ? undefined : { state: {}, offset: max };
-}
-
-export const browserRawEvents = implementProcessor(
-  browserRawEventsContract,
-  (deps: { sql: SqlClient }) => ({
-    afterAppendBatch({ events, blockProcessorUntil }) {
-      blockProcessorUntil(() =>
-        ensureBrowserRawEventsSchema(deps.sql).then(() =>
-          deps.sql.batch(
-            events.map(({ event }) => {
-              return {
-                sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
-                params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
-              };
-            }),
-            { transaction: true },
-          ),
-        ),
-      );
-    },
-  }),
-);
 
 export { ensureBrowserRawEventsSchema };

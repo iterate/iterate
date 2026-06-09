@@ -5,7 +5,7 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";
 
-export const browserRawEventsContract = defineProcessorContract({
+export const BrowserRawEventsContract = defineProcessorContract({
   slug: "browser-raw-events",
   version: "0.1.0",
   description: "Mirrors raw stream events into the browser SQLite events table.",

@@ -26,10 +26,12 @@ import {
   type StreamBrowserDatabase,
   type StreamEventRow,
 } from "../../../src/browser/stream-browser-db.ts";
+import { browserProcessorStateStorage } from "../../../src/browser/processor-state-storage.ts";
 import {
   BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-  browserRawEvents,
-  loadBrowserRawEventsCheckpoint,
+  BrowserRawEventsContract,
+  BrowserRawEventsProcessor,
+  type BrowserRawEventsState,
 } from "../../../src/processors/browser-raw-events/implementation.ts";
 import { useStreamQuery } from "../../../src/browser/hooks/use-stream-query.ts";
 import { streamViewSearch, type StreamViewSearch } from "../lib/stream-view-search.ts";
@@ -180,18 +182,18 @@ function HydratedStreamCompactView({ streamPath }: { streamPath: string }) {
 function useStreamProcessor(
   args: { streamPath: string; streamNamespace?: string } & BrowserProcessorConfig,
 ) {
-  const { streamPath, streamNamespace, processor, schemaVersion, tables, loadCheckpoint } = args;
+  const { streamPath, streamNamespace, slug, schemaVersion, tables, createProcessor } = args;
   const store = useMemo(
     () =>
       acquireStreamRuntime({
         streamPath,
         ...(streamNamespace === undefined ? {} : { namespace: streamNamespace }),
-        processor,
+        slug,
         schemaVersion,
         tables,
-        loadCheckpoint,
+        createProcessor,
       }),
-    [streamPath, streamNamespace, processor, schemaVersion, tables, loadCheckpoint],
+    [streamPath, streamNamespace, slug, schemaVersion, tables, createProcessor],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -203,10 +205,22 @@ function useStreamProcessor(
 
 // Stable raw-events config (a constant so useStreamProcessor's useMemo identity is stable).
 const RAW_EVENTS_RUNTIME: BrowserProcessorConfig = {
-  processor: browserRawEvents,
+  slug: BrowserRawEventsContract.slug,
   schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   tables: ["events"],
-  loadCheckpoint: loadBrowserRawEventsCheckpoint,
+  createProcessor({ stream, sql, subscriptionKey }) {
+    const storage = browserProcessorStateStorage<BrowserRawEventsState>({
+      sql,
+      processorSlug: BrowserRawEventsContract.slug,
+      subscriptionKey,
+    });
+    return new BrowserRawEventsProcessor({
+      iterateContext: { stream },
+      sql,
+      readState: storage.readState,
+      writeState: storage.writeState,
+    });
+  },
 };
 
 // The raw-events view's data: the thin runtime + this view's own reactive SQL queries.

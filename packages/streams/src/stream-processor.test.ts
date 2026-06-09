@@ -1,23 +1,19 @@
 // Runnable in the Node/vitest runtime, fully in-process (no worker needed).
 // Proves the processor model: per-event afterAppend, durable blockProcessorUntil,
-// the core beforeAppend gate, child-stream topology, circuit breaker, and the
+// the core append validation gate, child-stream topology, circuit breaker, and the
 // SQLite-projector shape.
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import {
-  defineProcessorContract,
-  getInitialProcessorState,
-  runProcessorReduce,
-} from "./shared/stream-processors.ts";
+import { defineProcessorContract, getInitialProcessorState } from "./shared/stream-processors.ts";
 import type { StreamEvent, StreamEventInput } from "./shared/event.ts";
 import { implementProcessor } from "./processor.ts";
-import { createProcessorRunner, type Snapshot, type ProcessorStream } from "./processor-runner.ts";
+import { createProcessorRunner, type Snapshot } from "./processor-runner.ts";
 import { echoExampleProcessor } from "./processors/examples/echo/implementation.ts";
 import { circuitBreakerProcessor } from "./processors/circuit-breaker/implementation.ts";
 import type { CircuitBreakerProcessorState } from "./processors/circuit-breaker/contract.ts";
-import { coreProcessor, getAncestorStreamPaths } from "./processors/core/implementation.ts";
-import { coreProcessorContract } from "./processors/core/contract.ts";
+import { CoreStreamProcessor } from "./processors/core/implementation.ts";
+import { CoreProcessorContract } from "./processors/core/contract.ts";
 import type { StreamCoreProcessorState } from "./types.ts";
 import type { StreamRpc } from "./types.ts";
 
@@ -414,19 +410,17 @@ class CoreStreamSim {
 
   append(path: string, input: StreamEventInput, createdAtMs = 0): StreamEvent {
     const entry = this.#entry(path);
-    const coreInline = coreProcessor.build({
-      propagateChildStreamCreated: (coreState) => {
-        for (const ancestor of getAncestorStreamPaths(coreState.path)) {
-          this.append(ancestor, {
-            type: "events.iterate.com/stream/child-stream-created",
-            payload: { childPath: coreState.path },
-            idempotencyKey: `child-stream-created:${ancestor}:${coreState.path}`,
-          });
-        }
+    const coreInline = new CoreStreamProcessor({
+      iterateContext: {
+        stream: {
+          append: (args) => this.append(args.streamPath ?? path, args.event, createdAtMs),
+          appendBatch: (args) =>
+            args.events.map((event) => this.append(args.streamPath ?? path, event, createdAtMs)),
+        },
       },
     });
 
-    coreInline.beforeAppend?.({
+    coreInline.validateAppend({
       event: input,
       state: entry.coreProcessorState,
     });
@@ -436,34 +430,18 @@ class CoreStreamSim {
       offset: entry.coreProcessorState.maxOffset + 1,
       createdAt: iso(createdAtMs),
     };
-    const appendStream: ProcessorStream = {
-      append: (args) => this.append(path, args.event, createdAtMs),
-      appendBatch: (args) => args.events.map((event) => this.append(path, event, createdAtMs)),
-    };
 
-    const previousCoreState = entry.coreProcessorState;
-
-    const coreReduction = runProcessorReduce({
-      processor: { contract: coreProcessorContract },
+    const previousCoreProcessorState = entry.coreProcessorState;
+    entry.coreProcessorState = coreInline.reduceEvent({
       event: committed,
-      state: previousCoreState,
+      state: previousCoreProcessorState,
     });
-    if (coreReduction === undefined) {
-      throw new Error(`core cannot reduce ${committed.type}`);
-    }
-
-    entry.coreProcessorState = coreProcessorContract.stateSchema.parse(coreReduction.state);
     entry.events.push(committed);
 
-    coreInline.afterAppend?.({
-      event: coreReduction.event,
-      previousState: previousCoreState,
+    coreInline.processReducedEvent({
+      event: committed,
+      previousState: previousCoreProcessorState,
       state: entry.coreProcessorState,
-      streamMaxOffset: committed.offset,
-      stream: appendStream,
-      shouldApplySideEffects: () => true,
-      blockProcessorUntil: (work) => void work(),
-      keepAlive: (work) => void work,
     });
 
     return committed;
@@ -474,8 +452,8 @@ function initialCoreProcessorState(args: {
   namespace: string;
   path: string;
 }): StreamCoreProcessorState {
-  return coreProcessorContract.stateSchema.parse({
-    ...getInitialProcessorState(coreProcessorContract),
+  return CoreProcessorContract.stateSchema.parse({
+    ...getInitialProcessorState(CoreProcessorContract),
     namespace: args.namespace,
     path: args.path,
   });
