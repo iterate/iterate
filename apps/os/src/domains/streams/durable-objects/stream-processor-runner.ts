@@ -42,6 +42,8 @@ import { JsonataReactorProcessorContract } from "@iterate-com/shared/stream-proc
 import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import type { CodemodeProcessorSession } from "@iterate-com/shared/stream-processors/codemode/code-executor";
+import { circuitBreakerProcessor } from "@iterate-com/streams/processors/circuit-breaker/implementation";
+import { echoExampleProcessor } from "@iterate-com/streams/processors/examples/echo/implementation";
 import {
   createRepoStreamProcessor,
   RepoStreamProcessorContract,
@@ -391,6 +393,14 @@ function getOsProcessor(args: {
         streamPath,
       } satisfies AgentHostProcessorDeps,
     };
+  }
+
+  if (args.slug === "echo-example") {
+    return { processor: echoExampleProcessor, deps: undefined };
+  }
+
+  if (args.slug === "circuit-breaker") {
+    return { processor: circuitBreakerProcessor, deps: undefined };
   }
 
   return undefined;

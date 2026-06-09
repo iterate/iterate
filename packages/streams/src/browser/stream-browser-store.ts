@@ -19,6 +19,7 @@ import type { Processor } from "../processor.ts";
 import type { StreamCoreProcessorState, StreamRpc } from "../types.ts";
 import { createStreamSubscription, type StreamSubscription } from "../subscription.ts";
 import {
+  DEFAULT_STREAM_NAMESPACE,
   withStreamConnectionFromBrowser,
   streamRpcPath,
   type StreamBrowserConnectionStatus,
@@ -30,9 +31,6 @@ import {
   type StreamDatabaseInfo,
 } from "./stream-browser-db.ts";
 
-// Stream DOs are named `${namespace}:${path}`. The example app uses "default";
-// host apps can pass their own namespace, e.g. an OS project id.
-const DEFAULT_STREAM_NAMESPACE = "default";
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
 
 export type StreamBrowserSnapshot = {
@@ -532,5 +530,11 @@ function resolveStreamUrl(args: {
   if (typeof args.streamUrl === "function") {
     return args.streamUrl({ namespace: args.namespace, streamPath: args.streamPath });
   }
-  return args.streamUrl ?? streamRpcPath(args.streamPath);
+  return (
+    args.streamUrl ??
+    streamRpcPath({
+      path: args.streamPath,
+      namespace: args.namespace === DEFAULT_STREAM_NAMESPACE ? undefined : args.namespace,
+    })
+  );
 }

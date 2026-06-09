@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { normalizeStreamPath } from "../../../src/browser/connect.ts";
 import { StreamCompactView } from "./-stream-page.tsx";
 
 export const Route = createFileRoute("/split-stream")({
   validateSearch: (search) => ({
-    left: normalizeStreamPath(search.left),
-    right: normalizeStreamPath(search.right),
+    left: normalizeStreamPath({ path: typeof search.left === "string" ? search.left : undefined }),
+    right: normalizeStreamPath({
+      path: typeof search.right === "string" ? search.right : undefined,
+    }),
   }),
   component: SplitStreamRoute,
 });
@@ -31,7 +34,10 @@ function SplitStreamControls({ left, right }: { left: string; right: string }) {
   function goToDrafts() {
     void navigate({
       to: "/split-stream",
-      search: { left: normalizeStreamPath(leftDraft), right: normalizeStreamPath(rightDraft) },
+      search: {
+        left: normalizeStreamPath({ path: leftDraft }),
+        right: normalizeStreamPath({ path: rightDraft }),
+      },
     });
   }
 
@@ -74,11 +80,4 @@ function SplitStreamControls({ left, right }: { left: string; right: string }) {
       </div>
     </main>
   );
-}
-
-function normalizeStreamPath(value: unknown) {
-  if (typeof value !== "string") return "/";
-  const trimmed = value.trim();
-  if (trimmed === "") return "/";
-  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }

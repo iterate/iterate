@@ -1,6 +1,7 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { newWorkersRpcResponse } from "capnweb";
 import { env } from "cloudflare:workers";
+import { parseStreamRpcRequest, streamDurableObjectName } from "../../src/browser/connect.ts";
 import { PublicStreamRpcTarget } from "../../src/workers/durable-objects/stream.ts";
 
 export { Stream } from "../../src/workers/durable-objects/stream.ts";
@@ -15,15 +16,13 @@ export default createServerEntry({
       return env.STREAM_PROCESSOR_RUNNER.getByName(name).fetch(request);
     }
 
-    if (url.pathname === "/api/streams" || url.pathname.startsWith("/api/streams/")) {
-      const path =
-        url.pathname === "/api/streams"
-          ? "/"
-          : decodeURIComponent(url.pathname.slice("/api/streams/".length));
-      // Stream DOs are named `${namespace}:${path}`; the browser namespace is "default".
+    if (url.pathname === "/api/streams") {
+      const { namespace, path } = parseStreamRpcRequest({ url });
       return newWorkersRpcResponse(
         request,
-        new PublicStreamRpcTarget(env.STREAM.getByName(`default:${path}`)),
+        new PublicStreamRpcTarget(
+          env.STREAM.getByName(streamDurableObjectName({ namespace, path })),
+        ),
       );
     }
 

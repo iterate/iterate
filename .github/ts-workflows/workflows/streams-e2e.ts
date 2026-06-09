@@ -55,7 +55,8 @@ export default workflow({
           run: [
             "for attempt in {1..30}; do",
             "  if node --input-type=module <<'EOF'",
-            'const target = new URL("/api/streams/" + encodeURIComponent("/ci-readiness"), process.env.WORKER_URL);',
+            'const target = new URL("/api/streams", process.env.WORKER_URL);',
+            'target.searchParams.set("path", "/ci-readiness");',
             'target.protocol = target.protocol === "https:" ? "wss:" : "ws:";',
             "",
             "await new Promise((resolve, reject) => {",

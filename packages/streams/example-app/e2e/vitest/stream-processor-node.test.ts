@@ -10,15 +10,15 @@ import { createProcessorRunner, type Snapshot } from "../../../src/processor-run
 // The SAME processor the DO (outbound) and the browser tab (inbound) run.
 import { echoExampleProcessor } from "../../../src/processors/examples/echo/implementation.ts";
 import type { EchoExampleState } from "../../../src/processors/examples/echo/contract.ts";
+import { e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
 
-const workerUrl = process.env.WORKER_URL ?? "http://localhost:5173";
 const e2eIt = process.env.STREAM_STAGING_E2E === "true" ? it : it.skip;
 
 describe("node-hosted stream processor (e2e)", () => {
   e2eIt("hosts echo in-process over an inbound subscription", async () => {
-    const path = `node-echo-${crypto.randomUUID()}`;
+    const path = e2eStreamPathLabel("node-echo");
     using connection = withStreamConnectionFromNode({
-      url: toStreamWebSocketUrl(path),
+      url: toStreamWebSocketUrl({ path }),
     });
 
     let saved: Snapshot<EchoExampleState> | undefined;
@@ -60,7 +60,7 @@ describe("node-hosted stream processor (e2e)", () => {
   });
 
   e2eIt("reconnects and resumes from its snapshot without reprocessing", async () => {
-    const path = `node-resume-${crypto.randomUUID()}`;
+    const path = e2eStreamPathLabel("node-resume");
     let saved: Snapshot<EchoExampleState> | undefined;
     const storage = {
       load: () => saved,
@@ -70,7 +70,7 @@ describe("node-hosted stream processor (e2e)", () => {
     // Session 1: process one input, then drop the connection + runner.
     {
       using connection = withStreamConnectionFromNode({
-        url: toStreamWebSocketUrl(path),
+        url: toStreamWebSocketUrl({ path }),
       });
       const processorRunner = createProcessorRunner({
         processor: echoExampleProcessor,
@@ -101,7 +101,7 @@ describe("node-hosted stream processor (e2e)", () => {
     // resume (subscribe afterOffset = stored offset), not reprocess the first input.
     {
       using connection = withStreamConnectionFromNode({
-        url: toStreamWebSocketUrl(path),
+        url: toStreamWebSocketUrl({ path }),
       });
       const processorRunner = createProcessorRunner({
         processor: echoExampleProcessor,
@@ -137,17 +137,4 @@ async function waitUntil(predicate: () => boolean, timeoutMs: number) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error("waitUntil timed out");
-}
-
-function toStreamWebSocketUrl(path: string) {
-  const url = new URL(workerUrl);
-  url.pathname = streamApiPath(path);
-  if (url.protocol === "http:") url.protocol = "ws:";
-  if (url.protocol === "https:") url.protocol = "wss:";
-  return url.toString();
-}
-
-function streamApiPath(path: string) {
-  if (path === "" || path === "/") return "/api/streams";
-  return `/api/streams/${path.startsWith("/") ? encodeURIComponent(path) : path.split("/").map(encodeURIComponent).join("/")}`;
 }
