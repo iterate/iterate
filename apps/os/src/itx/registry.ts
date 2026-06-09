@@ -143,6 +143,12 @@ export class CapOfflineError extends Error {
   }
 }
 
+/** Dispose a borrowed RPC stub if it is disposable (in-process targets aren't). */
+function disposeIfPossible(target: unknown): void {
+  const dispose = (target as Partial<Disposable> | null)?.[Symbol.dispose];
+  if (typeof dispose === "function") Reflect.apply(dispose, target, []);
+}
+
 export class ContextRegistry {
   // In-memory only, on purpose: live stubs cannot be persisted. When workerd
   // ships hibernation-surviving outbound stub storage (workerd#6087) this
@@ -278,12 +284,14 @@ export class ContextRegistry {
       throw new Error(`No capability named "${name}" in context ${this.host.contextId}.`);
     }
 
-    const target = this.targetFor(row);
-    // worker/facet targets are fresh per-call RPC stubs we must release;
-    // live targets are the long-lived stored connection and must NOT be
-    // disposed here (the provider owns their lifetime).
-    const disposable =
-      row.kind === "live" ? undefined : (target as Partial<Disposable>)[Symbol.dispose];
+    // Every dispatch works on a BORROW that is disposed when the call ends,
+    // never on a long-lived object:
+    //  - live   → a .dup() of the stored stub (the dup-on-borrow half of the
+    //             capnweb discipline; the stored connection is left intact so
+    //             concurrent / back-to-back calls never share or close it),
+    //  - worker → the fresh per-call entrypoint stub,
+    //  - facet  → the per-call facet stub.
+    const { target, dispose } = this.borrowTarget(row);
     try {
       if (row.invoke === "path-call") {
         // One RPC: the provider implements call({ path, args }) and owns its
@@ -302,21 +310,26 @@ export class ContextRegistry {
       );
       throw error;
     } finally {
-      if (typeof disposable === "function") {
-        Reflect.apply(disposable, target, []);
-      }
+      dispose();
     }
   }
 
-  private targetFor(row: CapRow): unknown {
+  private borrowTarget(row: CapRow): { target: unknown; dispose: () => void } {
     switch (row.kind) {
       case "live": {
         const connection = this.#live.get(row.name);
         if (!connection) throw new CapOfflineError(row.name);
-        return connection.target;
+        // Borrow a duplicate, not the stored stub itself. Disposing the borrow
+        // releases only this call's reference; the registered target stays
+        // callable for the next caller (matches the original getConnection
+        // dup-on-borrow behaviour).
+        const target = connection.target.dup ? connection.target.dup() : connection.target;
+        return { target, dispose: () => disposeIfPossible(target) };
       }
-      case "worker":
-        return this.loadWorker(row).getEntrypoint(this.sourceFor(row).entrypoint);
+      case "worker": {
+        const target = this.loadWorker(row).getEntrypoint(this.sourceFor(row).entrypoint);
+        return { target, dispose: () => disposeIfPossible(target) };
+      }
       case "facet": {
         const facets = this.host.facets;
         if (!facets) {
@@ -325,7 +338,7 @@ export class ContextRegistry {
         // Facet name deliberately excludes codeId: the facet's private SQLite
         // database survives code upgrades (new source, same data) — the same
         // property Cloudflare's AppRunner example relies on.
-        return facets(`cap:${row.name}`, () => {
+        const target = facets(`cap:${row.name}`, () => {
           const source = this.sourceFor(row);
           const facetClass = this.loadWorker(row).getDurableObjectClass?.(source.entrypoint);
           if (!facetClass) {
@@ -336,6 +349,7 @@ export class ContextRegistry {
           }
           return { class: facetClass };
         });
+        return { target, dispose: () => disposeIfPossible(target) };
       }
     }
   }
