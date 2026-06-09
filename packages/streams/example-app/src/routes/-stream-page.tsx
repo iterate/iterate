@@ -32,9 +32,9 @@ import {
   loadBrowserRawEventsCheckpoint,
 } from "../../../src/processors/browser-raw-events/implementation.ts";
 import { useStreamQuery } from "../../../src/browser/hooks/use-stream-query.ts";
+import { streamViewSearch, type StreamViewSearch } from "../lib/stream-view-search.ts";
 import { EventFeedView } from "./-event-feed-view.tsx";
 import { StreamStateView } from "./-stream-state-view.tsx";
-import { streamViewSearch, type StreamViewSearch } from "../lib/stream-view-search.ts";
 import { useInitialTailScroll } from "../lib/use-initial-tail-scroll.ts";
 import { ViewSwitcher } from "./-view-switcher.tsx";
 
