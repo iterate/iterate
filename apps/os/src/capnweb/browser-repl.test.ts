@@ -74,8 +74,10 @@ describe("browser Cap'n Web REPL", () => {
         scope: {},
       }),
     ).resolves.toEqual({
+      consoleOutput: "",
       code: DEFAULT_BROWSER_REPL_CODE,
       output: JSON.stringify({ projects: [{ id: "proj_123" }], total: 1, limit: 5 }, null, 2),
+      outputLanguage: "json",
       status: "success",
     });
   });
@@ -107,7 +109,7 @@ describe("browser Cap'n Web REPL", () => {
         ctx: {},
         scope,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(41);
 
     await expect(
       evalBrowserReplSessionCode({
@@ -123,7 +125,7 @@ describe("browser Cap'n Web REPL", () => {
         ctx: {},
         scope,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(42);
 
     await expect(
       evalBrowserReplSessionCode({
@@ -143,7 +145,7 @@ describe("browser Cap'n Web REPL", () => {
         ctx: {},
         scope,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(22);
 
     await expect(
       evalBrowserReplSessionCode({
@@ -154,16 +156,107 @@ describe("browser Cap'n Web REPL", () => {
     ).resolves.toBe(42);
   });
 
-  test("session snippets persist function and class declarations", async () => {
+  test("session snippets use the final top-level expression as the result", async () => {
     const scope: Record<string, unknown> = {};
 
     await expect(
       evalBrowserReplSessionCode({
-        code: "function answer() { return 42; }",
+        code: `
+const project = { total: 2 }
+project.total + 40
+`.trim(),
         ctx: {},
         scope,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(42);
+
+    expect(scope.project).toEqual({ total: 2 });
+  });
+
+  test("session snippets keep multiline calls as one final expression", async () => {
+    const scope: Record<string, unknown> = {};
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: `
+const increment = (value) => value + 1
+increment
+(41)
+`.trim(),
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBe(42);
+  });
+
+  test("session snippets keep operator-start continuations in the final expression", async () => {
+    await expect(
+      evalBrowserReplSessionCode({
+        code: `
+40
++ 2
+`.trim(),
+        ctx: {},
+        scope: {},
+      }),
+    ).resolves.toBe(42);
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: `
+const project = { stats: { total: 42 } }
+project.stats
+?.total
+`.trim(),
+        ctx: {},
+        scope: {},
+      }),
+    ).resolves.toBe(42);
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: `
+true
+? 42
+: 0
+`.trim(),
+        ctx: {},
+        scope: {},
+      }),
+    ).resolves.toBe(42);
+  });
+
+  test("session snippets do not rewrite do-while statements as expressions", async () => {
+    const scope: Record<string, unknown> = {};
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: `
+let count = 0
+do {
+  count += 1
+} while (false)
+count
+`.trim(),
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toBe(1);
+
+    expect(scope.count).toBe(1);
+  });
+
+  test("session snippets persist function and class declarations", async () => {
+    const scope: Record<string, unknown> = {};
+
+    const answerResult = await evalBrowserReplSessionCode({
+      code: "function answer() { return 42; }",
+      ctx: {},
+      scope,
+    });
+    expect(answerResult).toBe(scope.answer);
+    expect(answerResult).toEqual(expect.any(Function));
+
     await expect(
       evalBrowserReplSessionCode({
         code: "answer()",
@@ -172,13 +265,14 @@ describe("browser Cap'n Web REPL", () => {
       }),
     ).resolves.toBe(42);
 
-    await expect(
-      evalBrowserReplSessionCode({
-        code: "class Box { value() { return answer(); } }",
-        ctx: {},
-        scope,
-      }),
-    ).resolves.toBeUndefined();
+    const boxResult = await evalBrowserReplSessionCode({
+      code: "class Box { value() { return answer(); } }",
+      ctx: {},
+      scope,
+    });
+    expect(boxResult).toBe(scope.Box);
+    expect(boxResult).toEqual(expect.any(Function));
+
     await expect(
       evalBrowserReplSessionCode({
         code: "new Box().value()",
@@ -187,13 +281,14 @@ describe("browser Cap'n Web REPL", () => {
       }),
     ).resolves.toBe(42);
 
-    await expect(
-      evalBrowserReplSessionCode({
-        code: "async function asyncAnswer() { return answer(); }",
-        ctx: {},
-        scope,
-      }),
-    ).resolves.toBeUndefined();
+    const asyncAnswerResult = await evalBrowserReplSessionCode({
+      code: "async function asyncAnswer() { return answer(); }",
+      ctx: {},
+      scope,
+    });
+    expect(asyncAnswerResult).toBe(scope.asyncAnswer);
+    expect(asyncAnswerResult).toEqual(expect.any(Function));
+
     await expect(
       evalBrowserReplSessionCode({
         code: "await asyncAnswer()",
@@ -219,7 +314,7 @@ const persisted = answer();
         ctx: {},
         scope,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(42);
 
     expect(scope).toHaveProperty("answer");
     expect(scope).toHaveProperty("persisted", 42);
@@ -255,6 +350,79 @@ const persisted = answer();
       }),
     ).rejects.toThrow('REPL binding "env" is reserved.');
     expect(scope).not.toHaveProperty("env");
+  });
+
+  test("route entry runner exposes the last result through aliases", async () => {
+    const scope: Record<string, unknown> = {};
+
+    await expect(
+      runBrowserReplEntry({
+        code: "const answer = 42",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toMatchObject({
+      output: "42",
+      outputLanguage: "json",
+      status: "success",
+    });
+    expect(scope.answer).toBe(42);
+    expect(scope.$_).toBe(42);
+    expect(scope._).toBe(42);
+
+    await expect(
+      runBrowserReplEntry({
+        code: "$_ + _",
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toMatchObject({
+      output: "84",
+      outputLanguage: "json",
+      status: "success",
+    });
+    expect(scope.$_).toBe(84);
+    expect(scope._).toBe(84);
+  });
+
+  test("route entry runner captures console output for the submitted prompt", async () => {
+    const scope: Record<string, unknown> = {};
+
+    await expect(
+      runBrowserReplEntry({
+        code: `console.log("project", { id: "proj_123" }); console.warn("careful"); return 42`,
+        ctx: {},
+        scope,
+      }),
+    ).resolves.toMatchObject({
+      consoleOutput: `project {\n  "id": "proj_123"\n}\nwarn: careful`,
+      output: "42",
+      outputLanguage: "json",
+      status: "success",
+    });
+  });
+
+  test("route entry runner delegates non-captured console methods", async () => {
+    const scope: Record<string, unknown> = {};
+    const trace = vi.spyOn(console, "trace").mockImplementation(() => {});
+
+    try {
+      await expect(
+        runBrowserReplEntry({
+          code: `console.trace("kept"); return 42`,
+          ctx: {},
+          scope,
+        }),
+      ).resolves.toMatchObject({
+        consoleOutput: "",
+        output: "42",
+        outputLanguage: "json",
+        status: "success",
+      });
+      expect(trace).toHaveBeenCalledWith("kept");
+    } finally {
+      trace.mockRestore();
+    }
   });
 
   test("provideCapability example registers and calls a browser-owned target", async () => {

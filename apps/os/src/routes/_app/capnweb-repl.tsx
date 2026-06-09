@@ -1,9 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
-import { BookOpen, Play } from "lucide-react";
+import { BookOpen, ChevronDown, CircleHelp, Play } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@iterate-com/ui/components/collapsible";
 import { ScrollArea } from "@iterate-com/ui/components/scroll-area";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import {
   Sheet,
   SheetContent,
@@ -90,20 +96,29 @@ function CapnwebReplPage() {
               </div>
             ) : (
               entries.map((entry, index) => (
-                <div key={index} className="flex flex-col gap-2 font-mono text-sm">
-                  <pre className="overflow-x-auto whitespace-pre-wrap text-foreground">
-                    <span className="select-none text-muted-foreground">iterate&gt; </span>
-                    {entry.code}
-                  </pre>
-                  <pre
-                    className={
-                      entry.status === "error"
-                        ? "overflow-x-auto whitespace-pre-wrap text-destructive"
-                        : "overflow-x-auto whitespace-pre-wrap text-muted-foreground"
-                    }
-                  >
-                    {entry.output}
-                  </pre>
+                <div key={index} className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
+                    <span className="select-none">iterate&gt;</span>
+                  </div>
+                  <SourceCodeBlock
+                    code={entry.code}
+                    className="max-h-80"
+                    language="typescript"
+                    showCopyButton
+                  />
+                  {entry.consoleOutput ? (
+                    <ReplCollapsibleCodeBlock
+                      code={entry.consoleOutput}
+                      language="text"
+                      title="Console"
+                    />
+                  ) : null}
+                  <ReplCollapsibleCodeBlock
+                    code={entry.output}
+                    language={entry.outputLanguage}
+                    title={entry.status === "error" ? "Error" : "Result"}
+                    variant={entry.status === "error" ? "error" : "default"}
+                  />
                 </div>
               ))
             )}
@@ -113,7 +128,27 @@ function CapnwebReplPage() {
         <div className="border-t bg-background">
           <div className="mx-auto flex w-full max-w-5xl flex-col gap-2 px-4 py-3">
             <div className="flex items-center justify-between gap-3">
-              <span className="font-mono text-xs text-muted-foreground">iterate&gt;</span>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-xs text-muted-foreground">iterate&gt;</span>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        className="flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden"
+                        aria-label="REPL result aliases"
+                      />
+                    }
+                  >
+                    <CircleHelp className="size-3.5" />
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>
+                      Use <code>$_</code> or <code>_</code> for the last successful result.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
               <span className="text-xs text-muted-foreground">{status}</span>
             </div>
             <SourceCodeBlock
@@ -123,7 +158,7 @@ function CapnwebReplPage() {
               language="typescript"
               onChange={setCode}
               onModEnter={() => void run()}
-              showCopyButton={false}
+              showCopyButton
             />
             <div className="flex items-center justify-end gap-2">
               <Button variant="outline" onClick={() => setExamplesOpen(true)} size="sm">
@@ -177,5 +212,41 @@ function CapnwebReplPage() {
         </SheetContent>
       </Sheet>
     </main>
+  );
+}
+
+function ReplCollapsibleCodeBlock(input: {
+  code: string;
+  language: "json" | "text" | "typescript";
+  title: string;
+  variant?: "default" | "error";
+}) {
+  return (
+    <Collapsible defaultOpen>
+      <div className="flex items-center justify-between gap-2">
+        <CollapsibleTrigger
+          className={
+            input.variant === "error"
+              ? "group flex items-center gap-1 text-xs font-medium text-destructive"
+              : "group flex items-center gap-1 text-xs font-medium text-muted-foreground"
+          }
+        >
+          <ChevronDown className="size-3 -rotate-90 transition-transform [[data-panel-open]_&]:rotate-0" />
+          {input.title}
+        </CollapsibleTrigger>
+      </div>
+      <CollapsibleContent>
+        <SourceCodeBlock
+          code={input.code}
+          className={
+            input.variant === "error"
+              ? "mt-1 max-h-96 [&_.cm-content]:text-destructive"
+              : "mt-1 max-h-96"
+          }
+          language={input.language}
+          showCopyButton
+        />
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
