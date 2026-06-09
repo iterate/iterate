@@ -5,9 +5,21 @@ import {
   Bug,
   Check,
   ChevronsUpDown,
+  CircleDot,
+  Code2,
   ExternalLink,
+  GitBranch,
+  House,
+  KeyRound,
   LogOut,
+  Network,
+  Plug,
+  Radio,
+  ScrollText,
+  Settings2,
+  SquareTerminal,
   UserCircle,
+  type LucideIcon,
 } from "lucide-react";
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -318,6 +330,7 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
+              tooltip="Projects"
               render={<Link to="/projects" />}
               isActive={Boolean(
                 matchRoute({
@@ -326,6 +339,7 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
                 }),
               )}
             >
+              <ScrollText />
               <span>Projects</span>
             </SidebarMenuButton>
             <SidebarMenuSub>
@@ -351,9 +365,11 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
+              tooltip="Repl"
               render={<Link to="/capnweb-repl" />}
               isActive={Boolean(matchRoute({ to: "/capnweb-repl", fuzzy: false }))}
             >
+              <SquareTerminal />
               <span>Repl</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -404,6 +420,7 @@ function ProjectSidebarGroup({
             {PROJECT_SIDEBAR_ITEMS.map((item) => (
               <ProjectSidebarMenuItem
                 key={item.label}
+                icon={item.icon}
                 label={item.label}
                 render={<Link to={item.to} params={{ projectSlug }} />}
                 isActive={Boolean(
@@ -417,6 +434,7 @@ function ProjectSidebarGroup({
             ))}
             {mcpUrl ? (
               <ProjectSidebarMenuItem
+                icon={Network}
                 label="MCP"
                 render={<Link to="/projects/$projectSlug/mcp" params={{ projectSlug }} />}
                 isActive={Boolean(
@@ -428,6 +446,7 @@ function ProjectSidebarGroup({
               />
             ) : null}
             <ProjectSidebarMenuItem
+              icon={Radio}
               label="Streams"
               render={<Link to="/projects/$projectSlug/streams" params={{ projectSlug }} />}
               isActive={Boolean(
@@ -439,6 +458,7 @@ function ProjectSidebarGroup({
               )}
             />
             <ProjectSidebarMenuItem
+              icon={Settings2}
               label="Settings"
               render={<Link to="/projects/$projectSlug/settings" params={{ projectSlug }} />}
               isActive={Boolean(
@@ -451,6 +471,7 @@ function ProjectSidebarGroup({
             {customWorkerUrl ? (
               <SidebarMenuItem>
                 <SidebarMenuButton
+                  tooltip="Custom worker"
                   render={
                     <a
                       aria-label={`Open ${projectSlug} custom worker`}
@@ -474,6 +495,7 @@ function ProjectSidebarGroup({
             <SidebarMenuItem>
               <SidebarMenuButton
                 size="sm"
+                tooltip="View all projects"
                 className="text-sidebar-foreground/70"
                 render={<Link to="/projects" />}
               >
@@ -491,58 +513,69 @@ function ProjectSidebarGroup({
 const PROJECT_SIDEBAR_ITEMS = [
   {
     fuzzy: false,
+    icon: House,
     label: "Home",
     to: "/projects/$projectSlug",
   },
   {
     fuzzy: true,
+    icon: CircleDot,
     label: "Agents",
     to: "/projects/$projectSlug/agents",
   },
   {
     fuzzy: true,
+    icon: Code2,
     label: "Codemode Sessions",
     to: "/projects/$projectSlug/codemode-sessions",
   },
   {
     fuzzy: true,
+    icon: GitBranch,
     label: "Repos",
     to: "/projects/$projectSlug/repos",
   },
   {
     fuzzy: true,
+    icon: KeyRound,
     label: "Secrets",
     to: "/projects/$projectSlug/secrets",
   },
   {
     fuzzy: false,
+    icon: SquareTerminal,
     label: "Repl",
     to: "/projects/$projectSlug/repl",
   },
   {
     fuzzy: false,
+    icon: ScrollText,
     label: "Examples",
     to: "/projects/$projectSlug/examples",
   },
   {
     fuzzy: false,
+    icon: Plug,
     label: "Integrations",
     to: "/projects/$projectSlug/integrations",
   },
 ] as const;
 
 function ProjectSidebarMenuItem({
+  icon: Icon,
   isActive,
   label,
   render,
 }: {
+  icon: LucideIcon;
   isActive: boolean;
   label: string;
   render: ReactElement;
 }) {
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton render={render} isActive={isActive}>
+      <SidebarMenuButton render={render} isActive={isActive} tooltip={label}>
+        <Icon />
         <span>{label}</span>
       </SidebarMenuButton>
     </SidebarMenuItem>
