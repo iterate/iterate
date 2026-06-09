@@ -129,14 +129,17 @@ test("worker caps hold a correctly scoped itx of their own", async () => {
   await expect(todo.list()).resolves.toEqual(["ship the capability layer", "delete the mounts"]);
 
   // The cap's events went through ITS itx onto the project's streams —
-  // visible to any other holder of a project handle.
+  // visible to any other holder of a project handle. (Streams also carry
+  // platform lifecycle events, so filter to the cap's event type.)
   const events = (await projectItx.streams.get("/itx-e2e/todos").read()) as Array<{
-    payload: { text: string };
+    payload: { text?: string };
+    type: string;
   }>;
-  expect(events.map((event) => event.payload.text)).toEqual([
-    "ship the capability layer",
-    "delete the mounts",
-  ]);
+  expect(
+    events
+      .filter((event) => event.type === "events.iterate.test/itx/todo-added")
+      .map((event) => event.payload.text),
+  ).toEqual(["ship the capability layer", "delete the mounts"]);
 });
 
 test("revoked and offline caps fail with instructive errors", async () => {
