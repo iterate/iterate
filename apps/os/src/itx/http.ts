@@ -15,13 +15,13 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
+import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import type { CapDescription } from "./protocol.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { normalizeIngressHost } from "~/ingress/host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { AppConfig } from "~/app.ts";
 
 export const SHARE_TOKEN_PARAM = "itx_share";
