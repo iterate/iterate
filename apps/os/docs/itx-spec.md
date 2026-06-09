@@ -1,8 +1,11 @@
 # itx: Contexts, Capabilities, and the One True Handle
 
-Status: DRAFT for review — produced from the capability-design conversation on the
-`efficacious-drain` branch (April 2026). This spec describes the target
-architecture and the migration of `apps/os` onto it.
+Status: IMPLEMENTED on the `itx-implementation` branch (PR #1407). This spec is
+the design of record; the living code is in `apps/os/src/itx/` — see
+`apps/os/src/itx/README.md` (architecture + diagrams) and
+`apps/os/src/itx/DECISIONS.md` (where reality diverged from this spec). All six
+phases below shipped and are proven by `pnpm e2e:itx` against a deployed
+preview (node + browser execution modes).
 
 ## 0. Summary
 
