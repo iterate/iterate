@@ -210,7 +210,40 @@ never re-visited through an ensure path (e.g. already-routed Slack threads)
 retain only legacy `built-in` subscriptions, which no longer dial. Acceptable
 for previews/new projects; production would need a backfill pass.
 
-### I5. (running list — updated as migration proceeds)
+### I5. Wake-hook catch-up deadlocks against the lifecycle gate on co-hosted DOs
+
+The codemode-session workerd test "runs loopback RPC capability examples with
+live handles and callbacks" kept failing after the agents-domain migration.
+Root cause: `AgentDurableObject`'s instance-wake hook awaited
+`waitForAgentProcessorsCatchUp` — but wake hooks run inside
+`ctx.blockConcurrencyWhile` (the lifecycle gate), and in the class model the
+processors are co-hosted on the same DO. The Stream DO's subscription
+handshake (`requestStreamSubscription`) and event delivery are _inbound_ calls
+into that DO, which the closed input gate queues, so the local checkpoints the
+wait polls can never advance: the wait burned its full 5s on every instance
+wake. The test's script does `ctx.agents.create().sendMessage(...)`, whose
+`initialize` triggered the wake hook; the 5s stall pushed
+script-execution-completed past the test's own 5s `waitFor`.
+
+This was fine in the legacy model only because the processors lived on a
+_different_ DO (the runner): the wake hook polled the runner's checkpoints via
+outbound RPC, and the Stream DO delivered to the runner — neither needed this
+DO's input gate. The per-processor consumed-event target fix (I3) was correct
+but insufficient: with the gate closed, no target > 0 is reachable.
+
+Fix: the wake hook no longer waits; `AgentDurableObject` memoizes one
+deferred `waitForAgentProcessorsCatchUp` per instance wake
+(`ensureStartedAndCaughtUp()`), awaited by the public methods
+(`sendMessage`, `getRuntimeState`, `doThing`, `executeCodemodeFunctionCall`)
+_after_ `ensureStarted()` returns — i.e. outside the gate, where the handshake
+and deliveries can interleave with the poll. Same once-per-wake semantics,
+no gate deadlock. `afterAppend` keeps its own fresh wait (it recomputes
+targets at call time). The other migrated domains (repo, slack-integration,
+slack-agent, codemode-session) already waited only in regular methods; rule of
+thumb going forward: never await processor catch-up inside
+`blockConcurrencyWhile` on a DO that hosts the processors.
+
+### I6. (running list — updated as migration proceeds)
 
 ### Legacy deletion
 

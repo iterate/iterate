@@ -214,8 +214,28 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         ]);
         await this.ensureCodemodeSession(params);
       }
-      await this.waitForAgentProcessorsCatchUp(params);
+      // Deliberately no catch-up wait here: wake hooks run inside
+      // `blockConcurrencyWhile`, and the processors are co-hosted on this DO,
+      // so the Stream DO's subscription handshake and event delivery are
+      // inbound calls that cannot land while the input gate is closed. A wait
+      // here can never observe progress and would burn its full timeout.
+      // Public methods await `ensureStartedAndCaughtUp()` instead, which runs
+      // the same wait once per instance wake, outside the gate.
     });
+  }
+
+  /** See the wake hook comment: the wake-time catch-up runs outside the lifecycle gate. */
+  // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: read and assigned via ??=.
+  #wakeCatchUp: Promise<void> | undefined;
+
+  private async ensureStartedAndCaughtUp(): Promise<AgentDurableObjectStructuredName> {
+    const params = await this.ensureStarted();
+    this.#wakeCatchUp ??= this.waitForAgentProcessorsCatchUp(params).catch((error: unknown) => {
+      this.#wakeCatchUp = undefined;
+      throw error;
+    });
+    await this.#wakeCatchUp;
+    return params;
   }
 
   /** Subscription callables on agent streams dial this host entry point. */
@@ -231,12 +251,12 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   async getRuntimeState() {
-    const params = await this.ensureStarted();
+    const params = await this.ensureStartedAndCaughtUp();
     return await this.getAgentRuntimeState(params);
   }
 
   async sendMessage(input: { message: string; channel?: string }) {
-    const params = await this.ensureStarted();
+    const params = await this.ensureStartedAndCaughtUp();
     const event = await this.streamsEntrypoint(params.agentPath).append({
       event: {
         type: "events.iterate.com/agent-chat/user-message-added",
@@ -250,7 +270,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   async doThing(input: { label: string; value: number }) {
-    await this.ensureStarted();
+    await this.ensureStartedAndCaughtUp();
     return {
       agentName: this.name,
       label: input.label,
@@ -260,7 +280,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    await this.ensureStarted();
+    await this.ensureStartedAndCaughtUp();
     const providerName = input.providerPath.join(".");
     if (providerName === "debug") {
       return await this.createDebugSnapshot();
