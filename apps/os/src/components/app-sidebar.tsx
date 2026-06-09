@@ -38,6 +38,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import type { AppConfig } from "~/app.ts";
@@ -302,31 +305,37 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
             >
               <span>Projects</span>
             </SidebarMenuButton>
-          </SidebarMenuItem>
-          {projects.map((project) => (
-            <SidebarMenuItem key={project.id} className="pl-4">
-              <SidebarMenuButton
-                size="sm"
-                className="h-7 gap-2 text-xs font-normal text-muted-foreground hover:text-sidebar-accent-foreground"
-                render={<Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} />}
-              >
-                <span
-                  aria-hidden="true"
-                  className="size-1.5 shrink-0 rounded-full bg-muted-foreground/35"
-                />
-                <span>{project.slug}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          ))}
-          <SidebarMenuItem className="pl-4">
-            <SidebarMenuButton
-              size="sm"
-              className="h-7 gap-2 text-xs font-normal text-muted-foreground hover:text-sidebar-accent-foreground"
-              render={<Link to="/projects/new" />}
-            >
-              <Plus />
-              <span>Create project</span>
-            </SidebarMenuButton>
+            <SidebarMenuSub>
+              {projects.map((project) => (
+                <SidebarMenuSubItem key={project.id}>
+                  <SidebarMenuSubButton
+                    isActive={Boolean(
+                      matchRoute({
+                        to: "/projects/$projectSlug",
+                        params: { projectSlug: project.slug },
+                        fuzzy: true,
+                      }),
+                    )}
+                    render={
+                      <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} />
+                    }
+                  >
+                    <span>{project.slug}</span>
+                  </SidebarMenuSubButton>
+                </SidebarMenuSubItem>
+              ))}
+              <SidebarMenuSubItem>
+                <SidebarMenuSubButton
+                  className="text-muted-foreground"
+                  isActive={Boolean(matchRoute({ to: "/projects/new", fuzzy: false }))}
+                  render={<Link to="/projects/new" />}
+                  size="sm"
+                >
+                  <Plus />
+                  <span>Create project</span>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+            </SidebarMenuSub>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarGroupContent>
