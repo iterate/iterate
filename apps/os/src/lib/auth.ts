@@ -2,73 +2,34 @@ import { redirect } from "@tanstack/react-router";
 import type { PublicSessionResponse } from "@iterate-com/auth/client";
 import { createUserPrincipal, type UserPrincipal } from "~/auth/principal.ts";
 
-export type OrganizationRouteAuth = {
-  authProjectAccessUrl: string | null;
-  sessionId: string;
-  userId: string;
+type RouteLocation = {
+  pathname: string;
+  searchStr?: string;
 };
 
 export function requireOrganizationMemberForSession(
   session: PublicSessionResponse | null | undefined,
-  location: { href: string },
-) {
-  const principal = requireUserPrincipalFromSession(session, location);
-  if (principal.organizations.length === 0) {
-    throw redirect({ to: "/organization" });
-  }
-
-  return null;
-}
-
-export function requireOrganizationRouteAccessForSession(
-  session: PublicSessionResponse | null | undefined,
-  location: { href: string },
-  organizationSlug: string,
-) {
-  const principal = requireUserPrincipalFromSession(session, location);
-  if (principal.organizations.length === 0) {
-    throw redirect({ to: "/organization" });
-  }
-
-  if (!principal.organizations.some((organization) => organization.slug === organizationSlug)) {
-    throw redirect({ to: "/projects" });
-  }
-
-  return null;
-}
-
-export function requireSignedInForOrganizationSession(
-  session: PublicSessionResponse | null | undefined,
-  location: { href: string },
+  location: RouteLocation,
   issuer: string | undefined,
-): OrganizationRouteAuth {
+) {
   const principal = requireUserPrincipalFromSession(session, location);
-
-  if (principal.organizations.length > 0) {
-    throw redirect({ to: "/projects" });
+  if (principal.organizations.length === 0) {
+    throw redirectToProjectAccess(issuer);
   }
 
-  const projectAccessUrl = issuer ? `${new URL(issuer).origin}/project-access` : null;
-  if (projectAccessUrl) {
-    throw redirect({ href: projectAccessUrl });
-  }
-
-  return {
-    authProjectAccessUrl: projectAccessUrl,
-    userId: principal.userId,
-    sessionId: principal.sessionId ?? principal.userId,
-  };
+  return null;
 }
 
 export function requireAuthenticatedRootRedirectTargetFromSession(
   session: PublicSessionResponse | null | undefined,
-  location: { href: string },
+  location: RouteLocation,
+  issuer: string | undefined,
   currentProjectHostSlug: string | null | undefined,
 ) {
   const principal = requireUserPrincipalFromSession(session, location);
 
   if (principal.organizations.length === 0) {
-    throw redirect({ to: "/organization" });
+    throw redirectToProjectAccess(issuer);
   }
 
   return {
@@ -91,21 +52,42 @@ function getUserPrincipalFromSession(
 
 function requireUserPrincipalFromSession(
   session: PublicSessionResponse | null | undefined,
-  location: { href: string },
+  location: RouteLocation,
 ): UserPrincipal {
   const principal = getUserPrincipalFromSession(session);
   if (!principal) {
-    throw redirectToSignIn(location.href);
+    throw redirectToSignIn(location);
   }
   return principal;
 }
 
-function redirectToSignIn(redirectUrl?: string): never {
+function redirectToSignIn(location: RouteLocation): never {
   throw redirect({
     to: "/sign-in/$",
     params: { _splat: "" },
     search: {
-      redirect_url: redirectUrl ?? "/",
+      // The sign-in page only accepts same-origin relative paths, so pass
+      // pathname + search rather than a full href.
+      redirect_url: `${location.pathname}${location.searchStr ?? ""}`,
     },
   });
+}
+
+function redirectToProjectAccess(issuer: string | undefined): never {
+  throw redirect({ href: authWorkerUrl("/project-access", issuer) });
+}
+
+function authWorkerUrl(path: string, issuer: string | undefined) {
+  return new URL(path, `${authWorkerOrigin(issuer)}/`).toString();
+}
+
+function authWorkerOrigin(issuer: string | undefined) {
+  if (issuer) {
+    try {
+      return new URL(issuer).origin;
+    } catch {
+      // Fall through to the production auth origin.
+    }
+  }
+  return "https://auth.iterate.com";
 }

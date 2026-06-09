@@ -7,8 +7,8 @@ environment it is targeting by branching on hard-coded names.
 
 ## Core Model
 
-- Every independently deployable app has a Doppler project: `os`, `events`,
-  `semaphore`, `example`, `iterate-com`, etc.
+- Every independently deployable app has a Doppler project: `os`, `semaphore`,
+  `example`, `iterate-com`, etc.
 - The repo uses Doppler's monorepo setup in `doppler.yaml`; the current working
   directory chooses the project unless a command explicitly passes `--project`.
 - The Doppler config chooses the environment. Typical configs are `dev_<user>`,
@@ -142,7 +142,7 @@ is not portable across local resolvers.
 
 An environment config is the Doppler config selected for a run. Multiple apps
 can deploy into the same environment config; for example a PR preview can deploy
-`os`, `events`, and `semaphore` with the same `preview_N` config.
+`os` and `semaphore` with the same `preview_N` config.
 
 | Config      | Typical effect                                                 |
 | ----------- | -------------------------------------------------------------- |

@@ -21,9 +21,9 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { EventsDebugLink } from "~/components/events-debug-link.tsx";
+import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
 import { projectStreamsListQueryOptions } from "~/lib/project-route-query.ts";
-import { streamPathFromInput } from "~/lib/stream-links.ts";
+import { streamPathFromInput, streamPathToSplat } from "~/lib/stream-links.ts";
 import { orpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
@@ -63,7 +63,7 @@ function ProjectStreamsIndexPage() {
           to: "/projects/$projectSlug/streams/$",
           params: {
             projectSlug: params.projectSlug,
-            _splat: input.streamPath,
+            _splat: streamPathToSplat(input.streamPath),
           },
         });
       },
@@ -104,7 +104,7 @@ function ProjectStreamsIndexPage() {
   return (
     <section className="w-full space-y-4 p-4">
       <div className="flex justify-end">
-        <EventsDebugLink label="Open namespace in Streams" namespace={project.id} streamPath="/" />
+        <StreamDebugLink label="Open root stream" projectSlug={project.slug} streamPath="/" />
       </div>
       <form
         className="flex w-full flex-col gap-2 md:flex-row"
@@ -202,7 +202,7 @@ function ProjectStreamsIndexPage() {
                         to="/projects/$projectSlug/streams/$"
                         params={{
                           projectSlug: params.projectSlug,
-                          _splat: stream.streamPath,
+                          _splat: streamPathToSplat(stream.streamPath),
                         }}
                       >
                         <EventsStreamPathLabel path={stream.streamPath} className="min-w-0" />
@@ -215,9 +215,9 @@ function ProjectStreamsIndexPage() {
                       {formatRelativeTime(stream.lastWokenAt)}
                     </TableCell>
                     <TableCell className="w-28 text-right">
-                      <EventsDebugLink
+                      <StreamDebugLink
                         label="Open"
-                        namespace={project.id}
+                        projectSlug={project.slug}
                         streamPath={stream.streamPath}
                       />
                     </TableCell>

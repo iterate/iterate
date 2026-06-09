@@ -91,13 +91,11 @@ export const AppConfig = BaseAppConfig.extend({
     })
     .default({}),
   slackBotToken: redacted(z.string().trim().min(1)).optional(),
-  typeIdPrefix: redacted(
-    z
-      .string()
-      .trim()
-      .regex(/^[a-z]+$/, "Type ID prefix must contain lowercase letters only")
-      .default("os"),
-  ),
+  typeIdPrefix: z
+    .string()
+    .trim()
+    .regex(/^[a-z]+$/, "Type ID prefix must contain lowercase letters only")
+    .default("os"),
   posthog: z
     .object({
       apiKey: publicValue(z.string().trim().min(1)),

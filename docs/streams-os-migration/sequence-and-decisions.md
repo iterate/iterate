@@ -4,10 +4,7 @@ This note synthesizes the discovery docs for replacing OS's legacy shared stream
 
 ## Source Inventories
 
-- [Current OS stream surface](./current-os-stream-surface.md)
-- [Legacy shared streams](./legacy-shared-streams.md)
 - [New packages/streams](./new-packages-streams.md)
-- [Domain stream ownership](./domain-stream-ownership.md)
 
 ## Constraints From The Code
 
@@ -42,7 +39,6 @@ This note synthesizes the discovery docs for replacing OS's legacy shared stream
 - Use a small compatibility adapter first if needed so existing OS/shared processor contracts can run inside the new `StreamProcessorRunner` with minimal contract churn.
 - Keep broad stream append authority for the POC. Do not mix event-type/path safety policy into the first runtime cutover.
 - Use only the new `packages/streams` subscription event schema. Do not translate legacy callable subscription events.
-- Ignore `apps/events` entirely for this migration.
 
 ### Phase 0: Prepare The Package Boundary
 

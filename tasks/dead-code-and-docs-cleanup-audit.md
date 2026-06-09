@@ -37,7 +37,7 @@ Also check root `package.json` script `"cli": "cd apps/cli && ..."` — broken i
 | Module                      | Evidence                                                                                                                                                            |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `github-agent-path`         | `buildDefaultGitHubPrAgentPath`, `normalizeAgentPath`, etc. only in `packages/shared/src/github-agent-path.ts`. No `@iterate-com/shared/github-agent-path` imports. |
-| `jsonata-reactor` processor | Contract + implementation exported; **only `jsonata-transformer`** wired in `apps/events/src/lib/processor-docs.ts`. No `jsonata-reactor` under `apps/events`.      |
+| `jsonata-reactor` processor | Contract + implementation exported; only `jsonata-transformer` appears to be wired into current processor docs.                                                     |
 
 Either delete or register `jsonata-reactor` like `jsonata-transformer`.
 

@@ -9,7 +9,6 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as OrganizationRouteImport } from './routes/organization'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
@@ -23,14 +22,13 @@ import { Route as AppCapnwebReplRouteImport } from './routes/_app/capnweb-repl'
 import { Route as AppProjectsRouteRouteImport } from './routes/_app/projects/route'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
+import { Route as AppProjectsNewRouteImport } from './routes/_app/projects/[_]new'
 import { Route as AppProjectsProjectSlugRouteRouteImport } from './routes/_app/projects/$projectSlug/route'
-import { Route as AppOrgOrganizationSlugRouteRouteImport } from './routes/_app/org/$organizationSlug/route'
 import { Route as AppProjectsProjectSlugIndexRouteImport } from './routes/_app/projects/$projectSlug/index'
-import { Route as AppOrgOrganizationSlugIndexRouteImport } from './routes/_app/org/$organizationSlug/index'
 import { Route as AppProjectsProjectSlugSettingsRouteImport } from './routes/_app/projects/$projectSlug/settings'
+import { Route as AppProjectsProjectSlugReplRouteImport } from './routes/_app/projects/$projectSlug/repl'
 import { Route as AppProjectsProjectSlugMcpRouteImport } from './routes/_app/projects/$projectSlug/mcp'
 import { Route as AppProjectsProjectSlugIntegrationsRouteImport } from './routes/_app/projects/$projectSlug/integrations'
-import { Route as AppProjectsProjectSlugExamplesRouteImport } from './routes/_app/projects/$projectSlug/examples'
 import { Route as AppProjectsProjectSlugStreamsRouteRouteImport } from './routes/_app/projects/$projectSlug/streams/route'
 import { Route as AppProjectsProjectSlugAgentsRouteRouteImport } from './routes/_app/projects/$projectSlug/agents/route'
 import { Route as AppProjectsProjectSlugStreamsIndexRouteImport } from './routes/_app/projects/$projectSlug/streams/index'
@@ -47,11 +45,6 @@ import { Route as AppProjectsProjectSlugAgentsNewPresetRouteImport } from './rou
 import { Route as AppProjectsProjectSlugAgentsNewRouteImport } from './routes/_app/projects/$projectSlug/agents/new'
 import { Route as AppProjectsProjectSlugAgentsStreamsSplatRouteImport } from './routes/_app/projects/$projectSlug/agents/streams/$'
 
-const OrganizationRoute = OrganizationRouteImport.update({
-  id: '/organization',
-  path: '/organization',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AppRoute = AppRouteImport.update({
   id: '/_app',
   getParentRoute: () => rootRouteImport,
@@ -116,17 +109,16 @@ const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
   path: '/api/orpc/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppProjectsNewRoute = AppProjectsNewRouteImport.update({
+  id: '/_new',
+  path: '',
+  getParentRoute: () => AppProjectsRouteRoute,
+} as any)
 const AppProjectsProjectSlugRouteRoute =
   AppProjectsProjectSlugRouteRouteImport.update({
     id: '/$projectSlug',
     path: '/$projectSlug',
     getParentRoute: () => AppProjectsRouteRoute,
-  } as any)
-const AppOrgOrganizationSlugRouteRoute =
-  AppOrgOrganizationSlugRouteRouteImport.update({
-    id: '/org/$organizationSlug',
-    path: '/org/$organizationSlug',
-    getParentRoute: () => AppRoute,
   } as any)
 const AppProjectsProjectSlugIndexRoute =
   AppProjectsProjectSlugIndexRouteImport.update({
@@ -134,16 +126,16 @@ const AppProjectsProjectSlugIndexRoute =
     path: '/',
     getParentRoute: () => AppProjectsProjectSlugRouteRoute,
   } as any)
-const AppOrgOrganizationSlugIndexRoute =
-  AppOrgOrganizationSlugIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => AppOrgOrganizationSlugRouteRoute,
-  } as any)
 const AppProjectsProjectSlugSettingsRoute =
   AppProjectsProjectSlugSettingsRouteImport.update({
     id: '/settings',
     path: '/settings',
+    getParentRoute: () => AppProjectsProjectSlugRouteRoute,
+  } as any)
+const AppProjectsProjectSlugReplRoute =
+  AppProjectsProjectSlugReplRouteImport.update({
+    id: '/repl',
+    path: '/repl',
     getParentRoute: () => AppProjectsProjectSlugRouteRoute,
   } as any)
 const AppProjectsProjectSlugMcpRoute =
@@ -156,12 +148,6 @@ const AppProjectsProjectSlugIntegrationsRoute =
   AppProjectsProjectSlugIntegrationsRouteImport.update({
     id: '/integrations',
     path: '/integrations',
-    getParentRoute: () => AppProjectsProjectSlugRouteRoute,
-  } as any)
-const AppProjectsProjectSlugExamplesRoute =
-  AppProjectsProjectSlugExamplesRouteImport.update({
-    id: '/examples',
-    path: '/examples',
     getParentRoute: () => AppProjectsProjectSlugRouteRoute,
   } as any)
 const AppProjectsProjectSlugStreamsRouteRoute =
@@ -257,7 +243,6 @@ const AppProjectsProjectSlugAgentsStreamsSplatRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/organization': typeof OrganizationRoute
   '/projects': typeof AppProjectsRouteRouteWithChildren
   '/capnweb-repl': typeof AppCapnwebReplRoute
   '/debug': typeof AppDebugRoute
@@ -267,17 +252,16 @@ export interface FileRoutesByFullPath {
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/org/$organizationSlug': typeof AppOrgOrganizationSlugRouteRouteWithChildren
   '/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
+  '/projects/new': typeof AppProjectsNewRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/projects/': typeof AppProjectsIndexRoute
   '/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
   '/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
-  '/projects/$projectSlug/examples': typeof AppProjectsProjectSlugExamplesRoute
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/mcp': typeof AppProjectsProjectSlugMcpRoute
+  '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
-  '/org/$organizationSlug/': typeof AppOrgOrganizationSlugIndexRoute
   '/projects/$projectSlug/': typeof AppProjectsProjectSlugIndexRoute
   '/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
@@ -295,7 +279,6 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/organization': typeof OrganizationRoute
   '/capnweb-repl': typeof AppCapnwebReplRoute
   '/debug': typeof AppDebugRoute
   '/log-stream': typeof AppLogStreamRoute
@@ -304,13 +287,13 @@ export interface FileRoutesByTo {
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
+  '/projects/new': typeof AppProjectsNewRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/projects': typeof AppProjectsIndexRoute
-  '/projects/$projectSlug/examples': typeof AppProjectsProjectSlugExamplesRoute
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/mcp': typeof AppProjectsProjectSlugMcpRoute
+  '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
-  '/org/$organizationSlug': typeof AppOrgOrganizationSlugIndexRoute
   '/projects/$projectSlug': typeof AppProjectsProjectSlugIndexRoute
   '/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
@@ -330,7 +313,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
-  '/organization': typeof OrganizationRoute
   '/_app/projects': typeof AppProjectsRouteRouteWithChildren
   '/_app/capnweb-repl': typeof AppCapnwebReplRoute
   '/_app/debug': typeof AppDebugRoute
@@ -340,17 +322,16 @@ export interface FileRoutesById {
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
-  '/_app/org/$organizationSlug': typeof AppOrgOrganizationSlugRouteRouteWithChildren
   '/_app/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
+  '/_app/projects/_new': typeof AppProjectsNewRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/projects/': typeof AppProjectsIndexRoute
   '/_app/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
   '/_app/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
-  '/_app/projects/$projectSlug/examples': typeof AppProjectsProjectSlugExamplesRoute
   '/_app/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/_app/projects/$projectSlug/mcp': typeof AppProjectsProjectSlugMcpRoute
+  '/_app/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/_app/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
-  '/_app/org/$organizationSlug/': typeof AppOrgOrganizationSlugIndexRoute
   '/_app/projects/$projectSlug/': typeof AppProjectsProjectSlugIndexRoute
   '/_app/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/_app/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
@@ -370,7 +351,6 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/organization'
     | '/projects'
     | '/capnweb-repl'
     | '/debug'
@@ -380,17 +360,16 @@ export interface FileRouteTypes {
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
-    | '/org/$organizationSlug'
     | '/projects/$projectSlug'
+    | '/projects/new'
     | '/api/orpc/$'
     | '/projects/'
     | '/projects/$projectSlug/agents'
     | '/projects/$projectSlug/streams'
-    | '/projects/$projectSlug/examples'
     | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/mcp'
+    | '/projects/$projectSlug/repl'
     | '/projects/$projectSlug/settings'
-    | '/org/$organizationSlug/'
     | '/projects/$projectSlug/'
     | '/projects/$projectSlug/agents/new'
     | '/projects/$projectSlug/agents/new-preset'
@@ -408,7 +387,6 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/organization'
     | '/capnweb-repl'
     | '/debug'
     | '/log-stream'
@@ -417,13 +395,13 @@ export interface FileRouteTypes {
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
+    | '/projects/new'
     | '/api/orpc/$'
     | '/projects'
-    | '/projects/$projectSlug/examples'
     | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/mcp'
+    | '/projects/$projectSlug/repl'
     | '/projects/$projectSlug/settings'
-    | '/org/$organizationSlug'
     | '/projects/$projectSlug'
     | '/projects/$projectSlug/agents/new'
     | '/projects/$projectSlug/agents/new-preset'
@@ -442,7 +420,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/_app'
-    | '/organization'
     | '/_app/projects'
     | '/_app/capnweb-repl'
     | '/_app/debug'
@@ -452,17 +429,16 @@ export interface FileRouteTypes {
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
-    | '/_app/org/$organizationSlug'
     | '/_app/projects/$projectSlug'
+    | '/_app/projects/_new'
     | '/api/orpc/$'
     | '/_app/projects/'
     | '/_app/projects/$projectSlug/agents'
     | '/_app/projects/$projectSlug/streams'
-    | '/_app/projects/$projectSlug/examples'
     | '/_app/projects/$projectSlug/integrations'
     | '/_app/projects/$projectSlug/mcp'
+    | '/_app/projects/$projectSlug/repl'
     | '/_app/projects/$projectSlug/settings'
-    | '/_app/org/$organizationSlug/'
     | '/_app/projects/$projectSlug/'
     | '/_app/projects/$projectSlug/agents/new'
     | '/_app/projects/$projectSlug/agents/new-preset'
@@ -482,7 +458,6 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
-  OrganizationRoute: typeof OrganizationRoute
   ApiSplatRoute: typeof ApiSplatRoute
   ApiOrpcWsRoute: typeof ApiOrpcWsRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
@@ -493,13 +468,6 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/organization': {
-      id: '/organization'
-      path: '/organization'
-      fullPath: '/organization'
-      preLoaderRoute: typeof OrganizationRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/_app': {
       id: '/_app'
       path: ''
@@ -591,19 +559,19 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiOrpcSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/projects/_new': {
+      id: '/_app/projects/_new'
+      path: ''
+      fullPath: '/projects/new'
+      preLoaderRoute: typeof AppProjectsNewRouteImport
+      parentRoute: typeof AppProjectsRouteRoute
+    }
     '/_app/projects/$projectSlug': {
       id: '/_app/projects/$projectSlug'
       path: '/$projectSlug'
       fullPath: '/projects/$projectSlug'
       preLoaderRoute: typeof AppProjectsProjectSlugRouteRouteImport
       parentRoute: typeof AppProjectsRouteRoute
-    }
-    '/_app/org/$organizationSlug': {
-      id: '/_app/org/$organizationSlug'
-      path: '/org/$organizationSlug'
-      fullPath: '/org/$organizationSlug'
-      preLoaderRoute: typeof AppOrgOrganizationSlugRouteRouteImport
-      parentRoute: typeof AppRoute
     }
     '/_app/projects/$projectSlug/': {
       id: '/_app/projects/$projectSlug/'
@@ -612,18 +580,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectSlugIndexRouteImport
       parentRoute: typeof AppProjectsProjectSlugRouteRoute
     }
-    '/_app/org/$organizationSlug/': {
-      id: '/_app/org/$organizationSlug/'
-      path: '/'
-      fullPath: '/org/$organizationSlug/'
-      preLoaderRoute: typeof AppOrgOrganizationSlugIndexRouteImport
-      parentRoute: typeof AppOrgOrganizationSlugRouteRoute
-    }
     '/_app/projects/$projectSlug/settings': {
       id: '/_app/projects/$projectSlug/settings'
       path: '/settings'
       fullPath: '/projects/$projectSlug/settings'
       preLoaderRoute: typeof AppProjectsProjectSlugSettingsRouteImport
+      parentRoute: typeof AppProjectsProjectSlugRouteRoute
+    }
+    '/_app/projects/$projectSlug/repl': {
+      id: '/_app/projects/$projectSlug/repl'
+      path: '/repl'
+      fullPath: '/projects/$projectSlug/repl'
+      preLoaderRoute: typeof AppProjectsProjectSlugReplRouteImport
       parentRoute: typeof AppProjectsProjectSlugRouteRoute
     }
     '/_app/projects/$projectSlug/mcp': {
@@ -638,13 +606,6 @@ declare module '@tanstack/react-router' {
       path: '/integrations'
       fullPath: '/projects/$projectSlug/integrations'
       preLoaderRoute: typeof AppProjectsProjectSlugIntegrationsRouteImport
-      parentRoute: typeof AppProjectsProjectSlugRouteRoute
-    }
-    '/_app/projects/$projectSlug/examples': {
-      id: '/_app/projects/$projectSlug/examples'
-      path: '/examples'
-      fullPath: '/projects/$projectSlug/examples'
-      preLoaderRoute: typeof AppProjectsProjectSlugExamplesRouteImport
       parentRoute: typeof AppProjectsProjectSlugRouteRoute
     }
     '/_app/projects/$projectSlug/streams': {
@@ -799,9 +760,9 @@ const AppProjectsProjectSlugStreamsRouteRouteWithChildren =
 interface AppProjectsProjectSlugRouteRouteChildren {
   AppProjectsProjectSlugAgentsRouteRoute: typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
   AppProjectsProjectSlugStreamsRouteRoute: typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
-  AppProjectsProjectSlugExamplesRoute: typeof AppProjectsProjectSlugExamplesRoute
   AppProjectsProjectSlugIntegrationsRoute: typeof AppProjectsProjectSlugIntegrationsRoute
   AppProjectsProjectSlugMcpRoute: typeof AppProjectsProjectSlugMcpRoute
+  AppProjectsProjectSlugReplRoute: typeof AppProjectsProjectSlugReplRoute
   AppProjectsProjectSlugSettingsRoute: typeof AppProjectsProjectSlugSettingsRoute
   AppProjectsProjectSlugIndexRoute: typeof AppProjectsProjectSlugIndexRoute
   AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute: typeof AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
@@ -819,10 +780,10 @@ const AppProjectsProjectSlugRouteRouteChildren: AppProjectsProjectSlugRouteRoute
       AppProjectsProjectSlugAgentsRouteRouteWithChildren,
     AppProjectsProjectSlugStreamsRouteRoute:
       AppProjectsProjectSlugStreamsRouteRouteWithChildren,
-    AppProjectsProjectSlugExamplesRoute: AppProjectsProjectSlugExamplesRoute,
     AppProjectsProjectSlugIntegrationsRoute:
       AppProjectsProjectSlugIntegrationsRoute,
     AppProjectsProjectSlugMcpRoute: AppProjectsProjectSlugMcpRoute,
+    AppProjectsProjectSlugReplRoute: AppProjectsProjectSlugReplRoute,
     AppProjectsProjectSlugSettingsRoute: AppProjectsProjectSlugSettingsRoute,
     AppProjectsProjectSlugIndexRoute: AppProjectsProjectSlugIndexRoute,
     AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute:
@@ -848,38 +809,25 @@ const AppProjectsProjectSlugRouteRouteWithChildren =
 
 interface AppProjectsRouteRouteChildren {
   AppProjectsProjectSlugRouteRoute: typeof AppProjectsProjectSlugRouteRouteWithChildren
+  AppProjectsNewRoute: typeof AppProjectsNewRoute
   AppProjectsIndexRoute: typeof AppProjectsIndexRoute
 }
 
 const AppProjectsRouteRouteChildren: AppProjectsRouteRouteChildren = {
   AppProjectsProjectSlugRouteRoute:
     AppProjectsProjectSlugRouteRouteWithChildren,
+  AppProjectsNewRoute: AppProjectsNewRoute,
   AppProjectsIndexRoute: AppProjectsIndexRoute,
 }
 
 const AppProjectsRouteRouteWithChildren =
   AppProjectsRouteRoute._addFileChildren(AppProjectsRouteRouteChildren)
 
-interface AppOrgOrganizationSlugRouteRouteChildren {
-  AppOrgOrganizationSlugIndexRoute: typeof AppOrgOrganizationSlugIndexRoute
-}
-
-const AppOrgOrganizationSlugRouteRouteChildren: AppOrgOrganizationSlugRouteRouteChildren =
-  {
-    AppOrgOrganizationSlugIndexRoute: AppOrgOrganizationSlugIndexRoute,
-  }
-
-const AppOrgOrganizationSlugRouteRouteWithChildren =
-  AppOrgOrganizationSlugRouteRoute._addFileChildren(
-    AppOrgOrganizationSlugRouteRouteChildren,
-  )
-
 interface AppRouteChildren {
   AppProjectsRouteRoute: typeof AppProjectsRouteRouteWithChildren
   AppCapnwebReplRoute: typeof AppCapnwebReplRoute
   AppDebugRoute: typeof AppDebugRoute
   AppLogStreamRoute: typeof AppLogStreamRoute
-  AppOrgOrganizationSlugRouteRoute: typeof AppOrgOrganizationSlugRouteRouteWithChildren
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -887,8 +835,6 @@ const AppRouteChildren: AppRouteChildren = {
   AppCapnwebReplRoute: AppCapnwebReplRoute,
   AppDebugRoute: AppDebugRoute,
   AppLogStreamRoute: AppLogStreamRoute,
-  AppOrgOrganizationSlugRouteRoute:
-    AppOrgOrganizationSlugRouteRouteWithChildren,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
@@ -896,7 +842,6 @@ const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
-  OrganizationRoute: OrganizationRoute,
   ApiSplatRoute: ApiSplatRoute,
   ApiOrpcWsRoute: ApiOrpcWsRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,

@@ -58,8 +58,8 @@ const SchedulerEntryState = z.strictObject({
 /**
  * Frontend-safe scheduling contract.
  *
- * Scheduling is now an ordinary stream processor, not hidden logic inside
- * `apps/events/src/durable-objects/stream.ts`. A runner can host this processor
+ * Scheduling is now an ordinary stream processor, not hidden stream runtime
+ * logic. A runner can host this processor
  * wherever it has a timer/alarm mechanism. The contract remains importable by
  * frontend code because it contains only schemas and a pure reducer.
  */

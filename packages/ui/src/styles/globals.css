@@ -6,6 +6,19 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* From shadcn/tailwind.css — maps data-vertical:/data-horizontal: to Base UI data-orientation */
+@custom-variant data-horizontal {
+  &:where([data-orientation="horizontal"]) {
+    @slot;
+  }
+}
+
+@custom-variant data-vertical {
+  &:where([data-orientation="vertical"]) {
+    @slot;
+  }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

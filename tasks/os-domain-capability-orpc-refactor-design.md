@@ -3,7 +3,6 @@ state: planned
 priority: high
 size: large
 dependsOn:
-  - os-events-streams-project-identity-plan
 ---
 
 # OS domain, capability, and project oRPC refactor design
@@ -40,9 +39,9 @@ The target architecture is:
   may own reusable components only.
 - Domain `components/` folders are for reusable components, not route/page
   modules.
-- Keep shared stream runtime in `packages/shared/src/streams`.
+- Keep stream runtime infrastructure in `packages/streams`.
 - OS uses Project ID as the Stream Namespace for project-owned streams, but the
-  shared stream runtime must not know about Projects.
+  stream runtime must not know about Projects.
 - `os.projects` is plural and collection-oriented.
 - `os.project` is singular and project-scoped.
 - `codemode`, `inboundMcpServer`, and `streams` all live under `os.project`.
@@ -660,12 +659,10 @@ project identity.
 Shared packages should own code that is truly reusable across apps:
 
 ```txt
-packages/shared/src/streams/
-  stream-durable-object.ts
-  types.ts
-  helpers.ts
-  external-subscriber.ts
-  db/
+packages/streams/
+  src/workers/durable-objects/stream.ts
+  src/types.ts
+  src/shared/event.ts
 
 packages/shared/src/stream-processors/
   slack/
@@ -690,9 +687,9 @@ Leave `apps/os-contract` structurally alone for now. It is a nuisance package
 that may go away later. This refactor should touch the contract only where the
 public `os.project.*` API shape requires it.
 
-Apps should import shared stream schemas and types directly from
-`@iterate-com/shared/streams/*`. `apps/events-contract` should not be the owner
-or re-export hub for core stream schemas.
+Apps should import stream schemas and runtime types from `@iterate-com/streams`
+where possible. Temporary `@iterate-com/shared/streams/*` imports should stay
+limited to legacy compatibility schemas that have not moved yet.
 
 ## Implementation Phases
 
@@ -854,9 +851,8 @@ Suggested first moves:
   composition stays in TanStack route files for now.
 - End-to-end tests stay outside domains.
 - Existing `apps/os` e2e tests continue working.
-- Existing `apps/events` e2e tests continue working.
-- Existing manual smoke tests against `apps/os` and `apps/events` continue
-  working.
+- Existing `apps/os` e2e tests continue working.
+- Existing manual smoke tests against `apps/os` continue working.
 - The implementer is responsible for proving the result works in local Miniflare
   and in a deployed preview environment after pushing the commit.
 - Preview smoke still proves Code Mode works in OS with authenticated Clerk
@@ -984,8 +980,8 @@ Other good public candidates are Cloudflare Radar and X API docs. This namespace
 is separate from OS's inbound Project MCP server, which is exposed through
 `os.project.inboundMcpServer.*` for browser/API callers.
 
-Streams show the intended pattern clearly. The shared stream runtime lives in
-`packages/shared/src/streams` and knows only about `{ namespace, path }`. OS
+Streams show the intended pattern clearly. The stream runtime lives in
+`packages/streams` and knows only about `{ namespace, path }`. OS
 uses stable Project ID as the stream namespace, but the stream runtime itself is
 not project-specific. OS's `StreamsCapability` binds the namespace through
 WorkerEntrypoint props, and `os.project.streams.*` validates user input,

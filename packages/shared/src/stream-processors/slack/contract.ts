@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { ExternalSubscriber } from "../../streams/external-subscriber-types.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import { defineProcessorContract } from "../stream-processor.ts";
 
@@ -7,6 +6,15 @@ const NullableOptionalString = z.preprocess(
   (value) => (value === null ? undefined : value),
   z.string().optional(),
 );
+
+const StreamSubscriptionConfiguredPayload = z.object({
+  subscriptionKey: z.string().trim().min(1),
+  subscriber: z.object({
+    type: z.literal("built-in"),
+    transport: z.literal("workers-rpc"),
+    processorSlug: z.string().trim().min(1),
+  }),
+});
 
 /**
  * Processor mounted on `/integrations/slack`.
@@ -51,9 +59,9 @@ export const SlackProcessorContract = defineProcessorContract({
   initialState: standardProcessorBehavior.initialState,
   processorDeps: [...standardProcessorBehavior.processorDeps],
   events: {
-    "events.iterate.com/core/subscription-configured": {
+    "events.iterate.com/stream/subscription-configured": {
       description: "Configures a stream subscriber on a routed Slack stream.",
-      payloadSchema: ExternalSubscriber,
+      payloadSchema: StreamSubscriptionConfiguredPayload,
     },
     "events.iterate.com/slack/connected": {
       description: "Slack OAuth connection was established for this project.",
@@ -109,7 +117,7 @@ export const SlackProcessorContract = defineProcessorContract({
   ],
   emits: [
     ...standardProcessorBehavior.emits,
-    "events.iterate.com/core/subscription-configured",
+    "events.iterate.com/stream/subscription-configured",
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
   ],

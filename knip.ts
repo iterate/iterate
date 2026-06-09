@@ -119,23 +119,6 @@ function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceCon
   };
 }
 
-function makeEventsCloudflareWorkspace(workerEnvShim: string): WorkspaceConfig {
-  const workspace = makeCloudflareTanStackAppWorkspace(workerEnvShim);
-
-  return {
-    ...workspace,
-    entry: [
-      ...(workspace.entry ?? []),
-      "scripts/demo/router.ts",
-      "sqlfu.config.ts",
-      "src/entry.workerd.vitest.ts",
-    ],
-    ignore: ["src/db/migrations/.generated/migrations.ts", "src/durable-objects/sqlfu.config.ts"],
-    ignoreBinaries: [...(workspace.ignoreBinaries ?? []), "sqlfu"],
-    ignoreDependencies: [...(workspace.ignoreDependencies ?? []), "miniflare"],
-  };
-}
-
 function makePrivateContractWorkspace(): WorkspaceConfig {
   return {
     // These contract packages are private, tiny, and self-contained, so report
@@ -174,8 +157,6 @@ const config: KnipConfig = {
     "apps/*",
     "!apps/example",
     "!apps/example-contract",
-    "!apps/events",
-    "!apps/events-contract",
     "!apps/os",
     "!apps/os-contract",
     "!apps/semaphore",
@@ -204,19 +185,6 @@ const config: KnipConfig = {
     "apps/semaphore-contract/src/client.ts": ["types"],
     "apps/semaphore/src/router.tsx": ["exports"],
     "apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts": ["exports"],
-    // Generated SQLFU bundles/configs are loaded by scripts/runtime conventions.
-    "apps/events/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
-    "apps/events/src/db/queries/.generated/index.ts": ["files", "exports", "types"],
-    "apps/events/src/durable-objects/db/migrations/.generated/migrations.ts": ["exports", "types"],
-    "apps/events/src/durable-objects/db/queries/.generated/index.ts": ["exports", "types"],
-    "apps/events/src/durable-objects/db/queries/.generated/tables.ts": ["types"],
-    "apps/events/src/db/queries/.generated/tables.ts": ["files", "types"],
-    "apps/events/src/durable-objects/sqlfu.config.ts": ["files"],
-    "apps/events/src/lib/custom-html-renderers.ts": ["exports"],
-    "apps/events/src/lib/stream-feed-summary.ts": ["types"],
-    "apps/events/src/lib/stream-helpers.ts": ["exports"],
-    "packages/shared/src/streams/db/migrations/.generated/migrations.ts": ["exports", "types"],
-    "packages/shared/src/streams/db/queries/.generated/tables.ts": ["types"],
     // Cloudflare discovers DO default exports through Worker bindings.
     "apps/example/src/durable-objects/example-counter.ts": ["exports"],
     "packages/shared/src/callable/entry.workerd.vitest.ts": ["exports"],
@@ -229,19 +197,6 @@ const config: KnipConfig = {
   workspaces: {
     "apps/example": makeDualRuntimeAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/example-contract": makePrivateContractWorkspace(),
-    "apps/events": {
-      ...makeEventsCloudflareWorkspace("./src/lib/worker-env.d.ts"),
-      ignoreDependencies: [
-        ...(makeEventsCloudflareWorkspace("./src/lib/worker-env.d.ts").ignoreDependencies ?? []),
-        // Form devtools expects the form package in this app workspace even
-        // though the root source only imports the devtools panel directly.
-        "@tanstack/react-form",
-        // SQLFU config is a tool entrypoint; `sqlfu` is intentionally
-        // resolved from the monorepo toolchain rather than app runtime code.
-        "sqlfu",
-      ],
-    },
-    "apps/events-contract": makePrivateContractWorkspace(),
     "apps/semaphore": makeCloudflareTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/semaphore-contract": makePrivateContractWorkspace(),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
