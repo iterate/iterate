@@ -29,6 +29,7 @@ import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
 import { handleRootIterateContextFetch } from "~/capnweb/root-context-fetch.ts";
+import { handleCapabilityPrototypeFetch } from "~/domains/capability-prototype/fetch.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 // Re-export rpc-targets used by OS's existing loopback callable paths.
@@ -40,6 +41,10 @@ export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durab
 export { CaptunServerShard };
 export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 export { DebugAppendChainSubscriber } from "~/durable-objects/debug-append-chain-subscriber.ts";
+export {
+  FakeProjectDurableObject,
+  FakeStreamDurableObject,
+} from "~/domains/capability-prototype/durable-object.ts";
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
@@ -47,6 +52,7 @@ export { SlackIntegrationDurableObject } from "~/domains/slack/durable-objects/s
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
+export { FakeIterateEntrypoint } from "~/domains/capability-prototype/entrypoint.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { IterateContextEntrypoint } from "~/capnweb/iterate-context-capability.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
@@ -171,6 +177,14 @@ export default {
           stream: env.STREAM,
           workerExports: cfCtx.exports,
         };
+
+        const capabilityPrototypeResponse = await handleCapabilityPrototypeFetch({
+          config,
+          context,
+          env,
+          request,
+        });
+        if (capabilityPrototypeResponse) return capabilityPrototypeResponse;
 
         const captnwebResponse = await handleRootIterateContextFetch({
           request,

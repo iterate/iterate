@@ -42,6 +42,46 @@ function getPropertyName(node) {
   return undefined;
 }
 
+/** @param {string} filename */
+function normalizePathForLint(filename) {
+  return filename.replaceAll("\\", "/");
+}
+
+/** @param {string} filename */
+function isAllowedRawDurableObjectBindingAccessFile(filename) {
+  const path = normalizePathForLint(filename);
+
+  if (path.includes("/apps/os/docs/")) return true;
+  if (path.endsWith("/apps/os/src/entry.workerd.ts")) return true;
+  if (path.includes("/apps/os/src/capnweb/")) return true;
+  if (path.includes("/apps/os/src/durable-objects/")) return true;
+  if (!path.includes("/apps/os/src/domains/")) return false;
+
+  return (
+    path.includes("/durable-objects/") ||
+    path.includes("/entrypoints/") ||
+    path.endsWith("/durable-object.ts") ||
+    path.endsWith("/capability.ts") ||
+    path.endsWith("-capability.ts")
+  );
+}
+
+/** @param {import("estree").Node | undefined} node */
+function getRawEnvBindingName(node) {
+  if (!node || node.type !== "MemberExpression") return undefined;
+  const bindingName = getPropertyName(node.property);
+  if (!bindingName) return undefined;
+  if (node.object.type === "Identifier" && node.object.name === "env") return bindingName;
+  if (
+    node.object.type === "MemberExpression" &&
+    getPropertyName(node.object.property) === "env" &&
+    node.object.object.type === "ThisExpression"
+  ) {
+    return bindingName;
+  }
+  return undefined;
+}
+
 /** @param {import("estree").Node | undefined} node */
 function getTestLintCallName(node) {
   if (!node) return undefined;
@@ -598,6 +638,34 @@ const plugin = {
                       });
                     }
                   }
+                },
+              };
+            },
+          },
+          "no-raw-durable-object-binding-access": {
+            meta: {
+              type: "problem",
+              docs: {
+                description:
+                  "Restrict raw env.*.getByName Durable Object namespace access to capability adapters and trusted domain internals.",
+              },
+            },
+            create: (context) => {
+              return {
+                "CallExpression[callee.type='MemberExpression']": (node) => {
+                  if (getPropertyName(node.callee.property) !== "getByName") return;
+                  const bindingName = getRawEnvBindingName(node.callee.object);
+                  if (!bindingName) return;
+                  if (isAllowedRawDurableObjectBindingAccessFile(context.filename ?? "")) return;
+
+                  context.report({
+                    node,
+                    message:
+                      `Raw env.${bindingName}.getByName(...) access is privileged platform authority. ` +
+                      `Untrusted ingress should go through the root capability/capability adapter instead. ` +
+                      `Allowed locations are domain Durable Objects, domain entrypoints, capability files, ` +
+                      `and the current Cap'n Web compatibility layer.`,
+                  });
                 },
               };
             },

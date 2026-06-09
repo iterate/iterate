@@ -10,6 +10,7 @@ type WorkerMainModule = Pick<
     | "AgentCapability"
     | "AiCapability"
     | "FetchCapability"
+    | "FakeIterateEntrypoint"
     | "GmailCapability"
     | "IterateContextEntrypoint"
     | "OpenApiBridge"
