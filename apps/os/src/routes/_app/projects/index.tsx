@@ -5,7 +5,7 @@ import type { Project } from "@iterate-com/os-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { cacheCreatedProjectQueries } from "~/components/create-project-form.tsx";
+import { cacheCreatedProjectQueries } from "~/lib/cache-created-project-queries.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";

@@ -1,8 +1,6 @@
 import { useForm } from "@tanstack/react-form";
-import type { QueryClient } from "@tanstack/react-query";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
-import type { Project } from "@iterate-com/os-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Field,
@@ -14,14 +12,12 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
-import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
+import { cacheCreatedProjectQueries } from "~/lib/cache-created-project-queries.ts";
 import { orpc } from "~/orpc/client.ts";
-
-type ProjectsListData = { projects: Project[]; total: number };
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-const CreateProjectSchema = z.object({
+const CreateProjectInput = z.object({
   slug: z
     .string()
     .trim()
@@ -52,11 +48,11 @@ export function CreateProjectForm() {
   const form = useForm({
     defaultValues: { slug: "" },
     validators: {
-      onChange: CreateProjectSchema,
-      onSubmit: CreateProjectSchema,
+      onChange: CreateProjectInput,
+      onSubmit: CreateProjectInput,
     },
     onSubmit: async ({ value }) => {
-      const parsed = CreateProjectSchema.parse(value);
+      const parsed = CreateProjectInput.parse(value);
       await createProject.mutateAsync({ slug: parsed.slug });
       form.reset();
     },
@@ -104,48 +100,4 @@ export function CreateProjectForm() {
       </form.Subscribe>
     </form>
   );
-}
-
-export function cacheCreatedProjectQueries(input: {
-  project: Project & { ingressUrl: string };
-  queryClient: QueryClient;
-}) {
-  const findQuery = orpc.projects.find.queryOptions({ input: { id: input.project.id } });
-  const findBySlugQuery = orpc.projects.findBySlug.queryOptions({
-    input: { slug: input.project.slug },
-  });
-  input.queryClient.setQueryData(findQuery.queryKey, input.project);
-  input.queryClient.setQueryData(findBySlugQuery.queryKey, input.project);
-  const listProject: Project = {
-    id: input.project.id,
-    slug: input.project.slug,
-    customHostname: input.project.customHostname,
-    createdAt: input.project.createdAt,
-    updatedAt: input.project.updatedAt,
-    isOrphanedProjectFromAuthService: input.project.isOrphanedProjectFromAuthService,
-  };
-
-  for (const listInput of [
-    { limit: 20, offset: 0 },
-    { limit: 100, offset: 0 },
-  ] as const) {
-    const listQuery = projectsListQueryOptions(listInput);
-    input.queryClient.setQueryData<ProjectsListData>(listQuery.queryKey, (existing) => {
-      if (!existing) return existing;
-      if (existing.projects.some((project) => project.id === input.project.id)) {
-        return {
-          ...existing,
-          projects: existing.projects.map((project) =>
-            project.id === input.project.id ? listProject : project,
-          ),
-        };
-      }
-
-      return {
-        ...existing,
-        projects: [listProject, ...existing.projects].slice(0, listInput.limit),
-        total: existing.total + 1,
-      };
-    });
-  }
 }
