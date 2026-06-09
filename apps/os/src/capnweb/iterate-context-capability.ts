@@ -2,12 +2,7 @@ import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createRequestLogger } from "@iterate-com/shared/request-logging";
 import { createD1Client } from "sqlfu";
-import {
-  callLocalProxyCaller,
-  isLocalProxyCaller,
-  localProxyCaller,
-} from "./local-proxy-wrapper.js";
-import localProxyWrapperSource from "./local-proxy-wrapper.js?raw";
+import { PathProxyRpcTarget } from "./path-proxy-rpc-target.ts";
 import type { ProjectCapability, ProjectWorkerCapability } from "./project-capability.ts";
 import { ProjectsCapability } from "./projects-capability.ts";
 import type { ProjectReposCapability } from "./repos-capability.ts";
@@ -18,6 +13,7 @@ import type { AppContext } from "~/context.ts";
 import { normalizeActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 
 type RuntimeContext = Pick<ExecutionContext, "exports" | "waitUntil">;
+const INVOKE_MOUNTED = Symbol("IterateContext.invokeMounted");
 
 export type ProjectScopes = {
   projects: "all" | string[];
@@ -77,10 +73,6 @@ export class IterateContextEntrypoint extends WorkerEntrypoint<Env, IterateConte
       }),
       props: workerCtx.props,
     });
-  }
-
-  async callMounted(path: string[], args: unknown[] = []) {
-    return await this.context.callMounted(path, args);
   }
 }
 
@@ -147,7 +139,6 @@ export class IterateCapability extends RpcTarget {
       },
       mainModule: "mount-worker.js",
       modules: {
-        "local-proxy-wrapper.js": localProxyWrapperSource,
         "mount-worker.js": target.script,
       },
     };
@@ -171,7 +162,7 @@ export class IterateContext extends IterateCapability {
     installMountedRootMembers(this, this.#mounts);
   }
 
-  async callMounted(path: string[], args: unknown[] = []) {
+  async [INVOKE_MOUNTED](path: string[], args: unknown[] = []) {
     const match = resolveMount(this.#mounts, path);
     if (!match) {
       throw new Error(`No mount registered for ${path.join(".")}`);
@@ -201,16 +192,8 @@ export class IterateContext extends IterateCapability {
   }
 
   getMounted(path: string[]) {
-    const match = this.requireMount(path);
-    if (match.mount.target.type === "dynamic-worker") {
-      return mountedPathCaller(this, path);
-    }
-    const resolved = {
-      ...match,
-      target: this.resolveMountTarget(match.mount.target),
-    };
-    if (resolved.remainder.length === 0) return resolved.target;
-    return resolveTargetCall(resolved.target, resolved.remainder);
+    this.requireMountedPath(path);
+    return mountedPathTarget(this, path);
   }
 
   private requireMount(path: string[]) {
@@ -221,10 +204,17 @@ export class IterateContext extends IterateCapability {
     return match;
   }
 
+  private requireMountedPath(path: string[]) {
+    const match = resolveMount(this.#mounts, path);
+    if (match) return;
+    if (this.#mounts.some((mount) => isPathPrefix(path, mount.path))) return;
+    throw new Error(`No mount registered for ${path.join(".")}`);
+  }
+
   private async resolveMountTarget(target: Mount["target"]): Promise<unknown> {
     switch (target.type) {
       case "dynamic-worker":
-        throw new Error("Dynamic-worker mounts must be invoked through callMounted.");
+        throw new Error("Dynamic-worker mounts must be invoked through a mounted path target.");
       case "ctx":
         return await resolveTargetCall(this, target.call ?? []);
     }
@@ -313,9 +303,13 @@ export function createCapnwebAppContext(input: {
 }
 
 function mountedPathCaller(context: IterateContext, path: string[]) {
-  return localProxyCaller(async (input) => {
-    return await context.callMounted([...path, ...input.path], input.args);
+  return new PathProxyRpcTarget(async (input) => {
+    return await context[INVOKE_MOUNTED]([...path, ...input.path], input.args);
   });
+}
+
+function mountedPathTarget(context: IterateContext, path: string[]) {
+  return mountedPathCaller(context, path);
 }
 
 function installMountedRootMembers(context: IterateContext, mounts: Mount[]) {
@@ -340,7 +334,7 @@ function installMountedRootMembers(context: IterateContext, mounts: Mount[]) {
       Object.defineProperty(prototype, rootName, {
         configurable: true,
         value: async function mountedMethod(this: IterateContext, ...args: unknown[]) {
-          return await this.callMounted([rootName], args);
+          return await this[INVOKE_MOUNTED]([rootName], args);
         },
         writable: false,
       });
@@ -353,8 +347,8 @@ function installMountedRootMembers(context: IterateContext, mounts: Mount[]) {
     Object.defineProperty(prototype, rootName, {
       configurable: true,
       get(this: IterateContext) {
-        if (rootMount) return this.getMounted(rootMount.path);
-        return mountedPathCaller(this, [rootName]);
+        if (rootMount) return mountedPathTarget(this, rootMount.path);
+        return mountedPathTarget(this, [rootName]);
       },
     });
   }
@@ -383,18 +377,19 @@ function isPathPrefix(prefix: string[], path: string[]) {
 
 async function resolveTargetCall(target: unknown, call: readonly TargetCall[]): Promise<unknown> {
   let current = target;
-  for (const step of call) {
+  for (const [index, step] of call.entries()) {
     current = await current;
     if (current == null) {
       throw new Error(`Cannot resolve target call through ${String(current)}.`);
     }
 
     if (typeof step === "string") {
-      const parent = current;
-      const value = (parent as Record<string, unknown>)[step];
+      const parent = current as Record<string, unknown>;
+      const value = parent[step];
       current =
-        typeof value === "function" && typeof value.bind === "function"
-          ? value.bind(parent)
+        index === call.length - 1 && typeof value === "function"
+          ? (...args: unknown[]) =>
+              (parent as Record<string, (...args: unknown[]) => unknown>)[step](...args)
           : value;
       continue;
     }
@@ -414,21 +409,25 @@ async function invokeResolvedMountTarget(input: {
   remainder: string[];
   target: unknown;
 }) {
-  if (isLocalProxyCaller(input.target)) {
-    return await callLocalProxyCaller(input.target, {
-      args: input.args,
-      path: input.remainder,
-    });
+  if (input.remainder.length === 0) {
+    if (typeof input.target !== "function") {
+      throw new Error(`Mounted path ${input.path.join(".")} did not resolve to a function.`);
+    }
+    return await input.target(...input.args);
   }
 
-  const method =
-    input.remainder.length > 0
-      ? await resolveTargetCall(input.target, input.remainder)
-      : input.target;
+  let parent = input.target;
+  for (const segment of input.remainder.slice(0, -1)) {
+    parent = await (parent as Record<string, unknown>)[segment];
+  }
+  const methodName = input.remainder.at(-1)!;
+  const method = (parent as Record<string, unknown>)[methodName];
   if (typeof method !== "function") {
     throw new Error(`Mounted path ${input.path.join(".")} did not resolve to a function.`);
   }
-  return await method(...input.args);
+  return await (parent as Record<string, (...args: unknown[]) => unknown>)[methodName](
+    ...input.args,
+  );
 }
 
 async function invokeDynamicWorkerTarget(input: {
@@ -448,39 +447,30 @@ async function invokeDynamicWorkerTarget(input: {
     if (typeof parent[lastCallStep] !== "function") {
       throw new Error(`Dynamic target method ${lastCallStep} is not callable.`);
     }
-    return await parent[lastCallStep](...input.args);
+    return wrapForwardedResult(await parent[lastCallStep](...input.args));
   }
 
   const resolved = await resolveDynamicTargetCall(input.target, input.call);
   let current = resolved.value;
 
-  if (isLocalProxyCaller(current)) {
-    return await callLocalProxyCaller(current, {
-      args: input.args,
-      path: input.path,
-    });
-  }
-
   if (input.path.length === 0) {
     if (typeof current !== "function") {
       throw new Error("Dynamic worker mount did not resolve to a callable target.");
     }
-    return await Reflect.apply(current, resolved.receiver, input.args);
+    return wrapForwardedResult(await Reflect.apply(current, resolved.receiver, input.args));
   }
 
   for (const segment of input.path.slice(0, -1)) {
-    // Nested dynamic-worker getters like tools.nested return RPC promises.
-    // Await them in the parent before walking deeper so the final result is
-    // serializable back to the /run worker.
-    current = await (current as Record<string, unknown>)[segment];
+    current = (current as Record<string, unknown>)[segment];
   }
 
   const methodName = input.path.at(-1)!;
-  const method = (current as Record<string, unknown>)[methodName];
-  if (typeof method !== "function") {
+  const parent = current as Record<string, (...args: unknown[]) => unknown>;
+  if (typeof parent[methodName] !== "function") {
     throw new Error(`Dynamic worker mount ${input.path.join(".")} did not resolve to a function.`);
   }
-  return await Reflect.apply(method, current, input.args);
+  const result = await parent[methodName](...input.args);
+  return wrapForwardedResult(result);
 }
 
 async function resolveDynamicTargetCall(
@@ -512,6 +502,129 @@ async function resolveDynamicTargetCall(
     current = Reflect.apply(method, parent, step.args ?? []);
   }
   return { receiver, value: await current };
+}
+
+function wrapForwardedResult(result: unknown): unknown {
+  if (isPassByValueObject(result)) return result;
+  if (isPlainDataContainer(result)) return stripRpcDisposersFromPlainData(result);
+  if (typeof result === "function") {
+    return new PathProxyRpcTarget(
+      async (input) => {
+        return wrapForwardedResult(await invokeCallablePath(result, input.path, input.args));
+      },
+      { dispose: createForwardedResultDisposer(result) },
+    );
+  }
+  if (isDisposableObject(result)) {
+    return new PathProxyRpcTarget(
+      async (input) => {
+        return wrapForwardedResult(await invokeObjectMethodPath(result, input.path, input.args));
+      },
+      { dispose: createForwardedResultDisposer(result) },
+    );
+  }
+  return result;
+}
+
+function isPassByValueObject(value: unknown): boolean {
+  return (
+    value instanceof ArrayBuffer ||
+    value instanceof Blob ||
+    value instanceof Date ||
+    value instanceof Error ||
+    value instanceof Headers ||
+    value instanceof ReadableStream ||
+    value instanceof Request ||
+    value instanceof Response ||
+    value instanceof Uint8Array ||
+    value instanceof WritableStream
+  );
+}
+
+function isPlainDataContainer(value: unknown): value is Record<string, unknown> | unknown[] {
+  if (Array.isArray(value)) return true;
+  if (value === null || typeof value !== "object") return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function stripRpcDisposersFromPlainData(value: Record<string, unknown> | unknown[]): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) =>
+      isPlainDataContainer(item) ? stripRpcDisposersFromPlainData(item) : item,
+    );
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      key,
+      isPlainDataContainer(item) ? stripRpcDisposersFromPlainData(item) : item,
+    ]),
+  );
+}
+
+function isDisposableObject(value: unknown): value is Record<PropertyKey, unknown> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    (Symbol.dispose in value || Symbol.asyncDispose in value)
+  );
+}
+
+function createForwardedResultDisposer(value: Function | Record<PropertyKey, unknown>) {
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+
+    const disposable = value as {
+      [Symbol.asyncDispose]?: () => Promise<void> | void;
+      [Symbol.dispose]?: () => void;
+    };
+    const dispose = disposable[Symbol.dispose];
+    if (typeof dispose === "function") {
+      Reflect.apply(dispose, value, []);
+      return;
+    }
+
+    const asyncDispose = disposable[Symbol.asyncDispose];
+    if (typeof asyncDispose === "function") {
+      void Reflect.apply(asyncDispose, value, []);
+    }
+  };
+}
+
+function invokeCallablePath(root: Function, path: string[], args: unknown[]) {
+  let current: unknown = root;
+  for (const segment of path.slice(0, -1)) {
+    current = (current as Record<string, unknown>)[segment];
+  }
+  const methodName = path.at(-1);
+  if (!methodName) return root(...args);
+  const parent = current as Record<string, (...args: unknown[]) => unknown>;
+  if (typeof parent[methodName] !== "function") {
+    throw new Error(`Forwarded path ${path.join(".")} did not resolve to a function.`);
+  }
+  return parent[methodName](...args);
+}
+
+function invokeObjectMethodPath(root: unknown, path: string[], args: unknown[]) {
+  let current = root;
+  for (const segment of path.slice(0, -1)) {
+    current = (current as Record<string, unknown>)[segment];
+  }
+  const methodName = path.at(-1);
+  if (!methodName) {
+    if (typeof current !== "function") {
+      throw new Error("Forwarded path is empty.");
+    }
+    return current(...args);
+  }
+  const parent = current as Record<string, (...args: unknown[]) => unknown>;
+  if (typeof parent[methodName] !== "function") {
+    throw new Error(`Forwarded path ${path.join(".")} did not resolve to a function.`);
+  }
+  return parent[methodName](...args);
 }
 
 export function singleProjectIdFromScopes(scopes: ProjectScopes): string | null {

@@ -18,7 +18,6 @@ import {
   runBrowserReplEntry,
   type BrowserReplEntry,
 } from "~/capnweb/browser-repl.ts";
-import { liftLocalProxies } from "~/capnweb/local-proxy-wrapper.js";
 import type { IterateContext } from "~/capnweb/iterate-context-capability.ts";
 
 export const Route = createFileRoute("/_app/capnweb-repl")({
@@ -42,14 +41,13 @@ function CapnwebReplPage() {
     wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(wsUrl);
     const rpc = newWebSocketRpcSession<IterateContext>(socket);
-    const lifted = liftLocalProxies(rpc) as RpcStub<IterateContext>;
     const globals = globalThis as typeof globalThis & {
       ctx?: RpcStub<IterateContext>;
       env?: object;
     };
-    globals.ctx = lifted;
+    globals.ctx = rpc;
     globals.env = envRef.current;
-    setCtx(() => lifted);
+    setCtx(() => rpc);
     setStatus("Connected");
     return () => {
       delete globals.ctx;

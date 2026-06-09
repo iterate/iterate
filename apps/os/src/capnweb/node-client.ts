@@ -1,6 +1,5 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
-import { liftLocalProxies } from "./local-proxy-wrapper.js";
 import type { IterateContext } from "./iterate-context-capability.ts";
 import type { ProjectCapabilityApi } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
@@ -22,10 +21,8 @@ export async function connectNodeIterateContext(input: {
 
   const rootSocket = new WebSocket(rootWebSocketUrl(baseUrl), { headers: authHeaders });
   sockets.push(rootSocket);
-  const root = liftLocalProxies(
-    newWebSocketRpcSession<IterateContext>(
-      rootSocket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
-    ),
+  const root = newWebSocketRpcSession<IterateContext>(
+    rootSocket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
 
   const ctx = input.projectId
@@ -86,7 +83,7 @@ async function projectContext(input: {
   const project = newWebSocketRpcSession<ProjectCapabilityApi>(
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
-  return liftLocalProxies(project.getIterateContext() as unknown as RpcStub<IterateContext>);
+  return project.getIterateContext() as unknown as RpcStub<IterateContext>;
 }
 
 function rootWebSocketUrl(baseUrl: string) {
