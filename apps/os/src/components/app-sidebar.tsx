@@ -468,13 +468,13 @@ function ProjectSidebarGroup({
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
-      <SidebarGroup className="mt-auto pt-0">
+      <SidebarGroup className="mt-auto">
         <SidebarGroupContent>
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
                 size="sm"
-                className="text-xs text-muted-foreground hover:text-sidebar-accent-foreground"
+                className="text-sidebar-foreground/70"
                 render={<Link to="/projects" />}
               >
                 <ArrowLeft />
