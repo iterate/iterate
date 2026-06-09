@@ -76,7 +76,7 @@ export function AppSidebar({ routeConfig }: AppSidebarProps) {
   // Sidebar composition follows shadcn sidebar blocks 07/08:
   // https://ui.shadcn.com/blocks/sidebar
   return (
-    <Sidebar collapsible="icon" variant="inset">
+    <Sidebar collapsible="icon">
       <SidebarHeader>
         <AppSidebarHeader />
       </SidebarHeader>
