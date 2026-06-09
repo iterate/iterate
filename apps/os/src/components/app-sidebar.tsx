@@ -284,23 +284,48 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
-              render={<Link to="/projects" />}
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects",
-                  fuzzy: true,
-                }),
-              )}
-            >
-              <span>View all projects</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
               render={<Link to="/capnweb-repl" />}
               isActive={Boolean(matchRoute({ to: "/capnweb-repl", fuzzy: false }))}
             >
               <span>Repl</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              render={<Link to="/projects" />}
+              isActive={Boolean(
+                matchRoute({
+                  to: "/projects",
+                  fuzzy: false,
+                }),
+              )}
+            >
+              <span>Projects</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          {projects.map((project) => (
+            <SidebarMenuItem key={project.id} className="pl-4">
+              <SidebarMenuButton
+                size="sm"
+                className="h-7 gap-2 text-xs font-normal text-muted-foreground hover:text-sidebar-accent-foreground"
+                render={<Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} />}
+              >
+                <span
+                  aria-hidden="true"
+                  className="size-1.5 shrink-0 rounded-full bg-muted-foreground/35"
+                />
+                <span>{project.slug}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+          <SidebarMenuItem className="pl-4">
+            <SidebarMenuButton
+              size="sm"
+              className="h-7 gap-2 text-xs font-normal text-muted-foreground hover:text-sidebar-accent-foreground"
+              render={<Link to="/projects/new" />}
+            >
+              <Plus />
+              <span>Create project</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
