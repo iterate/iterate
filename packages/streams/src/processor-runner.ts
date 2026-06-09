@@ -25,10 +25,8 @@ export type ProcessorStorage<State> = {
   save(snapshot: Snapshot<State>): Promise<void> | void;
 };
 
-export type ProcessorStream = {
-  append(args: { streamPath?: string; event: StreamEventInput }): unknown;
-  appendBatch(args: { streamPath?: string; events: StreamEventInput[] }): unknown;
-};
+import type { ProcessorStream } from "./types.ts";
+export type { ProcessorStream } from "./types.ts";
 
 export function createProcessorRunner<Contract extends RunnableContract<Contract>, Deps>(args: {
   processor: Processor<Contract, Deps>;

@@ -1,6 +1,6 @@
 import { RpcTarget } from "capnweb";
 import type { z } from "zod";
-import type { ProcessorStream } from "./processor-runner.ts";
+import type { ProcessorStream } from "./types.ts";
 import type { StreamEvent } from "./shared/event.ts";
 import {
   assertObjectProcessorState,
