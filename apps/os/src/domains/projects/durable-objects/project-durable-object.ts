@@ -28,7 +28,7 @@ import {
   authenticateCapnwebAdmin,
   handleCapnwebAdminCookieRequest,
 } from "~/capnweb/admin-auth-cookie.ts";
-import { ProjectCapability } from "~/capnweb/project-capability.ts";
+import { ProjectCapability as CapnwebProjectCapability } from "~/capnweb/project-capability.ts";
 import {
   AGENTS_STREAM_PATH,
   type AgentDurableObject,
@@ -95,7 +95,7 @@ export type ProjectSummary = {
   hosts: string[];
 };
 
-export type ProjectCapabilityApi = Pick<
+export type ProjectCapability = Pick<
   ProjectDurableObject,
   | "afterAppend"
   | "callConfigWorkerFunction"
@@ -113,7 +113,7 @@ export type ProjectCapabilityApi = Pick<
   | "ingressUrl"
   | "provideCapability"
 > & {
-  getCapability(props?: { scopes?: unknown }): ProjectCapabilityApi;
+  getCapability(props?: { scopes?: unknown }): ProjectCapability;
 };
 
 export type CreateProjectInput = {
@@ -418,17 +418,18 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     };
   }
 
-  getCapability(_props: { scopes?: unknown } = {}): ProjectCapability {
+  getCapability(_props: { scopes?: unknown } = {}): CapnwebProjectCapability {
     const context = createCapnwebAppContext({
       ctx: this.ctx,
       env: this.env as unknown as Env,
       method: "CAPNWEB",
       path: "capnweb://project-capability",
     });
-    return new ProjectCapability({
+    return new CapnwebProjectCapability({
       context,
-      project: this,
-      projectId: this.structuredName.projectId,
+      project: () => this as unknown as ProjectCapability,
+      projectId: () => this.structuredName.projectId,
+      projectIdOrSlug: this.structuredName.projectId,
     });
   }
 

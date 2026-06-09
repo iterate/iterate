@@ -7,7 +7,6 @@ import {
 } from "../../domains/secrets/example-secret.ts";
 import { liftLocalProxies } from "../local-proxy-wrapper.js";
 import type { IterateContext } from "../iterate-context-capability.ts";
-import type { ProjectCapabilityApi } from "../../domains/projects/durable-objects/project-durable-object.ts";
 import {
   appendAndReadProjectStream,
   buildIterateConfigWorkerSource,
@@ -25,7 +24,6 @@ declare const __CAPNWEB_BROWSER_E2E__: {
 };
 
 const ROOT_ITERATE_CONTEXT_PREFIX = "/api/captnweb";
-const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
 
 describe("capnweb browser execution mode", () => {
   const createdProjectIds: string[] = [];
@@ -58,14 +56,14 @@ describe("capnweb browser execution mode", () => {
       slug: project.slug,
     });
 
-    using iterate = await withIterateFromBrowser({ ingressUrl: project.ingressUrl });
+    using iterate = await withIterateFromBrowser({ projectId: project.id });
     const marker = `browser-${uniqueSuffix()}`;
     const streamPath = `/capnweb/browser/${marker}`;
     const eventType = `events.iterate.com/capnweb/browser/${marker}`;
     const streamResult = await runBrowserCapnwebScript({
       ctx: iterate.ctx,
       script: appendAndReadProjectStream,
-      vars: { eventType, executionMode: "browser", marker, streamPath },
+      vars: { eventType, executionMode: "browser", marker, projectId: project.id, streamPath },
     });
     expect(streamResult.appended).toMatchObject({
       payload: { executionMode: "browser", marker },
@@ -88,6 +86,7 @@ describe("capnweb browser execution mode", () => {
         echoUrl: __CAPNWEB_BROWSER_E2E__.egressEchoUrl,
         executionMode: "browser",
         ingressUrl: project.ingressUrl,
+        projectId: project.id,
         secretKey: EXAMPLE_EGRESS_SECRET_KEY,
       },
     });
@@ -111,6 +110,7 @@ describe("capnweb browser execution mode", () => {
         dir: `/iterate-config-browser-${Date.now()}`,
         executionMode: "browser",
         marker: workerMarker,
+        projectId: project.id,
         workerSource: buildIterateConfigWorkerSource({ marker: workerMarker }),
       },
     });
@@ -123,7 +123,7 @@ describe("capnweb browser execution mode", () => {
       executionMode: "browser",
       project: { id: project.id, slug: project.slug },
       repoSlug: "iterate-config",
-      workspaceGitPath: "ctx.project.workspace.git",
+      workspaceGitPath: 'ctx.projects.get(projectId).workspaces.get("capnweb").git',
     });
 
     const workerCallResult = await runBrowserCapnwebScript({
@@ -133,6 +133,7 @@ describe("capnweb browser execution mode", () => {
         eventType: workerEventType,
         executionMode: "browser",
         marker: workerMarker,
+        projectId: project.id,
         streamPath: workerStreamPath,
       },
     });
@@ -178,20 +179,21 @@ async function withRootIterateFromBrowser(): Promise<RpcStub<IterateContext>> {
   return liftLocalProxies(newWebSocketRpcSession<IterateContext>(new WebSocket(wsUrl)));
 }
 
-async function withIterateFromBrowser(input: { ingressUrl: string }): Promise<{
+async function withIterateFromBrowser(input: { projectId: string }): Promise<{
   ctx: RpcStub<IterateContext>;
   [Symbol.dispose](): void;
 }> {
-  await setCapnwebAdminCookie(new URL(`${PROJECT_CAPNWEB_PATH}/admin-cookie`, input.ingressUrl));
-  const wsUrl = new URL(PROJECT_CAPNWEB_PATH, input.ingressUrl);
-  wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-  const project = newWebSocketRpcSession<ProjectCapabilityApi>(new WebSocket(wsUrl));
+  const root = await withRootIterateFromBrowser();
+  const projects = await root.projects;
+  const project = await projects.get(input.projectId);
   const ctxHandle = project.getIterateContext() as unknown as RpcStub<IterateContext>;
   return {
     ctx: liftLocalProxies(ctxHandle),
     [Symbol.dispose]() {
       ctxHandle[Symbol.dispose]?.();
       project[Symbol.dispose]?.();
+      projects[Symbol.dispose]?.();
+      root[Symbol.dispose]?.();
     },
   };
 }

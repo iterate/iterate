@@ -19,7 +19,7 @@ import {
 } from "~/db/queries/.generated/index.ts";
 import {
   getProjectDurableObjectName,
-  type ProjectCapabilityApi,
+  type ProjectCapability as ProjectDurableObjectCapability,
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
@@ -42,7 +42,7 @@ type ProjectWithIngressUrl = ReturnType<typeof toProject> & {
 };
 
 type ProjectDurableObjectContextClient = {
-  getCapability(props?: { scopes?: unknown }): ProjectCapabilityApi;
+  getCapability(props?: { scopes?: unknown }): ProjectDurableObjectCapability;
 };
 
 export class ProjectsCapability extends RpcTarget {
@@ -56,16 +56,31 @@ export class ProjectsCapability extends RpcTarget {
     super();
   }
 
-  get(projectId: string) {
-    const project = projectDurableObject(
-      this.props.context,
-      projectId,
-    ) as unknown as ProjectDurableObjectContextClient;
+  get(projectIdOrSlug: string) {
     return new ProjectCapability({
       context: this.props.context,
       iterateContextProps: this.props.iterateContextProps,
-      project: project.getCapability({ scopes: { projects: [projectId] } }),
-      projectId,
+      project: async () => {
+        const row = await requireProject({
+          activeOrganization: this.props.activeOrganization,
+          context: this.props.context,
+          projectIdOrSlug,
+        });
+        const project = projectDurableObject(
+          this.props.context,
+          row.id,
+        ) as unknown as ProjectDurableObjectContextClient;
+        return project.getCapability({ scopes: { projects: [row.id] } });
+      },
+      projectId: async () =>
+        (
+          await requireProject({
+            activeOrganization: this.props.activeOrganization,
+            context: this.props.context,
+            projectIdOrSlug,
+          })
+        ).id,
+      projectIdOrSlug,
     });
   }
 
@@ -227,13 +242,22 @@ export async function toProjectWithIngressUrl(context: AppContext, row: ProjectR
 export async function requireProject(input: {
   activeOrganization?: ActiveOrganizationAuth;
   context: AppContext;
-  projectId: string;
+  projectId?: string;
+  projectIdOrSlug?: string;
 }): Promise<ProjectRow> {
-  const project = await getProjectById(input.context.db, { id: input.projectId });
+  const projectIdOrSlug = input.projectIdOrSlug ?? input.projectId;
+  if (!projectIdOrSlug) {
+    throw new ORPCError("BAD_REQUEST", { message: "Project ID or slug is required" });
+  }
+
+  const project =
+    projectIdOrSlug.startsWith("proj_") || isValidTypeId(projectIdOrSlug, "proj")
+      ? await getProjectById(input.context.db, { id: projectIdOrSlug })
+      : await getProjectBySlug(input.context.db, { slug: projectIdOrSlug });
 
   if (!project) {
     throw new ORPCError("NOT_FOUND", {
-      message: `Project ${input.projectId} not found`,
+      message: `Project ${projectIdOrSlug} not found`,
     });
   }
 
@@ -243,13 +267,13 @@ export async function requireProject(input: {
     const permission = await getProjectPermission(input.context.db, {
       principalId: input.activeOrganization.orgId,
       principalType: "clerk_organization",
-      projectId: input.projectId,
+      projectId: project.id,
     });
     if (permission) return project;
   }
 
   throw new ORPCError("FORBIDDEN", {
-    message: `Project ${input.projectId} not found`,
+    message: `Project ${projectIdOrSlug} not found`,
   });
 }
 

@@ -17,7 +17,7 @@ async function main() {
   const session = await connectNodeIterateContext({ projectId: flags["project-id"] });
 
   if (flags["project-id"]) {
-    globalThis.fetch = (...args) => projectEgressFetch(session.ctx, ...args);
+    globalThis.fetch = (...args) => projectEgressFetch(session.ctx, flags["project-id"], ...args);
   }
 
   const server = repl.start({

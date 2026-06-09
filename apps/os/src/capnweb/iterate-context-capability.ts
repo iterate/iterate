@@ -10,9 +10,9 @@ import {
 import localProxyWrapperSource from "./local-proxy-wrapper.js?raw";
 import type { ProjectCapability, ProjectWorkerCapability } from "./project-capability.ts";
 import { ProjectsCapability } from "./projects-capability.ts";
-import type { ProjectReposCapability } from "./repos-capability.ts";
-import type { ProjectStreamsCapability } from "./streams-capability.ts";
-import type { ProjectWorkspaceCapability } from "./workspace-capability.ts";
+import { RootReposCapability } from "./repos-capability.ts";
+import { RootStreamsCapability } from "./streams-capability.ts";
+import { RootWorkspacesCapability } from "./workspace-capability.ts";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import { normalizeActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
@@ -87,7 +87,10 @@ export class IterateContextEntrypoint extends WorkerEntrypoint<Env, IterateConte
 export class IterateCapability extends RpcTarget {
   readonly #runtime: IterateContextRuntime;
   readonly #dynamicWorkerTargets = new Map<string, unknown>();
+  #repos?: RootReposCapability;
   #project?: ProjectCapability;
+  #streams?: RootStreamsCapability;
+  #workspaces?: RootWorkspacesCapability;
 
   constructor(runtime: IterateContextRuntime) {
     super();
@@ -105,16 +108,29 @@ export class IterateCapability extends RpcTarget {
     return (this.#project ??= this.projects.get(requireRuntimeProjectId(this.#runtime)));
   }
 
-  get repos(): ProjectReposCapability {
-    return this.project.repos;
+  get repos(): RootReposCapability {
+    return (this.#repos ??= new RootReposCapability({
+      context: this.#runtime.context,
+      scopes: this.#runtime.props.scopes,
+    }));
   }
 
-  get streams(): ProjectStreamsCapability {
-    return this.project.streams;
+  get streams(): RootStreamsCapability {
+    return (this.#streams ??= new RootStreamsCapability({
+      context: this.#runtime.context,
+      scopes: this.#runtime.props.scopes,
+    }));
   }
 
-  get workspace(): ProjectWorkspaceCapability {
+  get workspace() {
     return this.project.workspace;
+  }
+
+  get workspaces(): RootWorkspacesCapability {
+    return (this.#workspaces ??= new RootWorkspacesCapability({
+      context: this.#runtime.context,
+      scopes: this.#runtime.props.scopes,
+    }));
   }
 
   get worker(): ProjectWorkerCapability {

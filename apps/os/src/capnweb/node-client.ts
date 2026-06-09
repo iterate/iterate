@@ -2,7 +2,7 @@ import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
 import { liftLocalProxies } from "./local-proxy-wrapper.js";
 import type { IterateContext } from "./iterate-context-capability.ts";
-import type { ProjectCapabilityApi } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import type { ProjectCapability } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 const ROOT_ITERATE_CONTEXT_PREFIX = "/api/captnweb";
 const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
@@ -42,16 +42,17 @@ export async function connectNodeIterateContext(input: {
 
 export async function runWithProjectEgressFetch<T>(
   ctx: RpcStub<IterateContext>,
+  projectId: string | undefined,
   run: () => T | Promise<T>,
 ): Promise<T> {
   // This is the Node-side version of codemode's outbound gateway. It gives
   // local CLI/REPL snippets the same authoring model as /run and real codemode
-  // workers: bare fetch(...) goes through ctx.project.egressFetch so project
-  // secret references are substituted. Root-only contexts that call fetch()
-  // fail at ctx.project, which is the right signal: there is no project egress
-  // authority in scope.
+  // workers: bare fetch(...) goes through ctx.projects.get(projectId).egressFetch
+  // so project secret references are substituted. Root-only contexts that call
+  // fetch() fail before egress, which is the right signal: there is no project
+  // egress authority in scope.
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (...args) => projectEgressFetch(ctx, ...args);
+  globalThis.fetch = (...args) => projectEgressFetch(ctx, projectId, ...args);
   try {
     return await run();
   } finally {
@@ -61,11 +62,16 @@ export async function runWithProjectEgressFetch<T>(
 
 export async function projectEgressFetch(
   ctx: RpcStub<IterateContext>,
+  projectId: string | undefined,
   input: RequestInfo | URL,
   init?: RequestInit,
 ) {
-  using project = await ctx.project;
-  return await project.egressFetch(new Request(input, init));
+  if (!projectId) {
+    throw new Error("A project-scoped IterateCapability is required for global fetch.");
+  }
+  using projects = await ctx.projects;
+  using project = await projects.get(projectId);
+  return (await project.egressFetch(new Request(input, init))) as Response;
 }
 
 async function projectContext(input: {
@@ -84,7 +90,7 @@ async function projectContext(input: {
   });
   const socket = new WebSocket(wsUrl.toString(), { headers });
   input.sockets.push(socket);
-  const project = newWebSocketRpcSession<ProjectCapabilityApi>(
+  const project = newWebSocketRpcSession<ProjectCapability>(
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
   return liftLocalProxies(project.getIterateContext() as unknown as RpcStub<IterateContext>);

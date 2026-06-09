@@ -1,51 +1,60 @@
 import { RpcTarget } from "cloudflare:workers";
 import { ProjectReposCapability } from "./repos-capability.ts";
 import { ProjectStreamsCapability } from "./streams-capability.ts";
-import { ProjectWorkspaceCapability } from "./workspace-capability.ts";
+import { ProjectWorkspaceCapability, ProjectWorkspacesCapability } from "./workspace-capability.ts";
 import type { IterateContextProps } from "./iterate-context-capability.ts";
 import type { AppContext } from "~/context.ts";
-import type { ProjectCapabilityApi } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import type { ProjectCapability as ProjectDurableObjectCapability } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 export class ProjectCapability extends RpcTarget {
   #connections?: ProjectConnectionsCapability;
   #repos?: ProjectReposCapability;
   #streams?: ProjectStreamsCapability;
   #workspace?: ProjectWorkspaceCapability;
+  #workspaces?: ProjectWorkspacesCapability;
   #worker?: ProjectWorkerCapability;
 
   constructor(
     private readonly input: {
       context: AppContext;
       iterateContextProps?: IterateContextProps;
-      project: ProjectCapabilityApi;
-      projectId: string;
+      project: () => Promise<ProjectDurableObjectCapability> | ProjectDurableObjectCapability;
+      projectId: () => Promise<string> | string;
+      projectIdOrSlug: string;
     },
   ) {
     super();
   }
 
   get connections(): ProjectConnectionsCapability {
-    return (this.#connections ??= new ProjectConnectionsCapability(this.input.project));
+    return (this.#connections ??= new ProjectConnectionsCapability(() => this.project()));
   }
 
   get repos(): ProjectReposCapability {
     return (this.#repos ??= new ProjectReposCapability({
       context: this.input.context,
-      projectId: this.input.projectId,
+      projectId: () => this.projectId(),
     }));
   }
 
   get streams(): ProjectStreamsCapability {
     return (this.#streams ??= new ProjectStreamsCapability({
       context: this.input.context,
-      projectId: this.input.projectId,
+      projectId: () => this.projectId(),
     }));
   }
 
   get workspace(): ProjectWorkspaceCapability {
     return (this.#workspace ??= new ProjectWorkspaceCapability({
       context: this.input.context,
-      projectId: this.input.projectId,
+      projectId: () => this.projectId(),
+    }));
+  }
+
+  get workspaces(): ProjectWorkspacesCapability {
+    return (this.#workspaces ??= new ProjectWorkspacesCapability({
+      context: this.input.context,
+      projectId: () => this.projectId(),
     }));
   }
 
@@ -62,85 +71,93 @@ export class ProjectCapability extends RpcTarget {
       // below rewrites scopes to this one project and only carries mounts
       // forward.
       iterateContextProps: this.input.iterateContextProps,
-      project: this.input.project,
-      projectId: this.input.projectId,
+      project: () => this.project(),
+      projectId: () => this.projectId(),
     }));
   }
 
-  afterAppend(...args: Parameters<ProjectCapabilityApi["afterAppend"]>) {
-    return this.input.project.afterAppend(...args);
+  afterAppend(...args: any[]) {
+    return this.project().then((project) => (project.afterAppend as any)(...args));
   }
 
-  callConfigWorkerFunction(...args: Parameters<ProjectCapabilityApi["callConfigWorkerFunction"]>) {
-    return this.input.project.callConfigWorkerFunction(...args);
+  callConfigWorkerFunction(...args: any[]) {
+    return this.project().then((project) => (project.callConfigWorkerFunction as any)(...args));
   }
 
-  checkAccess(...args: Parameters<ProjectCapabilityApi["checkAccess"]>) {
-    return this.input.project.checkAccess(...args);
+  checkAccess(...args: any[]) {
+    return this.project().then((project) => (project.checkAccess as any)(...args));
   }
 
-  createProject(...args: Parameters<ProjectCapabilityApi["createProject"]>) {
-    return this.input.project.createProject(...args);
+  createProject(...args: any[]) {
+    return this.project().then((project) => (project.createProject as any)(...args));
   }
 
-  describe(...args: Parameters<ProjectCapabilityApi["describe"]>) {
-    return this.input.project.describe(...args);
+  describe(...args: any[]) {
+    return this.project().then((project) => (project.describe as any)(...args));
   }
 
-  egressFetch(...args: Parameters<ProjectCapabilityApi["egressFetch"]>) {
-    return this.input.project.egressFetch(...args);
+  egressFetch(...args: any[]) {
+    return this.project().then((project) => (project.egressFetch as any)(...args));
   }
 
-  fetch(...args: Parameters<ProjectCapabilityApi["fetch"]>) {
-    return this.input.project.fetch(...args);
+  fetch(...args: any[]) {
+    return this.project().then((project) => (project.fetch as any)(...args));
   }
 
-  getCapability(...args: Parameters<ProjectCapabilityApi["getCapability"]>) {
-    return this.input.project.getCapability(...args);
+  getCapability(...args: any[]) {
+    return this.project().then((project) => (project.getCapability as any)(...args));
   }
 
-  getConfigWorker(...args: Parameters<ProjectCapabilityApi["getConfigWorker"]>) {
-    return this.input.project.getConfigWorker(...args);
+  getConfigWorker(...args: any[]) {
+    return this.project().then((project) => (project.getConfigWorker as any)(...args));
   }
 
-  getConnection(...args: Parameters<ProjectCapabilityApi["getConnection"]>) {
-    return this.input.project.getConnection(...args);
+  getConnection(...args: any[]) {
+    return this.project().then((project) => (project.getConnection as any)(...args));
   }
 
-  getIterateContext(...args: Parameters<ProjectCapabilityApi["getIterateContext"]>) {
-    return this.input.project.getIterateContext(...args);
+  getIterateContext(...args: any[]) {
+    return this.project().then((project) => (project.getIterateContext as any)(...args));
   }
 
-  getProjectLifecycleRunnerState(
-    ...args: Parameters<ProjectCapabilityApi["getProjectLifecycleRunnerState"]>
-  ) {
-    return this.input.project.getProjectLifecycleRunnerState(...args);
+  getProjectLifecycleRunnerState(...args: any[]) {
+    return this.project().then((project) =>
+      (project.getProjectLifecycleRunnerState as any)(...args),
+    );
   }
 
-  getSummary(...args: Parameters<ProjectCapabilityApi["getSummary"]>) {
-    return this.input.project.getSummary(...args);
+  getSummary(...args: any[]) {
+    return this.project().then((project) => (project.getSummary as any)(...args));
   }
 
-  ingressFetch(...args: Parameters<ProjectCapabilityApi["ingressFetch"]>) {
-    return this.input.project.ingressFetch(...args);
+  ingressFetch(...args: any[]) {
+    return this.project().then((project) => (project.ingressFetch as any)(...args));
   }
 
-  ingressUrl(...args: Parameters<ProjectCapabilityApi["ingressUrl"]>) {
-    return this.input.project.ingressUrl(...args);
+  ingressUrl(...args: any[]) {
+    return this.project().then((project) => (project.ingressUrl as any)(...args));
   }
 
-  provideCapability(...args: Parameters<ProjectCapabilityApi["provideCapability"]>) {
-    return this.input.project.provideCapability(...args);
+  provideCapability(...args: any[]) {
+    return this.project().then((project) => (project.provideCapability as any)(...args));
+  }
+
+  private async project() {
+    return await this.input.project();
+  }
+
+  private async projectId() {
+    return await this.input.projectId();
   }
 }
 
 export class ProjectConnectionsCapability extends RpcTarget {
-  constructor(private readonly project: ProjectCapabilityApi) {
+  constructor(private readonly getProject: () => Promise<ProjectDurableObjectCapability>) {
     super();
   }
 
   get(connectionKey: string) {
-    return this.project.getConnection(connectionKey);
+    return this.getProject().then((project) => project.getConnection(connectionKey));
   }
 }
 
@@ -148,8 +165,8 @@ export class ProjectWorkerCapability extends RpcTarget {
   constructor(
     private readonly input: {
       iterateContextProps?: IterateContextProps;
-      project: ProjectCapabilityApi;
-      projectId: string;
+      project: () => Promise<ProjectDurableObjectCapability>;
+      projectId: () => Promise<string>;
     },
   ) {
     super();
@@ -185,12 +202,14 @@ export class ProjectWorkerCapability extends RpcTarget {
           return Reflect.get(target, prop, receiver);
         }
         return async (...args: unknown[]) => {
-          return await target.input.project.callConfigWorkerFunction({
+          const projectId = await target.input.projectId();
+          const project = await target.input.project();
+          return await project.callConfigWorkerFunction({
             args,
             functionName: prop,
             iterateContextProps: projectConfigWorkerProps({
               iterateContextProps: target.input.iterateContextProps,
-              projectId: target.input.projectId,
+              projectId,
             }),
           });
         };
@@ -199,7 +218,7 @@ export class ProjectWorkerCapability extends RpcTarget {
   }
 
   async fetch(request: Request) {
-    return await this.input.project.fetch(request);
+    return await (await this.input.project()).fetch(request);
   }
 }
 

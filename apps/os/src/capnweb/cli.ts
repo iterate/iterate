@@ -21,7 +21,7 @@ async function main() {
       ctx: RpcStub<IterateContext>;
       vars: Record<string, unknown>;
     }) => unknown;
-    const result = await runWithProjectEgressFetch(session.ctx, () =>
+    const result = await runWithProjectEgressFetch(session.ctx, flags["project-id"], () =>
       fn({ ctx: session.ctx, vars: parseJsonObject(flags.vars ?? "{}") }),
     );
     console.log(JSON.stringify(result));

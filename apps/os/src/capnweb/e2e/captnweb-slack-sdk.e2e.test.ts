@@ -11,7 +11,7 @@ import {
   uniqueSuffix,
 } from "../../../e2e/test-support/os-client.ts";
 import { createPublicTunnel } from "../../../e2e/test-support/create-test-project.ts";
-import type { ProjectCapabilityApi } from "../../domains/projects/durable-objects/project-durable-object.ts";
+import type { ProjectCapability } from "../../domains/projects/durable-objects/project-durable-object.ts";
 import type { IterateContext } from "../iterate-context-capability.ts";
 import { liftLocalProxies, localProxyCaller } from "../local-proxy-wrapper.js";
 
@@ -73,11 +73,12 @@ describe("capnweb Slack SDK mount proof", () => {
     });
 
     const connectionKey = `slack-sdk-${uniqueSuffix()}`;
-    const workerSource = slackConfigWorkerSource({ connectionKey });
+    const workerSource = slackConfigWorkerSource({ connectionKey, projectId: project.id });
     using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
 
-    await runCodemodeWithProjectEgressFetch(iterate.ctx, async () => {
-      using projectContext = await iterate.ctx.project;
+    await runCodemodeWithProjectEgressFetch(iterate.ctx, project.id, async () => {
+      using projects = await iterate.ctx.projects;
+      using projectContext = await projects.get(project.id);
       await projectContext.provideCapability({
         connectionKey,
         rpcTarget: new SlackSdkRpcTarget({
@@ -89,6 +90,7 @@ describe("capnweb Slack SDK mount proof", () => {
       await updateIterateConfigWorker({
         ctx: iterate.ctx,
         dir: `/iterate-config-slack-${Date.now()}`,
+        projectId: project.id,
         workerSource,
       });
 
@@ -196,7 +198,7 @@ function requestBody(input: unknown): BodyInit | undefined {
   return JSON.stringify(input);
 }
 
-function slackConfigWorkerSource(input: { connectionKey: string }) {
+function slackConfigWorkerSource(input: { connectionKey: string; projectId: string }) {
   return dedent`
     import { WorkerEntrypoint } from "cloudflare:workers";
     import { liftLocalProxies } from "./local-proxy-wrapper.js";
@@ -210,7 +212,8 @@ function slackConfigWorkerSource(input: { connectionKey: string }) {
               target: {
                 type: "ctx",
                 call: [
-                  "project",
+                  "projects",
+                  { method: "get", args: [${JSON.stringify(input.projectId)}] },
                   "connections",
                   { method: "get", args: [${JSON.stringify(input.connectionKey)}] },
                   { method: "sdk" },
@@ -243,11 +246,14 @@ function slackConfigWorkerSource(input: { connectionKey: string }) {
 async function updateIterateConfigWorker(input: {
   ctx: RpcStub<IterateContext>;
   dir: string;
+  projectId: string;
   workerSource: string;
 }) {
-  using project = await input.ctx.project;
+  using projects = await input.ctx.projects;
+  using project = await projects.get(input.projectId);
   using repos = await project.repos;
-  using workspace = await project.workspace;
+  using workspaces = await project.workspaces;
+  using workspace = await workspaces.get("capnweb");
   using git = await workspace.git;
   const repo = await repos.ensureIterateConfigInfo({ projectSlug: null });
 
@@ -275,10 +281,11 @@ async function updateIterateConfigWorker(input: {
 
 async function runCodemodeWithProjectEgressFetch<T>(
   ctx: RpcStub<IterateContext>,
+  projectId: string,
   run: () => T | Promise<T>,
 ) {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (...args) => projectEgressFetch(ctx, ...args);
+  globalThis.fetch = (...args) => projectEgressFetch(ctx, projectId, ...args);
   try {
     return await run();
   } finally {
@@ -288,11 +295,13 @@ async function runCodemodeWithProjectEgressFetch<T>(
 
 async function projectEgressFetch(
   ctx: RpcStub<IterateContext>,
+  projectId: string,
   input: RequestInfo | URL,
   init?: RequestInit,
 ) {
-  using project = await ctx.project;
-  return await project.egressFetch(new Request(input, init));
+  using projects = await ctx.projects;
+  using project = await projects.get(projectId);
+  return (await project.egressFetch(new Request(input, init))) as Response;
 }
 
 function withRootIterateContextFromNode(input: {
@@ -319,7 +328,7 @@ function withIterateFromNode(input: { auth: RootAccessAuth; ingressUrl: string }
     path: PROJECT_CAPNWEB_PATH,
   });
   const socket = new WebSocket(wsUrl.toString(), { headers });
-  const project = newWebSocketRpcSession<ProjectCapabilityApi>(
+  const project = newWebSocketRpcSession<ProjectCapability>(
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
   const ctxHandle = project.getIterateContext() as unknown as RpcStub<IterateContext>;

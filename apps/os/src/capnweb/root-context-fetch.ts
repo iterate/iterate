@@ -3,6 +3,7 @@ import { authenticateCapnwebAdmin, handleCapnwebAdminCookieRequest } from "./adm
 import {
   createIterateContext,
   createProjectsCapability,
+  singleProjectIdFromScopes,
   type IterateContextProps,
 } from "./iterate-context-capability.ts";
 import localProxyWrapperSource from "./local-proxy-wrapper.js?raw";
@@ -95,7 +96,11 @@ function appendAuthHeaders(headers: Headers, authHeaders: Headers) {
   if (setCookie) headers.append("set-cookie", setCookie);
 }
 
-function rootRunWorkerSrc(input: { dynamicMountRoots: string[]; functionSource: string }) {
+function rootRunWorkerSrc(input: {
+  dynamicMountRoots: string[];
+  functionSource: string;
+  projectId?: string;
+}) {
   return /* js */ `
   import { WorkerEntrypoint } from "cloudflare:workers";
   import { liftLocalProxies, localProxyCaller } from "./local-proxy-wrapper.js";
@@ -139,12 +144,16 @@ function rootRunWorkerSrc(input: { dynamicMountRoots: string[]; functionSource: 
     });
   }
 
-  async function projectEgressFetch(ctx, ...args) {
-    using project = await ctx.project;
+  async function projectEgressFetch(ctx, projectId, ...args) {
+    if (!projectId) {
+      throw new Error("A project-scoped IterateCapability is required for global fetch.");
+    }
+    using projects = await ctx.projects;
+    using project = await projects.get(projectId);
     return await project.egressFetch(new Request(args[0], args[1]));
   }
 
-  async function runWithProjectEgressFetch(ctx, run) {
+  async function runWithProjectEgressFetch(ctx, projectId, run) {
     // Dynamic Workers normally have a host-controlled outbound fetch gate. The
     // /run worker is our tiny codemode-shaped harness, so it installs the same
     // rule at the runner boundary: bare fetch() goes through the Project Durable
@@ -152,9 +161,10 @@ function rootRunWorkerSrc(input: { dynamicMountRoots: string[]; functionSource: 
     //
     // This is intentionally scoped to the snippet invocation and restored in a
     // finally block. Built-in project ingress fetch remains available as
-    // ctx.project.fetch(...); this hook is only the global outbound fetch.
+    // ctx.projects.get(projectId).fetch(...); this hook is only the global
+    // outbound fetch.
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (...args) => projectEgressFetch(ctx, ...args);
+    globalThis.fetch = (...args) => projectEgressFetch(ctx, projectId, ...args);
     try {
       return await run();
     } finally {
@@ -166,7 +176,7 @@ function rootRunWorkerSrc(input: { dynamicMountRoots: string[]; functionSource: 
     async run(vars) {
       try {
         const ctx = contextForRun(this, await this.env.ITERATE.context);
-        const result = await runWithProjectEgressFetch(ctx, () =>
+        const result = await runWithProjectEgressFetch(ctx, ${JSON.stringify(input.projectId)}, () =>
           snippet({
             ctx,
             vars,
@@ -230,6 +240,7 @@ async function handleRootRunLeg(input: { context: AppContext; env: Env; request:
       "worker.js": rootRunWorkerSrc({
         dynamicMountRoots,
         functionSource: body.functionSource,
+        projectId: singleProjectIdFromScopes(props.scopes) ?? undefined,
       }),
       "local-proxy-wrapper.js": localProxyWrapperSource,
     },
