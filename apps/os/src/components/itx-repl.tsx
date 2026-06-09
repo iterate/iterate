@@ -20,13 +20,13 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
-import type { BrowserReplEntry, BrowserReplExample } from "~/capnweb/browser-repl.ts";
+import type { BrowserReplEntry, BrowserReplExample } from "~/itx/browser-repl.ts";
 
 const REPL_SOURCE_PATH = "/repl.ts";
 const replCodeBlockClassName =
   "min-h-0 [&_.cm-content]:font-mono [&_.cm-line]:px-0 [&_.cm-scroller]:font-mono";
 
-export interface CapnwebReplProps {
+export interface ItxReplProps {
   canRun: boolean;
   code: string;
   entries: BrowserReplEntry[];
@@ -40,7 +40,7 @@ export interface CapnwebReplProps {
   status: string;
 }
 
-export function CapnwebRepl({
+export function ItxRepl({
   canRun,
   code,
   entries,
@@ -52,7 +52,7 @@ export function CapnwebRepl({
   onSetExamplesOpen,
   selectAllSignal,
   status,
-}: CapnwebReplProps) {
+}: ItxReplProps) {
   const typeScriptExtensions = useReplTypeScriptExtensions({
     code,
     path: REPL_SOURCE_PATH,
@@ -202,7 +202,7 @@ function useReplTypeScriptExtensions(input: { code: string; path: string }) {
 
       if (disposed) return;
 
-      innerWorker = new Worker(new URL("./capnweb-repl-typescript.worker.ts", import.meta.url), {
+      innerWorker = new Worker(new URL("./itx-repl-typescript.worker.ts", import.meta.url), {
         type: "module",
       });
       const remoteWorker = comlinkModule.wrap<WorkerShape>(innerWorker);
@@ -238,7 +238,7 @@ function useReplTypeScriptExtensions(input: { code: string; path: string }) {
 
     void initializeTypeScriptExtensions().catch((error: unknown) => {
       if (disposed) return;
-      console.error("[capnweb-repl] Failed to initialize TypeScript worker", error);
+      console.error("[itx-repl] Failed to initialize TypeScript worker", error);
     });
 
     return () => {

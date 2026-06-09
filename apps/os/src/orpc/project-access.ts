@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { getAccessibleAuthProject } from "~/capnweb/projects-capability.ts";
+import { getAccessibleAuthProject } from "~/domains/projects/project-directory.ts";
 import type { AppContext } from "~/context.ts";
 import { getProjectById, getProjectBySlug } from "~/db/queries/.generated/index.ts";
 import {

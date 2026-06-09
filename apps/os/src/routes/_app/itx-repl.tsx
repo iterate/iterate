@@ -1,3 +1,8 @@
+// The browser itx REPL: a Cap'n Web session straight from the browser tab to
+// /api/itx, with `itx` in scope. Because itx is symmetric, anything you can
+// do here you can do from Node, a worker cap, or the config worker — and the
+// browser can PROVIDE live capabilities too (see the examples).
+
 import { useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
@@ -6,32 +11,36 @@ import {
   DEFAULT_BROWSER_REPL_CODE,
   runBrowserReplEntry,
   type BrowserReplEntry,
-} from "~/capnweb/browser-repl.ts";
-import type { IterateContext } from "~/capnweb/iterate-context-capability.ts";
-import { CapnwebRepl } from "~/components/capnweb-repl.tsx";
+} from "~/itx/browser-repl.ts";
+import type { Itx } from "~/itx/handle.ts";
+import { ItxRepl } from "~/components/itx-repl.tsx";
 
-export const Route = createFileRoute("/_app/capnweb-repl")({
+export const Route = createFileRoute("/_app/itx-repl")({
   staticData: {
     breadcrumb: "Repl",
   },
-  component: CapnwebReplPage,
+  component: ItxReplPage,
 });
 
 export type BrowserReplSession = {
   close(): void;
-  ctx: RpcStub<IterateContext>;
+  itx: RpcStub<Itx>;
 };
 
 export type BrowserReplSessionFactory = () => BrowserReplSession | Promise<BrowserReplSession>;
 
-export function createRootBrowserReplSession(): BrowserReplSession {
-  const wsUrl = new URL("/api/captnweb", window.location.href);
+/** Connect to a context: the global one by default, or a project's. */
+export function createBrowserReplSession(context?: string): BrowserReplSession {
+  const wsUrl = new URL(
+    context ? `/api/itx/${encodeURIComponent(context)}` : "/api/itx",
+    window.location.href,
+  );
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(wsUrl);
-  const rpc = newWebSocketRpcSession<IterateContext>(socket);
+  const rpc = newWebSocketRpcSession<Itx>(socket);
 
   return {
-    ctx: rpc,
+    itx: rpc,
     close() {
       rpc[Symbol.dispose]?.();
       socket.close();
@@ -39,8 +48,8 @@ export function createRootBrowserReplSession(): BrowserReplSession {
   };
 }
 
-export function CapnwebReplPage({
-  connectSession = createRootBrowserReplSession,
+export function ItxReplPage({
+  connectSession = () => createBrowserReplSession(),
   initialCode = DEFAULT_BROWSER_REPL_CODE,
   scope,
 }: {
@@ -49,7 +58,7 @@ export function CapnwebReplPage({
   scope?: Record<string, unknown>;
 }) {
   const [code, setCode] = useState(initialCode);
-  const [ctx, setCtx] = useState<RpcStub<IterateContext> | null>(null);
+  const [itx, setItx] = useState<RpcStub<Itx> | null>(null);
   const [status, setStatus] = useState("Connecting...");
   const [entries, setEntries] = useState<BrowserReplEntry[]>([]);
   const [examplesOpen, setExamplesOpen] = useState(false);
@@ -61,7 +70,7 @@ export function CapnwebReplPage({
 
   useEffect(() => {
     const globals = globalThis as typeof globalThis & {
-      ctx?: RpcStub<IterateContext>;
+      itx?: RpcStub<Itx>;
       env?: object;
     };
     let closed = false;
@@ -75,9 +84,9 @@ export function CapnwebReplPage({
         }
 
         session = connectedSession;
-        globals.ctx = connectedSession.ctx;
+        globals.itx = connectedSession.itx;
         globals.env = envRef.current;
-        setCtx(() => connectedSession.ctx);
+        setItx(() => connectedSession.itx);
         setStatus("Connected");
       })
       .catch((error: unknown) => {
@@ -87,7 +96,7 @@ export function CapnwebReplPage({
 
     return () => {
       closed = true;
-      delete globals.ctx;
+      delete globals.itx;
       delete globals.env;
       session?.close();
     };
@@ -95,12 +104,12 @@ export function CapnwebReplPage({
 
   async function run() {
     const trimmedCode = code.trim();
-    if (!ctx || trimmedCode === "") return;
+    if (!itx || trimmedCode === "") return;
     setStatus("Running...");
     const entry = await runBrowserReplEntry({
       code: trimmedCode,
-      ctx,
       env: envRef.current,
+      itx,
       scope: scopeRef.current,
     });
     setEntries((current) => [...current, entry]);
@@ -114,8 +123,8 @@ export function CapnwebReplPage({
   }
 
   return (
-    <CapnwebRepl
-      canRun={Boolean(ctx) && status !== "Running..." && code.trim() !== ""}
+    <ItxRepl
+      canRun={Boolean(itx) && status !== "Running..." && code.trim() !== ""}
       code={code}
       entries={entries}
       examples={BROWSER_REPL_EXAMPLES}

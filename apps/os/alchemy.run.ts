@@ -18,10 +18,6 @@ import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import type { OutboundMcpFromOurClientCapability } from "./src/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 import type { StreamProcessorRunner } from "./src/domains/streams/durable-objects/stream-processor-runner.ts";
-import type {
-  FakeProjectDurableObject,
-  FakeStreamDurableObject,
-} from "./src/domains/capability-prototype/durable-object.ts";
 
 const env = {
   ...process.env,
@@ -100,14 +96,6 @@ const workspace = DurableObjectNamespace<WorkspaceDurableObject>("workspace", {
   className: "WorkspaceDurableObject",
   sqlite: true,
 });
-const fakeProject = DurableObjectNamespace<FakeProjectDurableObject>("fake-project", {
-  className: "FakeProjectDurableObject",
-  sqlite: true,
-});
-const fakeStream = DurableObjectNamespace<FakeStreamDurableObject>("fake-stream", {
-  className: "FakeStreamDurableObject",
-  sqlite: true,
-});
 const agent = DurableObjectNamespace<AgentDurableObject>("agent", {
   className: "AgentDurableObject",
   sqlite: true,
@@ -142,8 +130,6 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     AGENT: agent,
     ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
     PROJECT: project,
-    FAKE_PROJECT: fakeProject,
-    FAKE_STREAM: fakeStream,
     SLACK_AGENT: slackAgent,
     SLACK_INTEGRATION: slackIntegration,
     REPO: repo,

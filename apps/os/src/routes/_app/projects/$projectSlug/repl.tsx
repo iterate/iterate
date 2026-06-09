@@ -1,45 +1,31 @@
 import { useMemo } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import {
-  CapnwebReplPage,
-  createRootBrowserReplSession,
-  type BrowserReplSession,
+  createBrowserReplSession,
+  ItxReplPage,
   type BrowserReplSessionFactory,
-} from "~/routes/_app/capnweb-repl.tsx";
+} from "~/routes/_app/itx-repl.tsx";
 
-const PROJECT_REPL_INITIAL_CODE = "await ctx.project.describe()";
+const PROJECT_REPL_INITIAL_CODE = "await itx.describe()";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repl")({
   staticData: {
     breadcrumb: "Repl",
   },
-  component: ProjectCapnwebReplPage,
+  component: ProjectItxReplPage,
 });
 
-function ProjectCapnwebReplPage() {
+function ProjectItxReplPage() {
   const { project } = Route.useRouteContext();
+  // A project repl is just an itx session on that project's context — the
+  // connect endpoint does the narrowing, the page is otherwise identical.
   const connectSession = useMemo<BrowserReplSessionFactory>(
-    () => async () => {
-      const rootSession = createRootBrowserReplSession();
-      try {
-        const projectContext = await rootSession.ctx.projects.get(project.id).getIterateContext();
-
-        return {
-          close: rootSession.close,
-          // The project-scoped IterateContext arrives as a Workers RPC stub
-          // whose static type is unknown; the REPL only needs the ctx shape.
-          ctx: projectContext as BrowserReplSession["ctx"],
-        };
-      } catch (error) {
-        rootSession.close();
-        throw error;
-      }
-    },
+    () => () => createBrowserReplSession(project.id),
     [project.id],
   );
 
   return (
-    <CapnwebReplPage
+    <ItxReplPage
       connectSession={connectSession}
       initialCode={PROJECT_REPL_INITIAL_CODE}
       scope={{ projectId: project.id }}

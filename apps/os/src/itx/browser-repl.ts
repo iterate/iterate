@@ -1,4 +1,4 @@
-export const DEFAULT_BROWSER_REPL_CODE = "await ctx.projects.list({ limit: 5 })";
+export const DEFAULT_BROWSER_REPL_CODE = "await itx.projects.list({ limit: 5 })";
 
 export type BrowserReplExample = {
   code: string;
@@ -21,15 +21,15 @@ export type BrowserReplEntry = {
 export const BROWSER_REPL_EXAMPLES: BrowserReplExample[] = [
   {
     id: "provide-alert-capability",
-    title: "Provide and call a project capability",
+    title: "Provide and call a live capability",
     description:
-      "Registers a browser-owned RpcTarget with a project, then immediately calls it back through ctx.projects.get(...).connections.",
+      "Registers a browser-owned RpcTarget as a live capability on a project, then calls it back through the itx fallthrough — itx.answer.run().",
     code: `
-const projectPage = await ctx.projects.list({ limit: 1 });
+const projectPage = await itx.projects.list({ limit: 1 });
 const selectedProjectId =
   typeof projectId === "string" ? projectId : projectPage.projects[0]?.id;
 if (!selectedProjectId) throw new Error("Create a project before running this snippet.");
-const project = ctx.projects.get(selectedProjectId);
+const project = await itx.projects.get(selectedProjectId);
 
 class AnswerCapability extends RpcTarget {
   async run() {
@@ -38,32 +38,29 @@ class AnswerCapability extends RpcTarget {
   }
 }
 
-await project.provideCapability({
-  connectionKey: "answer",
-  rpcTarget: new AnswerCapability(),
-});
+await project.caps.provide({ name: "answer", target: new AnswerCapability() });
 
-return await project.connections.get("answer").run();
+return await project.answer.run();
 `.trim(),
   },
 ];
 
-export async function evalBrowserReplCode(input: { code: string; ctx: unknown; env?: object }) {
-  return await compileBrowserReplFunction(input.code)(input.ctx, input.env ?? {}, {});
+export async function evalBrowserReplCode(input: { code: string; itx: unknown; env?: object }) {
+  return await compileBrowserReplFunction(input.code)(input.itx, input.env ?? {}, {});
 }
 
 export async function evalBrowserReplSessionCode(input: {
   code: string;
-  ctx: unknown;
+  itx: unknown;
   env?: object;
   scope: Record<string, unknown>;
 }) {
-  return await compileBrowserReplFunction(input.code)(input.ctx, input.env ?? {}, input.scope);
+  return await compileBrowserReplFunction(input.code)(input.itx, input.env ?? {}, input.scope);
 }
 
 export async function runBrowserReplEntry(input: {
   code: string;
-  ctx: unknown;
+  itx: unknown;
   env?: object;
   scope: Record<string, unknown>;
 }): Promise<BrowserReplEntry> {
@@ -74,7 +71,7 @@ export async function runBrowserReplEntry(input: {
   try {
     const result = await evalBrowserReplSessionCode({
       code: trimmedCode,
-      ctx: input.ctx,
+      itx: input.itx,
       env: input.env,
       scope: input.scope,
     });
@@ -114,7 +111,7 @@ export function compileBrowserReplFunction(code: string) {
   try {
     // oxlint-disable-next-line no-new-func -- This helper backs the explicit browser-local REPL.
     return new Function(
-      "ctx",
+      "itx",
       "env",
       "scope",
       `with (scope) { ${expressionSource} }`,
@@ -124,15 +121,15 @@ export function compileBrowserReplFunction(code: string) {
   }
 }
 
-type ReplFunction = (ctx: unknown, env: object, scope: Record<string, unknown>) => Promise<unknown>;
+type ReplFunction = (itx: unknown, env: object, scope: Record<string, unknown>) => Promise<unknown>;
 
-const RESERVED_TOP_LEVEL_BINDINGS = new Set(["ctx", "env", "scope", "console", "$_", "_"]);
+const RESERVED_TOP_LEVEL_BINDINGS = new Set(["itx", "env", "scope", "console", "$_", "_"]);
 
 function compileBrowserReplStatements(code: string) {
   const statementSource = transformTopLevelStatements(code);
   // oxlint-disable-next-line no-new-func -- Statement-mode fallback for the explicit browser-local REPL.
   return new Function(
-    "ctx",
+    "itx",
     "env",
     "scope",
     `with (scope) { return (async () => { let __replLastValue; ${statementSource}; return __replLastValue })() }`,

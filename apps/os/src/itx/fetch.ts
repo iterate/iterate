@@ -13,12 +13,9 @@ import { newWorkersRpcResponse } from "capnweb";
 import { resolveItx } from "./entrypoint.ts";
 import { GLOBAL_CONTEXT_ID, type ItxProps, type ProjectAccess } from "./protocol.ts";
 import type { ItxRuntime } from "./handle.ts";
+import { authenticateCapnwebAdmin, handleCapnwebAdminCookieRequest } from "./admin-auth-cookie.ts";
 import type { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
-import {
-  authenticateCapnwebAdmin,
-  handleCapnwebAdminCookieRequest,
-} from "~/capnweb/admin-auth-cookie.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import type { Principal } from "~/auth/principal.ts";
 import { getProjectById, getProjectBySlug } from "~/db/queries/.generated/index.ts";
@@ -68,6 +65,41 @@ export async function handleItxFetch(input: {
   const setCookie = auth.responseHeaders.get("set-cookie");
   if (setCookie) response.headers.append("set-cookie", setCookie);
   return response;
+}
+
+export const PROJECT_HOST_ITX_PATH = "/__itx";
+
+/**
+ * Project-host connect endpoint: wss://{project-host}/__itx returns an itx
+ * already narrowed to that project. Cap'n Web terminates here in the
+ * stateless worker (Law 7); the Project DO only ever sees Workers RPC.
+ * Admin-credential only for now — user sessions connect via /api/itx on the
+ * control plane host.
+ */
+export async function handleProjectHostItxFetch(input: {
+  config: AppConfig;
+  env: Env;
+  exports: unknown;
+  projectId: string;
+  request: Request;
+}): Promise<Response | null> {
+  const pathname = new URL(input.request.url).pathname;
+  if (pathname === `${PROJECT_HOST_ITX_PATH}/admin-cookie`) {
+    return await handleCapnwebAdminCookieRequest({ config: input.config, request: input.request });
+  }
+  if (pathname !== PROJECT_HOST_ITX_PATH) return null;
+
+  const principal = authenticateCapnwebAdmin({ config: input.config, request: input.request });
+  if (!principal) return new Response("Unauthorized", { status: 401 });
+
+  return await newWorkersRpcResponse(
+    input.request,
+    resolveItx({
+      env: input.env,
+      exports: input.exports as ItxRuntime["exports"],
+      props: { context: input.projectId },
+    }),
+  );
 }
 
 async function authenticateItxRequest(input: {

@@ -28,7 +28,10 @@ import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
 import { projectSecretsRouter } from "~/orpc/routers/secrets.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
-import { getAccessibleAuthProject, ProjectsCapability } from "~/capnweb/projects-capability.ts";
+import {
+  getAccessibleAuthProject,
+  ProjectsCapability,
+} from "~/domains/projects/project-directory.ts";
 
 type ProjectRow = {
   id: string;

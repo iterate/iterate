@@ -1,8 +1,12 @@
+// Project directory: the org-membership-aware project CRUD used by the oRPC
+// product surface (dashboard flows). This is deliberately SEPARATE from itx:
+// itx narrowing uses the simplified access model (all | named projects),
+// while these flows speak to the auth worker about organizations. When org
+// access moves into itx this file collapses into it.
+
 import { RpcTarget } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
-import { ProjectCapability } from "./project-capability.ts";
-import type { IterateContextProps } from "./iterate-context-capability.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { AppContext } from "~/context.ts";
 import {
@@ -15,7 +19,6 @@ import {
 } from "~/db/queries/.generated/index.ts";
 import {
   getProjectDurableObjectName,
-  type ProjectCapability as ProjectDurableObjectCapability,
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
@@ -46,47 +49,14 @@ type ProjectWithIngressUrl = ProjectListItem & {
   ingressUrl: string;
 };
 
-type ProjectDurableObjectContextClient = {
-  getCapability(props?: { scopes?: unknown }): ProjectDurableObjectCapability;
-};
-
 export class ProjectsCapability extends RpcTarget {
   constructor(
     private readonly props: {
       activeOrganization?: ActiveOrganizationAuth;
       context: AppContext;
-      iterateContextProps?: IterateContextProps;
     },
   ) {
     super();
-  }
-
-  get(projectIdOrSlug: string) {
-    return new ProjectCapability({
-      context: this.props.context,
-      iterateContextProps: this.props.iterateContextProps,
-      project: async () => {
-        const row = await requireProject({
-          activeOrganization: this.props.activeOrganization,
-          context: this.props.context,
-          projectIdOrSlug,
-        });
-        const project = projectDurableObject(
-          this.props.context,
-          row.id,
-        ) as unknown as ProjectDurableObjectContextClient;
-        return project.getCapability({ scopes: { projects: [row.id] } });
-      },
-      projectId: async () =>
-        (
-          await requireProject({
-            activeOrganization: this.props.activeOrganization,
-            context: this.props.context,
-            projectIdOrSlug,
-          })
-        ).id,
-      projectIdOrSlug,
-    });
   }
 
   async list(input: { limit?: number; offset?: number } = {}): Promise<ProjectListResult> {

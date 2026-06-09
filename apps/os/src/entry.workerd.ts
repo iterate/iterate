@@ -34,10 +34,7 @@ import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
-import { handleRootIterateContextFetch } from "~/capnweb/root-context-fetch.ts";
-import { handleItxFetch } from "~/itx/fetch.ts";
-import { handleCapabilityPrototypeFetch } from "~/domains/capability-prototype/fetch.ts";
-import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { handleItxFetch, handleProjectHostItxFetch } from "~/itx/fetch.ts";
 import { requireProjectScopedAccess } from "~/orpc/project-access.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
@@ -51,10 +48,6 @@ export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durab
 export { CaptunServerShard };
 export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 export { DebugAppendChainSubscriber } from "~/durable-objects/debug-append-chain-subscriber.ts";
-export {
-  FakeProjectDurableObject,
-  FakeStreamDurableObject,
-} from "~/domains/capability-prototype/durable-object.ts";
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
@@ -62,9 +55,7 @@ export { SlackIntegrationDurableObject } from "~/domains/slack/durable-objects/s
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
-export { FakeIterateEntrypoint } from "~/domains/capability-prototype/entrypoint.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
-export { IterateContextEntrypoint } from "~/capnweb/iterate-context-capability.ts";
 export { ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
@@ -80,8 +71,7 @@ export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 
 const CAPTUN_TUNNEL_ROUTE_PREFIX = "/__iterate/captun";
-const EGRESS_ECHO_PATH = "/api/captnweb/egress-echo";
-const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
+const EGRESS_ECHO_PATH = "/api/itx/egress-echo";
 const PROJECT_STREAM_RPC_PREFIX = "/api/project-streams";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
@@ -147,15 +137,17 @@ export default {
         });
 
         if (ingressMatch) {
-          const pathname = new URL(request.url).pathname;
-          if (
-            (pathname === PROJECT_CAPNWEB_PATH ||
-              pathname === `${PROJECT_CAPNWEB_PATH}/admin-cookie`) &&
-            ingressMatch.rule.projectId
-          ) {
-            return await env.PROJECT.getByName(
-              getProjectDurableObjectName(ingressMatch.rule.projectId),
-            ).fetch(request);
+          // Project-host itx sessions terminate HERE in the stateless worker,
+          // never in the Project DO (itx Law 7 — the hibernation-ready seam).
+          if (ingressMatch.rule.projectId) {
+            const projectItxResponse = await handleProjectHostItxFetch({
+              config: requestConfig,
+              env,
+              exports: cfCtx.exports,
+              projectId: ingressMatch.rule.projectId,
+              request,
+            });
+            if (projectItxResponse) return projectItxResponse;
           }
           return await dispatchFetchCallable({
             callable: ingressMatch.rule.callable,
@@ -190,14 +182,6 @@ export default {
           workerExports: cfCtx.exports,
         };
 
-        const capabilityPrototypeResponse = await handleCapabilityPrototypeFetch({
-          config,
-          context,
-          env,
-          request,
-        });
-        if (capabilityPrototypeResponse) return capabilityPrototypeResponse;
-
         const projectStreamRpcResponse = await handleProjectStreamRpcFetch({
           context,
           env,
@@ -207,14 +191,6 @@ export default {
 
         const itxResponse = await handleItxFetch({ config, context, env, request });
         if (itxResponse) return itxResponse;
-
-        const captnwebResponse = await handleRootIterateContextFetch({
-          request,
-          env,
-          context,
-          config,
-        });
-        if (captnwebResponse) return captnwebResponse;
 
         const durableObjectDebugResponse = await handleDurableObjectDebugFetch({ request, env });
         if (durableObjectDebugResponse) return durableObjectDebugResponse;

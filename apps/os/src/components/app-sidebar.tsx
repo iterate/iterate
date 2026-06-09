@@ -393,8 +393,8 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
           <SidebarMenuItem>
             <SidebarMenuButton
               tooltip="Repl"
-              render={<Link to="/capnweb-repl" />}
-              isActive={Boolean(matchRoute({ to: "/capnweb-repl", fuzzy: false }))}
+              render={<Link to="/itx-repl" />}
+              isActive={Boolean(matchRoute({ to: "/itx-repl", fuzzy: false }))}
             >
               <SquareTerminal />
               <span>Repl</span>
