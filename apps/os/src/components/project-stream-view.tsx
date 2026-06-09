@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -77,19 +76,14 @@ export function ProjectStreamView({
   );
   const [submitError, setSubmitError] = useState<string | undefined>();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [pendingSubmission, setPendingSubmission] = useState<{ baseEventCount: number } | null>(
-    null,
-  );
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const isAwaitingResult = pendingSubmission != null;
 
   async function submit() {
     const trimmed = composerText.trim();
     if (!trimmed) return;
     setIsSubmitting(true);
     setSubmitError(undefined);
-    setPendingSubmission({ baseEventCount: eventCount });
     try {
       if (composerMode === "message" && messageComposer) {
         await messageComposer.onSubmit(trimmed);
@@ -103,7 +97,6 @@ export function ProjectStreamView({
       setComposerText("");
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : String(error));
-      setPendingSubmission(null);
     } finally {
       setIsSubmitting(false);
       window.requestAnimationFrame(() => {
@@ -111,14 +104,6 @@ export function ProjectStreamView({
       });
     }
   }
-
-  useEffect(() => {
-    if (pendingSubmission == null || eventCount <= pendingSubmission.baseEventCount) {
-      return;
-    }
-
-    setPendingSubmission(null);
-  }, [eventCount, pendingSubmission]);
 
   useLayoutEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -133,7 +118,7 @@ export function ProjectStreamView({
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [eventCount, isAwaitingResult, submitError]);
+  }, [eventCount, isSubmitting, submitError]);
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-white">
@@ -157,7 +142,7 @@ export function ProjectStreamView({
             snapshot={snapshot}
           />
         )}
-        {isAwaitingResult ? <PendingResultRow /> : null}
+        {isSubmitting ? <PendingResultRow /> : null}
         <form
           className="border-t p-3"
           onSubmit={(event) => {
