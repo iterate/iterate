@@ -287,14 +287,6 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
-              render={<Link to="/capnweb-repl" />}
-              isActive={Boolean(matchRoute({ to: "/capnweb-repl", fuzzy: false }))}
-            >
-              <span>Repl</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
               render={<Link to="/projects" />}
               isActive={Boolean(
                 matchRoute({
@@ -324,18 +316,15 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
                   </SidebarMenuSubButton>
                 </SidebarMenuSubItem>
               ))}
-              <SidebarMenuSubItem>
-                <SidebarMenuSubButton
-                  className="text-muted-foreground"
-                  isActive={Boolean(matchRoute({ to: "/projects/new", fuzzy: false }))}
-                  render={<Link to="/projects/new" />}
-                  size="sm"
-                >
-                  <Plus />
-                  <span>Create project</span>
-                </SidebarMenuSubButton>
-              </SidebarMenuSubItem>
             </SidebarMenuSub>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              render={<Link to="/capnweb-repl" />}
+              isActive={Boolean(matchRoute({ to: "/capnweb-repl", fuzzy: false }))}
+            >
+              <span>Repl</span>
+            </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarGroupContent>
