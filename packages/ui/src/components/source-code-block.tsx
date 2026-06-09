@@ -41,9 +41,12 @@ function CodeMirror({
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const onModEnterRef = useRef(onModEnter);
+  const initialSelectAllSignalRef = useRef(selectAllSignal);
   const selectAllSignalRef = useRef(selectAllSignal);
+  const latestSelectAllSignalRef = useRef(selectAllSignal);
   const valueRef = useRef(value);
   valueRef.current = value;
+  latestSelectAllSignalRef.current = selectAllSignal;
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -54,10 +57,7 @@ function CodeMirror({
   }, [onModEnter]);
 
   useEffect(() => {
-    if (!containerRef.current) {
-      return;
-    }
-
+    if (!containerRef.current) return;
     viewRef.current?.destroy();
 
     const view = new EditorView({
@@ -93,6 +93,12 @@ function CodeMirror({
     });
 
     viewRef.current = view;
+    if (
+      latestSelectAllSignalRef.current !== undefined &&
+      latestSelectAllSignalRef.current !== initialSelectAllSignalRef.current
+    ) {
+      selectAll(view);
+    }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!editable || event.key !== "Tab" || event.metaKey || event.ctrlKey || event.altKey) {
@@ -156,16 +162,20 @@ function CodeMirror({
       return;
     }
 
-    view.focus();
-    view.dispatch({
-      selection: {
-        anchor: 0,
-        head: view.state.doc.length,
-      },
-    });
+    selectAll(view);
   }, [selectAllSignal]);
 
   return <div ref={containerRef} />;
+}
+
+function selectAll(view: EditorView) {
+  view.focus();
+  view.dispatch({
+    selection: {
+      anchor: 0,
+      head: view.state.doc.length,
+    },
+  });
 }
 
 export interface SourceCodeBlockProps {

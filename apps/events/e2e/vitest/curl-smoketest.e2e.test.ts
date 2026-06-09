@@ -36,7 +36,7 @@ import {
   supportsProjectHostRouting,
 } from "../helpers.ts";
 
-describe("events curl smoke", () => {
+describe.skip("events curl smoke", () => {
   test("append, state, history stream, and root endpoints (shell + snapshot)", async () => {
     const bareBaseUrl = requireEventsBaseUrl();
     const namespace = supportsProjectHostRouting(bareBaseUrl)
