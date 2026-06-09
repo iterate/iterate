@@ -116,8 +116,19 @@ export class Itx extends RpcTarget {
     });
   }
 
-  get workspace(): ItxWorkspace {
-    return new ItxWorkspace(this.#runtime, this.#requireProjectId());
+  get workspace() {
+    // Like itx.repos: the workspace domain entrypoint already exposes the
+    // exact surface we want (readFile/writeFile and a nested git with
+    // add/clone/commit/push/status), so hand it out directly rather than
+    // re-wrapping it. workspaceId is fixed to "itx" — one workspace per
+    // project context.
+    const factory = this.#runtime.exports.WorkspaceCapability;
+    if (typeof factory !== "function") {
+      throw new Error("WorkspaceCapability export is not available.");
+    }
+    return factory({
+      props: { projectId: this.#requireProjectId(), workspaceId: ITX_WORKSPACE_ID },
+    });
   }
 
   /**
@@ -428,79 +439,6 @@ export class ItxStream extends RpcTarget {
         streamPath: this.path,
       },
     });
-  }
-}
-
-// ---- workspace ------------------------------------------------------------
-
-type WorkspaceClient = {
-  gitAdd(input: Record<string, unknown>): Promise<unknown>;
-  gitClone(input: Record<string, unknown>): Promise<unknown>;
-  gitCommit(input: Record<string, unknown>): Promise<unknown>;
-  gitPush(input: Record<string, unknown>): Promise<unknown>;
-  gitStatus(input: Record<string, unknown>): Promise<unknown>;
-  readFile(path: string): Promise<unknown>;
-  writeFile(path: string, content: string): Promise<unknown>;
-};
-
-export class ItxWorkspace extends RpcTarget {
-  constructor(
-    private readonly runtime: ItxRuntime,
-    private readonly projectId: string,
-  ) {
-    super();
-  }
-
-  get git(): ItxWorkspaceGit {
-    return new ItxWorkspaceGit(() => this.client());
-  }
-
-  async readFile(path: string) {
-    return await this.client().readFile(path);
-  }
-
-  async writeFile(path: string, content: string) {
-    return await this.client().writeFile(path, content);
-  }
-
-  describe() {
-    return { namespace: this.projectId, workspaceId: ITX_WORKSPACE_ID };
-  }
-
-  private client(): WorkspaceClient {
-    const factory = this.runtime.exports.WorkspaceCapability;
-    if (typeof factory !== "function") {
-      throw new Error("WorkspaceCapability export is not available.");
-    }
-    return factory({
-      props: { projectId: this.projectId, workspaceId: ITX_WORKSPACE_ID },
-    }) as WorkspaceClient;
-  }
-}
-
-class ItxWorkspaceGit extends RpcTarget {
-  constructor(private readonly client: () => WorkspaceClient) {
-    super();
-  }
-
-  async add(input: Record<string, unknown>) {
-    return await this.client().gitAdd(input);
-  }
-
-  async clone(input: Record<string, unknown>) {
-    return await this.client().gitClone(input);
-  }
-
-  async commit(input: Record<string, unknown>) {
-    return await this.client().gitCommit(input);
-  }
-
-  async push(input: Record<string, unknown>) {
-    return await this.client().gitPush(input);
-  }
-
-  async status(input: Record<string, unknown>) {
-    return await this.client().gitStatus(input);
   }
 }
 

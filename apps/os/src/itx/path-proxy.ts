@@ -16,10 +16,6 @@ import { RESERVED_PATH_SEGMENTS, type PathCall } from "./protocol.ts";
 
 export type PathProxyCall = (input: PathCall) => unknown;
 
-export type PathProxyOptions = {
-  dispose?: () => void;
-};
-
 /**
  * Class-shaped constructor that actually returns a callable Proxy. The class
  * wrapper exists so call sites read as "this is an RPC-able object"; workerd
@@ -27,24 +23,13 @@ export type PathProxyOptions = {
  * DataCloneError limitation was fixed (workerd#3184).
  */
 export class PathProxyRpcTarget {
-  constructor(callPath: PathProxyCall, options: PathProxyOptions = {}) {
-    return pathNode(callPath, [], options.dispose) as unknown as PathProxyRpcTarget;
+  constructor(callPath: PathProxyCall) {
+    return pathNode(callPath, []) as unknown as PathProxyRpcTarget;
   }
 }
 
-function pathNode(
-  callPath: PathProxyCall,
-  path: string[],
-  dispose: (() => void) | undefined,
-): Function {
+function pathNode(callPath: PathProxyCall, path: string[]): Function {
   const fn = (...args: unknown[]) => callPath({ args, path });
-
-  Object.defineProperty(fn, Symbol.dispose, {
-    configurable: true,
-    value() {
-      dispose?.();
-    },
-  });
 
   return new Proxy(fn, {
     apply(_target, _thisArg, args) {
@@ -61,7 +46,7 @@ function pathNode(
       // names are in RESERVED_PATH_SEGMENTS.)
       if (typeof key === "symbol") return Reflect.get(target, key, receiver);
       if (RESERVED_PATH_SEGMENTS.has(key)) return undefined;
-      return pathNode(callPath, [...path, key], dispose);
+      return pathNode(callPath, [...path, key]);
     },
     getOwnPropertyDescriptor(target, key) {
       const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
@@ -72,7 +57,7 @@ function pathNode(
       return {
         configurable: true,
         enumerable: true,
-        value: pathNode(callPath, [...path, key], dispose),
+        value: pathNode(callPath, [...path, key]),
         writable: false,
       };
     },

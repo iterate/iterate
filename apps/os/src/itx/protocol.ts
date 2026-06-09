@@ -135,11 +135,10 @@ export const RESERVED_PATH_SEGMENTS: ReadonlySet<string> = new Set([
   "valueOf",
 ]);
 
-const RESERVED_PROTOCOL_NAMES = [...RESERVED_PATH_SEGMENTS] as const;
-
+/** A cap name may shadow neither an itx built-in nor a reserved path segment. */
 export const RESERVED_CAP_NAMES: ReadonlySet<string> = new Set([
   ...ITX_BUILTIN_NAMES,
-  ...RESERVED_PROTOCOL_NAMES,
+  ...RESERVED_PATH_SEGMENTS,
 ]);
 
 /**
