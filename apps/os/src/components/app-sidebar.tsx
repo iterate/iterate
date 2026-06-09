@@ -7,13 +7,13 @@ import {
   ChevronsUpDown,
   ExternalLink,
   LogOut,
-  Plus,
   UserCircle,
 } from "lucide-react";
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { useQuery } from "@tanstack/react-query";
+import { Avatar, AvatarFallback } from "@iterate-com/ui/components/avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -41,6 +41,7 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
+  useSidebar,
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import type { AppConfig } from "~/app.ts";
@@ -64,6 +65,7 @@ export function AppSidebar({ routeConfig }: AppSidebarProps) {
 
 function AppSidebarHeader() {
   const matches = useMatches();
+  const { isMobile } = useSidebar();
   const { data } = useQuery(projectsListQueryOptions({ limit: 100, offset: 0 }));
   const projects =
     data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
@@ -77,55 +79,54 @@ function AppSidebarHeader() {
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <SidebarMenuButton className="h-12 gap-2 data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground">
-                <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-sidebar-primary text-xs font-semibold text-sidebar-primary-foreground">
+              <SidebarMenuButton
+                size="lg"
+                className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
+              >
+                <span className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sm font-semibold text-sidebar-primary-foreground">
                   i
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate">iterate</span>
-                  <span className="block truncate text-xs font-normal text-muted-foreground">
+                <span className="grid flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-medium">iterate</span>
+                  <span className="truncate text-xs text-muted-foreground">
                     {headerDescription}
                   </span>
                 </span>
-                <ChevronsUpDown className="ml-auto size-4" />
+                <ChevronsUpDown className="ml-auto" />
               </SidebarMenuButton>
             }
           />
-          <DropdownMenuContent side="bottom" align="start" className="w-60">
+          <DropdownMenuContent
+            align="start"
+            side={isMobile ? "bottom" : "right"}
+            sideOffset={4}
+            className="min-w-56 rounded-lg"
+          >
             <DropdownMenuGroup>
-              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">
                 Projects
               </DropdownMenuLabel>
               {projects.length > 0 ? (
                 projects.map((project) => (
                   <DropdownMenuItem
                     key={project.id}
-                    className="gap-2"
+                    className="gap-2 p-2"
                     render={
                       <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} />
                     }
                   >
-                    <span
-                      aria-hidden="true"
-                      className="size-1.5 shrink-0 rounded-full bg-muted-foreground/40"
-                    />
+                    <span className="flex size-6 items-center justify-center rounded-md border text-xs font-medium text-muted-foreground">
+                      {project.slug.slice(0, 1).toLowerCase()}
+                    </span>
                     <span className="truncate">{project.slug}</span>
                     {project.slug === activeProjectSlug ? <Check className="ml-auto" /> : null}
                   </DropdownMenuItem>
                 ))
               ) : (
-                <DropdownMenuItem disabled>
-                  <span className="truncate text-muted-foreground">No projects yet</span>
+                <DropdownMenuItem disabled className="p-2">
+                  <span className="truncate">No projects yet</span>
                 </DropdownMenuItem>
               )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="gap-2 text-muted-foreground"
-                render={<Link to="/projects/new" />}
-              >
-                <Plus />
-                <span>New project</span>
-              </DropdownMenuItem>
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -136,12 +137,14 @@ function AppSidebarHeader() {
 
 function AppSidebarUser() {
   const { loading, session, signOut } = useAuthClient();
+  const { isMobile } = useSidebar();
   const config = useConfig<PublicConfig>();
   const accountManagementUrl = authWorkerUrl(config, "/");
   const [debugOpen, setDebugOpen] = useState(false);
   const user = session?.authenticated ? session.user : null;
   const label = nonEmptyLabel(user?.name, user?.email, "Account");
   const email = user?.email?.trim() ?? "";
+  const initials = userInitials(label);
   const debugInfo = useMemo(
     () => ({
       auth: {
@@ -170,41 +173,56 @@ function AppSidebarUser() {
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
-                <SidebarMenuButton className="h-12 gap-2 data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground">
-                  <UserCircle className="size-4" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate">{label}</span>
-                    {email ? (
-                      <span className="block truncate text-xs font-normal text-muted-foreground">
-                        {email}
-                      </span>
-                    ) : null}
+                <SidebarMenuButton
+                  size="lg"
+                  className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
+                >
+                  <Avatar className="size-8 rounded-lg">
+                    <AvatarFallback className="rounded-lg">{initials}</AvatarFallback>
+                  </Avatar>
+                  <span className="grid flex-1 text-left text-sm leading-tight">
+                    <span className="truncate font-medium">{label}</span>
+                    {email ? <span className="truncate text-xs">{email}</span> : null}
                   </span>
-                  <ChevronsUpDown className="ml-auto size-4" />
+                  <ChevronsUpDown className="ml-auto" />
                 </SidebarMenuButton>
               }
             />
-            <DropdownMenuContent side="top" align="start" className="w-56">
+            <DropdownMenuContent
+              className="min-w-56 rounded-lg"
+              side={isMobile ? "bottom" : "right"}
+              align="end"
+              sideOffset={4}
+            >
+              <DropdownMenuLabel className="p-0 font-normal">
+                <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
+                  <Avatar className="size-8 rounded-lg">
+                    <AvatarFallback className="rounded-lg">{initials}</AvatarFallback>
+                  </Avatar>
+                  <div className="grid flex-1 text-left text-sm leading-tight">
+                    <span className="truncate font-medium">{label}</span>
+                    {email ? <span className="truncate text-xs">{email}</span> : null}
+                  </div>
+                </div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                <DropdownMenuLabel>
-                  <span className="block truncate text-foreground">{label}</span>
-                  {email ? (
-                    <span className="block truncate text-xs font-normal text-muted-foreground">
-                      {email}
-                    </span>
-                  ) : null}
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem render={<a href={accountManagementUrl} />}>
-                  <UserCircle />
-                  <span>Manage account</span>
-                  <ExternalLink className="ml-auto" />
-                </DropdownMenuItem>
+                <DropdownMenuItem
+                  render={
+                    <a href={accountManagementUrl}>
+                      <UserCircle />
+                      <span>Manage account</span>
+                      <ExternalLink className="ml-auto" />
+                    </a>
+                  }
+                />
                 <DropdownMenuItem onClick={() => setDebugOpen(true)}>
                   <Bug />
                   <span>View debug info</span>
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
                 <DropdownMenuItem onClick={() => void signOut()}>
                   <LogOut />
                   <span>Sign out</span>
@@ -237,6 +255,19 @@ function AppSidebarUser() {
       </Sheet>
     </>
   );
+}
+
+function userInitials(label: string) {
+  const parts = label
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const initials = parts
+    .slice(0, 2)
+    .map((part) => part.at(0))
+    .join("")
+    .toUpperCase();
+  return initials || "I";
 }
 
 function nonEmptyLabel(...values: Array<string | null | undefined>) {
