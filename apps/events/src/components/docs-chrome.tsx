@@ -2,20 +2,23 @@ import { Link, useMatchRoute } from "@tanstack/react-router";
 import type { CSSProperties, ReactNode } from "react";
 import { Separator } from "@iterate-com/ui/components/separator";
 import {
+  Sidebar,
+  SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
+  SidebarHeader,
   SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarRail,
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
   SidebarProvider,
   SidebarTrigger,
 } from "@iterate-com/ui/components/sidebar";
-import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import type { ProcessorDoc, ProcessorEventDoc } from "~/lib/processor-docs.ts";
 import { processorDocs } from "~/lib/processor-docs.ts";
 
@@ -49,18 +52,24 @@ export function DocsChrome({
 
 function DocsSidebar() {
   return (
-    <SidebarShell header={<DocsSidebarBrand />}>
-      <SidebarGroup>
-        <SidebarGroupLabel>Processors</SidebarGroupLabel>
-        <SidebarGroupContent className="overflow-x-auto">
-          <SidebarMenu className="min-w-max">
-            {processorDocs.map((processor) => (
-              <DocsProcessorNavItem key={processor.contract.slug} processor={processor} />
-            ))}
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
-    </SidebarShell>
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <DocsSidebarBrand />
+      </SidebarHeader>
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel>Processors</SidebarGroupLabel>
+          <SidebarGroupContent className="overflow-x-auto">
+            <SidebarMenu className="min-w-max">
+              {processorDocs.map((processor) => (
+                <DocsProcessorNavItem key={processor.contract.slug} processor={processor} />
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarRail />
+    </Sidebar>
   );
 }
 

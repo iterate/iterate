@@ -45,17 +45,21 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarRail,
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
-import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import type { AppConfig } from "~/app.ts";
 import { buildProjectMcpUrl, buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
@@ -68,10 +72,21 @@ type AppSidebarProps = {
 };
 
 export function AppSidebar({ routeConfig }: AppSidebarProps) {
+  // Sidebar composition follows shadcn sidebar blocks 07/08:
+  // https://ui.shadcn.com/blocks/sidebar
   return (
-    <SidebarShell header={<AppSidebarHeader />} footer={<AppSidebarUser />}>
-      <AppSidebarNav routeConfig={routeConfig} />
-    </SidebarShell>
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <AppSidebarHeader />
+      </SidebarHeader>
+      <SidebarContent>
+        <AppSidebarNav routeConfig={routeConfig} />
+      </SidebarContent>
+      <SidebarFooter>
+        <AppSidebarUser />
+      </SidebarFooter>
+      <SidebarRail />
+    </Sidebar>
   );
 }
 
