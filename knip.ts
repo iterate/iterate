@@ -155,8 +155,6 @@ const config: KnipConfig = {
   // unrelated apps with heavyweight config loading.
   ignoreWorkspaces: [
     "apps/*",
-    "!apps/example",
-    "!apps/example-contract",
     "!apps/os",
     "!apps/os-contract",
     "!apps/semaphore",
@@ -167,7 +165,6 @@ const config: KnipConfig = {
   ignoreIssues: {
     // TanStack Start resolves these router factories by convention from the
     // entrypoint, so there is no direct import Knip can follow.
-    "apps/example/src/router.tsx": ["exports"],
     "apps/os/src/router.tsx": ["exports"],
     "apps/os-contract/src/index.ts": ["exports", "types"],
     "apps/os/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
@@ -185,8 +182,8 @@ const config: KnipConfig = {
     "apps/semaphore-contract/src/client.ts": ["types"],
     "apps/semaphore/src/router.tsx": ["exports"],
     "apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts": ["exports"],
-    // Cloudflare discovers DO default exports through Worker bindings.
-    "apps/example/src/durable-objects/example-counter.ts": ["exports"],
+    "packages/shared/src/streams/db/migrations/.generated/migrations.ts": ["exports", "types"],
+    "packages/shared/src/streams/db/queries/.generated/tables.ts": ["types"],
     "packages/shared/src/callable/entry.workerd.vitest.ts": ["exports"],
     "packages/shared/src/durable-object-utils/test-harness/initialize-fronting-worker.ts": [
       "exports",
@@ -195,8 +192,6 @@ const config: KnipConfig = {
     "packages/shared/src/durable-object-utils/mixins/fetch-mixin-utils.ts": ["types"],
   },
   workspaces: {
-    "apps/example": makeDualRuntimeAppWorkspace("./src/lib/worker-env.d.ts"),
-    "apps/example-contract": makePrivateContractWorkspace(),
     "apps/semaphore": makeCloudflareTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/semaphore-contract": makePrivateContractWorkspace(),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),

@@ -4,7 +4,7 @@ import {
   newStyleCloudflareAppSharedPaths,
 } from "../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
 
-export const CloudflarePreviewAppSlug = z.enum(["example", "os", "semaphore"]);
+export const CloudflarePreviewAppSlug = z.enum(["os", "semaphore"]);
 
 export type CloudflarePreviewAppSlug = z.infer<typeof CloudflarePreviewAppSlug>;
 
@@ -33,11 +33,6 @@ export const cloudflarePreviewAdditionalTriggerPaths = [
 ] as const;
 
 export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflarePreviewApp> = {
-  example: {
-    ...newStyleCloudflareApps.example,
-    previewTestBaseUrlEnvVar: "EXAMPLE_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
-  },
   os: {
     ...newStyleCloudflareApps.os,
     previewDependencies: newStyleCloudflareApps.os.deploymentDependencies?.map((appSlug) =>

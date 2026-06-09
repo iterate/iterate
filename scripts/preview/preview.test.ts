@@ -26,10 +26,10 @@ describe("preview app dependency batches", () => {
   it("keeps independent apps in the same batch", () => {
     expect(
       batchPreviewAppsByDependencies([
-        cloudflarePreviewApps.example,
+        cloudflarePreviewApps.os,
         cloudflarePreviewApps.semaphore,
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([["example", "semaphore"]]);
+    ).toEqual([["os", "semaphore"]]);
   });
 });
 
