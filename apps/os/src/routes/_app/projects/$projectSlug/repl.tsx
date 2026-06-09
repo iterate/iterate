@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import {
   CapnwebReplPage,
   createRootBrowserReplSession,
+  type BrowserReplSession,
   type BrowserReplSessionFactory,
 } from "~/routes/_app/capnweb-repl.tsx";
 
@@ -25,7 +26,9 @@ function ProjectCapnwebReplPage() {
 
         return {
           close: rootSession.close,
-          ctx: projectContext,
+          // The project-scoped IterateContext arrives as a Workers RPC stub
+          // whose static type is unknown; the REPL only needs the ctx shape.
+          ctx: projectContext as BrowserReplSession["ctx"],
         };
       } catch (error) {
         rootSession.close();
