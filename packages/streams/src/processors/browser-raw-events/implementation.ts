@@ -1,6 +1,10 @@
 import { StreamProcessor } from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
-import { deleteBrowserProcessorState } from "../../browser/processor-state-storage.ts";
+import {
+  deleteBrowserProcessorState,
+  ensureBrowserProcessorStateSchema,
+  upsertProcessorStateStatement,
+} from "../../browser/processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserRawEventsContract } from "./contract.ts";
 export { BrowserRawEventsContract } from "./contract.ts";
@@ -12,6 +16,8 @@ export type BrowserRawEventsState = Record<string, never>;
 
 export type BrowserRawEventsProcessorDeps = {
   sql: SqlClient;
+  /** Must match the key the host's checkpoint storage was created with. */
+  subscriptionKey?: string;
 };
 
 /**
@@ -30,17 +36,28 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
   // gets memoized and reported to the server as the replay cursor, and the first
   // insert into the freshly-reset table trips the continuity trigger.
   protected override async prepare(): Promise<void> {
+    await ensureBrowserProcessorStateSchema(this.deps.sql);
     await ensureBrowserRawEventsSchema(this.deps.sql);
   }
 
   protected override async processEventBatch(
     args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEventBatch"]>[0],
   ): Promise<void> {
+    // The checkpoint upsert rides in the same transaction as the mirror writes,
+    // so the stored cursor can never lag the events table. The base class's
+    // later writeState persists the same snapshot again (idempotent upsert).
     await this.deps.sql.batch(
-      args.events.map((event) => ({
-        sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
-        params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
-      })),
+      [
+        ...args.events.map((event) => ({
+          sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
+          params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
+        })),
+        upsertProcessorStateStatement({
+          processorSlug: this.contract.slug,
+          subscriptionKey: this.deps.subscriptionKey,
+          snapshot: { offset: args.checkpointOffset, state: args.state },
+        }),
+      ],
       { transaction: true },
     );
     await super.processEventBatch(args);

@@ -217,6 +217,7 @@ const RAW_EVENTS_RUNTIME: BrowserProcessorConfig = {
     return new BrowserRawEventsProcessor({
       iterateContext: { stream },
       sql,
+      subscriptionKey,
       readState: storage.readState,
       writeState: storage.writeState,
     });

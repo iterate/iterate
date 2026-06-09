@@ -2,12 +2,14 @@
 // (processor slug, subscription key) holding the JSON reduced state and the
 // max processed offset. Keeping checkpoints here — separate from each
 // processor's projection tables — gives every processor the same resume and
-// reset story; the cost is that projection writes and the checkpoint are not
-// in one transaction, so processors must tolerate at-least-once redelivery.
+// reset story. Processors that own SQLite projection tables include
+// `upsertProcessorStateStatement` in their projection transaction so the
+// checkpoint can never lag the mirror; the base class's later `writeState`
+// persists the same snapshot again, which is an idempotent upsert.
 
 import type { StreamProcessorSnapshot, StreamProcessorStateStorage } from "../stream-processor.ts";
 import { createSchemaEnsurer } from "./ensure-schema-once.ts";
-import type { SqlClient } from "./stream-browser-db.ts";
+import type { SqlClient, SqlValue } from "./stream-browser-db.ts";
 
 const DEFAULT_SUBSCRIPTION_KEY = "";
 
@@ -67,24 +69,48 @@ export function browserProcessorStateStorage<State>(args: {
     },
     writeState: async (snapshot: StreamProcessorSnapshot<State>) => {
       await ensureBrowserProcessorStateSchema(args.sql);
-      await args.sql.exec(
-        `
-          INSERT INTO processor_state (
-            processor_slug,
-            subscription_key,
-            reduced_state,
-            max_offset,
-            updated_at
-          )
-          VALUES (?, ?, ?, ?, datetime('now'))
-          ON CONFLICT(processor_slug, subscription_key) DO UPDATE SET
-            reduced_state = excluded.reduced_state,
-            max_offset = excluded.max_offset,
-            updated_at = excluded.updated_at
-        `,
-        [args.processorSlug, subscriptionKey, JSON.stringify(snapshot.state), snapshot.offset],
-      );
+      const statement = upsertProcessorStateStatement({
+        processorSlug: args.processorSlug,
+        subscriptionKey,
+        snapshot,
+      });
+      await args.sql.exec(statement.sql, statement.params);
     },
+  };
+}
+
+/**
+ * The checkpoint upsert as a single statement, so processors that project into
+ * SQLite can commit their projection writes and the checkpoint in one
+ * transaction — ruling out the crash window where the mirror is ahead of the
+ * stored cursor.
+ */
+export function upsertProcessorStateStatement(args: {
+  processorSlug: string;
+  subscriptionKey?: string;
+  snapshot: StreamProcessorSnapshot<unknown>;
+}): { sql: string; params: SqlValue[] } {
+  return {
+    sql: `
+      INSERT INTO processor_state (
+        processor_slug,
+        subscription_key,
+        reduced_state,
+        max_offset,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(processor_slug, subscription_key) DO UPDATE SET
+        reduced_state = excluded.reduced_state,
+        max_offset = excluded.max_offset,
+        updated_at = excluded.updated_at
+    `,
+    params: [
+      args.processorSlug,
+      args.subscriptionKey ?? DEFAULT_SUBSCRIPTION_KEY,
+      JSON.stringify(args.snapshot.state),
+      args.snapshot.offset,
+    ],
   };
 }
 

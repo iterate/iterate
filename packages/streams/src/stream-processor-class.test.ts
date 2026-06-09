@@ -407,6 +407,32 @@ describe("state storage", () => {
   });
 });
 
+describe("shutdown", () => {
+  it("waits for the in-flight batch and rejects further ingests", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const processor = new CounterProcessor({
+      iterateContext: iterateContext(),
+      onProcessEventBatch: () => gate,
+    });
+
+    const inFlight = processor.ingest({ events: [add(1, 1)], streamMaxOffset: 1 });
+    await tick();
+
+    const shutdown = processor.shutdown().then(() => "settled");
+    expect(await Promise.race([shutdown, tick().then(() => "pending")])).toBe("pending");
+
+    release();
+    expect(await shutdown).toBe("settled");
+    await inFlight;
+    expect(processor.state).toEqual({ total: 1 });
+
+    await expect(processor.ingest({ events: [add(2, 1)], streamMaxOffset: 2 })).rejects.toThrow(
+      /shut down/,
+    );
+  });
+});
+
 // ---------------------------------------------------------------------------
 // wildcard consume runtime semantics
 // ---------------------------------------------------------------------------

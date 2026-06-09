@@ -169,6 +169,7 @@ export abstract class StreamProcessor<
   // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: #loadState reads and assigns this via ??=.
   #loaded: Promise<void> | undefined;
   #processing: Promise<void> = Promise.resolve();
+  #shutdownRequested = false;
   #state: ProcessorState<Contract> | undefined;
   #memorySnapshot: StreamProcessorSnapshot<ProcessorState<Contract>> | undefined;
   readonly #keepAliveWhile: ((work: () => Promise<unknown>) => void) | undefined;
@@ -219,9 +220,23 @@ export abstract class StreamProcessor<
    * extend `processEventBatch` instead.
    */
   async ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void> {
+    if (this.#shutdownRequested) {
+      throw new Error(`stream processor "${this.contract.slug}" is shut down`);
+    }
     const next = this.#processing.then(() => this.#ingest(args));
     this.#processing = next.catch(() => undefined);
     return await next;
+  }
+
+  /**
+   * Stops accepting new batches and resolves once any in-flight batch has
+   * settled. Hosts call this on teardown (e.g. losing browser leadership) so a
+   * successor never overlaps with this instance's writes.
+   */
+  async shutdown(): Promise<void> {
+    this.#shutdownRequested = true;
+    // #processing never rejects (failures are caught into the chain).
+    await this.#processing;
   }
 
   /**
