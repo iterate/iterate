@@ -98,8 +98,7 @@ function AppSidebarHeader() {
   const projects =
     data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
   const activeProjectSlug = getActiveProjectSlug(matches);
-  const activeProject = projects.find((project) => project.slug === activeProjectSlug);
-  const headerDescription = activeProject?.slug ?? "(select project)";
+  const headerDescription = activeProjectSlug ?? "(select project)";
 
   return (
     <SidebarMenu>
@@ -328,12 +327,14 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   const activeProjectSlug = getActiveProjectSlug(matches);
   const activeProject = projects.find((project) => project.slug === activeProjectSlug);
 
-  if (activeProject) {
+  // Drive the project nav from the active route slug, not list membership, so a valid
+  // project that isn't in the cached list (e.g. beyond the first page) still shows its nav.
+  if (activeProjectSlug) {
     return (
       <ProjectSidebarGroup
-        customHostname={activeProject.customHostname}
+        customHostname={activeProject?.customHostname ?? null}
         mcpBaseUrl={routeConfig.mcpBaseUrl}
-        projectSlug={activeProject.slug}
+        projectSlug={activeProjectSlug}
         baseUrl={routeConfig.baseUrl}
         projectHostnameBases={routeConfig.projectHostnameBases}
       />

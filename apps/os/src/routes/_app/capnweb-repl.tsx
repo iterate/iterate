@@ -71,6 +71,8 @@ export function CapnwebReplPage({
   const [examplesOpen, setExamplesOpen] = useState(false);
   const envRef = useRef<Record<string, unknown>>({});
   const scopeRef = useRef<Record<string, unknown>>({ RpcTarget, ...scope });
+  // Keep the scope in sync when navigating between project repls (same route, new params).
+  scopeRef.current = { RpcTarget, ...scope };
 
   useEffect(() => {
     const globals = globalThis as typeof globalThis & {
