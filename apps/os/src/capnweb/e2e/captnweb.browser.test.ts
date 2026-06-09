@@ -21,6 +21,7 @@ import {
 declare const __CAPNWEB_BROWSER_E2E__: {
   adminApiSecret: string;
   baseUrl: string;
+  egressEchoUrl: string;
 };
 
 const ROOT_ITERATE_CONTEXT_PREFIX = "/api/captnweb";
@@ -84,7 +85,7 @@ describe("capnweb browser execution mode", () => {
       script: fetchAndEgressProject,
       vars: {
         echoAuthToken: __CAPNWEB_BROWSER_E2E__.adminApiSecret,
-        echoUrl: new URL("/api/captnweb/egress-echo", __CAPNWEB_BROWSER_E2E__.baseUrl).toString(),
+        echoUrl: __CAPNWEB_BROWSER_E2E__.egressEchoUrl,
         executionMode: "browser",
         ingressUrl: project.ingressUrl,
         secretKey: EXAMPLE_EGRESS_SECRET_KEY,
@@ -167,7 +168,7 @@ async function runBrowserCapnwebScript(input: {
   script: CapnwebScript<any, any, any>;
   vars?: Record<string, unknown>;
 }): Promise<any> {
-  return await input.script({ ctx: input.ctx, env: {}, vars: input.vars ?? {} });
+  return await input.script({ ctx: input.ctx, vars: input.vars ?? {} });
 }
 
 async function withRootIterateFromBrowser(): Promise<RpcStub<IterateContext>> {

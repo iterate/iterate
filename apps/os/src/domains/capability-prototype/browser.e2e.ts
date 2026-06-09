@@ -3,11 +3,7 @@ import { commands } from "vitest/browser";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 
 import type { FakeIterateCapability } from "./capability.ts";
-import {
-  appendAndReadViaRoot,
-  type PrototypeScript,
-  type PrototypeScriptInput,
-} from "./scripts.ts";
+import { appendAndRead, type PrototypeScript, type PrototypeScriptInput } from "./scripts.ts";
 
 declare const __CAPABILITY_PROTOTYPE_BROWSER_E2E__: {
   adminApiSecret: string;
@@ -24,11 +20,12 @@ test("prototype root capability code has an in-browser runner", async () => {
   await expect(
     runPrototypeBrowserScript({
       ctx,
-      script: appendAndReadViaRoot,
+      script: appendAndRead,
       vars: {
         eventType,
         marker,
         projectId,
+        source: "browser",
         streamPath,
       },
     }),
@@ -51,16 +48,9 @@ async function runPrototypeBrowserScript(input: {
   script: PrototypeScript;
   vars: PrototypeScriptInput["vars"];
 }) {
-  const script = evalPrototypeScript(
-    input.script.toString().replaceAll(JSON.stringify("root-ctx"), JSON.stringify("browser")),
-  );
+  const script = evalPrototypeScript(input.script.toString());
   return await script({
     ctx: input.ctx,
-    env: {
-      ITERATE: {
-        context: input.ctx,
-      },
-    },
     vars: input.vars,
   });
 }

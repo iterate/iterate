@@ -109,9 +109,11 @@ The local Cloudflare dev server reserves `/__debug`, so JSON helper routes under
 that path can return devtools HTML before the Worker fetch handler sees the
 request.
 
-Use app-owned helper routes such as `/api/captnweb/egress-echo`. When local e2e
-uses `APP_CONFIG_BASE_URL=http://127.0.0.1:5173`, worker-to-worker egress should
-target a deployed/dev tunnel through `OS_E2E_EGRESS_ECHO_BASE_URL`.
+Use app-owned helper routes such as `/api/captnweb/egress-echo` for deployed or
+tunnel-backed runs. When local e2e uses `APP_CONFIG_BASE_URL=http://127.0.0.1:*`,
+worker-to-worker egress should use a public echo endpoint by default; override
+with `OS_E2E_EGRESS_ECHO_URL` or the older `OS_E2E_EGRESS_ECHO_BASE_URL` when a
+specific echo target is needed.
 
 ## Some Failures Are Below The Context Model
 

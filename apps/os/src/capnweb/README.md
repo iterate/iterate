@@ -33,7 +33,9 @@ await worker.someTool({ value: 1 });
 : JSON bridge for e2e/codemode-shaped scripts. The parent worker creates a
 dynamic worker with `env.ITERATE`, the dynamic worker resolves
 `await env.ITERATE.context`, runs the provided function with
-`{ ctx, env, vars }`, and returns JSON. Results must be serializable.
+`{ ctx, vars }`, and returns JSON. Results must be serializable. The Worker
+`env` stays inside the runner; script authors use explicit capabilities on
+`ctx`.
 
 `/__iterate/capnweb`
 : Project ingress Cap'n Web session. Returns the project capability directly.
@@ -278,7 +280,7 @@ does not import those helpers.
 ## Node CLI And REPL
 
 `src/capnweb/cli.ts` is the one-shot JSON executor. It runs a codemode-shaped
-function with `{ ctx, env, vars }` and exits:
+function with `{ ctx, vars }` and exits:
 
 ```bash
 doppler run --project os --config preview_5 -- pnpm exec tsx src/capnweb/cli.ts \

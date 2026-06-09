@@ -15,6 +15,7 @@ const repoRoot = fileURLToPath(new URL("../../../../..", import.meta.url));
 const vitestRunSlug = process.env.OS_E2E_RUN_SLUG?.trim() || createVitestRunSlug();
 const vitestRunRoot = createVitestRunRoot("os-capnweb-e2e-");
 const CAPNWEB_ADMIN_AUTH_COOKIE = "iterate-admin-auth";
+const baseUrl = process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "") || "";
 
 console.log(`[vitest-artifacts] run root: ${vitestRunRoot}`);
 console.log(`[vitest] run slug: ${vitestRunSlug}`);
@@ -54,7 +55,8 @@ export default defineConfig({
               process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
               process.env.OS_E2E_BEARER_TOKEN?.trim() ||
               "",
-            baseUrl: process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "") || "",
+            baseUrl,
+            egressEchoUrl: egressEchoUrl(baseUrl),
           }),
         },
         test: {
@@ -116,3 +118,22 @@ export default defineConfig({
     },
   },
 });
+
+function egressEchoUrl(controlPlaneBaseUrl: string) {
+  const explicitUrl = process.env.OS_E2E_EGRESS_ECHO_URL?.trim();
+  if (explicitUrl) return explicitUrl;
+
+  const explicitBaseUrl = process.env.OS_E2E_EGRESS_ECHO_BASE_URL?.trim().replace(/\/+$/, "");
+  if (explicitBaseUrl) {
+    return new URL("/api/captnweb/egress-echo", explicitBaseUrl).toString();
+  }
+
+  if (!controlPlaneBaseUrl) return "";
+
+  const url = new URL(controlPlaneBaseUrl);
+  if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+    return new URL("/api/captnweb/egress-echo", controlPlaneBaseUrl).toString();
+  }
+
+  return "https://postman-echo.com/get";
+}

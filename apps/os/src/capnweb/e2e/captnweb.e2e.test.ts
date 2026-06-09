@@ -55,7 +55,7 @@ import {
  *   preserving the same `ctx.some.path.method(...)` authoring model.
  */
 const baseUrl = requireBaseUrl();
-const egressEchoBaseUrl = requireEgressEchoBaseUrl(baseUrl);
+const egressEchoUrl = requireEgressEchoUrl(baseUrl);
 const auth = rootAccessAuth();
 const ROOT_ITERATE_CONTEXT_PREFIX = "/api/captnweb";
 const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
@@ -404,7 +404,7 @@ describe("capnweb", () => {
         script: fetchAndEgressProject,
         vars: {
           echoAuthToken: auth.token.exposeSecret(),
-          echoUrl: new URL("/api/captnweb/egress-echo", egressEchoBaseUrl).toString(),
+          echoUrl: egressEchoUrl,
           executionMode: executionMode.name,
           ingressUrl: project.ingressUrl,
           secretKey: EXAMPLE_EGRESS_SECRET_KEY,
@@ -444,7 +444,7 @@ describe("capnweb", () => {
         script: globalFetchUsesProjectEgress,
         vars: {
           echoAuthToken: auth.token.exposeSecret(),
-          echoUrl: new URL("/api/captnweb/egress-echo", egressEchoBaseUrl).toString(),
+          echoUrl: egressEchoUrl,
           executionMode: executionMode.name,
           secretKey: EXAMPLE_EGRESS_SECRET_KEY,
         },
@@ -923,7 +923,7 @@ async function runCapnwebScriptFromNode(input: {
   vars?: Record<string, unknown>;
 }): Promise<any> {
   return await runWithProjectEgressFetch(input.ctx, () =>
-    input.script({ ctx: input.ctx, env: {}, vars: input.vars ?? {} }),
+    input.script({ ctx: input.ctx, vars: input.vars ?? {} }),
   );
 }
 
@@ -1139,18 +1139,21 @@ function rootAccessAuthHeaders(auth: RootAccessAuth) {
   return { Authorization: `Bearer ${auth.token.exposeSecret()}` };
 }
 
-function requireEgressEchoBaseUrl(controlPlaneBaseUrl: string) {
-  const explicit = process.env.OS_E2E_EGRESS_ECHO_BASE_URL?.trim().replace(/\/+$/, "");
-  if (explicit) return explicit;
+function requireEgressEchoUrl(controlPlaneBaseUrl: string) {
+  const explicitUrl = process.env.OS_E2E_EGRESS_ECHO_URL?.trim();
+  if (explicitUrl) return explicitUrl;
+
+  const explicitBaseUrl = process.env.OS_E2E_EGRESS_ECHO_BASE_URL?.trim().replace(/\/+$/, "");
+  if (explicitBaseUrl) {
+    return new URL("/api/captnweb/egress-echo", explicitBaseUrl).toString();
+  }
 
   const url = new URL(controlPlaneBaseUrl);
   if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
-    return controlPlaneBaseUrl;
+    return new URL("/api/captnweb/egress-echo", controlPlaneBaseUrl).toString();
   }
 
-  throw new Error(
-    "OS_E2E_EGRESS_ECHO_BASE_URL is required when APP_CONFIG_BASE_URL points at localhost.",
-  );
+  return "https://postman-echo.com/get";
 }
 
 async function createDisposableProject(input: { root: RpcStub<IterateContext>; slug: string }) {

@@ -23,22 +23,12 @@ const ctx = connectPrototypeContext(input);
 try {
   const script = (0, eval)(`(${input.script})`) as (input: {
     ctx: RpcStub<FakeIterateCapability>;
-    env: {
-      ITERATE: {
-        context: RpcStub<FakeIterateCapability>;
-      };
-    };
     vars: PrototypeScriptInput["vars"];
   }) => Promise<unknown>;
   console.log(
     JSON.stringify(
       await script({
         ctx,
-        env: {
-          ITERATE: {
-            context: ctx,
-          },
-        },
         vars: input.vars,
       }),
     ),

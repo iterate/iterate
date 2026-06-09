@@ -8,7 +8,6 @@ export type CapnwebScriptInput<
   Ctx = BuiltinCapnwebContext,
 > = {
   ctx: Ctx;
-  env: Record<string, unknown>;
   vars: Vars;
 };
 

@@ -121,8 +121,8 @@ function rootRunWorkerSrc(input: { dynamicMountRoots: string[]; functionSource: 
     //   env.ITERATE.callMounted(["tools", "echo"], [arg])
     //
     // Normal properties fall through untouched. This keeps the symmetric
-    // snippet model ("const ctx = await env.ITERATE.context") while preserving
-    // the dynamic-worker mount rule that the loader owner forwards the call.
+    // snippet model (script({ ctx, vars })) while preserving the dynamic-worker
+    // mount rule that the loader owner forwards the call.
     //
     // References:
     // - Dynamic Workers API: https://developers.cloudflare.com/dynamic-workers/api-reference/
@@ -169,7 +169,6 @@ function rootRunWorkerSrc(input: { dynamicMountRoots: string[]; functionSource: 
         const result = await runWithProjectEgressFetch(ctx, () =>
           snippet({
             ctx,
-            env: this.env,
             vars,
           })
         );

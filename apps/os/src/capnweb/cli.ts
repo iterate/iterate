@@ -19,11 +19,10 @@ async function main() {
   try {
     const fn = (0, eval)(`(${flags.e})`) as (input: {
       ctx: RpcStub<IterateContext>;
-      env: Record<string, unknown>;
       vars: Record<string, unknown>;
     }) => unknown;
     const result = await runWithProjectEgressFetch(session.ctx, () =>
-      fn({ ctx: session.ctx, env: {}, vars: parseJsonObject(flags.vars ?? "{}") }),
+      fn({ ctx: session.ctx, vars: parseJsonObject(flags.vars ?? "{}") }),
     );
     console.log(JSON.stringify(result));
   } finally {

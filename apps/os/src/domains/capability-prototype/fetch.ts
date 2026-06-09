@@ -91,7 +91,6 @@ function prototypeRunWorkerSource(input: { functionSource: string }) {
         const resolvedCtx = await ctx;
         return await snippet({
           ctx: resolvedCtx,
-          env: this.env,
           vars,
         });
       }

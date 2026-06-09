@@ -5,12 +5,7 @@ import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
 
 import type { FakeIterateCapability } from "./capability.ts";
-import {
-  appendAndReadViaDynamicWorkerEnv,
-  appendAndReadViaRoot,
-  type PrototypeScript,
-  type PrototypeScriptInput,
-} from "./scripts.ts";
+import { appendAndRead, type PrototypeScript, type PrototypeScriptInput } from "./scripts.ts";
 
 const PROTOTYPE_PREFIX = "/api/capability-prototype";
 const execFileAsync = promisify(execFile);
@@ -24,17 +19,12 @@ test("prototype root capability works from Node, dynamic worker, and CLI against
   for (const executionMode of prototypeExecutionModes({ ctx })) {
     const marker = `${executionMode.name}-${crypto.randomUUID().slice(0, 8)}`;
     const result = await executionMode.run({
-      script:
-        executionMode.name === "run-endpoint"
-          ? appendAndReadViaDynamicWorkerEnv
-          : rewriteSource(appendAndReadViaRoot, {
-              from: "root-ctx",
-              to: executionMode.name,
-            }),
+      script: appendAndRead,
       vars: {
         eventType,
         marker,
         projectId,
+        source: executionMode.name,
         streamPath,
       },
     });
@@ -69,8 +59,7 @@ test("prototype denies unauthorized project access against the real worker", asy
         type: "iterate-auth",
         userId: "user_no_projects",
       },
-      functionSource: `async ({ env }) => {
-        const ctx = await env.ITERATE.context;
+      functionSource: `async ({ ctx }) => {
         return await ctx.projects.get("fake_proj_forbidden").describe();
       }`,
       vars: {},
@@ -113,11 +102,6 @@ function prototypeExecutionModes(input: { ctx: RpcStub<FakeIterateCapability> })
       run: ({ script, vars }: ScriptRunInput) =>
         script({
           ctx: input.ctx,
-          env: {
-            ITERATE: {
-              context: input.ctx,
-            },
-          },
           vars,
         }),
     },
@@ -125,7 +109,7 @@ function prototypeExecutionModes(input: { ctx: RpcStub<FakeIterateCapability> })
       name: "run-endpoint",
       run: ({ script, vars }: ScriptRunInput) =>
         runPrototypeScriptInDynamicWorker({
-          script: rewriteSource(script, { from: "dynamic-worker-env", to: "run-endpoint" }),
+          script,
           vars,
         }),
     },
@@ -133,7 +117,7 @@ function prototypeExecutionModes(input: { ctx: RpcStub<FakeIterateCapability> })
       name: "cli",
       run: ({ script, vars }: ScriptRunInput) =>
         runPrototypeScriptInCli({
-          script: rewriteSource(script, { from: "root-ctx", to: "cli" }),
+          script,
           vars,
         }),
     },
@@ -189,19 +173,6 @@ function authHeaders() {
     Authorization: `Bearer ${adminApiSecret()}`,
     "content-type": "application/json",
   };
-}
-
-function rewriteSource(script: PrototypeScript, replacement: { from: string; to: string }) {
-  const source = script
-    .toString()
-    .replaceAll(JSON.stringify(replacement.from), JSON.stringify(replacement.to));
-  const rewritten = (0, eval)(`(${source})`) as PrototypeScript;
-  Object.defineProperty(rewritten, "toString", {
-    value() {
-      return source;
-    },
-  });
-  return rewritten;
 }
 
 function adminApiSecret() {
