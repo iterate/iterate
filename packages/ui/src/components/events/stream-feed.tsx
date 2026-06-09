@@ -582,6 +582,8 @@ function RawJsonDump({ element }: { element: EventsStreamRawJsonDumpElement }) {
       showToggle
       showCopyButton
       scrollToBottom
+      showLineNumbers={false}
+      plainChrome
     />
   );
 }
@@ -708,6 +710,8 @@ function MetadataUpdatedBlock({ element }: { element: EventsStreamMetadataUpdate
         initialFormat="yaml"
         showToggle
         showCopyButton
+        showLineNumbers={false}
+        plainChrome
       />
     </FeedEvent>
   );
@@ -737,6 +741,8 @@ function CodemodeBlockBlock({ element }: { element: EventsStreamCodemodeBlockEle
         language="typescript"
         className="min-h-40 max-h-128"
         showCopyButton
+        showLineNumbers={false}
+        plainChrome
       />
     </FeedEvent>
   );
@@ -771,6 +777,8 @@ function CodemodeResultBlock({ element }: { element: EventsStreamCodemodeResultE
           initialFormat="yaml"
           showToggle
           showCopyButton
+          showLineNumbers={false}
+          plainChrome
         />
         {element.props.error == null ? null : (
           <SourceCodeBlock
@@ -778,6 +786,8 @@ function CodemodeResultBlock({ element }: { element: EventsStreamCodemodeResultE
             language="text"
             className="min-h-20 max-h-48"
             showCopyButton
+            showLineNumbers={false}
+            plainChrome
           />
         )}
         {element.props.logs.length === 0 ? null : (
@@ -786,6 +796,8 @@ function CodemodeResultBlock({ element }: { element: EventsStreamCodemodeResultE
             language="text"
             className="min-h-20 max-h-56"
             showCopyButton
+            showLineNumbers={false}
+            plainChrome
           />
         )}
       </div>
