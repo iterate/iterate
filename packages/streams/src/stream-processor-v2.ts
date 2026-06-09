@@ -1,5 +1,6 @@
-import { RpcTarget } from "cloudflare:workers";
+import { RpcTarget } from "capnweb";
 import type { z } from "zod";
+import type { ProcessorStream } from "./processor-runner.ts";
 import type { StreamEvent } from "./shared/event.ts";
 import {
   getInitialProcessorState,
@@ -17,6 +18,10 @@ export type DeepReadonly<T> = T extends (...args: never[]) => unknown
       ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
       : T;
 
+export type StreamProcessorIterateContext = {
+  stream: ProcessorStream;
+};
+
 export type StreamProcessorContract<Self> = {
   slug: string;
   stateSchema: z.ZodType;
@@ -31,10 +36,10 @@ export type StreamProcessorContract<Self> = {
   }) => ProcessorState<Self> | null | undefined;
 };
 
-export type StreamProcessorDeps<IterateContext> = {
+export type StreamProcessorBaseDeps<Contract, IterateContext> = {
   iterateContext: IterateContext;
   keepAliveWhile?: <Result>(work: () => Promise<Result>) => void;
-};
+} & StreamProcessorStateStorage<ProcessorState<Contract>>;
 
 export type ReducedEvent<Contract> = {
   event: DeepReadonly<ConsumedEvent<Contract>>;
@@ -49,6 +54,7 @@ export type ReduceArgs<Contract> = {
 
 export type ProcessEventArgs<Contract> = ReducedEvent<Contract> & {
   streamMaxOffset: number;
+  checkpointOffset: number;
   blockProcessorWhile: <Result>(work: () => Promise<Result>) => void;
   runInBackground: <Result>(work: () => Promise<Result>) => void;
 };
@@ -57,7 +63,10 @@ export type ProcessEventsArgs<Contract> = {
   events: readonly ReducedEvent<Contract>[];
   previousState: DeepReadonly<ProcessorState<Contract>>;
   state: DeepReadonly<ProcessorState<Contract>>;
+  checkpointOffset: number;
   streamMaxOffset: number;
+  blockProcessorWhile: <Result>(work: () => Promise<Result>) => void;
+  runInBackground: <Result>(work: () => Promise<Result>) => void;
 };
 
 export type StreamProcessorSnapshot<State> = {
@@ -65,58 +74,82 @@ export type StreamProcessorSnapshot<State> = {
   state: State;
 };
 
-export type SyncSqlStorage = {
-  exec<Row extends Record<string, unknown> = Record<string, unknown>>(
-    query: string,
-    ...bindings: unknown[]
-  ): { toArray(): Row[] };
+type MaybePromise<T> = T | Promise<T>;
+
+export type StreamProcessorStateStorage<State> = {
+  readState?: () => MaybePromise<StreamProcessorSnapshot<State> | undefined>;
+  writeState?: (snapshot: StreamProcessorSnapshot<State>) => MaybePromise<void>;
 };
 
 export type StreamProcessorConstructorArgs<
   Contract extends StreamProcessorContract<Contract>,
-  Deps extends StreamProcessorDeps<unknown>,
+  Deps extends object,
+  IterateContext = StreamProcessorIterateContext,
 > = {
-  contract: Contract;
-  deps: Deps;
   processorKey?: string;
-  sql?: SyncSqlStorage;
-};
+} & StreamProcessorBaseDeps<Contract, IterateContext> &
+  Deps;
 
+// Extending RpcTarget is a convenience for exposing processors directly over Cap'n Web.
+// The processing model should not fundamentally depend on RPC; we may remove this base
+// class dependency once processor hosting has settled.
 export abstract class StreamProcessor<
   Contract extends StreamProcessorContract<Contract>,
-  Deps extends StreamProcessorDeps<unknown>,
+  Deps extends object = Record<string, never>,
+  IterateContext = StreamProcessorIterateContext,
 > extends RpcTarget {
-  readonly contract: Contract;
-  protected readonly ctx: Deps["iterateContext"];
+  abstract readonly contract: Contract;
+  protected readonly ctx: IterateContext;
   protected readonly deps: Deps;
-  protected readonly processorKey: string;
-  protected readonly sql: SyncSqlStorage | undefined;
+  readonly #processorKey: string | undefined;
 
   #checkpointOffset = 0;
+  #loaded: Promise<void> | undefined;
   #processing: Promise<void> = Promise.resolve();
-  #state: ProcessorState<Contract>;
+  #state: ProcessorState<Contract> | undefined;
   #blockingWork: Promise<unknown>[] = [];
+  #memorySnapshot: StreamProcessorSnapshot<ProcessorState<Contract>> | undefined;
+  readonly #keepAliveWhile: (<Result>(work: () => Promise<Result>) => void) | undefined;
+  readonly #readState: () => MaybePromise<
+    StreamProcessorSnapshot<ProcessorState<Contract>> | undefined
+  >;
+  readonly #writeState: (
+    snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>,
+  ) => MaybePromise<void>;
 
-  protected constructor(args: StreamProcessorConstructorArgs<Contract, Deps>) {
+  constructor(args: StreamProcessorConstructorArgs<Contract, Deps, IterateContext>) {
     super();
-    this.contract = args.contract;
-    this.ctx = args.deps.iterateContext;
-    this.deps = args.deps;
-    this.processorKey = args.processorKey ?? args.contract.slug;
-    this.sql = args.sql;
+    const { iterateContext, keepAliveWhile, processorKey, readState, writeState, ...deps } = args;
+    this.ctx = iterateContext;
+    this.deps = deps as Deps;
+    this.#processorKey = processorKey;
+    this.#keepAliveWhile = keepAliveWhile;
+    this.#readState = readState ?? (() => this.#memorySnapshot);
+    this.#writeState =
+      writeState ??
+      ((snapshot) => {
+        this.#memorySnapshot = snapshot;
+      });
+  }
 
-    this.#ensureStorageSchema();
-    const snapshot = this.#loadSnapshot();
-    this.#state = snapshot?.state ?? getInitialProcessorState(args.contract);
-    this.#checkpointOffset = snapshot?.offset ?? 0;
+  protected get processorKey(): string {
+    return this.#processorKey ?? this.contract.slug;
   }
 
   get state(): DeepReadonly<ProcessorState<Contract>> {
-    return this.#state as DeepReadonly<ProcessorState<Contract>>;
+    return this.#getState() as DeepReadonly<ProcessorState<Contract>>;
   }
 
   get checkpointOffset(): number {
     return this.#checkpointOffset;
+  }
+
+  async snapshot(): Promise<StreamProcessorSnapshot<DeepReadonly<ProcessorState<Contract>>>> {
+    await this.#loadState();
+    return {
+      offset: this.#checkpointOffset,
+      state: this.state,
+    };
   }
 
   async processEventBatch(args: {
@@ -140,9 +173,10 @@ export abstract class StreamProcessor<
     for (const reducedEvent of args.events) {
       this.processEvent({
         ...reducedEvent,
+        checkpointOffset: args.checkpointOffset,
         streamMaxOffset: args.streamMaxOffset,
-        blockProcessorWhile: (work) => this.#blockProcessorWhile(work),
-        runInBackground: (work) => this.#runInBackground(work),
+        blockProcessorWhile: args.blockProcessorWhile,
+        runInBackground: args.runInBackground,
       });
     }
   }
@@ -153,42 +187,53 @@ export abstract class StreamProcessor<
     events: readonly StreamEvent[];
     streamMaxOffset: number;
   }): Promise<void> {
-    for (const rawEvent of args.events) {
-      if (rawEvent.offset <= this.#checkpointOffset) continue;
+    await this.#loadState();
 
-      const previousState = this.#state;
+    const batchPreviousState = this.#getState();
+    let nextState = batchPreviousState;
+    let checkpointOffset = this.#checkpointOffset;
+    const reducedEvents: ReducedEvent<Contract>[] = [];
+
+    for (const rawEvent of args.events) {
+      if (rawEvent.offset <= checkpointOffset) continue;
+
       const reduction = runProcessorReduce({
         event: rawEvent,
         processor: { contract: this.contract },
-        state: previousState,
+        state: nextState,
       });
+      checkpointOffset = rawEvent.offset;
 
-      if (reduction === undefined) {
-        this.#checkpointOffset = rawEvent.offset;
-        this.#saveSnapshot();
-        continue;
-      }
+      if (reduction === undefined) continue;
 
-      const reducedEvent: ReducedEvent<Contract> = {
+      reducedEvents.push({
         event: reduction.event as DeepReadonly<ConsumedEvent<Contract>>,
-        previousState: previousState as DeepReadonly<ProcessorState<Contract>>,
+        previousState: nextState as DeepReadonly<ProcessorState<Contract>>,
         state: reduction.state as DeepReadonly<ProcessorState<Contract>>,
-      };
+      });
+      nextState = reduction.state;
+    }
 
+    if (checkpointOffset === this.#checkpointOffset) return;
+
+    if (reducedEvents.length > 0) {
       this.#blockingWork = [];
       this.processEvents({
-        events: [reducedEvent],
-        previousState: reducedEvent.previousState,
-        state: reducedEvent.state,
+        events: reducedEvents,
+        previousState: batchPreviousState as DeepReadonly<ProcessorState<Contract>>,
+        state: nextState as DeepReadonly<ProcessorState<Contract>>,
+        checkpointOffset,
         streamMaxOffset: args.streamMaxOffset,
+        blockProcessorWhile: (work) => this.#blockProcessorWhile(work),
+        runInBackground: (work) => this.#runInBackground(work),
       });
 
       await this.#awaitBlockingWork();
-
-      this.#state = reduction.state;
-      this.#checkpointOffset = rawEvent.offset;
-      this.#saveSnapshot();
     }
+
+    this.#state = nextState;
+    this.#checkpointOffset = checkpointOffset;
+    await this.#saveSnapshot();
   }
 
   #blockProcessorWhile<Result>(work: () => Promise<Result>): void {
@@ -202,10 +247,10 @@ export abstract class StreamProcessor<
   }
 
   async #runKeepAliveBackedWork<Result>(work: () => Promise<Result>): Promise<Result> {
-    if (this.deps.keepAliveWhile === undefined) return await work();
+    if (this.#keepAliveWhile === undefined) return await work();
 
     return await new Promise<Result>((resolve, reject) => {
-      this.deps.keepAliveWhile!(async () => {
+      this.#keepAliveWhile!(async () => {
         try {
           const result = await work();
           resolve(result);
@@ -223,48 +268,28 @@ export abstract class StreamProcessor<
     await Promise.all(this.#blockingWork);
   }
 
-  #ensureStorageSchema(): void {
-    this.sql?.exec(`
-      create table if not exists stream_processor_snapshots (
-        processor_key text primary key,
-        state_json text not null,
-        offset integer not null
-      )
-    `);
+  async #loadState(): Promise<void> {
+    this.#loaded ??= (async () => {
+      const snapshot = await this.#readState();
+      if (snapshot === undefined) {
+        this.#state ??= getInitialProcessorState(this.contract);
+        return;
+      }
+      this.#state = this.contract.stateSchema.parse(snapshot.state) as ProcessorState<Contract>;
+      this.#checkpointOffset = snapshot.offset;
+    })();
+    await this.#loaded;
   }
 
-  #loadSnapshot(): StreamProcessorSnapshot<ProcessorState<Contract>> | undefined {
-    const row = this.sql
-      ?.exec<{ stateJson: string; offset: number }>(
-        `
-          select state_json as stateJson, offset
-          from stream_processor_snapshots
-          where processor_key = ?
-          limit 1
-        `,
-        this.processorKey,
-      )
-      .toArray()[0];
-
-    if (row === undefined) return undefined;
-    return {
-      offset: Number(row.offset),
-      state: this.contract.stateSchema.parse(JSON.parse(row.stateJson)) as ProcessorState<Contract>,
-    };
+  #getState(): ProcessorState<Contract> {
+    this.#state ??= getInitialProcessorState(this.contract);
+    return this.#state;
   }
 
-  #saveSnapshot(): void {
-    this.sql?.exec(
-      `
-        insert into stream_processor_snapshots (processor_key, state_json, offset)
-        values (?, ?, ?)
-        on conflict(processor_key) do update set
-          state_json = excluded.state_json,
-          offset = excluded.offset
-      `,
-      this.processorKey,
-      JSON.stringify(this.#state),
-      this.#checkpointOffset,
-    );
+  async #saveSnapshot(): Promise<void> {
+    await this.#writeState({
+      offset: this.#checkpointOffset,
+      state: this.#getState(),
+    });
   }
 }

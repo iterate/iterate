@@ -16,11 +16,13 @@ import type {
   StreamBrowserDatabase,
   StreamEventRow,
 } from "@iterate-com/streams/browser/stream-browser-db";
+import { browserProcessorStateStorage } from "@iterate-com/streams/browser/processor-state-storage";
+import { BROWSER_RAW_EVENTS_SCHEMA_VERSION } from "@iterate-com/streams/processors/browser-raw-events/implementation";
 import {
-  BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-  browserRawEvents,
-  loadBrowserRawEventsCheckpoint,
-} from "@iterate-com/streams/processors/browser-raw-events/implementation";
+  BrowserRawEventsContract,
+  BrowserRawEventsProcessor,
+  type BrowserRawEventsState,
+} from "@iterate-com/streams/processors/browser-raw-events/v2";
 import { StreamEventInput } from "@iterate-com/streams/shared/event";
 import type { StreamPath } from "@iterate-com/shared/streams/types";
 import { parse as parseYaml } from "yaml";
@@ -52,10 +54,22 @@ export function ProjectStreamView({
         namespace: projectSlugOrId,
         streamPath: streamPathText,
         streamUrl: projectStreamRpcPath(projectSlugOrId, streamPathText),
-        processor: browserRawEvents,
+        slug: BrowserRawEventsContract.slug,
         schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
         tables: ["events"],
-        loadCheckpoint: loadBrowserRawEventsCheckpoint,
+        createProcessor({ stream, sql, subscriptionKey }) {
+          const storage = browserProcessorStateStorage<BrowserRawEventsState>({
+            sql,
+            processorSlug: BrowserRawEventsContract.slug,
+            subscriptionKey,
+          });
+          return new BrowserRawEventsProcessor({
+            iterateContext: { stream },
+            sql,
+            readState: storage.readState,
+            writeState: storage.writeState,
+          });
+        },
       }),
     [projectSlugOrId, streamPathText],
   );

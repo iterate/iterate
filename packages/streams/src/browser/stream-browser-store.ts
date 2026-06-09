@@ -14,15 +14,15 @@
 
 import type { RpcPromise, RpcStub } from "capnweb";
 import type { StreamEvent, StreamEventInput } from "../shared/event.ts";
-import { createProcessorRunner } from "../processor-runner.ts";
-import type { Processor } from "../processor.ts";
+import type { ProcessorStream } from "../processor-runner.ts";
+import type { StreamProcessorSnapshot } from "../stream-processor-v2.ts";
 import type { StreamCoreProcessorState, StreamRpc } from "../types.ts";
-import { createStreamSubscription, type StreamSubscription } from "../subscription.ts";
 import {
   withStreamConnectionFromBrowser,
   streamRpcPath,
   type StreamBrowserConnectionStatus,
 } from "./connect.ts";
+import { deleteBrowserProcessorState } from "./processor-state-storage.ts";
 import { acquireWriterRole, streamWriterLockName, type WriterRole } from "./stream-leader.ts";
 import {
   StreamBrowserDatabase,
@@ -35,6 +35,14 @@ import {
 const DEFAULT_STREAM_NAMESPACE = "default";
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
 
+type BrowserHostedProcessor = {
+  snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
+  processEventBatch(args: {
+    events: readonly StreamEvent[];
+    streamMaxOffset: number;
+  }): Promise<void>;
+};
+
 export type StreamBrowserSnapshot = {
   connectionStatus: StreamBrowserConnectionStatus | "reconnecting" | "subscribing" | "subscribed";
   subscriptionStatus: "idle" | "electing" | "leader" | "follower";
@@ -45,15 +53,18 @@ export type StreamBrowserSnapshot = {
 
 /** What a view tells the runtime about the processor it wants hosted. */
 export type BrowserProcessorConfig = {
-  // Heterogeneous processors; the runner re-infers the contract per call, so the
-  // contract type is intentionally erased here.
-  processor: Processor<any, { sql: SqlClient }>;
+  /** Stable processor identity, used for runtime dedupe, locks, and state rows. */
+  slug: string;
   /** Bumped into the writer-lock name so a schema migration lets a fresh tab take over. */
   schemaVersion: number;
   /** Tables this processor owns, cleared together when the local mirror is discarded. */
   tables: string[];
-  /** Durable resume cursor + reduced state, read back from this processor's own tables. */
-  loadCheckpoint(sql: SqlClient): Promise<{ state: unknown; offset: number } | undefined>;
+  /** Create the concrete processor once the browser runtime has a stream connection. */
+  createProcessor(args: {
+    stream: ProcessorStream;
+    sql: SqlClient;
+    subscriptionKey: string;
+  }): BrowserHostedProcessor;
 };
 
 export type BrowserStreamConnectionConfig = {
@@ -114,7 +125,7 @@ export function acquireStreamRuntime(
   args: { streamPath: string } & BrowserProcessorConfig & BrowserStreamConnectionConfig,
 ): StreamBrowserStore {
   const namespace = args.namespace ?? DEFAULT_STREAM_NAMESPACE;
-  const slug = args.processor.contract.slug;
+  const slug = args.slug;
   const key = `${namespace} ${args.streamPath} ${slug}`;
   const existing = runtimeRegistry.get(key);
   if (existing !== undefined) return existing;
@@ -135,8 +146,8 @@ function createStreamRuntime(
   } & BrowserProcessorConfig &
     BrowserStreamConnectionConfig,
 ): StreamBrowserStore {
-  const { processor, schemaVersion, tables, loadCheckpoint } = args;
-  const slug = processor.contract.slug;
+  const { schemaVersion, tables } = args;
+  const slug = args.slug;
   const { db: streamDatabase, release: releaseDatabase } = acquireDatabase(
     args.namespace,
     args.streamPath,
@@ -166,8 +177,6 @@ function createStreamRuntime(
   const listeners = new Set<() => void>();
   let stream: Awaited<ReturnType<typeof withStreamConnectionFromBrowser>> | undefined;
   let subscriptionHandle: { unsubscribe(): void } | undefined;
-  let subscription: StreamSubscription | undefined;
-  let processing: AsyncDisposable | undefined;
   let writerRole: WriterRole | undefined;
   let connectTimer: ReturnType<typeof setTimeout> | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -267,6 +276,7 @@ function createStreamRuntime(
 
   async function discardLocalMirror() {
     await streamDatabase.clearTables(tables);
+    await deleteBrowserProcessorState({ sql, processorSlug: slug, subscriptionKey });
     await streamDatabase.compact();
     snapshot = {
       ...snapshot,
@@ -280,8 +290,9 @@ function createStreamRuntime(
   // Discard the local mirror when the server has fewer committed events than we do — a
   // reset/rewind makes our stored suffix impossible.
   async function reconcileLocalMirrorWithServer(rpc: RpcStub<StreamRpc>) {
-    const checkpoint = await loadCheckpoint(sql);
-    const localMaxOffset = checkpoint?.offset ?? -1;
+    const processor = args.createProcessor({ stream: rpc, sql, subscriptionKey });
+    const checkpoint = await processor.snapshot();
+    const localMaxOffset = checkpoint.offset;
     if (localMaxOffset < 0) return;
     const { coreProcessorState } = await rpc.runtimeState();
     if (coreProcessorState.maxOffset >= localMaxOffset) return;
@@ -357,19 +368,16 @@ function createStreamRuntime(
         snapshot = { ...snapshot, subscriptionStatus: "leader" };
         emitSnapshot();
         await reconcileLocalMirrorWithServer(election.connection.stream);
-        const checkpoint = await loadCheckpoint(sql);
-        const processorRunner = createProcessorRunner({
-          processor,
-          deps: { sql },
-          storage: { load: () => checkpoint, save: () => {} },
+        const processor = args.createProcessor({
           stream: election.connection.stream,
+          sql,
+          subscriptionKey,
         });
-        const streamSubscription = createStreamSubscription({ subscriptionKey });
-        subscription = streamSubscription;
-        processing = processorRunner.run({ subscription: streamSubscription });
+        const checkpoint = await processor.snapshot();
         return {
-          replayAfterOffset: checkpoint?.offset ?? 0,
-          processEventBatch: streamSubscription.processEventBatch,
+          replayAfterOffset: checkpoint.offset,
+          processEventBatch: (batch: { events: readonly StreamEvent[]; streamMaxOffset: number }) =>
+            processor.processEventBatch(batch),
         };
       })
       .then((ready) => {
@@ -404,10 +412,6 @@ function createStreamRuntime(
   function stopSubscriptionElection() {
     subscriptionHandle?.unsubscribe();
     subscriptionHandle = undefined;
-    void processing?.[Symbol.asyncDispose]();
-    processing = undefined;
-    void subscription?.[Symbol.asyncDispose]();
-    subscription = undefined;
     writerRole?.release();
     writerRole = undefined;
     snapshot = { ...snapshot, subscriptionStatus: "idle" };

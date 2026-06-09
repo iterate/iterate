@@ -13,12 +13,16 @@ import {
   type StreamBrowserStore,
 } from "../../../src/browser/stream-browser-store.ts";
 import type { StreamBrowserDatabase } from "../../../src/browser/stream-browser-db.ts";
+import { browserProcessorStateStorage } from "../../../src/browser/processor-state-storage.ts";
 import {
   BROWSER_EVENT_FEED_SCHEMA_VERSION,
   BROWSER_EVENT_FEED_TABLE,
-  browserEventFeed,
-  loadBrowserEventFeedCheckpoint,
 } from "../../../src/processors/browser-event-feed/implementation.ts";
+import {
+  BrowserEventFeedContract,
+  BrowserEventFeedProcessor,
+  type BrowserEventFeedState,
+} from "../../../src/processors/browser-event-feed/v2.ts";
 import { useStreamQuery } from "../../../src/browser/hooks/use-stream-query.ts";
 
 type FeedItemRow = {
@@ -41,10 +45,22 @@ export function EventFeedView({ streamPath }: { streamPath: string }) {
     () =>
       acquireStreamRuntime({
         streamPath,
-        processor: browserEventFeed,
+        slug: BrowserEventFeedContract.slug,
         schemaVersion: BROWSER_EVENT_FEED_SCHEMA_VERSION,
         tables: [BROWSER_EVENT_FEED_TABLE],
-        loadCheckpoint: loadBrowserEventFeedCheckpoint,
+        createProcessor({ stream, sql, subscriptionKey }) {
+          const storage = browserProcessorStateStorage<BrowserEventFeedState>({
+            sql,
+            processorSlug: BrowserEventFeedContract.slug,
+            subscriptionKey,
+          });
+          return new BrowserEventFeedProcessor({
+            iterateContext: { stream },
+            sql,
+            readState: storage.readState,
+            writeState: storage.writeState,
+          });
+        },
       }),
     [streamPath],
   );

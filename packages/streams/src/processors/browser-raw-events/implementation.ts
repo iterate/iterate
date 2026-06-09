@@ -1,11 +1,6 @@
-// Implements the "browser-raw-events" processor.
-// Owns the browser `events` table schema and writes each delivered batch of events
-// in one SQLite transaction (afterAppendBatch + the batch write API).
+// Browser raw-events SQLite helpers.
 
-import { implementProcessor } from "../../processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
-import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
-import { browserRawEventsContract } from "./contract.ts";
 
 export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 4;
 
@@ -85,36 +80,5 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
     );
   },
 });
-
-/** Resume cursor for this processor: the max committed offset in the events table. */
-export async function loadBrowserRawEventsCheckpoint(
-  sql: SqlClient,
-): Promise<{ state: Record<string, never>; offset: number } | undefined> {
-  await ensureBrowserRawEventsSchema(sql);
-  const [row] = await sql.exec(`SELECT MAX(offset) AS max_offset FROM events`);
-  const max = Number(row?.max_offset ?? -1);
-  return max < 0 ? undefined : { state: {}, offset: max };
-}
-
-export const browserRawEvents = implementProcessor(
-  browserRawEventsContract,
-  (deps: { sql: SqlClient }) => ({
-    afterAppendBatch({ events, blockProcessorUntil }) {
-      blockProcessorUntil(() =>
-        ensureBrowserRawEventsSchema(deps.sql).then(() =>
-          deps.sql.batch(
-            events.map(({ event }) => {
-              return {
-                sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
-                params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
-              };
-            }),
-            { transaction: true },
-          ),
-        ),
-      );
-    },
-  }),
-);
 
 export { ensureBrowserRawEventsSchema };

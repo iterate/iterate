@@ -25,11 +25,13 @@ import {
   type StreamBrowserDatabase,
   type StreamEventRow,
 } from "../../../src/browser/stream-browser-db.ts";
+import { browserProcessorStateStorage } from "../../../src/browser/processor-state-storage.ts";
+import { BROWSER_RAW_EVENTS_SCHEMA_VERSION } from "../../../src/processors/browser-raw-events/implementation.ts";
 import {
-  BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-  browserRawEvents,
-  loadBrowserRawEventsCheckpoint,
-} from "../../../src/processors/browser-raw-events/implementation.ts";
+  BrowserRawEventsContract,
+  BrowserRawEventsProcessor,
+  type BrowserRawEventsState,
+} from "../../../src/processors/browser-raw-events/v2.ts";
 import { useStreamQuery } from "../../../src/browser/hooks/use-stream-query.ts";
 import { EventFeedView } from "./-event-feed-view.tsx";
 import { StreamStateView } from "./-stream-state-view.tsx";
@@ -170,10 +172,22 @@ function useStreamProcessor(streamPath: string, config: BrowserProcessorConfig) 
 
 // Stable raw-events config (a constant so useStreamProcessor's useMemo identity is stable).
 const RAW_EVENTS_RUNTIME: BrowserProcessorConfig = {
-  processor: browserRawEvents,
+  slug: BrowserRawEventsContract.slug,
   schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   tables: ["events"],
-  loadCheckpoint: loadBrowserRawEventsCheckpoint,
+  createProcessor({ stream, sql, subscriptionKey }) {
+    const storage = browserProcessorStateStorage<BrowserRawEventsState>({
+      sql,
+      processorSlug: BrowserRawEventsContract.slug,
+      subscriptionKey,
+    });
+    return new BrowserRawEventsProcessor({
+      iterateContext: { stream },
+      sql,
+      readState: storage.readState,
+      writeState: storage.writeState,
+    });
+  },
 };
 
 // The raw-events view's data: the thin runtime + this view's own reactive SQL queries.
