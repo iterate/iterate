@@ -119,7 +119,7 @@ function ProjectDetailContent({ project }: { project: Project }) {
 
         <div className="space-y-2">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Events namespace</p>
-          <EventsDebugLink label="Open project in Events" namespace={project.id} streamPath="/" />
+          <EventsDebugLink label="Open project in Streams" namespace={project.id} streamPath="/" />
         </div>
 
         <div className="space-y-2">

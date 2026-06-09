@@ -114,7 +114,7 @@ function ProjectStreamsIndexPage() {
   return (
     <section className="w-full space-y-4 p-4">
       <div className="flex justify-end">
-        <EventsDebugLink label="Open namespace in Events" namespace={project.id} streamPath="/" />
+        <EventsDebugLink label="Open namespace in Streams" namespace={project.id} streamPath="/" />
       </div>
       <form
         className="flex w-full flex-col gap-2 md:flex-row"

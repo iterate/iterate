@@ -6,7 +6,7 @@ import { eventsStreamViewerUrl } from "~/lib/events-links.ts";
 
 export function EventsDebugLink({
   className,
-  label = "Open in Events",
+  label = "Open in Streams",
   namespace,
   streamPath,
 }: {
