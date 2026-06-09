@@ -99,8 +99,13 @@ export class ItxCapIngress extends WorkerEntrypoint<Env, ItxCapIngressProps> {
     });
     const project = this.env.PROJECT.getByName(getProjectDurableObjectName(props.projectId));
 
+    // The host label was lowercased by normalizeIngressHost, but cap names
+    // may contain uppercase — match case-insensitively so `myCap` is routable
+    // at `mycap--{project}`. (Collisions that differ only by case are the
+    // owner's problem; first exposed match wins.)
+    const wanted = props.cap.toLowerCase();
     const caps = (await project.itxDescribe()) as CapDescription[];
-    const cap = caps.find((candidate) => candidate.name === props.cap);
+    const cap = caps.find((candidate) => candidate.name.toLowerCase() === wanted);
     if (!cap || cap.meta.http?.expose !== true) {
       return new Response("Not Found", { status: 404 });
     }
@@ -112,7 +117,7 @@ export class ItxCapIngress extends WorkerEntrypoint<Env, ItxCapIngressProps> {
           config,
         }) ||
         (await verifyShareToken({
-          cap: props.cap,
+          cap: cap.name,
           projectId: props.projectId,
           secret: config.adminApiSecret?.exposeSecret() ?? "",
           token: new URL(request.url).searchParams.get(SHARE_TOKEN_PARAM),
@@ -122,7 +127,8 @@ export class ItxCapIngress extends WorkerEntrypoint<Env, ItxCapIngressProps> {
 
     return (await project.itxInvoke({
       args: [request],
-      name: props.cap,
+      // Use the registry's exact name, not the lowercased host label.
+      name: cap.name,
       path: ["fetch"],
     })) as Response;
   }

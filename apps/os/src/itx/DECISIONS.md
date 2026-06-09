@@ -124,3 +124,40 @@ Verified by running the IDENTICAL test from origin/main (3cc317ad8) against a
 main-code dev server: it times out there too. Not caused by the itx branch;
 also failed on the itx preview deployment, consistent with an upstream
 slack-agent/stream-subscription regression that predates this work.
+
+## D16: Security hardening from adversarial review (round 1)
+
+- **Global context is admin-only.** `accessForPrincipal` hands non-admins
+  their named projects; the global ("all") handle — and global `/api/itx/run`,
+  which inherits the platform's own egress with no per-project
+  `globalOutbound` — are gated to `access === "all"`. Non-admins must narrow
+  to a named project. (Closes ambient-SSRF for authenticated non-admins.)
+- **`replayPathCall` filters reserved segments server-side.** `itxInvoke` is a
+  public DO method reachable with a hand-built `path`; the reserved-name gate
+  can't live only in the consumer proxy. `RESERVED_PATH_SEGMENTS` is now one
+  exported set (protocol.ts) used by both the proxy and the replay, and also
+  feeds `RESERVED_CAP_NAMES`, so a cap can never be named a prototype-pollution
+  vector or `Function.prototype` member.
+- **The path proxy never falls through to `Function.prototype`.** String keys
+  always extend the path (unless reserved), so SDK methods named
+  `name`/`call`/`bind`/`length` traverse correctly.
+- **`itx.project` is a narrow facade** (`ItxProject`: describe/ingressUrl/
+  getSummary), not the raw Project DO stub — internal lifecycle methods
+  (afterAppend, createProject, getConfigWorker, the itx\* verbs) are no longer
+  reachable from a project-scoped handle.
+- **Worker/facet entrypoint stubs are disposed after each invoke** (live
+  targets are not — the provider owns them).
+- **Cap HTTP routing matches names case-insensitively** and dispatches with
+  the registry's exact name.
+
+## D17: itx.project is the full Project DO surface (reverses D16's facade)
+
+Owner decision: within a project you get its whole surface — `itx.project`
+returns the Project DO stub directly, so Workers RPC auto-proxies every
+public method/getter and a newly-added DO method is instantly callable as
+`itx.project.foo()` with zero forwarder code. The round-1 review narrowed
+this to a facade for safety; the owner explicitly prefers the full surface
+under the project-level access model ("you have the project or you don't").
+The genuinely dangerous direction — a hand-built `path` into
+reserved/prototype names via `itxInvoke` — stays gated in `replayPathCall`
+(D16), which is exactly why that server-side filter is load-bearing now.

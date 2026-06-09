@@ -142,6 +142,96 @@ test("worker caps hold a correctly scoped itx of their own", async () => {
   ).toEqual(["ship the capability layer", "delete the mounts"]);
 });
 
+test("members caps auto-proxy every public method/getter at any depth", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-proxy` })) as { id: string };
+  using projectItx = await itx.projects.get(project.id);
+
+  // No method list anywhere: the WorkerEntrypoint just exports methods (and a
+  // getter returning a nested surface), and they are all instantly callable.
+  await projectItx.caps.define({
+    name: "kit",
+    source: {
+      codeId: crypto.randomUUID(),
+      mainModule: "cap.js",
+      modules: {
+        "cap.js": `
+          import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+          class Math extends RpcTarget {
+            add({ a, b }) { return a + b; }
+          }
+          export default class extends WorkerEntrypoint {
+            echo(input) { return { echoed: input }; }
+            get math() { return new Math(); }
+          }
+        `,
+      },
+    },
+  });
+
+  const kit = (projectItx as never as Record<string, any>).kit;
+  await expect(kit.echo({ hi: 1 })).resolves.toEqual({ echoed: { hi: 1 } });
+  // Depth: getter → nested RpcTarget → method, all proxied with no wiring.
+  await expect(kit.math.add({ a: 2, b: 3 })).resolves.toBe(5);
+});
+
+test("one dynamic worker cap calls another's methods through its own itx", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-w2w` })) as { id: string };
+  using projectItx = await itx.projects.get(project.id);
+
+  // Provider cap: a plain WorkerEntrypoint exporting a method + a nested
+  // getter. No method list — the whole public surface is proxied.
+  await projectItx.caps.define({
+    name: "inventory",
+    source: {
+      codeId: crypto.randomUUID(),
+      mainModule: "cap.js",
+      modules: {
+        "cap.js": `
+          import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+          class Skus extends RpcTarget { priceOf({ sku }) { return sku === "ABC" ? 42 : 0; } }
+          export default class extends WorkerEntrypoint {
+            count() { return 7; }
+            get skus() { return new Skus(); }
+          }
+        `,
+      },
+    },
+  });
+
+  // Consumer cap: a DIFFERENT dynamic worker that reaches the first one
+  // purely through env.ITERATE.context — itx.inventory.count() and the nested
+  // itx.inventory.skus.priceOf(...) are proxied worker→worker, no wiring.
+  await projectItx.caps.define({
+    name: "report",
+    source: {
+      codeId: crypto.randomUUID(),
+      mainModule: "cap.js",
+      modules: {
+        "cap.js": `
+          import { WorkerEntrypoint } from "cloudflare:workers";
+          export default class extends WorkerEntrypoint {
+            async build({ sku }) {
+              const itx = await this.env.ITERATE.context;
+              const count = await itx.inventory.count();
+              const price = await itx.inventory.skus.priceOf({ sku });
+              return { count, price, total: count * price };
+            }
+          }
+        `,
+      },
+    },
+  });
+
+  const report = (projectItx as never as Record<string, any>).report;
+  await expect(report.build({ sku: "ABC" })).resolves.toEqual({
+    count: 7,
+    price: 42,
+    total: 294,
+  });
+});
+
 test("revoked and offline caps fail with instructive errors", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-err` })) as { id: string };
@@ -156,6 +246,28 @@ test("revoked and offline caps fail with instructive errors", async () => {
       name: "then",
       source: { codeId: "x", mainModule: "cap.js", modules: { "cap.js": "export default {}" } },
     }),
+  ).rejects.toThrow(/reserved/);
+
+  // itx.project IS the full Project DO surface (D17): any public method is
+  // callable, so a method added to the DO is instantly reachable here. But a
+  // hand-built reserved path through itxInvoke is still gated server-side, so
+  // the full surface can never be abused to reach prototype internals.
+  await projectItx.caps.define({
+    name: "probe",
+    source: {
+      codeId: crypto.randomUUID(),
+      mainModule: "cap.js",
+      modules: {
+        "cap.js":
+          "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { ok() { return 1; } }",
+      },
+    },
+  });
+  const projectDo = (projectItx as { project: unknown }).project as {
+    itxInvoke(input: { args: unknown[]; name: string; path: string[] }): Promise<unknown>;
+  };
+  await expect(
+    projectDo.itxInvoke({ args: [], name: "probe", path: ["constructor"] }),
   ).rejects.toThrow(/reserved/);
 });
 

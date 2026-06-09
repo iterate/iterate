@@ -121,10 +121,12 @@ export class Itx extends RpcTarget {
   }
 
   /**
-   * The project's iterate-config worker as a path-call facade. The dynamic
-   * worker entrypoint itself can never cross an RPC boundary (workerd
-   * forbids transferring loader entrypoints), so calls forward by name:
-   * itx.worker.someTool(args) → callConfigWorkerFunction({ functionName }).
+   * The project's iterate-config worker. The dynamic worker entrypoint itself
+   * can never cross an RPC boundary (workerd forbids transferring loader
+   * entrypoints), so the path is replayed against it INSIDE the Project DO —
+   * every public method/getter is proxied automatically, at any depth:
+   * itx.worker.someTool(args), itx.worker.group.tool(args). `fetch` is the
+   * one special case (the project's ingress fetch).
    */
   get worker(): unknown {
     const project = this.#projectStub();
@@ -132,20 +134,21 @@ export class Itx extends RpcTarget {
       if (path.length === 1 && path[0] === "fetch") {
         return await project.fetch(args[0] as Request);
       }
-      if (path.length !== 1) {
-        throw new Error(
-          `itx.worker exposes the config worker's flat exports; ` +
-            `itx.worker.${path.join(".")} is not a single exported function.`,
-        );
-      }
-      return await project.callConfigWorkerFunction({ args, functionName: path[0]! });
+      return await project.callConfigWorkerFunction({ args, path });
     });
   }
 
   /**
-   * The project admin surface IS the Project Durable Object — cap #0. The
-   * stub passes over RPC with automatic proxying, so there is nothing to
-   * forward and no wrapper class to drift out of sync.
+   * The project's own (cap #0) surface IS the Project Durable Object stub.
+   * Workers RPC proxies every public method/getter automatically, so adding a
+   * method to ProjectDurableObject makes it instantly callable as
+   * itx.project.newMethod() — zero forwarder code, nothing to keep in sync.
+   *
+   * This is a deliberate, owner-chosen posture (reverses the round-1 facade,
+   * DECISIONS D17): the access model is project-level — if your handle is on
+   * this project's context at all, you get its whole surface. The dangerous
+   * direction (a hand-built `path` into reserved/prototype names via
+   * itxInvoke) is still gated server-side in replayPathCall.
    */
   get project(): ProjectStub {
     return this.#projectStub();

@@ -57,6 +57,7 @@ import {
 } from "~/domains/secrets/example-secret.ts";
 import type { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
+import { replayPathCall } from "~/itx/path-proxy.ts";
 import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
 import type { CapInvoke, CapMeta, CapSource, PathCall } from "~/itx/protocol.ts";
 
@@ -585,10 +586,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return await fetch(outboundRequest);
   }
 
-  async callConfigWorkerFunction(input: {
-    args?: unknown[];
-    functionName: string;
-  }): Promise<unknown> {
+  async callConfigWorkerFunction(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
     await this.ensureStarted();
     const summary = this.requireSummary();
     const checkout = await this.buildFreshProjectDynamicWorker(summary);
@@ -597,15 +595,16 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     // tool wants shortcuts like itx.slack, those are registry capabilities
     // (itx.caps.provide/define) — durable wiring, not per-load props. This is
     // what deleted the old getIterateContextProps() two-step load.
+    //
+    // Every public method/getter on the config worker entrypoint is proxied
+    // automatically via the shared path replay — exactly like worker/facet
+    // caps — so adding an exported method makes itx.worker.foo() work with no
+    // wiring here.
     const entrypoint = this.loadProjectDynamicWorkerEntrypoint({
       checkout,
       projectId: summary.id,
     });
-    const fn = entrypoint[input.functionName];
-    if (typeof fn !== "function") {
-      throw new Error(`Project config worker does not export ${input.functionName}.`);
-    }
-    return await Reflect.apply(fn, entrypoint, input.args ?? []);
+    return await replayPathCall(entrypoint, { args: input.args ?? [], path: input.path });
   }
 
   async getConfigWorker(): Promise<ProjectDynamicWorkerEntrypoint> {

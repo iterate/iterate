@@ -278,8 +278,13 @@ export class ContextRegistry {
       throw new Error(`No capability named "${name}" in context ${this.host.contextId}.`);
     }
 
+    const target = this.targetFor(row);
+    // worker/facet targets are fresh per-call RPC stubs we must release;
+    // live targets are the long-lived stored connection and must NOT be
+    // disposed here (the provider owns their lifetime).
+    const disposable =
+      row.kind === "live" ? undefined : (target as Partial<Disposable>)[Symbol.dispose];
     try {
-      const target = this.targetFor(row);
       if (row.invoke === "path-call") {
         // One RPC: the provider implements call({ path, args }) and owns its
         // own method-tree semantics (e.g. forwarding to the Slack web API).
@@ -296,6 +301,10 @@ export class ContextRegistry {
         error,
       );
       throw error;
+    } finally {
+      if (typeof disposable === "function") {
+        Reflect.apply(disposable, target, []);
+      }
     }
   }
 

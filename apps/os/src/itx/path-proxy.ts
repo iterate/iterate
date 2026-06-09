@@ -12,22 +12,7 @@
 // (protocol.ts), so the proxy only needs to protect protocol-level names on
 // intermediate path segments.
 
-import type { PathCall } from "./protocol.ts";
-
-const RESERVED_PATH_SEGMENTS = new Set([
-  "__proto__",
-  "catch",
-  "constructor",
-  "dup",
-  "finally",
-  "hasOwnProperty",
-  "map",
-  "onRpcBroken",
-  "prototype",
-  "then",
-  "toString",
-  "valueOf",
-]);
+import { RESERVED_PATH_SEGMENTS, type PathCall } from "./protocol.ts";
 
 export type PathProxyCall = (input: PathCall) => unknown;
 
@@ -69,15 +54,18 @@ function pathNode(
       // `then` must read as undefined so promise assimilation never mistakes
       // a path node for a thenable mid-chain.
       if (key === "then") return undefined;
+      // Symbols resolve on the function itself (e.g. Symbol.dispose). String
+      // keys ALWAYS extend the path unless reserved — we never fall through to
+      // Function.prototype, so an SDK method literally named `name`/`call`/
+      // `bind`/`length` still traverses correctly. (The dangerous prototype
+      // names are in RESERVED_PATH_SEGMENTS.)
       if (typeof key === "symbol") return Reflect.get(target, key, receiver);
       if (RESERVED_PATH_SEGMENTS.has(key)) return undefined;
-      if (key in target) return Reflect.get(target, key, receiver);
       return pathNode(callPath, [...path, key], dispose);
     },
     getOwnPropertyDescriptor(target, key) {
       const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
       if (descriptor) return descriptor;
-      if (key in target) return undefined;
       if (typeof key === "symbol" || RESERVED_PATH_SEGMENTS.has(key)) return undefined;
       // Workers RPC probes own-property descriptors when serializing; report
       // path extensions as readable values so stubs traverse cleanly.
@@ -108,6 +96,15 @@ function pathNode(
  * (capnweb LEARNINGS, "Preserve Receivers").
  */
 export async function replayPathCall(target: unknown, call: PathCall): Promise<unknown> {
+  // Filter the path here too, not just in the consumer proxy: `itxInvoke` is
+  // a public DO method, so a caller can hand-build a `path` and reach this
+  // directly. This is the authoritative reserved-name gate.
+  for (const segment of call.path) {
+    if (RESERVED_PATH_SEGMENTS.has(segment)) {
+      throw new Error(`Capability path segment "${segment}" is reserved.`);
+    }
+  }
+
   if (call.path.length === 0) {
     if (typeof target !== "function") {
       throw new Error("Capability invoked as a function but the target is not callable.");

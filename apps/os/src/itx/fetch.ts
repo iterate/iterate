@@ -54,6 +54,11 @@ export async function handleItxFetch(input: {
   // ctx_… child context id.
   let props: ItxProps;
   if (subpath === "") {
+    // The global context is the all-projects handle. Only "all" access
+    // (admins) may hold it — a non-admin must narrow to one of their named
+    // projects. This is also what keeps global /api/itx/run (which inherits
+    // the platform's own egress) out of non-admin hands.
+    if (access !== "all") return new Response("Forbidden", { status: 403 });
     props = { access, context: GLOBAL_CONTEXT_ID };
   } else {
     const resolved = await resolveAccessibleContextId({
@@ -225,6 +230,10 @@ async function handleItxRun(input: {
     props = { context: resolved.contextId };
     scriptProjectId = resolved.projectId;
   } else {
+    // A global-context script inherits the platform's own egress (no
+    // per-project globalOutbound below), so it is admin-only — same rule as
+    // the global connect handle.
+    if (input.access !== "all") return Response.json({ error: "Forbidden" }, { status: 403 });
     props = { access: input.access, context: GLOBAL_CONTEXT_ID };
   }
 

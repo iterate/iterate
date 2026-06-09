@@ -103,20 +103,39 @@ const ITX_BUILTIN_NAMES = [
   "workspace",
 ] as const;
 
-const RESERVED_PROTOCOL_NAMES = [
+/**
+ * Names that must never traverse a dynamic surface — prototype-pollution
+ * vectors, capnweb stub controls, and thenable/`Function.prototype` traps.
+ * The single source of truth for BOTH the consumer-side path proxy
+ * (path-proxy.ts) and the server-side path replay (`replayPathCall`), so a
+ * hand-built `path` reaching `itxInvoke` directly is filtered identically.
+ */
+export const RESERVED_PATH_SEGMENTS: ReadonlySet<string> = new Set([
+  "__defineGetter__",
+  "__defineSetter__",
+  "__lookupGetter__",
+  "__lookupSetter__",
   "__proto__",
+  "apply",
+  "bind",
+  "call",
   "catch",
   "constructor",
   "dup",
   "finally",
   "hasOwnProperty",
+  "isPrototypeOf",
   "map",
   "onRpcBroken",
+  "propertyIsEnumerable",
   "prototype",
   "then",
+  "toLocaleString",
   "toString",
   "valueOf",
-] as const;
+]);
+
+const RESERVED_PROTOCOL_NAMES = [...RESERVED_PATH_SEGMENTS] as const;
 
 export const RESERVED_CAP_NAMES: ReadonlySet<string> = new Set([
   ...ITX_BUILTIN_NAMES,
