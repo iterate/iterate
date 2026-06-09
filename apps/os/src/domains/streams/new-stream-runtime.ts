@@ -4,13 +4,16 @@ import type {
   StreamEventInput as NewStreamEventInput,
 } from "@iterate-com/streams/shared/event";
 import type { StreamRpc } from "@iterate-com/streams/types";
+import {
+  DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
+  DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE,
+} from "@iterate-com/streams/processors/circuit-breaker/contract";
 import type {
   Event,
   EventInput,
   StreamState,
   StreamCursor,
 } from "@iterate-com/shared/streams/types";
-import { circuitBreakerProcessor } from "@iterate-com/shared/streams/circuit-breaker";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 
 export type StreamDurableObject = Stream;
@@ -86,7 +89,6 @@ function toLegacyStreamState(
   runtimeState: Awaited<ReturnType<StreamRpc["runtimeState"]>>,
 ): StreamState {
   const core = runtimeState.coreProcessorState;
-  const circuitBreaker = circuitBreakerProcessor.initialState;
   return {
     namespace: core.namespace,
     path: StreamPath.parse(core.path),
@@ -99,11 +101,11 @@ function toLegacyStreamState(
         pauseReason: core.pauseReason,
         pausedAt: null,
         config: {
-          burstCapacity: circuitBreaker.config.burstCapacity,
-          refillRatePerMinute: circuitBreaker.config.refillRatePerMinute,
+          burstCapacity: DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
+          refillRatePerMinute: DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE,
         },
-        availableTokens: circuitBreaker.availableTokens,
-        lastRefillAtMs: circuitBreaker.lastRefillAtMs,
+        availableTokens: DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
+        lastRefillAtMs: null,
       },
       "external-subscriber": {
         subscribersBySlug: Object.fromEntries(

@@ -40,8 +40,6 @@ jobs:
               "apps/auth-example/**",
               "apps/example/**",
               "apps/example-contract/**",
-              "apps/events/**",
-              "apps/events-contract/**",
               "apps/os/**",
               "apps/os-contract/**",
               "apps/auth/**",

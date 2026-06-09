@@ -12,8 +12,7 @@ The first production slice is implemented:
 - `EventsStreamViewState.slots` is the canonical render surface.
 - Built-in element-specific data now lives under `element.props`.
 - The web renderer reads `viewState.slots`.
-- The Events app renders input-slot suggestions above the composer in the clean
-  view.
+- Host apps can render input-slot suggestions above the composer.
 - The OpenTUI proof of concept reads `state.slots.feed`.
 - `outlets`, `feedItems`, and old `*FeedItem` type aliases remain only as
   deprecated migration affordances.
@@ -100,7 +99,7 @@ Remaining work:
 
 Priority: medium. Header/feed now prove the unified model.
 
-### `apps/events/src/components/stream-page.tsx`
+### Stream page host component
 
 Current shape:
 
@@ -123,7 +122,7 @@ Status: done, with `outlets` kept as a deprecated alias.
 Verification run:
 
 - `pnpm --filter @iterate-com/ui typecheck`
-- `pnpm --filter @iterate-com/events typecheck`
+- `pnpm --filter @iterate-com/ui typecheck`
 
 ### Slice 2: Collapse Per-Slot Base Types
 
@@ -144,8 +143,8 @@ heavily edited path.
 ### Slice 4: Input Slot Proof
 
 Status: done for the first proof. Stream error events now produce a
-`composer-suggestion` input element, and the Events app can accept it to prefill
-the agent composer.
+`composer-suggestion` input element, and host apps can accept it to prefill the
+agent composer.
 
 Remaining work:
 

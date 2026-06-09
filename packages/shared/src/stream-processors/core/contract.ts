@@ -11,7 +11,7 @@ export const CoreProcessorErrorOccurredEventType = "events.iterate.com/core/erro
  *
  * This is app-local while the abstraction is still settling. It gives ordinary
  * processors a canonical event to announce "this processor version is active
- * on this stream" without reaching into `events-contract`.
+ * on this stream" without reaching into an app contract.
  */
 export const CoreProcessorContract = defineProcessorContract({
   slug: "core",

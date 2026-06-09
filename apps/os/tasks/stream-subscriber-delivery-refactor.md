@@ -24,13 +24,13 @@ This is motivated by three related problems:
   for one stream and one subscriber, it invokes that subscriber's delivery
   function in stream offset order.
 
-## Current Shape
+## Original Shape
 
-- `packages/shared/src/streams/stream-durable-object.ts` keeps a set of
-  `ReadableStreamDefaultController<Uint8Array>` subscribers and pushes encoded
+- The legacy shared stream runtime kept a set of
+  `ReadableStreamDefaultController<Uint8Array>` subscribers and pushed encoded
   lines from `publish(event)`.
-- `packages/shared/src/streams/external-subscriber.ts` fans out configured
-  external subscribers through `Promise.all(...)`.
+- The legacy external subscriber runtime fanned out configured subscribers
+  through `Promise.all(...)`.
 - `apps/os/src/entrypoints/stream-capability.ts` exposes
   `StreamCapability.stream()` as a `Response` with `application/x-ndjson`.
 - `apps/os/src/orpc/routers/codemode.ts` receives that response body, decodes
@@ -162,10 +162,9 @@ References:
     be removed in favor of direct subscribe/read methods.
   - `codemode.streamEvents` should bridge callback subscription to oRPC async
     generator output.
-- Extract external subscriber delivery from
-  `packages/shared/src/streams/external-subscriber.ts` into promise-returning
-  delivery functions so configured webhook/callable/websocket subscribers use
-  the same ordering rail.
+- Extract external subscriber delivery into promise-returning delivery functions
+  so configured webhook/callable/websocket subscribers use the same ordering
+  rail.
 - Keep circuit breaker and ancestor propagation outside Stream Subscriber lanes;
   those are stream-core post-commit behavior, not subscriber delivery.
 

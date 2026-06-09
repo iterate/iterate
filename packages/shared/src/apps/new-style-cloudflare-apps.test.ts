@@ -6,7 +6,7 @@ describe("resolveNewStyleCloudflareAppBaseUrlFromEnv", () => {
     expect(
       resolveNewStyleCloudflareAppBaseUrlFromEnv({
         APP_CONFIG_BASE_URL: "https://os.iterate-preview-2.com",
-        APP_CONFIG_EVENTS_BASE_URL: "https://events.iterate-preview-2.com",
+        APP_CONFIG_UNUSED_BASE_URL: "https://unused.iterate-preview-2.com",
         APP_CONFIG_PROJECT_HOSTNAME_BASES: '["iterate-preview-2.app"]',
         APP_CONFIG_SHARED_API_SECRET: "secret",
       }),

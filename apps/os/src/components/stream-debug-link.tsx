@@ -2,30 +2,27 @@ import { ExternalLink } from "lucide-react";
 import type { StreamPath } from "@iterate-com/shared/streams/types";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { eventsStreamViewerUrl } from "~/lib/events-links.ts";
+import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
 
-export function EventsDebugLink({
+export function StreamDebugLink({
   className,
-  label = "Open in Streams",
-  namespace,
+  label = "Open stream",
+  projectSlug,
   streamPath,
 }: {
   className?: string;
   label?: string;
-  namespace: string;
+  projectSlug: string;
   streamPath: StreamPath;
 }) {
-  const href = eventsStreamViewerUrl({
-    currentOrigin: currentOrigin(),
-    namespace,
-    streamPath,
-  });
-  if (href === null) return null;
-
   return (
     <a
       className={cn(buttonVariants({ variant: "outline", size: "sm" }), className)}
-      href={href}
+      href={buildProjectStreamViewerUrl({
+        baseUrl: currentOrigin(),
+        projectSlug,
+        streamPath,
+      })}
       target="_blank"
       rel="noreferrer"
     >

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { GenericMessageEvent, MessageChangedEvent, ReactionAddedEvent } from "@slack/types";
-import { STREAM_SUBSCRIPTION_CONFIGURED_TYPE } from "../../streams/core-event-types.ts";
 import { buildProcessorRegisteredEvent } from "../core/contract.ts";
 import {
   getInitialProcessorState,
@@ -13,6 +12,8 @@ import {
 } from "../stream-processor.ts";
 import { SlackProcessorContract } from "./contract.ts";
 import { createSlackProcessor } from "./implementation.ts";
+
+const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 describe("createSlackProcessor", () => {
   it("keeps Slack timestamp to stream path routing in reduced state", () => {
@@ -219,18 +220,11 @@ describe("createSlackProcessor", () => {
           type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
           idempotencyKey: "slack-agent-subscription",
           payload: {
-            slug: "slack-agent:C123:1772136258.963519",
-            type: "callable",
-            callable: {
-              type: "workers-rpc",
-              via: {
-                type: "env-binding",
-                bindingType: "durable-object-namespace",
-                bindingName: "SLACK_AGENT",
-                durableObject: { name: "slack-agent-do" },
-              },
-              rpcMethod: "afterAppend",
-              argsMode: "object",
+            subscriptionKey: "slack-agent:C123:1772136258.963519",
+            subscriber: {
+              type: "built-in",
+              transport: "workers-rpc",
+              processorSlug: "slack-agent",
             },
           },
         },
@@ -238,18 +232,11 @@ describe("createSlackProcessor", () => {
           type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
           idempotencyKey: "agent-subscription",
           payload: {
-            slug: "agent:C123:1772136258.963519",
-            type: "callable",
-            callable: {
-              type: "workers-rpc",
-              via: {
-                type: "env-binding",
-                bindingType: "durable-object-namespace",
-                bindingName: "AGENT",
-                durableObject: { name: "agent-do" },
-              },
-              rpcMethod: "afterAppend",
-              argsMode: "object",
+            subscriptionKey: "agent:C123:1772136258.963519",
+            subscriber: {
+              type: "built-in",
+              transport: "workers-rpc",
+              processorSlug: "codemode",
             },
           },
         },

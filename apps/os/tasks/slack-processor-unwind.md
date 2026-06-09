@@ -139,9 +139,6 @@ processors and Slack domain, not in `AgentDurableObject`.
 - Verification update: root `pnpm typecheck`, `pnpm format:check`, `pnpm
 lint`, `pnpm knip`, `pnpm --dir packages/shared test`, and `pnpm --dir
 apps/os test` passed.
-- Verification update: `pnpm --dir apps/events test` passed after updating
-  shared processor API/docs references and cleaning the stale apps/events route
-  tree/knip config.
 - Kimi update: replaced prior Kimi K2.5 references with
   `@cf/moonshotai/kimi-k2.6`. OS now defaults new agents, new presets, shared
   agent reduced state, and unconfigured agent runtime setup to Cloudflare

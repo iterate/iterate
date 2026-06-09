@@ -6,8 +6,6 @@ packages:
   - apps/semaphore-contract
   - apps/example
   - apps/example-contract
-  - apps/events
-  - apps/events-contract
   - apps/*
   - packages/*
   - packages/*/example-app
