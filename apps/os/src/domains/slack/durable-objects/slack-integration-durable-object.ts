@@ -4,7 +4,7 @@ import {
   deriveDurableObjectNameFromStructuredName,
   NotInitializedError,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
+
 import { type Event } from "@iterate-com/shared/streams/types";
 import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import {
@@ -21,7 +21,10 @@ import {
   AGENT_HOST_PROCESSOR_SLUG,
   agentProcessorSubscriptionConfiguredEvent,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
-import { codemodeProcessorSubscriptionKey } from "~/domains/codemode/durable-objects/codemode-session.ts";
+import {
+  codemodeProcessorSubscriptionKey,
+  getCodemodeSessionName,
+} from "~/domains/codemode/durable-objects/codemode-session.ts";
 import { createCodemodeSessionStartupEvents } from "~/domains/codemode/codemode-session-rpc.ts";
 import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-streams.ts";
 import {
@@ -217,17 +220,21 @@ export function routedStreamBootstrapEvents(input: {
     },
     {
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `codemode-session-processor-subscription:${input.projectId}:${streamPath}:workers-rpc`,
+      // ":callable" suffix: see the slack-agent subscription above.
+      idempotencyKey: `codemode-session-processor-subscription:${input.projectId}:${streamPath}:workers-rpc:callable`,
       payload: {
         subscriptionKey: codemodeProcessorSubscriptionKey({
           projectId: input.projectId,
           streamPath,
         }),
-        subscriber: {
-          type: "built-in",
-          transport: "workers-rpc",
-          processorSlug: CodemodeProcessorContract.slug,
-        },
+        subscriber: durableObjectProcessorSubscriber({
+          bindingName: "CODEMODE_SESSION",
+          durableObjectName: getCodemodeSessionName({
+            projectId: input.projectId,
+            streamPath,
+          }),
+          processorName: "codemode",
+        }),
       },
     },
     // The forwarded Slack webhook can immediately become a bang-command

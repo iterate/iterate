@@ -187,4 +187,27 @@ i.e. a scroll/notification behavior change, not data loss. Reverted to unblock
 #1401; root cause not yet established. Suspect the writer-lock release
 deferral changing teardown/re-election timing during the seeding phase.
 
-### I2. (running list — updated as migration proceeds)
+### I2. zod resolved to two versions across the workspace
+
+The lockfile resolved `packages/streams`' `zod@^4.3.6` to 4.4.3 while apps/os
+and packages/shared resolve to 4.3.6. zod brands its types per minor version,
+so every OS-defined contract failed deep type-identity checks against the
+streams package's generics. Fixed with a one-line lockfile pin of the streams
+importer to 4.3.6.
+
+### I3. Contract-filtered delivery changes "caught up" semantics
+
+With `eventTypes: contract.consumes` (D9), a processor's checkpoint only
+advances to the latest consumed event, never the raw stream head. Catch-up
+helpers that polled `checkpoint >= maxOffset` would time out; they now compare
+against the latest history offset of a consumed type (repo, slack, agents).
+
+### I4. Existing streams keep only legacy subscriptions until re-appended
+
+Callable subscriptions land via the ensure-on-access paths with new
+idempotency keys, so new and re-visited streams self-heal. Streams that are
+never re-visited through an ensure path (e.g. already-routed Slack threads)
+retain only legacy `built-in` subscriptions, which no longer dial. Acceptable
+for previews/new projects; production would need a backfill pass.
+
+### I5. (running list — updated as migration proceeds)
