@@ -232,6 +232,45 @@ describe("CodemodeSession", () => {
     expect(runnerState.reducedThroughOffset).toBeGreaterThanOrEqual(event.offset);
   });
 
+  test("reduces tool providers appended before the codemode processor subscribes", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: (env as TestEnv).STREAM,
+      namespace: projectId,
+      path: streamPath,
+    });
+    await stream.append({
+      type: "events.iterate.com/codemode/tool-provider-registered",
+      payload: createExampleRpcProviderRegistration({
+        exportName: "AiCapability",
+        instructions: "Use ctx.preexistingAi.run(model, input).",
+        path: ["preexistingAi"],
+        projectId,
+      }),
+    });
+
+    const session = await initializeSession(streamPath);
+    const created = await session.createSession({
+      code: `async (ctx) => {
+  return await ctx.preexistingAi.run("test-model", { prompt: "hello" });
+}`,
+    });
+
+    const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "returned",
+        value: expect.objectContaining({ model: "test-model" }),
+      },
+    });
+    expect(await readCurrentStreamEvents(streamPath)).toEqual(
+      expect.arrayContaining([
+        functionCallRequested(["preexistingAi", "run"], ["preexistingAi"], ["run"]),
+      ]),
+    );
+  });
+
   test("runs loopback RPC capability examples with live handles and callbacks", async () => {
     const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
     const session = await initializeSession(streamPath);
@@ -313,12 +352,6 @@ describe("CodemodeSession", () => {
       outcome: {
         status: "returned",
         value: {
-          agentMessage: "hello from env project",
-          agentThing: {
-            doubled: 42,
-            label: "project-pipeline",
-            value: 21,
-          },
           aiModel: "test-model",
           batchAppendCount: 2,
           eventMessages: expect.arrayContaining([
@@ -328,7 +361,6 @@ describe("CodemodeSession", () => {
             "project capability lowercase env alias",
           ]),
           proceduresIncludeStreams: true,
-          repoCount: expect.any(Number),
           streamInitialized: true,
         },
       },

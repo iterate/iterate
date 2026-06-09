@@ -6,7 +6,6 @@ import {
   singleProjectIdFromScopes,
   type IterateContextProps,
 } from "./iterate-context-capability.ts";
-import localProxyWrapperSource from "./local-proxy-wrapper.js?raw";
 import { ProjectsCapability } from "./projects-capability.ts";
 import type { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
@@ -96,60 +95,17 @@ function appendAuthHeaders(headers: Headers, authHeaders: Headers) {
   if (setCookie) headers.append("set-cookie", setCookie);
 }
 
-function rootRunWorkerSrc(input: {
-  dynamicMountRoots: string[];
-  functionSource: string;
-  projectId?: string;
-}) {
+function rootRunWorkerSrc(input: { functionSource: string; projectId?: string }) {
   return /* js */ `
   import { WorkerEntrypoint } from "cloudflare:workers";
-  import { liftLocalProxies, localProxyCaller } from "./local-proxy-wrapper.js";
 
   const snippet = (${input.functionSource});
-  const dynamicMountRoots = new Set(${JSON.stringify(input.dynamicMountRoots)});
-
-  function contextForRun(host, ctx) {
-    const lifted = liftLocalProxies(ctx);
-    if (dynamicMountRoots.size === 0) return lifted;
-    // This Proxy is a narrow /run compatibility overlay, not the canonical
-    // context object. The /run worker gets ctx from env.ITERATE.context so
-    // built-in roots like ctx.projects and ctx.project are the normal
-    // parent-provided RPC stubs. Dynamic-worker mounts are different: their
-    // actual WorkerEntrypoint is owned by the parent worker with the LOADER
-    // binding and cannot be transferred into this /run worker. For just those
-    // root names, this proxy returns a local SDK-style marker that forwards the
-    // eventual call back to the parent-owned env.ITERATE.callMounted(...).
-    //
-    // Effect:
-    //   ctx.tools.echo(arg)
-    // becomes:
-    //   env.ITERATE.callMounted(["tools", "echo"], [arg])
-    //
-    // Normal properties fall through untouched. This keeps the symmetric
-    // snippet model (script({ ctx, vars })) while preserving the dynamic-worker
-    // mount rule that the loader owner forwards the call.
-    //
-    // References:
-    // - Dynamic Workers API: https://developers.cloudflare.com/dynamic-workers/api-reference/
-    // - Workers RPC stubs: https://developers.cloudflare.com/workers/runtime-apis/rpc/
-    return new Proxy(lifted, {
-      get(target, prop, receiver) {
-        if (typeof prop === "string" && dynamicMountRoots.has(prop)) {
-          return liftLocalProxies(localProxyCaller(({ path, args }) =>
-            host.env.ITERATE.callMounted([prop, ...path], args)
-          ));
-        }
-        return Reflect.get(target, prop, receiver);
-      },
-    });
-  }
 
   async function projectEgressFetch(ctx, projectId, ...args) {
     if (!projectId) {
       throw new Error("A project-scoped IterateCapability is required for global fetch.");
     }
-    using projects = await ctx.projects;
-    using project = await projects.get(projectId);
+    const project = ctx.projects.get(projectId);
     return await project.egressFetch(new Request(args[0], args[1]));
   }
 
@@ -175,7 +131,7 @@ function rootRunWorkerSrc(input: {
   export default class extends WorkerEntrypoint {
     async run(vars) {
       try {
-        const ctx = contextForRun(this, await this.env.ITERATE.context);
+        const ctx = await this.env.ITERATE.context;
         const result = await runWithProjectEgressFetch(ctx, ${JSON.stringify(input.projectId)}, () =>
           snippet({
             ctx,
@@ -220,14 +176,6 @@ async function handleRootRunLeg(input: { context: AppContext; env: Env; request:
   const principal = input.context.principal;
   if (!principal) return Response.json({ error: "Unauthorized" }, { status: 401 });
   const props = body.props ?? { scopes: scopesForPrincipal(principal) };
-  const dynamicMountRoots = [
-    ...new Set(
-      (props.mounts ?? [])
-        .filter((mount) => mount.target.type === "dynamic-worker")
-        .map((mount) => mount.path[0])
-        .filter((root): root is string => root != null),
-    ),
-  ];
   const worker = input.env.LOADER.load({
     compatibilityDate: "2026-04-27",
     env: {
@@ -238,11 +186,9 @@ async function handleRootRunLeg(input: { context: AppContext; env: Env; request:
     mainModule: "worker.js",
     modules: {
       "worker.js": rootRunWorkerSrc({
-        dynamicMountRoots,
         functionSource: body.functionSource,
         projectId: singleProjectIdFromScopes(props.scopes) ?? undefined,
       }),
-      "local-proxy-wrapper.js": localProxyWrapperSource,
     },
   });
   const entry = worker.getEntrypoint() as unknown as {

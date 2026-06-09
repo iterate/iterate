@@ -42,51 +42,21 @@ export const variablesProvider = () =>
     Variables: Variables;
     Bindings: CloudflareEnv;
   }>(async (c, next) => {
-    let projectIngressUser: ProjectIngressUser | null = null;
     let session = await auth.api.getSession({ headers: c.req.raw.headers });
-    if (!session) {
-      const bearerToken = parseBearerToken(c.req.header("authorization"));
-      if (bearerToken) {
-        const payload = await verifyProjectIngressToken(bearerToken);
-        if (payload) {
-          const user = await getUserById(db, { id: payload.userId });
-          const authUser = toAuthSessionUser(user);
-          if (authUser) {
-            projectIngressUser = authUser;
-          }
-        }
-      }
-    }
-    const providedServiceToken = c.req.header(SERVICE_TOKEN_HEADER)?.trim();
-    const expectedServiceToken = c.env.SERVICE_AUTH_TOKEN?.trim();
-    const serviceAuthorized = Boolean(
-      expectedServiceToken && providedServiceToken === expectedServiceToken,
-    );
+    const projectIngressUser = session
+      ? null
+      : await authenticateProjectIngressUser(c.req.header("authorization"));
+    const serviceAuthorized = authenticateServiceRequest({
+      expectedServiceToken: c.env.SERVICE_AUTH_TOKEN,
+      providedServiceToken: c.req.header(SERVICE_TOKEN_HEADER),
+    });
 
     if (!session && serviceAuthorized) {
-      const asUserId = c.req.header(AS_USER_HEADER)?.trim();
-      if (asUserId) {
-        const user = await getUserById(db, { id: asUserId });
-        const authUser = toAuthSessionUser(user);
-        if (authUser) {
-          const now = new Date();
-          session = {
-            session: {
-              id: `ses_as_user_${authUser.id}`,
-              expiresAt: new Date(now.getTime() + 60 * 60 * 1000),
-              token: "",
-              ipAddress: c.req.header("cf-connecting-ip") ?? null,
-              userAgent: c.req.header("user-agent") ?? null,
-              userId: authUser.id,
-              impersonatedBy: null,
-              activeOrganizationId: null,
-              createdAt: now,
-              updatedAt: now,
-            },
-            user: authUser,
-          };
-        }
-      }
+      session = await createServiceAsUserSession({
+        asUserId: c.req.header(AS_USER_HEADER),
+        ipAddress: c.req.header("cf-connecting-ip"),
+        userAgent: c.req.header("user-agent"),
+      });
     }
 
     c.set("session", session);
@@ -95,3 +65,51 @@ export const variablesProvider = () =>
     c.set("projectIngressUser", projectIngressUser);
     return next();
   });
+
+async function authenticateProjectIngressUser(authorizationHeader: string | undefined) {
+  const bearerToken = parseBearerToken(authorizationHeader);
+  if (!bearerToken) return null;
+
+  const payload = await verifyProjectIngressToken(bearerToken);
+  if (!payload) return null;
+
+  return toAuthSessionUser(await getUserById(db, { id: payload.userId }));
+}
+
+function authenticateServiceRequest(input: {
+  expectedServiceToken: string | undefined;
+  providedServiceToken: string | undefined;
+}) {
+  const expectedServiceToken = input.expectedServiceToken?.trim();
+  const providedServiceToken = input.providedServiceToken?.trim();
+  return Boolean(expectedServiceToken && providedServiceToken === expectedServiceToken);
+}
+
+async function createServiceAsUserSession(input: {
+  asUserId: string | undefined;
+  ipAddress: string | undefined;
+  userAgent: string | undefined;
+}): Promise<AuthSession> {
+  const asUserId = input.asUserId?.trim();
+  if (!asUserId) return null;
+
+  const authUser = toAuthSessionUser(await getUserById(db, { id: asUserId }));
+  if (!authUser) return null;
+
+  const now = new Date();
+  return {
+    session: {
+      id: `ses_as_user_${authUser.id}`,
+      expiresAt: new Date(now.getTime() + 60 * 60 * 1000),
+      token: "",
+      ipAddress: input.ipAddress ?? null,
+      userAgent: input.userAgent ?? null,
+      userId: authUser.id,
+      impersonatedBy: null,
+      activeOrganizationId: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    user: authUser,
+  };
+}

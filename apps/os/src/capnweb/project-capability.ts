@@ -85,11 +85,11 @@ export class ProjectCapability extends RpcTarget {
   }
 
   checkAccess(...args: any[]) {
-    return this.project().then((project) => (project.checkAccess as any)(...args));
+    return this.project().then((project) => ((project as any).checkAccess as any)(...args));
   }
 
   createProject(...args: any[]) {
-    return this.project().then((project) => (project.createProject as any)(...args));
+    return this.project().then((project) => ((project as any).createProject as any)(...args));
   }
 
   describe(...args: any[]) {
@@ -162,6 +162,8 @@ export class ProjectConnectionsCapability extends RpcTarget {
 }
 
 export class ProjectWorkerCapability extends RpcTarget {
+  [toolName: string]: any;
+
   constructor(
     private readonly input: {
       iterateContextProps?: IterateContextProps;

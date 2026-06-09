@@ -5,7 +5,6 @@ import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
 import { useState } from "react";
 import type { Project } from "@iterate-com/os-contract";
-import { useConfig } from "@iterate-com/ui/apps/config";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Dialog,
@@ -26,21 +25,21 @@ import {
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
-import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { z } from "zod";
-import type { AppConfig } from "~/app.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
+import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
+import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { orpc } from "~/orpc/client.ts";
 
-type PublicConfig = PublicAppConfig<AppConfig>;
 type ProjectsListData = { projects: Project[]; total: number };
 
 export const Route = createFileRoute("/_app/projects/")({
   loader: async ({ context }) => {
-    await context.queryClient.ensureQueryData({
-      ...orpc.projects.list.queryOptions({ input: { limit: 20, offset: 0 } }),
-      staleTime: 30_000,
-    });
+    await context.queryClient.ensureQueryData(projectsListQueryOptions({ limit: 20, offset: 0 }));
+
+    return {
+      routeConfig: await getPublicRouteConfig(),
+    };
   },
   component: ProjectsIndexPage,
 });
@@ -69,12 +68,9 @@ function buildProjectHostname(input: {
 function ProjectsIndexPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const config = useConfig<PublicConfig>();
+  const { routeConfig } = Route.useLoaderData();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
-  const { data: projectsData } = useQuery({
-    ...orpc.projects.list.queryOptions({ input: { limit: 20, offset: 0 } }),
-    staleTime: 30_000,
-  });
+  const { data: projectsData } = useQuery(projectsListQueryOptions({ limit: 20, offset: 0 }));
 
   const createProject = useMutation(
     orpc.projects.create.mutationOptions({
@@ -221,7 +217,7 @@ function ProjectsIndexPage() {
             const hostname = buildProjectHostname({
               slug: project.slug,
               customHostname: project.customHostname,
-              projectHostnameBases: config.projectHostnameBases,
+              projectHostnameBases: routeConfig.projectHostnameBases,
             });
 
             return (
@@ -230,20 +226,14 @@ function ProjectsIndexPage() {
                 className="grid min-w-[900px] grid-cols-[220px_160px_220px_minmax(220px,1fr)_190px_96px] items-start gap-3 border-b px-3 py-3 text-sm last:border-b-0"
               >
                 <Identifier value={project.id} textClassName="text-xs text-muted-foreground" />
-                <Link
-                  to="/projects/$projectSlug"
-                  params={{
-                    projectSlug: project.slug,
-                  }}
-                  className="truncate font-medium hover:underline"
-                >
-                  {project.slug}
-                </Link>
+                <ProjectSlugCell project={project} />
                 <div className="truncate text-xs text-muted-foreground">
-                  {project.customHostname ?? "None"}
+                  {project.isOrphanedProjectFromAuthService
+                    ? "Not created in OS"
+                    : (project.customHostname ?? "None")}
                 </div>
                 <div className="truncate text-xs">
-                  {hostname ? (
+                  {!project.isOrphanedProjectFromAuthService && hostname ? (
                     <a
                       href={`https://${hostname}`}
                       target="_blank"
@@ -256,23 +246,58 @@ function ProjectsIndexPage() {
                     <span className="text-muted-foreground">-</span>
                   )}
                 </div>
-                <div className="text-xs text-muted-foreground">{project.createdAt}</div>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={() => deleteProject.mutate({ id: project.id })}
-                  disabled={deleteProject.isPending && deleteProject.variables?.id === project.id}
-                >
-                  {deleteProject.isPending && deleteProject.variables?.id === project.id
-                    ? "Deleting..."
-                    : "Delete"}
-                </Button>
+                <div className="text-xs text-muted-foreground">{project.createdAt ?? "-"}</div>
+                {project.isOrphanedProjectFromAuthService ? (
+                  <Button
+                    size="sm"
+                    onClick={() => createProject.mutate({ id: project.id, slug: project.slug })}
+                    disabled={createProject.isPending && createProject.variables?.id === project.id}
+                  >
+                    {createProject.isPending && createProject.variables?.id === project.id
+                      ? "Creating..."
+                      : "Create"}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => deleteProject.mutate({ id: project.id })}
+                    disabled={deleteProject.isPending && deleteProject.variables?.id === project.id}
+                  >
+                    {deleteProject.isPending && deleteProject.variables?.id === project.id
+                      ? "Deleting..."
+                      : "Delete"}
+                  </Button>
+                )}
               </div>
             );
           })}
         </div>
       )}
     </section>
+  );
+}
+
+function ProjectSlugCell({ project }: { project: Project }) {
+  if (project.isOrphanedProjectFromAuthService) {
+    return (
+      <div className="min-w-0">
+        <div className="truncate font-medium">{project.slug}</div>
+        <div className="text-xs text-muted-foreground">Available from Auth</div>
+      </div>
+    );
+  }
+
+  return (
+    <Link
+      to="/projects/$projectSlug"
+      params={{
+        projectSlug: project.slug,
+      }}
+      className="truncate font-medium hover:underline"
+    >
+      {project.slug}
+    </Link>
   );
 }
 
@@ -292,16 +317,24 @@ function cacheCreatedProjectQueries(input: {
     customHostname: input.project.customHostname,
     createdAt: input.project.createdAt,
     updatedAt: input.project.updatedAt,
+    isOrphanedProjectFromAuthService: input.project.isOrphanedProjectFromAuthService,
   };
 
   for (const listInput of [
     { limit: 20, offset: 0 },
     { limit: 100, offset: 0 },
   ] as const) {
-    const listQuery = orpc.projects.list.queryOptions({ input: listInput });
+    const listQuery = projectsListQueryOptions(listInput);
     input.queryClient.setQueryData<ProjectsListData>(listQuery.queryKey, (existing) => {
       if (!existing) return existing;
-      if (existing.projects.some((project) => project.id === input.project.id)) return existing;
+      if (existing.projects.some((project) => project.id === input.project.id)) {
+        return {
+          ...existing,
+          projects: existing.projects.map((project) =>
+            project.id === input.project.id ? listProject : project,
+          ),
+        };
+      }
 
       return {
         ...existing,

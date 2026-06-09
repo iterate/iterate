@@ -1,5 +1,9 @@
 import { env as workerEnv } from "cloudflare:workers";
-import { Stream as PackageStream } from "@iterate-com/streams/workers/durable-objects/stream";
+import { newWorkersRpcResponse } from "capnweb";
+import {
+  PublicStreamRpcTarget,
+  Stream as PackageStream,
+} from "@iterate-com/streams/workers/durable-objects/stream";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
@@ -10,6 +14,7 @@ import crossws from "crossws/adapters/cloudflare";
 import { createD1Client } from "sqlfu";
 import {
   getInitializedStreamStub,
+  getStreamDurableObjectName,
   type StreamDurableObjectNamespace,
 } from "~/domains/streams/new-stream-runtime.ts";
 import manifest, { AppConfig } from "~/app.ts";
@@ -27,10 +32,14 @@ import { getProjectPlatformHostIngressRule } from "~/ingress/project-platform-ho
 import { getProjectCustomHostnameIngressRule } from "~/ingress/project-custom-hostname-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
+import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
 import { handleRootIterateContextFetch } from "~/capnweb/root-context-fetch.ts";
 import { handleCapabilityPrototypeFetch } from "~/domains/capability-prototype/fetch.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { requireProjectScopedAccess } from "~/orpc/project-access.ts";
+import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { authenticateAdminBearer } from "~/auth/admin.ts";
 
 // Re-export rpc-targets used by OS's existing loopback callable paths.
 // Stream processor subscriptions do not use these exports; they target Durable
@@ -71,6 +80,7 @@ export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/wor
 const CAPTUN_TUNNEL_ROUTE_PREFIX = "/__iterate/captun";
 const EGRESS_ECHO_PATH = "/api/captnweb/egress-echo";
 const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
+const PROJECT_STREAM_RPC_PREFIX = "/api/project-streams";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 const config = parseAppConfigFromEnv({
@@ -186,6 +196,13 @@ export default {
         });
         if (capabilityPrototypeResponse) return capabilityPrototypeResponse;
 
+        const projectStreamRpcResponse = await handleProjectStreamRpcFetch({
+          context,
+          env,
+          request,
+        });
+        if (projectStreamRpcResponse) return projectStreamRpcResponse;
+
         const captnwebResponse = await handleRootIterateContextFetch({
           request,
           env,
@@ -215,6 +232,70 @@ export default {
     });
   },
 };
+
+async function handleProjectStreamRpcFetch(input: {
+  context: AppContext;
+  env: Env;
+  request: Request;
+}): Promise<Response | null> {
+  const route = parseProjectStreamRpcRoute(input.request);
+  if (!route) return null;
+
+  const auth = createOsIterateAuth(input.context, input.request);
+  const resolvedAuth = await resolveRequestAuth({
+    auth,
+    context: input.context,
+    request: input.request,
+  });
+  const context: AppContext = {
+    ...input.context,
+    iterateAuthSession: resolvedAuth.session,
+    principal: resolvedAuth.principal,
+    rawRequest: input.request,
+  };
+  const project = await requireProjectScopedAccess({
+    context,
+    projectSlugOrId: route.projectSlugOrId,
+  });
+  const streamPath = resolveStreamPath(route.streamPath);
+  const stream = input.env.STREAM.getByName(
+    getStreamDurableObjectName({
+      namespace: project.id,
+      path: streamPath,
+    }),
+  );
+  const response = await newWorkersRpcResponse(input.request, new PublicStreamRpcTarget(stream));
+  const setCookie = resolvedAuth.responseHeaders.get("set-cookie");
+  if (setCookie) response.headers.append("set-cookie", setCookie);
+  return response;
+}
+
+function parseProjectStreamRpcRoute(request: Request): {
+  projectSlugOrId: string;
+  streamPath: string;
+} | null {
+  const url = new URL(request.url);
+  if (
+    url.pathname !== PROJECT_STREAM_RPC_PREFIX &&
+    !url.pathname.startsWith(`${PROJECT_STREAM_RPC_PREFIX}/`)
+  ) {
+    return null;
+  }
+
+  const remainder = url.pathname.slice(PROJECT_STREAM_RPC_PREFIX.length);
+  const match = /^\/([^/]+)(?:\/(.*))?$/.exec(remainder);
+  if (!match) return null;
+  const projectSlugOrId = decodeURIComponent(match[1] ?? "").trim();
+  if (!projectSlugOrId) return null;
+  const encodedStreamPath = match[2];
+  return {
+    projectSlugOrId,
+    streamPath:
+      encodedStreamPath == null || encodedStreamPath === ""
+        ? "/"
+        : decodeURIComponent(encodedStreamPath),
+  };
+}
 
 function handleEgressEchoFetch(input: { request: Request }) {
   const url = new URL(input.request.url);
@@ -262,7 +343,12 @@ async function handleDebugAppendChainFetch(input: { request: Request; env: Env }
     return Response.json({ error: "Debug endpoint is disabled." }, { status: 404 });
   }
 
-  if (input.request.headers.get("authorization") !== `Bearer ${expectedToken}`) {
+  if (
+    !authenticateAdminBearer({
+      authorizationHeader: input.request.headers.get("authorization"),
+      config,
+    })
+  ) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
 
@@ -383,7 +469,12 @@ async function handleSeedIterateConfigBaseFetch(input: { request: Request; env: 
     return Response.json({ error: "Seed endpoint is disabled." }, { status: 404 });
   }
 
-  if (input.request.headers.get("authorization") !== `Bearer ${expectedToken}`) {
+  if (
+    !authenticateAdminBearer({
+      authorizationHeader: input.request.headers.get("authorization"),
+      config,
+    })
+  ) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
 

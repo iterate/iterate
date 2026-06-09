@@ -13,7 +13,6 @@ import {
 import { createPublicTunnel } from "../../../e2e/test-support/create-test-project.ts";
 import type { ProjectCapability } from "../../domains/projects/durable-objects/project-durable-object.ts";
 import type { IterateContext } from "../iterate-context-capability.ts";
-import { liftLocalProxies, localProxyCaller } from "../local-proxy-wrapper.js";
 
 const baseUrl = requireBaseUrl();
 const auth = rootAccessAuth();
@@ -94,13 +93,13 @@ describe("capnweb Slack SDK mount proof", () => {
         workerSource,
       });
 
-      using worker = (await projectContext.worker) as any;
-      const result = await worker.postDailyReport({
+      const result = await (projectContext.worker as any).postDailyReport({
         channel: "CFAKE",
         text: "daily report from iterate-config",
       });
       expect(result).toMatchObject({
         channel: "CFAKE",
+        message: { text: "daily report from iterate-config" },
         ok: true,
         ts: "1770000000.000100",
       });
@@ -131,10 +130,7 @@ class SlackSdkRpcTarget extends RpcTarget {
   }
 
   sdk() {
-    // This is the server-side half of the Slack-style infinite SDK path. The
-    // caller sees ctx.slack.chat.postMessage(...); localProxyCaller records
-    // ["chat", "postMessage"] and forwards it here as call({ path, args }).
-    return localProxyCaller(({ path, args }) => this.call({ path, args }));
+    return new TestPathProxyRpcTarget(({ path, args }) => this.call({ path, args }));
   }
 
   async call(input: { args: unknown[]; path: string[] }) {
@@ -201,7 +197,6 @@ function requestBody(input: unknown): BodyInit | undefined {
 function slackConfigWorkerSource(input: { connectionKey: string; projectId: string }) {
   return dedent`
     import { WorkerEntrypoint } from "cloudflare:workers";
-    import { liftLocalProxies } from "./local-proxy-wrapper.js";
 
     export default class SlackProofWorker extends WorkerEntrypoint {
       getIterateContextProps() {
@@ -226,11 +221,7 @@ function slackConfigWorkerSource(input: { connectionKey: string; projectId: stri
 
       async postDailyReport(input) {
         const ctx = await this.env.ITERATE.context;
-        // ctx.slack is a mounted localProxyCaller marker. The config worker
-        // lifts that marker into the SDK-shaped path proxy, so this tool can
-        // call the natural Slack SDK shape without knowing the Slack hierarchy.
-        using slack = liftLocalProxies(await ctx.slack);
-        return await slack.chat.postMessage({
+        return await ctx.slack.chat.postMessage({
           channel: input.channel,
           text: input.text,
         });
@@ -249,13 +240,10 @@ async function updateIterateConfigWorker(input: {
   projectId: string;
   workerSource: string;
 }) {
-  using projects = await input.ctx.projects;
-  using project = await projects.get(input.projectId);
-  using repos = await project.repos;
-  using workspaces = await project.workspaces;
-  using workspace = await workspaces.get("capnweb");
-  using git = await workspace.git;
-  const repo = await repos.ensureIterateConfigInfo({ projectSlug: null });
+  const project = input.ctx.projects.get(input.projectId);
+  const workspace = project.workspaces.get("capnweb");
+  const repo = await project.repos.ensureIterateConfigInfo({ projectSlug: null });
+  const git = workspace.git;
 
   await git.clone({
     branch: repo.defaultBranch,
@@ -299,9 +287,7 @@ async function projectEgressFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ) {
-  using projects = await ctx.projects;
-  using project = await projects.get(projectId);
-  return (await project.egressFetch(new Request(input, init))) as Response;
+  return (await ctx.projects.get(projectId).egressFetch(new Request(input, init))) as Response;
 }
 
 function withRootIterateContextFromNode(input: {
@@ -311,10 +297,8 @@ function withRootIterateContextFromNode(input: {
   const wsUrl = new URL(ROOT_ITERATE_CONTEXT_PREFIX, input.baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(wsUrl.toString(), { headers: rootAccessAuthHeaders(input.auth) });
-  return liftLocalProxies(
-    newWebSocketRpcSession<IterateContext>(
-      socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
-    ),
+  return newWebSocketRpcSession<IterateContext>(
+    socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
 }
 
@@ -332,7 +316,7 @@ function withIterateFromNode(input: { auth: RootAccessAuth; ingressUrl: string }
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
   const ctxHandle = project.getIterateContext() as unknown as RpcStub<IterateContext>;
-  const ctx = liftLocalProxies(ctxHandle);
+  const ctx = ctxHandle;
   return {
     ctx,
     [Symbol.dispose]() {
@@ -399,3 +383,45 @@ type FakeSlackRequest = {
   method: string;
   url: string;
 };
+
+class TestPathProxyRpcTarget extends RpcTarget {
+  constructor(callPath: (input: { args: unknown[]; path: string[] }) => unknown) {
+    super();
+    return testPathProxy(callPath, []) as unknown as TestPathProxyRpcTarget;
+  }
+}
+
+function testPathProxy(
+  callPath: (input: { args: unknown[]; path: string[] }) => unknown,
+  path: string[],
+): Function {
+  const fn = (...args: unknown[]) => callPath({ args, path });
+  return new Proxy(fn, {
+    apply(_target, _thisArg, args) {
+      return callPath({ args, path });
+    },
+    get(target, key, receiver) {
+      if (key === "then") return undefined;
+      if (typeof key === "symbol") return Reflect.get(target, key, receiver);
+      if (key in target) return Reflect.get(target, key, receiver);
+      return testPathProxy(callPath, [...path, key]);
+    },
+    getOwnPropertyDescriptor(target, key) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+      if (descriptor) return descriptor;
+      if (key in target) return undefined;
+      if (typeof key === "symbol" || key === "then") return undefined;
+      return {
+        configurable: true,
+        enumerable: false,
+        value: testPathProxy(callPath, [...path, key]),
+        writable: false,
+      };
+    },
+    has(target, key) {
+      if (typeof key === "symbol") return key in target;
+      if (key === "then") return false;
+      return true;
+    },
+  });
+}

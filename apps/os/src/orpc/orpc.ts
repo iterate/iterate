@@ -1,7 +1,7 @@
 import { ORPCError, implement } from "@orpc/server";
 import { osContract } from "@iterate-com/os-contract";
 import type { AppContext } from "~/context.ts";
-import { resolveActiveOrganizationAuth } from "~/orpc/auth.ts";
+import { resolveActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 import { requireProjectScopedAccess } from "~/orpc/project-access.ts";
 
 export const os = implement(osContract).$context<AppContext>();

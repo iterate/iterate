@@ -9,7 +9,8 @@ import {
   runProcessorReduce,
   type ProcessorState,
 } from "./shared/stream-processors.ts";
-import type { StreamEventBatch, StreamSubscription } from "./subscription.ts";
+import type { StreamSubscription } from "./subscription.ts";
+import type { StreamEventBatch } from "./types.ts";
 import type {
   Processor,
   ProcessorSideEffectAnchor,
@@ -247,7 +248,6 @@ function makeShouldApplySideEffects(anchor: ProcessorSideEffectAnchor | undefine
   return (args: { event: Pick<StreamEvent, "offset" | "createdAt">; gracePeriodMs?: number }) => {
     if (anchor === undefined) return true;
     if (args.event.offset > anchor.offset) return true;
-    if (args.event.offset === anchor.offset) return false;
 
     const gracePeriodMs = args.gracePeriodMs ?? 0;
     if (gracePeriodMs <= 0) return false;

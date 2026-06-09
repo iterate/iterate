@@ -11,15 +11,13 @@ import type { Processor } from "@iterate-com/streams/processor";
 import { implementProcessor } from "@iterate-com/streams/processor";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/streams/shared/event";
 import { makeRpcTargetClass } from "@iterate-com/streams/shared/rpc-target";
-import {
-  createStreamSubscription,
-  type StreamSubscription,
-} from "@iterate-com/streams/subscription";
+import { createStreamSubscription } from "@iterate-com/streams/subscription";
 import type {
+  ProcessEventBatch,
   StreamCoreProcessorState,
   StreamProcessorRunnerRpc,
   StreamRpc,
-  SubscriptionSink,
+  StreamSubscriptionHandle,
 } from "@iterate-com/streams/types";
 import type { Callable } from "@iterate-com/shared/callable/types.ts";
 import { StreamPath, type StreamCursor } from "@iterate-com/shared/streams/types";
@@ -44,6 +42,8 @@ import { JsonataReactorProcessorContract } from "@iterate-com/shared/stream-proc
 import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { createCodemodeProcessor } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import type { CodemodeProcessorSession } from "@iterate-com/shared/stream-processors/codemode/code-executor";
+import { circuitBreakerProcessor } from "@iterate-com/streams/processors/circuit-breaker/implementation";
+import { echoExampleProcessor } from "@iterate-com/streams/processors/examples/echo/implementation";
 import {
   createRepoStreamProcessor,
   RepoStreamProcessorContract,
@@ -108,18 +108,20 @@ type OsProcessorBinding = {
   deps: unknown;
 };
 
+const PROCESSOR_RUNNER_SNAPSHOT_KEY = "snapshot:v5";
+
 export class StreamProcessorRunner extends DurableObject {
   #stream: RpcStub<StreamRpc> | undefined;
   #runner: ProcessorRunner | undefined;
-  #subscription: StreamSubscription | undefined;
-  #processing: AsyncDisposable | undefined;
+  #subscriptionHandle: StreamSubscriptionHandle | undefined;
+  #processing: Promise<void> = Promise.resolve();
 
   async fetch(request: Request) {
     return newWorkersRpcResponse(request, new StreamProcessorRunnerRpcTarget(this));
   }
 
   async requestSubscription(args: {
-    stream: RpcStub<StreamRpc>;
+    stream: StreamRpc;
     subscriptionKey: string;
     streamMaxOffset: number;
     subscriptionConfiguredEvent: {
@@ -134,23 +136,23 @@ export class StreamProcessorRunner extends DurableObject {
       };
     };
     streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
-  }): Promise<{ sink: SubscriptionSink; replayAfterOffset?: number }> {
+  }): Promise<void> {
     const subscriber = args.subscriptionConfiguredEvent.payload.subscriber;
     if (subscriber.type !== "built-in") {
       throw new Error("OS StreamProcessorRunner only supports built-in subscribers.");
     }
-    if (subscriber.transport !== "capnweb-websocket") {
-      throw new Error("OS StreamProcessorRunner only supports capnweb-websocket subscribers.");
+    if (subscriber.transport !== "workers-rpc") {
+      throw new Error("OS StreamProcessorRunner only supports workers-rpc subscribers.");
     }
     if (!subscriber.processorSlug) {
       throw new Error("Built-in subscriber is missing processorSlug.");
     }
 
-    await this.#processing?.[Symbol.asyncDispose]();
-    await this.#subscription?.[Symbol.asyncDispose]();
+    this.#subscriptionHandle?.unsubscribe();
+    await this.#processing.catch(() => {});
     this.#stream?.[Symbol.dispose]();
 
-    this.#stream = args.stream.dup();
+    this.#stream = retainStreamRpc(args.stream);
     const processor = getOsProcessor({
       ctx: this.ctx,
       env: this.env as StreamProcessorRunnerEnv,
@@ -167,33 +169,36 @@ export class StreamProcessorRunner extends DurableObject {
       processor: processor.processor,
       deps: processor.deps,
       storage: {
-        load: () => this.ctx.storage.kv.get<RunnerSnapshot>("snapshot"),
-        save: (snapshot) => void this.ctx.storage.kv.put("snapshot", snapshot),
+        load: () => this.ctx.storage.kv.get<RunnerSnapshot>(PROCESSOR_RUNNER_SNAPSHOT_KEY),
+        save: (snapshot) => this.ctx.storage.kv.put(PROCESSOR_RUNNER_SNAPSHOT_KEY, snapshot),
       },
       stream: this.#stream,
       sideEffectAnchor: {
-        offset: args.subscriptionConfiguredEvent.offset,
-        createdAt: args.subscriptionConfiguredEvent.createdAt,
+        offset: args.streamMaxOffset,
+        createdAt: new Date().toISOString(),
       },
     });
 
     const snapshot = await this.#runner.snapshot();
-    this.#subscription = createStreamSubscription({
-      subscriptionKey: args.subscriptionKey,
-    });
-    this.#processing = this.#runner.run({
-      subscription: this.#subscription,
-    });
-
-    return {
-      sink: this.#subscription.sink,
-      replayAfterOffset: snapshot?.offset ?? 0,
+    const processEventBatch: ProcessEventBatch = (batch) => {
+      const currentRunner = this.#runner;
+      if (currentRunner === undefined) return;
+      const next = this.#processing.then(() => currentRunner.processEventBatch(batch));
+      this.#processing = next;
+      this.ctx.waitUntil(next);
     };
+
+    this.#subscriptionHandle = await (this.#stream as OutboundStreamRpc).subscribeOutbound({
+      subscriptionKey: args.subscriptionKey,
+      processEventBatch,
+      replayAfterOffset: snapshot?.offset ?? 0,
+    });
   }
 
-  runtimeState() {
+  async runtimeState() {
+    await this.#processing;
     const processorSlug = this.ctx.storage.kv.get<string>("processorSlug");
-    const snapshot = this.ctx.storage.kv.get<RunnerSnapshot>("snapshot");
+    const snapshot = this.ctx.storage.kv.get<RunnerSnapshot>(PROCESSOR_RUNNER_SNAPSHOT_KEY);
     return {
       processorSlug,
       snapshot,
@@ -208,6 +213,29 @@ export const StreamProcessorRunnerRpcTarget = makeRpcTargetClass<
   StreamProcessorRunnerRpc,
   StreamProcessorRunner
 >(StreamProcessorRunner);
+
+type RetainedStreamRpc = RpcStub<StreamRpc> & Disposable;
+type OutboundStreamRpc = RetainedStreamRpc & {
+  subscribeOutbound(
+    args: Parameters<StreamRpc["subscribe"]>[0],
+  ): ReturnType<StreamRpc["subscribe"]>;
+};
+
+type RetainableStreamRpc = StreamRpc &
+  Partial<Disposable> & {
+    dup?(): RetainedStreamRpc;
+  };
+
+function retainStreamRpc(stream: StreamRpc): RetainedStreamRpc {
+  const retainable = stream as RetainableStreamRpc;
+  const retained = retainable.dup?.() ?? retainable;
+  const dispose = retained[Symbol.dispose]?.bind(retained);
+  return Object.assign(retained, {
+    [Symbol.dispose]() {
+      dispose?.();
+    },
+  }) as RetainedStreamRpc;
+}
 
 function getOsProcessor(args: {
   ctx: DurableObjectState;
@@ -232,6 +260,7 @@ function getOsProcessor(args: {
     return {
       processor: adaptSharedProcessor(
         createCodemodeProcessor(codemodeProcessorDeps({ ...args, projectId, streamPath })),
+        { detachedSideEffects: true },
       ),
       deps: {
         env: args.env,
@@ -366,6 +395,14 @@ function getOsProcessor(args: {
     };
   }
 
+  if (args.slug === "echo-example") {
+    return { processor: echoExampleProcessor, deps: undefined };
+  }
+
+  if (args.slug === "circuit-breaker") {
+    return { processor: circuitBreakerProcessor, deps: undefined };
+  }
+
   return undefined;
 }
 
@@ -397,6 +434,8 @@ const AgentHostProcessorContract = {
 function createAgentHostProcessor(): Processor<any, AgentHostProcessorDeps> {
   return implementProcessor(AgentHostProcessorContract as any, (deps: AgentHostProcessorDeps) => ({
     afterAppend(args) {
+      if (!args.shouldApplySideEffects({ event: args.event as StreamEvent })) return;
+
       const event = toLegacyEvent(args.event as StreamEvent, deps.streamPath);
       // Wake this stream's agent WITHOUT blocking the host's checkpoint. The agent's
       // onInstanceWake waits for every processor on the stream (including this agent-host) to
@@ -458,12 +497,23 @@ type SharedProcessorAdapterDeps = {
 
 function adaptSharedProcessor(
   sharedProcessor: SharedProcessor<any>,
+  options: { detachedSideEffects?: boolean } = {},
 ): Processor<any, SharedProcessorAdapterDeps> {
   return {
     contract: sharedProcessor.contract,
     build(deps: SharedProcessorAdapterDeps) {
       return {
         afterAppend(args: any) {
+          if (
+            !shouldApplySharedProcessorSideEffects({
+              event: args.event as StreamEvent,
+              sharedProcessor,
+              shouldApplySideEffects: args.shouldApplySideEffects,
+            })
+          ) {
+            return;
+          }
+
           const abortController = new AbortController();
           args.blockProcessorUntil(async () => {
             await sharedProcessor.implementation.afterAppend?.({
@@ -477,13 +527,29 @@ function adaptSharedProcessor(
                 streamPath: deps.streamPath,
               }) as never,
               signal: abortController.signal,
-              waitUntil: (promise) => args.keepAlive(promise),
+              ...(options.detachedSideEffects === true
+                ? { waitUntil: (promise: Promise<unknown>) => args.keepAlive(promise) }
+                : {}),
             });
           });
         },
       };
     },
   } as unknown as Processor<any, SharedProcessorAdapterDeps>;
+}
+
+function shouldApplySharedProcessorSideEffects(args: {
+  event: StreamEvent;
+  sharedProcessor: SharedProcessor<any>;
+  shouldApplySideEffects(input: { event: StreamEvent; gracePeriodMs?: number }): boolean;
+}) {
+  const policy = args.sharedProcessor.implementation.firstAttachAfterAppend;
+  if (policy?.mode === "all") return true;
+  if (policy?.mode === "none") return args.shouldApplySideEffects({ event: args.event });
+  return args.shouldApplySideEffects({
+    event: args.event,
+    gracePeriodMs: policy?.milliseconds ?? 250,
+  });
 }
 
 function codemodeProcessorDeps(args: {
@@ -621,7 +687,7 @@ async function* subscribeSharedProcessorStreamApi(args: {
   streamPath: StreamPath;
 }) {
   const stream = streamRpcForPath(args);
-  let handle: ReturnType<StreamRpc["subscribe"]> | undefined;
+  let handle: StreamSubscriptionHandle | undefined;
   const subscription = createStreamSubscription({
     onDispose: () => handle?.unsubscribe(),
   });
@@ -629,7 +695,7 @@ async function* subscribeSharedProcessorStreamApi(args: {
   args.signal?.addEventListener("abort", abort, { once: true });
   try {
     handle = await stream.subscribe({
-      sink: subscription.sink as RpcStub<SubscriptionSink>,
+      processEventBatch: subscription.processEventBatch,
       replayAfterOffset: toNewAfterOffset(args.afterOffset),
     });
 

@@ -9,14 +9,10 @@ import {
   defaultCodemodeProviderRegistrationEvents,
   providersForCodemodeExample,
 } from "~/domains/codemode/examples.ts";
-import { orpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/examples")({
-  loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
+  loader: async ({ context }) => {
+    const { project } = context;
 
     return {
       breadcrumb: "Examples",

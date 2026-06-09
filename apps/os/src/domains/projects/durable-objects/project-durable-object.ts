@@ -16,6 +16,7 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/new-stream-runtime.ts";
 import { AppConfig } from "~/app.ts";
+import { authenticateAdminBearer } from "~/auth/admin.ts";
 import {
   createCapnwebAppContext,
   createIterateContext,
@@ -23,7 +24,6 @@ import {
   type IterateContext,
   type IterateContextProps,
 } from "~/capnweb/iterate-context-capability.ts";
-import localProxyWrapperSource from "~/capnweb/local-proxy-wrapper.js?raw";
 import {
   authenticateCapnwebAdmin,
   handleCapnwebAdminCookieRequest,
@@ -99,7 +99,6 @@ export type ProjectCapability = Pick<
   ProjectDurableObject,
   | "afterAppend"
   | "callConfigWorkerFunction"
-  | "checkAccess"
   | "createProject"
   | "describe"
   | "egressFetch"
@@ -119,11 +118,6 @@ export type ProjectCapability = Pick<
 export type CreateProjectInput = {
   projectId: string;
   slug: string;
-};
-
-export type ProjectAccessPrincipal = {
-  orgId: string;
-  userId: string;
 };
 
 type ProjectEnv = {
@@ -383,26 +377,6 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       material: EXAMPLE_EGRESS_SECRET_MATERIAL,
       metadata: EXAMPLE_EGRESS_SECRET_METADATA,
     });
-  }
-
-  async checkAccess(input: { principal: ProjectAccessPrincipal }): Promise<ProjectSummary> {
-    await this.ensureStarted();
-    const summary = this.requireSummary();
-    const row = await this.env.DB.prepare(
-      `SELECT project_id FROM project_permissions
-       WHERE project_id = ?
-         AND principal_type = 'clerk_organization'
-         AND principal_id = ?
-       LIMIT 1`,
-    )
-      .bind(summary.id, input.principal.orgId)
-      .first<{ project_id: string }>();
-
-    if (!row) {
-      throw new Error(`Project ${summary.id} is not available to this principal.`);
-    }
-
-    return summary;
   }
 
   async getSummary(): Promise<ProjectSummary> {
@@ -708,7 +682,12 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       );
     }
 
-    if (readBearerToken(request.headers.get("authorization")) !== expectedToken) {
+    if (
+      !authenticateAdminBearer({
+        authorizationHeader: request.headers.get("authorization"),
+        config: this.getAppConfig(),
+      })
+    ) {
       return Response.json({ error: "Unauthorized." }, { status: 401 });
     }
 
@@ -1295,12 +1274,12 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `project-lifecycle-subscription:${projectId}`,
+      idempotencyKey: `project-lifecycle-subscription:${projectId}:workers-rpc`,
       payload: {
         subscriptionKey: projectLifecycleSubscriptionKey(projectId),
         subscriber: {
           type: "built-in",
-          transport: "capnweb-websocket",
+          transport: "workers-rpc",
           processorSlug: ProjectLifecycleProcessorContract.slug,
         },
       },
@@ -1412,16 +1391,6 @@ function projectDynamicWorkerCodeWithStreams(input: {
     },
     modules: {
       ...input.workerCode.modules,
-      // Config workers can receive mounted SDK-shaped capabilities such as
-      // ctx.slack. Those mounts cross RPC as localProxyCaller marker values.
-      // The worker must opt in by importing liftLocalProxies from this helper:
-      //
-      //   import { liftLocalProxies } from "./local-proxy-wrapper.js";
-      //   const ctx = liftLocalProxies(await env.ITERATE.context);
-      //
-      // We inject the helper here so a tiny iterate-config worker.js can use the
-      // same SDK path adapter as /run without bundling app internals itself.
-      "local-proxy-wrapper.js": { js: localProxyWrapperSource },
     },
   };
 }
@@ -1559,14 +1528,6 @@ function projectLandingResponse(input: { request: Request; summary: ProjectSumma
 function isHttpRequestUrl(urlString: string) {
   const url = new URL(urlString);
   return url.protocol === "http:" || url.protocol === "https:";
-}
-
-function readBearerToken(headerValue: string | null): string | null {
-  if (!headerValue) return null;
-  const match = /^bearer\s+(.+)$/i.exec(headerValue);
-  if (!match) return null;
-  const token = match[1]?.trim() ?? "";
-  return token.length > 0 ? token : null;
 }
 
 function projectWorkerBuildingResponse() {

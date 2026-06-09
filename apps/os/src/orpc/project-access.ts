@@ -1,18 +1,17 @@
 import { ORPCError } from "@orpc/server";
+import { getAccessibleAuthProject } from "~/capnweb/projects-capability.ts";
 import type { AppContext } from "~/context.ts";
+import { getProjectById, getProjectBySlug } from "~/db/queries/.generated/index.ts";
 import {
-  getProjectById,
-  getProjectBySlug,
-  getProjectPermission,
-} from "~/db/queries/.generated/index.ts";
-import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
-import { resolveActiveOrganizationAuth } from "~/orpc/auth.ts";
+  type ActiveOrganizationAuth,
+  resolveActiveOrganizationAuth,
+} from "~/lib/active-organization-auth.ts";
 
 /**
  * Confirms a caller can access an ownerless project before exposing
  * project-scoped capabilities such as Code Mode or stream access. Projects are
- * deliberately not owned by organizations at their core; the permission table
- * is the current claim/grant layer, and admin API callers bypass it for
+ * deliberately not owned by organizations at their core; user access is claimed
+ * through Auth project membership, and admin API callers bypass that for
  * operator work.
  */
 export async function requireActiveOrganizationProject(input: {
@@ -38,19 +37,13 @@ export async function requireActiveOrganizationProject(input: {
     return project;
   }
 
-  const permission = await getProjectPermission(input.context.db, {
-    principalId: input.activeOrganization.orgId,
-    principalType: "clerk_organization",
-    projectId: input.projectId,
-  });
-
-  if (!permission) {
-    throw new ORPCError("FORBIDDEN", {
-      message: `Project ${input.projectId} not found`,
-    });
+  if (await getAccessibleAuthProject(input)) {
+    return project;
   }
 
-  return project;
+  throw new ORPCError("FORBIDDEN", {
+    message: `Project ${input.projectId} not found`,
+  });
 }
 
 export async function requireProjectScopedAccess(input: {
@@ -87,19 +80,19 @@ export async function requireProjectScopedAccess(input: {
     return project;
   }
 
-  const permission = await getProjectPermission(input.context.db, {
-    principalId: activeOrganization.orgId,
-    principalType: "clerk_organization",
-    projectId: project.id,
-  });
-
-  if (!permission) {
-    throw new ORPCError("FORBIDDEN", {
-      message: `Project ${input.projectSlugOrId} is not accessible.`,
-    });
+  if (
+    await getAccessibleAuthProject({
+      activeOrganization,
+      context: input.context,
+      projectId: project.id,
+    })
+  ) {
+    return project;
   }
 
-  return project;
+  throw new ORPCError("FORBIDDEN", {
+    message: `Project ${input.projectSlugOrId} is not accessible.`,
+  });
 }
 
 export function requireProjectScope(

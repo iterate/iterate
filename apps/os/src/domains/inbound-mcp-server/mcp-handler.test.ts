@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchMcpRequestUrl } from "./mcp-url-routing.ts";
+import { matchMcpRequestUrl, publicMcpRequestUrl } from "./mcp-url-routing.ts";
 
 describe("matchMcpRequestUrl", () => {
   it("matches the root of the configured MCP host", () => {
@@ -9,6 +9,24 @@ describe("matchMcpRequestUrl", () => {
         requestUrl: "https://mcp.iterate.com/",
       }),
     ).toEqual({ relativePathname: "/" });
+  });
+
+  it("matches metadata paths below the canonical root mount", () => {
+    expect(
+      matchMcpRequestUrl({
+        mcpBaseUrl: "https://mcp.iterate.com",
+        requestUrl: "https://mcp.iterate.com/.well-known/oauth-protected-resource",
+      }),
+    ).toEqual({ relativePathname: "/.well-known/oauth-protected-resource" });
+  });
+
+  it("preserves explicit path-mounted MCP URLs", () => {
+    expect(
+      matchMcpRequestUrl({
+        mcpBaseUrl: "https://mcp.iterate.com/mcp",
+        requestUrl: "https://mcp.iterate.com/mcp/.well-known/oauth-protected-resource",
+      }),
+    ).toEqual({ relativePathname: "/.well-known/oauth-protected-resource" });
   });
 
   it("matches paths relative to a path-mounted MCP base URL", () => {
@@ -45,5 +63,24 @@ describe("matchMcpRequestUrl", () => {
         requestUrl: "https://os.iterate.com/mcp",
       }),
     ).toBeNull();
+  });
+
+  it("matches tunnel requests using the forwarded public MCP host", () => {
+    const requestUrl = publicMcpRequestUrl(
+      new Request("http://localhost:5173/", {
+        headers: {
+          "x-forwarded-host": "mcp.iterate-dev-rahul.com",
+          "x-forwarded-proto": "https",
+        },
+      }),
+    );
+
+    expect(requestUrl).toBe("https://mcp.iterate-dev-rahul.com/");
+    expect(
+      matchMcpRequestUrl({
+        mcpBaseUrl: "https://mcp.iterate-dev-rahul.com",
+        requestUrl,
+      }),
+    ).toEqual({ relativePathname: "/" });
   });
 });

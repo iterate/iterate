@@ -6,11 +6,7 @@ import {
   listD1ObjectCatalogRecordsByIndex,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { AppContext } from "~/context.ts";
-import {
-  getProjectById,
-  getProjectPermission,
-  updateProjectConfig,
-} from "~/db/queries/.generated/index.ts";
+import { getProjectById, updateProjectConfig } from "~/db/queries/.generated/index.ts";
 import type { CodemodeSessionStructuredName } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import {
   ensureProjectCustomHostname,
@@ -32,7 +28,7 @@ import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
 import { projectSecretsRouter } from "~/orpc/routers/secrets.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
-import { ProjectsCapability } from "~/capnweb/projects-capability.ts";
+import { getAccessibleAuthProject, ProjectsCapability } from "~/capnweb/projects-capability.ts";
 
 type ProjectRow = {
   id: string;
@@ -53,6 +49,7 @@ function toProject(row: ProjectRow) {
     customHostname: row.custom_hostname ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    isOrphanedProjectFromAuthService: false,
   };
 }
 
@@ -349,18 +346,19 @@ async function requireProject(input: {
     return project;
   }
 
-  const permission = await getProjectPermission(input.context.db, {
-    principalId: input.activeOrganization.orgId,
-    principalType: "clerk_organization",
-    projectId: input.projectId,
-  });
-  if (!permission) {
-    throw new ORPCError("FORBIDDEN", {
-      message: `Project ${input.projectId} not found`,
-    });
+  if (
+    await getAccessibleAuthProject({
+      activeOrganization: input.activeOrganization,
+      context: input.context,
+      projectId: project.id,
+    })
+  ) {
+    return project;
   }
 
-  return project;
+  throw new ORPCError("FORBIDDEN", {
+    message: `Project ${input.projectId} not found`,
+  });
 }
 
 function requireD1ObjectCatalog(context: AppContext) {

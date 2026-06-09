@@ -4,15 +4,18 @@ import {
   hasWildcardProjectScope,
   listProjectScopeIds,
 } from "@iterate-com/shared/auth-claims";
+import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
 import { McpAgent } from "agents/mcp";
 import { createD1Client } from "sqlfu";
 import type { AppConfig } from "~/app.ts";
+import { authenticateAdminBearer } from "~/auth/admin.ts";
 import { principalFromAccessToken, type Principal } from "~/auth/principal.ts";
 import { listAllProjects } from "~/db/queries/.generated/index.ts";
 import { isBrowserMcpInstructionsRequest } from "~/domains/inbound-mcp-server/mcp-instructions-request.ts";
 import {
   matchMcpRequestUrl,
   normalizeMcpBaseUrl,
+  publicMcpRequestUrl,
   stripTrailingSlash,
 } from "~/domains/inbound-mcp-server/mcp-url-routing.ts";
 import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
@@ -129,9 +132,14 @@ export async function handleMcpFetch(input: McpHandlerInput): Promise<Response |
 }
 
 async function authenticateAdminMcpRequest(input: McpHandlerInput) {
-  const token = readBearerToken(input.request.headers.get("authorization"));
-  const expectedToken = input.config.adminApiSecret?.exposeSecret();
-  if (!token || !expectedToken || token !== expectedToken) return null;
+  if (
+    !authenticateAdminBearer({
+      authorizationHeader: input.request.headers.get("authorization"),
+      config: input.config,
+    })
+  ) {
+    return null;
+  }
 
   const db = createD1Client(input.env.DB);
   const projects = await listAllProjects(db, { limit: 10_000, offset: 0 });
@@ -172,7 +180,7 @@ function matchConfiguredMcpBaseUrl(input: McpHandlerInput) {
   return matchMcpRequestUrl({
     appBaseUrl: input.config.baseUrl,
     mcpBaseUrl: input.config.mcp?.baseUrl,
-    requestUrl: input.request.url,
+    requestUrl: publicMcpRequestUrl(input.request),
   });
 }
 
@@ -192,7 +200,7 @@ function createMcpIterateAuth(input: McpHandlerInput) {
     clientId: config.clientId,
     clientSecret: config.clientSecret.exposeSecret(),
     redirectURI: `${baseUrl}/api/iterate-auth/callback`,
-    resource: canonicalMcpResourceUrl(input),
+    resource: oauthResourceAudienceVariants(canonicalMcpResourceUrl(input)),
   });
 }
 
@@ -238,11 +246,6 @@ function buildProtectedResourceMetadata(input: McpHandlerInput) {
 function readAccessTokenScopes(accessToken: { scope?: string; scopes?: string[] }) {
   if (accessToken.scopes) return accessToken.scopes;
   return accessToken.scope?.split(" ").filter(Boolean) ?? [];
-}
-
-function readBearerToken(headerValue: string | null) {
-  const match = /^bearer\s+(.+)$/i.exec(headerValue ?? "");
-  return match?.[1]?.trim() || null;
 }
 
 function canonicalMcpResourceUrl(input: McpHandlerInput) {

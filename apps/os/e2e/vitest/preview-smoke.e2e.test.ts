@@ -135,11 +135,11 @@ async function seedProject(input: { adminApiSecret: string; baseUrl: URL }) {
 function projectMcpUrlFor(input: { baseUrl: URL; project: Project }) {
   const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(input.baseUrl.hostname);
   if (previewMatch) {
-    return new URL(`https://mcp.iterate-preview-${previewMatch[1]}.com/`);
+    return new URL(`https://mcp.iterate-preview-${previewMatch[1]}.com`);
   }
 
   if (input.baseUrl.hostname === "os.iterate.com") {
-    return new URL("https://mcp.iterate.com/");
+    return new URL("https://mcp.iterate.com");
   }
 
   throw new Error(
@@ -204,7 +204,10 @@ test("OS preview smoke", async () => {
     status: 401,
   });
   const wwwAuthenticate = projectMcpResponse.headers.get("www-authenticate") ?? "";
-  const metadataUrl = new URL("/.well-known/oauth-protected-resource", projectMcpUrl.origin);
+  const metadataUrl = new URL(
+    ".well-known/oauth-protected-resource",
+    `${projectMcpUrl.toString().replace(/\/+$/, "")}/`,
+  );
   if (!wwwAuthenticate.includes(`resource_metadata="${metadataUrl.toString()}"`)) {
     throw new Error(`Unexpected MCP WWW-Authenticate header: ${wwwAuthenticate}`);
   }

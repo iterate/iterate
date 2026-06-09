@@ -13,14 +13,10 @@ The design goal is a single scoped capability tree that can be used from:
 The same authoring model should work everywhere:
 
 ```ts
-using project = await ctx.project;
-using workspace = await project.workspace;
-using git = await workspace.git;
-await git.add({ dir, filepath: "worker.js" });
-await git.push({ dir, remote: "origin", ref });
+await ctx.project.workspace.git.add({ dir, filepath: "worker.js" });
+await ctx.project.workspace.git.push({ dir, remote: "origin", ref });
 
-using worker = await project.worker;
-await worker.someTool({ value: 1 });
+await ctx.project.worker.someTool({ value: 1 });
 ```
 
 ## Entrypoints
@@ -155,8 +151,7 @@ Default `invoke` is `"target"`:
   target: { type: "dynamic-worker", script: toolsWorkerSource },
 }
 
-using tools = await ctx.tools;
-await tools.echo({ text: "hi" });
+await ctx.tools.echo({ text: "hi" });
 ```
 
 Use `invoke: "method"` when the mount itself should be callable:
@@ -203,8 +198,7 @@ export default class Worker extends WorkerEntrypoint {
 
   async postDailyReport(input) {
     const ctx = await this.env.ITERATE.context;
-    using slack = await ctx.slack;
-    return await slack.chat.postMessage(input);
+    return await ctx.slack.chat.postMessage(input);
   }
 }
 ```
@@ -224,29 +218,56 @@ cached project worker.
 ## Dynamic Worker Mounts
 
 Dynamic-worker mounts are loaded and invoked by the parent worker that owns the
-`LOADER` binding. A `/run` dynamic worker must not receive or transfer the
-mounted dynamic-worker entrypoint.
+`LOADER` binding. A mounted root returns a parent-owned path `RpcTarget`, so
+callers can use the normal Cap'n Web shape:
 
-For built-ins, `/run` uses the real context from `await env.ITERATE.context`.
-For dynamic-worker mount roots only, `/run` overlays a local marker that calls
-back to parent-owned `env.ITERATE.callMounted([root, ...path], args)`.
+```ts
+await ctx.tools.echo(input);
+await ctx.slack.chat.postMessage(input);
+```
 
-The parent then resolves the mount, loads/reuses the dynamic worker, walks any
-`target.call` path, awaits intermediate getter/RPC-promise values, and calls the
-final method with the correct receiver.
+The parent resolves the mount, loads/reuses the dynamic worker, replays the full
+property path against the native Workers RPC entrypoint, and returns plain data
+or another parent-owned path target.
 
 ## SDK-Shaped Paths
 
 SDKs like Slack have method trees we should not predeclare. A normal mounted
-target can expose a getter that returns `localProxyCaller(...)`:
+target can expose a getter that returns a server-side path `RpcTarget`:
 
 ```ts
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { localProxyCaller } from "./local-proxy-wrapper.js";
+
+function sdkPathProxy(callPath, path = []) {
+  const fn = (...args) => callPath({ path, args });
+  return new Proxy(fn, {
+    apply(_target, _thisArg, args) {
+      return callPath({ path, args });
+    },
+    get(target, key, receiver) {
+      if (key === "then") return undefined;
+      if (typeof key === "symbol" || key in target) {
+        return Reflect.get(target, key, receiver);
+      }
+      return sdkPathProxy(callPath, [...path, key]);
+    },
+    getOwnPropertyDescriptor(target, key) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+      if (descriptor) return descriptor;
+      if (typeof key === "symbol" || key === "then") return undefined;
+      return {
+        configurable: true,
+        enumerable: true,
+        value: sdkPathProxy(callPath, [...path, key]),
+        writable: false,
+      };
+    },
+  });
+}
 
 export default class SlackTarget extends WorkerEntrypoint {
   get sdk() {
-    return localProxyCaller(({ path, args }) => this.call({ path, args }));
+    return sdkPathProxy(({ path, args }) => this.call({ path, args }));
   }
 
   async call({ path, args }) {
@@ -258,18 +279,16 @@ export default class SlackTarget extends WorkerEntrypoint {
 Mounted with `call: ["sdk"]`, this lets callers write:
 
 ```ts
-using slack = await ctx.slack;
-await slack.chat.postMessage({ channel: "C123", text: "hi" });
+await ctx.slack.chat.postMessage({ channel: "C123", text: "hi" });
 ```
 
-Only marker values get this local path-proxy behavior. Normal Cap'n Web and
-Workers RPC stubs pass through untouched.
+Normal Cap'n Web and Workers RPC stubs keep their own proxy behavior; the SDK
+adapter only exists server-side.
 
 ## `/run` And Vitest
 
-`/api/captnweb/run` should stay small. It imports the local SDK marker adapter,
-resolves `ctx` from `env.ITERATE.context`, invokes the provided function, and
-returns JSON.
+`/api/captnweb/run` should stay small. It resolves `ctx` from
+`env.ITERATE.context`, invokes the provided function, and returns JSON.
 
 Workerd supports native `using` for the compatibility date used here. If Vitest
 or esbuild lowers `using` before `fn.toString()`, that is a test serialization
@@ -285,7 +304,7 @@ function with `{ ctx, vars }` and exits:
 ```bash
 doppler run --project os --config preview_5 -- pnpm exec tsx src/capnweb/cli.ts \
   --project-id proj_123 \
-  -e 'async ({ ctx }) => await (await ctx.project).describe()'
+  -e 'async ({ ctx }) => await ctx.project.describe()'
 ```
 
 `src/capnweb/repl.ts` is the persistent Node REPL. It opens the same Cap'n Web
@@ -297,8 +316,7 @@ doppler run --project os --config preview_5 -- pnpm exec tsx src/capnweb/repl.ts
 ```
 
 ```js
-using project = await ctx.project;
-await project.describe();
+await ctx.project.describe();
 let stream = new ReadableStream();
 stream instanceof ReadableStream;
 ```

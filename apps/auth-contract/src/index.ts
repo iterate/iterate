@@ -1,3 +1,5 @@
+import { createORPCClient } from "@orpc/client";
+import { RPCLink } from "@orpc/client/fetch";
 import { oc, type ContractRouterClient } from "@orpc/contract";
 import { z } from "zod";
 
@@ -486,3 +488,41 @@ export const authContract = oc.router({
   },
 });
 export type AuthContractClient = ContractRouterClient<typeof authContract>;
+
+export type AuthContractClientOptions = {
+  baseUrl: string;
+  serviceToken?: string;
+  asUserId?: string;
+  fetch?: typeof fetch;
+};
+
+export function createAuthContractClient(options: AuthContractClientOptions): AuthContractClient {
+  const authBaseUrl = options.baseUrl.replace(/\/+$/, "");
+  const fetchImpl = options.fetch ?? fetch;
+
+  return createORPCClient(
+    new RPCLink({
+      url: `${authBaseUrl}/api/orpc/`,
+      fetch: (request: URL | Request, init?: RequestInit) => {
+        const headers = mergeRequestHeaders(request, init?.headers);
+        if (options.serviceToken) {
+          headers.set(SERVICE_TOKEN_HEADER, options.serviceToken);
+        }
+        if (options.asUserId) {
+          headers.set(AS_USER_HEADER, options.asUserId);
+        }
+        return fetchImpl(request, { ...init, headers });
+      },
+    }),
+  ) as AuthContractClient;
+}
+
+function mergeRequestHeaders(request: URL | Request, initHeaders: HeadersInit | undefined) {
+  const headers = new Headers(request instanceof Request ? request.headers : undefined);
+  if (initHeaders) {
+    for (const [key, value] of new Headers(initHeaders)) {
+      headers.set(key, value);
+    }
+  }
+  return headers;
+}

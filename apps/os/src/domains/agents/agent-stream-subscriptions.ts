@@ -46,12 +46,12 @@ export function agentProcessorSubscriptionConfiguredEvent(input: {
 }): EventInput {
   return {
     type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-    idempotencyKey: `agent-processor-subscription:${input.projectId}:${StreamPathSchema.parse(input.agentPath)}:${input.processorSlug}`,
+    idempotencyKey: `agent-processor-subscription:${input.projectId}:${StreamPathSchema.parse(input.agentPath)}:${input.processorSlug}:workers-rpc`,
     payload: {
       subscriptionKey: agentProcessorSubscriptionKey(input),
       subscriber: {
         type: "built-in",
-        transport: "capnweb-websocket",
+        transport: "workers-rpc",
         processorSlug: input.processorSlug,
       },
     },

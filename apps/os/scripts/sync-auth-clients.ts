@@ -1,7 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { createORPCClient } from "@orpc/client";
-import { RPCLink } from "@orpc/client/fetch";
-import { SERVICE_TOKEN_HEADER, type AuthContractClient } from "@iterate-com/auth-contract";
+import { createAuthContractClient } from "@iterate-com/auth-contract";
 
 type Target = {
   dopplerConfig: string;
@@ -66,16 +64,7 @@ if (!serviceToken) {
   );
 }
 
-const authClient = createORPCClient(
-  new RPCLink({
-    url: `${authBaseUrl.replace(/\/+$/, "")}/api/orpc/`,
-    fetch: (request: URL | Request, init?: RequestInit) => {
-      const headers = new Headers(request instanceof Request ? request.headers : init?.headers);
-      headers.set(SERVICE_TOKEN_HEADER, serviceToken);
-      return fetch(request, { ...init, headers });
-    },
-  }),
-) as AuthContractClient;
+const authClient = createAuthContractClient({ baseUrl: authBaseUrl, serviceToken });
 
 for (const target of targets) {
   if (targetFilter.size > 0 && !targetFilter.has(target.dopplerConfig)) {

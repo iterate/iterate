@@ -1,5 +1,5 @@
 import type { AppConfig } from "~/app.ts";
-import { authenticateAdminApiSecret } from "~/auth/middleware.ts";
+import { authenticateAdminApiSecret } from "~/auth/admin.ts";
 import { adminPrincipal } from "~/auth/principal.ts";
 
 export const CAPNWEB_ADMIN_AUTH_COOKIE = "iterate-admin-auth";

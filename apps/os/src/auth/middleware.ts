@@ -1,22 +1,28 @@
-import { createIterateAuth, type AuthenticatedSession } from "@iterate-com/auth/server";
+import {
+  createIterateAuth,
+  isAuthHandlerRequest,
+  type AuthenticatedSession,
+} from "@iterate-com/auth/server";
+import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
 import { createMiddleware } from "@tanstack/react-start";
 import type { AppContext } from "~/context.ts";
+import { authenticateAdminApiSecret } from "~/auth/admin.ts";
 import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import {
-  adminPrincipal,
   principalFromAccessToken,
   principalFromSession,
   type Principal,
 } from "~/auth/principal.ts";
 
-const AUTH_HANDLER_PREFIX = "/api/iterate-auth/";
-
 export const iterateAuthMiddleware = createMiddleware().server(
   async ({ request, context, next }) => {
     const auth = createOsIterateAuth(context, request);
-    const authHandlerResponse = handleAuthHandlerRequest({ auth, request });
+    const authHandlerResponse = auth?.handleRequest(request) ?? null;
     if (authHandlerResponse) {
       return authHandlerResponse;
+    }
+    if (!auth && isAuthHandlerRequest(request)) {
+      return new Response("Iterate auth is not configured.", { status: 503 });
     }
 
     const resolvedAuth = await resolveRequestAuth({ auth, context, request });
@@ -37,21 +43,6 @@ export const iterateAuthMiddleware = createMiddleware().server(
     return result;
   },
 );
-
-function handleAuthHandlerRequest(input: {
-  auth: ReturnType<typeof createOsIterateAuth>;
-  request: Request;
-}) {
-  if (!new URL(input.request.url).pathname.startsWith(AUTH_HANDLER_PREFIX)) {
-    return null;
-  }
-
-  if (!input.auth) {
-    return new Response("Iterate auth is not configured.", { status: 503 });
-  }
-
-  return input.auth.handler(input.request);
-}
 
 export async function resolveRequestAuth(input: {
   auth: ReturnType<typeof createOsIterateAuth>;
@@ -124,34 +115,6 @@ async function authenticateBearerPrincipal(input: {
   return accessToken ? principalFromAccessToken(accessToken) : null;
 }
 
-export function readBearerToken(headerValue: string | null): string | null {
-  if (!headerValue) return null;
-  const match = /^bearer\s+(.+)$/i.exec(headerValue);
-  const token = match?.[1]?.trim() ?? "";
-  return token.length > 0 ? token : null;
-}
-
-export function authenticateAdminApiSecret(
-  context: Pick<AppContext, "config">,
-  request: Request,
-): Principal | null {
-  const expectedToken = context.config.adminApiSecret?.exposeSecret();
-  const providedToken = readBearerToken(request.headers.get("authorization"));
-
-  if (!expectedToken || !providedToken || providedToken !== expectedToken) {
-    return null;
-  }
-
-  return adminPrincipal;
-}
-
-export function authenticateRootApiSecret(
-  context: Pick<AppContext, "config">,
-  request: Request,
-): Principal | null {
-  return authenticateAdminApiSecret(context, request);
-}
-
 export function createOsIterateAuth(context: AppContext, request: Request) {
   const config = context.config.iterateAuth;
   if (!config) return null;
@@ -163,7 +126,9 @@ export function createOsIterateAuth(context: AppContext, request: Request) {
     mcpBaseUrl: context.config.mcp?.baseUrl,
     requestUrl: request.url,
   });
-  const resources = mcpResource ? [resource, mcpResource] : [resource];
+  const resources = mcpResource
+    ? [resource, ...oauthResourceAudienceVariants(mcpResource)]
+    : [resource];
 
   return createIterateAuth({
     issuer: config.issuer,

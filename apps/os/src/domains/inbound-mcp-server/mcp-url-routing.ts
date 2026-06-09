@@ -1,5 +1,17 @@
 import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 
+export function publicMcpRequestUrl(request: Request) {
+  const url = new URL(request.url);
+  const forwardedHost = request.headers.get("x-forwarded-host")?.replace(/:\d+$/, "");
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.replace(/:$/, "");
+
+  if (forwardedProto) url.protocol = `${forwardedProto}:`;
+  if (forwardedHost) url.host = forwardedHost;
+  if (forwardedHost && !forwardedHost.includes(":")) url.port = "";
+
+  return url.toString();
+}
+
 export function matchMcpRequestUrl(input: {
   appBaseUrl?: string;
   mcpBaseUrl?: string;

@@ -1,6 +1,6 @@
 import { useState, type ChangeEvent } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@iterate-com/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@iterate-com/ui/components/card";
 import { Input } from "@iterate-com/ui/components/input";
@@ -48,9 +48,9 @@ function ClientsPage() {
 }
 
 function CreateClientForm() {
+  const queryClient = useQueryClient();
   const [clientName, setClientName] = useState("");
   const [redirectURIs, setRedirectURIs] = useState("");
-  const listClientsQuery = useQuery(orpc.superadmin.oauth.listClients.queryOptions());
 
   const createClientMutation = useMutation(
     orpc.superadmin.oauth.createClient.mutationOptions({
@@ -58,7 +58,7 @@ function CreateClientForm() {
         toast.success("OAuth client created");
         setClientName("");
         setRedirectURIs("");
-        listClientsQuery.refetch();
+        queryClient.invalidateQueries({ queryKey: orpc.superadmin.oauth.listClients.key() });
       },
     }),
   );

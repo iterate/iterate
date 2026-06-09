@@ -1,4 +1,3 @@
-import { newWebSocketRpcSession, newWorkersRpcResponse, type RpcStub } from "capnweb";
 import { DurableObject } from "cloudflare:workers";
 import {
   StreamEvent as StreamEventSchema,
@@ -7,16 +6,31 @@ import {
   type StreamEventInput,
 } from "../../shared/event.ts";
 import { getInitialProcessorState, runProcessorReduce } from "../../shared/stream-processors.ts";
-import { makeRpcTargetClass } from "../../shared/rpc-target.ts";
-import type { StreamCoreProcessorState } from "../../types.ts";
+import type { ProcessEventBatch, StreamCoreProcessorState } from "../../types.ts";
 import type { ProcessorStream } from "../../processor-runner.ts";
 import {
   getAncestorStreamPaths,
   catchUpCoreProcessorState,
   coreProcessor,
+  reduceCoreProcessorStateFromEvents,
 } from "../../processors/core/implementation.ts";
 import { coreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
-import type { StreamProcessorRunnerRpc, StreamRpc, SubscriptionSink } from "../../types.ts";
+import type { StreamRpc } from "../../types.ts";
+import { makeRpcTargetClass, type RpcTargetClass } from "../../shared/rpc-target.ts";
+import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecycle.ts";
+
+/**
+ * Durable stream storage and Workers RPC surface.
+ *
+ * HTTP/WebSocket Cap'n Web termination belongs at the fronting Worker, which
+ * exposes this DO through `StreamRpcTarget`.
+ */
+
+// Cloudflare Durable Objects cap each SQLite string/blob/table row at 2 MB.
+// BLOB columns do not raise that ceiling, and SQL-side substr(?) chunking would
+// still require binding the oversized value first, so event JSON is chunked in JS.
+const EVENT_CHUNK_SIZE = 512 * 1024;
+const textEncoder = new TextEncoder();
 
 export class Stream extends DurableObject<Env> implements StreamRpc {
   #coreProcessorState: StreamCoreProcessorState;
@@ -33,17 +47,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.ctx.storage.sql.exec(`
-      -- Stream-owned append log. This is the same replay source that external
-      -- StreamProcessorRunner DOs consume over subscribe().
-      create table if not exists events (
-        offset integer primary key autoincrement,
-        type text not null,
-        created_at text not null,
-        idempotency_key text unique,
-        raw_json text not null
-      );
-    `);
+    this.#ensureStorageSchema();
 
     this.#coreProcessorState = this.readCoreProcessorState();
 
@@ -76,12 +80,49 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     this.#reconcile();
   }
 
+  #ensureStorageSchema(): void {
+    // Keep storage normalized:
+    // - `events` is the offset-ordered metadata/index table.
+    // - `event_chunks` stores the full event JSON as bounded UTF-8 byte rows.
+    this.#createEventsTable();
+    this.#createEventChunksTable();
+  }
+
+  #createEventsTable(): void {
+    this.ctx.storage.sql.exec(`
+      -- Stream-owned append log metadata. Full event JSON is stored in event_chunks.
+      -- offset is the replay cursor; idempotency_key's unique constraint is its lookup index.
+      create table if not exists events (
+        offset integer primary key autoincrement,
+        type text not null,
+        created_at text not null,
+        idempotency_key text unique
+      )
+    `);
+  }
+
+  #createEventChunksTable(): void {
+    this.ctx.storage.sql.exec(`
+      -- Full committed event JSON split into ordered byte chunks. The WITHOUT ROWID
+      -- primary key is the lookup index used by point reads and range replay.
+      create table if not exists event_chunks (
+        offset integer not null,
+        chunk_index integer not null,
+        chunk_bytes blob not null,
+        primary key (offset, chunk_index),
+        foreign key (offset) references events(offset) on delete cascade
+      ) without rowid
+    `);
+  }
+
   protected readCoreProcessorState(): StreamCoreProcessorState {
     const stored = this.ctx.storage.kv.get<unknown>("state");
     const storedState =
       stored === undefined
-        ? getInitialProcessorState(coreProcessorContract)
+        ? this.#recoverCoreProcessorStateFromEventLog()
         : coreProcessorContract.stateSchema.parse(stored);
+    if (storedState === undefined) return getInitialProcessorState(coreProcessorContract);
+
     const state = this.#catchUpCoreProcessorState(storedState);
 
     if (state.maxOffset !== storedState.maxOffset) {
@@ -118,25 +159,41 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   #appendEventRows(events: StreamEvent[]): void {
     for (const event of events) {
+      const rawJson = JSON.stringify(event);
       this.ctx.storage.sql.exec(
         `
-          insert into events (offset, type, created_at, idempotency_key, raw_json)
-          values (?, ?, ?, ?, ?)
+          insert into events (offset, type, created_at, idempotency_key)
+          values (?, ?, ?, ?)
         `,
         event.offset,
         event.type,
         event.createdAt,
         event.idempotencyKey ?? null,
-        JSON.stringify(event),
+      );
+      this.#insertEventChunks(event.offset, rawJson);
+    }
+  }
+
+  #insertEventChunks(offset: number, rawJson: string): void {
+    const rawJsonBytes = textEncoder.encode(rawJson);
+    for (const [chunkIndex, chunk] of chunkBytes(rawJsonBytes, EVENT_CHUNK_SIZE)) {
+      this.ctx.storage.sql.exec(
+        `
+          insert into event_chunks (offset, chunk_index, chunk_bytes)
+          values (?, ?, ?)
+        `,
+        offset,
+        chunkIndex,
+        chunk,
       );
     }
   }
 
   #readEventByOffset(offset: number): StreamEvent | undefined {
     const row = this.ctx.storage.sql
-      .exec<{ rawJson: string }>(
+      .exec<{ offset: number }>(
         `
-          select raw_json as rawJson
+          select offset
           from events
           where offset = ?
           limit 1
@@ -144,14 +201,15 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         offset,
       )
       .toArray()[0];
-    return row === undefined ? undefined : StreamEventSchema.parse(JSON.parse(row.rawJson));
+    if (row === undefined) return undefined;
+    return this.#readEventFromChunks(row.offset);
   }
 
   #readEventByIdempotencyKey(idempotencyKey: string): StreamEvent | undefined {
     const row = this.ctx.storage.sql
-      .exec<{ rawJson: string }>(
+      .exec<{ offset: number }>(
         `
-          select raw_json as rawJson
+          select offset
           from events
           where idempotency_key = ?
           limit 1
@@ -159,7 +217,27 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         idempotencyKey,
       )
       .toArray()[0];
-    return row === undefined ? undefined : StreamEventSchema.parse(JSON.parse(row.rawJson));
+    if (row === undefined) return undefined;
+    return this.#readEventFromChunks(row.offset);
+  }
+
+  #readEventFromChunks(offset: number): StreamEvent {
+    // Do not use group_concat here: it would recreate a multi-MiB SQLite result cell.
+    // Returning bounded chunk rows and joining in JS keeps SQLite row sizes predictable.
+    const chunks = this.ctx.storage.sql
+      .exec<{ chunkBytes: ArrayBuffer }>(
+        `
+          select chunk_bytes as chunkBytes
+          from event_chunks
+          where offset = ?
+          order by chunk_index asc
+        `,
+        offset,
+      )
+      .toArray()
+      .map((row) => row.chunkBytes);
+    const rawJson = decodeChunks(chunks);
+    return StreamEventSchema.parse(JSON.parse(rawJson));
   }
 
   #readEventsInRange(args: {
@@ -167,33 +245,60 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     beforeOffset: number;
     limit: number;
   }): StreamEvent[] {
-    return this.ctx.storage.sql
-      .exec<{ rawJson: string }>(
+    // One indexed metadata subquery picks the replay window; the join then streams each
+    // event's chunks in primary-key order (offset, chunk_index).
+    const chunks = this.ctx.storage.sql
+      .exec<{ offset: number; chunkBytes: ArrayBuffer }>(
         `
-          select raw_json as rawJson
-          from events
-          where offset > ?
-            and offset < ?
-          order by offset asc
-          limit ?
+          select selected.offset as offset, event_chunks.chunk_bytes as chunkBytes
+          from (
+            select offset
+            from events
+            where offset > ?
+              and offset < ?
+            order by offset asc
+            limit ?
+          ) selected
+          join event_chunks on event_chunks.offset = selected.offset
+          order by selected.offset asc, event_chunks.chunk_index asc
         `,
         args.afterOffset,
         args.beforeOffset,
         args.limit,
       )
-      .toArray()
-      .map((row) => StreamEventSchema.parse(JSON.parse(row.rawJson)));
+      .toArray();
+    const chunksByOffset = new Map<number, ArrayBuffer[]>();
+    for (const chunk of chunks) {
+      const eventChunks = chunksByOffset.get(chunk.offset);
+      if (eventChunks === undefined) {
+        chunksByOffset.set(chunk.offset, [chunk.chunkBytes]);
+      } else {
+        eventChunks.push(chunk.chunkBytes);
+      }
+    }
+    return [...chunksByOffset.values()].map((eventChunks) =>
+      StreamEventSchema.parse(JSON.parse(decodeChunks(eventChunks))),
+    );
+  }
+
+  #recoverCoreProcessorStateFromEventLog(): StreamCoreProcessorState | undefined {
+    const events = this.#readEventsInRange({
+      afterOffset: 0,
+      beforeOffset: Number.MAX_SAFE_INTEGER,
+      limit: Number.MAX_SAFE_INTEGER,
+    });
+    if (events.length === 0) return undefined;
+
+    // KV state is the fast path, but SQL rows are the durable source of truth.
+    // If a deployed DO has rows but no KV state, replay the event log instead of
+    // treating the stream as empty and trying to insert offset 1 again.
+    return reduceCoreProcessorStateFromEvents(events);
   }
 
   #resolveStream(streamPath: string): Pick<StreamRpc, "append" | "appendBatch"> {
     const resolvedPath = resolveStreamPath(this.#coreProcessorState.path, streamPath);
     if (resolvedPath === resolveStreamPath(this.#coreProcessorState.path, ".")) return this;
     return this.env.STREAM.getByName(`${this.#coreProcessorState.namespace}:${resolvedPath}`);
-  }
-
-  /** Opens the capnweb RPC API for this stream Durable Object. */
-  async fetch(request: Request) {
-    return newWorkersRpcResponse(request, new StreamRpcTarget(this));
   }
 
   /**
@@ -406,24 +511,32 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 
   /**
-   * Inbound subscribe: a subscriber hands the stream a sink and the stream delivers.
+   * Subscribes to catch-up then live event batches.
    *
-   * `subscribe({ subscriptionKey: "s", sink })` live-tails by default. Passing
+   * `subscribe({ subscriptionKey: "s", processEventBatch })` live-tails by default. Passing
    * `replayAfterOffset: 0` replays from the first event before live delivery; passing
    * `replayAfterOffset: 3` starts at offset 4. Re-subscribing with the same key replaces
    * the old connection. Omit `subscriptionKey` for an anonymous subscription; the stream
    * assigns a random key and returns it. Call the returned `unsubscribe()` to stop
-   * delivery without closing the underlying capnweb session.
+   * delivery.
    */
   subscribe(args: {
     subscriptionKey?: string;
-    sink: RpcStub<SubscriptionSink>;
+    processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     // Type-filtered subscriptions belong here later. For now every subscription
     // observes the stream's full ordered event log after its offset boundary.
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
     return this.#openConnection({ ...args, subscriptionKey, direction: "inbound" });
+  }
+
+  subscribeOutbound(args: {
+    subscriptionKey: string;
+    processEventBatch: ProcessEventBatch;
+    replayAfterOffset?: number;
+  }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
+    return this.#openConnection({ ...args, direction: "outbound" });
   }
 
   runtimeState() {
@@ -487,7 +600,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   #openConnection(args: {
     direction: "inbound" | "outbound";
     subscriptionKey: string;
-    sink: RpcStub<SubscriptionSink>;
+    processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
     onClose?: () => void;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
@@ -497,17 +610,21 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     // Replacing any existing connection for this key.
     this.#connections.get(subscriptionKey)?.close();
 
-    const sink = args.sink.dup();
+    // Workers RPC disposes parameter stubs when an RPC method returns unless the
+    // callee duplicates them. Keep a retained callback because this stream calls
+    // it later from the pump, after subscribe() has returned:
+    // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
+    const processEventBatch = retainProcessEventBatch(args.processEventBatch);
     let cursor = args.replayAfterOffset ?? this.#coreProcessorState.maxOffset;
     let draining = false;
     let open = true;
 
-    // The single delivery path: drain committed events to the sink, then park.
+    // The single delivery path: drain committed events to the callback, then park.
     //
     // FUTURE OPTIMIZATION (Proposal B): the live path currently pays one indexed
     // `getEvents` read per batch even when the subscriber has caught up to maxOffset.
     // `appendBatch` already has the freshly-committed events array in memory, so when
-    // `cursor === firstNewOffset - 1` it could hand that array straight to the sink and
+    // `cursor === firstNewOffset - 1` it could hand that array straight to the callback and
     // skip the SQL round-trip — a pure fast path that can't desync because `cursor`
     // stays the source of truth (a behind/draining connection just falls back to this
     // loop). Not worth it until a benchmark shows the per-batch read in the hot path;
@@ -524,13 +641,18 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
           connection.batchesSent += 1;
           connection.eventsSent += events.length;
           connection.lastDeliveredAt = new Date().toISOString();
-          // Batch-first, fire-and-forget: never await the thenable, dispose the ignored result.
-          // Awaiting it forces a return round-trip per batch (see design.md "capnweb API").
-          const pendingBatch = sink.processEventBatch({
+          // Batch-first, fire-and-forget: never await the remote result. Both
+          // Workers RPC and Cap'n Web return disposable thenables for remote calls;
+          // dispose ignored results so we do not retain return capabilities.
+          // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
+          // https://github.com/cloudflare/capnweb#memory-management
+          const pendingBatch = processEventBatch({
+            namespace: this.#coreProcessorState.namespace,
+            path: this.#coreProcessorState.path,
             events,
             streamMaxOffset: this.#coreProcessorState.maxOffset,
           });
-          pendingBatch[Symbol.dispose]();
+          disposeIgnoredRpcResult(pendingBatch);
           await Promise.resolve();
         }
       } finally {
@@ -553,13 +675,16 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         if (this.#connections.get(subscriptionKey) === connection) {
           this.#connections.delete(subscriptionKey);
         }
-        sink[Symbol.dispose]();
+        processEventBatch[Symbol.dispose]();
         args.onClose?.();
       },
     };
 
     this.#connections.set(subscriptionKey, connection);
-    sink.onRpcBroken(() => connection.close());
+    processEventBatch.onRpcBroken?.(() => {
+      connection.close();
+      if (args.direction === "outbound") this.#reconcile();
+    });
     connection.wake();
 
     return {
@@ -584,12 +709,11 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
    * subscription that has none. Triggered on boot, on subscription-configured
    * appends, and on outbound connection loss — never per-append.
    *
-   * What actually happens after appending a `subscription-configured` for key "echo-example":
-   * reduced state now has `subscriptionsByKey.echo-example`, no connection exists for it, so
-   * this dials the `echo-example` runner DO over a websocket, handshakes via `runner.requestSubscription`,
-   * and `#openConnection`s the resulting sink as an outbound connection. On the next
-   * boot the constructor's `#reconcile()` re-establishes that same connection from
-   * persisted state with no new append needed.
+   * Built-in processors use same-account Workers RPC: the stream wakes the runner
+   * DO, and the runner calls back into subscribeOutbound({ processEventBatch }).
+   * Cloudflare recommends Worker/DO RPC methods for same-account Worker entrypoints:
+   * https://developers.cloudflare.com/workers/runtime-apis/rpc/
+   * https://developers.cloudflare.com/durable-objects/best-practices/create-durable-object-stubs-and-send-requests/
    */
   #reconcileOutboundConnections() {
     for (const [subscriptionKey, connection] of this.#connections) {
@@ -624,61 +748,81 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     configured: CoreProcessorState["subscriptionsByKey"][string];
     subscriptionKey: string;
   }) {
-    const subscriber = args.configured.latestConfiguredEvent.payload.subscriber;
-    let response: Response;
-    if (subscriber.type === "built-in") {
-      response = await this.env.STREAM_PROCESSOR_RUNNER.getByName(
-        `${this.#coreProcessorState.namespace}:${this.#coreProcessorState.path}:${args.subscriptionKey}`,
-      ).fetch(
-        new Request("https://stream-processor.local/", {
-          headers: { Upgrade: "websocket" },
-        }),
-      );
-    } else {
-      const headers = new Headers(subscriber.headers);
-      headers.set("Upgrade", "websocket");
-      response = await fetch(new Request(subscriber.url, { headers }));
-    }
-    const webSocket = response.webSocket;
-    if (webSocket === null) {
-      throw new Error(
-        `expected processor runner websocket, got ${response.status} ${response.statusText}: ${await response.text()}`,
-      );
-    }
-
-    webSocket.accept();
-    const runner = newWebSocketRpcSession<StreamProcessorRunnerRpc>(webSocket);
-    const request = await runner.requestSubscription({
-      stream: new StreamRpcTarget(this),
+    const streamName = `${this.#coreProcessorState.namespace}:${this.#coreProcessorState.path}`;
+    await this.env.STREAM_PROCESSOR_RUNNER.getByName(
+      `${streamName}:${args.subscriptionKey}`,
+    ).requestSubscription({
+      stream: new StreamRpcTarget(this) as unknown as StreamRpc,
       subscriptionKey: args.subscriptionKey,
       streamMaxOffset: this.#coreProcessorState.maxOffset,
       subscriptionConfiguredEvent: args.configured.latestConfiguredEvent,
       streamRuntimeState: { coreProcessorState: this.#coreProcessorState },
     });
-
-    this.#openConnection({
-      ...request,
-      direction: "outbound",
-      // Default to the offset the subscription was configured at, so that events
-      // committed in the gap between the `subscription-configured` append and a
-      // successful dial are replayed rather than skipped. `replayAfterOffset` is
-      // exclusive, so this delivers from the first event after the subscription
-      // was added. A subscriber that returns its own `replayAfterOffset` (e.g. a
-      // runner resuming from a checkpoint) still wins.
-      replayAfterOffset: request.replayAfterOffset ?? args.configured.latestConfiguredEvent.offset,
-      subscriptionKey: args.subscriptionKey,
-      onClose: () => runner[Symbol.dispose](),
-    });
-    runner.onRpcBroken(() => {
-      // The connection's own onRpcBroken already closed it; reconnect if still configured.
-      this.#reconcile();
-    });
   }
 }
 
-// Wraps the Stream Durable Object in an RpcTarget that can be passed
-// across workers rpc and capnweb rpc boundaries
-export const StreamRpcTarget = makeRpcTargetClass(Stream);
+export const StreamRpcTarget = makeRpcTargetClass<StreamRpc, StreamRpc>(
+  Stream as { prototype: StreamRpc },
+  { exclude: ["subscribe"] },
+);
+installSubscribeRpcTargetOverride(StreamRpcTarget);
+
+export const PublicStreamRpcTarget = makeRpcTargetClass<StreamRpc, StreamRpc>(
+  Stream as { prototype: StreamRpc },
+  { exclude: ["subscribe", "subscribeOutbound"] },
+);
+installSubscribeRpcTargetOverride(PublicStreamRpcTarget);
+
+function installSubscribeRpcTargetOverride(target: RpcTargetClass<StreamRpc, StreamRpc>) {
+  Object.defineProperty(target.prototype, "subscribe", {
+    async value(this: { source: StreamRpc }, args: Parameters<StreamRpc["subscribe"]>[0]) {
+      // The generated target can proxy ordinary methods directly. subscribe() is
+      // the only special case because it receives a callback that lives beyond the
+      // subscribe RPC return; keep that callback local to this Worker and forward a
+      // fire-and-forget callback to the DO so batch delivery produces no client
+      // `resolve(undefined)` traffic.
+      const clientProcessEventBatch = retainProcessEventBatch(args.processEventBatch);
+      let disposed = false;
+      const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        clientProcessEventBatch[Symbol.dispose]();
+      };
+      const processEventBatch: ProcessEventBatch & Disposable = Object.assign(
+        (batch: Parameters<ProcessEventBatch>[0]) => {
+          const pendingBatch = clientProcessEventBatch(batch);
+          disposeIgnoredRpcResult(pendingBatch);
+        },
+        { [Symbol.dispose]: dispose },
+      );
+
+      try {
+        const subscription = await this.source.subscribe({
+          subscriptionKey: args.subscriptionKey,
+          replayAfterOffset: args.replayAfterOffset,
+          processEventBatch,
+        });
+
+        clientProcessEventBatch.onRpcBroken?.(() => {
+          disposeIgnoredRpcResult(subscription.unsubscribe());
+          dispose();
+        });
+
+        return {
+          subscriptionKey: subscription.subscriptionKey,
+          streamMaxOffset: subscription.streamMaxOffset,
+          unsubscribe() {
+            disposeIgnoredRpcResult(subscription.unsubscribe());
+            dispose();
+          },
+        };
+      } catch (error) {
+        clientProcessEventBatch[Symbol.dispose]();
+        throw error;
+      }
+    },
+  });
+}
 
 /**
  * Resolves `streamPath` against the current stream's path into a canonical
@@ -709,21 +853,43 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
   return `/${segments.join("/")}`;
 }
 
+function* chunkBytes(value: Uint8Array, chunkSize: number): Generator<[number, ArrayBuffer]> {
+  if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
+    throw new Error("chunkSize must be a positive integer.");
+  }
+  let chunkIndex = 0;
+  for (let start = 0; start < value.byteLength; start += chunkSize) {
+    const end = Math.min(start + chunkSize, value.byteLength);
+    const chunk = new ArrayBuffer(end - start);
+    new Uint8Array(chunk).set(value.subarray(start, end));
+    yield [chunkIndex, chunk];
+    chunkIndex += 1;
+  }
+  if (chunkIndex === 0) yield [0, new ArrayBuffer(0)];
+}
+
+function decodeChunks(chunks: ArrayBuffer[]): string {
+  const textDecoder = new TextDecoder();
+  let value = "";
+  for (const chunk of chunks) value += textDecoder.decode(chunk, { stream: true });
+  return value + textDecoder.decode();
+}
+
 /**
- * A live delivery connection from this stream to one subscriber sink. Not persisted;
- * the sink and pump state live in the `#openConnection` closure, so this is just the
+ * A live delivery connection from this stream to one subscriber callback. Not persisted;
+ * the callback and pump state live in the `#openConnection` closure, so this is just the
  * metrics counters plus the two control verbs the stream calls.
  */
 type Connection = {
   readonly direction: "inbound" | "outbound";
   readonly startedAt: string;
-  /** Highest offset delivered to the sink; also the pump's resume cursor. */
+  /** Highest offset delivered to the callback; also the pump's resume cursor. */
   readonly cursor: number;
   batchesSent: number;
   eventsSent: number;
   lastDeliveredAt?: string;
   /** Re-arm the delivery pump after events are committed. Idempotent while draining. */
   wake(): void;
-  /** Stop the pump, dispose the sink, run teardown, drop from the map. Idempotent. */
+  /** Stop the pump, dispose the callback, run teardown, drop from the map. Idempotent. */
   close(): void;
 };

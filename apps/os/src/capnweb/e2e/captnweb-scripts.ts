@@ -1,7 +1,6 @@
-import type { RpcStub } from "capnweb";
 import type { IterateContext } from "../iterate-context-capability.ts";
 
-export type BuiltinCapnwebContext = RpcStub<IterateContext>;
+export type BuiltinCapnwebContext = IterateContext;
 
 export type CapnwebScriptInput<
   Vars extends Record<string, unknown> = Record<string, unknown>,
@@ -31,9 +30,7 @@ class CapnwebScriptBuilder<
 
   /**
    * Type-only override for scripts that need more than the built-in Iterate
-   * capability tree. This copies the existing codemode builder precedent:
-   * `.context<T>()` changes TypeScript's view of `ctx`, but it does not change
-   * runtime wiring. The default remains the normal built-in Iterate context.
+   * capability tree. Runtime wiring still comes from the runner.
    */
   context<NewCtx, Mode extends "extend" | "replace" = "extend">() {
     type ReplacementCtx = Mode extends "extend" ? Ctx & NewCtx : NewCtx;
@@ -43,32 +40,22 @@ class CapnwebScriptBuilder<
 
 export const capnwebScript = new CapnwebScriptBuilder();
 
-/**
- * Builds the iterate-config `worker.js` used by the git-update scenario.
- *
- * This proves the dynamic worker that comes from a project's iterate-config repo
- * receives the same `env.ITERATE.context` capability shape as codemode `/run`.
- * In other words, after a script updates git, the project worker can call
- * `env.ITERATE.context.streams` without knowing whether the original caller was
- * Node, browser, CLI, or another dynamic worker.
- */
 export function buildIterateConfigWorkerSource(input: { marker: string }) {
   return `
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    // The iterate-config worker uses the same context binding as /run and
-    // codemode scripts. No test-only ctx injection is involved.
     const ctx = await env.ITERATE.context;
+    const projectId = url.searchParams.get("projectId");
     const streamPath = url.searchParams.get("streamPath");
     const eventType = url.searchParams.get("eventType");
     const marker = url.searchParams.get("marker");
-    const executionMode = url.searchParams.get("executionMode");
-    const projectId = url.searchParams.get("projectId");
-    using projects = await ctx.projects;
-    using project = await projects.get(projectId);
-    using streams = await project.streams;
-    using stream = await streams.get(streamPath);
+    const project = ctx.projects.get(projectId);
+    const streams = project.streams;
+    const stream = streams.get(streamPath);
+
+    // Stream reads are immediately consistent, but listing can lag briefly in
+    // deployed environments. Poll only the listing assertion.
     const beforeStreams = await streams.list();
     const listUntilStreamAppears = async () => {
       for (let attempt = 0; attempt < 8; attempt++) {
@@ -76,25 +63,25 @@ export default {
         if (listedStreams.some((stream) => stream.streamPath === streamPath)) {
           return listedStreams;
         }
-        // Deployed stream listing can lag a successful append/read by a short interval.
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
       return streams.list();
     };
+
     const appended = await stream.append({
       type: eventType,
-      payload: { executionMode, marker, source: "iterate-config" },
+      payload: { marker, source: "iterate-config" },
     });
     const afterStreams = await listUntilStreamAppears();
-    const events = await stream.read({ afterOffset: "start" });
+
     return Response.json({
       appended: {
         eventType: appended.type,
-        executionMode: appended.payload.executionMode,
         marker: appended.payload.marker,
         offset: appended.offset,
         streamPath,
       },
+      events: await stream.read({ afterOffset: "start" }),
       streamNames: afterStreams.map((stream) => stream.name),
       streamWasListedBeforeAppend: beforeStreams.some(
         (stream) => stream.streamPath === streamPath,
@@ -102,9 +89,9 @@ export default {
       streamWasListedAfterAppend: afterStreams.some(
         (stream) => stream.streamPath === streamPath,
       ),
-      events,
     });
   },
+
   async someFunction(input = {}) {
     return { from: "iterate-config", input, marker: ${JSON.stringify(input.marker)} };
   },
@@ -112,52 +99,37 @@ export default {
 `.trim();
 }
 
-/**
- * Root-context script: starts at `ctx.projects`, gets a fully qualified project
- * capability, and returns its stable description.
- *
- * This proves root code can enter an allowed Project explicitly through
- * `ctx.projects.get(idOrSlug)`.
- */
 export const describeProjectThroughProjects = capnwebScript
-  .vars<{ executionMode: string; projectId: string }>()
-  .define(async ({ ctx, vars }) => {
-    using projects = await ctx.projects;
-    using project = await projects.get(vars.projectId);
-    return {
-      ...((await project.describe()) as Record<string, unknown>),
-      executionMode: vars.executionMode,
-    };
+  .vars<{ projectId: string }>()
+  .define(({ ctx, vars }) => {
+    // Start at the root Iterate capability, select a project, and ask the
+    // project to describe itself.
+    return ctx.projects.get(vars.projectId).describe();
   });
 
-/**
- * Project-context script: gets the Project through `ctx.projects`, uses the
- * Project-curried streams collection, appends an event, then reads the same
- * stream back.
- *
- * This proves stream namespacing is supplied by the IterateContext capability,
- * not by handwritten runner code. The same function can run from all supported
- * runtimes and still resolve `/some/path` under the current project namespace.
- */
 export const appendAndReadProjectStream = capnwebScript
   .vars<{
     eventType: string;
-    executionMode: string;
     marker: string;
     projectId: string;
     streamPath: string;
   }>()
   .define(async ({ ctx, vars }) => {
-    using projects = await ctx.projects;
-    using project = await projects.get(vars.projectId);
-    using streams = await project.streams;
-    using stream = await streams.get(vars.streamPath);
+    // Project child capabilities inherit the project namespace, so this stream
+    // path is just "/something", not "proj_123:/something".
+    const stream = ctx.projects.get(vars.projectId).streams.get(vars.streamPath);
+
+    // Appending returns the stored event. Reading from the same stream returns
+    // the event again through the durable stream API.
     const appended = await stream.append({
       type: vars.eventType,
-      payload: { executionMode: vars.executionMode, marker: vars.marker },
+      payload: { marker: vars.marker },
     });
-    const events = await stream.read({ afterOffset: "start" });
-    return { appended, events, executionMode: vars.executionMode };
+
+    return {
+      appended,
+      events: await stream.read({ afterOffset: "start" }),
+    };
   });
 
 export const proveStreamNamespaceCurrying = capnwebScript
@@ -169,80 +141,58 @@ export const proveStreamNamespaceCurrying = capnwebScript
     streamPath: string;
   }>()
   .define(async ({ ctx, vars }) => {
-    using projects = await ctx.projects;
-    using projectById = await projects.get(vars.projectId);
-    using projectBySlug = await projects.get(vars.projectSlug);
-    using projectStreams = await projectById.streams;
-    using projectStream = await projectStreams.get(vars.streamPath);
-    using rootStreams = await ctx.streams;
-    using rootObjectStream = await rootStreams.get({
+    // These three handles address the same stream. The project path curries the
+    // namespace; the root stream collection accepts the namespace explicitly.
+    const projectStream = ctx.projects.get(vars.projectId).streams.get(vars.streamPath);
+    const rootObjectStream = ctx.streams.get({
       namespace: vars.projectId,
       path: vars.streamPath,
     });
-    using rootStringStream = await rootStreams.get(`${vars.projectId}:${vars.streamPath}`);
+    const rootStringStream = ctx.streams.get(`${vars.projectId}:${vars.streamPath}`);
 
     const appended = await projectStream.append({
       type: vars.eventType,
       payload: { marker: vars.marker, source: "project-curried" },
     });
-    const objectRead = await rootObjectStream.read({ afterOffset: "start" });
-    const stringRead = await rootStringStream.read({ afterOffset: "start" });
 
     return {
       appended,
-      projectById: await projectById.describe(),
-      projectBySlug: await projectBySlug.describe(),
+      objectRead: await rootObjectStream.read({ afterOffset: "start" }),
+      projectById: await ctx.projects.get(vars.projectId).describe(),
+      projectBySlug: await ctx.projects.get(vars.projectSlug).describe(),
       rootObjectDescription: await rootObjectStream.describe(),
       rootStringDescription: await rootStringStream.describe(),
-      objectRead,
-      stringRead,
+      stringRead: await rootStringStream.read({ afterOffset: "start" }),
     };
   });
 
-/**
- * Project-context script: calls a test-runner-provided RpcTarget through
- * `ctx.projects.get(projectId).connections`.
- *
- * This proves capabilities can flow in both directions. The project can hold a
- * parent-owned RpcTarget, and later codemode/dynamic-worker code can call back
- * into it through the canonical context tree instead of a bespoke test hook.
- */
 export const callProjectConnection = capnwebScript
-  .vars<{ connectionKey: string; methodName: string; projectId: string; source: string }>()
+  .vars<{ connectionKey: string; projectId: string; source: string }>()
   .define(async ({ ctx, vars }) => {
-    using projects = await ctx.projects;
-    using project = await projects.get(vars.projectId);
-    using connections = await project.connections;
-    using connection = await connections.get(vars.connectionKey);
-    return await (connection as Record<string, any>)[vars.methodName]({ source: vars.source });
+    // Connections are capabilities that the project is holding on behalf of
+    // another process. From script code they look like ordinary objects.
+    const connection = (await ctx.projects
+      .get(vars.projectId)
+      .connections.get(vars.connectionKey)) as unknown as {
+      echo(input: { source: string }): unknown;
+    };
+    return connection.echo({ source: vars.source });
   });
 
-/**
- * Project-context script: edits the iterate-config repo through
- * `ctx.projects.get(projectId).workspaces.get("capnweb").git`, pushes a new
- * `worker.js`, then immediately calls the resulting project worker tool.
- *
- * This is the highest-signal codemode proof. It shows the same script can run
- * from Node, browser, CLI, or `/run`; can mutate project configuration through
- * ordinary project capabilities; and can then use the newly deployed worker as a
- * first-class tool at `ctx.project.worker`.
- */
 export const updateIterateConfigAndCallWorker = capnwebScript
   .vars<{
     dir: string;
-    executionMode: string;
     marker: string;
     projectId: string;
     workerSource: string;
   }>()
   .define(async ({ ctx, vars }) => {
-    using projects = await ctx.projects;
-    using project = await projects.get(vars.projectId);
-    using repos = await project.repos;
-    using workspaces = await project.workspaces;
-    using workspace = await workspaces.get("capnweb");
-    using git = await workspace.git;
-    const repo = await repos.ensureIterateConfigInfo({ projectSlug: null });
+    // The project owns its iterate-config repo. The script can use normal repo
+    // and workspace capabilities to edit worker.js and push it.
+    const project = ctx.projects.get(vars.projectId);
+    const workspace = project.workspaces.get("capnweb");
+    const repo = await project.repos.ensureIterateConfigInfo({ projectSlug: null });
+    const git = workspace.git;
 
     await git.clone({
       branch: repo.defaultBranch,
@@ -256,7 +206,7 @@ export const updateIterateConfigAndCallWorker = capnwebScript
     await git.commit({
       author: { name: "Capnweb", email: "captnweb-e2e@iterate.com" },
       dir: vars.dir,
-      message: `Add capnweb worker proof from ${vars.executionMode}`,
+      message: `Add capnweb worker proof for ${vars.marker}`,
     });
     await git.push({
       dir: vars.dir,
@@ -265,48 +215,32 @@ export const updateIterateConfigAndCallWorker = capnwebScript
       ...repo.credentials,
     });
 
-    using worker = (await project.worker) as any;
-    const calledTool = await worker.someFunction({
-      echo: vars.marker,
-      executionMode: vars.executionMode,
-    });
-
+    // Once the repo update lands, the project worker is available as a normal
+    // child capability.
     return {
-      calledTool,
-      executionMode: vars.executionMode,
+      calledTool: await project.worker.someFunction({ echo: vars.marker }),
       project: await project.describe(),
       repoSlug: repo.slug,
       workspaceGitPath: 'ctx.projects.get(projectId).workspaces.get("capnweb").git',
     };
   });
 
-/**
- * Project-context script: calls the iterate-config worker that the git-update
- * script wrote, both as a normal RPC tool and as a fetch handler.
- *
- * This proves the updated project worker is available at the canonical Project
- * capability path from every runtime. The worker's fetch handler then
- * calls `env.ITERATE.context.streams`, which closes the loop: caller-owned
- * codemode, project-owned config workers, and server-owned Durable Object
- * capabilities all use the same context model.
- */
 export const callUpdatedIterateConfigWorker = capnwebScript
   .vars<{
     eventType: string;
-    executionMode: string;
     marker: string;
     projectId: string;
     streamPath: string;
   }>()
   .define(async ({ ctx, vars }) => {
-    using projects = await ctx.projects;
-    using project = await projects.get(vars.projectId);
-    using worker = (await project.worker) as any;
+    // Call the same project worker both as a fetch handler and as an RPC-style
+    // tool. The worker itself uses env.ITERATE.context internally.
+    const project = ctx.projects.get(vars.projectId);
+    const worker = project.worker;
     const streamFetchResponse = await worker.fetch(
       new Request(
         `https://iterate-config.local/capnweb-fetch/${vars.marker}?${new URLSearchParams({
           eventType: vars.eventType,
-          executionMode: vars.executionMode,
           marker: vars.marker,
           projectId: vars.projectId,
           streamPath: vars.streamPath,
@@ -319,43 +253,32 @@ export const callUpdatedIterateConfigWorker = capnwebScript
       );
     }
 
-    const streamFetch = await streamFetchResponse.json();
-    const called = await worker.someFunction({
-      echo: vars.marker,
-      executionMode: vars.executionMode,
-    });
-    using streams = await ctx.streams;
-    using stream = await streams.get({ namespace: vars.projectId, path: vars.streamPath });
-    const streamEvents = await stream.read({ afterOffset: "start" });
-
-    return { called, streamEvents, streamFetch };
+    return {
+      called: await worker.someFunction({ echo: vars.marker }),
+      streamEvents: await ctx.streams
+        .get({ namespace: vars.projectId, path: vars.streamPath })
+        .read({ afterOffset: "start" }),
+      streamFetch: await streamFetchResponse.json(),
+    };
   });
 
-/**
- * Project-context script: calls `ctx.projects.get(projectId).fetch(...)` and
- * `ctx.projects.get(projectId).egressFetch(...)`.
- *
- * This proves the project capability exposes the Project Durable Object's public
- * fetch surfaces directly: ingress fetch returns the project homepage, and
- * egress fetch runs through project secret substitution. The return shape is
- * deliberately plain JSON so the same script can run through `/run` and CLI.
- */
 export const fetchAndEgressProject = capnwebScript
   .vars<{
     echoAuthToken: string;
     echoUrl: string;
-    executionMode: string;
     ingressUrl: string;
     projectId: string;
     secretKey: string;
   }>()
   .define(async ({ ctx, vars }) => {
-    using projects = await ctx.projects;
-    using project = await projects.get(vars.projectId);
+    // Project fetch goes through the project ingress path. This retries because
+    // the freshly-created project's default worker can still be warming.
+    const project = ctx.projects.get(vars.projectId);
     const expectedHomepageText = "Hello from the project config worker";
     let ingress = { status: 0, text: "" };
+
     for (let attempt = 0; attempt < 12; attempt++) {
-      const response = (await project.fetch(new Request(vars.ingressUrl + "/"))) as Response;
+      const response = await project.fetch(new Request(vars.ingressUrl + "/"));
       ingress = {
         status: response.status,
         text: await response.text(),
@@ -372,18 +295,15 @@ export const fetchAndEgressProject = capnwebScript
 
     const headerName = "x-iterate-example-secret";
     const secretReference = `Bearer getSecret({ key: ${JSON.stringify(vars.secretKey)} })`;
-    const egressResponse = (await project.egressFetch(
+    const egressResponse = await project.egressFetch(
       new Request(vars.echoUrl, {
         headers: {
           authorization: `Bearer ${vars.echoAuthToken}`,
           [headerName]: secretReference,
         },
       }),
-    )) as Response;
-    const body = (await egressResponse.json()) as {
-      headers?: Record<string, string | string[] | undefined>;
-      url?: string;
-    };
+    );
+    const body = (await egressResponse.json()) as EchoResponse;
     const echoedHeader = body.headers?.[headerName] ?? body.headers?.["X-Iterate-Example-Secret"];
     const echoedSecretHeader = Array.isArray(echoedHeader)
       ? echoedHeader.join(", ")
@@ -396,28 +316,19 @@ export const fetchAndEgressProject = capnwebScript
         secretReferenceWasSubstituted: echoedSecretHeader !== secretReference,
         status: egressResponse.status,
       },
-      executionMode: vars.executionMode,
       ingress,
     };
   });
 
-/**
- * Project-context script: calls bare global `fetch(...)` with a getSecret(...)
- * header.
- *
- * This is the codemode-global-fetch proof. The script does not mention
- * `ctx.project.egressFetch`; each runner must install global fetch as the
- * project egress gateway. The node e2e test runs this same function through
- * Vitest's direct runner, `/api/captnweb/run`, and `src/capnweb/cli.ts`.
- */
 export const globalFetchUsesProjectEgress = capnwebScript
   .vars<{
     echoAuthToken: string;
     echoUrl: string;
-    executionMode: string;
     secretKey: string;
   }>()
   .define(async ({ vars }) => {
+    // Codemode scripts use normal fetch(). The runner decides that, in a
+    // project-scoped context, outbound fetches should go through project egress.
     const headerName = "x-iterate-global-fetch-secret";
     const secretReference = `Bearer getSecret({ key: ${JSON.stringify(vars.secretKey)} })`;
     const response = await fetch(vars.echoUrl, {
@@ -426,10 +337,7 @@ export const globalFetchUsesProjectEgress = capnwebScript
         [headerName]: secretReference,
       },
     });
-    const body = (await response.json()) as {
-      headers?: Record<string, string | string[] | undefined>;
-      url?: string;
-    };
+    const body = (await response.json()) as EchoResponse;
     const echoedHeader =
       body.headers?.[headerName] ?? body.headers?.["X-Iterate-Global-Fetch-Secret"];
     const echoedSecretHeader = Array.isArray(echoedHeader)
@@ -438,8 +346,12 @@ export const globalFetchUsesProjectEgress = capnwebScript
 
     return {
       echoedSecretHeader,
-      executionMode: vars.executionMode,
       secretReferenceWasSubstituted: echoedSecretHeader !== secretReference,
       status: response.status,
     };
   });
+
+type EchoResponse = {
+  headers?: Record<string, string | string[] | undefined>;
+  url?: string;
+};

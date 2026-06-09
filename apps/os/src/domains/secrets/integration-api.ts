@@ -321,7 +321,6 @@ async function handleVerifiedSlackWebhook(input: {
     initialize(input: { name: string }): Promise<unknown>;
   };
   await slackIntegration.initialize({ name: slackIntegrationName });
-  await slackIntegration.ensureReady();
 
   const stream = await getInitializedStreamStub({
     durableObjectNamespace: input.context.stream as never,
@@ -345,6 +344,11 @@ async function handleVerifiedSlackWebhook(input: {
       body: payload,
     },
   });
+  input.context.waitUntil?.(
+    slackIntegration.ensureReady().catch((error) => {
+      console.error("[slack-integration-webhook] background catch-up failed", error);
+    }),
+  );
 
   return Response.json({ ok: true });
 }

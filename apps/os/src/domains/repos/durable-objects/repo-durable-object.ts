@@ -211,7 +211,7 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
   }
 
   private async currentRepo() {
-    return (await this.getRepoRunnerState()).state.repo;
+    return (await this.getRepoRunnerState()).state?.repo ?? null;
   }
 
   private async getRepoRunnerState() {
@@ -356,12 +356,12 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `repo-subscription:${params.projectId}:${params.repoSlug}`,
+      idempotencyKey: `repo-subscription:${params.projectId}:${params.repoSlug}:workers-rpc`,
       payload: {
         subscriptionKey: repoProcessorSubscriptionKey(params),
         subscriber: {
           type: "built-in",
-          transport: "capnweb-websocket",
+          transport: "workers-rpc",
           processorSlug: RepoStreamProcessorContract.slug,
         },
       },
@@ -377,7 +377,7 @@ type RepoInfoSource = {
 };
 
 type RepoProcessorRuntimeState = {
-  state: { repo: RepoInfoSource | null };
+  state: { repo: RepoInfoSource | null } | null;
   reducedThroughOffset: number;
 };
 

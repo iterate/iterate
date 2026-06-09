@@ -16,7 +16,6 @@ import {
   uniqueSuffix,
 } from "../../../e2e/test-support/os-client.ts";
 import type { IterateContext, IterateContextProps } from "../iterate-context-capability.ts";
-import { liftLocalProxies } from "../local-proxy-wrapper.js";
 import type { ProjectCapability } from "../../domains/projects/durable-objects/project-durable-object.ts";
 import {
   appendAndReadProjectStream,
@@ -96,10 +95,9 @@ describe("capnweb", () => {
       expect(
         await executionMode.runTool({
           script: describeProjectThroughProjects,
-          vars: { executionMode: executionMode.name, projectId: project.id },
+          vars: { projectId: project.id },
         }),
       ).toMatchObject({
-        executionMode: executionMode.name,
         id: project.id,
         slug: project.slug,
       });
@@ -176,20 +174,19 @@ describe("capnweb", () => {
         script: appendAndReadProjectStream,
         vars: {
           eventType,
-          executionMode: executionMode.name,
           marker,
           projectId: project.id,
           streamPath,
         },
       });
       expect(result.appended).toMatchObject({
-        payload: { executionMode: executionMode.name, marker },
+        payload: { marker },
         type: eventType,
       });
       expect(result.events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            payload: { executionMode: executionMode.name, marker },
+            payload: { marker },
             type: eventType,
           }),
         ]),
@@ -206,7 +203,7 @@ describe("capnweb", () => {
 
     const output = await runCapnwebRepl({
       input: [
-        `const description = await (await ctx.projects).get(${JSON.stringify(project.id)}).describe()`,
+        `const description = await ctx.projects.get(${JSON.stringify(project.id)}).describe()`,
         "description.id",
         "let localStream = new ReadableStream()",
         "localStream instanceof ReadableStream",
@@ -229,7 +226,6 @@ describe("capnweb", () => {
       slug: `${testRunSlugPrefix}-connection-${uniqueSuffix()}`.slice(0, 40),
     });
     const connectionKey = `connection-${uniqueSuffix()}`;
-    const connectionMethodName = `method-${uniqueSuffix()}`;
     using iterate = withIterateFromNode({ auth, ingressUrl: project.ingressUrl });
     using projects = await iterate.ctx.projects;
     using projectContext = await projects.get(project.id);
@@ -239,7 +235,6 @@ describe("capnweb", () => {
       connectionKey,
       rpcTarget: new ProjectConnectionTestTarget({
         marker: connectionKey,
-        methodName: connectionMethodName,
       }),
     });
 
@@ -253,7 +248,6 @@ describe("capnweb", () => {
           script: callProjectConnection,
           vars: {
             connectionKey,
-            methodName: connectionMethodName,
             projectId: project.id,
             source: executionMode.name,
           },
@@ -334,7 +328,6 @@ describe("capnweb", () => {
       script: updateIterateConfigAndCallWorker,
       vars: {
         dir: `/iterate-config-config-mount-${Date.now()}`,
-        executionMode: "node-capnweb",
         marker,
         projectId: project.id,
         workerSource,
@@ -379,7 +372,6 @@ describe("capnweb", () => {
         script: updateIterateConfigAndCallWorker,
         vars: {
           dir: `/iterate-config-${executionMode.name}-${Date.now()}`,
-          executionMode: executionMode.name,
           marker,
           projectId: project.id,
           workerSource,
@@ -388,10 +380,9 @@ describe("capnweb", () => {
       expect(updateResult).toMatchObject({
         calledTool: {
           from: "iterate-config",
-          input: { echo: marker, executionMode: executionMode.name },
+          input: { echo: marker },
           marker,
         },
-        executionMode: executionMode.name,
         project: { id: project.id, slug: project.slug },
         repoSlug: "iterate-config",
         workspaceGitPath: 'ctx.projects.get(projectId).workspaces.get("capnweb").git',
@@ -401,7 +392,6 @@ describe("capnweb", () => {
         script: callUpdatedIterateConfigWorker,
         vars: {
           eventType,
-          executionMode: executionMode.name,
           marker,
           projectId: project.id,
           streamPath,
@@ -410,12 +400,11 @@ describe("capnweb", () => {
 
       expect(workerCallResult.called).toMatchObject({
         from: "iterate-config",
-        input: { echo: marker, executionMode: executionMode.name },
+        input: { echo: marker },
         marker,
       });
       expect(workerCallResult.streamFetch.appended).toMatchObject({
         eventType,
-        executionMode: executionMode.name,
         marker,
         offset: expect.any(Number),
         streamPath,
@@ -428,7 +417,7 @@ describe("capnweb", () => {
       expect(workerCallResult.streamFetch.events).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            payload: { executionMode: executionMode.name, marker, source: "iterate-config" },
+            payload: { marker, source: "iterate-config" },
             type: eventType,
           }),
         ]),
@@ -436,7 +425,7 @@ describe("capnweb", () => {
       expect(workerCallResult.streamEvents).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            payload: { executionMode: executionMode.name, marker, source: "iterate-config" },
+            payload: { marker, source: "iterate-config" },
             type: eventType,
           }),
         ]),
@@ -463,7 +452,6 @@ describe("capnweb", () => {
         vars: {
           echoAuthToken: auth.token.exposeSecret(),
           echoUrl: egressEchoUrl,
-          executionMode: executionMode.name,
           ingressUrl: project.ingressUrl,
           projectId: project.id,
           secretKey: EXAMPLE_EGRESS_SECRET_KEY,
@@ -479,7 +467,6 @@ describe("capnweb", () => {
         status: 200,
       });
       expect(result.egress.echoedSecretHeader).toBe(`Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}`);
-      expect(result.executionMode).toBe(executionMode.name);
     }
   });
 
@@ -504,13 +491,11 @@ describe("capnweb", () => {
         vars: {
           echoAuthToken: auth.token.exposeSecret(),
           echoUrl: egressEchoUrl,
-          executionMode: executionMode.name,
           secretKey: EXAMPLE_EGRESS_SECRET_KEY,
         },
       });
       expect(result).toMatchObject({
         echoedSecretHeader: `Bearer ${EXAMPLE_EGRESS_SECRET_MATERIAL}`,
-        executionMode: executionMode.name,
         secretReferenceWasSubstituted: true,
         status: 200,
       });
@@ -532,6 +517,9 @@ describe("capnweb", () => {
     const appendMountName = `append-${uniqueSuffix()}`;
     const listStreamsMountName = `listStreams-${uniqueSuffix()}`;
     const mountedStreamsName = `mountedStreams-${uniqueSuffix()}`;
+    const nestedCtxBranchName = `ctxBranch-${uniqueSuffix()}`;
+    const nestedCtxMountName = `ctxStreams-${uniqueSuffix()}`;
+    const nestedCtxRootName = `ctxRoot-${uniqueSuffix()}`;
     const nestedSdkBranchName = `branch-${uniqueSuffix()}`;
     const nestedSdkMountName = `nestedSdk-${uniqueSuffix()}`;
     const nestedSdkRootName = `root-${uniqueSuffix()}`;
@@ -543,6 +531,43 @@ describe("capnweb", () => {
     const toolsMountName = `tools-${uniqueSuffix()}`;
     const toolsScript = dedent`
       import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+
+      class CounterMath extends RpcTarget {
+        constructor(label) {
+          super();
+          this.label = label;
+        }
+
+        async double(input) {
+          return {
+            input,
+            kind: "returned-target-nested-method",
+            label: this.label,
+            value: input.value * 2,
+          };
+        }
+      }
+
+      class CounterTool extends RpcTarget {
+        constructor(input) {
+          super();
+          this.label = input.label;
+          this.value = input.start;
+        }
+
+        get math() {
+          return new CounterMath(this.label);
+        }
+
+        async increment(by = 1) {
+          this.value += by;
+          return {
+            kind: "returned-target-method",
+            label: this.label,
+            value: this.value,
+          };
+        }
+      }
 
       class NestedTools extends RpcTarget {
         async describe(input) {
@@ -557,29 +582,90 @@ describe("capnweb", () => {
 
         async echo(input) {
           const ctx = await this.env.ITERATE.context;
-          using projects = await ctx.projects;
-          using project = await projects.get(${JSON.stringify(project.id)});
-          using streams = await project.streams;
-          const streamList = await streams.list();
+          const streamList = await ctx.projects.get(${JSON.stringify(project.id)}).streams.list();
           return {
             kind: "target-method",
             input,
             streamCountVisibleFromMountedWorker: streamList.length,
           };
         }
+
+        createCounter(input) {
+          return new CounterTool(input);
+        }
+
+        structuredData(input) {
+          return {
+            createdAt: new Date("2026-06-09T00:00:00.000Z"),
+            input,
+            kind: "plain-data",
+            nested: {
+              marker: input.marker,
+            },
+          };
+        }
       }
     `;
     const sdkScript = dedent`
-      import { WorkerEntrypoint } from "cloudflare:workers";
-      import { localProxyCaller } from "./local-proxy-wrapper.js";
+      import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 
       const sdkGetterName = ${JSON.stringify(sdkGetterName)};
+      const reserved = new Set(["__proto__", "catch", "constructor", "dup", "finally", "map", "onRpcBroken", "prototype", "then"]);
+
+      class SdkPathTarget extends RpcTarget {
+        constructor(callPath) {
+          super();
+          this.callPath = callPath;
+          return new Proxy(this, {
+            get: (target, key, receiver) => {
+              if (key === "then") return undefined;
+              if (typeof key === "symbol" || key in target) return Reflect.get(target, key, receiver);
+              if (reserved.has(key)) return undefined;
+              return target.callable([key]);
+            },
+            getOwnPropertyDescriptor: (target, key) => Reflect.getOwnPropertyDescriptor(target, key),
+            has: (target, key) => {
+              if (typeof key === "symbol") return key in target;
+              if (reserved.has(key)) return false;
+              return true;
+            },
+          });
+        }
+
+        callable(path) {
+          const fn = (...args) => this.callPath({ path, args });
+          return new Proxy(fn, {
+            apply: (_target, _thisArg, args) => this.callPath({ path, args }),
+            get: (target, key, receiver) => {
+              if (key === "then") return undefined;
+              if (typeof key === "symbol" || key in target) return Reflect.get(target, key, receiver);
+              if (reserved.has(key)) return undefined;
+              return this.callable([...path, key]);
+            },
+            getOwnPropertyDescriptor: (target, key) => {
+              const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+              if (descriptor) return descriptor;
+              if (key in target) return undefined;
+              if (typeof key === "symbol" || reserved.has(key)) return undefined;
+              return {
+                configurable: true,
+                enumerable: false,
+                value: this.callable([...path, key]),
+                writable: false,
+              };
+            },
+            has: (target, key) => {
+              if (typeof key === "symbol") return key in target;
+              if (reserved.has(key)) return false;
+              return true;
+            },
+          });
+        }
+      }
 
       export default class SdkLikeTarget extends WorkerEntrypoint {
         get [sdkGetterName]() {
-          // The SDK hierarchy is intentionally unknown. The marker says:
-          // "record all properties after this getter and send them to call".
-          return localProxyCaller(({ path, args }) => this.call({ path, args }));
+          return new SdkPathTarget(({ path, args }) => this.call({ path, args }));
         }
 
         async call({ path, args }) {
@@ -603,6 +689,24 @@ describe("capnweb", () => {
           using tools = await mountedCtx[vars.toolsMountName];
           const targetResult = await tools.echo({ marker: vars.marker });
           const nestedResult = await tools.nested.describe({ marker: vars.marker });
+          using returnedCounter = await tools.createCounter({
+            label: "awaited-returned-target",
+            start: 10,
+          });
+          const returnedCounterFirst = await returnedCounter.increment(2);
+          const returnedCounterSecond = await returnedCounter.increment(3);
+          using pipelinedCounter = tools.createCounter({
+            label: "pipelined-returned-target",
+            start: 20,
+          });
+          const pipelinedCounterResult = await pipelinedCounter.increment(4);
+          const nestedReturnedTargetResult = await tools
+            .createCounter({
+              label: "nested-returned-target",
+              start: 30,
+            })
+            .math.double({ value: 7 });
+          const structuredDataResult = await tools.structuredData({ marker: vars.marker });
 
           const methodResult = await mountedCtx[vars.rootEchoMountName]({ marker: vars.marker });
 
@@ -620,6 +724,16 @@ describe("capnweb", () => {
           });
 
           const listedByShortcut = await mountedStreams.list();
+          using nestedCtxRootFromGetter = await mountedCtx[vars.nestedCtxRootName];
+          const listedByNestedCtxGetter =
+            await nestedCtxRootFromGetter[vars.nestedCtxBranchName][vars.nestedCtxMountName].list();
+          using nestedCtxRootFromGetMounted = (await mountedCtx.getMounted([
+            vars.nestedCtxRootName,
+          ])) as Record<string, any> & Disposable;
+          const listedByNestedCtxGetMounted =
+            await nestedCtxRootFromGetMounted[vars.nestedCtxBranchName][
+              vars.nestedCtxMountName
+            ].list();
           const listedByMethod = await mountedCtx[vars.listStreamsMountName]();
           const appendResult = await mountedCtx[vars.appendMountName]({
             streamPath: vars.streamPath,
@@ -656,7 +770,18 @@ describe("capnweb", () => {
             methodResult,
             mountedAppendResult,
             nestedResult,
+            nestedReturnedTargetResult,
+            listedByNestedCtxGetMounted: listedByNestedCtxGetMounted.map(
+              (stream: { name: string }) => stream.name,
+            ),
+            listedByNestedCtxGetter: listedByNestedCtxGetter.map(
+              (stream: { name: string }) => stream.name,
+            ),
+            pipelinedCounterResult,
+            returnedCounterFirst,
+            returnedCounterSecond,
             sdkResult,
+            structuredDataResult,
             targetResult,
           };
         }),
@@ -705,6 +830,13 @@ describe("capnweb", () => {
             },
           },
           {
+            path: [nestedCtxRootName, nestedCtxBranchName, nestedCtxMountName],
+            target: {
+              call: ["projects", { method: "get", args: [project.id] }, "streams"],
+              type: "ctx",
+            },
+          },
+          {
             invoke: "method",
             path: [listStreamsMountName],
             target: {
@@ -728,6 +860,9 @@ describe("capnweb", () => {
         listStreamsMountName,
         marker,
         mountedStreamsName,
+        nestedCtxBranchName,
+        nestedCtxMountName,
+        nestedCtxRootName,
         nestedSdkBranchName,
         nestedSdkMountName,
         nestedSdkRootName,
@@ -752,6 +887,33 @@ describe("capnweb", () => {
     expect(result.methodResult).toMatchObject({
       input: { marker },
       kind: "target-method",
+    });
+    expect(result.returnedCounterFirst).toMatchObject({
+      kind: "returned-target-method",
+      label: "awaited-returned-target",
+      value: 12,
+    });
+    expect(result.returnedCounterSecond).toMatchObject({
+      kind: "returned-target-method",
+      label: "awaited-returned-target",
+      value: 15,
+    });
+    expect(result.pipelinedCounterResult).toMatchObject({
+      kind: "returned-target-method",
+      label: "pipelined-returned-target",
+      value: 24,
+    });
+    expect(result.nestedReturnedTargetResult).toMatchObject({
+      input: { value: 7 },
+      kind: "returned-target-nested-method",
+      label: "nested-returned-target",
+      value: 14,
+    });
+    expect(result.structuredDataResult).toMatchObject({
+      createdAt: "2026-06-09T00:00:00.000Z",
+      input: { marker },
+      kind: "plain-data",
+      nested: { marker },
     });
     expect(result.mountedAppendResult).toMatchObject({
       payload: { marker, source: "mount-fully-qualified" },
@@ -786,6 +948,8 @@ describe("capnweb", () => {
       ]),
     );
     expect(result.listedByShortcut).toEqual(expect.any(Array));
+    expect(result.listedByNestedCtxGetter).toEqual(expect.any(Array));
+    expect(result.listedByNestedCtxGetMounted).toEqual(expect.any(Array));
     expect(result.listedByMethod).toEqual(expect.any(Array));
   });
 
@@ -842,10 +1006,8 @@ function withRootIterateContextFromNode(input: {
   const wsUrl = new URL(ROOT_ITERATE_CONTEXT_PREFIX, input.baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(wsUrl.toString(), { headers: rootAccessAuthHeaders(input.auth) });
-  return liftLocalProxies(
-    newWebSocketRpcSession<IterateContext>(
-      socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
-    ),
+  return newWebSocketRpcSession<IterateContext>(
+    socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
 }
 
@@ -864,7 +1026,7 @@ function withIterateFromNode(input: { auth: RootAccessAuth; ingressUrl: string }
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
   const ctxHandle = project.getIterateContext() as unknown as RpcStub<IterateContext>;
-  const ctx = liftLocalProxies(ctxHandle);
+  const ctx = ctxHandle;
   void Promise.resolve(ctxHandle).catch((error: unknown) => {
     socket.close();
     project[Symbol.dispose]?.();
@@ -909,20 +1071,19 @@ function projectCapnwebWebSocketRequest(input: {
 }
 
 class ProjectConnectionTestTarget extends RpcTarget {
-  constructor(input: { marker: string; methodName: string }) {
+  #callCount = 0;
+
+  constructor(private readonly input: { marker: string }) {
     super();
-    let callCount = 0;
-    Object.defineProperty(Object.getPrototypeOf(this), input.methodName, {
-      configurable: true,
-      value(callInput: { source: string }) {
-        callCount += 1;
-        return {
-          callCount,
-          marker: input.marker,
-          source: callInput.source,
-        };
-      },
-    });
+  }
+
+  echo(input: { source: string }) {
+    this.#callCount += 1;
+    return {
+      callCount: this.#callCount,
+      marker: this.input.marker,
+      source: input.source,
+    };
   }
 }
 
@@ -1024,9 +1185,7 @@ async function projectEgressFetch(
   if (!projectId) {
     throw new Error("A project-scoped IterateCapability is required for global fetch.");
   }
-  using projects = await ctx.projects;
-  using project = await projects.get(projectId);
-  return (await project.egressFetch(new Request(input, init))) as Response;
+  return (await ctx.projects.get(projectId).egressFetch(new Request(input, init))) as Response;
 }
 
 async function runCapnwebScriptInDynamicWorker(input: {
@@ -1137,7 +1296,7 @@ function serializeCapnwebScriptForDynamicWorker(fn: { toString(): string }) {
   // The awkward case is Vitest/Vite/esbuild transforming this test module
   // before fn.toString() runs. If esbuild lowers:
   //
-  //   using project = await ctx.project
+  //   const project = await ctx.project
   //
   // then the function string contains calls to module-scoped helpers like
   // __using(...) and __callDispose(...), but fn.toString() does not include the

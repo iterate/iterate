@@ -37,6 +37,15 @@ doppler run --config prd -- pnpm cli rpc --help
 doppler run --config preview_3 -- pnpm cli rpc --help
 ```
 
+Local operational commands should also live under `pnpm cli`, not as
+environment-pinning package scripts. For example, the Iterate config base
+Artifact repair command runs through the local script router:
+
+```bash
+pnpm cli artifacts seed-config-base
+doppler run --project os --config dev_jonas -- pnpm cli artifacts seed-config-base
+```
+
 Do not put `--project os` or `--config prd` in the default script. That makes
 plain local commands surprisingly target production and bypasses the user's
 local Doppler setup.

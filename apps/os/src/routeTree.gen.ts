@@ -14,7 +14,6 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
-import { Route as SessionTasksChooseOrganizationRouteImport } from './routes/session-tasks.choose-organization'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
 import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
@@ -23,8 +22,6 @@ import { Route as AppDebugRouteImport } from './routes/_app/debug'
 import { Route as AppCapnwebReplRouteImport } from './routes/_app/capnweb-repl'
 import { Route as AppProjectsRouteRouteImport } from './routes/_app/projects/route'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
-import { Route as SignUpTasksChooseOrganizationRouteImport } from './routes/sign-up.tasks.choose-organization'
-import { Route as SignInTasksChooseOrganizationRouteImport } from './routes/sign-in.tasks.choose-organization'
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AppProjectsProjectSlugRouteRouteImport } from './routes/_app/projects/$projectSlug/route'
 import { Route as AppOrgOrganizationSlugRouteRouteImport } from './routes/_app/org/$organizationSlug/route'
@@ -74,12 +71,6 @@ const SignInSplatRoute = SignInSplatRouteImport.update({
   path: '/sign-in/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SessionTasksChooseOrganizationRoute =
-  SessionTasksChooseOrganizationRouteImport.update({
-    id: '/session-tasks/choose-organization',
-    path: '/session-tasks/choose-organization',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const PosthogProxySplatRoute = PosthogProxySplatRouteImport.update({
   id: '/posthog-proxy/$',
   path: '/posthog-proxy/$',
@@ -120,18 +111,6 @@ const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppProjectsRouteRoute,
 } as any)
-const SignUpTasksChooseOrganizationRoute =
-  SignUpTasksChooseOrganizationRouteImport.update({
-    id: '/sign-up/tasks/choose-organization',
-    path: '/sign-up/tasks/choose-organization',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const SignInTasksChooseOrganizationRoute =
-  SignInTasksChooseOrganizationRouteImport.update({
-    id: '/sign-in/tasks/choose-organization',
-    path: '/sign-in/tasks/choose-organization',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
   id: '/api/orpc/$',
   path: '/api/orpc/$',
@@ -286,14 +265,11 @@ export interface FileRoutesByFullPath {
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
-  '/session-tasks/choose-organization': typeof SessionTasksChooseOrganizationRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/org/$organizationSlug': typeof AppOrgOrganizationSlugRouteRouteWithChildren
   '/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
   '/api/orpc/$': typeof ApiOrpcSplatRoute
-  '/sign-in/tasks/choose-organization': typeof SignInTasksChooseOrganizationRoute
-  '/sign-up/tasks/choose-organization': typeof SignUpTasksChooseOrganizationRoute
   '/projects/': typeof AppProjectsIndexRoute
   '/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
   '/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
@@ -326,12 +302,9 @@ export interface FileRoutesByTo {
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
-  '/session-tasks/choose-organization': typeof SessionTasksChooseOrganizationRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
-  '/sign-in/tasks/choose-organization': typeof SignInTasksChooseOrganizationRoute
-  '/sign-up/tasks/choose-organization': typeof SignUpTasksChooseOrganizationRoute
   '/projects': typeof AppProjectsIndexRoute
   '/projects/$projectSlug/examples': typeof AppProjectsProjectSlugExamplesRoute
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
@@ -365,14 +338,11 @@ export interface FileRoutesById {
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
-  '/session-tasks/choose-organization': typeof SessionTasksChooseOrganizationRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/_app/org/$organizationSlug': typeof AppOrgOrganizationSlugRouteRouteWithChildren
   '/_app/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
   '/api/orpc/$': typeof ApiOrpcSplatRoute
-  '/sign-in/tasks/choose-organization': typeof SignInTasksChooseOrganizationRoute
-  '/sign-up/tasks/choose-organization': typeof SignUpTasksChooseOrganizationRoute
   '/_app/projects/': typeof AppProjectsIndexRoute
   '/_app/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
   '/_app/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
@@ -408,14 +378,11 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
-    | '/session-tasks/choose-organization'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/org/$organizationSlug'
     | '/projects/$projectSlug'
     | '/api/orpc/$'
-    | '/sign-in/tasks/choose-organization'
-    | '/sign-up/tasks/choose-organization'
     | '/projects/'
     | '/projects/$projectSlug/agents'
     | '/projects/$projectSlug/streams'
@@ -448,12 +415,9 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
-    | '/session-tasks/choose-organization'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/api/orpc/$'
-    | '/sign-in/tasks/choose-organization'
-    | '/sign-up/tasks/choose-organization'
     | '/projects'
     | '/projects/$projectSlug/examples'
     | '/projects/$projectSlug/integrations'
@@ -486,14 +450,11 @@ export interface FileRouteTypes {
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
-    | '/session-tasks/choose-organization'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/_app/org/$organizationSlug'
     | '/_app/projects/$projectSlug'
     | '/api/orpc/$'
-    | '/sign-in/tasks/choose-organization'
-    | '/sign-up/tasks/choose-organization'
     | '/_app/projects/'
     | '/_app/projects/$projectSlug/agents'
     | '/_app/projects/$projectSlug/streams'
@@ -525,12 +486,9 @@ export interface RootRouteChildren {
   ApiSplatRoute: typeof ApiSplatRoute
   ApiOrpcWsRoute: typeof ApiOrpcWsRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
-  SessionTasksChooseOrganizationRoute: typeof SessionTasksChooseOrganizationRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
   ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
-  SignInTasksChooseOrganizationRoute: typeof SignInTasksChooseOrganizationRoute
-  SignUpTasksChooseOrganizationRoute: typeof SignUpTasksChooseOrganizationRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -568,13 +526,6 @@ declare module '@tanstack/react-router' {
       path: '/sign-in/$'
       fullPath: '/sign-in/$'
       preLoaderRoute: typeof SignInSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/session-tasks/choose-organization': {
-      id: '/session-tasks/choose-organization'
-      path: '/session-tasks/choose-organization'
-      fullPath: '/session-tasks/choose-organization'
-      preLoaderRoute: typeof SessionTasksChooseOrganizationRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/posthog-proxy/$': {
@@ -632,20 +583,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/projects/'
       preLoaderRoute: typeof AppProjectsIndexRouteImport
       parentRoute: typeof AppProjectsRouteRoute
-    }
-    '/sign-up/tasks/choose-organization': {
-      id: '/sign-up/tasks/choose-organization'
-      path: '/sign-up/tasks/choose-organization'
-      fullPath: '/sign-up/tasks/choose-organization'
-      preLoaderRoute: typeof SignUpTasksChooseOrganizationRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sign-in/tasks/choose-organization': {
-      id: '/sign-in/tasks/choose-organization'
-      path: '/sign-in/tasks/choose-organization'
-      fullPath: '/sign-in/tasks/choose-organization'
-      preLoaderRoute: typeof SignInTasksChooseOrganizationRouteImport
-      parentRoute: typeof rootRouteImport
     }
     '/api/orpc/$': {
       id: '/api/orpc/$'
@@ -963,12 +900,9 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSplatRoute: ApiSplatRoute,
   ApiOrpcWsRoute: ApiOrpcWsRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
-  SessionTasksChooseOrganizationRoute: SessionTasksChooseOrganizationRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
   ApiOrpcSplatRoute: ApiOrpcSplatRoute,
-  SignInTasksChooseOrganizationRoute: SignInTasksChooseOrganizationRoute,
-  SignUpTasksChooseOrganizationRoute: SignUpTasksChooseOrganizationRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

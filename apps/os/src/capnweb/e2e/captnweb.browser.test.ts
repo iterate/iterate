@@ -1,11 +1,15 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { commands } from "vitest/browser";
-import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import {
   EXAMPLE_EGRESS_SECRET_KEY,
   EXAMPLE_EGRESS_SECRET_MATERIAL,
 } from "../../domains/secrets/example-secret.ts";
-import { liftLocalProxies } from "../local-proxy-wrapper.js";
+import {
+  BROWSER_REPL_EXAMPLES,
+  DEFAULT_BROWSER_REPL_CODE,
+  evalBrowserReplSessionCode,
+} from "../browser-repl.ts";
 import type { IterateContext } from "../iterate-context-capability.ts";
 import {
   appendAndReadProjectStream,
@@ -36,6 +40,22 @@ describe("capnweb browser execution mode", () => {
     }
   });
 
+  it("runs the default browser REPL project list expression", async () => {
+    using root = await withRootIterateFromBrowser();
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: DEFAULT_BROWSER_REPL_CODE,
+        ctx: root,
+        env: {},
+        scope: {},
+      }),
+    ).resolves.toMatchObject({
+      projects: expect.any(Array),
+      total: expect.any(Number),
+    });
+  }, 60_000);
+
   it("runs codemode-shaped scripts through browser Cap'n Web stubs", async () => {
     using root = await withRootIterateFromBrowser();
     using projects = await root.projects;
@@ -48,10 +68,9 @@ describe("capnweb browser execution mode", () => {
       runBrowserCapnwebScript({
         ctx: root,
         script: describeProjectThroughProjects,
-        vars: { executionMode: "browser", projectId: project.id },
+        vars: { projectId: project.id },
       }),
     ).resolves.toMatchObject({
-      executionMode: "browser",
       id: project.id,
       slug: project.slug,
     });
@@ -63,16 +82,16 @@ describe("capnweb browser execution mode", () => {
     const streamResult = await runBrowserCapnwebScript({
       ctx: iterate.ctx,
       script: appendAndReadProjectStream,
-      vars: { eventType, executionMode: "browser", marker, projectId: project.id, streamPath },
+      vars: { eventType, marker, projectId: project.id, streamPath },
     });
     expect(streamResult.appended).toMatchObject({
-      payload: { executionMode: "browser", marker },
+      payload: { marker },
       type: eventType,
     });
     expect(streamResult.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          payload: { executionMode: "browser", marker },
+          payload: { marker },
           type: eventType,
         }),
       ]),
@@ -84,7 +103,6 @@ describe("capnweb browser execution mode", () => {
       vars: {
         echoAuthToken: __CAPNWEB_BROWSER_E2E__.adminApiSecret,
         echoUrl: __CAPNWEB_BROWSER_E2E__.egressEchoUrl,
-        executionMode: "browser",
         ingressUrl: project.ingressUrl,
         projectId: project.id,
         secretKey: EXAMPLE_EGRESS_SECRET_KEY,
@@ -108,7 +126,6 @@ describe("capnweb browser execution mode", () => {
       script: updateIterateConfigAndCallWorker,
       vars: {
         dir: `/iterate-config-browser-${Date.now()}`,
-        executionMode: "browser",
         marker: workerMarker,
         projectId: project.id,
         workerSource: buildIterateConfigWorkerSource({ marker: workerMarker }),
@@ -117,10 +134,9 @@ describe("capnweb browser execution mode", () => {
     expect(updateResult).toMatchObject({
       calledTool: {
         from: "iterate-config",
-        input: { echo: workerMarker, executionMode: "browser" },
+        input: { echo: workerMarker },
         marker: workerMarker,
       },
-      executionMode: "browser",
       project: { id: project.id, slug: project.slug },
       repoSlug: "iterate-config",
       workspaceGitPath: 'ctx.projects.get(projectId).workspaces.get("capnweb").git',
@@ -131,7 +147,6 @@ describe("capnweb browser execution mode", () => {
       script: callUpdatedIterateConfigWorker,
       vars: {
         eventType: workerEventType,
-        executionMode: "browser",
         marker: workerMarker,
         projectId: project.id,
         streamPath: workerStreamPath,
@@ -139,12 +154,11 @@ describe("capnweb browser execution mode", () => {
     });
     expect(workerCallResult.called).toMatchObject({
       from: "iterate-config",
-      input: { echo: workerMarker, executionMode: "browser" },
+      input: { echo: workerMarker },
       marker: workerMarker,
     });
     expect(workerCallResult.streamFetch.appended).toMatchObject({
       eventType: workerEventType,
-      executionMode: "browser",
       marker: workerMarker,
       offset: expect.any(Number),
       streamPath: workerStreamPath,
@@ -156,12 +170,90 @@ describe("capnweb browser execution mode", () => {
     expect(workerCallResult.streamEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          payload: { executionMode: "browser", marker: workerMarker, source: "iterate-config" },
+          payload: { marker: workerMarker, source: "iterate-config" },
           type: workerEventType,
         }),
       ]),
     );
   }, 120_000);
+
+  it("runs the provideCapability browser REPL example and calls the provided target", async () => {
+    using root = await withRootIterateFromBrowser();
+    using projects = await root.projects;
+    const project = await projects.create({
+      slug: `captnweb-repl-example-${uniqueSuffix()}`.slice(0, 40),
+    });
+    createdProjectIds.push(project.id);
+
+    using iterate = await withIterateFromBrowser({ projectId: project.id });
+    const example = BROWSER_REPL_EXAMPLES.find((candidate) => {
+      return candidate.id === "provide-alert-capability";
+    });
+    if (!example) throw new Error("Missing provideCapability browser REPL example.");
+
+    const alertMessages: string[] = [];
+    const originalAlert = globalThis.alert;
+    globalThis.alert = (message?: unknown) => {
+      alertMessages.push(String(message));
+    };
+
+    try {
+      await expect(
+        evalBrowserReplSessionCode({
+          code: example.code,
+          ctx: iterate.ctx,
+          env: {},
+          scope: { projectId: project.id, RpcTarget },
+        }),
+      ).resolves.toBe("alerted");
+    } finally {
+      globalThis.alert = originalAlert;
+    }
+
+    expect(alertMessages).toEqual(["The answer is 42"]);
+  }, 60_000);
+
+  it("calls a browser-owned Slack SDK-shaped local proxy marker", async () => {
+    using root = await withRootIterateFromBrowser();
+    using projects = await root.projects;
+    const project = await projects.create({
+      slug: `captnweb-browser-slack-${uniqueSuffix()}`.slice(0, 40),
+    });
+    createdProjectIds.push(project.id);
+
+    using iterate = await withIterateFromBrowser({ projectId: project.id });
+    const projectContext = iterate.ctx.projects.get(project.id);
+    const connectionKey = `browser-slack-sdk-${uniqueSuffix()}`;
+
+    class BrowserSlackSdkTarget extends RpcTarget {
+      sdk() {
+        return new BrowserPathTarget(({ path, args }) => ({
+          args,
+          ok: true,
+          path,
+        }));
+      }
+    }
+
+    await projectContext.provideCapability({
+      connectionKey,
+      rpcTarget: new BrowserSlackSdkTarget(),
+    });
+
+    const connection = (await projectContext.connections.get(connectionKey)) as any;
+    const slack = (await connection.sdk()) as any;
+
+    await expect(
+      slack.chat.postMessage({
+        channel: "C_BROWSER",
+        text: "hello from browser",
+      }),
+    ).resolves.toEqual({
+      args: [{ channel: "C_BROWSER", text: "hello from browser" }],
+      ok: true,
+      path: ["chat", "postMessage"],
+    });
+  }, 60_000);
 });
 
 async function runBrowserCapnwebScript(input: {
@@ -176,7 +268,7 @@ async function withRootIterateFromBrowser(): Promise<RpcStub<IterateContext>> {
   await setCapnwebAdminCookie(new URL(`${ROOT_ITERATE_CONTEXT_PREFIX}/admin-cookie`, baseUrl()));
   const wsUrl = new URL(ROOT_ITERATE_CONTEXT_PREFIX, baseUrl());
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-  return liftLocalProxies(newWebSocketRpcSession<IterateContext>(new WebSocket(wsUrl)));
+  return newWebSocketRpcSession<IterateContext>(new WebSocket(wsUrl));
 }
 
 async function withIterateFromBrowser(input: { projectId: string }): Promise<{
@@ -188,7 +280,7 @@ async function withIterateFromBrowser(input: { projectId: string }): Promise<{
   const project = await projects.get(input.projectId);
   const ctxHandle = project.getIterateContext() as unknown as RpcStub<IterateContext>;
   return {
-    ctx: liftLocalProxies(ctxHandle),
+    ctx: ctxHandle,
     [Symbol.dispose]() {
       ctxHandle[Symbol.dispose]?.();
       project[Symbol.dispose]?.();
@@ -196,6 +288,42 @@ async function withIterateFromBrowser(input: { projectId: string }): Promise<{
       root[Symbol.dispose]?.();
     },
   };
+}
+
+class BrowserPathTarget extends RpcTarget {
+  constructor(private readonly callPath: (input: { args: unknown[]; path: string[] }) => unknown) {
+    super();
+    return this.callable([]) as unknown as BrowserPathTarget;
+  }
+
+  private callable(path: string[]): Function {
+    const fn = (...args: unknown[]) => this.callPath({ args, path });
+    return new Proxy(fn, {
+      apply: (_target, _thisArg, args) => this.callPath({ args, path }),
+      get: (target, key, receiver) => {
+        if (key === "then") return undefined;
+        if (typeof key === "symbol" || key in target) return Reflect.get(target, key, receiver);
+        return this.callable([...path, key]);
+      },
+      getOwnPropertyDescriptor: (target, key) => {
+        const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+        if (descriptor) return descriptor;
+        if (key in target) return undefined;
+        if (typeof key === "symbol" || key === "then") return undefined;
+        return {
+          configurable: true,
+          enumerable: false,
+          value: this.callable([...path, key]),
+          writable: false,
+        };
+      },
+      has: (target, key) => {
+        if (typeof key === "symbol") return key in target;
+        if (key === "then") return false;
+        return true;
+      },
+    });
+  }
 }
 
 async function setCapnwebAdminCookie(url: URL) {

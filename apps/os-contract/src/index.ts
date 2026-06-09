@@ -24,8 +24,9 @@ export const Project = z.object({
   id: z.string(),
   slug: z.string(),
   customHostname: z.string().nullable(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
+  createdAt: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+  isOrphanedProjectFromAuthService: z.boolean(),
 });
 export type Project = z.output<typeof Project>;
 

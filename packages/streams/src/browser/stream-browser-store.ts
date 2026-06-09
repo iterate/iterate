@@ -19,6 +19,7 @@ import type { Processor } from "../processor.ts";
 import type { StreamCoreProcessorState, StreamRpc } from "../types.ts";
 import { createStreamSubscription, type StreamSubscription } from "../subscription.ts";
 import {
+  DEFAULT_STREAM_NAMESPACE,
   withStreamConnectionFromBrowser,
   streamRpcPath,
   type StreamBrowserConnectionStatus,
@@ -30,8 +31,6 @@ import {
   type StreamDatabaseInfo,
 } from "./stream-browser-db.ts";
 
-// Stream DOs are named `${namespace}:${path}`; the browser namespace is "default".
-const STREAM_NAMESPACE = "default";
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
 
 export type StreamBrowserSnapshot = {
@@ -55,6 +54,11 @@ export type BrowserProcessorConfig = {
   loadCheckpoint(sql: SqlClient): Promise<{ state: unknown; offset: number } | undefined>;
 };
 
+export type BrowserStreamConnectionConfig = {
+  namespace?: string;
+  streamUrl?: string | URL | ((args: { namespace: string; streamPath: string }) => string | URL);
+};
+
 export type StreamRuntimeState = {
   coreProcessorState: StreamCoreProcessorState;
   runtime: {
@@ -67,8 +71,8 @@ export type StreamBrowserStore = Disposable & {
   appendBatch(args: { events: StreamEventInput[] }): RpcPromise<StreamEvent[]>;
   runtimeState(): RpcPromise<StreamRuntimeState>;
   clearLocalDatabase(): Promise<void>;
-  kill(): RpcPromise<void>;
-  reset(): RpcPromise<void>;
+  kill(): Promise<void>;
+  reset(): Promise<void>;
   getSnapshot(): StreamBrowserSnapshot;
   getServerSnapshot(): StreamBrowserSnapshot;
   subscribe(listener: () => void): () => void;
@@ -80,11 +84,11 @@ export type StreamBrowserStore = Disposable & {
 
 const databaseRegistry = new Map<string, { db: StreamBrowserDatabase; refs: number }>();
 
-function acquireDatabase(streamPath: string) {
-  const key = streamPath;
+function acquireDatabase(namespace: string, streamPath: string) {
+  const key = `${namespace}\0${streamPath}`;
   let entry = databaseRegistry.get(key);
   if (entry === undefined) {
-    entry = { db: new StreamBrowserDatabase(STREAM_NAMESPACE, streamPath), refs: 0 };
+    entry = { db: new StreamBrowserDatabase(namespace, streamPath), refs: 0 };
     databaseRegistry.set(key, entry);
   }
   entry.refs += 1;
@@ -105,23 +109,36 @@ const runtimeRegistry = new Map<string, StreamBrowserStore>();
 
 /** Get (or lazily create) the shared runtime for one (path, processor). */
 export function acquireStreamRuntime(
-  args: { streamPath: string } & BrowserProcessorConfig,
+  args: { streamPath: string } & BrowserProcessorConfig & BrowserStreamConnectionConfig,
 ): StreamBrowserStore {
+  const namespace = args.namespace ?? DEFAULT_STREAM_NAMESPACE;
   const slug = args.processor.contract.slug;
-  const key = `${args.streamPath} ${slug}`;
+  const key = `${namespace} ${args.streamPath} ${slug}`;
   const existing = runtimeRegistry.get(key);
   if (existing !== undefined) return existing;
-  const runtime = createStreamRuntime({ ...args, onDispose: () => runtimeRegistry.delete(key) });
+  const runtime = createStreamRuntime({
+    ...args,
+    namespace,
+    onDispose: () => runtimeRegistry.delete(key),
+  });
   runtimeRegistry.set(key, runtime);
   return runtime;
 }
 
 function createStreamRuntime(
-  args: { streamPath: string; onDispose?: () => void } & BrowserProcessorConfig,
+  args: {
+    namespace: string;
+    streamPath: string;
+    onDispose?: () => void;
+  } & BrowserProcessorConfig &
+    BrowserStreamConnectionConfig,
 ): StreamBrowserStore {
   const { processor, schemaVersion, tables, loadCheckpoint } = args;
   const slug = processor.contract.slug;
-  const { db: streamDatabase, release: releaseDatabase } = acquireDatabase(args.streamPath);
+  const { db: streamDatabase, release: releaseDatabase } = acquireDatabase(
+    args.namespace,
+    args.streamPath,
+  );
 
   // A plain SQLite client for the processor. Each committed write nudges the reactive
   // queries (coalesced to one notify per tick so a replay storm shows partial progress).
@@ -162,7 +179,7 @@ function createStreamRuntime(
     localStorage.getItem(browserSubscriberStorageKey) ?? crypto.randomUUID();
   localStorage.setItem(browserSubscriberStorageKey, browserSubscriberId);
   // One stream subscription per (browser profile, processor); namespace keeps it distinct.
-  const subscriptionKey = `${STREAM_NAMESPACE}:${browserSubscriberId}:${slug}`;
+  const subscriptionKey = `${args.namespace}:${browserSubscriberId}:${slug}`;
   let snapshot: StreamBrowserSnapshot = {
     clearVersion: 0,
     connectionStatus: "connecting",
@@ -275,7 +292,7 @@ function createStreamRuntime(
 
   function connect() {
     if (stream !== undefined || disposed) return;
-    const streamUrl = new URL(streamRpcPath(args.streamPath), window.location.href);
+    const streamUrl = new URL(resolveStreamUrl(args), window.location.href);
 
     void withStreamConnectionFromBrowser({
       url: streamUrl,
@@ -325,7 +342,7 @@ function createStreamRuntime(
 
     writerRole = acquireWriterRole({
       lockName: streamWriterLockName({
-        namespace: STREAM_NAMESPACE,
+        namespace: args.namespace,
         streamPath: args.streamPath,
         slug,
         schemaVersion,
@@ -348,13 +365,16 @@ function createStreamRuntime(
         const streamSubscription = createStreamSubscription({ subscriptionKey });
         subscription = streamSubscription;
         processing = processorRunner.run({ subscription: streamSubscription });
-        return { replayAfterOffset: checkpoint?.offset ?? 0, sink: streamSubscription.sink };
+        return {
+          replayAfterOffset: checkpoint?.offset ?? 0,
+          processEventBatch: streamSubscription.processEventBatch,
+        };
       })
       .then((ready) => {
         if (ready === undefined || disposed || stream !== election.connection) return undefined;
         return election.connection.stream.subscribe({
           subscriptionKey,
-          sink: ready.sink,
+          processEventBatch: ready.processEventBatch,
           replayAfterOffset: ready.replayAfterOffset,
         });
       })
@@ -390,6 +410,22 @@ function createStreamRuntime(
     writerRole = undefined;
     snapshot = { ...snapshot, subscriptionStatus: "idle" };
     if (!disposed) emitSnapshot();
+  }
+
+  async function runControlAndReconnect(control: "kill" | "reset") {
+    reconnectNow();
+    if (stream === undefined) throw new Error("stream connection is disposed");
+    const controlledStream = stream;
+    try {
+      await controlledStream.stream[control]();
+    } finally {
+      if (stream === controlledStream) {
+        stopSubscriptionElection();
+        controlledStream[Symbol.dispose]();
+        stream = undefined;
+        reconnectAfter(`stream ${control} requested`);
+      }
+    }
   }
 
   function start() {
@@ -448,14 +484,10 @@ function createStreamRuntime(
       reconnectNow();
     },
     kill() {
-      reconnectNow();
-      if (stream === undefined) throw new Error("stream connection is disposed");
-      return stream.stream.kill();
+      return runControlAndReconnect("kill");
     },
     reset() {
-      reconnectNow();
-      if (stream === undefined) throw new Error("stream connection is disposed");
-      return stream.stream.reset();
+      return runControlAndReconnect("reset");
     },
     getSnapshot: () => snapshot,
     getServerSnapshot: () => snapshot,
@@ -488,4 +520,21 @@ function errorMessage(error: unknown) {
 
 function isWriteStatement(sql: string) {
   return /^\s*(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|REPLACE|PRAGMA\s+user_version)/i.test(sql);
+}
+
+function resolveStreamUrl(args: {
+  namespace: string;
+  streamPath: string;
+  streamUrl?: BrowserStreamConnectionConfig["streamUrl"];
+}) {
+  if (typeof args.streamUrl === "function") {
+    return args.streamUrl({ namespace: args.namespace, streamPath: args.streamPath });
+  }
+  return (
+    args.streamUrl ??
+    streamRpcPath({
+      path: args.streamPath,
+      namespace: args.namespace === DEFAULT_STREAM_NAMESPACE ? undefined : args.namespace,
+    })
+  );
 }

@@ -4,8 +4,6 @@ import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { z } from "zod";
-import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
-import { useConfig } from "@iterate-com/ui/apps/config";
 import { Button } from "@iterate-com/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import {
@@ -25,12 +23,11 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import type { AppConfig } from "~/app.ts";
 import { repoArtifactName } from "~/domains/repos/repo-artifact-name.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
+import { projectReposListQueryOptions } from "~/lib/project-route-query.ts";
+import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { orpc } from "~/orpc/client.ts";
-
-type PublicConfig = PublicAppConfig<AppConfig>;
 
 const CreateRepoForm = z.object({
   slug: z
@@ -48,19 +45,15 @@ type SortKey = "repoSlug" | "createdAt" | "lastWokenAt";
 type SortDirection = "asc" | "desc";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
-  loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
-    await context.queryClient.ensureQueryData({
-      ...orpc.project.repos.list.queryOptions({ input: { projectSlugOrId: project.id } }),
-      staleTime: 10_000,
-    });
+  loader: async ({ context }) => {
+    const { project } = context;
+    await context.queryClient.ensureQueryData(projectReposListQueryOptions(project.id));
+    const routeConfig = await getPublicRouteConfig();
 
     return {
       breadcrumb: "Repos",
       project,
+      routeConfig,
     };
   },
   component: ProjectReposIndexPage,
@@ -68,22 +61,16 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
 
 function ProjectReposIndexPage() {
   const params = Route.useParams();
-  const config = useConfig<PublicConfig>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { project } = Route.useLoaderData();
+  const { project, routeConfig } = Route.useLoaderData();
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({
     key: "lastWokenAt",
     direction: "desc",
   });
-  const reposQueryOptions = orpc.project.repos.list.queryOptions({
-    input: { projectSlugOrId: project.id },
-  });
-  const { data } = useQuery({
-    ...reposQueryOptions,
-    staleTime: 10_000,
-  });
+  const reposQueryOptions = projectReposListQueryOptions(project.id);
+  const { data } = useQuery(reposQueryOptions);
   const createRepo = useMutation(
     orpc.project.repos.create.mutationOptions({
       onSuccess: async (repo) => {
@@ -246,7 +233,7 @@ function ProjectReposIndexPage() {
               ) : (
                 visibleRepos.map((repo) => {
                   const artifactViewerUrl = buildArtifactViewerUrl({
-                    appBaseUrl: config.baseUrl ?? currentOrigin(),
+                    appBaseUrl: routeConfig.baseUrl,
                     artifactName: repoArtifactName({
                       projectId: repo.projectId,
                       repoSlug: repo.repoSlug,
@@ -350,8 +337,4 @@ function formatRelativeTime(value: string) {
   const count = Math.round(absoluteSeconds / unit.seconds);
   const suffix = count === 1 ? unit.label : `${unit.label}s`;
   return seconds < 0 ? `in ${count} ${suffix}` : `${count} ${suffix} ago`;
-}
-
-function currentOrigin() {
-  return typeof window === "undefined" ? undefined : window.location.origin;
 }

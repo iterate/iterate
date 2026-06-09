@@ -1,33 +1,22 @@
-import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { useQuery } from "@tanstack/react-query";
-import { useConfig } from "@iterate-com/ui/apps/config";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import type { AppConfig } from "~/app.ts";
 import { buildProjectMcpUrl } from "~/lib/project-host-routing.ts";
-import { streamPathToSplat } from "~/lib/stream-links.ts";
-import { orpc } from "~/orpc/client.ts";
-
-type PublicConfig = PublicAppConfig<AppConfig>;
+import { projectInboundMcpSessionsQueryOptions } from "~/lib/project-route-query.ts";
+import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/mcp")({
-  loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
-    await context.queryClient.ensureQueryData({
-      ...orpc.project.inboundMcpServer.listSessions.queryOptions({
-        input: { projectSlugOrId: project.id },
-      }),
-      staleTime: 10_000,
-    });
+  loader: async ({ context }) => {
+    const { project } = context;
+    await context.queryClient.ensureQueryData(projectInboundMcpSessionsQueryOptions(project.id));
+    const routeConfig = await getPublicRouteConfig();
 
     return {
       breadcrumb: "MCP",
       project,
+      routeConfig,
     };
   },
   component: ProjectMcpPage,
@@ -35,19 +24,13 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/mcp")({
 
 function ProjectMcpPage() {
   const params = Route.useParams();
-  const { project } = Route.useLoaderData();
-  const config = useConfig<PublicConfig>();
-  const { data: sessionsData } = useQuery({
-    ...orpc.project.inboundMcpServer.listSessions.queryOptions({
-      input: { projectSlugOrId: project.id },
-    }),
-    staleTime: 10_000,
-  });
+  const { project, routeConfig } = Route.useLoaderData();
+  const { data: sessionsData } = useQuery(projectInboundMcpSessionsQueryOptions(project.id));
   const mcpUrl = buildProjectMcpUrl({
-    baseUrl: config.baseUrl,
-    mcpBaseUrl: config.mcp?.baseUrl,
+    baseUrl: routeConfig.baseUrl,
+    mcpBaseUrl: routeConfig.mcpBaseUrl,
     projectSlug: project.slug,
-    projectHostnameBases: config.projectHostnameBases,
+    projectHostnameBases: routeConfig.projectHostnameBases,
   });
   const sessions = sessionsData?.sessions ?? [];
 
@@ -64,12 +47,12 @@ function ProjectMcpPage() {
 
   const claudeCommand = `claude mcp add --transport http ${project.slug} ${mcpUrl}`;
   const cliBaseHostFlag =
-    config.mcp?.baseUrl && config.mcp.baseUrl !== "https://mcp.iterate.com"
-      ? ` --base-host ${config.mcp.baseUrl}`
+    routeConfig.mcpBaseUrl && routeConfig.mcpBaseUrl !== "https://mcp.iterate.com"
+      ? ` --base-host ${routeConfig.mcpBaseUrl}`
       : "";
   const cliCommand = `cd apps/os && pnpm cli claude-mcp${cliBaseHostFlag}`;
   const cliCommandHint =
-    config.baseUrl === "https://os.iterate.com"
+    routeConfig.baseUrl === "https://os.iterate.com"
       ? "Run from the repo root. Uses the admin token for auth and disables all other MCP servers. For production, prefix with: doppler run --project os --config prd --"
       : "Run from the repo root. Uses the admin token for auth and disables all other MCP servers.";
 
@@ -154,7 +137,7 @@ function ProjectMcpPage() {
                   to="/projects/$projectSlug/streams/$"
                   params={{
                     projectSlug: params.projectSlug,
-                    _splat: streamPathToSplat(session.streamPath),
+                    _splat: session.streamPath,
                   }}
                 >
                   <EventsStreamPathLabel path={session.streamPath} />

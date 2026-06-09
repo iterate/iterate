@@ -20,6 +20,11 @@ import {
   loadBrowserEventFeedCheckpoint,
 } from "../../../src/processors/browser-event-feed/implementation.ts";
 import { useStreamQuery } from "../../../src/browser/hooks/use-stream-query.ts";
+import { streamViewSearch, type StreamViewSearch } from "../lib/stream-view-search.ts";
+import {
+  useInitialTailScroll,
+  shouldSuppressUnreadBadgeDuringInitialTail,
+} from "../lib/use-initial-tail-scroll.ts";
 
 type FeedItemRow = {
   local_index: number;
@@ -36,17 +41,18 @@ const SPECIFIC_RENDERER_TYPES: Record<string, string> = {
   "stream.child-stream-created": "events.iterate.com/stream/child-stream-created",
 };
 
-export function EventFeedView({ streamPath }: { streamPath: string }) {
+export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) {
   const store = useMemo(
     () =>
       acquireStreamRuntime({
-        streamPath,
+        streamPath: streamView.path,
+        namespace: streamView.namespace,
         processor: browserEventFeed,
         schemaVersion: BROWSER_EVENT_FEED_SCHEMA_VERSION,
         tables: [BROWSER_EVENT_FEED_TABLE],
         loadCheckpoint: loadBrowserEventFeedCheckpoint,
       }),
-    [streamPath],
+    [streamView.namespace, streamView.path],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -78,10 +84,10 @@ export function EventFeedView({ streamPath }: { streamPath: string }) {
   return (
     <FeedItemRows
       itemCount={itemCount}
-      key={`feed:${streamPath}:${snapshot.clearVersion}`}
+      key={`feed:${streamView.path}:${snapshot.clearVersion}`}
       snapshot={snapshot}
       streamDatabase={db}
-      streamPath={streamPath}
+      streamView={streamView}
       streamStore={store}
     />
   );
@@ -91,20 +97,19 @@ function FeedItemRows({
   streamDatabase,
   itemCount,
   snapshot,
-  streamPath,
+  streamView,
   streamStore,
 }: {
   streamDatabase: StreamBrowserDatabase;
   itemCount: number;
   snapshot: StreamBrowserSnapshot;
-  streamPath: string;
+  streamView: StreamViewSearch;
   streamStore: StreamBrowserStore;
 }) {
   const topScrollAffordanceHeight = 48;
   const estimatedFeedRowHeight = 44;
   const parentRef = useRef<HTMLDivElement>(null);
   const previousItemCount = useRef(itemCount);
-  const settledInitialEndScroll = useRef(false);
   const initialScrollOffset = useRef(
     itemCount > 50 ? topScrollAffordanceHeight + itemCount * estimatedFeedRowHeight : 0,
   );
@@ -137,16 +142,19 @@ function FeedItemRows({
     },
   });
   const virtualItems = virtualizer.getVirtualItems();
-
-  useLayoutEffect(() => {
-    if (settledInitialEndScroll.current || itemCount === 0) return;
-    settledInitialEndScroll.current = true;
-    virtualizer.scrollToEnd();
-  }, [itemCount, virtualizer]);
+  const initialTailScroll = useInitialTailScroll({
+    count: itemCount,
+    scrollElementRef: parentRef,
+    virtualizer,
+  });
 
   useLayoutEffect(() => {
     const appendedCount = itemCount - previousItemCount.current;
     previousItemCount.current = itemCount;
+    if (shouldSuppressUnreadBadgeDuringInitialTail(initialTailScroll)) {
+      setNewItemCount(0);
+      return;
+    }
     if (appendedCount <= 0) {
       if (itemCount === 0) setNewItemCount(0);
       return;
@@ -154,7 +162,7 @@ function FeedItemRows({
     if (!scrollPosition.isAtEnd) {
       setNewItemCount((current) => current + appendedCount);
     }
-  }, [itemCount, scrollPosition.isAtEnd]);
+  }, [itemCount, initialTailScroll, scrollPosition.isAtEnd]);
 
   useLayoutEffect(() => {
     if (scrollPosition.isAtEnd) setNewItemCount(0);
@@ -177,6 +185,7 @@ function FeedItemRows({
               className="pointer-events-auto grid size-8 cursor-pointer place-items-center rounded-full border border-[#e8ebf0] bg-white text-base leading-none text-[#16181d] opacity-60 shadow-[0_4px_12px_rgb(15_23_42_/_8%)] hover:opacity-90"
               type="button"
               onClick={() => {
+                initialTailScroll.markUserLeftTail();
                 virtualizer.scrollToOffset(0);
               }}
             >
@@ -226,7 +235,7 @@ function FeedItemRows({
               expandedLocalIndexes={expandedLocalIndexes}
               itemCount={itemCount}
               streamDatabase={streamDatabase}
-              streamPath={streamPath}
+              streamView={streamView}
               virtualItems={virtualItems}
               measureElement={virtualizer.measureElement}
               onToggleLocalIndex={(localIndex) => {
@@ -281,7 +290,7 @@ function FeedItemRows({
               </div>
             </div>
           ) : null}
-          <FeedComposer key={`composer:${streamPath}`} streamStore={streamStore} />
+          <FeedComposer key={`composer:${streamView.path}`} streamStore={streamStore} />
         </div>
       </section>
     </div>
@@ -328,7 +337,7 @@ function FeedRuntimeNotice({
 
 function FeedItemWindow({
   streamDatabase,
-  streamPath,
+  streamView,
   virtualItems,
   expandedLocalIndexes,
   itemCount,
@@ -336,7 +345,7 @@ function FeedItemWindow({
   onToggleLocalIndex,
 }: {
   streamDatabase: StreamBrowserDatabase;
-  streamPath: string;
+  streamView: StreamViewSearch;
   virtualItems: VirtualItem[];
   expandedLocalIndexes: Set<number>;
   itemCount: number;
@@ -390,7 +399,7 @@ function FeedItemWindow({
             expanded={isExpanded}
             isLast={isLastFeedRow}
             row={row}
-            streamPath={streamPath}
+            streamView={streamView}
             onToggle={() => onToggleLocalIndex(row.local_index)}
           />
         )}
@@ -403,13 +412,13 @@ function FeedItem({
   row,
   isLast,
   expanded,
-  streamPath,
+  streamView,
   onToggle,
 }: {
   row: FeedItemRow;
   isLast: boolean;
   expanded: boolean;
-  streamPath: string;
+  streamView: StreamViewSearch;
   onToggle(): void;
 }) {
   const eventType = feedItemEventType(row);
@@ -447,7 +456,7 @@ function FeedItem({
     return (
       <ChildStreamCreatedFeedItem
         className={articleClass}
-        currentStreamPath={streamPath}
+        streamView={streamView}
         eventType={eventType}
         expanded={expanded}
         row={row}
@@ -539,21 +548,28 @@ function StreamLifecycleMarker({
 
 function ChildStreamCreatedFeedItem({
   className,
-  currentStreamPath,
+  streamView,
   eventType,
   expanded,
   row,
   onToggle,
 }: {
   className: string;
-  currentStreamPath: string;
+  streamView: StreamViewSearch;
   eventType: string;
   expanded: boolean;
   row: FeedItemRow;
   onToggle(): void;
 }) {
   const childPath = childStreamPathFromRow(row);
-  const childHref = streamPageHref(childPath);
+  const childSearch =
+    childPath === undefined
+      ? undefined
+      : streamViewSearch({
+          path: childPath,
+          namespace: streamView.namespace,
+          view: "browser-event-feed",
+        });
 
   return (
     <article
@@ -578,26 +594,15 @@ function ChildStreamCreatedFeedItem({
               </p>
             ) : (
               <p className="mt-1 text-[11px] text-violet-800/90">
-                Under <span className="font-mono text-violet-900">{currentStreamPath}</span>
+                Under <span className="font-mono text-violet-900">{streamView.path}</span>
               </p>
             )}
-            {childHref === undefined ? null : childHref.to === "/streams" ? (
+            {childSearch === undefined ? null : (
               <Link
                 className="mt-2 inline-flex items-center gap-1 font-mono text-xs text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
                 data-testid="feed-child-stream-link"
-                search={{ view: "browser-event-feed" }}
+                search={childSearch}
                 to="/streams"
-              >
-                Open {childPath}
-                <span aria-hidden>→</span>
-              </Link>
-            ) : (
-              <Link
-                className="mt-2 inline-flex items-center gap-1 font-mono text-xs text-violet-700 underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
-                data-testid="feed-child-stream-link"
-                params={childHref.params}
-                search={{ view: "browser-event-feed" }}
-                to="/streams/$"
               >
                 Open {childPath}
                 <span aria-hidden>→</span>
@@ -639,19 +644,6 @@ function childStreamPathFromRow(row: FeedItemRow): string | undefined {
   if (payload === null || typeof payload !== "object") return undefined;
   const childPath = (payload as Record<string, unknown>).childPath;
   return typeof childPath === "string" && childPath.length > 0 ? childPath : undefined;
-}
-
-function streamPageHref(
-  streamPath: string | undefined,
-):
-  | { to: "/streams"; params?: undefined }
-  | { to: "/streams/$"; params: { _splat: string } }
-  | undefined {
-  if (streamPath === undefined) return undefined;
-  if (streamPath === "/") return { to: "/streams" };
-  const splat = streamPath.replace(/^\//, "");
-  if (splat.length === 0) return undefined;
-  return { to: "/streams/$", params: { _splat: splat } };
 }
 
 function feedItemEventType(row: FeedItemRow) {

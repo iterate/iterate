@@ -1,6 +1,5 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
-import { liftLocalProxies } from "./local-proxy-wrapper.js";
 import type { IterateContext } from "./iterate-context-capability.ts";
 import type { ProjectCapability } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
@@ -22,10 +21,8 @@ export async function connectNodeIterateContext(input: {
 
   const rootSocket = new WebSocket(rootWebSocketUrl(baseUrl), { headers: authHeaders });
   sockets.push(rootSocket);
-  const root = liftLocalProxies(
-    newWebSocketRpcSession<IterateContext>(
-      rootSocket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
-    ),
+  const root = newWebSocketRpcSession<IterateContext>(
+    rootSocket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
 
   const ctx = input.projectId
@@ -69,9 +66,7 @@ export async function projectEgressFetch(
   if (!projectId) {
     throw new Error("A project-scoped IterateCapability is required for global fetch.");
   }
-  using projects = await ctx.projects;
-  using project = await projects.get(projectId);
-  return (await project.egressFetch(new Request(input, init))) as Response;
+  return (await ctx.projects.get(projectId).egressFetch(new Request(input, init))) as Response;
 }
 
 async function projectContext(input: {
@@ -93,7 +88,7 @@ async function projectContext(input: {
   const project = newWebSocketRpcSession<ProjectCapability>(
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
-  return liftLocalProxies(project.getIterateContext() as unknown as RpcStub<IterateContext>);
+  return project.getIterateContext() as unknown as RpcStub<IterateContext>;
 }
 
 function rootWebSocketUrl(baseUrl: string) {

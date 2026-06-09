@@ -1,15 +1,16 @@
 import { Outlet, createFileRoute } from "@tanstack/react-router";
-import { orpc } from "~/orpc/client.ts";
+import { ensureProjectBySlug } from "~/lib/project-route-query.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug")({
-  loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
-
+  beforeLoad: async ({ context, params }) => ({
+    project: await ensureProjectBySlug({
+      queryClient: context.queryClient,
+      projectSlug: params.projectSlug,
+    }),
+  }),
+  loader: ({ context }) => {
     return {
-      breadcrumb: project.slug,
+      breadcrumb: context.project.slug,
     };
   },
   component: ProjectLayout,

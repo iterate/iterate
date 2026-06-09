@@ -2,64 +2,63 @@ import { useCallback, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
 import type { Project, ProjectCustomHostnameStatus } from "@iterate-com/os-contract";
-import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
-import { useConfig } from "@iterate-com/ui/apps/config";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
-import type { AppConfig } from "~/app.ts";
 import { EventsDebugLink } from "~/components/events-debug-link.tsx";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
+import { projectCustomHostnameStatusQueryOptions } from "~/lib/project-route-query.ts";
+import { getPublicRouteConfig, type PublicRouteConfig } from "~/lib/public-route-config.ts";
 import { orpc } from "~/orpc/client.ts";
 
-type PublicConfig = PublicAppConfig<AppConfig>;
-
 export const Route = createFileRoute("/_app/projects/$projectSlug/settings")({
-  loader: async ({ context, params }) => {
-    await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
+  loader: async ({ context }) => {
+    const { project } = context;
+    if (project.customHostname) {
+      await context.queryClient.ensureQueryData(
+        projectCustomHostnameStatusQueryOptions(project.id),
+      );
+    }
 
     return {
       breadcrumb: "Settings",
+      project,
+      routeConfig: await getPublicRouteConfig(),
     };
   },
   component: ProjectDetailPage,
 });
 
 function ProjectDetailPage() {
-  const params = Route.useParams();
-  const { data: project } = useQuery({
-    ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-    staleTime: 30_000,
-  });
+  const { project, routeConfig } = Route.useLoaderData();
 
-  if (!project) return null;
-
-  return <ProjectDetailContent project={project} />;
+  return <ProjectDetailContent project={project} routeConfig={routeConfig} />;
 }
 
-function ProjectDetailContent({ project }: { project: Project }) {
+function ProjectDetailContent({
+  project,
+  routeConfig,
+}: {
+  project: Project;
+  routeConfig: PublicRouteConfig;
+}) {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const config = useConfig<PublicConfig>();
   const [customHostname, setCustomHostname] = useState(project.customHostname ?? "");
   const [hostnameToActivate, setHostnameToActivate] = useState("");
   const dnsInstructions = customHostnameDnsInstructions({
     customHostname,
     project,
-    projectHostnameBases: config.projectHostnameBases,
+    projectHostnameBases: routeConfig.projectHostnameBases,
   });
   const customHostnameStatusQuery = useQuery({
-    ...orpc.projects.customHostnameStatus.queryOptions({ input: { id: project.id } }),
+    ...projectCustomHostnameStatusQueryOptions(project.id),
     enabled: Boolean(project.customHostname),
     refetchInterval: (query) =>
       query.state.data?.hostnames.some((hostname) => hostname.sslStatus !== "active")
         ? 10_000
         : false,
-    staleTime: 10_000,
   });
   const updateConfig = useMutation(
     orpc.projects.updateConfig.mutationOptions({
@@ -119,7 +118,7 @@ function ProjectDetailContent({ project }: { project: Project }) {
 
         <div className="space-y-2">
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Events namespace</p>
-          <EventsDebugLink label="Open project in Events" namespace={project.id} streamPath="/" />
+          <EventsDebugLink label="Open project in Streams" namespace={project.id} streamPath="/" />
         </div>
 
         <div className="space-y-2">

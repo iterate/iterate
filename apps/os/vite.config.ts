@@ -9,6 +9,10 @@ const host = process.env.HOST ?? "127.0.0.1";
 const port = process.env.PORT ? Number(process.env.PORT) : 5173;
 
 export default defineConfig({
+  // wa-sqlite ships an Emscripten `.mjs` + `.wasm` pair that must stay together.
+  // The stream DB worker imports the wasm as a Vite asset URL; pre-bundling the
+  // package can break that pairing and surface as sqlite3_open_v2 failures.
+  optimizeDeps: { exclude: ["@journeyapps/wa-sqlite"] },
   build: {
     rollupOptions: {
       output: {

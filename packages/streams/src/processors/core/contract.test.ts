@@ -61,9 +61,9 @@ describe("core processor contract", () => {
           payload: {
             subscriptionKey: "echo",
             subscriber: {
-              type: "external-url",
-              transport: "capnweb-websocket",
-              url: "https://example.com/processor",
+              type: "built-in",
+              transport: "workers-rpc",
+              processorSlug: "echo-example",
             },
           },
           createdAt: "2026-06-01T12:00:01.000Z",
@@ -104,6 +104,73 @@ describe("core processor contract", () => {
         { type: "events.iterate.com/echo-example/output-echoed", description: "Output." },
       ],
     });
+  });
+
+  it("drops historical outbound subscription transports from reduced state", () => {
+    let state = coreProcessorContract.stateSchema.parse(coreProcessorContract.initialState);
+    state = coreProcessorContract.stateSchema.parse(
+      reduce({
+        contract: coreProcessorContract,
+        state,
+        event: {
+          offset: 1,
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            subscriptionKey: "echo",
+            subscriber: {
+              type: "built-in",
+              transport: "workers-rpc",
+              processorSlug: "echo-example",
+            },
+          },
+          createdAt: "2026-06-01T12:00:01.000Z",
+        },
+      }),
+    );
+
+    state = coreProcessorContract.stateSchema.parse(
+      reduce({
+        contract: coreProcessorContract,
+        state,
+        event: {
+          offset: 2,
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            subscriptionKey: "echo",
+            subscriber: {
+              type: "built-in",
+              transport: "capnweb-websocket",
+              processorSlug: "echo-example",
+            },
+          },
+          createdAt: "2026-06-01T12:00:02.000Z",
+        },
+      }),
+    );
+
+    expect(state.subscriptionsByKey.echo).toBeUndefined();
+
+    const stored = coreProcessorContract.stateSchema.parse({
+      ...state,
+      subscriptionsByKey: {
+        external: {
+          latestConfiguredEvent: {
+            offset: 3,
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: {
+              subscriptionKey: "external",
+              subscriber: {
+                type: "external-url",
+                transport: "capnweb-websocket",
+                url: "https://example.com/processor",
+              },
+            },
+            createdAt: "2026-06-01T12:00:03.000Z",
+          },
+        },
+      },
+    });
+    expect(stored.subscriptionsByKey).toEqual({});
   });
 
   it("owns pause/resume and beforeAppend door logic", () => {

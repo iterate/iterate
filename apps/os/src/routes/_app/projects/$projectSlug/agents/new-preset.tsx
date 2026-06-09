@@ -23,16 +23,14 @@ import {
   parseAgentPresetEventsYaml,
   parseAgentRunOptsJson,
 } from "~/domains/agents/agent-presets.ts";
-import { orpc, orpcClient } from "~/orpc/client.ts";
+import { projectAgentPresetsQueryOptions } from "~/lib/project-route-query.ts";
+import { orpcClient } from "~/orpc/client.ts";
 
 const emptyEventsYaml = "[]\n";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new-preset")({
-  loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
+  loader: async ({ context }) => {
+    const { project } = context;
 
     return {
       breadcrumb: "New Preset",
@@ -67,9 +65,7 @@ function NewAgentPresetPage() {
     [basePathInput, customEventsYaml, model, provider, runOpts, systemPrompt],
   );
 
-  const presetsQueryOptions = orpc.project.agents.listPresets.queryOptions({
-    input: { projectSlugOrId: project.id },
-  });
+  const presetsQueryOptions = projectAgentPresetsQueryOptions(project.id);
   const savePreset = useMutation({
     mutationFn: async () => {
       if (preview.error) throw new Error(preview.error);
