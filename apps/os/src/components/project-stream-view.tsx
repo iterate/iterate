@@ -1,12 +1,15 @@
 import {
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
+  type RefObject,
   type ReactNode,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { Spinner } from "@iterate-com/ui/components/spinner";
 import {
   acquireStreamRuntime,
   type StreamBrowserSnapshot,
@@ -74,12 +77,19 @@ export function ProjectStreamView({
   );
   const [submitError, setSubmitError] = useState<string | undefined>();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingSubmission, setPendingSubmission] = useState<{ baseEventCount: number } | null>(
+    null,
+  );
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const isAwaitingResult = pendingSubmission != null;
 
   async function submit() {
     const trimmed = composerText.trim();
     if (!trimmed) return;
     setIsSubmitting(true);
     setSubmitError(undefined);
+    setPendingSubmission({ baseEventCount: eventCount });
     try {
       if (composerMode === "message" && messageComposer) {
         await messageComposer.onSubmit(trimmed);
@@ -90,13 +100,40 @@ export function ProjectStreamView({
         );
         await store.appendBatch({ events });
       }
-      setComposerText(composerMode === "raw" ? composerText : "");
+      setComposerText("");
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : String(error));
+      setPendingSubmission(null);
     } finally {
       setIsSubmitting(false);
+      window.requestAnimationFrame(() => {
+        inputRef.current?.focus();
+      });
     }
   }
+
+  useEffect(() => {
+    if (pendingSubmission == null || eventCount <= pendingSubmission.baseEventCount) {
+      return;
+    }
+
+    setPendingSubmission(null);
+  }, [eventCount, pendingSubmission]);
+
+  useLayoutEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      const scrollContainer = scrollContainerRef.current;
+      if (scrollContainer == null) {
+        return;
+      }
+
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [eventCount, isAwaitingResult, submitError]);
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-white">
@@ -104,47 +141,52 @@ export function ProjectStreamView({
         <h1 className="truncate font-mono text-sm font-semibold">{streamPathText}</h1>
         <StreamStatus count={eventCount} snapshot={snapshot} />
       </header>
-      {countResult.status !== "ok" ? (
-        <Centered>
-          {countResult.status === "error"
-            ? (countResult.error?.message ?? "SQLite query failed")
-            : "Opening local SQLite mirror"}
-        </Centered>
-      ) : (
-        <VirtualEventRows
-          database={store.streamDatabase}
-          emptyLabel={emptyLabel}
-          eventCount={eventCount}
-          snapshot={snapshot}
-        />
-      )}
-      <form
-        className="shrink-0 border-t p-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void submit();
-        }}
-      >
-        <textarea
-          className="block max-h-48 min-h-20 w-full resize-y rounded-md border px-3 py-2 font-mono text-[13px] outline-none focus:border-slate-400"
-          placeholder={messageComposer?.placeholder ?? "YAML event"}
-          spellCheck={false}
-          value={composerText}
-          onChange={(event) => setComposerText(event.currentTarget.value)}
-        />
-        <div className="mt-2 flex items-center justify-between gap-3">
-          <output className="min-w-0 truncate font-mono text-xs text-red-700">
-            {submitError ?? ""}
-          </output>
-          <button
-            className="rounded-md bg-slate-950 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-            disabled={isSubmitting}
-            type="submit"
-          >
-            {isSubmitting ? "Sending" : composerMode === "message" ? "Send" : "Append"}
-          </button>
-        </div>
-      </form>
+      <main ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto">
+        {countResult.status !== "ok" ? (
+          <Centered>
+            {countResult.status === "error"
+              ? (countResult.error?.message ?? "SQLite query failed")
+              : "Opening local SQLite mirror"}
+          </Centered>
+        ) : (
+          <VirtualEventRows
+            database={store.streamDatabase}
+            emptyLabel={emptyLabel}
+            eventCount={eventCount}
+            scrollElementRef={scrollContainerRef}
+            snapshot={snapshot}
+          />
+        )}
+        {isAwaitingResult ? <PendingResultRow /> : null}
+        <form
+          className="border-t p-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          <textarea
+            ref={inputRef}
+            className="block max-h-48 min-h-20 w-full resize-y rounded-md border px-3 py-2 font-mono text-[13px] outline-none focus:border-slate-400"
+            placeholder={messageComposer?.placeholder ?? "YAML event"}
+            spellCheck={false}
+            value={composerText}
+            onChange={(event) => setComposerText(event.currentTarget.value)}
+          />
+          <div className="mt-2 flex items-center justify-between gap-3">
+            <output className="min-w-0 truncate font-mono text-xs text-red-700">
+              {submitError ?? ""}
+            </output>
+            <button
+              className="rounded-md bg-slate-950 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+              disabled={isSubmitting}
+              type="submit"
+            >
+              {isSubmitting ? "Sending" : composerMode === "message" ? "Send" : "Append"}
+            </button>
+          </div>
+        </form>
+      </main>
     </section>
   );
 }
@@ -153,24 +195,21 @@ function VirtualEventRows({
   database,
   emptyLabel,
   eventCount,
+  scrollElementRef,
   snapshot,
 }: {
   database: StreamBrowserDatabase;
   emptyLabel: string;
   eventCount: number;
+  scrollElementRef: RefObject<HTMLDivElement | null>;
   snapshot: StreamBrowserSnapshot;
 }) {
-  const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: eventCount,
-    getScrollElement: () => parentRef.current,
+    getScrollElement: () => scrollElementRef.current,
     estimateSize: () => 44,
     overscan: 24,
   });
-
-  useLayoutEffect(() => {
-    if (eventCount > 0) virtualizer.scrollToIndex(eventCount - 1, { align: "end" });
-  }, [eventCount, virtualizer]);
 
   const virtualItems = virtualizer.getVirtualItems();
   const first = virtualItems[0]?.index ?? 0;
@@ -201,7 +240,7 @@ function VirtualEventRows({
   }
 
   return (
-    <div ref={parentRef} className="min-h-0 flex-1 overflow-y-auto px-4">
+    <div className="px-4">
       <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
         {virtualItems.map((item) => {
           const row = rowsByIndex.get(item.index);
@@ -230,6 +269,15 @@ function VirtualEventRows({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function PendingResultRow() {
+  return (
+    <div className="flex items-center gap-2 border-t px-4 py-3 font-mono text-xs text-slate-500">
+      <Spinner className="size-3.5" />
+      <span>Waiting for result</span>
     </div>
   );
 }

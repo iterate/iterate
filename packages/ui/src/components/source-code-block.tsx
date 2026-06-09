@@ -143,6 +143,8 @@ export interface SourceCodeBlockProps {
   className?: string;
   language?: SourceCodeLanguage;
   showCopyButton?: boolean;
+  showLineNumbers?: boolean;
+  plainChrome?: boolean;
   wrapLongLines?: boolean;
   editable?: boolean;
   onChange?: (value: string) => void;
@@ -154,6 +156,8 @@ export function SourceCodeBlock({
   className,
   language = "typescript",
   showCopyButton = true,
+  showLineNumbers = true,
+  plainChrome = false,
   wrapLongLines = true,
   editable = false,
   onChange,
@@ -180,8 +184,25 @@ export function SourceCodeBlock({
       keymap.of(searchKeymap),
       EditorView.contentAttributes.of({ tabindex: "0" }),
       wrapLongLines ? EditorView.lineWrapping : [],
+      !showLineNumbers || plainChrome
+        ? EditorView.theme({
+            ".cm-gutters": {
+              display: "none",
+            },
+          })
+        : [],
+      plainChrome
+        ? EditorView.theme({
+            ".cm-activeLine, .cm-activeLineGutter, .cm-selectionMatch": {
+              backgroundColor: "transparent",
+            },
+            ".cm-focused": {
+              outline: "none",
+            },
+          })
+        : [],
     ];
-  }, [language, wrapLongLines]);
+  }, [language, plainChrome, showLineNumbers, wrapLongLines]);
 
   const handleCopy = async () => {
     try {
@@ -196,7 +217,12 @@ export function SourceCodeBlock({
 
   return (
     <div className={cn("relative flex min-h-0 flex-col", className)}>
-      <div className="min-h-0 flex-1 overflow-hidden overflow-y-auto rounded border">
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-hidden overflow-y-auto",
+          plainChrome ? "" : "rounded border",
+        )}
+      >
         <CodeMirror
           value={code}
           extensions={extensions}
