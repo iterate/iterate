@@ -61,7 +61,6 @@ export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) 
           return new BrowserEventFeedProcessor({
             iterateContext: { stream },
             sql,
-            subscriptionKey,
             readState: storage.readState,
             writeState: storage.writeState,
           });

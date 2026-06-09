@@ -198,38 +198,6 @@ describe("browser raw events schema version reset", () => {
     expect(rows.map((row) => Number(row.offset))).toEqual([1, 2, 3]);
   });
 
-  it("commits the checkpoint atomically with the mirror writes (regression)", async () => {
-    const db = new DatabaseSync(":memory:");
-    const sql = wrap(db);
-    const storage = browserProcessorStateStorage<BrowserRawEventsState>({
-      sql,
-      processorSlug: BrowserRawEventsContract.slug,
-    });
-    // Simulate a crash in the window between the projection transaction and the
-    // base class's writeState: the checkpoint must already be durable because
-    // it rode in the projection transaction.
-    const processor = new BrowserRawEventsProcessor({
-      iterateContext: iterateContext(),
-      sql,
-      readState: storage.readState,
-      writeState: () => {
-        throw new Error("simulated crash before writeState");
-      },
-    });
-
-    await expect(
-      processor.ingest({ events: [rawEvent(1), rawEvent(2)], streamMaxOffset: 2 }),
-    ).rejects.toThrow("simulated crash");
-
-    expect(await storage.readState()).toMatchObject({ offset: 2 });
-    const rows = await sql.exec(`SELECT offset FROM events ORDER BY offset`);
-    expect(rows.map((row) => Number(row.offset))).toEqual([1, 2]);
-
-    // A fresh load resumes from the durable checkpoint — never behind the mirror.
-    const recovered = createRawEventsProcessor(wrap(db));
-    expect(await recovered.snapshot()).toMatchObject({ offset: 2 });
-  });
-
   it("the continuity trigger rejects a gap in mirrored offsets", async () => {
     const sql = wrap(new DatabaseSync(":memory:"));
     await ensureBrowserRawEventsSchema(sql);

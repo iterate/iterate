@@ -35,14 +35,12 @@ const LIVE_PROGRESS_NOTIFICATION_MS = 16;
 
 /**
  * The slice of `StreamProcessor` the browser runtime drives: read the
- * checkpoint to pick the replay cursor, feed delivered batches into `ingest`,
- * and `shutdown` on teardown. Structural so views construct whatever processor
- * class they like.
+ * checkpoint to pick the replay cursor, then feed delivered batches into
+ * `ingest`. Structural so views construct whatever processor class they like.
  */
 type BrowserHostedProcessor = {
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
   ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void>;
-  shutdown(): Promise<void>;
 };
 
 export type StreamBrowserSnapshot = {
@@ -179,7 +177,6 @@ function createStreamRuntime(
   const listeners = new Set<() => void>();
   let stream: Awaited<ReturnType<typeof withStreamConnectionFromBrowser>> | undefined;
   let subscriptionHandle: { unsubscribe(): void } | undefined;
-  let activeProcessor: BrowserHostedProcessor | undefined;
   let writerRole: WriterRole | undefined;
   let connectTimer: ReturnType<typeof setTimeout> | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -378,7 +375,6 @@ function createStreamRuntime(
           sql,
           subscriptionKey,
         });
-        activeProcessor = processor;
         const checkpoint = await processor.snapshot();
         return {
           replayAfterOffset: checkpoint.offset,
@@ -418,15 +414,8 @@ function createStreamRuntime(
   function stopSubscriptionElection() {
     subscriptionHandle?.unsubscribe();
     subscriptionHandle = undefined;
-    // Hold the writer lock until the in-flight batch settles: the next leader
-    // is elected by acquiring this lock, so releasing it after shutdown
-    // guarantees no overlap between the old processor's writes and the new
-    // leader's. shutdown() also rejects any batch that is still in transit.
-    const processor = activeProcessor;
-    activeProcessor = undefined;
-    const role = writerRole;
+    writerRole?.release();
     writerRole = undefined;
-    void (processor?.shutdown() ?? Promise.resolve()).finally(() => role?.release());
     snapshot = { ...snapshot, subscriptionStatus: "idle" };
     if (!disposed) emitSnapshot();
   }

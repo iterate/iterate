@@ -1,9 +1,5 @@
 import { StreamProcessor } from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
-import {
-  ensureBrowserProcessorStateSchema,
-  upsertProcessorStateStatement,
-} from "../../browser/processor-state-storage.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserEventFeedContract } from "./contract.ts";
 import { planFeedOps, type FeedOp, type FeedState } from "./grouping.ts";
@@ -20,8 +16,6 @@ export type BrowserEventFeedState = FeedState;
 
 export type BrowserEventFeedProcessorDeps = {
   sql: SqlClient;
-  /** Must match the key the host's checkpoint storage was created with. */
-  subscriptionKey?: string;
 };
 
 /**
@@ -38,7 +32,6 @@ export class BrowserEventFeedProcessor extends StreamProcessor<
   readonly contract = BrowserEventFeedContract;
 
   protected override async prepare(): Promise<void> {
-    await ensureBrowserProcessorStateSchema(this.deps.sql);
     await ensureBrowserEventFeedSchema(this.deps.sql);
   }
 
@@ -53,20 +46,9 @@ export class BrowserEventFeedProcessor extends StreamProcessor<
   ): Promise<void> {
     const { ops } = planFeedOps(args.previousState, args.events);
 
-    // The checkpoint upsert rides in the same transaction as the feed writes,
-    // so the stored cursor can never lag feed_items. The base class's later
-    // writeState persists the same snapshot again (idempotent upsert).
-    await this.deps.sql.batch(
-      [
-        ...ops.map(feedOpToStatement),
-        upsertProcessorStateStatement({
-          processorSlug: this.contract.slug,
-          subscriptionKey: this.deps.subscriptionKey,
-          snapshot: { offset: args.checkpointOffset, state: args.state },
-        }),
-      ],
-      { transaction: true },
-    );
+    if (ops.length > 0) {
+      await this.deps.sql.batch(ops.map(feedOpToStatement), { transaction: true });
+    }
 
     await super.processEventBatch(args);
   }

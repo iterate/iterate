@@ -69,7 +69,6 @@ export function ProjectStreamView({
           return new BrowserRawEventsProcessor({
             iterateContext: { stream },
             sql,
-            subscriptionKey,
             readState: storage.readState,
             writeState: storage.writeState,
           });
