@@ -79,7 +79,7 @@ transaction, so repair/reconciliation should be explicit follow-up work.
 
 ## Streams
 
-`StreamDurableObject` lives in `packages/shared/src/streams`. It knows about
+`StreamDurableObject` is supplied by `@iterate-com/streams`. It knows about
 `namespace` and `path`, not projects. OS uses the stable Project ID as the
 stream namespace, which means OS stream paths are project-local:
 
@@ -97,9 +97,8 @@ The Project Stream Explorer lives at:
 Detail pages are splat routes. `/streams/foo/bar` opens stream path `/foo/bar`
 inside the project-bound namespace.
 
-OS should deploy the shared stream Durable Object from the main worker script
-and bind `STREAM` to that local namespace. Other apps may use cross-script
-bindings to point at OS's stream namespace.
+OS deploys the stream Durable Object from the main worker script and binds
+`STREAM` to that local namespace.
 
 ## Durable Object Utilities
 

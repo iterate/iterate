@@ -26,8 +26,8 @@ import { useMemo, useState } from "react";
 /**
  * Minimal stream composer for hosts that need message and/or raw event input.
  *
- * The events app keeps its richer JSON/YAML/template composer locally. This
- * package component is intentionally a controlled, lightweight shared affordance.
+ * Host apps can layer richer JSON/YAML/template composers around this
+ * controlled, lightweight shared affordance.
  */
 export type EventsStreamComposerMode = "message" | "raw";
 

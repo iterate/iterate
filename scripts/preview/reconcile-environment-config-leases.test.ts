@@ -68,7 +68,7 @@ describe("reconcileEnvironmentConfigLeaseResources", () => {
         ],
       },
       checkDopplerConfig: async ({ config, project }) =>
-        project === "events" && config === "preview_3"
+        project === "os" && config === "preview_3"
           ? { ok: false, message: "config not found" }
           : { ok: true },
       readCloudflareCredentials: async ({ project }) => ({
@@ -97,7 +97,7 @@ describe("reconcileEnvironmentConfigLeaseResources", () => {
       {
         check: "doppler-config",
         resourceSlug: "preview-3",
-        message: "events/preview_3: config not found",
+        message: "os/preview_3: config not found",
       },
       {
         check: "cloudflare-zone",

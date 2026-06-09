@@ -1,7 +1,7 @@
 # Streams Domain
 
-Streams is the OS project-bound adapter around the shared namespace/path stream
-runtime in `packages/shared/src/streams`.
+Streams is the OS project-bound adapter around the namespace/path stream runtime
+from `@iterate-com/streams`.
 
 OS uses the stable Project ID as the stream namespace for project streams, but
 stream paths remain project-local and must not encode `/projects/{projectId}`.

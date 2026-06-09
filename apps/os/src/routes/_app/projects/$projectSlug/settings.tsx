@@ -6,7 +6,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { EventsDebugLink } from "~/components/events-debug-link.tsx";
+import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { projectCustomHostnameStatusQueryOptions } from "~/lib/project-route-query.ts";
 import { getPublicRouteConfig, type PublicRouteConfig } from "~/lib/public-route-config.ts";
@@ -117,8 +117,8 @@ function ProjectDetailContent({
         </div>
 
         <div className="space-y-2">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Events namespace</p>
-          <EventsDebugLink label="Open project in Streams" namespace={project.id} streamPath="/" />
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Stream namespace</p>
+          <StreamDebugLink label="Open project stream" projectSlug={project.slug} streamPath="/" />
         </div>
 
         <div className="space-y-2">

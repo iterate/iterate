@@ -63,9 +63,9 @@ describe("cloudflare preview state helpers", () => {
 
     const body = renderCloudflarePreviewPullRequestBody(initialBody, {
       apps: {
-        events: CloudflarePreviewAppEntry.parse({
-          appDisplayName: "Events",
-          appSlug: "events",
+        os: CloudflarePreviewAppEntry.parse({
+          appDisplayName: "OS",
+          appSlug: "os",
           message: "AssertionError: expected 2 to be +0",
           runUrl: "https://github.com/iterate/iterate/actions/runs/456",
           shortSha: "1234567",

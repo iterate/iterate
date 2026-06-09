@@ -53,7 +53,7 @@ Implemented but not sufficiently validated:
 
 - [ ] Streams ingress full path:
       `streams.<project-host>` -> global D1 route -> Project DO local route ->
-      Events app URL with `x-iterate-project-id`. The callable header injection
+      stream upstream URL with `x-iterate-project-id`. The callable header injection
       is unit-tested, but the complete ingress path is not.
 - [ ] MCP OAuth client path through project host routing. The entrypoint
       authenticates Clerk OAuth tokens and calls `Project.checkAccess(...)`, but
@@ -380,14 +380,14 @@ Streams are host-routed, not path-routed. Use:
 The global D1 route still resolves each exact streams hostname to
 `ProjectIngressEntrypoint`, so the Project Durable Object remains the authority
 for the route. The Project DO then dispatches a project-local shared fetch
-callable to the production Events app:
+callable to the configured stream upstream:
 
-- base URL: `https://events.iterate.com`
+- base URL: configured stream upstream
 - injected header: `x-iterate-project-id: <project-id>`
 
 The proxy preserves path and query string. For example,
 `https://streams.demo.iterate.app/api/streams/foo` is fetched from
-`https://events.iterate.com/api/streams/foo` with the Project ID header set.
+the configured upstream with the Project ID header set.
 
 ## Project Dashboard Host
 

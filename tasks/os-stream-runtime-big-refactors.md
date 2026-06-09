@@ -32,8 +32,8 @@ direction is:
      - https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/rpc/
      - https://developers.cloudflare.com/durable-objects/best-practices/create-durable-object-stubs-and-send-requests/
 
-2. Decide whether the Stream Runtime really belongs in `packages/shared`.
-   - Current state: `packages/shared/src/streams` owns storage, delivery policy,
+2. Keep stream runtime ownership out of `packages/shared`.
+   - Current state: `packages/streams` owns storage, delivery policy,
      subscriptions, circuit breaker state, debug routes, socket protocol, and
      JSONata behavior.
    - Problem: this may be more product runtime than shared utility. It risks
@@ -43,24 +43,7 @@ direction is:
      to OS, or split shared streams into clearly named modules such as runtime,
      storage/sqlite, subscriptions, circuit-breaker, and debug.
 
-3. Make Events an optional stream inspector/client.
-   - Current state: Events can bind directly to OS's `StreamDurableObject`
-     namespace and exposes public Durable Object debug routes.
-   - Problem: OS is supposed to be the simpler monolith, but proof/debug still
-     requires another app and another Doppler config.
-   - Proposal: move stream inspection/debug routes into OS. If Events remains,
-     point it at an OS stream-inspector entrypoint instead of the raw Durable
-     Object namespace.
-
-4. Delete `events-contract` stream re-export indirection.
-   - Current state: `apps/events-contract/src/index.ts` and sibling files
-     re-export shared stream types.
-   - Problem: it keeps Events looking like the owner of core stream schemas.
-   - Proposal: make `events-contract` expose only the Events app API contract.
-     Import stream schemas directly from `@iterate-com/shared/streams/*` in
-     apps and UI packages. Delete one-line re-export files.
-
-5. Remove legacy subscription shapes.
+3. Remove legacy subscription shapes.
    - Current state: shared stream subscriptions still normalize historical
      `callbackUrl` payloads into `Callable` descriptors.
    - Problem: the migration explicitly does not need backwards compatibility.
@@ -68,7 +51,7 @@ direction is:
      callable subscribers all carry a `callable` descriptor. Migrate or delete
      old Agents code that still appends `callbackUrl`.
 
-6. Restrict public fetch authority for subscriptions.
+4. Restrict public fetch authority for subscriptions.
    - Current state: webhook and WebSocket paths still use public `fetch`.
      Callable processor subscriptions now dispatch through `CallableContext`
      without adding `globalThis.fetch`.
@@ -78,14 +61,14 @@ direction is:
      and add policy before persisted URL callables can egress from a Stream
      Durable Object.
 
-7. Rename stream event taxonomy away from Events ownership.
+5. Rename stream event taxonomy away from Events ownership.
    - Current state: core runtime events and Code Mode events use
      `events.iterate.com/...` type names.
    - Problem: stream ownership is no longer Events-app-specific.
    - Proposal: no-compat rename to stream/runtime-owned event type namespaces
      and update Events as a consumer.
 
-8. Tighten or remove the public OS stream oRPC.
+6. Tighten or remove the public OS stream oRPC.
    - Current state: OS exposes append/read/get-state by `projectId` and
      `streamPath`.
    - Problem: it is a public HTTP/oRPC interface to project streams. Internal
@@ -93,7 +76,7 @@ direction is:
    - Proposal: either delete it, make it explicitly internal/admin-only, or
      authorize it through the same project access path used by Code Mode.
 
-9. Replace persisted loopback callables where env bindings are practical.
+7. Replace persisted loopback callables where env bindings are practical.
    - Current state: Project ingress and MCP routes persist loopback callable
      descriptors that depend on export names and `ctx.exports`.
    - Problem: `ctx.exports` is valid Cloudflare API, but persisted route data
@@ -102,15 +85,15 @@ direction is:
      destinations and reserve URL callables for user-provided external targets
      behind policy.
 
-10. Isolate the `ctx.props` mutation bridge for `McpAgent.serve()`.
-    - Current state: `project-mcp-server-entrypoint.ts` mutates `ctx.props`
-      before handing off to the Agents SDK.
-    - Problem: Cloudflare documents `ctx.props` as invocation/config data, not a
-      request-local mutable bag.
-    - Proposal: isolate this behind a tiny documented SDK bridge helper so it
-      does not become a general OS pattern.
-    - Cloudflare reference:
-      - https://developers.cloudflare.com/workers/runtime-apis/context/#props
+8. Isolate the `ctx.props` mutation bridge for `McpAgent.serve()`.
+   - Current state: `project-mcp-server-entrypoint.ts` mutates `ctx.props`
+     before handing off to the Agents SDK.
+   - Problem: Cloudflare documents `ctx.props` as invocation/config data, not a
+     request-local mutable bag.
+   - Proposal: isolate this behind a tiny documented SDK bridge helper so it
+     does not become a general OS pattern.
+   - Cloudflare reference:
+     - https://developers.cloudflare.com/workers/runtime-apis/context/#props
 
 ## Immediate Cleanup Already Taken
 
@@ -119,7 +102,5 @@ direction is:
 - Callable processor delivery no longer adds ambient `globalThis.fetch`.
 - Restored `resolveBinding()` to own-property lookup so inherited env
   properties cannot be resolved as bindings.
-- Fixed SQL generation ownership: Events no longer runs sqlfu in the deleted
-  `src/durable-objects` directory, and shared owns stream sqlfu scripts.
-- Fixed Agents typecheck fallout from deleting Events `ProjectSlug` exports and
-  the old `apps/events/src/lib/project-slug.ts` helper.
+- Fixed SQL generation ownership so stream sqlfu scripts live with their owning
+  runtime package.
