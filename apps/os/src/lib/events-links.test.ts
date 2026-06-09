@@ -24,24 +24,24 @@ describe("events links", () => {
     ).toBe("http://localhost:5173/streams?path=%2Fagents%2Falice&namespace=project-123");
   });
 
-  it("links OS preview projects to the matching Events preview namespace", () => {
+  it("links 127.0.0.1 OS to the local streams example app", () => {
+    expect(
+      eventsStreamViewerUrl({
+        currentOrigin: "http://127.0.0.1:5173",
+        namespace: "project-123",
+        streamPath: "/agents/alice",
+      }),
+    ).toBe("http://localhost:5173/streams?path=%2Fagents%2Falice&namespace=project-123");
+  });
+
+  it("returns no link instead of linking to the legacy Events app", () => {
     expect(
       eventsStreamViewerUrl({
         currentOrigin: "https://os.iterate-preview-2.com",
         namespace: "project-123",
         streamPath: "/agents/alice/bla",
       }),
-    ).toBe("https://project-123.events.iterate-preview-2.com/streams/agents/alice/bla");
-  });
-
-  it("encodes stream path segments in the legacy Events viewer", () => {
-    expect(
-      eventsStreamViewerUrl({
-        currentOrigin: "https://os.iterate-preview-2.com",
-        namespace: "project-123",
-        streamPath: "/spaces and/slashes",
-      }),
-    ).toBe("https://project-123.events.iterate-preview-2.com/streams/spaces%20and/slashes");
+    ).toBeNull();
   });
 
   it("builds streams example app URLs without a namespace param for default", () => {

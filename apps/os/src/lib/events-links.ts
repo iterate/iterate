@@ -10,14 +10,12 @@ export function eventsStreamViewerUrl(input: {
   currentOrigin?: string;
 }) {
   const currentOrigin = input.currentOrigin ?? "https://os.iterate.com";
-  if (shouldUseStreamsExampleAppViewer(currentOrigin)) {
-    return streamsExampleAppViewerUrl({
-      baseUrl: streamsExampleAppBaseUrl(currentOrigin),
-      namespace: input.namespace,
-      streamPath: input.streamPath,
-    });
-  }
-  return legacyEventsStreamViewerUrl({ ...input, currentOrigin });
+  if (!shouldUseStreamsExampleAppViewer(currentOrigin)) return null;
+  return streamsExampleAppViewerUrl({
+    baseUrl: streamsExampleAppBaseUrl(currentOrigin),
+    namespace: input.namespace,
+    streamPath: input.streamPath,
+  });
 }
 
 export function streamsExampleAppViewerUrl(input: {
@@ -40,61 +38,14 @@ export function streamsExampleAppViewerUrl(input: {
 
 function shouldUseStreamsExampleAppViewer(currentOrigin: string) {
   const { hostname } = new URL(currentOrigin);
-  if (hostname === "localhost") return true;
+  if (hostname === "localhost" || hostname === "127.0.0.1") return true;
   return hostname === "os.iterate.com";
 }
 
 function streamsExampleAppBaseUrl(currentOrigin: string) {
   const { hostname } = new URL(currentOrigin);
-  if (hostname === "localhost") return LOCAL_STREAMS_EXAMPLE_APP_ORIGIN;
+  if (hostname === "localhost" || hostname === "127.0.0.1") return LOCAL_STREAMS_EXAMPLE_APP_ORIGIN;
   return PRODUCTION_STREAMS_EXAMPLE_APP_ORIGIN;
-}
-
-function legacyEventsStreamViewerUrl(input: {
-  namespace: string;
-  streamPath: StreamPath;
-  currentOrigin?: string;
-}) {
-  const origin = eventsOriginFromCurrentOrigin(input.currentOrigin);
-  origin.hostname = `${input.namespace}.${origin.hostname}`;
-  origin.pathname = legacyEventsStreamPathname(input.streamPath);
-  origin.search = "";
-  origin.hash = "";
-  return origin.toString();
-}
-
-function eventsOriginFromCurrentOrigin(currentOrigin?: string) {
-  const origin = new URL(currentOrigin ?? "https://events.iterate.com");
-  const labels = origin.hostname.split(".");
-
-  if (
-    labels.length === 3 &&
-    labels[0] === "os" &&
-    labels[1]?.startsWith("iterate-preview-") &&
-    labels[2] === "com"
-  ) {
-    origin.hostname = `events.${labels[1]}.com`;
-    return origin;
-  }
-
-  if (labels.length === 3 && labels[0] === "os" && labels[1] === "iterate" && labels[2] === "com") {
-    origin.hostname = "events.iterate.com";
-    return origin;
-  }
-
-  origin.hostname = "events.iterate.com";
-  return origin;
-}
-
-function legacyEventsStreamPathname(streamPath: StreamPath) {
-  if (streamPath === "/") return "/streams/";
-
-  const segments = streamPath
-    .replace(/^\/+/, "")
-    .split("/")
-    .filter(Boolean)
-    .map((segment) => encodeURIComponent(segment));
-  return `/streams/${segments.join("/")}`;
 }
 
 function normalizeStreamPath(path: string) {
