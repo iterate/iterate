@@ -515,7 +515,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   private getAppConfig() {
-    return parseConfig(this.env as unknown as Record<string, unknown>);
+    return parseConfig(this.env);
   }
 
   private async appendAssistantResponse(input: {

@@ -68,26 +68,11 @@ export function createAppRouterWithInternal<
 }
 
 export function createInternalDebugOutput() {
-  if (typeof process === "undefined") {
-    return { runtime: "workerd" };
-  }
-
-  return {
-    runtime: "node",
-    pid: process.pid,
-    ppid: process.ppid,
-    uptimeSec: process.uptime(),
-    nodeVersion: process.version,
-    platform: process.platform,
-    arch: process.arch,
-    cwd: process.cwd(),
-    execPath: process.execPath,
-    argv: process.argv,
-    env: Object.fromEntries(
-      Object.entries(process.env).map(([key, value]) => [key, value ?? null] as const),
-    ),
-    memoryUsage: process.memoryUsage(),
-  };
+  // SECURITY: `/__internal/debug` is UNAUTHENTICATED. This used to return
+  // `process.env`, but under `nodejs_compat` (which all our workers enable)
+  // `process` is defined and `process.env` contains the raw `APP_CONFIG`
+  // secret blob — so the secrets leaked publicly. Never put env/secrets here.
+  return { runtime: "workerd" as const };
 }
 
 export function parseTrpcCliProcedures(router: AnyRouter) {

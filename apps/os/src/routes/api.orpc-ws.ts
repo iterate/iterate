@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { requireRequestContext } from "~/request-context.ts";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
 import { orpcWebSocketHandler } from "~/orpc/handler.ts";
+import { requireRequestContext } from "~/request-context.ts";
 
 export const Route = createFileRoute("/api/orpc-ws")({
   server: {

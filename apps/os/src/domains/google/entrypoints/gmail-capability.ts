@@ -49,7 +49,7 @@ export class GmailCapability extends WorkerEntrypoint<GmailCapabilityEnv, GmailC
       throw new Error("GmailCapability requires ctx.props.projectId.");
     }
 
-    const config = parseConfig(this.env as unknown as Record<string, unknown>);
+    const config = parseConfig(this.env);
     return await getFreshGoogleAccessToken({
       config,
       db: createD1Client(this.env.DB),

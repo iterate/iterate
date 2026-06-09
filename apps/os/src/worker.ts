@@ -14,7 +14,6 @@
  * modules import `env` from "cloudflare:workers" directly:
  * https://developers.cloudflare.com/workers/runtime-apis/bindings/#importing-env-as-a-global
  */
-import { env as workerEnv } from "cloudflare:workers";
 import handler from "@tanstack/react-start/server-entry";
 import { withEvlog } from "@iterate-com/shared/evlog";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
@@ -67,12 +66,16 @@ export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-
 const CAPTUN_TUNNEL_ROUTE_PREFIX = "/__iterate/captun";
 const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
 
-const config = parseConfig(workerEnv as unknown as Record<string, unknown>);
-
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    // Parse config per request, not at module scope: workerd may reuse an
+    // isolate across binding-only deploys, so a module-scope copy can serve
+    // stale secrets after a rotation. Parsing is pure and cheap.
+    // https://developers.cloudflare.com/workers/runtime-apis/bindings/#how-bindings-work
+    const config = parseConfig(env);
+
     const earlyResponse =
-      (await handleCaptunTunnelFetch(request, env)) ??
+      (await handleCaptunTunnelFetch(request, env, config)) ??
       (await handleDebugRoutes({ request, env, config }));
     if (earlyResponse) return earlyResponse;
 
@@ -84,11 +87,11 @@ export default {
         if (mcpResponse) return mcpResponse;
 
         // When baseUrl is not configured (dev tunnels, previews), the request
-        // origin is the app's own URL.
+        // origin is the app's own URL. After this, baseUrl is always set.
         const requestConfig: AppConfig = config.baseUrl
           ? config
           : { ...config, baseUrl: new URL(request.url).origin as AppConfig["baseUrl"] };
-        const appHostname = requestConfig.baseUrl ? new URL(requestConfig.baseUrl).hostname : null;
+        const appHostname = new URL(requestConfig.baseUrl!).hostname;
 
         const db = createD1Client(env.DB);
 
@@ -147,7 +150,11 @@ export default {
         });
         if (capnwebResponse) return capnwebResponse;
 
-        const durableObjectDebugResponse = await handleDurableObjectDebugFetch({ request, env });
+        const durableObjectDebugResponse = await handleDurableObjectDebugFetch({
+          request,
+          env,
+          config,
+        });
         if (durableObjectDebugResponse) return durableObjectDebugResponse;
 
         // The TanStack Start app: SSR routes, server functions, and the oRPC
@@ -171,7 +178,7 @@ export default {
 };
 
 /** Serve the captun tunnel relay mounted under /__iterate/captun. */
-async function handleCaptunTunnelFetch(request: Request, env: Env) {
+async function handleCaptunTunnelFetch(request: Request, env: Env, config: AppConfig) {
   const url = new URL(request.url);
   if (
     url.pathname !== CAPTUN_TUNNEL_ROUTE_PREFIX &&

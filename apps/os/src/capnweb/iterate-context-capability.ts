@@ -257,7 +257,7 @@ export function createCapnwebRequestContext(input: {
   method?: string;
   path?: string;
 }): RequestContext {
-  const config = parseConfig(input.env as unknown as Record<string, unknown>);
+  const config = parseConfig(input.env);
 
   return {
     config,

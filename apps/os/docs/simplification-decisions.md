@@ -89,8 +89,8 @@ OS no longer imports anything from `@iterate-com/shared/apps/*`:
 ### 5. Surviving the routeTree.gen.ts Register footer (2026-06-10)
 
 The upgraded Start vite plugin appends a `declare module '@tanstack/react-start'`
-block to routeTree.gen.ts registering `ssr`, `router: ReturnType<typeof getRouter>`,
-and `config: typeof startInstance.getOptions`. That one block forced several
+block to routeTree.gen.ts registering `ssr`, `router: Awaited<ReturnType<typeof getRouter>>`,
+and `config: Awaited<ReturnType<typeof startInstance.getOptions>>`. That one block forced several
 structural changes, all verified by bisection:
 
 - `scripts/generate-route-tree.ts` mirrors the footer via `routeTreeFileFooter`
@@ -124,8 +124,27 @@ structural changes, all verified by bisection:
   that state the runtime truth; nothing else should call
   `getGlobalStartContext` directly.
 
+### 6. Security: closed an unauthenticated secret leak in `__internal/debug` (2026-06-10)
+
+While reviewing the refactor we found that `GET /api/__internal/debug` —
+**unauthenticated** — returned `process.env`, and under `nodejs_compat` (which
+all our workers enable) `process.env` contains the raw `APP_CONFIG` secret blob
+(Cloudflare API token, OAuth client secrets, OpenAI/xAI/Gemini keys, admin API
+secret). Confirmed live on both `os.iterate.com` and `semaphore.iterate.com`
+before this PR. Rotate those secrets.
+
+The leak was in the shared `createInternalDebugOutput`
+(`packages/shared/src/apps/internal-router.ts`). OS's inline `__internal`
+router already returns a static `{ runtime: "workerd" }`; this PR additionally
+guts the shared function so apps/semaphore (and any future app still on
+`createAppRouterWithInternal`) stops leaking immediately.
+
 ## Learnings
 
+- An unauthenticated debug endpoint that echoes `process.env` is a secret leak
+  the moment `nodejs_compat`/`nodejs_compat_populate_process_env` is on — which
+  is always, for us. Debug routes must be auth-gated AND must never serialize
+  env.
 - TanStack route files whose names need escaping are a smell: if you reach for
   `[_]` you are fighting route ranking that already does what you want
   (static beats dynamic).

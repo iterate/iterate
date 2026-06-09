@@ -87,8 +87,8 @@ export function getRequestContext(): RequestContext | undefined {
 }
 
 /** Like getRequestContext, but for paths where worker.ts guarantees a context. */
-export function requireRequestContext(context?: unknown): RequestContext {
-  const resolved = (context ?? getGlobalStartContext()) as RequestContext | undefined;
+export function requireRequestContext(context?: RequestContext): RequestContext {
+  const resolved = context ?? (getGlobalStartContext() as RequestContext | undefined);
   if (!resolved) {
     throw new Error("Request context missing — handler.fetch was called without a context.");
   }

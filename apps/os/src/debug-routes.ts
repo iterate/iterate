@@ -240,11 +240,32 @@ async function handleSeedIterateConfigBaseFetch(input: {
  * Proxy `/__durable-objects/<kind>/<name>/<path>` to a durable object's fetch
  * handler for debugging. Runs inside the normal pipeline (after ingress
  * routing), unlike the routes above.
+ *
+ * Admin-token gated: this proxies arbitrary requests straight into a DO's
+ * fetch handler, so it must never be reachable anonymously. (Today only
+ * PROJECT exposes a fetch handler and it self-authenticates, but the gate
+ * keeps that from being load-bearing as new DO fetch handlers are added.)
  */
-export async function handleDurableObjectDebugFetch(input: { request: Request; env: Env }) {
+export async function handleDurableObjectDebugFetch(input: {
+  request: Request;
+  env: Env;
+  config: AppConfig;
+}) {
   const url = new URL(input.request.url);
   const match = url.pathname.match(/^\/__durable-objects\/([^/]+)\/([^/]+)(\/.*)?$/);
   if (!match) return null;
+
+  if (input.config.adminApiSecret == null) {
+    return Response.json({ error: "Durable Object debug proxy is disabled." }, { status: 404 });
+  }
+  if (
+    !authenticateAdminBearer({
+      authorizationHeader: input.request.headers.get("authorization"),
+      config: input.config,
+    })
+  ) {
+    return Response.json({ error: "Unauthorized." }, { status: 401 });
+  }
 
   const objectKind = match[1];
   const objectName = decodeURIComponent(match[2] ?? "");

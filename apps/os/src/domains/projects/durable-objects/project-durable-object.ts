@@ -1102,7 +1102,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   }
 
   private getAppConfig() {
-    return parseConfig(this.env as unknown as Record<string, unknown>);
+    return parseConfig(this.env);
   }
 
   private async writeProjectCreatedLifecycleEvent(summary: ProjectSummary) {

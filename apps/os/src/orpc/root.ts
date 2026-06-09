@@ -23,6 +23,10 @@ const internalRouter = os.__internal.router({
   publicConfig: os.__internal.publicConfig.handler(({ context }) =>
     getPublicConfig(context.config, AppConfig),
   ),
+  // This whole subtree is UNAUTHENTICATED. Never return secrets here. The
+  // previous shared implementation dumped `process.env` (which under
+  // nodejs_compat contains the raw APP_CONFIG secret blob) on this public
+  // route — keep it to a static runtime marker.
   debug: os.__internal.debug.handler(() => ({ runtime: "workerd" })),
   trpcCliProcedures: os.__internal.trpcCliProcedures.handler(() => ({
     procedures: listCliProcedures(),

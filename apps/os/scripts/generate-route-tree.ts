@@ -1,7 +1,8 @@
 // Regenerates src/routeTree.gen.ts outside of `vite dev`/`vite build`, using the
 // same generator + config that @tanstack/react-start's vite plugin uses. This keeps
-// the checked-in route tree honest: `--check` fails (without writing) when the file
-// is stale, so CI catches route files added or renamed without regenerating.
+// the checked-in route tree honest: `--check` fails (and restores the original
+// file) when it is stale, so CI catches route files added or renamed without
+// regenerating.
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -36,14 +37,21 @@ const config = getConfig(
   root,
 );
 
+// Generator.run() writes the file in place. In check mode we always restore the
+// original afterwards (even if run() throws) so a failed/interrupted check never
+// leaves a mutated working tree that a later check would compare against.
 const before = readFileSync(routeTreePath, "utf8");
-await new Generator({ config, root }).run();
-const after = readFileSync(routeTreePath, "utf8");
+let after = before;
+try {
+  await new Generator({ config, root }).run();
+  after = readFileSync(routeTreePath, "utf8");
+} finally {
+  if (checkOnly) writeFileSync(routeTreePath, before);
+}
 
 if (before === after) {
   console.log("routeTree.gen.ts is up to date");
 } else if (checkOnly) {
-  writeFileSync(routeTreePath, before);
   console.error(
     "routeTree.gen.ts is stale. Run `pnpm --dir apps/os routes:generate` (or `pnpm dev`) and commit the result.",
   );

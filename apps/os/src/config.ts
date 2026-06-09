@@ -117,11 +117,15 @@ export const AppConfig = z.object({
 
 export type AppConfig = z.output<typeof AppConfig>;
 
-/** Parse OS config from a worker (or durable object) env. */
-export function parseConfig(env: Record<string, unknown>): AppConfig {
+/**
+ * Parse OS config from a worker or durable object `env` (the `cloudflare:workers`
+ * import, `this.env`, an `ExecutionContext`'s bindings — all `APP_CONFIG_*`
+ * carriers). Accepts `unknown` so callers don't need a cast at every site.
+ */
+export function parseConfig(env: unknown): AppConfig {
   return parseAppConfigFromEnv({
     configSchema: AppConfig,
     prefix: "APP_CONFIG_",
-    env,
+    env: env as Record<string, unknown>,
   });
 }

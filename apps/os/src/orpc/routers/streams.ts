@@ -118,7 +118,7 @@ async function* subscribeProjectStreamEvents(input: {
   signal?: AbortSignal;
   streamPath: string;
 }) {
-  const streamNamespace = requireStreamNamespace();
+  const streamNamespace = env.STREAM as unknown as StreamDurableObjectNamespace;
   const streamPath = resolveStreamPath(input.streamPath);
   const streamStub = streamNamespace.getByName(
     getStreamDurableObjectName({
@@ -152,8 +152,4 @@ async function* subscribeProjectStreamEvents(input: {
   } finally {
     input.signal?.removeEventListener("abort", onAbort);
   }
-}
-
-function requireStreamNamespace(): StreamDurableObjectNamespace {
-  return env.STREAM as unknown as StreamDurableObjectNamespace;
 }

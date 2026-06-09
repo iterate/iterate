@@ -1,11 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
-import { getRequestContext } from "~/request-context.ts";
 import type { PublicSessionResponse } from "@iterate-com/auth/client";
 import type { AuthenticatedSession } from "@iterate-com/auth/server";
 import {
   normalizeRequestHostname,
   resolveProjectSlugFromHostname,
 } from "~/lib/project-host-routing.ts";
+import { requireRequestContext } from "~/request-context.ts";
 
 export type RootAuthSnapshot = {
   authSession: PublicSessionResponse;
@@ -28,14 +28,14 @@ export type RootAuthSnapshot = {
 export const fetchRootAuthSnapshot: () => Promise<RootAuthSnapshot> = createServerFn({
   method: "GET",
 }).handler(async (): Promise<RootAuthSnapshot> => {
-  const startContext = getRequestContext();
+  const startContext = requireRequestContext();
   return {
-    authSession: toPublicSession(startContext?.iterateAuthSession),
-    iterateAuthIssuer: startContext?.config.iterateAuth?.issuer,
+    authSession: toPublicSession(startContext.iterateAuthSession),
+    iterateAuthIssuer: startContext.config.iterateAuth?.issuer,
     currentProjectHostSlug: resolveCurrentProjectHostSlug({
-      baseUrl: startContext?.config.baseUrl,
-      projectHostnameBases: startContext?.config.projectHostnameBases ?? [],
-      requestUrl: startContext?.rawRequest?.url,
+      baseUrl: startContext.config.baseUrl,
+      projectHostnameBases: startContext.config.projectHostnameBases ?? [],
+      requestUrl: startContext.rawRequest?.url,
     }),
   };
 });

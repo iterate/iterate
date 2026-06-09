@@ -151,7 +151,7 @@ export class SecretsCapability extends WorkerEntrypoint<
   }
 
   private createSecretId() {
-    const config = parseConfig(this.env as unknown as Record<string, unknown>);
+    const config = parseConfig(this.env);
     return projectSecretId({ typeIdPrefix: config.typeIdPrefix });
   }
 }

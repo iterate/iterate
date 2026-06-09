@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { getRequestContext } from "~/request-context.ts";
+import { requireRequestContext } from "~/request-context.ts";
 
 export type PublicRouteConfig = {
   baseUrl?: string;
@@ -9,12 +9,12 @@ export type PublicRouteConfig = {
 
 export const getPublicRouteConfig = createServerFn({ method: "GET" }).handler(
   (): PublicRouteConfig => {
-    const config = getRequestContext()?.config;
+    const config = requireRequestContext().config;
 
     return {
-      baseUrl: config?.baseUrl,
-      mcpBaseUrl: config?.mcp?.baseUrl,
-      projectHostnameBases: config?.projectHostnameBases ?? [],
+      baseUrl: config.baseUrl,
+      mcpBaseUrl: config.mcp?.baseUrl,
+      projectHostnameBases: config.projectHostnameBases ?? [],
     };
   },
 );

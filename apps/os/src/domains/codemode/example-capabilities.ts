@@ -236,6 +236,10 @@ function createCodemodeOrpcContext(input: {
   return {
     // The ORPC capability runs after the original browser request has gone
     // away, so it reconstructs a project-bound request context from scratch.
+    // INVARIANT: only `project.*` procedures are exposed through this context
+    // (see OrpcCapability below), and none of them read `config`. If you expose
+    // a config-reading procedure here, populate config instead of this stub —
+    // e.g. `parseConfig(env)` — or it will throw at runtime.
     config: {} as RequestContext["config"],
     db: env.DB ? createD1Client(env.DB) : (undefined as never),
     log: createRequestLogger({

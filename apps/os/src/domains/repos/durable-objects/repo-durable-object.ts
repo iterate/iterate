@@ -289,7 +289,7 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
   }
 
   private getAppConfig() {
-    return parseConfig(this.env as Record<string, unknown>);
+    return parseConfig(this.env);
   }
 
   private artifactRemote(artifactName: string) {
