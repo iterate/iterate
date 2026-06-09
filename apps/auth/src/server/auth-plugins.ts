@@ -24,9 +24,7 @@ import {
 import { db } from "./db/index.ts";
 import {
   buildAugmentedScopeClaims,
-  buildOAuthProjectSelectionReferenceId,
   parseOAuthProjectSelectionReferenceId,
-  resolveStoredProjectSelection,
 } from "./oauth-project-selection.ts";
 import { getOsMcpResourceBases, getOsResourceBases } from "./oauth-resources.ts";
 
@@ -172,21 +170,9 @@ export function getAuthPlugins(env: Record<string, unknown>) {
             return false;
           }
 
-          const selection = await resolveStoredProjectSelection({ userId: session?.userId });
-
-          return !selection;
+          return false;
         },
-        consentReferenceId: async ({ session }) => {
-          const selection = await resolveStoredProjectSelection({ userId: session?.userId });
-          if (!selection || !session?.userId) {
-            return undefined;
-          }
-
-          return buildOAuthProjectSelectionReferenceId({
-            projectIds: selection,
-            userId: session.userId,
-          });
-        },
+        consentReferenceId: () => undefined,
       },
       silenceWarnings: { openidConfig: true, oauthAuthServerConfig: true },
       accessTokenExpiresIn: 5 * 60,
@@ -201,10 +187,9 @@ export function getAuthPlugins(env: Record<string, unknown>) {
         }
 
         const isProjectScopedToken = scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
-        const selectedProjectIds = isProjectScopedToken ? (selection?.projectIds ?? []) : null;
         const [organizations, projects] = await Promise.all([
           listAccessTokenOrganizationClaims(user),
-          listProjectClaims(user, selectedProjectIds),
+          listProjectClaims(user, null),
         ]);
 
         return {

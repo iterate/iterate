@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
@@ -42,13 +44,20 @@ const AuthStrategy = z.discriminatedUnion("strategy", [SuperadminStrategy, Devic
 /** Stored session (lives inside a config entry) */
 const Session = z.object({
   token: z.string().optional(),
+  refreshToken: z.string().optional(),
+  clientId: z.string().optional(),
+  scope: z.string().optional(),
+  tokenType: z.string().optional(),
   cookie: z.string().optional(),
   expiresAt: z.string().optional(),
 });
 
+type StoredSession = z.infer<typeof Session>;
+
 /** A named config — describes which server to talk to and how to authenticate. */
 const Config = z.object({
   osBaseUrl: z.string(),
+  authBaseUrl: z.string().optional(),
   session: Session.optional(),
 });
 
@@ -269,20 +278,18 @@ const resolveConfig = (workspacePath: string): { name: string; config: Config } 
 };
 
 const getLocalConfigDefaults = () => {
-  const username = process.env.USER || process.env.LOGNAME || "dev";
   return {
     name: "local",
-    osBaseUrl: `https://${username}.iterate-dev.com`,
+    osBaseUrl: "http://localhost:5173",
+    authBaseUrl: "http://localhost:7101",
   };
 };
 
-const resolveAuthBaseUrl = async (config: Config) => {
-  const res = await fetch(`${config.osBaseUrl}/api/auth/base-url`);
-  const {authBaseUrl} = await res.json();
-  return String(authBaseUrl.slice());
-};
+const resolveAuthBaseUrl = (config: Config) =>
+  // The CLI owns auth discovery now; OS no longer exposes /api/auth/base-url for it.
+  (config.authBaseUrl?.trim() || "http://localhost:7101").replace(/\/+$/, "");
 
-const storeSession = (configName: string, session: Config["session"]): void => {
+const storeSession = (configName: string, session: StoredSession): void => {
   const configFile = readConfigFile();
   const entry = configFile.configs?.[configName];
   if (!entry) throw new Error(`Config "${configName}" not found`);
@@ -312,18 +319,23 @@ const setCookiesToCookieHeader = (setCookies: string[] | undefined): string => {
 };
 
 /**
- * Get auth headers for OS API calls based on the resolved config's auth strategy.
- * Returns either a cookie header (superadmin) or Authorization: Bearer header (device flow).
+ * Get auth headers for OS API calls based on the resolved config's stored session.
+ * OAuth sessions are refreshed when possible.
  */
 const getOsAuthHeaders = async (
   config: Config,
+  configName?: string,
 ): Promise<{ cookie?: string; authorization?: string }> => {
-  const session = config.session;
+  let session = config.session;
   if (!session) {
     throw new Error(`Not logged in to ${config.osBaseUrl}. Run \`iterate login\` first.`);
   }
   if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
-    throw new Error(`Session expired for ${config.osBaseUrl}. Run \`iterate login\` again.`);
+    if (session.refreshToken && session.clientId) {
+      session = await refreshOAuthSession({ config, configName, session });
+    } else {
+      throw new Error(`Session expired for ${config.osBaseUrl}. Run \`iterate login\` again.`);
+    }
   }
   if (session.token) {
     return { authorization: `Bearer ${session.token}` };
@@ -335,9 +347,9 @@ const getOsAuthHeaders = async (
 };
 
 /** Get an authenticated better-auth client for whoami/getSession etc. */
-const getAuthenticatedClient = async (config: Config) => {
-  const baseURL = await resolveAuthBaseUrl(config)
-  const headers = await getOsAuthHeaders(config);
+const getAuthenticatedClient = async (config: Config, configName?: string) => {
+  const baseURL = resolveAuthBaseUrl(config);
+  const headers = await getOsAuthHeaders(config, configName);
   return createAuthClient({
     baseURL,
     fetchOptions: {
@@ -393,10 +405,318 @@ const getAuthWorkerClient = async (config: Config): Promise<AuthContractClient> 
 // Device flow login (RFC 8628 via better-auth deviceAuthorization plugin)
 const DEVICE_CLIENT_ID = "iterate-cli";
 
+const OAUTH_SCOPE = "openid profile email offline_access project";
+const LOOPBACK_HOST = "localhost";
+const LOOPBACK_CALLBACK_PATH = "/callback";
+const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
+
+type OAuthTokenResponse = {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  expires_at?: number;
+  token_type?: string;
+  scope?: string;
+  id_token?: string;
+};
+
+const base64Url = (buffer: Buffer) => buffer.toString("base64url");
+
+const randomBase64Url = (byteLength = 32) => base64Url(randomBytes(byteLength));
+
+const pkceChallenge = (verifier: string) =>
+  base64Url(createHash("sha256").update(verifier).digest());
+
+const openUrlInBrowser = async (url: string) => {
+  try {
+    const { execFile } = await import("node:child_process");
+    if (process.platform === "darwin") {
+      execFile("open", [url]);
+      return;
+    }
+    if (process.platform === "win32") {
+      execFile("cmd", ["/c", "start", "", url]);
+      return;
+    }
+    execFile("xdg-open", [url]);
+  } catch {
+    // Ignore; the URL is printed for manual opening.
+  }
+};
+
+const readErrorBody = async (response: Response) => {
+  const text = await response.text();
+  return text.length > 300 ? `${text.slice(0, 300)}...` : text;
+};
+
+const registerOAuthClient = async (input: { authBaseUrl: string; redirectUri: string }) => {
+  const response = await fetch(`${input.authBaseUrl}/api/auth/oauth2/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: input.authBaseUrl },
+    body: JSON.stringify({
+      client_name: "Iterate CLI",
+      redirect_uris: [input.redirectUri],
+      token_endpoint_auth_method: "none",
+      grant_types: ["authorization_code", "refresh_token"],
+      response_types: ["code"],
+      scope: OAUTH_SCOPE,
+      type: "native",
+      require_pkce: true,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `OAuth client registration failed (${response.status}): ${await readErrorBody(response)}`,
+    );
+  }
+
+  const client = (await response.json()) as { client_id?: string };
+  if (!client.client_id) throw new Error("OAuth client registration did not return client_id.");
+  return client.client_id;
+};
+
+const startOAuthCallbackServer = async (): Promise<{
+  redirectUri: string;
+  wait: () => Promise<{ code: string; state: string; redirectUri: string }>;
+  close: () => Promise<void>;
+}> => {
+  let settled = false;
+  let resolveCallback:
+    | ((value: { code: string; state: string; redirectUri: string }) => void)
+    | undefined;
+  let rejectCallback: ((reason: unknown) => void) | undefined;
+
+  const callbackPromise = new Promise<{
+    code: string;
+    state: string;
+    redirectUri: string;
+  }>((resolve, reject) => {
+    resolveCallback = resolve;
+    rejectCallback = reject;
+  });
+
+  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    if (settled) {
+      response.writeHead(409, { "content-type": "text/plain; charset=utf-8" });
+      response.end("OAuth callback already received.");
+      return;
+    }
+
+    const url = new URL(request.url ?? "/", `http://${LOOPBACK_HOST}`);
+    if (url.pathname !== LOOPBACK_CALLBACK_PATH) {
+      response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      response.end("Not found.");
+      return;
+    }
+
+    const error = url.searchParams.get("error");
+    if (error) {
+      settled = true;
+      response.writeHead(400, { "content-type": "text/html; charset=utf-8" });
+      response.end("<h1>Iterate login failed</h1><p>You can return to the terminal.</p>");
+      rejectCallback?.(
+        new Error(
+          `OAuth authorization failed: ${error}${
+            url.searchParams.get("error_description")
+              ? ` (${url.searchParams.get("error_description")})`
+              : ""
+          }`,
+        ),
+      );
+      return;
+    }
+
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    if (!code || !state) {
+      settled = true;
+      response.writeHead(400, { "content-type": "text/html; charset=utf-8" });
+      response.end("<h1>Iterate login failed</h1><p>Missing code or state.</p>");
+      rejectCallback?.(new Error("OAuth callback was missing code or state."));
+      return;
+    }
+
+    settled = true;
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end("<h1>Iterate login complete</h1><p>You can close this tab.</p>");
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    resolveCallback?.({
+      code,
+      state,
+      redirectUri: `http://${LOOPBACK_HOST}:${port}${LOOPBACK_CALLBACK_PATH}`,
+    });
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, LOOPBACK_HOST, () => resolve());
+  });
+
+  const timeout = setTimeout(() => {
+    if (!settled) {
+      settled = true;
+      rejectCallback?.(new Error("Timed out waiting for OAuth callback."));
+    }
+  }, OAUTH_CALLBACK_TIMEOUT_MS);
+  timeout.unref();
+
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  const close = () => new Promise<void>((resolve) => server.close(() => resolve()));
+
+  return {
+    redirectUri: `http://${LOOPBACK_HOST}:${port}${LOOPBACK_CALLBACK_PATH}`,
+    wait: () => callbackPromise.finally(() => clearTimeout(timeout)),
+    close,
+  };
+};
+
+const exchangeOAuthCode = async (input: {
+  authBaseUrl: string;
+  clientId: string;
+  code: string;
+  codeVerifier: string;
+  redirectUri: string;
+  resource: string;
+}) => {
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    client_id: input.clientId,
+    code: input.code,
+    redirect_uri: input.redirectUri,
+    code_verifier: input.codeVerifier,
+    resource: input.resource,
+  });
+
+  const response = await fetch(`${input.authBaseUrl}/api/auth/oauth2/token`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      origin: input.authBaseUrl,
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `OAuth token exchange failed (${response.status}): ${await readErrorBody(response)}`,
+    );
+  }
+
+  const token = (await response.json()) as OAuthTokenResponse;
+  if (!token.access_token) throw new Error("OAuth token exchange did not return access_token.");
+  return token;
+};
+
+const oauthTokenToSession = (
+  token: OAuthTokenResponse,
+  existing: Pick<StoredSession, "clientId" | "refreshToken"> | undefined,
+): StoredSession => {
+  const expiresAtMs = token.expires_at
+    ? token.expires_at * 1000
+    : token.expires_in
+      ? Date.now() + token.expires_in * 1000
+      : undefined;
+  return {
+    token: token.access_token,
+    refreshToken: token.refresh_token ?? existing?.refreshToken,
+    clientId: existing?.clientId,
+    scope: token.scope,
+    tokenType: token.token_type,
+    expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : undefined,
+  };
+};
+
+const refreshOAuthSession = async (input: {
+  config: Config;
+  configName?: string;
+  session: StoredSession;
+}): Promise<StoredSession> => {
+  if (!input.session.refreshToken || !input.session.clientId) {
+    throw new Error(`Session expired for ${input.config.osBaseUrl}. Run \`iterate login\` again.`);
+  }
+
+  const authBaseUrl = resolveAuthBaseUrl(input.config);
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: input.session.clientId,
+    refresh_token: input.session.refreshToken,
+    resource: input.config.osBaseUrl,
+  });
+  if (input.session.scope) body.set("scope", input.session.scope);
+
+  const response = await fetch(`${authBaseUrl}/api/auth/oauth2/token`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      origin: authBaseUrl,
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    throw new Error(`OAuth refresh failed (${response.status}). Run \`iterate login\` again.`);
+  }
+
+  const token = (await response.json()) as OAuthTokenResponse;
+  const refreshedSession = oauthTokenToSession(token, input.session);
+  refreshedSession.clientId = input.session.clientId;
+  input.config.session = refreshedSession;
+  if (input.configName) storeSession(input.configName, refreshedSession);
+  return refreshedSession;
+};
+
+const oauthLogin = async (config: Config): Promise<StoredSession> => {
+  const authBaseUrl = resolveAuthBaseUrl(config);
+  const codeVerifier = randomBase64Url(48);
+  const state = randomBase64Url(32);
+  const callback = await startOAuthCallbackServer();
+  const clientId = await registerOAuthClient({ authBaseUrl, redirectUri: callback.redirectUri });
+
+  const authorizeUrl = new URL(`${authBaseUrl}/api/auth/oauth2/authorize`);
+  authorizeUrl.searchParams.set("response_type", "code");
+  authorizeUrl.searchParams.set("client_id", clientId);
+  authorizeUrl.searchParams.set("redirect_uri", callback.redirectUri);
+  authorizeUrl.searchParams.set("scope", OAUTH_SCOPE);
+  authorizeUrl.searchParams.set("resource", config.osBaseUrl);
+  authorizeUrl.searchParams.set("state", state);
+  authorizeUrl.searchParams.set("code_challenge", pkceChallenge(codeVerifier));
+  authorizeUrl.searchParams.set("code_challenge_method", "S256");
+
+  console.error(`\nOpening browser to authenticate with Iterate:\n`);
+  console.error(`  ${authorizeUrl.href}\n`);
+  await openUrlInBrowser(authorizeUrl.href);
+
+  let callbackResult: { code: string; state: string; redirectUri: string };
+  try {
+    callbackResult = await callback.wait();
+  } finally {
+    await callback.close().catch(() => {});
+  }
+
+  if (callbackResult.state !== state) {
+    throw new Error("OAuth callback state did not match. Please try again.");
+  }
+
+  const token = await exchangeOAuthCode({
+    authBaseUrl,
+    clientId,
+    code: callbackResult.code,
+    codeVerifier,
+    redirectUri: callbackResult.redirectUri,
+    resource: config.osBaseUrl,
+  });
+  const session = oauthTokenToSession(token, { clientId, refreshToken: undefined });
+  session.clientId = clientId;
+  return session;
+};
+
 const deviceFlowLogin = async (
   config: Config,
 ): Promise<{ token?: string; cookie?: string; expiresAt?: string }> => {
-  const authBaseUrl = await resolveAuthBaseUrl(config);
+  const authBaseUrl = resolveAuthBaseUrl(config);
   // Step 1: Request device code (RFC 8628 — all fields are snake_case)
   const codeRes = await fetch(`${authBaseUrl}/api/auth/device/code`, {
     method: "POST",
@@ -544,14 +864,18 @@ const orpcToTrpcStyleClient = (orpcClient: unknown) => {
   );
 };
 
-const getOsProcedures = async (params: { baseUrl: string; config: Config }) => {
+const getOsProcedures = async (params: {
+  baseUrl: string;
+  config: Config;
+  configName?: string;
+}) => {
   const appRouter = await loadRemoteProcedures(params);
   const proxiedRouter = proxifyOrpc(appRouter.procedures, () => {
     const client = createORPCClient(
       new RPCLink({
         url: `${params.baseUrl}/api/orpc/`,
         fetch: async (request: URL | Request, init?: RequestInit) => {
-          const authHeaders = await getOsAuthHeaders(params.config);
+          const authHeaders = await getOsAuthHeaders(params.config, params.configName);
           const headers = new Headers(request instanceof Request ? request.headers : init?.headers);
           if (authHeaders.cookie) headers.set("cookie", authHeaders.cookie);
           if (authHeaders.authorization) headers.set("authorization", authHeaders.authorization);
@@ -660,38 +984,40 @@ const launcherProcedures = {
     }),
 
   login: os
-    .input(
-      z
-        .object({
-          superadmin: z
-            .boolean()
-            .optional()
-            .describe("Use superadmin impersonation instead of device flow (for CI/automation)"),
-        })
-        .partial(),
-    )
+    .input(z.object({}))
     .meta({
-      description: "Authenticate with the OS server via browser-based device flow",
+      description: "Authenticate with the OS server via browser-based OAuth",
     })
-    .handler(async ({ input }) => {
+    .handler(async () => {
       const resolved = resolveConfig(process.cwd());
       if (resolved instanceof Error) throw resolved;
       const { config } = resolved;
 
-      // Device flow
-      console.error(`Logging in to ${resolveAuthBaseUrl(config)}...`);
-      const deviceResult = await deviceFlowLogin(config);
-      storeSession(resolved.name, deviceResult);
-      // Update in-memory config so getAuthenticatedClient sees the token
-      config.session = deviceResult;
+      console.error(`Logging in to ${await resolveAuthBaseUrl(config)}...`);
+      const oauthResult = await oauthLogin(config);
+      storeSession(resolved.name, oauthResult);
+      // Update in-memory config so subsequent verification and calls see the token.
+      config.session = oauthResult;
 
-      // Verify session
-      const client = await getAuthenticatedClient(config);
-      const session = await client.getSession();
+      const osClient = createORPCClient(
+        new RPCLink({
+          url: `${config.osBaseUrl}/api/orpc/`,
+          fetch: async (request: URL | Request, init?: RequestInit) => {
+            const authHeaders = await getOsAuthHeaders(config, resolved.name);
+            const headers = new Headers(
+              request instanceof Request ? request.headers : init?.headers,
+            );
+            if (authHeaders.authorization) headers.set("authorization", authHeaders.authorization);
+            if (authHeaders.cookie) headers.set("cookie", authHeaders.cookie);
+            return fetch(request, { ...init, headers });
+          },
+        }),
+      );
+      await (osClient as any).ping();
       return {
         message: "Logged in successfully",
-        user: (session as any)?.data?.user ?? (session as any)?.user,
-        expiresAt: deviceResult.expiresAt,
+        expiresAt: oauthResult.expiresAt,
+        scope: oauthResult.scope,
       };
     }),
 
@@ -707,8 +1033,15 @@ const launcherProcedures = {
   whoami: os.meta({ description: "Show current authenticated user" }).handler(async () => {
     const resolved = resolveConfig(process.cwd());
     if (resolved instanceof Error) throw resolved;
-    const client = await getAuthenticatedClient(resolved.config);
-    return await client.getSession();
+    const session = resolved.config.session;
+    if (!session?.token) {
+      throw new Error(`Not logged in to ${resolved.config.osBaseUrl}. Run \`iterate login\` first.`);
+    }
+    await getOsAuthHeaders(resolved.config, resolved.name);
+    const token = resolved.config.session?.token ?? session.token;
+    const [, payload] = token.split(".");
+    if (!payload) return { tokenType: session.tokenType, expiresAt: session.expiresAt };
+    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
   }),
 
   chat: os
@@ -824,6 +1157,7 @@ const launcherProcedures = {
 
         configFile.configs[input.name] = {
           osBaseUrl: input.osBaseUrl,
+          authBaseUrl: input.authBaseUrl,
         };
 
         if (input.setDefault) {
@@ -866,7 +1200,7 @@ const launcherProcedures = {
       return {
         name: resolved.name,
         config: resolved.config,
-        resolvedAuthBaseUrl: resolveAuthBaseUrl(resolved.config),
+        resolvedAuthBaseUrl: await resolveAuthBaseUrl(resolved.config),
         resolvedVia: configFlagOverride ? "--config flag" : "workspace mapping or default",
       };
     }),
@@ -896,6 +1230,7 @@ const launcherProcedures = {
 
         configFile.configs[name] = {
           osBaseUrl: defaults.osBaseUrl,
+          authBaseUrl: defaults.authBaseUrl,
         };
 
         if (input.setDefault ?? true) {
@@ -949,7 +1284,7 @@ export const getCli = async () => {
     } else {
       const { config } = resolved;
       const settledResults = await Promise.allSettled([
-        getOsProcedures({ baseUrl: config.osBaseUrl, config }),
+        getOsProcedures({ baseUrl: config.osBaseUrl, config, configName: resolved.name }),
       ]);
 
       const [osProcedures] = settledResults;

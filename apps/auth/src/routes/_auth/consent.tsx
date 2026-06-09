@@ -168,7 +168,7 @@ function scopeLabel(scope: string): string {
     profile: "View your profile information",
     email: "View your email address",
     offline_access: "Maintain access when you're not using the app",
-    [ITERATE_PROJECT_SELECTION_SCOPE]: "Access the projects you selected in the previous step",
+    [ITERATE_PROJECT_SELECTION_SCOPE]: "Access the projects you can already access",
   };
 
   return labels[scope] ?? scope;
