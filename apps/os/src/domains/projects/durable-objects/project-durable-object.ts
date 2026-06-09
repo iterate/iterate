@@ -10,6 +10,11 @@ import { jsonataReactorEventTypes } from "@iterate-com/shared/stream-processors/
 import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
 import { typeid } from "@iterate-com/shared/typeid";
 import {
+  createStreamProcessorHost,
+  type RequestStreamSubscriptionArgs,
+} from "@iterate-com/streams/workers/stream-processor-host";
+import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
+import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
@@ -37,6 +42,7 @@ import {
   PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE,
   PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE,
   PROJECT_LIFECYCLE_STREAM_PATH,
+  ProjectLifecycleProcessor,
   ProjectLifecycleProcessorContract,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 import { createProjectWildcardCNAMERecord as createCloudflareProjectWildcardCNAMERecord } from "~/domains/projects/cloudflare-dns.ts";
@@ -115,7 +121,6 @@ type ProjectEnv = {
   DO_CATALOG: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
-  STREAM_PROCESSOR_RUNNER: DurableObjectNamespace<StreamProcessorRunner>;
 };
 
 type ProjectStateRow = {
@@ -236,6 +241,12 @@ const ProjectLifecycleBase = createIterateDurableObjectBase<
 });
 
 export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
+  host = createStreamProcessorHost(this.ctx);
+  projectLifecycle = this.host.add(
+    ProjectLifecycleProcessorContract.slug,
+    (deps) => new ProjectLifecycleProcessor(deps),
+  );
+
   #dynamicWorkerEntrypoint: {
     commitOid: string;
     entrypoint: ProjectDynamicWorkerEntrypoint;
@@ -473,11 +484,23 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return new URL(`${protocol}//${host}`).origin;
   }
 
+  /** Subscription callables on the project lifecycle stream dial this. */
+  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
+    return this.host.requestStreamSubscription(args);
+  }
+
   async getProjectLifecycleRunnerState() {
     await this.ensureStarted();
-    return await this.env.STREAM_PROCESSOR_RUNNER.getByName(
-      projectLifecycleProcessorRunnerName(this.structuredName.projectId),
-    ).runtimeState();
+    const snapshot = await this.projectLifecycle.snapshot();
+    // Legacy runner runtimeState shape, kept for existing callers/tests. The
+    // class model has a single checkpoint, so both offsets are the same.
+    return {
+      processorSlug: this.projectLifecycle.contract.slug,
+      snapshot,
+      state: snapshot.state,
+      reducedThroughOffset: snapshot.offset,
+      afterAppendCompletedThroughOffset: snapshot.offset,
+    };
   }
 
   async afterAppend(input: { event: Event }) {
@@ -1175,16 +1198,20 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       path: PROJECT_LIFECYCLE_STREAM_PATH,
     });
 
+    // ":callable" suffix: the subscriber switched from the legacy built-in
+    // runner to a Callable subscription. Changing the idempotency key lets the
+    // new subscription-configured event land on existing streams that already
+    // recorded the old one.
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `project-lifecycle-subscription:${projectId}:workers-rpc`,
+      idempotencyKey: `project-lifecycle-subscription:${projectId}:workers-rpc:callable`,
       payload: {
         subscriptionKey: projectLifecycleSubscriptionKey(projectId),
-        subscriber: {
-          type: "built-in",
-          transport: "workers-rpc",
-          processorSlug: ProjectLifecycleProcessorContract.slug,
-        },
+        subscriber: durableObjectProcessorSubscriber({
+          bindingName: "PROJECT",
+          durableObjectName: getProjectDurableObjectName(projectId),
+          processorName: ProjectLifecycleProcessorContract.slug,
+        }),
       },
     });
   }
@@ -1220,10 +1247,6 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
 
 function projectLifecycleSubscriptionKey(projectId: string) {
   return `project-lifecycle:${projectId}`;
-}
-
-function projectLifecycleProcessorRunnerName(projectId: string) {
-  return `${projectId}:${PROJECT_LIFECYCLE_STREAM_PATH}:${projectLifecycleSubscriptionKey(projectId)}`;
 }
 
 async function upsertProjectProjection(input: { db: D1Database; input: CreateProjectInput }) {
