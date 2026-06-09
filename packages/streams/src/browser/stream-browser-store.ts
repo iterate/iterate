@@ -290,10 +290,12 @@ function createStreamRuntime(
   // Discard the local mirror when the server has fewer committed events than we do — a
   // reset/rewind makes our stored suffix impossible.
   async function reconcileLocalMirrorWithServer(rpc: RpcStub<StreamRpc>) {
+    // Deliberately a throwaway instance: processors memoize their checkpoint on
+    // first read, so the real instance must be created after any discard below.
     const processor = args.createProcessor({ stream: rpc, sql, subscriptionKey });
     const checkpoint = await processor.snapshot();
     const localMaxOffset = checkpoint.offset;
-    if (localMaxOffset < 0) return;
+    if (localMaxOffset <= 0) return; // fresh mirror: nothing to discard
     const { coreProcessorState } = await rpc.runtimeState();
     if (coreProcessorState.maxOffset >= localMaxOffset) return;
     console.warn(
