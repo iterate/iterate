@@ -23,6 +23,34 @@ export const DEFAULT_AUTH_HANDLER_BASE_PATH = "/api/iterate-auth";
 const SCOPES = ["openid", "profile", "email", "offline_access"] as const;
 const REFRESH_SKEW_MS = 30_000;
 
+/**
+ * Collapses concurrent calls keyed by the same string into a single in-flight
+ * promise. The OAuth refresh-token grant rotates the refresh token and revokes
+ * the whole family if a rotated token is presented twice, so two requests
+ * carrying the same session cookie must not both hit the token endpoint —
+ * otherwise the loser's "reuse" nukes the session and logs the user out. The
+ * entry is removed once settled so the next (rotated) token starts fresh.
+ */
+export function createSingleFlight<T>(): (key: string, fn: () => Promise<T>) => Promise<T> {
+  const inFlight = new Map<string, Promise<T>>();
+  return (key, fn) => {
+    const existing = inFlight.get(key);
+    if (existing) return existing;
+    // Clear inside the awaited promise's own finally so the entry is gone the
+    // moment callers observe the result — the next (rotated-token) cycle starts
+    // clean, while everyone racing the current cycle still shares this flight.
+    const flight = (async () => {
+      try {
+        return await fn();
+      } finally {
+        inFlight.delete(key);
+      }
+    })();
+    inFlight.set(key, flight);
+    return flight;
+  };
+}
+
 export type IterateAuthConfig = {
   issuer?: string;
   clientId: string;
@@ -255,16 +283,13 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
   // rotated token as theft (revoking the whole token family). Concurrent
   // requests carrying the same cookie must therefore share one refresh
   // flight per refresh token instead of racing the token endpoint.
-  const refreshFlights = new Map<string, Promise<TokenSet | null>>();
+  const refreshSingleFlight = createSingleFlight<TokenSet | null>();
 
   function doRefresh(tokenSet: TokenSet): Promise<TokenSet | null> {
     const refreshToken = tokenSet.refreshToken;
     if (!refreshToken) return Promise.resolve(null);
 
-    const existing = refreshFlights.get(refreshToken);
-    if (existing) return existing;
-
-    const flight = (async () => {
+    return refreshSingleFlight(refreshToken, async () => {
       const as = await getAuthorizationServer();
       const response = await oauth.refreshTokenGrantRequest(
         as,
@@ -278,10 +303,7 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
       );
       const result = await oauth.processRefreshTokenResponse(as, oauthClient, response);
       return toTokenSet(result, tokenSet);
-    })();
-    refreshFlights.set(refreshToken, flight);
-    void flight.catch(() => {}).finally(() => refreshFlights.delete(refreshToken));
-    return flight;
+    });
   }
 
   async function getUserInfo(accessToken: string): Promise<UserInfoClaims | null> {
