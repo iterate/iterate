@@ -299,7 +299,7 @@ function resolveProjectId(input: { id?: string; context: Pick<AppContext, "confi
   }
 
   return typeid({
-    env: { TYPEID_PREFIX: input.context.config.typeIdPrefix.exposeSecret() },
+    env: { TYPEID_PREFIX: input.context.config.typeIdPrefix },
     prefix: "proj",
   });
 }

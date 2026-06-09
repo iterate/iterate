@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { AppConfig } from "./app.ts";
@@ -7,6 +8,19 @@ const baseConfig = {
 };
 
 describe("AppConfig", () => {
+  it("keeps TypeID prefix visible because it is not a secret", () => {
+    const parsed = parseAppConfigFromEnv({
+      configSchema: AppConfig,
+      prefix: "APP_CONFIG_",
+      env: {
+        APP_CONFIG: JSON.stringify(baseConfig),
+      },
+    });
+
+    expect(parsed.typeIdPrefix).toBe("os");
+    expect(inspect(parsed)).toContain("typeIdPrefix: 'os'");
+  });
+
   it("accepts an optional admin API secret for proof and automation clients", () => {
     expect(
       parseAppConfigFromEnv({
