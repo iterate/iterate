@@ -1,10 +1,11 @@
+import { env } from "cloudflare:workers";
 import { RpcTarget } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
 import { ProjectCapability } from "./project-capability.ts";
 import type { IterateContextProps } from "./iterate-context-capability.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import {
   countAllProjects,
   deleteProject,
@@ -52,7 +53,7 @@ type ProjectDurableObjectContextClient = {
 export class ProjectsCapability extends RpcTarget {
   constructor(
     private readonly props: {
-      context: AppContext;
+      context: RequestContext;
       iterateContextProps?: IterateContextProps;
     },
   ) {
@@ -60,10 +61,7 @@ export class ProjectsCapability extends RpcTarget {
   }
 
   get(projectId: string) {
-    const project = projectDurableObject(
-      this.props.context,
-      projectId,
-    ) as unknown as ProjectDurableObjectContextClient;
+    const project = projectDurableObject(projectId) as unknown as ProjectDurableObjectContextClient;
     return new ProjectCapability({
       context: this.props.context,
       iterateContextProps: this.props.iterateContextProps,
@@ -123,7 +121,7 @@ export class ProjectsCapability extends RpcTarget {
           message: `Project ${id} already exists with slug ${existingById.slug}.`,
         });
       }
-      return await toProjectWithIngressUrl(context, existingById);
+      return await toProjectWithIngressUrl(existingById);
     }
 
     if (context.principal?.type === "user" && !authProject) {
@@ -167,7 +165,7 @@ export class ProjectsCapability extends RpcTarget {
     }
 
     try {
-      await projectDurableObject(context, id).createProject({
+      await projectDurableObject(id).createProject({
         projectId: id,
         slug,
       });
@@ -181,7 +179,7 @@ export class ProjectsCapability extends RpcTarget {
       throw error;
     }
 
-    return await toProjectWithIngressUrl(context, project);
+    return await toProjectWithIngressUrl(project);
   }
 
   async find(input: { id: string }) {
@@ -189,7 +187,7 @@ export class ProjectsCapability extends RpcTarget {
       context: this.props.context,
       projectId: input.id,
     });
-    return await toProjectWithIngressUrl(this.props.context, row);
+    return await toProjectWithIngressUrl(row);
   }
 
   async findBySlug(input: { slug: string }) {
@@ -201,7 +199,7 @@ export class ProjectsCapability extends RpcTarget {
       context: this.props.context,
       projectId: row.id,
     });
-    return await toProjectWithIngressUrl(this.props.context, row);
+    return await toProjectWithIngressUrl(row);
   }
 
   async remove(input: { id: string }): Promise<{ ok: true; id: string; deleted: boolean }> {
@@ -237,15 +235,15 @@ export function toProject(row: ProjectRow): ProjectListItem {
   };
 }
 
-export async function toProjectWithIngressUrl(context: AppContext, row: ProjectRow) {
+export async function toProjectWithIngressUrl(row: ProjectRow) {
   return {
     ...toProject(row),
-    ingressUrl: await projectDurableObject(context, row.id).ingressUrl(),
+    ingressUrl: await projectDurableObject(row.id).ingressUrl(),
   };
 }
 
 export async function requireProject(input: {
-  context: AppContext;
+  context: RequestContext;
   projectId: string;
 }): Promise<ProjectRow> {
   const project = await getProjectById(input.context.db, { id: input.projectId });
@@ -268,7 +266,7 @@ export async function requireProject(input: {
   });
 }
 
-function resolveProjectId(input: { id?: string; context: Pick<AppContext, "config"> }) {
+function resolveProjectId(input: { id?: string; context: Pick<RequestContext, "config"> }) {
   if (input.id) {
     if (!isValidTypeId(input.id, "proj")) {
       throw new ORPCError("BAD_REQUEST", {
@@ -284,15 +282,10 @@ function resolveProjectId(input: { id?: string; context: Pick<AppContext, "confi
   });
 }
 
-function projectDurableObject(context: AppContext, projectId: string) {
-  if (!context.projectDurableObjectNamespace) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "PROJECT binding not available.",
-    });
-  }
-  return (
-    context.projectDurableObjectNamespace as DurableObjectNamespace<ProjectDurableObject>
-  ).getByName(getProjectDurableObjectName(projectId));
+function projectDurableObject(projectId: string) {
+  return (env.PROJECT as DurableObjectNamespace<ProjectDurableObject>).getByName(
+    getProjectDurableObjectName(projectId),
+  );
 }
 
 function isUniqueConstraintError(error: unknown) {
@@ -320,18 +313,18 @@ function sortAuthProjects<T extends Pick<AuthProject, "slug">>(projects: T[]) {
   return [...projects].sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
-function listSignedProjectClaims(context: Pick<AppContext, "principal">): AuthProject[] {
+function listSignedProjectClaims(context: Pick<RequestContext, "principal">): AuthProject[] {
   return context.principal?.type === "user" ? sortAuthProjects(context.principal.projects) : [];
 }
 
-function getAccessibleSignedProject(input: { context: AppContext; projectId: string }) {
+function getAccessibleSignedProject(input: { context: RequestContext; projectId: string }) {
   return (
     listSignedProjectClaims(input.context).find((project) => project.id === input.projectId) ?? null
   );
 }
 
 function resolveOrganizationSlugForCreate(
-  context: Pick<AppContext, "principal">,
+  context: Pick<RequestContext, "principal">,
   requestedSlug: string | undefined,
 ) {
   const organizations = context.principal?.type === "user" ? context.principal.organizations : [];

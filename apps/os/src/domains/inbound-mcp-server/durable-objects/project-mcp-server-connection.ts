@@ -27,7 +27,7 @@ export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capabil
  * Project-scoped MCP server connection for os.
  *
  * Runs as a Durable Object in a separate Worker (`project-mcp-server-connection-do`).
- * `entry.workerd.ts` verifies Iterate Auth OAuth, resolves the token's project
+ * `worker.ts` verifies Iterate Auth OAuth, resolves the token's project
  * grants, and passes that identity into this Durable Object through McpAgent
  * props. That mirrors Cloudflare's documented OAuth integration point:
  * https://developers.cloudflare.com/agents/model-context-protocol/mcp-agent-api/

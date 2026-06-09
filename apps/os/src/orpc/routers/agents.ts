@@ -1,11 +1,10 @@
-import { ORPCError } from "@orpc/server";
+import { env } from "cloudflare:workers";
 import { listD1ObjectCatalogRecordsByIndex } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
-  type StreamDurableObject,
 } from "~/domains/streams/new-stream-runtime.ts";
 import {
   configuredAgentSetupEvents,
@@ -15,7 +14,6 @@ import {
   type AgentLlmProvider,
 } from "~/domains/agents/agent-presets.ts";
 import {
-  type AgentDurableObject,
   type AgentDurableObjectStructuredName,
   AGENTS_STREAM_PATH,
   getAgentDurableObjectName,
@@ -26,14 +24,8 @@ import { requireProjectScope } from "~/orpc/project-access.ts";
 export const projectAgentsRouter = {
   list: os.project.agents.list.use(projectScopeMiddleware).handler(async ({ context }) => {
     const project = requireProjectScope(context);
-    if (!context.doCatalog) {
-      throw new ORPCError("INTERNAL_SERVER_ERROR", {
-        message: "DO catalog binding not available.",
-      });
-    }
-
     const records = await listD1ObjectCatalogRecordsByIndex<AgentDurableObjectStructuredName>(
-      context.doCatalog,
+      env.DB,
       {
         className: "AgentDurableObject",
         indexName: "projectId",
@@ -58,7 +50,7 @@ export const projectAgentsRouter = {
     .use(projectScopeMiddleware)
     .handler(async ({ context }) => {
       const project = requireProjectScope(context);
-      const events = await readAgentsRootEvents({ context, projectId: project.id });
+      const events = await readAgentsRootEvents({ projectId: project.id });
       return {
         presets: readAgentPathPrefixPresets(events),
       };
@@ -79,7 +71,6 @@ export const projectAgentsRouter = {
         ...input.events,
       ];
       await appendAgentsRootEvent({
-        context,
         event: presetConfiguredEvent({ basePath, events }),
         projectId: project.id,
       });
@@ -91,7 +82,6 @@ export const projectAgentsRouter = {
     .handler(async ({ context, input }) => {
       const project = requireProjectScope(context);
       const agent = await getAgentStub({
-        context,
         agentPath: input.agentPath,
         projectId: project.id,
       });
@@ -106,7 +96,6 @@ export const projectAgentsRouter = {
     .handler(async ({ context, input }) => {
       const project = requireProjectScope(context);
       const agent = await getAgentStub({
-        context,
         agentPath: input.agentPath,
         projectId: project.id,
       });
@@ -121,35 +110,19 @@ type AgentRpcStub = {
   }>;
 };
 
-async function readAgentsRootEvents(input: {
-  context: { stream?: DurableObjectNamespace<StreamDurableObject> };
-  projectId: string;
-}) {
-  const stream = await getAgentsRootStream(input);
+async function readAgentsRootEvents(input: { projectId: string }) {
+  const stream = await getAgentsRootStream({ projectId: input.projectId });
   return await stream.history({ before: "end" });
 }
 
-async function appendAgentsRootEvent(input: {
-  context: { stream?: DurableObjectNamespace<StreamDurableObject> };
-  event: EventInput;
-  projectId: string;
-}) {
-  const stream = await getAgentsRootStream(input);
+async function appendAgentsRootEvent(input: { event: EventInput; projectId: string }) {
+  const stream = await getAgentsRootStream({ projectId: input.projectId });
   return await stream.append(input.event);
 }
 
-async function getAgentsRootStream(input: {
-  context: { stream?: DurableObjectNamespace<StreamDurableObject> };
-  projectId: string;
-}) {
-  if (!input.context.stream) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "STREAM Durable Object namespace is not configured.",
-    });
-  }
-
+async function getAgentsRootStream(input: { projectId: string }) {
   return await getInitializedStreamStub({
-    durableObjectNamespace: input.context.stream as unknown as StreamDurableObjectNamespace,
+    durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
     namespace: input.projectId,
     path: AGENTS_STREAM_PATH,
   });
@@ -157,22 +130,15 @@ async function getAgentsRootStream(input: {
 
 async function getAgentStub(input: {
   agentPath: StreamPath;
-  context: { agent?: DurableObjectNamespace<AgentDurableObject> };
   projectId: string;
 }): Promise<AgentRpcStub> {
-  if (!input.context.agent) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "AGENT Durable Object namespace is not configured.",
-    });
-  }
-
   const name = {
     agentPath: input.agentPath,
     projectId: input.projectId,
   };
   return (await getInitializedDoStub({
     allowCreate: true,
-    namespace: input.context.agent,
+    namespace: env.AGENT,
     name: getAgentDurableObjectName(name),
   })) as unknown as AgentRpcStub;
 }

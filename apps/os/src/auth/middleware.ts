@@ -5,7 +5,7 @@ import {
 } from "@iterate-com/auth/server";
 import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
 import { createMiddleware } from "@tanstack/react-start";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import { authenticateAdminApiSecret } from "~/auth/admin.ts";
 import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import {
@@ -18,8 +18,17 @@ type OsIterateAuth = ReturnType<typeof createIterateAuth>;
 
 const authClients = new Map<string, OsIterateAuth>();
 
-export const iterateAuthMiddleware = createMiddleware().server(
+// Registered as requestMiddleware in src/start.ts — `type: "request"` makes
+// early `Response` returns part of the contract (and the context it passes to
+// `next` flow into every server route, server function, and oRPC procedure):
+// https://tanstack.com/start/latest/docs/framework/react/guide/middleware
+export const iterateAuthMiddleware = createMiddleware({ type: "request" }).server(
   async ({ request, context, next }) => {
+    // Start types the request context as possibly undefined, but worker.ts
+    // always passes one to handler.fetch — treat its absence as a wiring bug.
+    if (!context) {
+      throw new Error("Request context missing — handler.fetch was called without a context.");
+    }
     const auth = createOsIterateAuth(context, request);
     const authHandlerResponse = auth?.handleRequest(request) ?? null;
     if (authHandlerResponse) {
@@ -50,7 +59,7 @@ export const iterateAuthMiddleware = createMiddleware().server(
 
 export async function resolveRequestAuth(input: {
   auth: OsIterateAuth | null;
-  context: Pick<AppContext, "config">;
+  context: Pick<RequestContext, "config">;
   request: Request;
 }): Promise<{
   principal: Principal | null;
@@ -122,7 +131,7 @@ async function authenticateBearerPrincipal(input: {
   return accessToken ? principalFromAccessToken(accessToken) : null;
 }
 
-export function createOsIterateAuth(context: AppContext, request: Request) {
+export function createOsIterateAuth(context: RequestContext, request: Request) {
   const config = context.config.iterateAuth;
   if (!config) return null;
 

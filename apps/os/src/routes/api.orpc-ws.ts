@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { requireRequestContext } from "~/request-context.ts";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
 import { orpcWebSocketHandler } from "~/orpc/handler.ts";
 
@@ -6,8 +7,9 @@ export const Route = createFileRoute("/api/orpc-ws")({
   server: {
     handlers: {
       GET: async ({ context, request }) => {
+        const requestContext = requireRequestContext(context);
         const requestedOrganizationSlug = new URL(request.url).searchParams.get("organizationSlug");
-        const principal = context.principal;
+        const principal = requestContext.principal;
         if (
           requestedOrganizationSlug &&
           (principal?.type !== "user" ||
@@ -20,7 +22,7 @@ export const Route = createFileRoute("/api/orpc-ws")({
           message(peer, message) {
             return orpcWebSocketHandler.message(peer, message, {
               context: {
-                ...context,
+                ...requestContext,
                 rawRequest: request,
               },
             });

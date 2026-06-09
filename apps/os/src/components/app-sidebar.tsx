@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
-import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
+import type { PublicAppConfig } from "@iterate-com/shared/config";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { useQuery } from "@tanstack/react-query";
@@ -65,7 +65,7 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
-import type { AppConfig } from "~/app.ts";
+import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";

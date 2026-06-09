@@ -1,5 +1,6 @@
+import { env } from "cloudflare:workers";
 import { RpcTarget } from "cloudflare:workers";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import {
   ensureIterateConfigInfoForProject,
   getReposCapability,
@@ -16,7 +17,7 @@ type RepoEnsureIterateConfigInfoInput = { projectSlug: string | null };
 type RepoGetInput = { slug: string };
 
 export class ProjectReposCapability extends RpcTarget {
-  constructor(private readonly input: { context: AppContext; projectId: string }) {
+  constructor(private readonly input: { context: RequestContext; projectId: string }) {
     super();
   }
 
@@ -30,7 +31,7 @@ export class ProjectReposCapability extends RpcTarget {
 
   async ensureIterateConfigInfo(input: RepoEnsureIterateConfigInfoInput) {
     return await ensureIterateConfigInfoForProject({
-      env: this.input.context.callableEnv as Pick<ReposCapabilityEnv, "REPO">,
+      env: env as unknown as Pick<ReposCapabilityEnv, "REPO">,
       projectId: this.input.projectId,
       projectSlug: input.projectSlug,
     });

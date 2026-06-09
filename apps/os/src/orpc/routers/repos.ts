@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
@@ -35,7 +35,7 @@ export const projectReposRouter = {
   }),
 };
 
-function getProjectReposCapability(context: AppContext, projectId: string) {
+function getProjectReposCapability(context: RequestContext, projectId: string) {
   if (!context.workerExports) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {
       message: "Worker exports are not available.",

@@ -3,7 +3,7 @@ import dedent from "dedent";
 import { afterAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { WebClient } from "@slack/web-api";
-import { Redacted } from "@iterate-com/shared/apps/config";
+import { Redacted } from "@iterate-com/shared/config";
 import {
   createAdminOsClient,
   requireBaseUrl,

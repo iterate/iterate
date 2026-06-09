@@ -1,4 +1,5 @@
-import { createServerFn, getGlobalStartContext } from "@tanstack/react-start";
+import { createServerFn } from "@tanstack/react-start";
+import { getRequestContext } from "~/request-context.ts";
 
 export type PublicRouteConfig = {
   baseUrl?: string;
@@ -8,7 +9,7 @@ export type PublicRouteConfig = {
 
 export const getPublicRouteConfig = createServerFn({ method: "GET" }).handler(
   (): PublicRouteConfig => {
-    const config = getGlobalStartContext()?.config;
+    const config = getRequestContext()?.config;
 
     return {
       baseUrl: config?.baseUrl,

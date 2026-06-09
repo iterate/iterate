@@ -1,9 +1,9 @@
 import { ORPCError, implement } from "@orpc/server";
 import { osContract } from "@iterate-com/os-contract";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import { requireProjectScopedAccess } from "~/orpc/project-access.ts";
 
-export const os = implement(osContract).$context<AppContext>();
+export const os = implement(osContract).$context<RequestContext>();
 
 export const authenticatedUserMiddleware = os.middleware(async ({ context, next }) => {
   if (context.principal?.type === "user" || context.principal?.type === "admin") {

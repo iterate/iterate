@@ -2,7 +2,7 @@ import { implement, ORPCError } from "@orpc/server";
 import type { AnyRouter } from "trpc-cli";
 import { parseRouter } from "trpc-cli";
 import { z, type ZodTypeAny } from "zod";
-import { getPublicConfig } from "./config.ts";
+import { getPublicConfig } from "../config.ts";
 import { internalContract } from "./internal-router-contract.ts";
 import type { AppContext } from "./types.ts";
 

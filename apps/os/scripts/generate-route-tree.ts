@@ -16,6 +16,22 @@ const config = getConfig(
     routesDirectory: path.resolve(root, "src/routes"),
     generatedRouteTree: routeTreePath,
     target: "react",
+    // @tanstack/start-plugin-core appends this Register block when the vite
+    // plugin runs the generator (see its start-router-plugin/route-tree-footer);
+    // mirror it so this script produces byte-identical output to the build.
+    routeTreeFileFooter: [
+      [
+        "import type { getRouter } from './router.tsx'",
+        "import type { startInstance } from './start.ts'",
+        "declare module '@tanstack/react-start' {",
+        "  interface Register {",
+        "    ssr: true",
+        "    router: Awaited<ReturnType<typeof getRouter>>",
+        "    config: Awaited<ReturnType<typeof startInstance.getOptions>>",
+        "  }",
+        "}",
+      ].join("\n"),
+    ],
   },
   root,
 );

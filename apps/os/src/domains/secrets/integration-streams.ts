@@ -1,7 +1,7 @@
 import { ORPCError } from "@orpc/server";
 import type { EventInput } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 
 export const SLACK_INTEGRATION_PROCESSOR_SLUG = "slack";
@@ -24,7 +24,7 @@ type AppendIntegrationEventInput = {
 };
 
 export async function appendIntegrationEvent(
-  context: AppContext,
+  context: RequestContext,
   input: AppendIntegrationEventInput,
 ) {
   if (!context.workerExports) {

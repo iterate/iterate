@@ -7,6 +7,12 @@
     "iterate-app-cli": "./bin/iterate-app-cli.js"
   },
   "exports": {
+    "./config": "./src/config.ts",
+    "./evlog": "./src/evlog/with-evlog.ts",
+    "./evlog/types": "./src/evlog/types.ts",
+    "./evlog/stdout": "./src/evlog/stdout.ts",
+    "./evlog/runtime": "./src/evlog/runtime.ts",
+    "./evlog/orpc-plugin": "./src/evlog/orpc-plugin.ts",
     "./alchemy/init": "./src/alchemy/init.ts",
     "./alchemy/artifacts": "./src/alchemy/artifacts.ts",
     "./alchemy/iterate-app": "./src/alchemy/iterate-app.ts",

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../../dev/strip-ansi.ts";
+import { stripAnsi } from "../dev/strip-ansi.ts";
 import {
   withEvlog,
   createPrettyStdoutDrain,
@@ -17,11 +17,9 @@ const originalConsole = {
   error: console.error,
 };
 const consoleFilterKey = Symbol.for("iterate.evlog.console-filter-installed");
-const appManifest = {
-  packageName: "@iterate-com/test-app",
-  version: "0.0.1",
+const evlogApp = {
+  name: "@iterate-com/test-app",
   slug: "test-app",
-  description: "Test App",
 } as const;
 
 afterEach(() => {
@@ -280,7 +278,7 @@ describe("apps logging pretty stdout", () => {
         request: new Request("https://example.com/api/test/log-demo", {
           method: "POST",
         }),
-        manifest: appManifest,
+        app: evlogApp,
         config: {
           logs: {
             stdoutFormat: "raw",

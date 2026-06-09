@@ -1,5 +1,5 @@
 import { RpcTarget } from "cloudflare:workers";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import type { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 
 type WorkspaceClient = Pick<
@@ -11,7 +11,7 @@ export class ProjectWorkspaceCapability extends RpcTarget {
   #git?: ProjectWorkspaceGitCapability;
   readonly #workspace: WorkspaceClient;
 
-  constructor(input: { context: AppContext; projectId: string }) {
+  constructor(input: { context: RequestContext; projectId: string }) {
     super();
     const workspaceCapability = input.context.workerExports?.WorkspaceCapability as unknown as
       | ((options: { props: { projectId: string; workspaceId: string } }) => WorkspaceClient)

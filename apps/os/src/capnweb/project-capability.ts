@@ -3,7 +3,7 @@ import { ProjectReposCapability } from "./repos-capability.ts";
 import { ProjectStreamsCapability } from "./streams-capability.ts";
 import { ProjectWorkspaceCapability } from "./workspace-capability.ts";
 import type { IterateContextProps } from "./iterate-context-capability.ts";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import type { ProjectCapabilityApi } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 export class ProjectCapability extends RpcTarget {
@@ -15,7 +15,7 @@ export class ProjectCapability extends RpcTarget {
 
   constructor(
     private readonly input: {
-      context: AppContext;
+      context: RequestContext;
       iterateContextProps?: IterateContextProps;
       project: ProjectCapabilityApi;
       projectId: string;

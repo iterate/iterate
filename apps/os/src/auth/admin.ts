@@ -1,4 +1,4 @@
-import type { AppConfig } from "~/app.ts";
+import type { AppConfig } from "~/config.ts";
 import { adminPrincipal, type AdminPrincipal } from "~/auth/principal.ts";
 
 export function readBearerToken(headerValue: string | null): string | null {

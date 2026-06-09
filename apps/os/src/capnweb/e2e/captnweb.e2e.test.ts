@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import dedent from "dedent";
 import WebSocket from "ws";
-import { Redacted } from "@iterate-com/shared/apps/config";
+import { Redacted } from "@iterate-com/shared/config";
 import {
   EXAMPLE_EGRESS_SECRET_KEY,
   EXAMPLE_EGRESS_SECRET_MATERIAL,

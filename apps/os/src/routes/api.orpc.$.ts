@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { requireRequestContext } from "~/request-context.ts";
 import { orpcRpcHandler } from "~/orpc/handler.ts";
 
 export const Route = createFileRoute("/api/orpc/$")({
@@ -8,7 +9,7 @@ export const Route = createFileRoute("/api/orpc/$")({
         const { matched, response } = await orpcRpcHandler.handle(request, {
           prefix: "/api/orpc",
           context: {
-            ...context,
+            ...requireRequestContext(context),
             rawRequest: request,
           },
         });

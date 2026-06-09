@@ -6,8 +6,8 @@ import {
   type IterateContextProps,
 } from "./iterate-context-capability.ts";
 import { ProjectsCapability } from "./projects-capability.ts";
-import type { AppConfig } from "~/app.ts";
-import type { AppContext } from "~/context.ts";
+import type { AppConfig } from "~/config.ts";
+import type { RequestContext } from "~/request-context.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import type { Principal } from "~/auth/principal.ts";
 
@@ -19,7 +19,7 @@ type CaptnwebVars = Record<string, unknown>;
 
 export async function handleRootIterateContextFetch(input: {
   config: AppConfig;
-  context: AppContext;
+  context: RequestContext;
   env: Env;
   request: Request;
 }): Promise<Response | null> {
@@ -66,12 +66,12 @@ export async function handleRootIterateContextFetch(input: {
 
 async function authenticateRootCapnwebRequest(input: {
   config: AppConfig;
-  context: AppContext;
+  context: RequestContext;
   request: Request;
 }): Promise<{
   principal: Principal | null;
   responseHeaders: Headers;
-  session: AppContext["iterateAuthSession"];
+  session: RequestContext["iterateAuthSession"];
 }> {
   const admin = authenticateCapnwebAdmin({ config: input.config, request: input.request });
   if (admin) return { principal: admin, responseHeaders: new Headers(), session: null };
@@ -146,7 +146,7 @@ function rootRunWorkerSrc(input: { functionSource: string }) {
 `;
 }
 
-async function handleRootRunLeg(input: { context: AppContext; env: Env; request: Request }) {
+async function handleRootRunLeg(input: { context: RequestContext; env: Env; request: Request }) {
   if (!input.env.LOADER) {
     return Response.json({ error: "LOADER binding not available" }, { status: 503 });
   }

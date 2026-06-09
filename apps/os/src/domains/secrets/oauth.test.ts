@@ -1,7 +1,6 @@
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import type { Client, QueryArg, SqlQuery } from "sqlfu";
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { AppConfig } from "~/app.ts";
+import { parseConfig } from "~/config.ts";
 import { getFreshGoogleAccessToken } from "~/domains/secrets/oauth.ts";
 
 type SecretRow = {
@@ -96,20 +95,16 @@ describe("getFreshGoogleAccessToken", () => {
 });
 
 function testConfig() {
-  return parseAppConfigFromEnv({
-    configSchema: AppConfig,
-    prefix: "APP_CONFIG_",
-    env: {
-      APP_CONFIG: JSON.stringify({
-        integrations: {
-          google: {
-            oauthClientId: "google-client-id",
-            oauthClientSecret: "google-client-secret",
-          },
+  return parseConfig({
+    APP_CONFIG: JSON.stringify({
+      integrations: {
+        google: {
+          oauthClientId: "google-client-id",
+          oauthClientSecret: "google-client-secret",
         },
-        openAiApiKey: "openai-test-key",
-      }),
-    },
+      },
+      openAiApiKey: "openai-test-key",
+    }),
   });
 }
 

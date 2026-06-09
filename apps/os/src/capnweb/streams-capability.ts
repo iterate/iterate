@@ -1,5 +1,5 @@
 import { RpcTarget } from "cloudflare:workers";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import {
   getStreamsCapability,
   type StreamAppendBatchInput,
@@ -16,7 +16,7 @@ type StreamsClient = Pick<
 >;
 
 export class ProjectStreamsCapability extends RpcTarget {
-  constructor(private readonly input: { context: AppContext; projectId: string }) {
+  constructor(private readonly input: { context: RequestContext; projectId: string }) {
     super();
   }
 

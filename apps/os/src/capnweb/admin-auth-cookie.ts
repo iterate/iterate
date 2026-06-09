@@ -1,4 +1,4 @@
-import type { AppConfig } from "~/app.ts";
+import type { AppConfig } from "~/config.ts";
 import { authenticateAdminApiSecret } from "~/auth/admin.ts";
 import { adminPrincipal } from "~/auth/principal.ts";
 

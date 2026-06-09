@@ -1,5 +1,5 @@
+import { env } from "cloudflare:workers";
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createRequestLogger } from "@iterate-com/shared/request-logging";
 import { createD1Client } from "sqlfu";
 import { PathProxyRpcTarget } from "./path-proxy-rpc-target.ts";
@@ -8,8 +8,8 @@ import { ProjectsCapability } from "./projects-capability.ts";
 import type { ProjectReposCapability } from "./repos-capability.ts";
 import type { ProjectStreamsCapability } from "./streams-capability.ts";
 import type { ProjectWorkspaceCapability } from "./workspace-capability.ts";
-import manifest, { AppConfig } from "~/app.ts";
-import type { AppContext } from "~/context.ts";
+import { parseConfig } from "~/config.ts";
+import type { RequestContext } from "~/request-context.ts";
 
 type RuntimeContext = Pick<ExecutionContext, "exports" | "waitUntil">;
 const INVOKE_MOUNTED = Symbol("IterateContext.invokeMounted");
@@ -50,7 +50,7 @@ export type TargetCall =
     };
 
 export type IterateContextRuntime = {
-  context: AppContext;
+  context: RequestContext;
   projects?: ProjectsCapability;
   props: IterateContextProps;
 };
@@ -58,16 +58,16 @@ export type IterateContextRuntime = {
 export class IterateContextEntrypoint extends WorkerEntrypoint<Env, IterateContextProps> {
   get context() {
     const workerCtx = Reflect.get(this, "ctx") as unknown as ExecutionContext<IterateContextProps>;
-    const appContext = createCapnwebAppContext({
+    const requestContext = createCapnwebRequestContext({
       ctx: workerCtx,
       env: this.env,
       method: "CAPNWEB",
       path: "capnweb://iterate-context-entrypoint",
     });
     return createIterateContext({
-      context: appContext,
+      context: requestContext,
       projects: createProjectsCapability({
-        context: appContext,
+        context: requestContext,
         iterateContextProps: workerCtx.props,
       }),
       props: workerCtx.props,
@@ -121,7 +121,7 @@ export class IterateCapability extends RpcTarget {
     const cached = this.#dynamicWorkerTargets.get(cacheKey);
     if (cached) return cached;
 
-    const loader = this.#runtime.context.loader;
+    const loader = env.LOADER;
     if (!loader) throw new Error("LOADER binding is not available.");
 
     const iterateEntrypoint = this.#runtime.context.workerExports?.IterateContextEntrypoint as
@@ -242,7 +242,7 @@ export function createIterateContext(input: IterateContextRuntime) {
 }
 
 export function createProjectsCapability(input: {
-  context: AppContext;
+  context: RequestContext;
   iterateContextProps?: IterateContextProps;
 }) {
   return new ProjectsCapability({
@@ -251,39 +251,23 @@ export function createProjectsCapability(input: {
   });
 }
 
-export function createCapnwebAppContext(input: {
+export function createCapnwebRequestContext(input: {
   ctx: RuntimeContext;
   env: Env;
   method?: string;
   path?: string;
-}): AppContext {
-  const config = parseAppConfigFromEnv({
-    configSchema: AppConfig,
-    prefix: "APP_CONFIG_",
-    env: input.env as unknown as Record<string, unknown>,
-  });
+}): RequestContext {
+  const config = parseConfig(input.env as unknown as Record<string, unknown>);
 
   return {
-    manifest,
     config,
     db: createD1Client(input.env.DB),
-    doCatalog: input.env.DO_CATALOG ?? input.env.DB,
     log: createRequestLogger({
       method: input.method ?? "CAPNWEB",
       path: input.path ?? "capnweb://runtime",
       requestId: crypto.randomUUID(),
     }),
-    projectHostnameBases: config.projectHostnameBases,
     waitUntil: (promise) => input.ctx.waitUntil(promise),
-    agent: input.env.AGENT,
-    callableEnv: input.env as unknown as Record<string, unknown>,
-    codemodeSession: input.env.CODEMODE_SESSION,
-    loader: input.env.LOADER,
-    projectDurableObjectNamespace: input.env.PROJECT,
-    repo: input.env.REPO,
-    slackAgent: input.env.SLACK_AGENT,
-    slackIntegration: input.env.SLACK_INTEGRATION,
-    stream: input.env.STREAM,
     workerExports: input.ctx.exports,
   };
 }

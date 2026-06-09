@@ -1,6 +1,5 @@
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { newWorkersRpcResponse, type RpcStub } from "capnweb";
 import { acceptCaptunTunnel, type Fetcher } from "captun";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
@@ -15,10 +14,10 @@ import {
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
 } from "~/domains/streams/new-stream-runtime.ts";
-import { AppConfig } from "~/app.ts";
+import { parseConfig } from "~/config.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
 import {
-  createCapnwebAppContext,
+  createCapnwebRequestContext,
   createIterateContext,
   createProjectsCapability,
   type IterateContext,
@@ -393,7 +392,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   }
 
   getCapability(_props: { scopes?: unknown } = {}): ProjectCapability {
-    const context = createCapnwebAppContext({
+    const context = createCapnwebRequestContext({
       ctx: this.ctx,
       env: this.env as unknown as Env,
       method: "CAPNWEB",
@@ -448,7 +447,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   async getIterateContext(props?: IterateContextProps): Promise<IterateContext> {
     await this.ensureStarted();
     const summary = this.requireSummary();
-    const context = createCapnwebAppContext({
+    const context = createCapnwebRequestContext({
       ctx: this.ctx,
       env: this.env as unknown as Env,
       method: "CAPNWEB",
@@ -1103,11 +1102,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   }
 
   private getAppConfig() {
-    return parseAppConfigFromEnv({
-      configSchema: AppConfig,
-      prefix: "APP_CONFIG_",
-      env: this.env as unknown as Record<string, unknown>,
-    });
+    return parseConfig(this.env as unknown as Record<string, unknown>);
   }
 
   private async writeProjectCreatedLifecycleEvent(summary: ProjectSummary) {

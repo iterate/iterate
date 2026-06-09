@@ -67,6 +67,7 @@
     "@orpc/openapi-client": "1.13.14",
     "@orpc/server": "1.13.14",
     "@orpc/tanstack-query": "1.13.14",
+    "@orpc/zod": "1.13.14",
     "@tanstack/react-devtools": "0.10.0",
     "@tanstack/react-form": "^1.28.4",
     "@tanstack/react-form-devtools": "^0.2.19",
@@ -92,6 +93,7 @@
     "react-dom": "^19.2.0",
     "sqlfu": "0.0.3-14",
     "tailwindcss": "^4.1.18",
+    "trpc-cli": "0.14.0",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
   },

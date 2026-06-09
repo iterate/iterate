@@ -1,7 +1,7 @@
 import alchemy, { type Scope } from "alchemy";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { z } from "zod";
-import { compileRawAppConfigFromEnv } from "../apps/config.ts";
+import { compileRawAppConfigFromEnv } from "../config.ts";
 import type { AppManifest } from "../apps/types.ts";
 import { slugify } from "../slugify.ts";
 
@@ -39,10 +39,13 @@ const AlchemyEnv = z.object({
  * @see https://alchemy.run/getting-started/
  */
 export async function initAlchemy<TSchema extends z.ZodTypeAny>(
-  manifest: AppManifest,
+  // The slug names the alchemy scope and prefixes the worker name. Passing a
+  // full AppManifest still works for apps that keep one; only `slug` is used.
+  slugOrManifest: string | AppManifest,
   configSchema: TSchema,
   env: Record<string, string | undefined>,
 ) {
+  const slug = typeof slugOrManifest === "string" ? slugOrManifest : slugOrManifest.slug;
   const alchemyEnv = AlchemyEnv.parse(env);
   if (alchemyEnv.ALCHEMY_LOCAL) delete env.CI;
 
@@ -58,18 +61,18 @@ export async function initAlchemy<TSchema extends z.ZodTypeAny>(
       ? new SQLiteStateStore(scope, { engine: "libsql" })
       : new CloudflareStateStore(scope);
 
-  const app = await alchemy(manifest.slug, {
+  const app = await alchemy(slug, {
     stage: alchemyEnv.ALCHEMY_STAGE,
     local: alchemyEnv.ALCHEMY_LOCAL,
     password: alchemyEnv.ALCHEMY_PASSWORD,
     stateStore,
   });
 
-  const workerName = slugify(`${manifest.slug}-${app.stage}`);
+  const workerName = slugify(`${slug}-${app.stage}`);
 
   return {
     app,
-    manifest,
+    slug,
     workerName,
     runtimeConfig,
     rawRuntimeConfig,
