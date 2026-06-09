@@ -1,4 +1,3 @@
-/// <reference types="vite/client" />
 import { memo, type ReactNode } from "react";
 import {
   HeadContent,
@@ -13,20 +12,19 @@ import { FormDevtoolsPanel } from "@tanstack/react-form-devtools";
 import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
+import { AuthClientProvider, type PublicSessionResponse } from "@iterate-com/auth/client";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
 import iterateLogoAsset from "@iterate-com/ui/assets/iterate-logo.svg";
 import { DefaultErrorComponent } from "@iterate-com/ui/components/route-defaults";
 import { AppConfig } from "../app.ts";
-import type { OsSessionResponse } from "../auth/client-context.ts";
-import { AuthClientProvider } from "../auth/client.tsx";
 import { orpcClient } from "../orpc/client.ts";
 import appCss from "../styles.css?url";
-import type { RouterContext } from "../router.tsx";
+import type { RouterContext } from "~/router.tsx";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 
 const getInitialAuthSession = createServerFn({ method: "GET" }).handler(
-  ({ context }): OsSessionResponse => {
+  ({ context }): PublicSessionResponse => {
     if (!context.iterateAuthSession) {
       return { authenticated: false };
     }
@@ -41,11 +39,7 @@ const getInitialAuthSession = createServerFn({ method: "GET" }).handler(
 
 export const Route = createRootRouteWithContext<RouterContext>()({
   loader: async () => {
-    const config = PublicConfigSchema.parse(
-      await (orpcClient.__internal as { publicConfig(input: {}): Promise<unknown> }).publicConfig(
-        {},
-      ),
-    );
+    const config = PublicConfigSchema.parse(await orpcClient.__internal.publicConfig({}));
     return {
       config,
       authSession: await getInitialAuthSession(),

@@ -41,17 +41,13 @@ import {
   defaultAgentProcessorSlugs,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { agentPathFromInput } from "~/lib/agent-links.ts";
-import { streamPathToSplat } from "~/lib/stream-links.ts";
-import { orpc, orpcClient } from "~/orpc/client.ts";
+import { orpcClient } from "~/orpc/client.ts";
 
 const emptyEventsYaml = "[]\n";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
-  loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
+  loader: async ({ context }) => {
+    const { project } = context;
 
     return {
       breadcrumb: "New Agent",
@@ -136,7 +132,7 @@ function NewAgentPage() {
         to: "/projects/$projectSlug/agents/streams/$",
         params: {
           ...params,
-          _splat: streamPathToSplat(preview.agentPath),
+          _splat: preview.agentPath,
         },
       });
     },

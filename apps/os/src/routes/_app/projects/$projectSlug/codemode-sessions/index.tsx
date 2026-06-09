@@ -9,20 +9,12 @@ import {
   EmptyTitle,
 } from "@iterate-com/ui/components/empty";
 import { Identifier } from "@iterate-com/ui/components/identifier";
-import { orpc } from "~/orpc/client.ts";
+import { projectCodemodeSessionsQueryOptions } from "~/lib/project-route-query.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/codemode-sessions/")({
-  loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
-    await context.queryClient.ensureQueryData({
-      ...orpc.project.codemode.listSessions.queryOptions({
-        input: { projectSlugOrId: project.id },
-      }),
-      staleTime: 10_000,
-    });
+  loader: async ({ context }) => {
+    const { project } = context;
+    await context.queryClient.ensureQueryData(projectCodemodeSessionsQueryOptions(project.id));
 
     return {
       breadcrumb: "Codemode Sessions",
@@ -35,12 +27,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/codemode-sessi
 function CodemodeSessionsPage() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
-  const { data } = useQuery({
-    ...orpc.project.codemode.listSessions.queryOptions({
-      input: { projectSlugOrId: project.id },
-    }),
-    staleTime: 10_000,
-  });
+  const { data } = useQuery(projectCodemodeSessionsQueryOptions(project.id));
   const sessions = data?.sessions ?? [];
 
   return (

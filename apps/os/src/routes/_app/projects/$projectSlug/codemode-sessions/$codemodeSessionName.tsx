@@ -10,7 +10,7 @@ import {
 import { z } from "zod";
 import { ExistingCodemodeSessionControls } from "~/components/codemode-session-controls.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.tsx";
-import { orpc } from "~/orpc/client.ts";
+import { projectCodemodeSessionQueryOptions } from "~/lib/project-route-query.ts";
 
 const Search = z.object({
   streamPath: StreamPath.optional(),
@@ -31,18 +31,15 @@ export const Route = createFileRoute(
   ssr: false,
   loader: async ({ context, location, params }) => {
     const search = Search.parse(location.search);
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
+    const { project } = context;
 
     try {
-      const session = await context.queryClient.ensureQueryData({
-        ...orpc.project.codemode.findSession.queryOptions({
-          input: { name: params.codemodeSessionName, projectSlugOrId: project.id },
+      const session = await context.queryClient.ensureQueryData(
+        projectCodemodeSessionQueryOptions({
+          name: params.codemodeSessionName,
+          projectId: project.id,
         }),
-        staleTime: 10_000,
-      });
+      );
 
       return {
         breadcrumb: "Session",

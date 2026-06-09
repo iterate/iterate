@@ -16,7 +16,6 @@ import {
   uniqueSuffix,
 } from "../../../e2e/test-support/os-client.ts";
 import type { IterateContext, IterateContextProps } from "../iterate-context-capability.ts";
-import { liftLocalProxies } from "../local-proxy-wrapper.js";
 import type { ProjectCapabilityApi } from "../../domains/projects/durable-objects/project-durable-object.ts";
 import {
   appendAndReadProjectStream,
@@ -473,6 +472,9 @@ describe("capnweb", () => {
     const appendMountName = `append-${uniqueSuffix()}`;
     const listStreamsMountName = `listStreams-${uniqueSuffix()}`;
     const mountedStreamsName = `mountedStreams-${uniqueSuffix()}`;
+    const nestedCtxBranchName = `ctxBranch-${uniqueSuffix()}`;
+    const nestedCtxMountName = `ctxStreams-${uniqueSuffix()}`;
+    const nestedCtxRootName = `ctxRoot-${uniqueSuffix()}`;
     const nestedSdkBranchName = `branch-${uniqueSuffix()}`;
     const nestedSdkMountName = `nestedSdk-${uniqueSuffix()}`;
     const nestedSdkRootName = `root-${uniqueSuffix()}`;
@@ -484,6 +486,43 @@ describe("capnweb", () => {
     const toolsMountName = `tools-${uniqueSuffix()}`;
     const toolsScript = dedent`
       import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+
+      class CounterMath extends RpcTarget {
+        constructor(label) {
+          super();
+          this.label = label;
+        }
+
+        async double(input) {
+          return {
+            input,
+            kind: "returned-target-nested-method",
+            label: this.label,
+            value: input.value * 2,
+          };
+        }
+      }
+
+      class CounterTool extends RpcTarget {
+        constructor(input) {
+          super();
+          this.label = input.label;
+          this.value = input.start;
+        }
+
+        get math() {
+          return new CounterMath(this.label);
+        }
+
+        async increment(by = 1) {
+          this.value += by;
+          return {
+            kind: "returned-target-method",
+            label: this.label,
+            value: this.value,
+          };
+        }
+      }
 
       class NestedTools extends RpcTarget {
         async describe(input) {
@@ -505,19 +544,83 @@ describe("capnweb", () => {
             streamCountVisibleFromMountedWorker: streamList.length,
           };
         }
+
+        createCounter(input) {
+          return new CounterTool(input);
+        }
+
+        structuredData(input) {
+          return {
+            createdAt: new Date("2026-06-09T00:00:00.000Z"),
+            input,
+            kind: "plain-data",
+            nested: {
+              marker: input.marker,
+            },
+          };
+        }
       }
     `;
     const sdkScript = dedent`
-      import { WorkerEntrypoint } from "cloudflare:workers";
-      import { localProxyCaller } from "./local-proxy-wrapper.js";
+      import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 
       const sdkGetterName = ${JSON.stringify(sdkGetterName)};
+      const reserved = new Set(["__proto__", "catch", "constructor", "dup", "finally", "map", "onRpcBroken", "prototype", "then"]);
+
+      class SdkPathTarget extends RpcTarget {
+        constructor(callPath) {
+          super();
+          this.callPath = callPath;
+          return new Proxy(this, {
+            get: (target, key, receiver) => {
+              if (key === "then") return undefined;
+              if (typeof key === "symbol" || key in target) return Reflect.get(target, key, receiver);
+              if (reserved.has(key)) return undefined;
+              return target.callable([key]);
+            },
+            getOwnPropertyDescriptor: (target, key) => Reflect.getOwnPropertyDescriptor(target, key),
+            has: (target, key) => {
+              if (typeof key === "symbol") return key in target;
+              if (reserved.has(key)) return false;
+              return true;
+            },
+          });
+        }
+
+        callable(path) {
+          const fn = (...args) => this.callPath({ path, args });
+          return new Proxy(fn, {
+            apply: (_target, _thisArg, args) => this.callPath({ path, args }),
+            get: (target, key, receiver) => {
+              if (key === "then") return undefined;
+              if (typeof key === "symbol" || key in target) return Reflect.get(target, key, receiver);
+              if (reserved.has(key)) return undefined;
+              return this.callable([...path, key]);
+            },
+            getOwnPropertyDescriptor: (target, key) => {
+              const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+              if (descriptor) return descriptor;
+              if (key in target) return undefined;
+              if (typeof key === "symbol" || reserved.has(key)) return undefined;
+              return {
+                configurable: true,
+                enumerable: false,
+                value: this.callable([...path, key]),
+                writable: false,
+              };
+            },
+            has: (target, key) => {
+              if (typeof key === "symbol") return key in target;
+              if (reserved.has(key)) return false;
+              return true;
+            },
+          });
+        }
+      }
 
       export default class SdkLikeTarget extends WorkerEntrypoint {
         get [sdkGetterName]() {
-          // The SDK hierarchy is intentionally unknown. The marker says:
-          // "record all properties after this getter and send them to call".
-          return localProxyCaller(({ path, args }) => this.call({ path, args }));
+          return new SdkPathTarget(({ path, args }) => this.call({ path, args }));
         }
 
         async call({ path, args }) {
@@ -541,6 +644,24 @@ describe("capnweb", () => {
           using tools = await mountedCtx[vars.toolsMountName];
           const targetResult = await tools.echo({ marker: vars.marker });
           const nestedResult = await tools.nested.describe({ marker: vars.marker });
+          using returnedCounter = await tools.createCounter({
+            label: "awaited-returned-target",
+            start: 10,
+          });
+          const returnedCounterFirst = await returnedCounter.increment(2);
+          const returnedCounterSecond = await returnedCounter.increment(3);
+          using pipelinedCounter = tools.createCounter({
+            label: "pipelined-returned-target",
+            start: 20,
+          });
+          const pipelinedCounterResult = await pipelinedCounter.increment(4);
+          const nestedReturnedTargetResult = await tools
+            .createCounter({
+              label: "nested-returned-target",
+              start: 30,
+            })
+            .math.double({ value: 7 });
+          const structuredDataResult = await tools.structuredData({ marker: vars.marker });
 
           const methodResult = await mountedCtx[vars.rootEchoMountName]({ marker: vars.marker });
 
@@ -558,6 +679,16 @@ describe("capnweb", () => {
           });
 
           const listedByShortcut = await mountedStreams.list();
+          using nestedCtxRootFromGetter = await mountedCtx[vars.nestedCtxRootName];
+          const listedByNestedCtxGetter =
+            await nestedCtxRootFromGetter[vars.nestedCtxBranchName][vars.nestedCtxMountName].list();
+          using nestedCtxRootFromGetMounted = (await mountedCtx.getMounted([
+            vars.nestedCtxRootName,
+          ])) as Record<string, any> & Disposable;
+          const listedByNestedCtxGetMounted =
+            await nestedCtxRootFromGetMounted[vars.nestedCtxBranchName][
+              vars.nestedCtxMountName
+            ].list();
           const listedByMethod = await mountedCtx[vars.listStreamsMountName]();
           const appendResult = await mountedCtx[vars.appendMountName]({
             streamPath: vars.streamPath,
@@ -594,7 +725,18 @@ describe("capnweb", () => {
             methodResult,
             mountedAppendResult,
             nestedResult,
+            nestedReturnedTargetResult,
+            listedByNestedCtxGetMounted: listedByNestedCtxGetMounted.map(
+              (stream: { name: string }) => stream.name,
+            ),
+            listedByNestedCtxGetter: listedByNestedCtxGetter.map(
+              (stream: { name: string }) => stream.name,
+            ),
+            pipelinedCounterResult,
+            returnedCounterFirst,
+            returnedCounterSecond,
             sdkResult,
+            structuredDataResult,
             targetResult,
           };
         }),
@@ -643,6 +785,13 @@ describe("capnweb", () => {
             },
           },
           {
+            path: [nestedCtxRootName, nestedCtxBranchName, nestedCtxMountName],
+            target: {
+              call: ["projects", { method: "get", args: [project.id] }, "streams"],
+              type: "ctx",
+            },
+          },
+          {
             invoke: "method",
             path: [listStreamsMountName],
             target: {
@@ -666,6 +815,9 @@ describe("capnweb", () => {
         listStreamsMountName,
         marker,
         mountedStreamsName,
+        nestedCtxBranchName,
+        nestedCtxMountName,
+        nestedCtxRootName,
         nestedSdkBranchName,
         nestedSdkMountName,
         nestedSdkRootName,
@@ -690,6 +842,33 @@ describe("capnweb", () => {
     expect(result.methodResult).toMatchObject({
       input: { marker },
       kind: "target-method",
+    });
+    expect(result.returnedCounterFirst).toMatchObject({
+      kind: "returned-target-method",
+      label: "awaited-returned-target",
+      value: 12,
+    });
+    expect(result.returnedCounterSecond).toMatchObject({
+      kind: "returned-target-method",
+      label: "awaited-returned-target",
+      value: 15,
+    });
+    expect(result.pipelinedCounterResult).toMatchObject({
+      kind: "returned-target-method",
+      label: "pipelined-returned-target",
+      value: 24,
+    });
+    expect(result.nestedReturnedTargetResult).toMatchObject({
+      input: { value: 7 },
+      kind: "returned-target-nested-method",
+      label: "nested-returned-target",
+      value: 14,
+    });
+    expect(result.structuredDataResult).toMatchObject({
+      createdAt: "2026-06-09T00:00:00.000Z",
+      input: { marker },
+      kind: "plain-data",
+      nested: { marker },
     });
     expect(result.mountedAppendResult).toMatchObject({
       payload: { marker, source: "mount-shortcut" },
@@ -724,6 +903,8 @@ describe("capnweb", () => {
       ]),
     );
     expect(result.listedByShortcut).toEqual(expect.any(Array));
+    expect(result.listedByNestedCtxGetter).toEqual(expect.any(Array));
+    expect(result.listedByNestedCtxGetMounted).toEqual(expect.any(Array));
     expect(result.listedByMethod).toEqual(expect.any(Array));
   });
 
@@ -780,10 +961,8 @@ function withRootIterateContextFromNode(input: {
   const wsUrl = new URL(ROOT_ITERATE_CONTEXT_PREFIX, input.baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(wsUrl.toString(), { headers: rootAccessAuthHeaders(input.auth) });
-  return liftLocalProxies(
-    newWebSocketRpcSession<IterateContext>(
-      socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
-    ),
+  return newWebSocketRpcSession<IterateContext>(
+    socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
 }
 
@@ -802,7 +981,7 @@ function withIterateFromNode(input: { auth: RootAccessAuth; ingressUrl: string }
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
   const ctxHandle = project.getIterateContext() as unknown as RpcStub<IterateContext>;
-  const ctx = liftLocalProxies(ctxHandle);
+  const ctx = ctxHandle;
   void Promise.resolve(ctxHandle).catch((error: unknown) => {
     socket.close();
     project[Symbol.dispose]?.();

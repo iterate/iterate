@@ -49,19 +49,3 @@ export interface AppContext {
     projectSlugOrId: string;
   };
 }
-
-declare module "@tanstack/react-start" {
-  interface Register {
-    server: {
-      requestContext: AppContext;
-    };
-  }
-}
-
-declare module "@tanstack/react-router" {
-  interface Register {
-    server: {
-      requestContext: AppContext;
-    };
-  }
-}

@@ -15,21 +15,12 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { streamPathAncestors, streamPathChild, streamPathToSplat } from "~/lib/stream-links.ts";
-import { orpc } from "~/orpc/client.ts";
-
-type BreadcrumbStaticData = {
-  breadcrumb?: string;
-};
-
-type BreadcrumbLoaderData = {
-  breadcrumb?: string;
-  streamBreadcrumb?: {
-    projectId: string;
-    projectSlug: string;
-    streamPath: StreamPathType;
-  };
-};
+import { projectStreamsListQueryOptions } from "~/lib/project-route-query.ts";
+import type {
+  RouteBreadcrumbLoaderData,
+  RouteBreadcrumbStaticData,
+} from "~/lib/route-breadcrumbs.ts";
+import { streamPathAncestors, streamPathChild } from "~/lib/stream-links.ts";
 
 const CHILD_STREAM_SEGMENT_PATTERN = /^[a-z0-9_-]+$/;
 
@@ -41,15 +32,17 @@ export function PathBreadcrumbs() {
   }
 
   const streamBreadcrumb = matches
-    .map((match) => (match.loaderData as BreadcrumbLoaderData | undefined)?.streamBreadcrumb)
-    .filter((value): value is NonNullable<BreadcrumbLoaderData["streamBreadcrumb"]> =>
+    .map((match) => (match.loaderData as RouteBreadcrumbLoaderData | undefined)?.streamBreadcrumb)
+    .filter((value): value is NonNullable<RouteBreadcrumbLoaderData["streamBreadcrumb"]> =>
       Boolean(value),
     )
     .at(-1);
 
   const routeCrumbs = matches.flatMap((match) => {
-    const staticBreadcrumb = (match.staticData as BreadcrumbStaticData | undefined)?.breadcrumb;
-    const dynamicBreadcrumb = (match.loaderData as BreadcrumbLoaderData | undefined)?.breadcrumb;
+    const staticBreadcrumb = (match.staticData as RouteBreadcrumbStaticData | undefined)
+      ?.breadcrumb;
+    const dynamicBreadcrumb = (match.loaderData as RouteBreadcrumbLoaderData | undefined)
+      ?.breadcrumb;
     const label = dynamicBreadcrumb ?? staticBreadcrumb;
 
     if (!label) {
@@ -132,7 +125,7 @@ function renderCrumbLink({
   streamBreadcrumb,
 }: {
   crumb: { streamPath?: StreamPathType; to?: string };
-  streamBreadcrumb: BreadcrumbLoaderData["streamBreadcrumb"];
+  streamBreadcrumb: RouteBreadcrumbLoaderData["streamBreadcrumb"];
 }) {
   if (crumb.streamPath && streamBreadcrumb) {
     return (
@@ -140,7 +133,7 @@ function renderCrumbLink({
         to="/projects/$projectSlug/streams/$"
         params={{
           projectSlug: streamBreadcrumb.projectSlug,
-          _splat: streamPathToSplat(crumb.streamPath),
+          _splat: crumb.streamPath,
         }}
       />
     );
@@ -152,17 +145,12 @@ function renderCrumbLink({
 function StreamChildrenBreadcrumb({
   streamBreadcrumb,
 }: {
-  streamBreadcrumb: NonNullable<BreadcrumbLoaderData["streamBreadcrumb"]>;
+  streamBreadcrumb: NonNullable<RouteBreadcrumbLoaderData["streamBreadcrumb"]>;
 }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [newChildSegment, setNewChildSegment] = useState("");
-  const streamsQuery = useQuery({
-    ...orpc.project.streams.list.queryOptions({
-      input: { projectSlugOrId: streamBreadcrumb.projectId },
-    }),
-    staleTime: 10_000,
-  });
+  const streamsQuery = useQuery(projectStreamsListQueryOptions(streamBreadcrumb.projectId));
   const children = useMemo(
     () =>
       (streamsQuery.data?.streams ?? []).filter((stream) =>
@@ -180,7 +168,7 @@ function StreamChildrenBreadcrumb({
       to: "/projects/$projectSlug/streams/$",
       params: {
         projectSlug: streamBreadcrumb.projectSlug,
-        _splat: streamPathToSplat(childPath),
+        _splat: childPath,
       },
     });
   }

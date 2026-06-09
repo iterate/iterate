@@ -113,10 +113,10 @@ describe("StreamProcessor class type inference", () => {
       payload: { total: 1 },
     } satisfies EmittedInput<TypeInferenceProcessorContract>;
 
-    // @ts-expect-error undeclared event type is not emitted by this processor
     const wrongType = {
+      // @ts-expect-error undeclared event type is not emitted by this processor
       type: "events.test/other/output",
-      payload: {},
+      payload: { accepted: true },
     } satisfies EmittedInput<TypeInferenceProcessorContract>;
     const wrongDependencyPayload = {
       type: "events.test/dependency/output",

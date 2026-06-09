@@ -28,7 +28,8 @@ type Request =
   | { id: number; op: "init"; databasePath: string }
   | { id: number; op: "exec"; sql: string; params?: SqlValue[] }
   | { id: number; op: "batch"; statements: Statement[]; transaction: boolean }
-  | { id: number; op: "export" };
+  | { id: number; op: "export" }
+  | { id: number; op: "close" };
 
 let sqlite3: Sqlite3 | undefined;
 let db: number | undefined;
@@ -36,9 +37,13 @@ let databasePath = "";
 const VFS_NAME = "stream-opfs-coop";
 
 async function open(path: string): Promise<void> {
-  const module = await SQLiteESMFactory({ locateFile: () => wasmUrl });
+  const module = await loadSqliteModule();
   sqlite3 = Factory(module);
   const vfs = await OPFSCoopSyncVFS.create(VFS_NAME, module);
+  // wa-sqlite's VFS base defaults to 64-byte pathnames. OS project namespaces are
+  // longer than the example app's "default" namespace, so root stream DB paths can
+  // exceed that and make sqlite3_open_v2 fail before OPFS is touched.
+  vfs.mxPathname = 1024;
   // makeDefault:false — register under a name and pass it to open_v2, so we never touch
   // the built-in "opfs"/"memory" VFS registration.
   sqlite3.vfs_register(vfs, false);
@@ -50,6 +55,19 @@ async function open(path: string): Promise<void> {
   // A busy_timeout would instead make SQLite's core spin synchronously (blocking the event
   // loop, so the async acquisition can't resolve) for the whole timeout — a ~5s stall on
   // first open. Cross-connection contention is handled by withBusyRetry instead.
+}
+
+async function loadSqliteModule() {
+  const response = await fetch(wasmUrl);
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch SQLite WASM: ${String(response.status)} ${response.statusText}`,
+    );
+  }
+  return await SQLiteESMFactory({
+    locateFile: () => wasmUrl,
+    wasmBinary: await response.arrayBuffer(),
+  });
 }
 
 async function openWithRetry(path: string): Promise<number> {
@@ -131,6 +149,15 @@ async function exportFile(): Promise<ArrayBuffer> {
   return (await handle.getFile()).arrayBuffer();
 }
 
+async function closeDatabase(): Promise<void> {
+  if (sqlite3 !== undefined && db !== undefined) {
+    await sqlite3.close(db);
+  }
+  db = undefined;
+  sqlite3 = undefined;
+  databasePath = "";
+}
+
 async function handle(request: Request): Promise<unknown> {
   switch (request.op) {
     case "init":
@@ -142,6 +169,8 @@ async function handle(request: Request): Promise<unknown> {
       return withBusyRetry(() => batch(request.statements, request.transaction));
     case "export":
       return exportFile();
+    case "close":
+      return closeDatabase();
   }
 }
 

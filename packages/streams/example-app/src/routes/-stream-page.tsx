@@ -10,6 +10,7 @@ import {
 } from "react";
 import { ClientOnly, useNavigate } from "@tanstack/react-router";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
+import { DEFAULT_STREAM_NAMESPACE } from "../../../src/browser/connect.ts";
 import {
   acquireStreamRuntime,
   type BrowserProcessorConfig,
@@ -33,31 +34,38 @@ import {
   type BrowserRawEventsState,
 } from "../../../src/processors/browser-raw-events/implementation.ts";
 import { useStreamQuery } from "../../../src/browser/hooks/use-stream-query.ts";
+import { streamViewSearch, type StreamViewSearch } from "../lib/stream-view-search.ts";
+import {
+  useInitialTailScroll,
+  shouldSuppressUnreadBadgeDuringInitialTail,
+} from "../lib/use-initial-tail-scroll.ts";
 import { EventFeedView } from "./-event-feed-view.tsx";
 import { StreamStateView } from "./-stream-state-view.tsx";
 import { ViewSwitcher } from "./-view-switcher.tsx";
 
-export function StreamPage({ streamPath, viewSlug }: { streamPath: string; viewSlug: string }) {
+export function StreamPage({ streamView }: { streamView: StreamViewSearch }) {
   return (
-    <ClientOnly fallback={<StreamHydrationFallback streamPath={streamPath} />}>
-      <HydratedStreamPage streamPath={streamPath} viewSlug={viewSlug} />
+    <ClientOnly fallback={<StreamHydrationFallback streamView={streamView} />}>
+      <HydratedStreamPage streamView={streamView} />
     </ClientOnly>
   );
 }
 
-// One hydration boundary, then exactly one of the three sibling views, chosen by `?view=`
-// (the value is the view's slug). All three share the same sidebar shell.
-function HydratedStreamPage({ streamPath, viewSlug }: { streamPath: string; viewSlug: string }) {
-  const sidebarRuntime = useRawEventsView(streamPath, "");
+function HydratedStreamPage({ streamView }: { streamView: StreamViewSearch }) {
+  const sidebarRuntime = useRawEventsView({
+    streamPath: streamView.path,
+    streamNamespace: streamView.namespace,
+    eventTypeFilter: "",
+  });
 
   return (
-    <StreamViewShell currentView={viewSlug} sidebarRuntime={sidebarRuntime} streamPath={streamPath}>
-      {viewSlug === "browser-event-feed" ? (
-        <EventFeedView streamPath={streamPath} />
-      ) : viewSlug === "browser-state" ? (
-        <StreamStateView streamPath={streamPath} />
+    <StreamViewShell sidebarRuntime={sidebarRuntime} streamView={streamView}>
+      {streamView.view === "browser-event-feed" ? (
+        <EventFeedView streamView={streamView} />
+      ) : streamView.view === "browser-state" ? (
+        <StreamStateView streamView={streamView} />
       ) : (
-        <RawEventsMain streamPath={streamPath} />
+        <RawEventsMain streamView={streamView} />
       )}
     </StreamViewShell>
   );
@@ -65,16 +73,30 @@ function HydratedStreamPage({ streamPath, viewSlug }: { streamPath: string; view
 
 export function StreamCompactView({ streamPath }: { streamPath: string }) {
   return (
-    <ClientOnly fallback={<StreamHydrationFallback streamPath={streamPath} />}>
+    <ClientOnly
+      fallback={
+        <StreamHydrationFallback
+          streamView={{
+            path: streamPath,
+            namespace: DEFAULT_STREAM_NAMESPACE,
+            view: "browser-raw-events",
+          }}
+        />
+      }
+    >
       <HydratedStreamCompactView streamPath={streamPath} />
     </ClientOnly>
   );
 }
 
 // The raw-events sibling view: type filter + virtualized raw event list + composer.
-function RawEventsMain({ streamPath }: { streamPath: string }) {
+function RawEventsMain({ streamView }: { streamView: StreamViewSearch }) {
   const [eventTypeFilter, setEventTypeFilter] = useState("");
-  const runtime = useRawEventsView(streamPath, eventTypeFilter);
+  const runtime = useRawEventsView({
+    streamPath: streamView.path,
+    streamNamespace: streamView.namespace,
+    eventTypeFilter,
+  });
 
   if (runtime.countResult.status !== "ok") {
     return (
@@ -93,10 +115,10 @@ function RawEventsMain({ streamPath }: { streamPath: string }) {
       eventCount={runtime.eventCount}
       eventTypeFilter={eventTypeFilter}
       eventTypes={runtime.eventTypes}
-      key={`events:${streamPath}:${runtime.snapshot.clearVersion}:${eventTypeFilter}`}
+      key={`events:${streamView.path}:${runtime.snapshot.clearVersion}:${eventTypeFilter}`}
       snapshot={runtime.snapshot}
       streamDatabase={runtime.streamDatabase}
-      streamPath={streamPath}
+      streamPath={streamView.path}
       streamStore={runtime.streamStore}
       totalEventCount={runtime.totalEventCount}
       onEventTypeFilterChange={setEventTypeFilter}
@@ -106,7 +128,7 @@ function RawEventsMain({ streamPath }: { streamPath: string }) {
 
 function HydratedStreamCompactView({ streamPath }: { streamPath: string }) {
   const [eventTypeFilter, setEventTypeFilter] = useState("");
-  const runtime = useRawEventsView(streamPath, eventTypeFilter);
+  const runtime = useRawEventsView({ streamPath, eventTypeFilter });
 
   return (
     <section
@@ -157,10 +179,21 @@ function HydratedStreamCompactView({ streamPath }: { streamPath: string }) {
 // The browser's thin layer over a processor: acquire the shared (path, processor) runtime
 // — which, once it wins leadership, runs the processor over a subscription exactly like the
 // StreamProcessorRunner DO — and subscribe to its snapshot for React. Nothing view-specific.
-function useStreamProcessor(streamPath: string, config: BrowserProcessorConfig) {
+function useStreamProcessor(
+  args: { streamPath: string; streamNamespace?: string } & BrowserProcessorConfig,
+) {
+  const { streamPath, streamNamespace, slug, schemaVersion, tables, createProcessor } = args;
   const store = useMemo(
-    () => acquireStreamRuntime({ streamPath, ...config }),
-    [streamPath, config],
+    () =>
+      acquireStreamRuntime({
+        streamPath,
+        ...(streamNamespace === undefined ? {} : { namespace: streamNamespace }),
+        slug,
+        schemaVersion,
+        tables,
+        createProcessor,
+      }),
+    [streamPath, streamNamespace, slug, schemaVersion, tables, createProcessor],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -191,15 +224,23 @@ const RAW_EVENTS_RUNTIME: BrowserProcessorConfig = {
 };
 
 // The raw-events view's data: the thin runtime + this view's own reactive SQL queries.
-function useRawEventsView(streamPath: string, eventTypeFilter: string) {
-  const { store, snapshot, db } = useStreamProcessor(streamPath, RAW_EVENTS_RUNTIME);
+function useRawEventsView(args: {
+  streamPath: string;
+  streamNamespace?: string;
+  eventTypeFilter: string;
+}) {
+  const { store, snapshot, db } = useStreamProcessor({
+    streamPath: args.streamPath,
+    streamNamespace: args.streamNamespace,
+    ...RAW_EVENTS_RUNTIME,
+  });
   const totalCountResult = useStreamQuery(db, `SELECT COUNT(*) AS count FROM events`);
   const countResult = useStreamQuery(
     db,
-    eventTypeFilter === ""
+    args.eventTypeFilter === ""
       ? `SELECT COUNT(*) AS count FROM events`
       : `SELECT COUNT(*) AS count FROM events WHERE type = ?`,
-    eventTypeFilter === "" ? [] : [eventTypeFilter],
+    args.eventTypeFilter === "" ? [] : [args.eventTypeFilter],
   );
   const eventTypesResult = useStreamQuery(
     db,
@@ -222,7 +263,7 @@ function useRawEventsView(streamPath: string, eventTypeFilter: string) {
   };
 }
 
-function StreamHydrationFallback({ streamPath }: { streamPath: string }) {
+function StreamHydrationFallback({ streamView }: { streamView: StreamViewSearch }) {
   return (
     <div className="min-h-full bg-white font-sans text-slate-950">
       <div className="flex min-h-60 items-center justify-center gap-2.5 text-sm text-slate-500">
@@ -230,20 +271,18 @@ function StreamHydrationFallback({ streamPath }: { streamPath: string }) {
           className="size-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
           aria-hidden="true"
         />
-        <span>SSR done, hydrating client for {streamPath}</span>
+        <span>SSR done, hydrating client for {streamView.path}</span>
       </div>
     </div>
   );
 }
 
 function StreamViewShell({
-  streamPath,
-  currentView,
+  streamView,
   sidebarRuntime,
   children,
 }: {
-  streamPath: string;
-  currentView: string;
+  streamView: StreamViewSearch;
   sidebarRuntime: ReturnType<typeof useRawEventsView>;
   children: ReactNode;
 }) {
@@ -256,13 +295,12 @@ function StreamViewShell({
       <div className="flex h-full min-h-0 flex-row gap-4 p-0 max-[760px]:flex-col max-[760px]:gap-0">
         <StreamSidebar
           className={sidebarOpen ? undefined : "hidden"}
-          currentView={currentView}
           eventCount={sidebarRuntime.totalEventCount}
-          key={`sidebar:${streamPath}`}
+          key={`sidebar:${streamView.path}:${streamView.namespace}`}
           snapshot={sidebarRuntime.snapshot}
           streamDatabase={sidebarRuntime.streamDatabase}
           streamStore={sidebarRuntime.streamStore}
-          streamPath={streamPath}
+          streamView={streamView}
           onSidebarOpenChange={setSidebarOpen}
         />
         <div
@@ -363,16 +401,19 @@ function AppendEventIcon() {
 }
 
 function StreamTopBar({
-  streamPath,
+  streamView,
   onSidebarOpenChange,
 }: {
-  streamPath: string;
+  streamView: StreamViewSearch;
   onSidebarOpenChange(open: boolean): void;
 }) {
   const navigate = useNavigate();
   const pathInputRef = useRef<HTMLInputElement>(null);
+  const namespaceInputRef = useRef<HTMLInputElement>(null);
   const [editingPath, setEditingPath] = useState(false);
-  const [editedPath, setEditedPath] = useState(streamPath);
+  const [editingNamespace, setEditingNamespace] = useState(false);
+  const [editedPath, setEditedPath] = useState(streamView.path);
+  const [editedNamespace, setEditedNamespace] = useState(streamView.namespace);
   const trimmedDraftPath = editedPath.trim();
   const normalizedDraftPath =
     trimmedDraftPath === ""
@@ -380,7 +421,11 @@ function StreamTopBar({
       : trimmedDraftPath.startsWith("/")
         ? trimmedDraftPath
         : `/${trimmedDraftPath}`;
-  const pathChanged = normalizedDraftPath !== streamPath;
+  const pathChanged = normalizedDraftPath !== streamView.path;
+  const trimmedDraftNamespace = editedNamespace.trim();
+  const normalizedDraftNamespace =
+    trimmedDraftNamespace === "" ? DEFAULT_STREAM_NAMESPACE : trimmedDraftNamespace;
+  const namespaceChanged = normalizedDraftNamespace !== streamView.namespace;
 
   useLayoutEffect(() => {
     if (!editingPath) return;
@@ -388,32 +433,64 @@ function StreamTopBar({
     pathInputRef.current?.select();
   }, [editingPath]);
 
+  useLayoutEffect(() => {
+    if (!editingNamespace) return;
+    namespaceInputRef.current?.focus();
+    namespaceInputRef.current?.select();
+  }, [editingNamespace]);
+
   function goToDraftPath() {
     if (!pathChanged) {
       setEditingPath(false);
-      setEditedPath(streamPath);
+      setEditedPath(streamView.path);
       return;
     }
     setEditingPath(false);
-    if (normalizedDraftPath === "/") {
-      void navigate({ to: "/streams", search: { view: "browser-raw-events" } });
+    void navigate({
+      to: "/streams",
+      search: streamViewSearch({
+        path: normalizedDraftPath,
+        namespace: streamView.namespace,
+        view: streamView.view,
+      }),
+    });
+  }
+
+  function goToDraftNamespace() {
+    if (!namespaceChanged) {
+      setEditingNamespace(false);
+      setEditedNamespace(streamView.namespace);
       return;
     }
+    setEditingNamespace(false);
     void navigate({
-      to: "/streams/$",
-      params: { _splat: normalizedDraftPath.slice(1) },
-      search: { view: "browser-raw-events" },
+      to: "/streams",
+      search: streamViewSearch({
+        path: streamView.path,
+        namespace: normalizedDraftNamespace,
+        view: streamView.view,
+      }),
     });
   }
 
   function startEditingPath() {
-    setEditedPath(streamPath);
+    setEditedPath(streamView.path);
     setEditingPath(true);
   }
 
+  function startEditingNamespace() {
+    setEditedNamespace(streamView.namespace);
+    setEditingNamespace(true);
+  }
+
   function cancelEditingPath() {
-    setEditedPath(streamPath);
+    setEditedPath(streamView.path);
     setEditingPath(false);
+  }
+
+  function cancelEditingNamespace() {
+    setEditedNamespace(streamView.namespace);
+    setEditingNamespace(false);
   }
 
   return (
@@ -458,7 +535,7 @@ function StreamTopBar({
               type="button"
               onClick={() => startEditingPath()}
             >
-              {streamPath}
+              {streamView.path}
             </button>
           )}
         </div>
@@ -492,6 +569,68 @@ function StreamTopBar({
           </button>
         )}
       </div>
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 w-full">
+        <span className="shrink-0 text-[11px] font-medium text-[#667085]">namespace</span>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          {editingNamespace ? (
+            <input
+              aria-label="Stream namespace"
+              className="min-w-0 flex-1 rounded border border-[#bac2cf] px-1.5 py-1 font-mono text-xs leading-snug"
+              data-testid="stream-namespace-input"
+              id="stream-namespace"
+              ref={namespaceInputRef}
+              value={editedNamespace}
+              onChange={(event) => setEditedNamespace(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  cancelEditingNamespace();
+                  return;
+                }
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                goToDraftNamespace();
+              }}
+            />
+          ) : (
+            <span
+              className="min-w-0 truncate font-mono text-xs leading-snug text-[#16181d]"
+              data-testid="stream-namespace"
+            >
+              {streamView.namespace}
+            </span>
+          )}
+        </div>
+        {editingNamespace ? (
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              className="cursor-pointer border-0 bg-transparent px-0 py-1 text-[11px] font-semibold text-[#667085] disabled:cursor-default disabled:opacity-40"
+              data-testid="stream-namespace-go"
+              disabled={!namespaceChanged}
+              type="button"
+              onClick={() => goToDraftNamespace()}
+            >
+              Go to stream
+            </button>
+            <button
+              className="cursor-pointer border-0 bg-transparent px-0 py-1 text-[11px] text-[#98a2b3] hover:text-[#475467] hover:underline"
+              type="button"
+              onClick={() => cancelEditingNamespace()}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            className="shrink-0 cursor-pointer border-0 bg-transparent px-0 py-1 text-[11px] text-[#667085] hover:text-[#344054] hover:underline"
+            data-testid="stream-namespace-change"
+            type="button"
+            onClick={() => startEditingNamespace()}
+          >
+            Change namespace
+          </button>
+        )}
+      </div>
     </header>
   );
 }
@@ -521,7 +660,6 @@ function EventRows({
   const estimatedEventRowHeight = 38;
   const parentRef = useRef<HTMLDivElement>(null);
   const previousEventCount = useRef(eventCount);
-  const settledInitialEndScroll = useRef(false);
   const initialScrollOffset = useRef(
     eventCount > 50 ? topScrollAffordanceHeight + eventCount * estimatedEventRowHeight : 0,
   );
@@ -564,16 +702,19 @@ function EventRows({
     },
   });
   const virtualItems = virtualizer.getVirtualItems();
-
-  useLayoutEffect(() => {
-    if (settledInitialEndScroll.current || eventCount === 0) return;
-    settledInitialEndScroll.current = true;
-    virtualizer.scrollToEnd();
-  }, [eventCount, virtualizer]);
+  const initialTailScroll = useInitialTailScroll({
+    count: eventCount,
+    scrollElementRef: parentRef,
+    virtualizer,
+  });
 
   useLayoutEffect(() => {
     const appendedCount = eventCount - previousEventCount.current;
     previousEventCount.current = eventCount;
+    if (shouldSuppressUnreadBadgeDuringInitialTail(initialTailScroll)) {
+      setNewEventCount(0);
+      return;
+    }
     if (appendedCount <= 0) {
       if (eventCount === 0) setNewEventCount(0);
       return;
@@ -581,7 +722,7 @@ function EventRows({
     if (!scrollPosition.isAtEnd) {
       setNewEventCount((current) => current + appendedCount);
     }
-  }, [eventCount, scrollPosition.isAtEnd]);
+  }, [eventCount, initialTailScroll, scrollPosition.isAtEnd]);
 
   useLayoutEffect(() => {
     if (scrollPosition.isAtEnd) setNewEventCount(0);
@@ -604,6 +745,7 @@ function EventRows({
               className="pointer-events-auto grid size-8 cursor-pointer place-items-center rounded-full border border-[#e8ebf0] bg-white text-base leading-none text-[#16181d] opacity-60 shadow-[0_4px_12px_rgb(15_23_42_/_8%)] hover:opacity-90"
               type="button"
               onClick={() => {
+                initialTailScroll.markUserLeftTail();
                 virtualizer.scrollToOffset(0);
               }}
             >
@@ -967,8 +1109,7 @@ function streamEventRowFromSql(row: Record<string, unknown>): StreamEventRow | u
 
 function StreamSidebar({
   className,
-  streamPath,
-  currentView,
+  streamView,
   snapshot,
   streamDatabase,
   streamStore,
@@ -976,8 +1117,7 @@ function StreamSidebar({
   onSidebarOpenChange,
 }: {
   className?: string;
-  streamPath: string;
-  currentView: string;
+  streamView: StreamViewSearch;
   snapshot: StreamBrowserSnapshot;
   streamDatabase: StreamBrowserDatabase;
   streamStore: StreamBrowserStore;
@@ -993,9 +1133,9 @@ function StreamSidebar({
       }
       id="stream-sidebar"
     >
-      <StreamTopBar streamPath={streamPath} onSidebarOpenChange={onSidebarOpenChange} />
+      <StreamTopBar streamView={streamView} onSidebarOpenChange={onSidebarOpenChange} />
       <div className="py-2">
-        <ViewSwitcher streamPath={streamPath} current={currentView} />
+        <ViewSwitcher streamView={streamView} />
       </div>
       <SubscriptionTool
         eventCount={eventCount}
@@ -1003,7 +1143,7 @@ function StreamSidebar({
         streamDatabase={streamDatabase}
         streamStore={streamStore}
       />
-      <InsertEventsTool streamStore={streamStore} streamPath={streamPath} />
+      <InsertEventsTool streamStore={streamStore} streamPath={streamView.path} />
       <StreamControlTool snapshot={snapshot} streamStore={streamStore} />
     </aside>
   );

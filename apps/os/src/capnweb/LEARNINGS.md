@@ -23,12 +23,11 @@ and forwarding stays in the parent worker.
 The working shape for dynamic-worker mounts is:
 
 - `/run` receives `env.ITERATE`.
-- `/run` resolves built-ins with `await env.ITERATE.context`.
-- `/run` overlays only dynamic-worker mount roots with a marker that calls
-  `env.ITERATE.callMounted([root, ...path], args)`.
-- `IterateContextEntrypoint.callMounted()` runs in the parent worker, loads or
-  reuses the mounted dynamic worker, awaits intermediate targets, and invokes
-  the final method there.
+- `/run` resolves the raw context with `await env.ITERATE.context`.
+- Mounted roots return parent-owned path `RpcTarget`s.
+- The parent worker loads or reuses the mounted dynamic worker, replays the full
+  property path against the native Workers RPC entrypoint, and invokes the final
+  method there.
 
 ## Preserve Receivers
 
@@ -87,12 +86,12 @@ entrypoint. It is a parent-owned facade:
 - `ctx.project.worker.someTool(args)` forwards to
   `project.callConfigWorkerFunction({ functionName: "someTool", args })`.
 
-## SDK Paths Are Marker-Only
+## SDK Paths Stay Server-Side
 
-`liftLocalProxies(...)` must not broadly replace every returned object/function.
-Only objects returned by `localProxyCaller(...)` become local SDK path proxies.
-Normal Cap'n Web and Workers RPC stubs already have their own proxy behavior and
-must pass through untouched.
+Do not add client-side lifters for SDK-shaped paths. Normal Cap'n Web and
+Workers RPC stubs already have their own proxy behavior. SDK-shaped dynamic
+surfaces should be server-owned path `RpcTarget`s that suppress `then` and
+reserved names, then forward the terminal call from the server.
 
 ## Vitest-Lowered `using` Is Test Serialization
 
