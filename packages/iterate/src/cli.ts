@@ -10,11 +10,11 @@ import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { os } from "@orpc/server";
 import { createAuthClient } from "better-auth/client";
-import { adminClient } from "better-auth/client/plugins";
 import { createCli, parseRouter, type AnyRouter, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod/v4";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 import type { AuthContractClient } from "../../../apps/auth-contract/src/index.ts";
+import { resourceLimits } from "node:worker_threads";
 
 type ParsedRouter = ReturnType<typeof parseRouter>;
 
@@ -25,20 +25,6 @@ const XDG_CONFIG_PARENT = join(
 
 const CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
 
-/** Superadmin impersonation strategy — for CI/automation. Requires admin password env var. */
-const SuperadminStrategy = z.object({
-  strategy: z.literal("superadmin"),
-  adminPasswordEnvVarName: z.string().describe("Env var name containing admin password"),
-  userEmail: z.string().describe("User email to impersonate for OS calls"),
-});
-
-/** Device flow strategy — interactive login via browser (RFC 8628). */
-const DeviceStrategy = z.object({
-  strategy: z.literal("device"),
-});
-
-const AuthStrategy = z.discriminatedUnion("strategy", [SuperadminStrategy, DeviceStrategy]);
-
 /** Stored session (lives inside a config entry) */
 const Session = z.object({
   token: z.string().optional(),
@@ -48,9 +34,11 @@ const Session = z.object({
 
 /** A named config — describes which server to talk to and how to authenticate. */
 const Config = z.object({
-  osBaseUrl: z.string(),
+  defaultProject: z.string().optional(),
+  osBaseUrl: z.string().optional().default("https://os.iterate.com"),
+  authBaseUrl: z.string().optional().default("https://auth.iterate.com"),
   session: Session.optional(),
-});
+})
 
 type Config = z.infer<typeof Config>;
 
@@ -147,7 +135,7 @@ const loadLocalRouter = async (routerPath: string) => {
 };
 
 const resolveStreamTuiEntrypointPath = () => {
-  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const moduleDir = import.meta.dirname;
   const candidates = [
     join(moduleDir, "stream-tui/event-stream-terminal.tsx"),
     join(moduleDir, "stream-tui/event-stream-terminal.mjs"),
@@ -182,10 +170,11 @@ export const buildChatCommand = (input: {
 const runInheritedProcess = async (input: {
   command: string;
   args: string[];
+  env: Record<string, string | undefined>;
 }): Promise<void> => {
   const child = spawn(input.command, input.args, {
     stdio: "inherit",
-    env: process.env,
+    env: {...process.env, ...input.env},
   });
 
   const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
@@ -277,9 +266,7 @@ const getLocalConfigDefaults = () => {
 };
 
 const resolveAuthBaseUrl = async (config: Config) => {
-  const res = await fetch(`${config.osBaseUrl}/api/auth/base-url`);
-  const {authBaseUrl} = await res.json();
-  return String(authBaseUrl.slice());
+  return config.authBaseUrl || Config.shape.authBaseUrl.def.defaultValue;
 };
 
 const storeSession = (configName: string, session: Config["session"]): void => {
@@ -632,33 +619,6 @@ const getDaemonProcedures = async (params: { daemonBaseUrl: string }) => {
 };
 
 const launcherProcedures = {
-  doctor: os
-    .meta({ description: "Show config, resolved target, and session status" })
-    .handler(async () => {
-      const configFile = readConfigFile();
-      const resolved = resolveConfig(process.cwd());
-      const configs = configFile.configs || {};
-      return {
-        configPath: CONFIG_PATH,
-        configFile,
-        resolved: resolved instanceof Error ? { error: resolved.message } : resolved,
-        resolvedAuthBaseUrl:
-          resolved instanceof Error ? undefined : resolveAuthBaseUrl(resolved.config),
-        sessions: Object.fromEntries(
-          Object.entries(configs).map(([name, cfg]) => [
-            name,
-            {
-              hasSession: Boolean(cfg.session?.token || cfg.session?.cookie),
-              expiresAt: cfg.session?.expiresAt,
-              expired: cfg.session?.expiresAt
-                ? new Date(cfg.session.expiresAt) < new Date()
-                : false,
-            },
-          ]),
-        ),
-      };
-    }),
-
   login: os
     .input(
       z
@@ -679,7 +639,7 @@ const launcherProcedures = {
       const { config } = resolved;
 
       // Device flow
-      console.error(`Logging in to ${resolveAuthBaseUrl(config)}...`);
+      console.error(`Logging in to ${await resolveAuthBaseUrl(config)}...`);
       const deviceResult = await deviceFlowLogin(config);
       storeSession(resolved.name, deviceResult);
       // Update in-memory config so getAuthenticatedClient sees the token
@@ -713,44 +673,46 @@ const launcherProcedures = {
 
   chat: os
     .input(
-      z.object({
-        projectSlugOrId: z
-          .string()
-          .trim()
-          .min(1)
-          .describe("OS project slug or ID"),
-        streamPath: z
-          .string()
-          .trim()
-          .min(1)
-          .startsWith("/")
-          .describe("Project stream path to open"),
-        osBaseUrl: z
-          .string()
-          .trim()
-          .url()
-          .optional()
-          .describe("OS base URL. Defaults to the active iterate config or production."),
-      }),
+      (() => {
+        const resolvedConfig = resolveConfig(process.cwd());
+        const shape = ({
+          project: z
+            .string()
+            .trim()
+            .min(1)
+            .describe("OS project slug or ID"),
+          streamPath: z
+            .string()
+            .trim()
+            .min(1)
+            .startsWith("/")
+            .describe("Project stream path to open"),
+        })
+
+        return resolvedConfig instanceof Error ? z.object(shape) : z.object({
+          ...shape,
+          ...(resolvedConfig.config.defaultProject && {project: shape.project.default(resolvedConfig.config.defaultProject)}),
+        })
+      })(),
     )
     .meta({
       description: "Open the Iterate chat terminal UI",
     })
     .handler(async ({ input }) => {
-      let osBaseUrl = input.osBaseUrl;
-      if (!osBaseUrl) {
-        const resolved = resolveConfig(process.cwd());
-        if (resolved instanceof Error) throw resolved;
-        osBaseUrl = resolved.config.osBaseUrl;
-      }
+      const resolved = resolveConfig(process.cwd());
+      if (resolved instanceof Error) throw resolved;
+      const osBaseUrl = resolved.config.osBaseUrl;
       const command = buildChatCommand({
         osBaseUrl,
-        projectSlugOrId: input.projectSlugOrId,
+        projectSlugOrId: input.project,
         streamPath: input.streamPath,
         entrypointPath: resolveStreamTuiEntrypointPath(),
       });
       await runInheritedProcess({
         ...command,
+        env: {
+          OS_E2E_BEARER_TOKEN: resolved.config.session?.token,
+        }
       });
     }),
 
@@ -764,6 +726,35 @@ const launcherProcedures = {
   },
 
   config: {
+    get: os.meta({ default: true, description: "Show config, resolved target, and session status" })
+    .handler(async () => {
+      const configFile = readConfigFile();
+      const resolved = resolveConfig(process.cwd());
+      const configs = configFile.configs || {};
+      return {
+        configPath: CONFIG_PATH,
+        configFile,
+        resolved: resolved instanceof Error ? { error: resolved.message } : resolved,
+        resolvedAuthBaseUrl:
+          resolved instanceof Error ? undefined : resolveAuthBaseUrl(resolved.config),
+        sessions: Object.fromEntries(
+          Object.entries(configs).map(([name, cfg]) => {
+            if (!cfg.session) return [name, null]
+            return [
+              name,
+              {
+                hasToken: Boolean(cfg.session?.token),
+                hasCookie: Boolean(cfg.session?.cookie),
+                expiresAt: cfg.session?.expiresAt,
+                expired: cfg.session?.expiresAt
+                  ? new Date(cfg.session.expiresAt) < new Date()
+                  : false,
+              },
+            ]
+          }),
+        ),
+      };
+    }),
     list: os.meta({ description: "List all named configs" }).handler(async () => {
       const configFile = readConfigFile();
       const currentName = resolveConfigName(process.cwd());
@@ -786,24 +777,11 @@ const launcherProcedures = {
       .input(
         z.object({
           name: z.string().describe("Config name (e.g. dev, prd, preview)"),
-          osBaseUrl: z.string().describe("Base URL for OS API (e.g. https://os.iterate.com)"),
+          osBaseUrl: z.string().optional().describe("Base URL for OS API (e.g. https://os.iterate.com)"),
           authBaseUrl: z
             .string()
             .optional()
             .describe("Base URL for auth API (e.g. https://auth.iterate.com)"),
-          daemonBaseUrl: z
-            .string()
-            .optional()
-            .describe("Base URL for daemon API (e.g. http://localhost:3001)"),
-          strategy: z.enum(["device", "superadmin"]).default("device").describe("Auth strategy"),
-          adminPasswordEnvVarName: z
-            .string()
-            .optional()
-            .describe("Env var name for admin password (superadmin strategy only)"),
-          userEmail: z
-            .string()
-            .optional()
-            .describe("User email to impersonate (superadmin strategy only)"),
           setDefault: z.boolean().optional().describe("Set as the default config"),
           setWorkspace: z.boolean().optional().describe("Map current directory to this config"),
         }),
@@ -813,18 +791,9 @@ const launcherProcedures = {
         const configFile = readConfigFile();
         configFile.configs ||= {};
 
-        const auth: z.infer<typeof AuthStrategy> =
-          input.strategy === "superadmin"
-            ? {
-                strategy: "superadmin" as const,
-                adminPasswordEnvVarName: input.adminPasswordEnvVarName || "",
-                userEmail: input.userEmail || "",
-              }
-            : { strategy: "device" as const };
-
-        configFile.configs[input.name] = {
-          osBaseUrl: input.osBaseUrl,
-        };
+        configFile.configs[input.name] ||= {} as never;
+        if (input.osBaseUrl) configFile.configs[input.name].osBaseUrl = input.osBaseUrl;
+        if (input.authBaseUrl) configFile.configs[input.name].authBaseUrl = input.authBaseUrl;
 
         if (input.setDefault) {
           configFile.default = input.name;
@@ -870,49 +839,6 @@ const launcherProcedures = {
         resolvedVia: configFlagOverride ? "--config flag" : "workspace mapping or default",
       };
     }),
-
-    local: os
-      .input(
-        z
-          .object({
-            name: z.string().optional().describe("Config name to create or update"),
-            setDefault: z.boolean().optional().describe("Set this config as the default"),
-            setWorkspace: z
-              .boolean()
-              .optional()
-              .describe("Map the current directory to this config"),
-          })
-          .partial(),
-      )
-      .meta({
-        description: "Create a local dev config wired to auth localhost and your dev tunnel",
-      })
-      .handler(async ({ input }) => {
-        const configFile = readConfigFile();
-        configFile.configs ||= {};
-
-        const defaults = getLocalConfigDefaults();
-        const name = input.name || defaults.name;
-
-        configFile.configs[name] = {
-          osBaseUrl: defaults.osBaseUrl,
-        };
-
-        if (input.setDefault ?? true) {
-          configFile.default = name;
-        }
-        if (input.setWorkspace ?? true) {
-          configFile.workspaces ||= {};
-          configFile.workspaces[process.cwd()] = name;
-        }
-
-        writeConfigFile(configFile);
-        return {
-          configPath: CONFIG_PATH,
-          name,
-          config: configFile.configs[name],
-        };
-      }),
   },
 };
 
