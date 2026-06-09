@@ -33,7 +33,10 @@ import {
 } from "../../../src/processors/browser-raw-events/implementation.ts";
 import { useStreamQuery } from "../../../src/browser/hooks/use-stream-query.ts";
 import { streamViewSearch, type StreamViewSearch } from "../lib/stream-view-search.ts";
-import { useInitialTailScroll } from "../lib/use-initial-tail-scroll.ts";
+import {
+  useInitialTailScroll,
+  shouldSuppressUnreadBadgeDuringInitialTail,
+} from "../lib/use-initial-tail-scroll.ts";
 import { EventFeedView } from "./-event-feed-view.tsx";
 import { StreamStateView } from "./-stream-state-view.tsx";
 import { ViewSwitcher } from "./-view-switcher.tsx";
@@ -685,12 +688,16 @@ function EventRows({
     },
   });
   const virtualItems = virtualizer.getVirtualItems();
-  const settledInitialEndScroll = useInitialTailScroll({ count: eventCount, virtualizer });
+  const initialTailScroll = useInitialTailScroll({
+    count: eventCount,
+    scrollElementRef: parentRef,
+    virtualizer,
+  });
 
   useLayoutEffect(() => {
     const appendedCount = eventCount - previousEventCount.current;
     previousEventCount.current = eventCount;
-    if (!settledInitialEndScroll.current) {
+    if (shouldSuppressUnreadBadgeDuringInitialTail(initialTailScroll)) {
       setNewEventCount(0);
       return;
     }
@@ -701,7 +708,7 @@ function EventRows({
     if (!scrollPosition.isAtEnd) {
       setNewEventCount((current) => current + appendedCount);
     }
-  }, [eventCount, scrollPosition.isAtEnd, settledInitialEndScroll]);
+  }, [eventCount, initialTailScroll, scrollPosition.isAtEnd]);
 
   useLayoutEffect(() => {
     if (scrollPosition.isAtEnd) setNewEventCount(0);
@@ -724,6 +731,7 @@ function EventRows({
               className="pointer-events-auto grid size-8 cursor-pointer place-items-center rounded-full border border-[#e8ebf0] bg-white text-base leading-none text-[#16181d] opacity-60 shadow-[0_4px_12px_rgb(15_23_42_/_8%)] hover:opacity-90"
               type="button"
               onClick={() => {
+                initialTailScroll.markUserLeftTail();
                 virtualizer.scrollToOffset(0);
               }}
             >

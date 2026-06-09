@@ -223,7 +223,7 @@ test("event feed view starts at the bottom on first visit while replay fills the
   const freshContext = await browser.newContext();
   const page = await freshContext.newPage();
   await page.goto(streamRoute({ path: streamPath, view: "browser-event-feed" }));
-  await expect(page.getByTestId("feed-item-count")).not.toHaveText(/0 feed items/, {
+  await expect(page.getByTestId("feed-item-count")).not.toHaveText(/^0 feed items$/, {
     timeout: 30_000,
   });
   await expect(page.getByTestId("stream-status")).toHaveText("subscribed", { timeout: 30_000 });
