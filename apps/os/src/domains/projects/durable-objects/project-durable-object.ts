@@ -8,7 +8,7 @@ import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-obje
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { jsonataReactorEventTypes } from "@iterate-com/shared/stream-processors/jsonata-reactor/contract";
-import { type Event } from "@iterate-com/shared/streams/types";
+import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
 import { typeid } from "@iterate-com/shared/typeid";
 import {
   getInitializedStreamStub,
@@ -67,6 +67,9 @@ import {
   EXAMPLE_EGRESS_SECRET_METADATA,
 } from "~/domains/secrets/example-secret.ts";
 import type { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
+import { ContextRegistry, type LiveCapTarget } from "~/itx/registry.ts";
+import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
+import type { CapInvoke, CapMeta, CapSource, PathCall } from "~/itx/protocol.ts";
 
 type CaptunServerTunnel = Fetcher & Disposable;
 type ProjectCapnwebConnectionTarget = Record<string, any>;
@@ -110,6 +113,11 @@ export type ProjectCapability = Pick<
   | "getSummary"
   | "ingressFetch"
   | "ingressUrl"
+  | "itxDefine"
+  | "itxDescribe"
+  | "itxInvoke"
+  | "itxProvide"
+  | "itxRevoke"
   | "provideCapability"
 > & {
   getCapability(props?: { scopes?: unknown }): ProjectCapability;
@@ -444,6 +452,86 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     target.onRpcBroken?.(() => connection[Symbol.dispose]());
 
     return { connectionKey, ok: true };
+  }
+
+  // ---- itx capability registry (apps/os/docs/itx-spec.md §4) --------------
+  //
+  // The Project DO hosts the PROJECT CONTEXT: it embeds the registry and is
+  // the supervisor for every capability invocation in this project. These
+  // five methods are the entire registry surface; itx handles (src/itx/) call
+  // them over Workers RPC and never reach the registry any other way.
+
+  #itxRegistry: ContextRegistry | null = null;
+
+  async itxProvide(input: {
+    name: string;
+    target: LiveCapTarget;
+    invoke?: CapInvoke;
+    meta?: CapMeta;
+  }) {
+    await this.ensureStarted();
+    return this.itxRegistry().provide(input);
+  }
+
+  async itxDefine(input: { name: string; source: CapSource; invoke?: CapInvoke; meta?: CapMeta }) {
+    await this.ensureStarted();
+    return this.itxRegistry().define(input);
+  }
+
+  async itxRevoke(input: { name: string }) {
+    await this.ensureStarted();
+    return this.itxRegistry().revoke(input);
+  }
+
+  async itxDescribe() {
+    await this.ensureStarted();
+    return this.itxRegistry().describe();
+  }
+
+  async itxInvoke(input: PathCall & { name: string }) {
+    await this.ensureStarted();
+    return await this.itxRegistry().invoke(input.name, { args: input.args, path: input.path });
+  }
+
+  private itxRegistry(): ContextRegistry {
+    if (this.#itxRegistry) return this.#itxRegistry;
+    const projectId = this.structuredName.projectId;
+    this.#itxRegistry = new ContextRegistry({
+      // Best-effort audit trail on the project's /itx stream; the registry's
+      // SQLite table is the authoritative state (itx DECISIONS.md D1).
+      audit: (event) => {
+        this.ctx.waitUntil(
+          (async () => {
+            const stream = await getInitializedStreamStub({
+              durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+              namespace: projectId,
+              path: StreamPath.parse(ITX_AUDIT_STREAM_PATH),
+            });
+            await stream.append({ payload: event.payload, type: event.type });
+          })().catch((error) => {
+            console.error(`[itx] audit append failed for ${projectId}:`, error);
+          }),
+        );
+      },
+      contextId: projectId,
+      loader: projectRuntimeEnv(this.env).LOADER as unknown as ConstructorParameters<
+        typeof ContextRegistry
+      >[0]["loader"],
+      loopback: (exportName, options) => {
+        const exports = this.ctx.exports as unknown as Record<
+          string,
+          (options: Record<string, unknown>) => unknown
+        >;
+        const factory = exports[exportName];
+        if (typeof factory !== "function") {
+          throw new Error(`Loopback export ${exportName} is not available.`);
+        }
+        return factory(options);
+      },
+      projectId,
+      sql: this.getDurableObjectSql(),
+    });
+    return this.#itxRegistry;
   }
 
   async getIterateContext(props?: IterateContextProps): Promise<IterateContext> {

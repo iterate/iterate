@@ -35,6 +35,7 @@ import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-ch
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
 import { handleRootIterateContextFetch } from "~/capnweb/root-context-fetch.ts";
+import { handleItxFetch } from "~/itx/fetch.ts";
 import { handleCapabilityPrototypeFetch } from "~/domains/capability-prototype/fetch.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { requireProjectScopedAccess } from "~/orpc/project-access.ts";
@@ -64,6 +65,7 @@ export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
 export { FakeIterateEntrypoint } from "~/domains/capability-prototype/entrypoint.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { IterateContextEntrypoint } from "~/capnweb/iterate-context-capability.ts";
+export { ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
@@ -202,6 +204,9 @@ export default {
           request,
         });
         if (projectStreamRpcResponse) return projectStreamRpcResponse;
+
+        const itxResponse = await handleItxFetch({ config, context, env, request });
+        if (itxResponse) return itxResponse;
 
         const captnwebResponse = await handleRootIterateContextFetch({
           request,
