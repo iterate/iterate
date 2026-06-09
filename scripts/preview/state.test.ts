@@ -16,10 +16,10 @@ describe("cloudflare preview state helpers", () => {
       type: "environment-config-lease",
     });
     const entry = CloudflarePreviewAppEntry.parse({
-      appDisplayName: "Example",
-      appSlug: "example",
+      appDisplayName: "OS",
+      appSlug: "os",
       headSha: "abcdef0123456789",
-      publicUrl: "https://example-preview-2.iterate.workers.dev",
+      publicUrl: "https://os.iterate-preview-2.com",
       runUrl: "https://github.com/iterate/iterate/actions/runs/123",
       shortSha: "abcdef0",
       status: "deployed",
@@ -28,7 +28,7 @@ describe("cloudflare preview state helpers", () => {
 
     const state = {
       apps: {
-        example: entry,
+        os: entry,
       },
       environmentConfigLease,
     };
@@ -45,7 +45,7 @@ describe("cloudflare preview state helpers", () => {
     expect(body).toContain("<!-- CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain("<!--\n{");
     expect(body).toContain("\n-->\n<!-- /CLOUDFLARE_PREVIEW_STATE -->");
-    expect(body).toContain("Preview: https://example-preview-2.iterate.workers.dev");
+    expect(body).toContain("Preview: https://os.iterate-preview-2.com");
   });
 
   it("updates only the managed block and preserves surrounding PR body content", () => {

@@ -18,10 +18,10 @@ const originalConsole = {
 };
 const consoleFilterKey = Symbol.for("iterate.evlog.console-filter-installed");
 const appManifest = {
-  packageName: "@iterate-com/example",
+  packageName: "@iterate-com/test-app",
   version: "0.0.1",
-  slug: "example",
-  description: "Example App",
+  slug: "test-app",
+  description: "Test App",
 } as const;
 
 afterEach(() => {
@@ -69,7 +69,7 @@ describe("apps logging pretty stdout", () => {
       renderPrettyStdoutEvent({
         timestamp: "2026-03-26T12:56:38.515Z",
         level: "info",
-        appName: "@iterate-com/example",
+        appName: "@iterate-com/test-app",
         message: "POST /api/test/log-demo 200 in 302ms (3 lines)",
         method: "POST",
         path: "/api/test/log-demo",
@@ -78,8 +78,8 @@ describe("apps logging pretty stdout", () => {
         durationMs: 302,
         requestId: "req_123",
         app: {
-          slug: "example",
-          packageName: "@iterate-com/example",
+          slug: "test-app",
+          packageName: "@iterate-com/test-app",
         },
         config: {
           logs: {
@@ -119,7 +119,7 @@ describe("apps logging pretty stdout", () => {
     );
 
     expect(output).toContain(
-      "12:56:38.515 INFO [@iterate-com/example] POST /api/test/log-demo 200 in 302ms (3 lines)",
+      "12:56:38.515 INFO [@iterate-com/test-app] POST /api/test/log-demo 200 in 302ms (3 lines)",
     );
     expect(output).toContain(
       "rpc: url=http://localhost:5174/api/test/log-demo procedurePath=test.logDemo",
@@ -143,7 +143,7 @@ describe("apps logging pretty stdout", () => {
       renderPrettyStdoutEvent({
         timestamp: "2026-03-26T12:56:40.000Z",
         level: "info",
-        appName: "@iterate-com/example",
+        appName: "@iterate-com/test-app",
         method: "GET",
         path: "/slow",
         status: 200,
@@ -174,7 +174,7 @@ describe("apps logging pretty stdout", () => {
       renderPrettyStdoutEvent({
         timestamp: "2026-03-26T12:56:38.515Z",
         level: "info",
-        appName: "@iterate-com/example",
+        appName: "@iterate-com/test-app",
         message: "GET /debug 200 in 41ms (0 lines)",
         method: "GET",
         path: "/debug",
@@ -184,7 +184,7 @@ describe("apps logging pretty stdout", () => {
     );
 
     expect(output).toContain(
-      "12:56:38.515 INFO [@iterate-com/example] GET /debug 200 in 41ms (0 lines)",
+      "12:56:38.515 INFO [@iterate-com/test-app] GET /debug 200 in 41ms (0 lines)",
     );
     expect(output).not.toContain(
       "GET /debug 200 in 41ms (0 lines) GET /debug 200 in 41ms (0 lines)",
@@ -199,7 +199,7 @@ describe("apps logging pretty stdout", () => {
       event: {
         timestamp: "2026-03-26T12:56:38.515Z",
         level: "info",
-        appName: "@iterate-com/example",
+        appName: "@iterate-com/test-app",
         method: "GET",
         path: "/debug",
         status: 200,
@@ -209,7 +209,7 @@ describe("apps logging pretty stdout", () => {
 
     expect(writer).toHaveBeenCalledTimes(1);
     expect(stripAnsi(writer.mock.calls[0]![0] as string)).toContain(
-      "12:56:38.515 INFO [@iterate-com/example] GET /debug 200 in 41ms",
+      "12:56:38.515 INFO [@iterate-com/test-app] GET /debug 200 in 41ms",
     );
   });
 
@@ -225,7 +225,7 @@ describe("apps logging pretty stdout", () => {
     console.info({
       timestamp: "2026-03-26T12:56:38.515Z",
       level: "info",
-      appName: "@iterate-com/example",
+      appName: "@iterate-com/test-app",
       method: "GET",
       path: "/debug",
     });
@@ -240,7 +240,7 @@ describe("apps logging pretty stdout", () => {
     const event = {
       timestamp: "2026-03-26T12:56:38.515Z",
       level: "error",
-      appName: "@iterate-com/example",
+      appName: "@iterate-com/test-app",
       message: "POST /api/test/log-demo 200 in 302ms (2 lines)",
       rpc: {
         url: "http://localhost:5174/api/test/log-demo",

@@ -32,6 +32,10 @@ export const adminPrincipal: AdminPrincipal = {
   can: () => true,
 };
 
+export function getUserPrincipal(principal: Principal | null | undefined): UserPrincipal | null {
+  return principal?.type === "user" ? principal : null;
+}
+
 export function createUserPrincipal(input: {
   userId: string;
   sessionId?: string;

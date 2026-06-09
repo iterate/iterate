@@ -232,8 +232,8 @@ inside the oRPC call chain.
   `__internal.health` does not read `context.manifest`.
 - Update `apps/os/src/orpc/root.ts` to pass manifest into
   `createAppRouterWithInternal`.
-- Consider updating sibling call sites in `apps/example` and `apps/semaphore`
-  in the same small shared change, because they use the same
+- Consider updating sibling call sites in `apps/semaphore` in the same small
+  shared change, because they use the same
   helper.
 
 ### Already correct

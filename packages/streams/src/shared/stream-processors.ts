@@ -193,6 +193,28 @@ export type InputFromDefinitionForType<Definition, Type extends string> =
     : never;
 
 /**
+ * An event delivered through the `"*"` wildcard that is not individually named
+ * in `consumes`. Its `type` is typed as the literal `"*"` — mirroring the
+ * contract entry it matched — so that narrowing over named consumed events
+ * stays exact and the fallthrough branch is reachable instead of `never`:
+ *
+ * ```ts
+ * switch (event.type) {
+ *   case "events.iterate.com/stream/paused":
+ *     event.payload.reason; // fully typed
+ *     break;
+ *   default:
+ *     event.payload; // unknown — wildcard event, runtime type string varies
+ * }
+ * ```
+ *
+ * At runtime `type` holds the actual event type string; the `"*"` literal is a
+ * type-level marker only. To compare against a specific event type, name it in
+ * `consumes` instead of string-matching inside the wildcard branch.
+ */
+export type WildcardConsumedEvent = StreamEvent<"*", unknown> & { payload: unknown };
+
+/**
  * Build the union of stream events corresponding to a `consumes` string
  * array. This is what makes reducer/`afterAppend` narrowing work:
  *
@@ -203,6 +225,13 @@ export type InputFromDefinitionForType<Definition, Type extends string> =
  *   }
  * }
  * ```
+ *
+ * `consumes` semantics by shape:
+ * - named only — exact union of those events; exhaustive switches can end in
+ *   `assertNever(event)`;
+ * - `["*"]` only — plain `StreamEvent` (real `type` string, `unknown` payload);
+ * - `["*", ...named]` — named union plus {@link WildcardConsumedEvent} for
+ *   everything else.
  */
 export type EventFromTypes<
   Events extends EventCatalog,
@@ -211,7 +240,7 @@ export type EventFromTypes<
 > = "*" extends Types[number]
   ? Exclude<Types[number], "*"> extends never
     ? StreamEvent
-    : EventFromType<Events, ProcessorDeps, Exclude<Types[number], "*">>
+    : EventFromType<Events, ProcessorDeps, Exclude<Types[number], "*">> | WildcardConsumedEvent
   : EventFromType<Events, ProcessorDeps, Types[number]>;
 
 export type EventFromType<
@@ -405,10 +434,10 @@ export type ProcessorState<Contract> = Contract extends {
  * `afterAppend`.
  */
 export type ConsumedEvent<Contract> = Contract extends {
-  events: infer Events extends EventCatalog;
+  events: EventCatalog;
   consumes: infer Consumes extends readonly string[];
 }
-  ? EventFromTypes<Events, ProcessorDepsOf<Contract>, Consumes>
+  ? EventFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Consumes>
   : never;
 
 /**
@@ -420,10 +449,10 @@ export type ConsumedEvent<Contract> = Contract extends {
  * plain object literals.
  */
 export type EmittedInput<Contract> = Contract extends {
-  events: infer Events extends EventCatalog;
+  events: EventCatalog;
   emits: infer Emits extends readonly string[];
 }
-  ? InputFromTypes<Events, ProcessorDepsOf<Contract>, Emits>
+  ? InputFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Emits>
   : never;
 
 /**
@@ -1303,7 +1332,12 @@ function shouldRunAfterAppendDuringCatchUp(args: {
   );
 }
 
-function assertObjectProcessorState(args: { processorSlug: string; value: unknown }) {
+/**
+ * Enforces the invariant that reduced processor state is object-shaped (so
+ * state slices can evolve safely and hooks never branch on primitive state).
+ * Runners and the `StreamProcessor` class call this after every reduce.
+ */
+export function assertObjectProcessorState(args: { processorSlug: string; value: unknown }) {
   if (typeof args.value === "object" && args.value !== null && !Array.isArray(args.value)) {
     return;
   }
@@ -1311,7 +1345,14 @@ function assertObjectProcessorState(args: { processorSlug: string; value: unknow
   throw new Error(`Processor "${args.processorSlug}" state must be an object.`);
 }
 
-function getConsumedEventDefinition(args: {
+/**
+ * Resolve the payload schema a processor should use for an incoming event:
+ * the named definition (from local `events` or `processorDeps`) when the type
+ * is listed in `consumes`, a permissive `z.unknown()` definition when the
+ * contract consumes `"*"`, and `undefined` when the event is not consumed at
+ * all. This is the runtime counterpart of `ConsumedEvent<Contract>`.
+ */
+export function getConsumedEventDefinition(args: {
   contract: {
     events: EventCatalog;
     processorDeps?: readonly unknown[];

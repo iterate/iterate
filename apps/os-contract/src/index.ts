@@ -312,6 +312,7 @@ export const osContract = oc.router({
             .trim()
             .min(1)
             .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase kebab-case"),
+          organizationSlug: z.string().trim().min(1).optional(),
         }),
       )
       .output(Project.extend({ ingressUrl: z.string().url() })),
@@ -342,7 +343,7 @@ export const osContract = oc.router({
       .route({
         method: "GET",
         path: "/projects/by-slug/{slug}",
-        description: "Get project by slug in the active organization",
+        description: "Get project by globally unique slug",
         tags: ["/projects"],
       })
       .input(z.object({ slug: z.string() }))

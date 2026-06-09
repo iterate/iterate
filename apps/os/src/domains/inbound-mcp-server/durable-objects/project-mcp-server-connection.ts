@@ -299,14 +299,6 @@ export class ProjectMcpServerConnection extends McpAgent<
     auth: ProjectMcpServerConnectionProps & { orgId: string; projectId: string },
   ): ToolProviderRegistration[] {
     const providers = createExampleCapabilityProviders({
-      activeOrganization: {
-        orgId: auth.orgId,
-        orgPermissions: auth.orgPermissions,
-        orgRole: auth.orgRole,
-        orgSlug: auth.orgSlug ?? auth.orgId,
-        sessionId: this.getSessionId(),
-        userId: auth.userId,
-      },
       projectId: auth.projectId,
     });
 

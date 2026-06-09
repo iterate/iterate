@@ -77,7 +77,7 @@ pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 | `tasks/`            | Work tracking (markdown + frontmatter)                                             |
 | `apps/iterate-com/` | iterate.com marketing site                                                         |
 
-Other Cloudflare apps (`semaphore`, `example`, …) are supporting services — see `docs/architecture.md`.
+Other Cloudflare apps (`semaphore`, …) are supporting services — see `docs/architecture.md`.
 
 ## Common commands
 

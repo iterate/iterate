@@ -9,6 +9,7 @@ import unicorn from "eslint-plugin-unicorn";
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
 const PROPERTY_MATCHERS = new Set(["toBe", "toEqual", "toStrictEqual"]);
+const STREAM_PROCESSOR_OVERRIDE_METHODS = new Set(["reduce", "processEvent", "processEventBatch"]);
 
 /** @param {string} name */
 const getExpectedName = (name) => {
@@ -144,6 +145,39 @@ function isFunctionLikeDeclaration(node) {
         init.type === "ClassExpression")
     );
   });
+}
+
+/** @param {string} text */
+function compactTypeText(text) {
+  return text.replace(/\s+/g, "");
+}
+
+/**
+ * Extracts the contract type argument from `class X extends StreamProcessor<Contract, ...>`.
+ * Text-based on purpose (no type checker in lint): it reads the first type argument up to a
+ * `,`, `>`, or newline, which works because contracts are concrete `typeof` aliases by
+ * convention — a contract type expression containing its own `<`/`,` would not be matched.
+ *
+ * @param {import("eslint").Rule.RuleContext} context
+ * @param {import("estree").ClassDeclaration | import("estree").ClassExpression} node
+ */
+function getStreamProcessorContractType(context, node) {
+  if (!node.superClass) return undefined;
+  const classHeader = context.sourceCode.getText(node).slice(0, node.body.range?.[0] ?? undefined);
+  const match = classHeader.match(/\bextends\s+StreamProcessor\s*<\s*([^,\n>]+)/);
+  return match?.[1]?.trim();
+}
+
+/** @param {import("estree").Node} node */
+function getClassElementName(node) {
+  if (!("key" in node)) return undefined;
+  return getPropertyName(node.key);
+}
+
+/** @param {import("estree").Node} parameter */
+function getParameterTypeAnnotation(parameter) {
+  if (!("typeAnnotation" in parameter)) return undefined;
+  return parameter.typeAnnotation?.typeAnnotation;
 }
 
 const isolatedCodemodeRule = {
@@ -371,6 +405,70 @@ const plugin = {
                           },
                         },
                       ],
+                    });
+                  }
+                },
+              };
+            },
+          },
+          "stream-processor-override-args": {
+            meta: {
+              type: "problem",
+              docs: {
+                description:
+                  "StreamProcessor subclass override args must reference the base method parameter type.",
+              },
+            },
+            create: (context) => {
+              return {
+                "ClassDeclaration, ClassExpression": (node) => {
+                  const contractType = getStreamProcessorContractType(context, node);
+                  if (!contractType) return;
+
+                  for (const element of node.body.body) {
+                    const methodName = getClassElementName(element);
+                    // The serialization guarantee lives in ingest; overriding it would let
+                    // subclass work escape the serialized batch section.
+                    if (methodName === "ingest") {
+                      context.report({
+                        node: element,
+                        message:
+                          "ingest is StreamProcessor's host-facing sink and must stay on the base class. Implement the processEvent or processEventBatch hook instead.",
+                      });
+                      continue;
+                    }
+
+                    // Near-miss hook names: defining these would silently never be called.
+                    if (methodName === "processEvents" || methodName === "processBatch") {
+                      context.report({
+                        node: element,
+                        message: `StreamProcessor has no hook named ${methodName}. The hooks are reduce, processEvent (one event), and processEventBatch (whole batch).`,
+                      });
+                      continue;
+                    }
+
+                    if (!methodName || !STREAM_PROCESSOR_OVERRIDE_METHODS.has(methodName)) {
+                      continue;
+                    }
+                    if (element.type !== "MethodDefinition") continue;
+
+                    const firstParameter = element.value.params[0];
+                    const typeAnnotation = firstParameter
+                      ? getParameterTypeAnnotation(firstParameter)
+                      : undefined;
+                    const actual =
+                      typeAnnotation === undefined
+                        ? undefined
+                        : compactTypeText(context.sourceCode.getText(typeAnnotation));
+                    const expected = compactTypeText(
+                      `Parameters<StreamProcessor<${contractType}>["${methodName}"]>[0]`,
+                    );
+
+                    if (actual === expected) continue;
+
+                    context.report({
+                      node: firstParameter ?? element,
+                      message: `Annotate ${methodName}'s args as \`Parameters<StreamProcessor<${contractType}>["${methodName}"]>[0]\`.`,
                     });
                   }
                 },

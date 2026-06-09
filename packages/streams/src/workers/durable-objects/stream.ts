@@ -5,16 +5,10 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "../../shared/event.ts";
-import { getInitialProcessorState, runProcessorReduce } from "../../shared/stream-processors.ts";
+import { getInitialProcessorState } from "../../shared/stream-processors.ts";
 import type { ProcessEventBatch, StreamCoreProcessorState } from "../../types.ts";
-import type { ProcessorStream } from "../../processor-runner.ts";
-import {
-  getAncestorStreamPaths,
-  catchUpCoreProcessorState,
-  coreProcessor,
-  reduceCoreProcessorStateFromEvents,
-} from "../../processors/core/implementation.ts";
-import { coreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
+import { CoreStreamProcessor } from "../../processors/core/implementation.ts";
+import { CoreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
 import type { StreamRpc } from "../../types.ts";
 import { makeRpcTargetClass, type RpcTargetClass } from "../../shared/rpc-target.ts";
 import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecycle.ts";
@@ -34,8 +28,13 @@ const textEncoder = new TextEncoder();
 
 export class Stream extends DurableObject<Env> implements StreamRpc {
   #coreProcessorState: StreamCoreProcessorState;
-  #coreProcessor = coreProcessor.build({
-    propagateChildStreamCreated: (state) => this.#propagateChildStreamCreated(state),
+  coreProcessor = new CoreStreamProcessor({
+    iterateContext: {
+      stream: {
+        append: (args) => this.append(args),
+        appendBatch: (args) => this.appendBatch(args),
+      },
+    },
   });
 
   // Live delivery connections, keyed by subscriptionKey. Runtime-only: outbound
@@ -120,8 +119,8 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     const storedState =
       stored === undefined
         ? this.#recoverCoreProcessorStateFromEventLog()
-        : coreProcessorContract.stateSchema.parse(stored);
-    if (storedState === undefined) return getInitialProcessorState(coreProcessorContract);
+        : CoreProcessorContract.stateSchema.parse(stored);
+    if (storedState === undefined) return getInitialProcessorState(CoreProcessorContract);
 
     const state = this.#catchUpCoreProcessorState(storedState);
 
@@ -139,7 +138,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     const highestOffset = this.#readHighestEventOffset();
     if (highestOffset <= state.maxOffset) return state;
 
-    return catchUpCoreProcessorState({
+    return this.#reduceCoreProcessorState({
       state,
       events: this.#readEventsInRange({
         afterOffset: state.maxOffset,
@@ -292,7 +291,22 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     // KV state is the fast path, but SQL rows are the durable source of truth.
     // If a deployed DO has rows but no KV state, replay the event log instead of
     // treating the stream as empty and trying to insert offset 1 again.
-    return reduceCoreProcessorStateFromEvents(events);
+    return this.#reduceCoreProcessorState({
+      state: getInitialProcessorState(CoreProcessorContract),
+      events,
+    });
+  }
+
+  #reduceCoreProcessorState(args: {
+    state: StreamCoreProcessorState;
+    events: readonly StreamEvent[];
+  }): StreamCoreProcessorState {
+    let state = args.state;
+    for (const event of args.events) {
+      if (event.offset <= state.maxOffset) continue;
+      state = this.coreProcessor.reduceEvent({ event, state });
+    }
+    return state;
   }
 
   #resolveStream(streamPath: string): Pick<StreamRpc, "append" | "appendBatch"> {
@@ -349,11 +363,6 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     const events: StreamEvent[] = [];
     const newEvents: StreamEvent[] = [];
     const idempotencyHitsInBatch = new Map<string, StreamEvent>();
-    const appendStream: ProcessorStream = {
-      append: (appendArgs) => this.append(appendArgs),
-      appendBatch: (appendArgs) => this.appendBatch(appendArgs),
-    };
-
     // 1. Prepare events and reduced state.
     for (const eventInput of args.events) {
       const input = StreamEventInputSchema.strict().parse(eventInput);
@@ -372,7 +381,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         }
       }
 
-      this.#coreProcessor.beforeAppend?.({
+      this.coreProcessor.validateAppend({
         event: input,
         state: workingCoreProcessorState,
       });
@@ -386,28 +395,16 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         throw new Error(`expected offset ${committed.offset}, got ${input.offset}`);
       }
 
-      const previousCoreState = workingCoreProcessorState;
-
-      const coreReduction = runProcessorReduce({
-        processor: { contract: coreProcessorContract },
+      const previousCoreProcessorState = workingCoreProcessorState;
+      workingCoreProcessorState = this.coreProcessor.reduceEvent({
         event: committed,
-        state: previousCoreState,
+        state: previousCoreProcessorState,
       });
-      if (coreReduction === undefined) {
-        throw new Error(`core processor cannot reduce event type "${committed.type}"`);
-      }
 
-      workingCoreProcessorState = coreProcessorContract.stateSchema.parse(coreReduction.state);
-
-      this.#coreProcessor.afterAppend?.({
-        event: coreReduction.event,
-        previousState: previousCoreState,
+      this.coreProcessor.processReducedEvent({
+        event: committed,
+        previousState: previousCoreProcessorState,
         state: workingCoreProcessorState,
-        streamMaxOffset: committed.offset,
-        stream: appendStream,
-        shouldApplySideEffects: () => true,
-        blockProcessorUntil: (work) => void work(),
-        keepAlive: (work) => void work,
       });
 
       events.push(committed);
@@ -441,23 +438,6 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     }
 
     return events;
-  }
-
-  #propagateChildStreamCreated(state: CoreProcessorState) {
-    for (const ancestorPath of getAncestorStreamPaths(state.path)) {
-      const stream = this.env.STREAM.getByName(`${state.namespace}:${ancestorPath}`);
-      Promise.resolve(
-        stream.append({
-          event: {
-            type: "events.iterate.com/stream/child-stream-created",
-            idempotencyKey: `child-stream-created:${ancestorPath}:${state.path}`,
-            payload: { childPath: state.path },
-          },
-        }),
-      ).catch((error: unknown) => {
-        console.error("failed to propagate child stream event", error);
-      });
-    }
   }
 
   getEvent(
@@ -498,16 +478,10 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }): StreamCoreProcessorState {
     const base = args.coreProcessorState ?? this.#coreProcessorState;
 
-    const coreReduction = runProcessorReduce({
-      processor: { contract: coreProcessorContract },
+    return this.coreProcessor.reduceEvent({
       event: args.event,
       state: base,
     });
-    if (coreReduction === undefined) {
-      throw new Error(`core processor cannot reduce event type "${args.event.type}"`);
-    }
-
-    return coreProcessorContract.stateSchema.parse(coreReduction.state);
   }
 
   /**
@@ -828,8 +802,8 @@ function installSubscribeRpcTargetOverride(target: RpcTargetClass<StreamRpc, Str
  * Resolves `streamPath` against the current stream's path into a canonical
  * leading-slash path used for the target DO name (`${namespace}:${path}`).
  *
- * Stream identity uses leading-slash paths everywhere — DO names, ancestor names
- * (getAncestorStreamPaths) and runner names all keep it — so resolution preserves
+ * Stream identity uses leading-slash paths everywhere — DO names, ancestor paths
+ * and runner names all keep it — so resolution preserves
  * the leading slash rather than stripping it. Relative paths (`child`, `./child`,
  * `../sibling`) resolve against `basePath`; absolute paths (`/root/x`) resolve from
  * the root. `.` and empty segments are ignored, `..` pops a segment, and a `..` that

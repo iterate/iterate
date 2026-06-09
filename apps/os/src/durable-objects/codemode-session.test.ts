@@ -56,14 +56,6 @@ type TestEnv = {
 };
 
 const projectId = "proj__test__codemodesession";
-const activeOrganization = {
-  orgId: "org__codemode_session_test",
-  orgPermissions: [],
-  orgRole: "admin",
-  orgSlug: "codemode-session-test",
-  sessionId: "sess__codemode_session_test",
-  userId: "user__codemode_session_test",
-};
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -970,7 +962,6 @@ function exampleCapabilityProviders(): ToolProviderRegistration[] {
     }),
     createExampleRpcProviderRegistration({
       exportName: "OrpcCapability",
-      activeOrganization,
       instructions: "Use ctx.os.listProcedures() and ctx.os.streams.list({}).",
       path: ["os"],
       projectId,

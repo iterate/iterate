@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../../shared/event.ts";
-import { reduceProcessorEvents } from "../../shared/stream-processors.ts";
 import { GROUP_COMPONENT, groupFeedData, INITIAL_FEED_STATE, planFeedOps } from "./grouping.ts";
-import { browserEventFeedContract } from "./contract.ts";
 
 function event(offset: number, type: string): StreamEvent {
   return { offset, type, createdAt: new Date(0).toISOString(), payload: { offset } };
@@ -235,11 +233,5 @@ describe("event-feed grouping", () => {
     let perEvent = INITIAL_FEED_STATE;
     for (const e of events) perEvent = planFeedOps(perEvent, [e]).endState;
     expect(perEvent).toEqual(planFeedOps(INITIAL_FEED_STATE, events).endState);
-  });
-
-  it("the contract reducer advances state via the same grouping", () => {
-    const events = [event(1, CREATED), event(2, WOKEN), event(3, DEBUG), event(4, DEBUG)];
-    const reduced = reduceProcessorEvents({ contract: browserEventFeedContract, events });
-    expect(reduced).toEqual(planFeedOps(INITIAL_FEED_STATE, events).endState);
   });
 });
