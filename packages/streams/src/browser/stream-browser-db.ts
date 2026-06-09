@@ -325,7 +325,18 @@ export class StreamBrowserDatabase implements Disposable {
     this.#queries.clear();
     this.#changeListeners.clear();
     this.#channel.close();
-    this.#worker.terminate();
+    const closeRequestId = this.#nextRequestId++;
+    const terminateTimer = setTimeout(() => this.#worker.terminate(), 1_000);
+    this.#worker.addEventListener(
+      "message",
+      (event: MessageEvent<{ id: number }>) => {
+        if (event.data.id !== closeRequestId) return;
+        clearTimeout(terminateTimer);
+        this.#worker.terminate();
+      },
+      { once: true },
+    );
+    this.#worker.postMessage({ id: closeRequestId, op: "close" });
   }
 
   [Symbol.dispose]() {
@@ -334,12 +345,16 @@ export class StreamBrowserDatabase implements Disposable {
 }
 
 // OPFS layout: one folder per namespace, one SQLite file per stream path inside it.
+// Bump this when the local mirror file itself can be wedged by browser OPFS state;
+// the mirror is a cache and will be replayed from the durable stream.
+const DATABASE_CACHE_VERSION = "v3";
+
 function databasePathFor(namespace: string, streamPath: string) {
-  return `${encodeURIComponent(namespace)}/${databaseSlugForStreamPath(streamPath)}.sqlite3`;
+  return `${encodeURIComponent(namespace)}/${DATABASE_CACHE_VERSION}/${databaseSlugForStreamPath(streamPath)}.sqlite3`;
 }
 
 function downloadFilenameFor(namespace: string, streamPath: string) {
-  return `${encodeURIComponent(namespace)}__${databaseSlugForStreamPath(streamPath)}.sqlite3`;
+  return `${encodeURIComponent(namespace)}__${DATABASE_CACHE_VERSION}-${databaseSlugForStreamPath(streamPath)}.sqlite3`;
 }
 
 function databaseSlugForStreamPath(streamPath: string) {
