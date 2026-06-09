@@ -111,7 +111,9 @@ function AppSidebarHeader() {
                 size="lg"
                 className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
               >
-                <IterateLogo className="size-8 rounded-lg" />
+                <span className="flex aspect-square size-7 items-center justify-center rounded-md bg-black">
+                  <IterateLogo className="size-5 rounded-sm" />
+                </span>
                 <span className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">iterate</span>
                   <span className="truncate text-xs text-muted-foreground">
