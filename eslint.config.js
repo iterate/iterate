@@ -10,7 +10,6 @@ const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEa
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
 const PROPERTY_MATCHERS = new Set(["toBe", "toEqual", "toStrictEqual"]);
 const STREAM_PROCESSOR_OVERRIDE_METHODS = new Set(["reduce", "processEvent", "processEventBatch"]);
-const STREAM_PROCESSOR_FORBIDDEN_METHODS = new Set(["ingest", "processEvents", "processBatch"]);
 
 /** @param {string} name */
 const getExpectedName = (name) => {
@@ -385,10 +384,22 @@ const plugin = {
 
                   for (const element of node.body.body) {
                     const methodName = getClassElementName(element);
-                    if (methodName && STREAM_PROCESSOR_FORBIDDEN_METHODS.has(methodName)) {
+                    // The serialization guarantee lives in ingest; overriding it would let
+                    // subclass work escape the serialized batch section.
+                    if (methodName === "ingest") {
                       context.report({
                         node: element,
-                        message: `Do not define ${methodName} on StreamProcessor subclasses: ingest is the serialized host-facing sink; override processEventBatch (or processEvent/reduce) instead.`,
+                        message:
+                          "ingest is StreamProcessor's host-facing sink and must stay on the base class. Implement the processEvent or processEventBatch hook instead.",
+                      });
+                      continue;
+                    }
+
+                    // Near-miss hook names: defining these would silently never be called.
+                    if (methodName === "processEvents" || methodName === "processBatch") {
+                      context.report({
+                        node: element,
+                        message: `StreamProcessor has no hook named ${methodName}. The hooks are reduce, processEvent (one event), and processEventBatch (whole batch).`,
                       });
                       continue;
                     }
