@@ -29,10 +29,16 @@ export function useInitialTailScroll<TScrollElement extends Element>(args: {
     const onUserScroll = () => {
       markUserLeftTail();
     };
+    const onScroll = () => {
+      const distanceFromTail = element.scrollHeight - element.scrollTop - element.clientHeight;
+      if (distanceFromTail > 4) markUserLeftTail();
+    };
     element.addEventListener("wheel", onUserScroll, { passive: true });
+    element.addEventListener("scroll", onScroll, { passive: true });
     element.addEventListener("touchmove", onUserScroll, { passive: true });
     return () => {
       element.removeEventListener("wheel", onUserScroll);
+      element.removeEventListener("scroll", onScroll);
       element.removeEventListener("touchmove", onUserScroll);
     };
   }, [args.scrollElementRef]);

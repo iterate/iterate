@@ -48,12 +48,7 @@ async function open(path: string): Promise<void> {
   // the built-in "opfs"/"memory" VFS registration.
   sqlite3.vfs_register(vfs, false);
   databasePath = path;
-  try {
-    db = await openWithRetry(path);
-  } catch (_error) {
-    await deleteDatabaseFiles(path);
-    db = await openWithRetry(path);
-  }
+  db = await openWithRetry(path);
   // NOTE: deliberately NO `PRAGMA busy_timeout`. OPFSCoopSyncVFS acquires its OPFS access
   // handle asynchronously and pushes that onto wa-sqlite's `retryOps`, which sqlite3.exec/
   // statements await and then retry — so the first lock resolves in ~one event-loop turn.
@@ -92,30 +87,6 @@ async function openWithRetry(path: string): Promise<number> {
     }
   }
   throw new Error(`sqlite3_open_v2 failed for ${path}: ${errorMessage(lastError)}`);
-}
-
-async function deleteDatabaseFiles(path: string): Promise<void> {
-  const root = await navigator.storage.getDirectory();
-  const segments = path.split("/").filter(Boolean);
-  const filename = segments.pop();
-  if (!filename) return;
-
-  let dir = root;
-  for (const segment of segments) {
-    try {
-      dir = await dir.getDirectoryHandle(segment);
-    } catch {
-      return;
-    }
-  }
-
-  for (const suffix of ["", "-journal", "-wal"]) {
-    try {
-      await dir.removeEntry(`${filename}${suffix}`);
-    } catch {
-      // Missing local mirror files are fine; they will be recreated by SQLite.
-    }
-  }
 }
 
 /** Runs one statement, collecting any result rows as plain objects. */

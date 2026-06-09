@@ -326,16 +326,17 @@ export class StreamBrowserDatabase implements Disposable {
     this.#changeListeners.clear();
     this.#channel.close();
     const closeRequestId = this.#nextRequestId++;
-    const terminateTimer = setTimeout(() => this.#worker.terminate(), 1_000);
-    this.#worker.addEventListener(
-      "message",
-      (event: MessageEvent<{ id: number }>) => {
-        if (event.data.id !== closeRequestId) return;
-        clearTimeout(terminateTimer);
-        this.#worker.terminate();
-      },
-      { once: true },
-    );
+    const onCloseMessage = (event: MessageEvent<{ id: number }>) => {
+      if (event.data.id !== closeRequestId) return;
+      clearTimeout(terminateTimer);
+      this.#worker.removeEventListener("message", onCloseMessage);
+      this.#worker.terminate();
+    };
+    const terminateTimer = setTimeout(() => {
+      this.#worker.removeEventListener("message", onCloseMessage);
+      this.#worker.terminate();
+    }, 10_000);
+    this.#worker.addEventListener("message", onCloseMessage);
     this.#worker.postMessage({ id: closeRequestId, op: "close" });
   }
 
