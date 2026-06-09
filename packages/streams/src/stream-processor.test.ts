@@ -1,23 +1,25 @@
 // Runnable in the Node/vitest runtime, fully in-process (no worker needed).
-// Proves the processor model: per-event afterAppend, durable blockProcessorUntil,
-// the core append validation gate, child-stream topology, circuit breaker, and the
-// SQLite-projector shape.
+// Exercises the example processors through the class-based StreamProcessor
+// model: echo fan-out + replay dedupe, the side-effect anchor, the core append
+// validation gate, child-stream topology, and the circuit breaker.
+// Base-class semantics (checkpointing, blocking work, batch serialization) are
+// covered in stream-processor-class.test.ts.
 
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
-import { defineProcessorContract, getInitialProcessorState } from "./shared/stream-processors.ts";
+import { getInitialProcessorState } from "./shared/stream-processors.ts";
 import type { StreamEvent, StreamEventInput } from "./shared/event.ts";
-import { implementProcessor } from "./processor.ts";
-import { createProcessorRunner, type Snapshot } from "./processor-runner.ts";
-import { echoExampleProcessor } from "./processors/examples/echo/implementation.ts";
-import { circuitBreakerProcessor } from "./processors/circuit-breaker/implementation.ts";
-import type { CircuitBreakerProcessorState } from "./processors/circuit-breaker/contract.ts";
+import { durableObjectProcessorSubscriber } from "./shared/callable-subscriber.ts";
+import { EchoExampleProcessor } from "./processors/examples/echo/implementation.ts";
+import { CircuitBreakerProcessor } from "./processors/circuit-breaker/implementation.ts";
 import { CoreStreamProcessor } from "./processors/core/implementation.ts";
 import { CoreProcessorContract } from "./processors/core/contract.ts";
 import type { StreamCoreProcessorState } from "./types.ts";
-import type { StreamRpc } from "./types.ts";
+import type { StreamProcessorIterateContext, StreamProcessorSnapshot } from "./stream-processor.ts";
 
 const iso = (ms = 0) => new Date(ms).toISOString();
+// Both example processors append via runInBackground, so tests tick the
+// microtask/timer queue once after ingest before asserting on appends.
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 function event(args: {
   type: string;
@@ -35,37 +37,23 @@ function event(args: {
   };
 }
 
-// A stream stub that commits appends in memory and (optionally) fans them back.
-function memoryStream(options: { onCommit?: (e: StreamEvent) => void; startOffset?: number } = {}) {
+// A stream stub that records appends in memory — just the `{ append,
+// appendBatch }` surface the class's iterateContext needs.
+function memoryStream(options: { startOffset?: number } = {}) {
   let nextOffset = options.startOffset ?? 100;
   const committed: StreamEvent[] = [];
-  const stream: StreamRpc = {
+  const stream: StreamProcessorIterateContext["stream"] = {
     append: (args) => {
       const e: StreamEvent = { ...args.event, offset: nextOffset++, createdAt: iso(1) };
       committed.push(e);
-      options.onCommit?.(e);
       return e;
     },
-    appendBatch: (batch) =>
-      batch.events.map((input) => {
+    appendBatch: (args) =>
+      args.events.map((input) => {
         const e: StreamEvent = { ...input, offset: nextOffset++, createdAt: iso(1) };
         committed.push(e);
-        options.onCommit?.(e);
         return e;
       }),
-    getEvent: () => undefined,
-    getEvents: () => [],
-    subscribe: () => {
-      throw new Error("memoryStream does not implement subscribe");
-    },
-    runtimeState: () => {
-      throw new Error("memoryStream does not implement runtimeState");
-    },
-    kill: () => {},
-    reset: async () => {},
-    reduce: () => {
-      throw new Error("memoryStream does not implement reduce");
-    },
   };
   return { stream, committed };
 }
@@ -74,315 +62,82 @@ function memoryStream(options: { onCommit?: (e: StreamEvent) => void; startOffse
 // echo — default fire-and-forget pattern
 // ---------------------------------------------------------------------------
 
-const echoContract = defineProcessorContract({
-  slug: "test.echo",
-  version: "0.1.0",
-  description: "echo",
-  stateSchema: z.object({ seen: z.number().int().min(0).default(0) }),
-  initialState: {},
-  events: {
-    "test.input": { description: "in", payloadSchema: z.object({ path: z.string() }) },
-    "test.output": { description: "out", payloadSchema: z.object({ seen: z.number() }) },
-  },
-  consumes: ["test.input"],
-  emits: ["test.output"],
-  reduce({ state, event }) {
-    return event.type === "test.input" ? { seen: state.seen + 1 } : state;
-  },
-});
+const echoInput = (offset: number): StreamEvent =>
+  event({ type: "events.iterate.com/echo-example/input-received", payload: {}, offset });
 
-const echo = implementProcessor(echoContract, () => ({
-  afterAppend({ event, state, stream, keepAlive }) {
-    if (event.type !== "test.input") return;
-    keepAlive(stream.append({ event: { type: "test.output", payload: { seen: state.seen } } }));
-  },
-}));
-
-describe("subscription processor (node, in-process)", () => {
-  it("echo reduces, emits, and advances the snapshot", async () => {
+describe("echo example processor", () => {
+  it("reduces, emits the running count, and checkpoints", async () => {
     const { stream, committed } = memoryStream();
-    let saved: Snapshot<{ seen: number }> | undefined;
-    const runner = createProcessorRunner({
-      processor: echo,
-      deps: undefined,
-      storage: { load: () => saved, save: (s) => void (saved = s) },
-      stream,
+    const writes: StreamProcessorSnapshot<{ seen: number }>[] = [];
+    const processor = new EchoExampleProcessor({
+      iterateContext: { stream },
+      writeState: (snapshot) => void writes.push(snapshot),
     });
 
-    await runner.processEventBatch({
-      namespace: "test",
-      path: "/test",
-      events: [event({ type: "test.input", payload: { path: "/x" }, offset: 2 })],
-      streamMaxOffset: 2,
-    });
-
-    expect(committed).toMatchObject([{ type: "test.output", payload: { seen: 1 } }]);
-    expect((await runner.snapshot())?.offset).toBe(2);
-    expect(saved?.offset).toBe(2);
-  });
-
-  it("dedups already-processed offsets on replay", async () => {
-    const { stream, committed } = memoryStream();
-    const runner = createProcessorRunner({
-      processor: echo,
-      deps: undefined,
-      storage: { load: () => ({ state: { seen: 0 }, offset: 5 }), save: () => {} },
-      stream,
-    });
-    await runner.processEventBatch({
-      namespace: "test",
-      path: "/test",
-      events: [event({ type: "test.input", payload: { path: "/x" }, offset: 3 })],
-      streamMaxOffset: 5,
-    });
-    expect(committed).toHaveLength(0); // offset 3 <= snapshot 5
-  });
-
-  it("runs echo side effects only after the subscription anchor", async () => {
-    const { stream, committed } = memoryStream();
-    const runner = createProcessorRunner({
-      processor: echoExampleProcessor,
-      deps: undefined,
-      storage: { load: () => undefined, save: () => {} },
-      stream,
-      sideEffectAnchor: { offset: 10, createdAt: iso(10_000) },
-    });
-
-    await runner.processEventBatch({
-      namespace: "test",
-      path: "/test",
-      events: [
-        event({
-          type: "events.iterate.com/echo-example/input-received",
-          offset: 9,
-          payload: {},
-          createdAtMs: 9_000,
-        }),
-        event({
-          type: "events.iterate.com/echo-example/input-received",
-          offset: 10,
-          payload: {},
-          createdAtMs: 10_000,
-        }),
-        event({
-          type: "events.iterate.com/echo-example/input-received",
-          offset: 11,
-          payload: {},
-          createdAtMs: 11_000,
-        }),
-      ],
-      streamMaxOffset: 11,
-    });
+    await processor.ingest({ events: [echoInput(2)], streamMaxOffset: 2 });
+    await tick();
 
     expect(committed).toMatchObject([
-      { type: "events.iterate.com/stream/processor-registered" },
+      { type: "events.iterate.com/echo-example/output-echoed", payload: { seen: 1 } },
+    ]);
+    expect(processor.checkpointOffset).toBe(2);
+    expect(writes).toEqual([{ offset: 2, state: { seen: 1 } }]);
+  });
+
+  it("dedups a re-delivered batch instead of emitting twice", async () => {
+    const { stream, committed } = memoryStream();
+    const processor = new EchoExampleProcessor({ iterateContext: { stream } });
+
+    await processor.ingest({ events: [echoInput(1), echoInput(2)], streamMaxOffset: 2 });
+    await processor.ingest({ events: [echoInput(1), echoInput(2)], streamMaxOffset: 2 });
+    await tick();
+
+    expect(processor.state).toEqual({ seen: 2 });
+    expect(committed).toMatchObject([
+      { type: "events.iterate.com/echo-example/output-echoed", payload: { seen: 1 } },
+      { type: "events.iterate.com/echo-example/output-echoed", payload: { seen: 2 } },
+    ]);
+  });
+
+  it("resumes from a persisted snapshot and ignores already-processed offsets", async () => {
+    const { stream, committed } = memoryStream();
+    const processor = new EchoExampleProcessor({
+      iterateContext: { stream },
+      readState: () => ({ offset: 5, state: { seen: 2 } }),
+    });
+
+    // A re-delivered historical event (offset 4 <= snapshot 5) must be ignored.
+    await processor.ingest({ events: [echoInput(4)], streamMaxOffset: 6 });
+    await tick();
+    expect(committed).toHaveLength(0);
+
+    // A genuinely new event resumes from the persisted count.
+    await processor.ingest({ events: [echoInput(6)], streamMaxOffset: 6 });
+    await tick();
+    expect(committed).toMatchObject([
       { type: "events.iterate.com/echo-example/output-echoed", payload: { seen: 3 } },
     ]);
+    expect(processor.checkpointOffset).toBe(6);
   });
-});
 
-// ---------------------------------------------------------------------------
-// transcribe — durable blockProcessorUntil (at-least-once)
-// ---------------------------------------------------------------------------
-
-const transcribeContract = defineProcessorContract({
-  slug: "test.transcribe",
-  version: "0.1.0",
-  description: "transcribe",
-  stateSchema: z.object({ done: z.number().int().min(0).default(0) }),
-  initialState: {},
-  events: {
-    "test.audio": { description: "in", payloadSchema: z.object({ url: z.string() }) },
-    "test.transcript": {
-      description: "out",
-      payloadSchema: z.object({ url: z.string(), text: z.string() }),
-    },
-  },
-  consumes: ["test.audio"],
-  emits: ["test.transcript"],
-  reduce({ state, event }) {
-    return event.type === "test.audio" ? { done: state.done + 1 } : state;
-  },
-});
-
-const transcribe = implementProcessor(
-  transcribeContract,
-  (deps: { transcribe(url: string): Promise<string> }) => ({
-    afterAppend({ event, stream, blockProcessorUntil }) {
-      if (event.type !== "test.audio") return;
-      const url = event.payload.url;
-      blockProcessorUntil(async () => {
-        const text = await deps.transcribe(url);
-        await stream.append({ event: { type: "test.transcript", payload: { url, text } } });
-      });
-    },
-  }),
-);
-
-describe("durable processor (blockProcessorUntil)", () => {
-  it("holds the checkpoint until the side effect completes", async () => {
+  it("reduces pre-anchor events into state but only runs side effects past the anchor", async () => {
     const { stream, committed } = memoryStream();
-    const saves: number[] = [];
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => (release = resolve));
-
-    const runner = createProcessorRunner({
-      processor: transcribe,
-      deps: {
-        transcribe: async (url) => {
-          await gate;
-          return `transcript:${url}`;
-        },
-      },
-      storage: { load: () => undefined, save: (s) => void saves.push(s.offset) },
-      stream,
+    const processor = new EchoExampleProcessor({
+      iterateContext: { stream },
+      sideEffectsAfterOffset: () => 10,
     });
 
-    const processed = runner.processEventBatch({
-      namespace: "test",
-      path: "/test",
-      events: [event({ type: "test.audio", payload: { url: "/a" }, offset: 2 })],
-      streamMaxOffset: 2,
-    });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(saves).toEqual([]); // blocked: not yet checkpointed
-
-    release();
-    await processed;
-    expect(committed).toMatchObject([
-      { type: "test.transcript", payload: { url: "/a", text: "transcript:/a" } },
-    ]);
-    expect(saves).toContain(2); // checkpointed only after the work completed
-  });
-});
-
-// ---------------------------------------------------------------------------
-// SQLite projector shape — fire-and-forget bulk write
-// ---------------------------------------------------------------------------
-
-const projectorContract = defineProcessorContract({
-  slug: "test.sqlite-projector",
-  version: "0.1.0",
-  description: "project",
-  stateSchema: z.object({}),
-  initialState: {},
-  events: {},
-  consumes: ["*"],
-  emits: [],
-});
-
-describe("projector processor (consumes everything, writes to a db port)", () => {
-  it("writes every delivered event", async () => {
-    const written: number[] = [];
-    const projector = implementProcessor(
-      projectorContract,
-      (deps: { write(e: StreamEvent): void }) => ({
-        afterAppend({ event }) {
-          deps.write(event);
-        },
-      }),
-    );
-    const { stream } = memoryStream();
-    const runner = createProcessorRunner({
-      processor: projector,
-      deps: { write: (e) => written.push(e.offset) },
-      storage: { load: () => undefined, save: () => {} },
-      stream,
-    });
-    await runner.processEventBatch({
-      namespace: "test",
-      path: "/test",
-      events: [event({ type: "a", offset: 0, payload: {} })],
-      streamMaxOffset: 1,
-    });
-    await runner.processEventBatch({
-      namespace: "test",
-      path: "/test",
-      events: [event({ type: "b", offset: 1, payload: {} })],
-      streamMaxOffset: 1,
-    });
-    expect(written).toEqual([0, 1]);
-  });
-
-  it("can commit a delivered batch as one side-effect/checkpoint unit", async () => {
-    const written: number[][] = [];
-    const saves: number[] = [];
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => (release = resolve));
-    const projector = implementProcessor(projectorContract, () => ({
-      afterAppendBatch({ events, blockProcessorUntil }) {
-        blockProcessorUntil(async () => {
-          await gate;
-          written.push(
-            events.map(({ event }) => {
-              const streamEvent: StreamEvent = event;
-              return streamEvent.offset;
-            }),
-          );
-        });
-      },
-    }));
-    const { stream } = memoryStream();
-    const runner = createProcessorRunner({
-      processor: projector,
-      deps: undefined,
-      storage: { load: () => undefined, save: (snapshot) => void saves.push(snapshot.offset) },
-      stream,
-    });
-
-    const processed = runner.processEventBatch({
-      namespace: "test",
-      path: "/test",
-      events: [
-        event({ type: "a", offset: 1, payload: {} }),
-        event({ type: "b", offset: 2, payload: {} }),
-      ],
-      streamMaxOffset: 2,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(written).toEqual([]);
-    expect(saves).toEqual([]);
-
-    release();
-    await processed;
-    expect(written).toEqual([[1, 2]]);
-    expect(saves).toEqual([2]);
-  });
-
-  it("lets a processor decide side-effect eligibility from the subscription anchor and grace period", async () => {
-    const written: number[] = [];
-    const projector = implementProcessor(projectorContract, () => ({
-      afterAppendBatch({ events, shouldApplySideEffects }) {
-        for (const { event } of events) {
-          const streamEvent: StreamEvent = event;
-          if (shouldApplySideEffects({ event: streamEvent, gracePeriodMs: 6_000 })) {
-            written.push(streamEvent.offset);
-          }
-        }
-      },
-    }));
-    const { stream } = memoryStream();
-    const runner = createProcessorRunner({
-      processor: projector,
-      deps: undefined,
-      storage: { load: () => undefined, save: () => {} },
-      stream,
-      sideEffectAnchor: { offset: 10, createdAt: iso(10_000) },
-    });
-
-    await runner.processEventBatch({
-      namespace: "test",
-      path: "/test",
-      events: [
-        event({ type: "a", offset: 8, payload: {}, createdAtMs: 0 }),
-        event({ type: "b", offset: 9, payload: {}, createdAtMs: 5_000 }),
-        event({ type: "c", offset: 10, payload: {}, createdAtMs: 10_000 }),
-        event({ type: "d", offset: 11, payload: {}, createdAtMs: 11_000 }),
-      ],
+    await processor.ingest({
+      events: [echoInput(9), echoInput(10), echoInput(11)],
       streamMaxOffset: 11,
     });
+    await tick();
 
-    expect(written).toEqual([9, 10, 11]);
+    // All three inputs reduce, but only offset 11 (past the anchor) echoes.
+    expect(processor.state).toEqual({ seen: 3 });
+    expect(committed).toMatchObject([
+      { type: "events.iterate.com/echo-example/output-echoed", payload: { seen: 3 } },
+    ]);
   });
 });
 
@@ -481,11 +236,11 @@ describe("core stream state and subscription processors", () => {
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
         subscriptionKey: "circuit-breaker",
-        subscriber: {
-          type: "built-in",
-          transport: "workers-rpc",
-          processorSlug: "circuit-breaker",
-        },
+        subscriber: durableObjectProcessorSubscriber({
+          bindingName: "PROCESSOR_HOST",
+          durableObjectName: "cb-host",
+          processorName: "circuit-breaker",
+        }),
       },
     });
     sim.append("/cb", {
@@ -499,53 +254,44 @@ describe("core stream state and subscription processors", () => {
 
     const entry = sim.streams.get("/cb");
     if (entry === undefined) throw new Error("missing /cb stream");
+    // Snapshot the batch now: the breaker's paused append grows entry.events.
+    const batch = [...entry.events];
 
-    let saved: Snapshot<CircuitBreakerProcessorState> | undefined;
-    const runner = createProcessorRunner({
-      processor: circuitBreakerProcessor,
-      deps: undefined,
-      storage: { load: () => saved, save: (snapshot) => void (saved = snapshot) },
-      stream: {
-        append: (args) => sim.append("/cb", args.event),
-        appendBatch: (args) => args.events.map((event) => sim.append("/cb", event)),
+    const writes: StreamProcessorSnapshot<unknown>[] = [];
+    const processor = new CircuitBreakerProcessor({
+      iterateContext: {
+        stream: {
+          append: (args) => sim.append(args.streamPath ?? "/cb", args.event),
+          appendBatch: (args) =>
+            args.events.map((event) => sim.append(args.streamPath ?? "/cb", event)),
+        },
       },
-      sideEffectAnchor: {
-        offset: subscriptionConfigured.offset,
-        createdAt: subscriptionConfigured.createdAt,
-      },
+      writeState: (snapshot) => void writes.push(snapshot),
+      // The subscription anchor: replay before it reduces but stays side-effect free.
+      sideEffectsAfterOffset: () => subscriptionConfigured.offset,
     });
 
-    await runner.processEventBatch({
-      namespace: "test",
-      path: "/test",
-      events: [...entry.events],
-      streamMaxOffset: entry.coreProcessorState.maxOffset,
+    await processor.ingest({
+      events: batch,
+      streamMaxOffset: batch.at(-1)?.offset ?? 0,
     });
+    await tick();
 
     expect(sim.streams.get("/cb")?.coreProcessorState.paused).toBe(true);
-    let rejected = 0;
-    try {
-      sim.append("/cb", { type: "test.widget", payload: { afterPause: true } });
-    } catch {
-      rejected += 1;
-    }
-    expect(rejected).toBeGreaterThan(0);
+    expect(writes.at(-1)?.offset).toBe(batch.at(-1)?.offset);
+    expect(() => sim.append("/cb", { type: "test.widget", payload: { afterPause: true } })).toThrow(
+      "stream paused",
+    );
   });
 
   it("does not pause the stream from pre-anchor circuit breaker replay", async () => {
     const { stream, committed } = memoryStream();
-    let saved: Snapshot<CircuitBreakerProcessorState> | undefined;
-    const runner = createProcessorRunner({
-      processor: circuitBreakerProcessor,
-      deps: undefined,
-      storage: { load: () => undefined, save: (snapshot) => void (saved = snapshot) },
-      stream,
-      sideEffectAnchor: { offset: 4, createdAt: iso(4_000) },
+    const processor = new CircuitBreakerProcessor({
+      iterateContext: { stream },
+      sideEffectsAfterOffset: () => 4,
     });
 
-    await runner.processEventBatch({
-      namespace: "test",
-      path: "/test",
+    await processor.ingest({
       events: [
         event({
           type: "events.iterate.com/circuit-breaker/configured",
@@ -558,8 +304,10 @@ describe("core stream state and subscription processors", () => {
       ],
       streamMaxOffset: 3,
     });
+    await tick();
 
+    // The breaker tripped during replay (offsets <= anchor), so no paused append.
     expect(committed).toEqual([]);
-    expect(saved?.offset).toBe(3);
+    expect(processor.checkpointOffset).toBe(3);
   });
 });
