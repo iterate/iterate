@@ -3,9 +3,8 @@ import { createCodemodeContext } from "@iterate-com/shared/codemode/context-prox
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { type Event, type EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
-import type { StreamProcessorRunnerState } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor-runner";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 import { getInitializedStreamStub } from "~/domains/streams/new-stream-runtime.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import { createCodemodeSessionStartupEvents } from "~/domains/codemode/codemode-session-rpc.ts";
@@ -15,6 +14,8 @@ import {
   EXAMPLE_EGRESS_SECRET_KEY,
   EXAMPLE_EGRESS_SECRET_MATERIAL,
 } from "~/domains/secrets/example-secret.ts";
+
+type CodemodeSessionRunnerState = Awaited<ReturnType<CodemodeSession["getRunnerState"]>>;
 
 type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
   callFunction(input: {
@@ -43,9 +44,9 @@ type CodemodeSessionStub = DurableObjectStub<CodemodeSession> & {
     scriptExecutionEvent: Event | null;
     streamPath: StreamPath;
   }>;
-  afterAppend(input: { event: Event }): Promise<StreamProcessorRunnerState<unknown>>;
+  afterAppend(input: { event: Event }): Promise<CodemodeSessionRunnerState>;
   ensureLiveConsumer(): Promise<void>;
-  getRunnerState(): Promise<StreamProcessorRunnerState<unknown>>;
+  getRunnerState(): Promise<CodemodeSessionRunnerState>;
   initialize(params: { name: string }): Promise<unknown>;
   registerToolProvider(input: { provider: ToolProviderRegistration }): Promise<Event>;
 };

@@ -10,9 +10,9 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
-import { AgentProcessorContract } from "@iterate-com/shared/stream-processors/agent/contract";
-import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { SlackProcessorContract } from "../slack/contract.ts";
+import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
+import { CodemodeProcessorContract } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 
 /**
  * Processor for one Slack-backed agent stream.

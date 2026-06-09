@@ -1160,6 +1160,9 @@ importers:
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../shared
+      '@iterate-com/streams':
+        specifier: workspace:*
+        version: link:../streams
       '@tailwindcss/postcss':
         specifier: ^4.1.17
         version: 4.2.1

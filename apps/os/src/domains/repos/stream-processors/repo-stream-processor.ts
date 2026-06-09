@@ -67,13 +67,3 @@ export class RepoStreamProcessor extends StreamProcessor<RepoStreamProcessorCont
     }
   }
 }
-
-/**
- * @deprecated Old-model shim kept only so the retiring legacy
- * StreamProcessorRunner (apps/os/src/domains/streams) keeps compiling until it
- * is deleted with the legacy model. Built-in subscribers are dropped at
- * runtime, so this code path is never dialed anymore.
- */
-export function createRepoStreamProcessor() {
-  return { contract: RepoStreamProcessorContract, implementation: {} };
-}

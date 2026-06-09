@@ -4,7 +4,7 @@ import type { Project } from "@iterate-com/os-contract";
 import { createCaptunTunnel } from "captun";
 import { expect } from "vitest";
 import { slugify } from "@iterate-com/shared/slug";
-import type { ProcessorContractShape } from "@iterate-com/shared/stream-processors";
+import type { ProcessorContractShape } from "@iterate-com/streams/shared/stream-processors";
 import {
   createAdminOsClient,
   requireBaseUrl,
@@ -15,8 +15,19 @@ import { CodemodeBuilder } from "./codemode-builder.ts";
 
 type Fetch = Parameters<typeof createCaptunTunnel>[0]["fetch"];
 
+/**
+ * Structural subset of a stream processor contract used for event typing.
+ * Looser than `ProcessorContractShape` so contracts returned by
+ * `defineProcessorContract` (whose `reduce` is property-typed after `Omit`)
+ * remain assignable.
+ */
+type ProcessorContractLike = {
+  events: ProcessorContractShape["events"];
+  processorDeps?: readonly unknown[];
+};
+
 export async function createTestProjectFixture<
-  ProcessorContracts extends ProcessorContractShape[],
+  ProcessorContracts extends ProcessorContractLike[],
 >(params?: {
   /** a fetch implementation that will be used to intercept the project's egress */
   egressFetch?: Fetch;
@@ -76,8 +87,8 @@ export async function createTestProjectFixture<
   };
 }
 
-type ProcessorContractEvent<ProcessorContracts extends ProcessorContractShape[]> =
-  ProcessorContractShape extends { processorDeps: infer Deps extends ProcessorContractShape[] }
+type ProcessorContractEvent<ProcessorContracts extends ProcessorContractLike[]> =
+  ProcessorContractLike extends { processorDeps: infer Deps extends ProcessorContractLike[] }
     ? ExtractEventType<ProcessorContracts[number]["events"]> | ProcessorContractEvent<Deps>
     : ExtractEventType<ProcessorContracts[number]["events"]>;
 

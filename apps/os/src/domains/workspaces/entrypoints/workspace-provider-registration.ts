@@ -1,4 +1,4 @@
-import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
+import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 
 export function createWorkspaceProviderRegistration(input: {
   projectId: string;

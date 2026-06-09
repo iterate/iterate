@@ -18,7 +18,6 @@ import type { SlackAgentDurableObject } from "./src/domains/slack/durable-object
 import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import type { OutboundMcpFromOurClientCapability } from "./src/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
-import type { StreamProcessorRunner } from "./src/domains/streams/durable-objects/stream-processor-runner.ts";
 
 const resolvedAuthIssuer =
   process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER;
@@ -111,13 +110,6 @@ const stream = DurableObjectNamespace<Stream>("stream", {
   className: "StreamDurableObject",
   sqlite: true,
 });
-const streamProcessorRunner = DurableObjectNamespace<StreamProcessorRunner>(
-  "stream-processor-runner",
-  {
-    className: "StreamProcessorRunner",
-    sqlite: true,
-  },
-);
 const codemodeSession = DurableObjectNamespace<CodemodeSession>("codemode-session-local", {
   className: "CodemodeSession",
   sqlite: true,
@@ -188,7 +180,6 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
     OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY: outboundMcpFromOurClientCapability,
     STREAM: stream,
-    STREAM_PROCESSOR_RUNNER: streamProcessorRunner,
     WORKSPACE: workspace,
     ...(debugAppendChainSubscriber == null
       ? {}

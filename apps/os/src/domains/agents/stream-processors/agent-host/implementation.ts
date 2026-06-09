@@ -1,9 +1,8 @@
 // Implements the "agent-host" processor as a class-based StreamProcessor.
 //
 // Recreated from the inline `createAgentHostProcessor` that used to live in
-// apps/os/src/domains/streams/durable-objects/stream-processor-runner.ts. The
-// host-side-effect handlers moved here from agent-durable-object.ts (which
-// re-exports them for the legacy runner); keeping them out of the Durable
+// the deleted legacy stream-processor runner. The host-side-effect handlers
+// moved here from agent-durable-object.ts; keeping them out of the Durable
 // Object module avoids a runtime import cycle now that the DO constructs this
 // processor in a class field initializer.
 

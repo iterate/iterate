@@ -54,8 +54,8 @@ type ScriptExecutionRequestedEvent = Extract<
 
 /**
  * Input shape for RPC tool-provider callables dispatched on behalf of codemode
- * function calls. Wire-compatible with the legacy
- * `@iterate-com/shared/stream-processors/codemode/implementation` export.
+ * function calls. Wire-compatible with the deleted legacy
+ * `@iterate-com/shared` codemode implementation export.
  */
 export type ExecuteCodemodeFunctionCallInput = {
   args: unknown[];

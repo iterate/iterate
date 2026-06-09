@@ -1,7 +1,7 @@
 // Defines the "agent-host" processor contract on the class-based stream model.
 //
-// Recreated from the inline contract that used to live in
-// apps/os/src/domains/streams/durable-objects/stream-processor-runner.ts.
+// Recreated from the inline contract that used to live in the deleted legacy
+// stream-processor runner.
 // The processor observes every event on an agent stream (`consumes: ["*"]`)
 // and runs OS-owned host side effects: waking the stream's AgentDurableObject,
 // initializing child-agent DOs, and bridging codemode script execution.

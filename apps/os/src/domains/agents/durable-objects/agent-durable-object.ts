@@ -8,9 +8,7 @@ import {
   getInitializedDoStub,
   NotInitializedError,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
-import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
-import type { ProcessorStreamApi } from "@iterate-com/shared/stream-processors";
+import type { ProcessorStreamApi } from "@iterate-com/streams/shared/stream-processors";
 import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { StreamEvent } from "@iterate-com/streams/shared/event";
@@ -19,6 +17,8 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
+import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
+import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
 import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
 import { AgentChatProcessor } from "~/domains/agents/stream-processors/agent-chat/implementation.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
@@ -86,17 +86,6 @@ export {
   getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 
-// The agent-host side-effect handlers used to live in this module; the legacy
-// stream-processor runner still imports them from here.
-export {
-  codemodeCompletionInputBlock,
-  ensureAgentRunnerForOwnStream,
-  ensureChildAgentRunner,
-  extractCodemodeScript,
-  handleAgentOutputAddedForCodemode,
-  handleCodemodeScriptExecutionCompletedForAgent,
-} from "~/domains/agents/stream-processors/agent-host/implementation.ts";
-
 export type AgentDurableObjectEnv = {
   AGENT: DurableObjectNamespace<AgentDurableObject>;
   AI: CloudflareAiBinding;
@@ -117,11 +106,14 @@ export type CloneIterateConfigRepoInput = {
   workspace: DurableObjectStub<WorkspaceDurableObject>;
 };
 
-type AgentStreamApi = ProcessorStreamApi<{
-  emits: readonly string[];
-  events: Record<string, unknown>;
-  processorDeps?: readonly unknown[];
-}> & {
+type AgentStreamApi = Omit<
+  ProcessorStreamApi<{
+    emits: readonly string[];
+    events: Record<string, unknown>;
+    processorDeps?: readonly unknown[];
+  }>,
+  "append" | "appendBatch" | "read"
+> & {
   append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
   appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
   read(args?: {

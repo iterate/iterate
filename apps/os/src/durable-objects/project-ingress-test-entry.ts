@@ -170,7 +170,6 @@ export {
 } from "./mock-artifacts-binding.ts";
 export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
-export { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 export { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";

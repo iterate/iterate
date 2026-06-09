@@ -22,7 +22,7 @@ import {
   type ConsumedEvent,
   type StreamEvent,
 } from "@iterate-com/streams/shared/stream-processors";
-import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
+import { CodemodeProcessorContract } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 
 export const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.6";
 

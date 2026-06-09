@@ -211,3 +211,89 @@ retain only legacy `built-in` subscriptions, which no longer dial. Acceptable
 for previews/new projects; production would need a backfill pass.
 
 ### I5. (running list — updated as migration proceeds)
+
+### Legacy deletion
+
+The legacy (non-class) processor model is now deleted everywhere.
+
+**Deleted:**
+
+- `apps/os/src/domains/streams/durable-objects/stream-processor-runner.ts`
+  (754 lines, the OS runner DO) plus every reference: the
+  `STREAM_PROCESSOR_RUNNER` binding and `DurableObjectNamespace` in
+  `alchemy.run.ts`, the `StreamProcessorRunner` re-exports from
+  `entry.workerd.ts` and the three workerd test entries, and the DO bindings +
+  `new_sqlite_classes` migration steps in the three `*.wrangler.vitest.jsonc`
+  configs.
+- `packages/shared/src/stream-processors/**` (whole legacy model + all OS
+  processor contracts/implementations, ~40 files) and all of its
+  `package.json` export entries plus the `test:stream-processors` script.
+- `packages/shared/src/durable-object-utils/mixins/with-stream-processor.ts`
+  and `with-stream-processor-runner.ts` (+ its type/unit tests) and their
+  export entries — the only remaining importer was the codemode-session test's
+  `StreamProcessorRunnerState` type, replaced by
+  `Awaited<ReturnType<CodemodeSession["getRunnerState"]>>`.
+- `packages/streams`: `src/processor.ts`, `src/processor-runner.ts`,
+  `src/processors/standard-processor-behavior.ts`,
+  `src/node/connect-processor-runner.ts` (zero importers), and the
+  `./processor` / `./processor-runner` exports. `src/types.ts` lost the
+  runner-handshake types (`StreamProcessorRunnerRpc`,
+  `StreamProcessorRunnerRuntimeState`, `StreamProcessorRunnerSnapshot`).
+- Legacy-runner-only helpers in `packages/streams/src/shared/stream-processors.ts`:
+  `StoredProcessorState`, `createStoredProcessorState`,
+  `FirstAttachAfterAppendPolicy`, `ProcessorImplementation`,
+  `BuiltinProcessorImplementation`, `Processor`, `BuiltinProcessor`,
+  `implementProcessor`, `implementBuiltinProcessor`, `reduceProcessorEvents`,
+  `runProcessorOnStart`, `runProcessorAfterAppend`,
+  `catchUpProcessorFromStream`, `consumeLiveProcessorEvent` (and its private
+  helpers). Kept everything contracts and the class model use, including
+  `runProcessorReduce` (used by `packages/ui`'s stream-view projection) and
+  `validateProcessorContract`.
+- The unused DO storage helpers in `packages/streams/src/shared/event.ts`
+  (`writeEvent`/`writeEventFromKv`/read/init helpers and the
+  `DurableObjectStorage`-derived types). The Stream DO has its own inline SQL;
+  nothing imported them — and removing them is what lets `packages/ui`
+  (lib: dom, no workers types) typecheck against
+  `@iterate-com/streams/shared/stream-processors`.
+- The `createRepoStreamProcessor` old-model compile shim in
+  `repo-stream-processor.ts` and the legacy-runner re-export block in
+  `agent-durable-object.ts`.
+
+**Repointed (~35 files):** every `@iterate-com/shared/stream-processors/*`
+import now targets the new homes — codemode contract/implementation →
+`~/domains/codemode/stream-processors/codemode/*`, agent contract →
+`~/domains/agents/stream-processors/agent/contract.ts`, jsonata-reactor →
+`~/domains/agents/stream-processors/jsonata-reactor/contract.ts`, and model
+helpers (`getInitialProcessorState`, `ProcessorContractShape`,
+`ProcessorStreamApi`, `defineProcessorContract`, `runProcessorReduce`) →
+`@iterate-com/streams/shared/stream-processors`. `packages/ui` gained a
+`@iterate-com/streams` workspace dep. The agent contract's
+`CodemodeProcessorContract` dep now points at the new codemode contract — no
+import cycle appeared (codemode's contract only imports zod/Callable/streams).
+
+**Judgment calls:**
+
+- Alchemy DO deletion needs no explicit migration entry: alchemy computes
+  `deleted_classes` server-side by diffing the worker's previous DO bindings
+  (tag-encoded stable ids) against the next deploy's bindings
+  (`worker-metadata.ts` in alchemy 0.83). Removing the binding is sufficient;
+  the next deploy emits `deleted_classes: ["StreamProcessorRunner"]`.
+- `packages/streams/src/subscription.ts` stays: `createStreamSubscription` is
+  live infrastructure (SSE bridging in `apps/os` `orpc/routers/streams.ts` and
+  `streams-capability.ts`), not legacy-model code.
+- `e2e/test-support/create-test-project.ts` now constrains `processors` with a
+  structural `ProcessorContractLike` (`events` + optional `processorDeps`)
+  because `defineProcessorContract`'s return type routes `reduce` through
+  `Omit`, which loses method bivariance against the wide
+  `ProcessorContractShape`.
+- `agents.e2e.test.ts`: the legacy `built-in`/`capnweb-websocket` slack
+  subscription fixture now appends the same callable subscriber payload as
+  `SlackIntegrationDurableObject.ensureIntegrationSubscription`
+  (subscriptionKey `slack:${projectId}`), and the subscriber assertions check
+  `type: "callable"` + `transformInput.shallowMerge.processorName` instead of
+  `processorSlug`.
+- Known pre-existing failure (unrelated, reproduced with this change stashed):
+  `codemode-session.test.ts` › "runs loopback RPC capability examples with
+  live handles and callbacks" times out in `waitForScriptExecutionCompleted`
+  on this branch. The other 16 tests in that suite and all 5 project-ingress
+  tests pass.

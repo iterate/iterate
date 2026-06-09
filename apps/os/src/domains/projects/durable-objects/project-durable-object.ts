@@ -6,7 +6,6 @@ import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { jsonataReactorEventTypes } from "@iterate-com/shared/stream-processors/jsonata-reactor/contract";
 import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
 import { typeid } from "@iterate-com/shared/typeid";
 import {
@@ -14,6 +13,7 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
 import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
+import { jsonataReactorEventTypes } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,

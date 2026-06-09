@@ -1,9 +1,5 @@
 import type { StreamEvent, StreamEventInput } from "./shared/event.ts";
-import type { Snapshot } from "./processor-runner.ts";
-import type {
-  CoreProcessorState,
-  SubscriptionConfiguredEvent,
-} from "./processors/core/contract.ts";
+import type { CoreProcessorState } from "./processors/core/contract.ts";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -88,22 +84,4 @@ export type ConnectionInfo = {
   batchesSent: number;
   eventsSent: number;
   lastDeliveredAt?: string;
-};
-
-export type StreamProcessorRunnerSnapshot = Snapshot<unknown>;
-
-export type StreamProcessorRunnerRuntimeState = {
-  processorSlug: string | undefined;
-  snapshot: StreamProcessorRunnerSnapshot | undefined;
-};
-
-export type StreamProcessorRunnerRpc = {
-  requestSubscription(args: {
-    stream: StreamRpc;
-    subscriptionKey: SubscriptionKey;
-    streamMaxOffset: number;
-    subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
-    streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
-  }): MaybePromise<void>;
-  runtimeState(): StreamProcessorRunnerRuntimeState;
 };
