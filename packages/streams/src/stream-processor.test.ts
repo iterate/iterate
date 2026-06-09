@@ -386,7 +386,7 @@ describe("projector processor (consumes everything, writes to a db port)", () =>
       streamMaxOffset: 11,
     });
 
-    expect(written).toEqual([9, 11]);
+    expect(written).toEqual([9, 10, 11]);
   });
 });
 
