@@ -5,8 +5,15 @@ import {
   Bug,
   Check,
   ChevronsUpDown,
+  CircleDot,
   ExternalLink,
+  GitBranch,
+  House,
+  KeyRound,
   LogOut,
+  Network,
+  Plug,
+  Radio,
   ScrollText,
   Settings2,
   SquareTerminal,
@@ -60,8 +67,6 @@ import type { AppConfig } from "~/app.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
-import type { RouteBreadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
-import { streamPathToSplat } from "~/lib/stream-links.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
 
@@ -107,8 +112,8 @@ function AppSidebarHeader() {
                 size="lg"
                 className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
               >
-                <span className="flex aspect-square size-7 items-center justify-center rounded-md bg-black">
-                  <IterateLogo className="size-5 rounded-sm" />
+                <span className="flex aspect-square size-8 items-center justify-center rounded-md bg-black">
+                  <IterateLogo className="size-6 rounded-sm" />
                 </span>
                 <span className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">iterate</span>
@@ -342,7 +347,6 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
-              tooltip="Projects"
               render={<Link to="/projects" />}
               isActive={Boolean(
                 matchRoute({
@@ -377,7 +381,6 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
-              tooltip="Repl"
               render={<Link to="/capnweb-repl" />}
               isActive={Boolean(matchRoute({ to: "/capnweb-repl", fuzzy: false }))}
             >
@@ -413,8 +416,6 @@ function ProjectSidebarGroup({
   projectSlug: string;
 }) {
   const matchRoute = useMatchRoute();
-  const matches = useMatches();
-  const activeStreamPath = getActiveStreamPath(matches);
   const customWorkerUrl = buildProjectWorkerUrl({
     projectSlug,
     customHostname,
@@ -429,26 +430,27 @@ function ProjectSidebarGroup({
             {PROJECT_STREAM_NAV_ITEMS.map((item) => (
               <ProjectStreamNavItem
                 key={item.label}
-                isActive={
-                  item.useProjectHome
-                    ? Boolean(
-                        matchRoute({
-                          to: "/projects/$projectSlug",
-                          params: { projectSlug },
-                          fuzzy: false,
-                        }),
-                      ) || activeStreamPath === "/"
-                    : activeStreamPath != null &&
-                      (activeStreamPath === item.streamPath ||
-                        activeStreamPath.startsWith(`${item.streamPath}/`))
-                }
+                icon={item.icon}
+                isActive={Boolean(
+                  matchRoute({
+                    to: item.to,
+                    params: { projectSlug },
+                    fuzzy: item.fuzzy,
+                  }),
+                )}
                 label={item.label}
                 projectSlug={projectSlug}
                 streamPath={item.streamPath}
-                useProjectHome={item.useProjectHome ?? false}
+                to={item.to}
               />
             ))}
-            <SidebarSeparator />
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+      <SidebarSeparator />
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <SidebarMenu>
             <ProjectSidebarMenuItem
               icon={Settings2}
               label="Settings"
@@ -474,7 +476,6 @@ function ProjectSidebarGroup({
             {customWorkerUrl ? (
               <SidebarMenuItem>
                 <SidebarMenuButton
-                  tooltip="Project worker"
                   render={
                     <a
                       aria-label={`Open ${projectSlug} project worker`}
@@ -498,7 +499,6 @@ function ProjectSidebarGroup({
             <SidebarMenuItem>
               <SidebarMenuButton
                 size="sm"
-                tooltip="View all projects"
                 className="text-sidebar-foreground/70"
                 render={<Link to="/projects" />}
               >
@@ -514,81 +514,91 @@ function ProjectSidebarGroup({
 }
 
 type ProjectStreamNavItemConfig = {
+  fuzzy: boolean;
+  icon: LucideIcon;
   label: string;
   streamPath: StreamPathType;
-  useProjectHome?: boolean;
+  to:
+    | "/projects/$projectSlug"
+    | "/projects/$projectSlug/agents"
+    | "/projects/$projectSlug/integrations"
+    | "/projects/$projectSlug/secrets"
+    | "/projects/$projectSlug/repos"
+    | "/projects/$projectSlug/streams"
+    | "/projects/$projectSlug/mcp";
 };
 
 const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
   {
+    fuzzy: false,
+    icon: House,
     label: "/",
     streamPath: StreamPath.parse("/"),
-    useProjectHome: true,
+    to: "/projects/$projectSlug",
   },
   {
+    fuzzy: true,
+    icon: CircleDot,
     label: "/agents/",
     streamPath: StreamPath.parse("/agents"),
+    to: "/projects/$projectSlug/agents",
   },
   {
+    fuzzy: false,
+    icon: Plug,
     label: "/integrations/",
     streamPath: StreamPath.parse("/integrations"),
+    to: "/projects/$projectSlug/integrations",
   },
   {
+    fuzzy: true,
+    icon: KeyRound,
     label: "/secrets/",
     streamPath: StreamPath.parse("/secrets"),
+    to: "/projects/$projectSlug/secrets",
   },
   {
+    fuzzy: true,
+    icon: GitBranch,
     label: "/repos/",
     streamPath: StreamPath.parse("/repos"),
+    to: "/projects/$projectSlug/repos",
   },
   {
+    fuzzy: true,
+    icon: Radio,
     label: "/streams/",
     streamPath: StreamPath.parse("/streams"),
+    to: "/projects/$projectSlug/streams",
   },
   {
+    fuzzy: false,
+    icon: Network,
     label: "/mcp/",
     streamPath: StreamPath.parse("/mcp"),
+    to: "/projects/$projectSlug/mcp",
   },
 ];
 
-function getActiveStreamPath(matches: ReturnType<typeof useMatches>) {
-  return matches
-    .map(
-      (match) =>
-        (match.loaderData as RouteBreadcrumbLoaderData | undefined)?.streamBreadcrumb?.streamPath,
-    )
-    .filter((streamPath): streamPath is StreamPathType => streamPath != null)
-    .at(-1);
-}
-
 function ProjectStreamNavItem({
+  icon: Icon,
   isActive,
   label,
   projectSlug,
   streamPath,
-  useProjectHome,
+  to,
 }: {
+  icon: LucideIcon;
   isActive: boolean;
   label: string;
   projectSlug: string;
   streamPath: StreamPathType;
-  useProjectHome: boolean;
+  to: ProjectStreamNavItemConfig["to"];
 }) {
-  const render = useProjectHome ? (
-    <Link to="/projects/$projectSlug" params={{ projectSlug }} />
-  ) : (
-    <Link
-      to="/projects/$projectSlug/streams/$"
-      params={{
-        projectSlug,
-        _splat: streamPathToSplat(streamPath),
-      }}
-    />
-  );
-
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton render={render} isActive={isActive} tooltip={label}>
+      <SidebarMenuButton render={<Link to={to} params={{ projectSlug }} />} isActive={isActive}>
+        <Icon />
         <EventsStreamPathLabel className="text-xs" label={label} path={streamPath} />
       </SidebarMenuButton>
     </SidebarMenuItem>
@@ -608,7 +618,7 @@ function ProjectSidebarMenuItem({
 }) {
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton render={render} isActive={isActive} tooltip={label}>
+      <SidebarMenuButton render={render} isActive={isActive}>
         <Icon />
         <span>{label}</span>
       </SidebarMenuButton>
