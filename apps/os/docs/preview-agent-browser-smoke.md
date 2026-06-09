@@ -60,3 +60,30 @@ Close the browser when the smoke is done:
 ```bash
 agent-browser close
 ```
+
+## Unattended sign-in (no human to approve prompts)
+
+The flow above assumes you can "reuse an auth-worker user". When running fully
+unattended (e.g. an agent working while nobody is awake to approve a CDP prompt
+or complete Google OAuth), use the bootstrap superadmin, which signs in with
+email + password — no OAuth provider, no interactive consent:
+
+- **email**: `superadmin@nustom.com`
+  (`BOOTSTRAP_SUPERADMIN_EMAIL`, `apps/auth/src/server/bootstrap-superadmin.ts`)
+- **password**: the auth worker's service token —
+  `doppler secrets get SERVICE_AUTH_TOKEN --project auth --config prd --plain`
+
+Email/password **sign-up** is disabled (`apps/auth/src/server/auth.ts`:
+`emailAndPassword.disableSignUp`, plus a `SIGNUP_ALLOWLIST`), so you cannot
+self-register a fresh user through the UI — sign in as the superadmin instead,
+or provision a user out-of-band via the auth worker's service-token-gated
+internal oRPC API (`apps/auth/src/server/orpc/routers/internal.ts`:
+`internal.user.upsertVerifiedEmail` + `internal.organization.createForUser`).
+
+`agent-browser` is headless and needs no CDP permission prompt, so the whole
+sequence — open preview, fill the auth-worker email/password form, land back on
+OS authenticated, create a project at `/new-project`, open
+`/projects/<slug>/agents` and send a message — runs without human interaction.
+
+Previews authenticate against **production** auth (`auth.iterate.com`), so these
+credentials work against preview hosts too.
