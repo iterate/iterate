@@ -1,7 +1,7 @@
-import { useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ProjectIntegrationConnection } from "@iterate-com/os-contract";
+import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Item,
@@ -14,8 +14,12 @@ import {
 } from "@iterate-com/ui/components/item";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { Circle, Mail, MessageSquare } from "lucide-react";
+import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
+import {
+  projectGoogleConnectionQueryOptions,
+  projectSlackConnectionQueryOptions,
+} from "~/lib/project-route-query.ts";
 import { orpc } from "~/orpc/client.ts";
 
 const Search = z.object({
@@ -24,11 +28,12 @@ const Search = z.object({
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")({
   validateSearch: Search,
-  loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
+  loader: async ({ context }) => {
+    const { project } = context;
+    await Promise.all([
+      context.queryClient.ensureQueryData(projectSlackConnectionQueryOptions(project.id)),
+      context.queryClient.ensureQueryData(projectGoogleConnectionQueryOptions(project.id)),
+    ]);
 
     return {
       breadcrumb: "Integrations",
@@ -43,19 +48,11 @@ function ProjectIntegrationsPage() {
   const { project } = Route.useLoaderData();
   const queryClient = useQueryClient();
   const projectSlugOrId = project.id;
-  const slackQuery = orpc.project.integrations.getSlackConnection.queryOptions({
-    input: { projectSlugOrId },
-  });
-  const googleQuery = orpc.project.integrations.getGoogleConnection.queryOptions({
-    input: { projectSlugOrId },
-  });
+  const slackQuery = projectSlackConnectionQueryOptions(project.id);
+  const googleQuery = projectGoogleConnectionQueryOptions(project.id);
   const { data: slackConnection } = useQuery(slackQuery);
   const { data: googleConnection } = useQuery(googleQuery);
-
-  useEffect(() => {
-    if (!search.error) return;
-    toast.error(search.error.replaceAll("_", " "));
-  }, [search.error]);
+  const oauthErrorLabel = search.error ? formatOAuthError(search.error) : null;
 
   const startSlack = useMutation(
     orpc.project.integrations.startSlackOAuthFlow.mutationOptions({
@@ -94,6 +91,13 @@ function ProjectIntegrationsPage() {
 
   return (
     <section className="max-w-md space-y-4 p-4">
+      {oauthErrorLabel ? (
+        <Alert variant="destructive">
+          <AlertCircle className="size-4" />
+          <AlertTitle>Integration failed</AlertTitle>
+          <AlertDescription>{oauthErrorLabel}</AlertDescription>
+        </Alert>
+      ) : null}
       <ItemGroup className="space-y-3">
         <Item variant="outline" className="items-start justify-between gap-4 p-4">
           <ItemMedia variant="icon">
@@ -278,6 +282,10 @@ function formatTimestamp(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(timestamp));
+}
+
+function formatOAuthError(value: string) {
+  return value.replaceAll("_", " ");
 }
 
 function countScopes(scopes: string | null, separator: "," | " ") {

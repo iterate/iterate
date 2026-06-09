@@ -2,8 +2,10 @@ import { ORPCError } from "@orpc/server";
 import { getAccessibleAuthProject } from "~/capnweb/projects-capability.ts";
 import type { AppContext } from "~/context.ts";
 import { getProjectById, getProjectBySlug } from "~/db/queries/.generated/index.ts";
-import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
-import { resolveActiveOrganizationAuth } from "~/orpc/auth.ts";
+import {
+  type ActiveOrganizationAuth,
+  resolveActiveOrganizationAuth,
+} from "~/lib/active-organization-auth.ts";
 
 /**
  * Confirms a caller can access an ownerless project before exposing

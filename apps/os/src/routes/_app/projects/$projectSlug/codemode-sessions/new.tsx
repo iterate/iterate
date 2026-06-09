@@ -39,12 +39,9 @@ const emptyEventsYaml = "[]\n";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/codemode-sessions/new")({
   validateSearch: Search,
-  loader: async ({ context, location, params }) => {
+  loader: async ({ context, location }) => {
     const search = Search.parse(location.search);
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
+    const { project } = context;
     return {
       breadcrumb: "New Codemode Session",
       example: findCodemodeExample(search.example),

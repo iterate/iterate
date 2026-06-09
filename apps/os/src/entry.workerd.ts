@@ -38,6 +38,7 @@ import { handleRootIterateContextFetch } from "~/capnweb/root-context-fetch.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { requireProjectScopedAccess } from "~/orpc/project-access.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { authenticateAdminBearer } from "~/auth/admin.ts";
 
 // Re-export rpc-targets used by OS's existing loopback callable paths.
 // Stream processor subscriptions do not use these exports; they target Durable
@@ -328,7 +329,12 @@ async function handleDebugAppendChainFetch(input: { request: Request; env: Env }
     return Response.json({ error: "Debug endpoint is disabled." }, { status: 404 });
   }
 
-  if (input.request.headers.get("authorization") !== `Bearer ${expectedToken}`) {
+  if (
+    !authenticateAdminBearer({
+      authorizationHeader: input.request.headers.get("authorization"),
+      config,
+    })
+  ) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
 
@@ -449,7 +455,12 @@ async function handleSeedIterateConfigBaseFetch(input: { request: Request; env: 
     return Response.json({ error: "Seed endpoint is disabled." }, { status: 404 });
   }
 
-  if (input.request.headers.get("authorization") !== `Bearer ${expectedToken}`) {
+  if (
+    !authenticateAdminBearer({
+      authorizationHeader: input.request.headers.get("authorization"),
+      config,
+    })
+  ) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
 

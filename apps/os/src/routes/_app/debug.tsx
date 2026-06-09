@@ -5,14 +5,13 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
 import type { AppConfig } from "~/app.ts";
+import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 import { orpcClient } from "~/orpc/client.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
 
 export const Route = createFileRoute("/_app/debug")({
-  staticData: {
-    breadcrumb: "Debug",
-  },
+  staticData: breadcrumbStaticData("Debug"),
   loader: async () => ({
     ping: await orpcClient.ping({}),
   }),

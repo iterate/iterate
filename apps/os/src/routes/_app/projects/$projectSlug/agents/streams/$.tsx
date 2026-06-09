@@ -1,25 +1,32 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ProjectStreamView } from "~/components/project-stream-view.tsx";
-import { streamPathFromSplat } from "~/lib/stream-links.ts";
+import {
+  projectAgentRuntimeStateQueryOptions,
+  projectAgentsListQueryOptions,
+} from "~/lib/project-route-query.ts";
+import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
+import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { orpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams/$")({
+  params: {
+    parse: (raw) => ({
+      _splat: streamPathFromSplat(raw._splat),
+    }),
+    stringify: (parsed) => ({
+      _splat: streamPathToSplat(parsed._splat),
+    }),
+  },
   ssr: false,
   loader: async ({ context, params }) => {
-    const agentPath = streamPathFromSplat(params._splat);
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
-    await context.queryClient.ensureQueryData({
-      ...orpc.project.agents.runtimeState.queryOptions({
-        input: { agentPath, projectSlugOrId: project.id },
-      }),
-      staleTime: 5_000,
-    });
+    const agentPath = params._splat;
+    const { project } = context;
+    await context.queryClient.ensureQueryData(
+      projectAgentRuntimeStateQueryOptions({ agentPath, projectId: project.id }),
+    );
 
-    return {
+    return breadcrumbLoaderData({
       breadcrumb: agentPath,
       project,
       streamPath: agentPath,
@@ -28,7 +35,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
         projectSlug: params.projectSlug,
         streamPath: agentPath,
       },
-    };
+    });
   },
   component: ProjectAgentDetailPage,
 });
@@ -37,9 +44,7 @@ function ProjectAgentDetailPage() {
   const params = Route.useParams();
   const queryClient = useQueryClient();
   const { project, streamPath } = Route.useLoaderData();
-  const agentsQueryOptions = orpc.project.agents.list.queryOptions({
-    input: { projectSlugOrId: project.id },
-  });
+  const agentsQueryOptions = projectAgentsListQueryOptions(project.id);
   const sendMessage = useMutation(
     orpc.project.agents.sendMessage.mutationOptions({
       onSuccess: async () => {

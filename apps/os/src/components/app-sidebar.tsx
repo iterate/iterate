@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Link, useMatchRoute } from "@tanstack/react-router";
 import { Bug, Building2, ChevronsUpDown, ExternalLink, LogOut, UserCircle } from "lucide-react";
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
+import { useAuthClient } from "@iterate-com/auth/client";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -35,33 +36,35 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import type { AppConfig } from "~/app.ts";
-import { useAuthClient } from "~/auth/client-context.ts";
 import { buildProjectMcpUrl, buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
-import { orpc } from "~/orpc/client.ts";
+import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
+import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
 
 type AppSidebarProps = {
   organizationSlug: string;
+  routeConfig: PublicRouteConfig;
 };
 
-export function AppSidebar({ organizationSlug }: AppSidebarProps) {
+export function AppSidebar({ organizationSlug, routeConfig }: AppSidebarProps) {
   return (
     <SidebarShell
       header={<AppSidebarOrganization organizationSlug={organizationSlug} />}
       footer={<AppSidebarUser />}
     >
-      <AppSidebarNav />
+      <AppSidebarNav routeConfig={routeConfig} />
     </SidebarShell>
   );
 }
 
-function AppSidebarOrganization({ organizationSlug }: AppSidebarProps) {
+function AppSidebarOrganization({ organizationSlug }: Pick<AppSidebarProps, "organizationSlug">) {
   const { session } = useAuthClient();
   const organizations = session?.authenticated ? session.session.organizations : [];
   const activeOrganization =
     organizations.find((organization) => organization.slug === organizationSlug) ??
     organizations[0];
+  const activeOrganizationLabel = nonEmptyLabel(activeOrganization?.name, organizationSlug);
 
   return (
     <SidebarMenu>
@@ -71,7 +74,7 @@ function AppSidebarOrganization({ organizationSlug }: AppSidebarProps) {
             render={
               <SidebarMenuButton className="h-10 gap-2 data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground">
                 <Building2 className="size-4" />
-                <span className="truncate">{activeOrganization?.name ?? organizationSlug}</span>
+                <span className="truncate">{activeOrganizationLabel}</span>
                 <ChevronsUpDown className="ml-auto size-4" />
               </SidebarMenuButton>
             }
@@ -90,7 +93,9 @@ function AppSidebarOrganization({ organizationSlug }: AppSidebarProps) {
                   }
                 >
                   <Building2 />
-                  <span className="truncate">{organization.name}</span>
+                  <span className="truncate">
+                    {nonEmptyLabel(organization.name, organization.slug)}
+                  </span>
                 </DropdownMenuItem>
               ))}
             </DropdownMenuGroup>
@@ -106,7 +111,7 @@ function AppSidebarUser() {
   const config = useConfig<PublicConfig>();
   const [debugOpen, setDebugOpen] = useState(false);
   const user = session?.authenticated ? session.user : null;
-  const label = user?.name ?? user?.email ?? "Account";
+  const label = nonEmptyLabel(user?.name, user?.email, "Account");
   const debugInfo = useMemo(
     () => ({
       auth: {
@@ -184,13 +189,13 @@ function AppSidebarUser() {
   );
 }
 
-function AppSidebarNav() {
+function nonEmptyLabel(...values: Array<string | null | undefined>) {
+  return values.find((value) => value?.trim())?.trim() ?? "";
+}
+
+function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   const matchRoute = useMatchRoute();
-  const config = useConfig<PublicConfig>();
-  const { data } = useQuery({
-    ...orpc.projects.list.queryOptions({ input: { limit: 100, offset: 0 } }),
-    staleTime: 30_000,
-  });
+  const { data } = useQuery(projectsListQueryOptions({ limit: 100, offset: 0 }));
   const projects =
     data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
 
@@ -228,10 +233,10 @@ function AppSidebarNav() {
         <ProjectSidebarGroup
           key={project.id}
           customHostname={project.customHostname}
-          mcpBaseUrl={config.mcp?.baseUrl}
+          mcpBaseUrl={routeConfig.mcpBaseUrl}
           projectSlug={project.slug}
-          baseUrl={config.baseUrl}
-          projectHostnameBases={config.projectHostnameBases}
+          baseUrl={routeConfig.baseUrl}
+          projectHostnameBases={routeConfig.projectHostnameBases}
         />
       ))}
     </>

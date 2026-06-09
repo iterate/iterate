@@ -2,15 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { ProjectStreamView } from "~/components/project-stream-view.tsx";
-import { orpc } from "~/orpc/client.ts";
+import { projectLifecycleStateQueryOptions } from "~/lib/project-route-query.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/")({
   ssr: false,
-  loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
+  loader: async ({ context }) => {
+    const { project } = context;
 
     return {
       breadcrumb: "Home",
@@ -24,9 +21,8 @@ function ProjectHomePage() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const lifecycleStateQuery = useQuery({
-    ...orpc.project.lifecycleState.queryOptions({ input: { projectSlugOrId: project.id } }),
+    ...projectLifecycleStateQueryOptions(project.id),
     refetchInterval: 2_500,
-    staleTime: 1_000,
   });
 
   return (

@@ -16,6 +16,7 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/new-stream-runtime.ts";
 import { AppConfig } from "~/app.ts";
+import { authenticateAdminBearer } from "~/auth/admin.ts";
 import {
   createCapnwebAppContext,
   createIterateContext,
@@ -680,7 +681,12 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       );
     }
 
-    if (readBearerToken(request.headers.get("authorization")) !== expectedToken) {
+    if (
+      !authenticateAdminBearer({
+        authorizationHeader: request.headers.get("authorization"),
+        config: this.getAppConfig(),
+      })
+    ) {
       return Response.json({ error: "Unauthorized." }, { status: 401 });
     }
 
@@ -1521,14 +1527,6 @@ function projectLandingResponse(input: { request: Request; summary: ProjectSumma
 function isHttpRequestUrl(urlString: string) {
   const url = new URL(urlString);
   return url.protocol === "http:" || url.protocol === "https:";
-}
-
-function readBearerToken(headerValue: string | null): string | null {
-  if (!headerValue) return null;
-  const match = /^bearer\s+(.+)$/i.exec(headerValue);
-  if (!match) return null;
-  const token = match[1]?.trim() ?? "";
-  return token.length > 0 ? token : null;
 }
 
 function projectWorkerBuildingResponse() {

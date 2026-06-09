@@ -19,6 +19,7 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { RadioGroup, RadioGroupItem } from "@iterate-com/ui/components/radio-group";
 import { createBrowserOpenApiClient, createBrowserWebSocketClient } from "~/orpc/client.ts";
+import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
 type StreamStatus = "idle" | "connecting" | "streaming" | "completed" | "error";
 type StreamTransport = "openapi" | "websocket";
@@ -53,9 +54,7 @@ const DEFAULT_TRANSPORT: StreamTransport = "openapi";
 
 export const Route = createFileRoute("/_app/log-stream")({
   ssr: false,
-  staticData: {
-    breadcrumb: "Log Stream",
-  },
+  staticData: breadcrumbStaticData("Log Stream"),
   component: LogStreamPage,
 });
 

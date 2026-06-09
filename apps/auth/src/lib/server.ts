@@ -19,6 +19,7 @@ import {
 } from "@iterate-com/shared/auth-claims";
 
 const DEFAULT_ISSUER = "https://auth.iterate.com/api/auth";
+export const DEFAULT_AUTH_HANDLER_BASE_PATH = "/api/iterate-auth";
 const SCOPES = ["openid", "profile", "email", "offline_access"] as const;
 const REFRESH_SKEW_MS = 30_000;
 
@@ -160,6 +161,7 @@ export type SessionResponse =
 
 const OAuthState = z.object({
   nonce: z.string(),
+  returnTo: z.string().optional(),
   state: z.string(),
   verifier: z.string(),
 });
@@ -421,12 +423,18 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     return OAuthState.parse(JSON.parse(value));
   }
 
-  const app = new Hono().basePath(config.authHandlerBasePath ?? "/api/iterate-auth");
+  const authHandlerBasePath = normalizeAuthHandlerBasePath(config.authHandlerBasePath);
+  const app = new Hono().basePath(authHandlerBasePath);
 
   app.get("/login", async (c) => {
     const as = await getAuthorizationServer();
     if (!as.authorization_endpoint) throw new Error("No authorization_endpoint in server metadata");
 
+    const requestURL = new URL(c.req.url);
+    const returnTo = resolveAllowedReturnTo(requestURL.searchParams.get("return_to"), [
+      requestURL.origin,
+      ...(config.logoutReturnToOrigins ?? []),
+    ]);
     const state = oauth.generateRandomState();
     const verifier = oauth.generateRandomCodeVerifier();
     const nonce = oauth.generateRandomNonce();
@@ -442,10 +450,15 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     url.searchParams.set("code_challenge", challenge);
     url.searchParams.set("code_challenge_method", "S256");
 
-    setCookie(c, STATE_COOKIE, JSON.stringify({ nonce, state, verifier } satisfies OAuthState), {
-      ...cookieOpts(),
-      maxAge: 10 * 60,
-    });
+    setCookie(
+      c,
+      STATE_COOKIE,
+      JSON.stringify({ nonce, returnTo, state, verifier } satisfies OAuthState),
+      {
+        ...cookieOpts(),
+        maxAge: 10 * 60,
+      },
+    );
 
     return c.redirect(url.toString());
   });
@@ -498,7 +511,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
 
     writeCookie(c, toTokenSet(tokenResponse));
     deleteCookie(c, STATE_COOKIE, cookieOpts());
-    return c.redirect(`${requestURL.origin}/`);
+    return c.redirect(oauthState.returnTo ?? `${requestURL.origin}/`);
   });
 
   app.get("/session", async (c) => {
@@ -627,10 +640,33 @@ export function createIterateAuth(config: IterateAuthConfig) {
 
   const routes = createAuthHandler(config, infra);
   const middleware = createAuthMiddleware(config, infra);
+  const authHandlerBasePath = normalizeAuthHandlerBasePath(config.authHandlerBasePath);
 
   return {
+    authHandlerBasePath,
     handler: routes.handler,
+    handleRequest(request: Request): Response | Promise<Response> | null {
+      if (!isAuthHandlerRequest(request, authHandlerBasePath)) {
+        return null;
+      }
+      return routes.handler(request);
+    },
     authenticate: middleware.authenticate,
     authenticateBearer: middleware.authenticateBearer,
   };
+}
+
+export function isAuthHandlerRequest(
+  request: Request,
+  authHandlerBasePath = DEFAULT_AUTH_HANDLER_BASE_PATH,
+) {
+  const pathname = new URL(request.url).pathname;
+  const basePath = normalizeAuthHandlerBasePath(authHandlerBasePath);
+  return pathname === basePath || pathname.startsWith(`${basePath}/`);
+}
+
+function normalizeAuthHandlerBasePath(authHandlerBasePath: string | undefined) {
+  const basePath = authHandlerBasePath ?? DEFAULT_AUTH_HANDLER_BASE_PATH;
+  const normalized = `/${basePath.replace(/^\/+|\/+$/g, "")}`;
+  return normalized === "/" ? DEFAULT_AUTH_HANDLER_BASE_PATH : normalized;
 }
