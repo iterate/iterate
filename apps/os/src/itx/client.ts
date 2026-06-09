@@ -19,6 +19,12 @@ export type ConnectItxInput = {
   token: string;
   /** "global" (default) or a project id/slug. */
   context?: string;
+  /**
+   * WebSocket handshake timeout (ms). Without this a dead/unreachable server
+   * makes the underlying socket — and every pending RPC on it — hang forever
+   * instead of failing fast. Default 15s.
+   */
+  handshakeTimeoutMs?: number;
 };
 
 export type ItxClient = RpcStub<Itx>;
@@ -33,6 +39,7 @@ export function connectItx(input: ConnectItxInput): ItxClient {
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
 
   const socket = new WebSocket(url.toString(), {
+    handshakeTimeout: input.handshakeTimeoutMs ?? 15_000,
     headers: { authorization: `Bearer ${input.token}` },
   });
   return newWebSocketRpcSession<Itx>(

@@ -65,6 +65,22 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   expect(reconnectedShadow.marker).toBe("child-level");
 });
 
+test("fork narrows access: a session cannot reach sibling projects", async () => {
+  using itx = connectGlobal();
+  // Two projects under an admin (access "all") handle.
+  const a = (await itx.projects.create({ slug: `itx-fork-a-${suffix()}` })) as { id: string };
+  const b = (await itx.projects.create({ slug: `itx-fork-b-${suffix()}` })) as { id: string };
+
+  using projectA = await itx.projects.get(a.id);
+  using session = await projectA.fork({ name: "agent-session" });
+
+  // The forked session is narrowed to project A — it must NOT be able to hop
+  // to a sibling project even though it descends from an admin handle.
+  await expect(session.projects.get(b.id)).rejects.toThrow(/not found/i);
+  // ...but reaching its own project is fine.
+  await expect(session.projects.get(a.id)).resolves.toBeDefined();
+});
+
 test("fork: child worker caps run with the owning project's authority", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `itx-fork-itx-${suffix()}` })) as {

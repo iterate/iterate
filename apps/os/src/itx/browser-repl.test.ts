@@ -2,6 +2,7 @@ import { RpcStub, RpcTarget } from "capnweb";
 import { describe, expect, test, vi } from "vitest";
 import {
   BROWSER_REPL_EXAMPLES,
+  compileBrowserReplFunction,
   DEFAULT_BROWSER_REPL_CODE,
   evalBrowserReplCode,
   evalBrowserReplSessionCode,
@@ -245,6 +246,19 @@ count
     expect(scope.count).toBe(1);
   });
 
+  test("snippet ending in a line comment still returns its last value", async () => {
+    // Regression: the appended `; return __replLastValue` used to land on the
+    // same line as a trailing comment and get swallowed → "Unexpected end of
+    // input". A trailing comment is natural in our documented examples.
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "const a = 41;\na + 1   // the answer",
+        itx: {},
+        scope: {},
+      }),
+    ).resolves.toBe(42);
+  });
+
   test("session snippets persist function and class declarations", async () => {
     const scope: Record<string, unknown> = {};
 
@@ -424,6 +438,22 @@ const persisted = answer();
     }
   });
 
+  test("every published example has unique metadata and compiles", () => {
+    expect(BROWSER_REPL_EXAMPLES.length).toBeGreaterThan(1);
+    const ids = new Set<string>();
+    for (const example of BROWSER_REPL_EXAMPLES) {
+      expect(example.id, `duplicate example id ${example.id}`).not.toBe(undefined);
+      expect(ids.has(example.id)).toBe(false);
+      ids.add(example.id);
+      expect(example.title.length).toBeGreaterThan(0);
+      expect(example.description.length).toBeGreaterThan(0);
+      // The statement compiler must accept the snippet — this catches
+      // transform bugs around nested template literals, top-level classes,
+      // and trailing `return` before any of them reaches a user.
+      expect(() => compileBrowserReplFunction(example.code)).not.toThrow();
+    }
+  });
+
   test("caps.provide example registers and calls a browser-owned target", async () => {
     // Mirrors the itx handle's shape: caps.provide registers a live target,
     // and unknown names on the project handle fall through to it.
@@ -460,9 +490,9 @@ const persisted = answer();
     };
 
     const example = BROWSER_REPL_EXAMPLES.find((candidate) => {
-      return candidate.id === "provide-alert-capability";
+      return candidate.id === "provide-live-capability";
     });
-    if (!example) throw new Error("Missing provideCapability browser REPL example.");
+    if (!example) throw new Error("Missing provide-live-capability browser REPL example.");
 
     await expect(
       evalBrowserReplSessionCode({

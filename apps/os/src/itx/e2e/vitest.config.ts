@@ -33,17 +33,17 @@ const sharedProvide = {
 export default defineConfig({
   test: {
     fileParallelism: false,
-    hookTimeout: 120_000,
+    hookTimeout: 45_000,
     passWithNoTests: true,
     projects: [
       {
         test: {
           environment: "node",
-          hookTimeout: 120_000,
+          hookTimeout: 45_000,
           include: ["./src/itx/e2e/*.e2e.test.ts"],
           name: "node",
           provide: sharedProvide,
-          testTimeout: 120_000,
+          testTimeout: 45_000,
         },
       },
       {
@@ -96,11 +96,11 @@ export default defineConfig({
           include: ["./src/itx/e2e/itx.browser.test.ts"],
           name: "browser",
           provide: sharedProvide,
-          testTimeout: 120_000,
+          testTimeout: 45_000,
         },
       },
     ],
-    testTimeout: 120_000,
+    testTimeout: 45_000,
     onConsoleLog(log, type, entity) {
       if (entity?.type !== "test") return;
       appendConsoleLineSync({

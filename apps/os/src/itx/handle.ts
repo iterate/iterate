@@ -217,7 +217,18 @@ export class Itx extends RpcTarget {
       parent: this.#runtime.contextId,
       projectId,
     });
-    return new Itx({ ...this.#runtime, cap: undefined, contextId: childId, projectId });
+    // The child is NARROWER than its parent (Law 4): its access is exactly
+    // its owning project, never the parent's wider scope. So a session forked
+    // off an admin (access "all") handle still cannot reach sibling projects
+    // via itx.projects — same access a reconnect through /api/itx/ctx_… would
+    // resolve. (Matches the cursor/bugbot finding on fork scope.)
+    return new Itx({
+      ...this.#runtime,
+      access: [projectId],
+      cap: undefined,
+      contextId: childId,
+      projectId,
+    });
   }
 
   // ---- wiring -------------------------------------------------------------

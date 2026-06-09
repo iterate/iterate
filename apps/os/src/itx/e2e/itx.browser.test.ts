@@ -51,7 +51,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
       projects: expect.any(Array),
       total: expect.any(Number),
     });
-  }, 60_000);
+  }, 45_000);
 
   it("runs the shared itx scripts through browser Cap'n Web stubs", async () => {
     using itx = await connectFromBrowser();
@@ -75,7 +75,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
       },
     });
     expect(streamed.readBackMarkers).toContain(marker);
-  }, 90_000);
+  }, 45_000);
 
   it("provides a live browser-owned capability and calls it via the fallthrough", async () => {
     using itx = await connectFromBrowser();
@@ -85,9 +85,9 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
     createdProjectIds.push(project.id);
 
     const example = BROWSER_REPL_EXAMPLES.find(
-      (candidate) => candidate.id === "provide-alert-capability",
+      (candidate) => candidate.id === "provide-live-capability",
     );
-    if (!example) throw new Error("Missing caps.provide browser REPL example.");
+    if (!example) throw new Error("Missing provide-live-capability browser REPL example.");
 
     const alertMessages: string[] = [];
     const originalAlert = globalThis.alert;
@@ -107,7 +107,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
       globalThis.alert = originalAlert;
     }
     expect(alertMessages).toEqual(["The answer is 42"]);
-  }, 60_000);
+  }, 45_000);
 
   it("provides a browser path-call cap with an SDK-shaped surface", async () => {
     using itx = await connectFromBrowser();
@@ -136,7 +136,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
       text: "hello from a browser tab",
     })) as { method: string; provider: string };
     expect(result).toMatchObject({ method: "chat.postMessage", provider: "browser-tab" });
-  }, 60_000);
+  }, 45_000);
 });
 
 // ---- connection -------------------------------------------------------------
