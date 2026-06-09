@@ -157,7 +157,7 @@ export class SecretsCapability extends WorkerEntrypoint<
       env: this.env as unknown as Record<string, unknown>,
       prefix: "APP_CONFIG_",
     });
-    return projectSecretId({ typeIdPrefix: config.typeIdPrefix.exposeSecret() });
+    return projectSecretId({ typeIdPrefix: config.typeIdPrefix });
   }
 }
 

@@ -7,7 +7,7 @@ import { os } from "~/orpc/orpc.ts";
 
 function createThingId(config: AppConfig) {
   return typeid({
-    env: { TYPEID_PREFIX: config.typeId.prefix.exposeSecret() },
+    env: { TYPEID_PREFIX: config.typeId.prefix },
     prefix: "thing",
   });
 }

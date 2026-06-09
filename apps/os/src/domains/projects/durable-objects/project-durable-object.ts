@@ -1097,7 +1097,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
 
   private createTypeId(prefix: string) {
     return typeid({
-      env: { TYPEID_PREFIX: this.getAppConfig().typeIdPrefix.exposeSecret() },
+      env: { TYPEID_PREFIX: this.getAppConfig().typeIdPrefix },
       prefix,
     });
   }
