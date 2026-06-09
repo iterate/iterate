@@ -20,17 +20,19 @@ questions as design work, not half-wired runtime behavior.
   - optional `readState` and `writeState`
 - If no state storage is passed, the base uses an in-memory snapshot. That keeps tests and
   stateless experiments cheap.
-- `processEventBatch({ events, streamMaxOffset })` is the public sink. It is not overridable
-  (enforced by lint): the serialization guarantee lives there and must stay on the base class.
+- `ingest({ events, streamMaxOffset })` is the host-facing sink — deliberately named outside the
+  `process*` hook family. It is not overridable (enforced by lint): the serialization guarantee
+  lives there and must stay on the base class.
 - The base serializes batches in memory. A later batch never starts until the previous batch has
   either completed or failed.
-- Subclasses extend up to three hooks, all of which run inside the serialized section:
+- The `process*` family is the authoring surface. Subclasses extend up to three hooks, all of
+  which run inside the serialized section:
   - `reduce(...)` — pure projection of one consumed event into the next state;
-  - `processEvent(...)` — synchronous per-event side effects;
-  - `processBatch(...)` — async batch-level side effects (e.g. one SQLite transaction over the
-    already-deduped new events). The default implementation calls `processEvent(...)` once per
-    reduced event; overrides call `super.processBatch(args)` to keep that behavior.
-- The checkpoint (reduced state + offset) is written only after `processBatch` and all
+  - `processEvent(...)` — synchronous per-event side effects; what most processors implement;
+  - `processEventBatch(...)` — async batch-level side effects (e.g. one SQLite transaction over
+    the already-deduped new events). The default implementation calls `processEvent(...)` once
+    per reduced event; overrides call `super.processEventBatch(args)` to keep that behavior.
+- The checkpoint (reduced state + offset) is written only after `processEventBatch` and all
   `blockProcessorWhile` work succeed.
 - Hooks receive plain state/event types and must treat them as immutable; there is no
   `DeepReadonly` wrapper because it forced a cast in every real subclass.
@@ -38,6 +40,23 @@ questions as design work, not half-wired runtime behavior.
   `Parameters<StreamProcessor<Contract>["method"]>[0]` — the single sanctioned spelling,
   enforced by the `iterate/stream-processor-override-args` lint rule. The arg shapes are
   deliberately not exported as named types.
+
+## Consumes Semantics
+
+`contract.consumes` is both a type-level and (eventually) delivery-level filter. The planned
+subscription filtering will use it to only deliver named event types, with `"*"` as the explicit
+opt-in for everything:
+
+- named only — the hook event type is the exact union of those events; exhaustive switches can
+  end in `assertNever(event)`;
+- `["*"]` only — plain `StreamEvent` (real `type` string, `unknown` payload), for generic
+  projectors;
+- `["*", ...named]` — the named union plus `WildcardConsumedEvent`, whose `type` is the literal
+  `"*"`. Named events keep exact payload inference; the wildcard branch is reachable (never-free)
+  with an `unknown` payload. To string-match a specific event type, name it in `consumes` instead
+  of comparing inside the wildcard branch.
+
+`emits` must always be named — `"*"` is rejected at the definition site.
 
 ## Async Side Effects
 

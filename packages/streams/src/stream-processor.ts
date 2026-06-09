@@ -64,7 +64,7 @@ type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
     checkpointOffset: number;
   };
 
-type ProcessBatchArgs<Contract> = SideEffectHelpers & {
+type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
   /** New events past the checkpoint, in stream order, consumed or not. */
   events: readonly StreamEvent[];
   /** The consumed subset of `events`, each with its reduction result. */
@@ -98,22 +98,25 @@ export type StreamProcessorConstructorArgs<
 /**
  * Class-based stream processor.
  *
- * The model in one sentence: the host pushes ordered event batches into
- * `processEventBatch`, the base reduces each new event into state, hands the
- * batch to `processBatch` for side effects, and checkpoints state + offset once
- * all blocking work has completed.
+ * The model in one sentence: the host feeds ordered event batches into
+ * `ingest`, the base reduces each new event into state, hands the batch to the
+ * `process*` hooks for side effects, and checkpoints state + offset once all
+ * blocking work has completed.
  *
+ * `ingest` is host plumbing; the `process*` family is the authoring surface.
  * Subclasses override up to three hooks:
  *
  * - `reduce` — pure projection of one consumed event into the next state
- * - `processEvent` — synchronous per-event side effects
- * - `processBatch` — batch-level side effects (e.g. one SQLite transaction);
- *   the default implementation calls `processEvent` once per reduced event
+ * - `processEvent` — synchronous per-event side effects; what most processors
+ *   implement
+ * - `processEventBatch` — batch-level side effects (e.g. one SQLite
+ *   transaction); the default implementation calls `processEvent` once per
+ *   reduced event
  *
  * Every hook runs inside the serialized batch section: a later batch never
  * starts until the previous one has completed or failed, and the checkpoint is
  * only written after the hooks (plus any `blockProcessorWhile` work) succeed.
- * `processEventBatch` itself must not be overridden.
+ * `ingest` itself must not be overridden.
  */
 // Extending RpcTarget is a convenience for exposing processors directly over Cap'n Web.
 // The processing model should not fundamentally depend on RPC; we may remove this base
@@ -174,13 +177,10 @@ export abstract class StreamProcessor<
   /**
    * The host-facing sink. Batches are serialized in memory: a later batch never
    * starts until the previous one completed or failed. Do not override this —
-   * extend `processBatch` instead.
+   * extend `processEventBatch` instead.
    */
-  async processEventBatch(args: {
-    events: readonly StreamEvent[];
-    streamMaxOffset: number;
-  }): Promise<void> {
-    const next = this.#processing.then(() => this.#processEventBatch(args));
+  async ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void> {
+    const next = this.#processing.then(() => this.#ingest(args));
     this.#processing = next.catch(() => undefined);
     return await next;
   }
@@ -190,16 +190,16 @@ export abstract class StreamProcessor<
     return args.state;
   }
 
-  /** Synchronous per-event side-effect hook, called by the default `processBatch`. */
+  /** Synchronous per-event side-effect hook, called by the default `processEventBatch`. */
   protected processEvent(_args: ProcessEventArgs<Contract>): void {}
 
   /**
    * Batch-level side-effect hook. Runs inside the serialized section, after the
    * whole batch has been reduced and before the checkpoint is written, so an
    * override can e.g. commit all projection writes in one SQLite transaction.
-   * Call `super.processBatch(args)` to keep the per-event `processEvent` calls.
+   * Call `super.processEventBatch(args)` to keep the per-event `processEvent` calls.
    */
-  protected async processBatch(args: ProcessBatchArgs<Contract>): Promise<void> {
+  protected async processEventBatch(args: ProcessEventBatchArgs<Contract>): Promise<void> {
     for (const reducedEvent of args.reducedEvents) {
       this.processEvent({
         ...reducedEvent,
@@ -247,10 +247,7 @@ export abstract class StreamProcessor<
     });
   }
 
-  async #processEventBatch(args: {
-    events: readonly StreamEvent[];
-    streamMaxOffset: number;
-  }): Promise<void> {
+  async #ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void> {
     await this.#loadState();
 
     const previousState = this.#getState();
@@ -274,7 +271,7 @@ export abstract class StreamProcessor<
 
     const blockingWork: Promise<unknown>[] = [];
     try {
-      await this.processBatch({
+      await this.processEventBatch({
         events,
         reducedEvents,
         previousState,

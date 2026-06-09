@@ -30,8 +30,8 @@ export class BrowserEventFeedProcessor extends StreamProcessor<
     return planFeedOps(args.state, [args.event]).endState;
   }
 
-  protected override async processBatch(
-    args: Parameters<StreamProcessor<BrowserEventFeedContract>["processBatch"]>[0],
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<BrowserEventFeedContract>["processEventBatch"]>[0],
   ): Promise<void> {
     const { ops } = planFeedOps(args.previousState, args.events);
 
@@ -40,7 +40,7 @@ export class BrowserEventFeedProcessor extends StreamProcessor<
       await this.deps.sql.batch(ops.map(feedOpToStatement), { transaction: true });
     }
 
-    await super.processBatch(args);
+    await super.processEventBatch(args);
   }
 }
 

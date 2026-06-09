@@ -35,10 +35,7 @@ const LIVE_PROGRESS_NOTIFICATION_MS = 16;
 
 type BrowserHostedProcessor = {
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
-  processEventBatch(args: {
-    events: readonly StreamEvent[];
-    streamMaxOffset: number;
-  }): Promise<void>;
+  ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void>;
 };
 
 export type StreamBrowserSnapshot = {
@@ -375,7 +372,7 @@ function createStreamRuntime(
         return {
           replayAfterOffset: checkpoint.offset,
           processEventBatch: (batch: { events: readonly StreamEvent[]; streamMaxOffset: number }) =>
-            processor.processEventBatch(batch),
+            processor.ingest(batch),
         };
       })
       .then((ready) => {

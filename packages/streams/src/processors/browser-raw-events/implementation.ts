@@ -28,8 +28,8 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
     return await super.snapshot();
   }
 
-  protected override async processBatch(
-    args: Parameters<StreamProcessor<BrowserRawEventsContract>["processBatch"]>[0],
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEventBatch"]>[0],
   ): Promise<void> {
     await ensureBrowserRawEventsSchema(this.deps.sql);
     await this.deps.sql.batch(
@@ -39,7 +39,7 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
       })),
       { transaction: true },
     );
-    await super.processBatch(args);
+    await super.processEventBatch(args);
   }
 }
 
