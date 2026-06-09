@@ -6,7 +6,7 @@ import {
   Scripts,
   createRootRouteWithContext,
 } from "@tanstack/react-router";
-import { getGlobalStartContext } from "@tanstack/react-start";
+import { createServerFn, getGlobalStartContext } from "@tanstack/react-start";
 import { TanStackDevtools } from "@tanstack/react-devtools";
 import { FormDevtoolsPanel } from "@tanstack/react-form-devtools";
 import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
@@ -27,45 +27,45 @@ import type { RouterContext } from "~/router.tsx";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 
-const ROOT_AUTH_SNAPSHOT_QUERY_KEY = ["__root-auth-snapshot"] as const;
-
 type RootAuthSnapshot = {
   authSession: PublicSessionResponse;
   iterateAuthIssuer: string | undefined;
   currentProjectHostSlug: string | null;
 };
 
-export const Route = createRootRouteWithContext<RouterContext>()({
-  beforeLoad: ({ context }) => {
-    // Server requests always carry a start context with the authenticated
-    // session (or null when signed out). Client-side navigations don't run
-    // the server middleware, so reuse the snapshot the SSR pass dehydrated
-    // into the query cache.
+// Reads the request's authenticated session (resolved by the iterate auth
+// request middleware from signed JWT claims) without any auth-worker
+// roundtrip. During SSR this executes in-process; if a client navigation
+// ever misses the dehydrated cache it fetches from the OS worker instead of
+// treating the user as signed out.
+const fetchRootAuthSnapshot = createServerFn({ method: "GET" }).handler(
+  async (): Promise<RootAuthSnapshot> => {
     const startContext = getGlobalStartContext();
-    if (startContext?.iterateAuthSession === undefined) {
-      const cached = context.queryClient.getQueryData<RootAuthSnapshot>(
-        ROOT_AUTH_SNAPSHOT_QUERY_KEY,
-      );
-      return (
-        cached ?? {
-          authSession: { authenticated: false } satisfies PublicSessionResponse,
-          iterateAuthIssuer: undefined,
-          currentProjectHostSlug: null,
-        }
-      );
-    }
-
-    const snapshot: RootAuthSnapshot = {
-      authSession: toPublicSession(startContext.iterateAuthSession),
-      iterateAuthIssuer: startContext.config.iterateAuth?.issuer,
+    return {
+      authSession: toPublicSession(startContext?.iterateAuthSession),
+      iterateAuthIssuer: startContext?.config.iterateAuth?.issuer,
       currentProjectHostSlug: resolveCurrentProjectHostSlug({
-        baseUrl: startContext.config.baseUrl,
-        projectHostnameBases: startContext.projectHostnameBases ?? [],
-        requestUrl: startContext.rawRequest?.url,
+        baseUrl: startContext?.config.baseUrl,
+        projectHostnameBases: startContext?.projectHostnameBases ?? [],
+        requestUrl: startContext?.rawRequest?.url,
       }),
     };
-    context.queryClient.setQueryData(ROOT_AUTH_SNAPSHOT_QUERY_KEY, snapshot);
-    return snapshot;
+  },
+);
+
+const rootAuthSnapshotQueryOptions = {
+  queryKey: ["__root-auth-snapshot"] as const,
+  queryFn: () => fetchRootAuthSnapshot(),
+  // The session is a per-page-load snapshot: SSR seeds it and client-side
+  // navigations reuse it. Claims changes propagate on the next full page
+  // load (or token refresh), and the server independently re-authenticates
+  // every request regardless of what the router believes.
+  staleTime: Number.POSITIVE_INFINITY,
+};
+
+export const Route = createRootRouteWithContext<RouterContext>()({
+  beforeLoad: async ({ context }) => {
+    return await context.queryClient.ensureQueryData(rootAuthSnapshotQueryOptions);
   },
   loader: async ({ context }) => {
     const config = PublicConfigSchema.parse(await orpcClient.__internal.publicConfig({}));
