@@ -13,7 +13,7 @@ import dedent from "dedent";
 import { createTestProjectFixture } from "../test-support/create-test-project.ts";
 import type { OsClient } from "../test-support/os-client.ts";
 import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
-import { getSlackIntegrationDurableObjectName } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
+import { getSlackIntegrationDurableObjectName } from "~/domains/slack/slack-naming.ts";
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 

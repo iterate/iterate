@@ -1,9 +1,6 @@
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import {
-  deriveDurableObjectNameFromStructuredName,
-  NotInitializedError,
-} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { NotInitializedError } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 
 import { type Event } from "@iterate-com/shared/streams/types";
 import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
@@ -11,6 +8,7 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
+import { getSlackIntegrationDurableObjectName } from "../slack-naming.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -38,6 +36,8 @@ import {
 import { SlackAgentProcessorContract } from "~/domains/slack/stream-processors/slack-agent/contract.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 
+export { getSlackIntegrationDurableObjectName } from "../slack-naming.ts";
+
 export type SlackIntegrationDurableObjectStructuredName = {
   projectId: string;
 };
@@ -45,12 +45,6 @@ export type SlackIntegrationDurableObjectStructuredName = {
 const SlackIntegrationDurableObjectStructuredName = z.object({
   projectId: z.string().trim().min(1),
 });
-
-export function getSlackIntegrationDurableObjectName(projectId: string) {
-  return deriveDurableObjectNameFromStructuredName({
-    structuredName: { projectId },
-  });
-}
 
 type SlackIntegrationEnv = {
   AGENT: DurableObjectNamespace<AgentDurableObject>;
