@@ -26,6 +26,7 @@ import { useAuthClient } from "@iterate-com/auth/client";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { useQuery } from "@tanstack/react-query";
 import { Avatar, AvatarFallback } from "@iterate-com/ui/components/avatar";
+import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -110,9 +111,7 @@ function AppSidebarHeader() {
                 size="lg"
                 className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
               >
-                <span className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sm font-semibold text-sidebar-primary-foreground">
-                  i
-                </span>
+                <IterateLogo className="size-8 rounded-lg" />
                 <span className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">iterate</span>
                   <span className="truncate text-xs text-muted-foreground">
