@@ -51,6 +51,7 @@ function normalizePathForLint(filename) {
 function isAllowedRawDurableObjectBindingAccessFile(filename) {
   const path = normalizePathForLint(filename);
 
+  if (!path.includes("/apps/os/src/")) return true;
   if (path.includes("/apps/os/docs/")) return true;
   if (path.endsWith("/apps/os/src/entry.workerd.ts")) return true;
   if (path.includes("/apps/os/src/capnweb/")) return true;

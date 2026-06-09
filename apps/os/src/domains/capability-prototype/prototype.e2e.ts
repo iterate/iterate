@@ -80,6 +80,7 @@ test("prototype Project Durable Object can append to Stream Durable Object witho
     new URL(`${PROTOTYPE_PREFIX}/internal-project-append?projectId=${projectId}`, baseUrl()),
     {
       headers: authHeaders(),
+      method: "POST",
     },
   );
 

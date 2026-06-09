@@ -58,6 +58,13 @@ export async function handleCapabilityPrototypeFetch(input: {
   }
 
   if (url.pathname === `${CAPABILITY_PROTOTYPE_PREFIX}/internal-project-append`) {
+    if (input.request.method !== "POST") {
+      return new Response("Method Not Allowed", {
+        headers: { Allow: "POST" },
+        status: 405,
+      });
+    }
+
     const projectId = url.searchParams.get("projectId") ?? "fake_proj_internal";
     return Response.json({
       ...(await input.env.FAKE_PROJECT.getByName(projectId).appendInternalProjectEvent({
