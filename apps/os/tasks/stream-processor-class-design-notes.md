@@ -32,6 +32,10 @@ questions as design work, not half-wired runtime behavior.
   - `processEventBatch(...)` — async batch-level side effects (e.g. one SQLite transaction over
     the already-deduped new events). The default implementation calls `processEvent(...)` once
     per reduced event; overrides call `super.processEventBatch(args)` to keep that behavior.
+- A fourth, optional `prepare()` hook runs once before the checkpoint is first read (via either
+  `snapshot()` or the first batch). Use it for setup that can invalidate the stored checkpoint —
+  e.g. schema migrations that reset projection tables — so it always lands before the resume
+  cursor is decided.
 - The checkpoint (reduced state + offset) is written only after `processEventBatch` and all
   `blockProcessorWhile` work succeed.
 - Hooks receive plain state/event types and must treat them as immutable; there is no

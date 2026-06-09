@@ -31,6 +31,10 @@ export class BrowserEventFeedProcessor extends StreamProcessor<
 > {
   readonly contract = BrowserEventFeedContract;
 
+  protected override async prepare(): Promise<void> {
+    await ensureBrowserEventFeedSchema(this.deps.sql);
+  }
+
   protected override reduce(
     args: Parameters<StreamProcessor<BrowserEventFeedContract>["reduce"]>[0],
   ): FeedState {
@@ -43,7 +47,6 @@ export class BrowserEventFeedProcessor extends StreamProcessor<
     const { ops } = planFeedOps(args.previousState, args.events);
 
     if (ops.length > 0) {
-      await ensureBrowserEventFeedSchema(this.deps.sql);
       await this.deps.sql.batch(ops.map(feedOpToStatement), { transaction: true });
     }
 

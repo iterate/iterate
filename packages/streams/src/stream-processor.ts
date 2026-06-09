@@ -145,6 +145,9 @@ export type StreamProcessorConstructorArgs<
  *   transaction); the default implementation calls `processEvent` once per
  *   reduced event
  *
+ * plus an optional one-time `prepare` for setup that must land before the
+ * checkpoint is first read (e.g. schema migrations that reset it).
+ *
  * Every hook runs inside the serialized batch section: a later batch never
  * starts until the previous one has completed or failed, and the checkpoint is
  * only written after the hooks (plus any `blockProcessorWhile` work) succeed.
@@ -220,6 +223,15 @@ export abstract class StreamProcessor<
     this.#processing = next.catch(() => undefined);
     return await next;
   }
+
+  /**
+   * One-time async setup, run before the checkpoint is first read — whether
+   * that happens via `snapshot()` or the first ingested batch. Override for
+   * work that can invalidate the stored checkpoint, such as schema migrations
+   * that reset projection tables, so it always lands before the resume cursor
+   * is decided. Failures reject the triggering call and retry on the next one.
+   */
+  protected async prepare(): Promise<void> {}
 
   /**
    * Pure projection of one consumed event into the next state. Defaults to
@@ -357,6 +369,7 @@ export abstract class StreamProcessor<
 
   async #loadState(): Promise<void> {
     this.#loaded ??= (async () => {
+      await this.prepare();
       const snapshot = await this.#readState();
       if (snapshot === undefined) {
         this.#state ??= getInitialProcessorState(this.contract);

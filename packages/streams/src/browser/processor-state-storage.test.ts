@@ -158,6 +158,28 @@ describe("browser raw events schema version reset", () => {
     expect(Number(version?.user_version)).toBe(BROWSER_RAW_EVENTS_SCHEMA_VERSION);
   });
 
+  it("resets before the checkpoint is read even when ingest is called without snapshot", async () => {
+    const db = new DatabaseSync(":memory:");
+
+    const firstLoad = createRawEventsProcessor(wrap(db));
+    await firstLoad.ingest({ events: [rawEvent(1), rawEvent(2)], streamMaxOffset: 2 });
+
+    db.exec(`PRAGMA user_version = ${BROWSER_RAW_EVENTS_SCHEMA_VERSION - 1}`);
+
+    // Straight to ingest, no snapshot() first: prepare() must still run the
+    // version reset before the stale checkpoint is memoized. Without that,
+    // offsets 1-2 are filtered out against the stale cursor and inserting
+    // offset 3 into the freshly-reset table trips the continuity trigger.
+    const secondLoad = createRawEventsProcessor(wrap(db));
+    await secondLoad.ingest({
+      events: [rawEvent(1), rawEvent(2), rawEvent(3)],
+      streamMaxOffset: 3,
+    });
+
+    const rows = await wrap(db).exec(`SELECT offset FROM events ORDER BY offset`);
+    expect(rows.map((row) => Number(row.offset))).toEqual([1, 2, 3]);
+  });
+
   it("leaves the mirror and checkpoint untouched when the version matches", async () => {
     const db = new DatabaseSync(":memory:");
 

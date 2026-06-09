@@ -26,17 +26,16 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
   readonly contract = BrowserRawEventsContract;
 
   // The schema ensurer also handles version resets (drop table + clear checkpoint),
-  // so it must run before the first checkpoint read — otherwise a stale checkpoint
-  // gets memoized and reported to the server as the replay cursor.
-  override async snapshot() {
+  // so it must run before the checkpoint is first read — otherwise a stale offset
+  // gets memoized and reported to the server as the replay cursor, and the first
+  // insert into the freshly-reset table trips the continuity trigger.
+  protected override async prepare(): Promise<void> {
     await ensureBrowserRawEventsSchema(this.deps.sql);
-    return await super.snapshot();
   }
 
   protected override async processEventBatch(
     args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEventBatch"]>[0],
   ): Promise<void> {
-    await ensureBrowserRawEventsSchema(this.deps.sql);
     await this.deps.sql.batch(
       args.events.map((event) => ({
         sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
