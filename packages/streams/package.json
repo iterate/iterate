@@ -43,7 +43,7 @@
     "@journeyapps/wa-sqlite": "^1.7.0",
     "capnweb": "^0.8.0",
     "react": "^19.2.0",
-    "zod": "^4.3.6"
+    "zod": "~4.3.6"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:cloudflare",

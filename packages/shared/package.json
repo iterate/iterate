@@ -39,6 +39,7 @@
     "./durable-object-utils/mixins/with-public-fetch-route": "./src/durable-object-utils/mixins/with-public-fetch-route.ts",
     "./durable-object-utils/iterate-durable-object": "./src/durable-object-utils/iterate-durable-object.ts",
     "./streams/circuit-breaker-types": "./src/streams/circuit-breaker-types.ts",
+    "./streams/compiled-jsonata": "./src/streams/compiled-jsonata.ts",
     "./streams/core-event-types": "./src/streams/core-event-types.ts",
     "./streams/event-base-types": "./src/streams/event-base-types.ts",
     "./streams/external-subscriber-types": "./src/streams/external-subscriber-types.ts",

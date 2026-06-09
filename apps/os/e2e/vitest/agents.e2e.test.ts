@@ -8,10 +8,10 @@
  */
 import { expect, test } from "vitest";
 import type { Event } from "@iterate-com/shared/streams/types";
-import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "@iterate-com/shared/stream-processors/agent/contract";
 import dedent from "dedent";
 import { createTestProjectFixture } from "../test-support/create-test-project.ts";
 import type { OsClient } from "../test-support/os-client.ts";
+import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 

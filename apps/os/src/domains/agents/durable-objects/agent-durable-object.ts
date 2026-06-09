@@ -5,33 +5,44 @@ import { z } from "zod";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import {
-  deriveDurableObjectNameFromStructuredName,
   getInitializedDoStub,
   NotInitializedError,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { AgentChatProcessorContract } from "@iterate-com/shared/stream-processors/agent-chat/contract";
-import { AgentProcessorContract } from "@iterate-com/shared/stream-processors/agent/contract";
-import type { CloudflareAiProcessorDeps } from "@iterate-com/shared/stream-processors/cloudflare-ai/implementation";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
-import {
-  type OpenAiResponsesWebSocket,
-  type OpenAiResponsesWebSocketStreamMessage,
-} from "@iterate-com/shared/stream-processors/openai-ws/implementation";
-import { JsonataReactorProcessorContract } from "@iterate-com/shared/stream-processors/jsonata-reactor/contract";
 import type { ProcessorStreamApi } from "@iterate-com/shared/stream-processors";
 import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
+import type { StreamEvent } from "@iterate-com/streams/shared/event";
+import type { StreamRpc } from "@iterate-com/streams/types";
+import {
+  createStreamProcessorHost,
+  type RequestStreamSubscriptionArgs,
+} from "@iterate-com/streams/workers/stream-processor-host";
+import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
+import { AgentChatProcessor } from "~/domains/agents/stream-processors/agent-chat/implementation.ts";
+import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
+import { AgentProcessor } from "~/domains/agents/stream-processors/agent/implementation.ts";
+import {
+  CloudflareAiProcessor,
+  type CloudflareAiBinding,
+} from "~/domains/agents/stream-processors/cloudflare-ai/implementation.ts";
+import {
+  OpenAiWsProcessor,
+  type OpenAiResponsesWebSocket,
+  type OpenAiResponsesWebSocketStreamMessage,
+} from "~/domains/agents/stream-processors/openai-ws/implementation.ts";
+import { JsonataReactorProcessorContract } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
+import { JsonataReactorProcessor } from "~/domains/agents/stream-processors/jsonata-reactor/implementation.ts";
+import { AgentHostProcessor } from "~/domains/agents/stream-processors/agent-host/implementation.ts";
 import {
   getInitializedStreamStub,
+  getStreamDurableObjectName,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
 } from "~/domains/streams/new-stream-runtime.ts";
 import { AppConfig } from "~/app.ts";
-import {
-  createCodemodeSession,
-  startCodemodeScriptOnExistingSession,
-} from "~/domains/codemode/codemode-session-rpc.ts";
+import { createCodemodeSession } from "~/domains/codemode/codemode-session-rpc.ts";
 import { createExampleCapabilityProviders } from "~/domains/codemode/example-provider-registrations.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import {
@@ -59,53 +70,41 @@ import {
 } from "~/domains/agents/agent-presets.ts";
 import {
   AGENT_HOST_PROCESSOR_SLUG,
+  AGENTS_STREAM_PATH,
+  AgentDurableObjectStructuredName,
   agentLlmProcessorSlug,
-  agentProcessorRunnerName,
   agentProcessorSubscriptionConfiguredEvents,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
-import type { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 
 export {
   AGENT_HOST_PROCESSOR_SLUG,
+  AGENTS_STREAM_PATH,
+  AgentDurableObjectStructuredName,
   agentLlmProcessorSlug,
-  agentProcessorRunnerName,
   agentProcessorSubscriptionKey,
+  getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 
-export const AGENTS_STREAM_PATH = StreamPath.parse("/agents");
-
-// Core lifecycle event types emitted by the @iterate-com/streams runtime. These use the
-// `events.iterate.com/stream/` prefix (NOT the legacy `@iterate-com/shared/streams` `/core/`
-// prefix, which never matches new-runtime events).
-const STREAM_CREATED_TYPE = "events.iterate.com/stream/created";
-const STREAM_CHILD_STREAM_CREATED_TYPE = "events.iterate.com/stream/child-stream-created";
-
-export type AgentDurableObjectStructuredName = {
-  agentPath: StreamPath;
-  projectId: string;
-};
-
-const AgentDurableObjectStructuredName = z.object({
-  agentPath: StreamPath,
-  projectId: z.string().trim().min(1),
-});
-
-export function getAgentDurableObjectName(input: AgentDurableObjectStructuredName) {
-  return deriveDurableObjectNameFromStructuredName({
-    structuredName: input,
-  });
-}
+// The agent-host side-effect handlers used to live in this module; the legacy
+// stream-processor runner still imports them from here.
+export {
+  codemodeCompletionInputBlock,
+  ensureAgentRunnerForOwnStream,
+  ensureChildAgentRunner,
+  extractCodemodeScript,
+  handleAgentOutputAddedForCodemode,
+  handleCodemodeScriptExecutionCompletedForAgent,
+} from "~/domains/agents/stream-processors/agent-host/implementation.ts";
 
 export type AgentDurableObjectEnv = {
   AGENT: DurableObjectNamespace<AgentDurableObject>;
-  AI: CloudflareAiProcessorDeps["ai"];
+  AI: CloudflareAiBinding;
   APP_CONFIG: string;
   CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>;
   DO_CATALOG: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
-  STREAM_PROCESSOR_RUNNER: DurableObjectNamespace<StreamProcessorRunner>;
   WORKSPACE: DurableObjectNamespace<WorkspaceDurableObject>;
 };
 
@@ -146,6 +145,58 @@ const AgentLifecycleBase = createIterateDurableObjectBase<
 });
 
 export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv> {
+  host = createStreamProcessorHost(this.ctx);
+  agentChatProcessor = this.host.add("agent-chat", (deps) => new AgentChatProcessor(deps));
+  agentProcessor = this.host.add(
+    "agent",
+    (deps) =>
+      new AgentProcessor({
+        ...deps,
+        readStreamEvents: () => this.readSubscribedStreamEvents("agent"),
+      }),
+  );
+  openAiWsProcessor = this.host.add("openai-ws", (deps) => {
+    const apiKey = readOpenAiApiKey(this.env as unknown as Record<string, unknown>);
+    if (apiKey.trim() === "") {
+      // Legacy parity with the old runner: without an OpenAI API key, the
+      // "openai-ws" subscription is served by the Cloudflare AI processor.
+      return new CloudflareAiProcessor({
+        ...deps,
+        ai: this.env.AI,
+        readStreamEvents: () => this.readSubscribedStreamEvents("openai-ws"),
+      });
+    }
+    return new OpenAiWsProcessor({
+      ...deps,
+      openResponsesWebSocket: async () =>
+        createOpenAiResponsesWebSocketClient(new OpenAI({ apiKey })),
+      readStreamEvents: () => this.readSubscribedStreamEvents("openai-ws"),
+    });
+  });
+  cloudflareAiProcessor = this.host.add(
+    "cloudflare-ai",
+    (deps) =>
+      new CloudflareAiProcessor({
+        ...deps,
+        ai: this.env.AI,
+        readStreamEvents: () => this.readSubscribedStreamEvents("cloudflare-ai"),
+      }),
+  );
+  jsonataReactorProcessor = this.host.add(
+    "jsonata-reactor",
+    (deps) => new JsonataReactorProcessor(deps),
+  );
+  agentHostProcessor = this.host.add(
+    AGENT_HOST_PROCESSOR_SLUG,
+    (deps) =>
+      new AgentHostProcessor({
+        ...deps,
+        agentNamespace: this.env.AGENT,
+        codemodeSessionNamespace: this.env.CODEMODE_SESSION,
+        getStreamContext: () => this.subscribedStreamContext(AGENT_HOST_PROCESSOR_SLUG),
+      }),
+  );
+
   constructor(ctx: DurableObjectState, env: AgentDurableObjectEnv) {
     super(ctx, env);
 
@@ -173,6 +224,11 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       }
       await this.waitForAgentProcessorsCatchUp(params);
     });
+  }
+
+  /** Subscription callables on agent streams dial this host entry point. */
+  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
+    return this.host.requestStreamSubscription(args);
   }
 
   async afterAppend(input: { event: Event }) {
@@ -251,28 +307,58 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   private async waitForAgentProcessorsCatchUp(params: AgentDurableObjectStructuredName) {
-    const maxOffset = await this.currentStreamMaxOffset(params);
-    const processorSlugs = await this.agentProcessorSlugs(params);
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: params.projectId,
+      path: params.agentPath,
+    });
+    const events = await stream.history({ before: "end" });
+    const maxOffset = events.at(-1)?.offset ?? 0;
+    // The host subscribes each processor with `contract.consumes` as the
+    // delivery filter, so a processor's checkpoint only ever reaches the offset
+    // of the last event it consumes — not the stream head. Wait for that
+    // per-processor target instead of `maxOffset` (which only wildcard
+    // consumers reach).
+    const targets = (await this.agentProcessorSlugs(params)).map((processorSlug) => {
+      const consumes = this.hostedProcessor(processorSlug).contract.consumes;
+      return {
+        processorSlug,
+        targetOffset: consumes.includes("*")
+          ? maxOffset
+          : events.reduce(
+              (max, event) => (consumes.includes(event.type) ? Math.max(max, event.offset) : max),
+              0,
+            ),
+      };
+    });
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
-      const states = await Promise.all(
-        processorSlugs.map((processorSlug) =>
-          this.getAgentProcessorRunnerState(params, processorSlug),
-        ),
-      );
-      if (states.every((state) => state.reducedThroughOffset >= maxOffset)) return;
+      if (
+        targets.every(
+          ({ processorSlug, targetOffset }) =>
+            this.processorCheckpointOffset(processorSlug) >= targetOffset,
+        )
+      ) {
+        return;
+      }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
 
   private async getAgentRuntimeState(params: AgentDurableObjectStructuredName) {
     const processorSlugs = await this.agentProcessorSlugs(params);
-    const states = await Promise.all(
-      processorSlugs.map(async (processorSlug) => ({
+    const states = processorSlugs.map((processorSlug) => {
+      const runtime = this.host.runtimeState(processorSlug);
+      const offset = runtime.snapshot?.offset ?? 0;
+      return {
         processorSlug,
-        state: await this.getAgentProcessorRunnerState(params, processorSlug),
-      })),
-    );
+        state: {
+          afterAppendCompletedThroughOffset: offset,
+          reducedThroughOffset: offset,
+          state: runtime.snapshot?.state ?? null,
+        },
+      };
+    });
     return {
       entries: states.map(({ processorSlug, state }) => ({
         afterAppendCompletedThroughOffset: state.afterAppendCompletedThroughOffset,
@@ -299,23 +385,48 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     ];
   }
 
-  private async getAgentProcessorRunnerState(
-    params: AgentDurableObjectStructuredName,
-    processorSlug: string,
-  ) {
-    const runner = this.env.STREAM_PROCESSOR_RUNNER.getByName(
-      agentProcessorRunnerName({ ...params, processorSlug }),
-    ) as unknown as { runtimeState(): Promise<AgentProcessorRuntimeState> };
-    return await runner.runtimeState();
+  /** The processor instance registered under a host name (the subscription slug). */
+  private hostedProcessor(processorSlug: string) {
+    const processors: Record<string, { contract: { consumes: readonly string[] } }> = {
+      "agent-chat": this.agentChatProcessor,
+      agent: this.agentProcessor,
+      "openai-ws": this.openAiWsProcessor,
+      "cloudflare-ai": this.cloudflareAiProcessor,
+      "jsonata-reactor": this.jsonataReactorProcessor,
+      [AGENT_HOST_PROCESSOR_SLUG]: this.agentHostProcessor,
+    };
+    const processor = processors[processorSlug];
+    if (processor === undefined) {
+      throw new Error(`Unknown agent stream processor "${processorSlug}"`);
+    }
+    return processor;
   }
 
-  private async currentStreamMaxOffset(params: AgentDurableObjectStructuredName) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: params.projectId,
-      path: params.agentPath,
-    });
-    return (await stream.history({ before: "end" })).at(-1)?.offset ?? 0;
+  private processorCheckpointOffset(processorSlug: string) {
+    return this.host.runtimeState(processorSlug).snapshot?.offset ?? 0;
+  }
+
+  /** Resolves the stream a hosted processor is subscribed to on this instance. */
+  private subscribedStreamContext(processorSlug: string) {
+    const subscription = this.host.runtimeState(processorSlug).subscription;
+    if (subscription === undefined) {
+      throw new Error(
+        `Stream processor "${processorSlug}" has no stream subscription on this instance yet.`,
+      );
+    }
+    return {
+      projectId: subscription.namespace,
+      streamPath: StreamPath.parse(subscription.path),
+    };
+  }
+
+  /** Full committed history of the stream a hosted processor is subscribed to. */
+  private async readSubscribedStreamEvents(processorSlug: string): Promise<StreamEvent[]> {
+    const { projectId, streamPath } = this.subscribedStreamContext(processorSlug);
+    const stream = this.env.STREAM.getByName(
+      getStreamDurableObjectName({ namespace: projectId, path: streamPath }),
+    ) as unknown as StreamRpc;
+    return await stream.getEvents({ afterOffset: 0, beforeOffset: null });
   }
 
   private async ensureStartedOrInitializeFromRuntimeName() {
@@ -639,143 +750,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 }
 
-type AgentProcessorRuntimeState = {
-  afterAppendCompletedThroughOffset: number;
-  reducedThroughOffset: number;
-  state: unknown;
-};
-
-export async function ensureChildAgentRunner(args: {
-  agentNamespace: DurableObjectNamespace<AgentDurableObject> | undefined;
-  event: Event;
-  projectId: string;
-}) {
-  if (args.agentNamespace === undefined) return;
-  if (args.event.type !== STREAM_CHILD_STREAM_CREATED_TYPE) return;
-
-  const payload = args.event.payload as { childPath?: unknown };
-  const childPath = StreamPath.safeParse(payload.childPath);
-  if (!childPath.success) return;
-
-  const name = getAgentDurableObjectName({
-    agentPath: childPath.data,
-    projectId: args.projectId,
-  });
-  const stub = args.agentNamespace.getByName(name);
-  await stub.initialize({ name });
-}
-
-// Ensures the AgentDurableObject for the stream the host processor is running on is initialized.
-//
-// Agent streams created by routing (e.g. Slack-routed `/agents/slack/<channel>/<ts>` streams) are
-// bootstrapped with only the `slack-agent` and `agent-host` subscriptions. Unlike the UI new-agent
-// flow, nothing registers the LLM processors (`agent-chat`/`agent`/the provider processor) or seeds
-// the agent setup events. Waking the AgentDurableObject here runs its `onInstanceWake` hook, which
-// registers those processors and setup events — restoring the behaviour the old runtime got from
-// subscribing a callable to `AgentDurableObject.afterAppend` on the routed stream.
-export async function ensureAgentRunnerForOwnStream(args: {
-  agentNamespace: DurableObjectNamespace<AgentDurableObject> | undefined;
-  event: Event;
-  projectId: string;
-  streamPath: StreamPath;
-}) {
-  if (args.agentNamespace === undefined) return;
-  if (args.event.type !== STREAM_CREATED_TYPE) return;
-  // The `/agents` root DO is created explicitly by the project lifecycle; it is not an agent.
-  if (args.streamPath === AGENTS_STREAM_PATH) return;
-
-  const name = getAgentDurableObjectName({
-    agentPath: args.streamPath,
-    projectId: args.projectId,
-  });
-  const stub = args.agentNamespace.getByName(name);
-  await stub.initialize({ name });
-}
-
-export async function handleAgentOutputAddedForCodemode(args: {
-  codemodeSessionNamespace: DurableObjectNamespace<CodemodeSession> | undefined;
-  event: Event;
-  projectId: string;
-  streamPath: StreamPath;
-}) {
-  if (args.codemodeSessionNamespace === undefined) return;
-  if (args.streamPath === AGENTS_STREAM_PATH) return;
-  if (args.event.type !== "events.iterate.com/agent/output-added") return;
-
-  const payload = args.event.payload as { content?: unknown };
-  if (typeof payload.content !== "string") return;
-
-  const code = extractCodemodeScript(payload.content);
-  if (code == null) return;
-
-  await startCodemodeScriptOnExistingSession({
-    code,
-    events: [],
-    namespace: args.codemodeSessionNamespace,
-    projectId: args.projectId,
-    streamPath: args.streamPath,
-  });
-}
-
-export async function handleCodemodeScriptExecutionCompletedForAgent(args: {
-  appendInput(input: { event: EventInput }): Promise<unknown>;
-  event: Event;
-  streamPath: StreamPath;
-}) {
-  if (args.streamPath === AGENTS_STREAM_PATH) return;
-  if (args.event.type !== "events.iterate.com/codemode/script-execution-completed") return;
-
-  const payload = args.event.payload as {
-    outcome?: unknown;
-    scriptExecutionId?: unknown;
-  };
-  const outcome = payload.outcome;
-  if (outcome == null || typeof outcome !== "object") return;
-
-  const status = "status" in outcome ? outcome.status : undefined;
-  if (status === "returned") {
-    const value = "value" in outcome ? outcome.value : undefined;
-    if (value === undefined) return;
-    await args.appendInput({
-      event: {
-        type: "events.iterate.com/agent/input-added",
-        idempotencyKey: `agent-codemode-script-result:${String(payload.scriptExecutionId)}`,
-        payload: {
-          content: codemodeCompletionInputBlock({
-            event: args.event,
-            outcome: {
-              status,
-              value,
-            },
-          }),
-          llmRequestPolicy: { behaviour: "after-current-request" },
-        },
-      },
-    });
-    return;
-  }
-
-  if (status === "threw") {
-    const error = "error" in outcome ? outcome.error : "Unknown codemode error";
-    await args.appendInput({
-      event: {
-        type: "events.iterate.com/agent/input-added",
-        idempotencyKey: `agent-codemode-script-error:${String(payload.scriptExecutionId)}`,
-        payload: {
-          content: codemodeCompletionInputBlock({
-            event: args.event,
-            outcome: {
-              error,
-              status,
-            },
-          }),
-          llmRequestPolicy: { behaviour: "after-current-request" },
-        },
-      },
-    });
-  }
-}
-
 function normalizeIdempotencyKeyPart(value: string) {
   return value.replace(/[^a-zA-Z0-9._/-]+/g, "-");
 }
@@ -889,69 +863,8 @@ function remoteWithToken(input: { remote: string; token: string }) {
   return url.toString();
 }
 
-const CODEMODE_FENCE_RE =
-  /^```(?:js|javascript|codemode|ts|typescript)\s*\n([\s\S]*?)(?:\n```\s*)?$/;
-
-export function extractCodemodeScript(content: string): string | null {
-  const trimmed = content.trim();
-  if (trimmed.startsWith("async (ctx) => {") && trimmed.endsWith("}")) {
-    return trimmed;
-  }
-
-  if (trimmed.startsWith("async () => {") && trimmed.endsWith("}")) {
-    return trimmed;
-  }
-
-  const fenced = CODEMODE_FENCE_RE.exec(trimmed);
-  return fenced?.[1]?.trim() || null;
-}
-
-function formatCodemodeOutput(output: unknown) {
-  if (typeof output === "string") return output;
-  try {
-    return JSON.stringify(output, null, 2) ?? String(output);
-  } catch {
-    return String(output);
-  }
-}
-
-export function codemodeCompletionInputBlock(input: {
-  event: Event;
-  outcome: { status: "returned"; value: unknown } | { status: "threw"; error: unknown };
-}) {
-  const scriptExecutionId = (input.event.payload as { scriptExecutionId?: unknown })
-    .scriptExecutionId;
-  return [
-    "```yaml",
-    "event:",
-    `  offset: ${input.event.offset}`,
-    "  type: events.iterate.com/codemode/script-execution-completed",
-    ...(typeof scriptExecutionId === "string"
-      ? [`  scriptExecutionId: ${yamlScalar(scriptExecutionId)}`]
-      : []),
-    "  outcome:",
-    `    status: ${input.outcome.status}`,
-    ...yamlBlockScalar(
-      input.outcome.status === "returned" ? "    value" : "    error",
-      formatCodemodeOutput(
-        input.outcome.status === "returned" ? input.outcome.value : input.outcome.error,
-      ),
-    ),
-    "```",
-  ].join("\n");
-}
-
 function parseAgentChatChannel(channel: string | undefined) {
   return channel === "tui" ? "tui" : "web";
-}
-
-function yamlScalar(value: string): string {
-  if (/^[a-zA-Z0-9._/@:-]+$/.test(value)) return value;
-  return JSON.stringify(value);
-}
-
-function yamlBlockScalar(key: string, value: string): string[] {
-  return [`${key}: |-`, ...value.split("\n").map((line) => `      ${line}`)];
 }
 
 type DebugProjectInfo = {
