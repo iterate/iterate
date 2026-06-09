@@ -5,7 +5,7 @@
 import { z } from "zod";
 import type { EventCatalog, StreamEventInput } from "../shared/stream-processors.ts";
 import type { ProcessorStream } from "../processor-runner.ts";
-import { coreProcessorContract } from "./core/contract.ts";
+import { CoreProcessorContract } from "./core/contract.ts";
 
 export function buildProcessorRegisteredEvent(args: {
   contract: {
@@ -19,7 +19,7 @@ export function buildProcessorRegisteredEvent(args: {
 }): StreamEventInput<
   "events.iterate.com/stream/processor-registered",
   z.output<
-    (typeof coreProcessorContract.events)["events.iterate.com/stream/processor-registered"]["payloadSchema"]
+    (typeof CoreProcessorContract.events)["events.iterate.com/stream/processor-registered"]["payloadSchema"]
   >
 > {
   return {
@@ -47,7 +47,7 @@ export const standardProcessorBehavior = {
     hasRegisteredCurrentVersion: z.boolean().default(false),
   },
   initialState: {},
-  processorDeps: [coreProcessorContract],
+  processorDeps: [CoreProcessorContract],
   consumes: ["events.iterate.com/stream/processor-registered"],
   emits: [
     "events.iterate.com/stream/processor-registered",
@@ -63,7 +63,7 @@ export const standardProcessorBehavior = {
       return args.state;
     }
 
-    const event = coreProcessorContract.events[
+    const event = CoreProcessorContract.events[
       "events.iterate.com/stream/processor-registered"
     ].payloadSchema.parse(args.event.payload);
     if (event.slug !== args.contract.slug || event.version !== args.contract.version) {

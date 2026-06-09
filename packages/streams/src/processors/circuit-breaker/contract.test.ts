@@ -1,19 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { coreProcessorContract } from "../core/contract.ts";
+import { CoreProcessorContract, type CoreProcessorState } from "../core/contract.ts";
 import { CoreStreamProcessor } from "../core/implementation.ts";
 import { circuitBreakerProcessorContract, shouldTripCircuitBreaker } from "./contract.ts";
+import type { StreamEvent } from "../../shared/event.ts";
 
-const coreReduce = coreProcessorContract.reduce;
 const circuitBreakerReduce = circuitBreakerProcessorContract.reduce;
-if (coreReduce === undefined || circuitBreakerReduce === undefined) {
-  throw new Error("core and circuit breaker processors must have reducers");
+if (circuitBreakerReduce === undefined) {
+  throw new Error("circuit breaker processor must have a reducer");
 }
 
 describe("circuit breaker processor", () => {
   const coreProcessor = new CoreStreamProcessor({
     iterateContext: { stream: { append: () => {}, appendBatch: () => {} } },
-    propagateChildStreamCreated: () => {},
   });
+  const coreReduce = (args: { state: CoreProcessorState; event: StreamEvent }) =>
+    coreProcessor.reduce(args);
 
   it("configures burst and refill via its owned configured event", () => {
     let state = circuitBreakerProcessorContract.stateSchema.parse(
@@ -41,7 +42,7 @@ describe("circuit breaker processor", () => {
   });
 
   it("trips after the burst budget and drives stream pause/resume", () => {
-    let coreState = coreProcessorContract.stateSchema.parse(coreProcessorContract.initialState);
+    let coreState = CoreProcessorContract.stateSchema.parse(CoreProcessorContract.initialState);
     let circuitBreakerState = circuitBreakerProcessorContract.stateSchema.parse(
       circuitBreakerProcessorContract.initialState,
     );
@@ -52,8 +53,8 @@ describe("circuit breaker processor", () => {
       payload: { namespace: "stream", path: "/cb" },
       createdAt: "2026-06-01T12:00:00.000Z",
     };
-    coreState = coreProcessorContract.stateSchema.parse(
-      coreReduce({ contract: coreProcessorContract, state: coreState, event: createdEvent }),
+    coreState = CoreProcessorContract.stateSchema.parse(
+      coreReduce({ state: coreState, event: createdEvent }),
     );
     circuitBreakerState = circuitBreakerProcessorContract.stateSchema.parse(
       circuitBreakerReduce({
@@ -103,8 +104,8 @@ describe("circuit breaker processor", () => {
       type: "events.iterate.com/stream/paused" as const,
       payload: { reason: "circuit breaker tripped" },
     };
-    coreState = coreProcessorContract.stateSchema.parse(
-      coreReduce({ contract: coreProcessorContract, state: coreState, event: pausedEvent }),
+    coreState = CoreProcessorContract.stateSchema.parse(
+      coreReduce({ state: coreState, event: pausedEvent }),
     );
     circuitBreakerState = circuitBreakerProcessorContract.stateSchema.parse(
       circuitBreakerReduce({
@@ -129,8 +130,8 @@ describe("circuit breaker processor", () => {
       type: "events.iterate.com/stream/resumed" as const,
       payload: { reason: "operator" },
     };
-    coreState = coreProcessorContract.stateSchema.parse(
-      coreReduce({ contract: coreProcessorContract, state: coreState, event: resumedEvent }),
+    coreState = CoreProcessorContract.stateSchema.parse(
+      coreReduce({ state: coreState, event: resumedEvent }),
     );
     circuitBreakerState = circuitBreakerProcessorContract.stateSchema.parse(
       circuitBreakerReduce({

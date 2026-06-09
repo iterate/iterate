@@ -9,7 +9,7 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";
-import { coreProcessorContract } from "../core/contract.ts";
+import { CoreProcessorContract } from "../core/contract.ts";
 
 // Experiment defaults: effectively no rate limiting for normal browser/load tests.
 // Refill is per minute in the token bucket; 6_000_000/min ≈ 100k events/s sustained.
@@ -36,7 +36,7 @@ export const circuitBreakerProcessorContract = defineProcessorContract({
     burstCapacity: DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
     refillRatePerMinute: DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE,
   },
-  processorDeps: [coreProcessorContract],
+  processorDeps: [CoreProcessorContract],
   events: {
     "events.iterate.com/circuit-breaker/configured": {
       description: "Configures burst capacity and refill rate for the token bucket.",

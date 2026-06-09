@@ -1,11 +1,11 @@
 import { StreamProcessor, type ProcessEventsArgs } from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
-import { browserRawEventsContract } from "./contract.ts";
+import { BrowserRawEventsContract } from "./contract.ts";
+export { BrowserRawEventsContract } from "./contract.ts";
 
 export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 4;
 
-export const BrowserRawEventsContract = browserRawEventsContract;
 export type BrowserRawEventsContract = typeof BrowserRawEventsContract;
 export type BrowserRawEventsState = Record<string, never>;
 

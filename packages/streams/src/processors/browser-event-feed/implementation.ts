@@ -1,8 +1,13 @@
-import { StreamProcessor, type ProcessEventsArgs } from "../../stream-processor.ts";
+import {
+  StreamProcessor,
+  type ProcessEventsArgs,
+  type ReduceArgs,
+} from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
-import { browserEventFeedContract } from "./contract.ts";
+import { BrowserEventFeedContract } from "./contract.ts";
 import { planFeedOps, type FeedOp, type FeedState } from "./grouping.ts";
+export { BrowserEventFeedContract } from "./contract.ts";
 
 /** The table this processor owns. */
 export const BROWSER_EVENT_FEED_TABLE = "feed_items";
@@ -10,7 +15,6 @@ export const BROWSER_EVENT_FEED_TABLE = "feed_items";
 /** Bumped into the writer-lock name so a feed_items schema change lets a fresh tab take over. */
 export const BROWSER_EVENT_FEED_SCHEMA_VERSION = 2;
 
-export const BrowserEventFeedContract = browserEventFeedContract;
 export type BrowserEventFeedContract = typeof BrowserEventFeedContract;
 export type BrowserEventFeedState = FeedState;
 
@@ -23,6 +27,10 @@ export class BrowserEventFeedProcessor extends StreamProcessor<
   BrowserEventFeedProcessorDeps
 > {
   readonly contract = BrowserEventFeedContract;
+
+  protected override reduce(args: ReduceArgs<BrowserEventFeedContract>): FeedState {
+    return planFeedOps(args.state as FeedState, [args.event]).endState;
+  }
 
   protected override processEvents(args: ProcessEventsArgs<BrowserEventFeedContract>): void {
     const { ops } = planFeedOps(

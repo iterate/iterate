@@ -4,21 +4,17 @@
 // before committed events are delivered to subscribers.
 
 import type { StreamEvent, StreamEventInput } from "../../shared/event.ts";
-import { StreamProcessor, type ProcessEventArgs, type ReduceArgs } from "../../stream-processor.ts";
-import { getInitialProcessorState, runProcessorReduce } from "../../shared/stream-processors.ts";
-import { coreProcessorContract, type CoreProcessorState } from "./contract.ts";
-
-export const CoreProcessorContract = coreProcessorContract;
-export type CoreProcessorContract = typeof CoreProcessorContract;
-
-export type CoreStreamProcessorDeps = {
-  propagateChildStreamCreated: (state: CoreProcessorState) => Promise<void> | void;
-};
-
-export class CoreStreamProcessor extends StreamProcessor<
+import { StreamProcessor, type ProcessEventArgs } from "../../stream-processor.ts";
+import {
   CoreProcessorContract,
-  CoreStreamProcessorDeps
-> {
+  SupportedSubscriptionConfiguredEvent,
+  type CoreProcessorState,
+} from "./contract.ts";
+
+export type CoreProcessorContract = typeof CoreProcessorContract;
+type CoreEvent = StreamEvent<string, any>;
+
+export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> {
   readonly contract = CoreProcessorContract;
 
   validateAppend(args: { event: StreamEventInput; state: CoreProcessorState }): void {
@@ -34,76 +30,160 @@ export class CoreStreamProcessor extends StreamProcessor<
     }
   }
 
-  public reduce(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState;
-  public override reduce(args: ReduceArgs<CoreProcessorContract>): CoreProcessorState;
-  public reduce(
-    args: ReduceArgs<CoreProcessorContract> | { event: StreamEvent; state: CoreProcessorState },
-  ): CoreProcessorState {
-    const reduction = runProcessorReduce({
-      processor: { contract: this.contract },
-      event: args.event as StreamEvent,
-      state: args.state as CoreProcessorState,
-    });
-    if (reduction === undefined) {
-      throw new Error(`core processor cannot reduce event type "${args.event.type}"`);
+  public override reduce(args: {
+    event: CoreEvent;
+    state: CoreProcessorState;
+  }): CoreProcessorState {
+    let next: CoreProcessorState = {
+      ...args.state,
+      eventCount: args.state.eventCount + 1,
+      maxOffset: args.event.offset,
+    };
+
+    switch (args.event.type) {
+      case "events.iterate.com/stream/paused":
+        next = {
+          ...next,
+          paused: true,
+          pauseReason: args.event.payload.reason ?? null,
+        };
+        break;
+
+      case "events.iterate.com/stream/resumed":
+        next = {
+          ...next,
+          paused: false,
+          pauseReason: null,
+        };
+        break;
+
+      case "events.iterate.com/stream/created":
+        if (args.event.offset !== 1) {
+          throw new Error(
+            "events.iterate.com/stream/created must be the first event and have offset 1",
+          );
+        }
+        next = {
+          ...next,
+          namespace: args.event.payload.namespace,
+          path: args.event.payload.path,
+          createdAt: args.event.createdAt,
+        };
+        break;
+
+      case "events.iterate.com/stream/woken":
+        next = {
+          ...next,
+          incarnationId: args.event.payload.incarnationId,
+        };
+        break;
+
+      case "events.iterate.com/stream/configured":
+        next = {
+          ...next,
+          config: {
+            ...next.config,
+            ...args.event.payload.config,
+          },
+        };
+        break;
+
+      case "events.iterate.com/stream/metadata-updated":
+        next = {
+          ...next,
+          metadata: args.event.payload.metadata,
+        };
+        break;
+
+      case "events.iterate.com/stream/child-stream-created": {
+        let childPath: string | null;
+        if (args.event.payload.childPath === args.state.path) {
+          childPath = null;
+        } else if (args.state.path === "/") {
+          const [firstSegment] = args.event.payload.childPath.split("/").filter(Boolean);
+          childPath = firstSegment === undefined ? null : `/${firstSegment}`;
+        } else {
+          const parentPrefix = `${args.state.path}/`;
+          if (!args.event.payload.childPath.startsWith(parentPrefix)) {
+            childPath = null;
+          } else {
+            const [firstSegment] = args.event.payload.childPath
+              .slice(parentPrefix.length)
+              .split("/")
+              .filter(Boolean);
+            childPath = firstSegment === undefined ? null : `${args.state.path}/${firstSegment}`;
+          }
+        }
+
+        next =
+          childPath === null || next.childPaths.includes(childPath)
+            ? next
+            : { ...next, childPaths: [...next.childPaths, childPath] };
+        break;
+      }
+
+      case "events.iterate.com/stream/subscription-configured":
+        const parsed = SupportedSubscriptionConfiguredEvent.safeParse(args.event);
+        if (!parsed.success) {
+          const { [args.event.payload.subscriptionKey]: _removed, ...subscriptionsByKey } =
+            next.subscriptionsByKey;
+          next = { ...next, subscriptionsByKey };
+          break;
+        }
+        next = {
+          ...next,
+          subscriptionsByKey: {
+            ...next.subscriptionsByKey,
+            [args.event.payload.subscriptionKey]: { latestConfiguredEvent: parsed.data },
+          },
+        };
+        break;
+
+      case "events.iterate.com/stream/processor-registered":
+        next = {
+          ...next,
+          processorsBySlug: {
+            ...next.processorsBySlug,
+            [args.event.payload.slug]: { latestRegisteredEvent: args.event },
+          },
+        };
+        break;
+
+      default:
+        break;
     }
-    return this.contract.stateSchema.parse(reduction.state) as CoreProcessorState;
+    return this.contract.stateSchema.parse(next ?? args.state);
   }
 
-  public override processEvent(
-    args:
-      | ProcessEventArgs<CoreProcessorContract>
-      | { event: StreamEvent; state: CoreProcessorState },
-  ): void {
+  protected override processEvent(args: ProcessEventArgs<CoreProcessorContract>): void {
     switch (args.event.type) {
-      case "events.iterate.com/stream/created":
-        Promise.resolve(
-          this.deps.propagateChildStreamCreated(args.state as CoreProcessorState),
-        ).catch((error: unknown) => {
-          console.error("core stream processor child propagation failed", error);
+      case "events.iterate.com/stream/created": {
+        if (args.state.path === "/") return;
+
+        const pathSegments = args.state.path.split("/").filter(Boolean);
+        const ancestorPaths = ["/"];
+        for (let index = 1; index < pathSegments.length; index += 1) {
+          ancestorPaths.push(`/${pathSegments.slice(0, index).join("/")}`);
+        }
+
+        args.runInBackground(async () => {
+          await Promise.all(
+            ancestorPaths.map((ancestorPath) =>
+              this.ctx.stream.append({
+                streamPath: ancestorPath,
+                event: {
+                  type: "events.iterate.com/stream/child-stream-created",
+                  idempotencyKey: `child-stream-created:${ancestorPath}:${args.state.path}`,
+                  payload: { childPath: args.state.path },
+                },
+              }),
+            ),
+          );
         });
         return;
+      }
       default:
         return;
     }
   }
-}
-
-export function getAncestorStreamPaths(path: string): string[] {
-  if (path === "/") return [];
-  const segments = path.split("/").filter(Boolean);
-  const ancestors = ["/"];
-  for (let index = 1; index < segments.length; index += 1) {
-    ancestors.push(`/${segments.slice(0, index).join("/")}`);
-  }
-  return ancestors;
-}
-
-export function catchUpCoreProcessorState(args: {
-  state: CoreProcessorState;
-  events: readonly StreamEvent[];
-}): CoreProcessorState {
-  let state = args.state;
-  for (const event of args.events) {
-    if (event.offset <= state.maxOffset) continue;
-    const reduction = runProcessorReduce({
-      processor: { contract: coreProcessorContract },
-      event,
-      state,
-    });
-    if (reduction === undefined) {
-      throw new Error(`core processor cannot reduce event type "${event.type}"`);
-    }
-    state = coreProcessorContract.stateSchema.parse(reduction.state);
-  }
-  return state;
-}
-
-export function reduceCoreProcessorStateFromEvents(
-  events: readonly StreamEvent[],
-): CoreProcessorState {
-  return catchUpCoreProcessorState({
-    state: getInitialProcessorState(coreProcessorContract),
-    events,
-  });
 }

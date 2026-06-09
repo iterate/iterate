@@ -1,18 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { coreProcessorContract } from "./contract.ts";
-import {
-  CoreStreamProcessor,
-  catchUpCoreProcessorState,
-  getAncestorStreamPaths,
-  reduceCoreProcessorStateFromEvents,
-} from "./implementation.ts";
+import { CoreProcessorContract, type CoreProcessorState } from "./contract.ts";
+import { CoreStreamProcessor } from "./implementation.ts";
+import type { StreamEvent } from "../../shared/event.ts";
 
-const reduce = coreProcessorContract.reduce;
-if (reduce === undefined) throw new Error("core processor must have a reducer");
+const processor = new CoreStreamProcessor({
+  iterateContext: { stream: { append: () => {}, appendBatch: () => {} } },
+});
+
+function reduce(args: { contract?: unknown; state: CoreProcessorState; event: StreamEvent }) {
+  return processor.reduce(args);
+}
+
+function reduceEvents(args: {
+  state?: CoreProcessorState;
+  events: readonly StreamEvent[];
+}): CoreProcessorState {
+  let state =
+    args.state ?? CoreProcessorContract.stateSchema.parse(CoreProcessorContract.initialState);
+  for (const event of args.events) {
+    if (event.offset <= state.maxOffset) continue;
+    state = processor.reduce({ event, state });
+  }
+  return state;
+}
 
 describe("core processor contract", () => {
   it("reduces stream identity and ordinary bookkeeping", () => {
-    let state = coreProcessorContract.stateSchema.parse(coreProcessorContract.initialState);
+    let state = CoreProcessorContract.stateSchema.parse(CoreProcessorContract.initialState);
     for (const event of [
       {
         offset: 1,
@@ -33,8 +47,8 @@ describe("core processor contract", () => {
         createdAt: "2026-06-01T12:00:01.000Z",
       },
     ]) {
-      state = coreProcessorContract.stateSchema.parse(
-        reduce({ contract: coreProcessorContract, state, event }),
+      state = CoreProcessorContract.stateSchema.parse(
+        reduce({ contract: CoreProcessorContract, state, event }),
       );
     }
 
@@ -49,10 +63,10 @@ describe("core processor contract", () => {
   });
 
   it("keeps latest subscription and processor registration events", () => {
-    let state = coreProcessorContract.stateSchema.parse(coreProcessorContract.initialState);
-    state = coreProcessorContract.stateSchema.parse(
+    let state = CoreProcessorContract.stateSchema.parse(CoreProcessorContract.initialState);
+    state = CoreProcessorContract.stateSchema.parse(
       reduce({
-        contract: coreProcessorContract,
+        contract: CoreProcessorContract,
         state,
         event: {
           offset: 1,
@@ -70,9 +84,9 @@ describe("core processor contract", () => {
         },
       }),
     );
-    state = coreProcessorContract.stateSchema.parse(
+    state = CoreProcessorContract.stateSchema.parse(
       reduce({
-        contract: coreProcessorContract,
+        contract: CoreProcessorContract,
         state,
         event: {
           offset: 2,
@@ -107,10 +121,10 @@ describe("core processor contract", () => {
   });
 
   it("drops historical outbound subscription transports from reduced state", () => {
-    let state = coreProcessorContract.stateSchema.parse(coreProcessorContract.initialState);
-    state = coreProcessorContract.stateSchema.parse(
+    let state = CoreProcessorContract.stateSchema.parse(CoreProcessorContract.initialState);
+    state = CoreProcessorContract.stateSchema.parse(
       reduce({
-        contract: coreProcessorContract,
+        contract: CoreProcessorContract,
         state,
         event: {
           offset: 1,
@@ -128,9 +142,9 @@ describe("core processor contract", () => {
       }),
     );
 
-    state = coreProcessorContract.stateSchema.parse(
+    state = CoreProcessorContract.stateSchema.parse(
       reduce({
-        contract: coreProcessorContract,
+        contract: CoreProcessorContract,
         state,
         event: {
           offset: 2,
@@ -150,7 +164,7 @@ describe("core processor contract", () => {
 
     expect(state.subscriptionsByKey.echo).toBeUndefined();
 
-    const stored = coreProcessorContract.stateSchema.parse({
+    const stored = CoreProcessorContract.stateSchema.parse({
       ...state,
       subscriptionsByKey: {
         external: {
@@ -174,10 +188,10 @@ describe("core processor contract", () => {
   });
 
   it("owns pause/resume and append validation", () => {
-    let state = coreProcessorContract.stateSchema.parse(coreProcessorContract.initialState);
-    state = coreProcessorContract.stateSchema.parse(
+    let state = CoreProcessorContract.stateSchema.parse(CoreProcessorContract.initialState);
+    state = CoreProcessorContract.stateSchema.parse(
       reduce({
-        contract: coreProcessorContract,
+        contract: CoreProcessorContract,
         state,
         event: {
           offset: 1,
@@ -187,11 +201,6 @@ describe("core processor contract", () => {
         },
       }),
     );
-
-    const processor = new CoreStreamProcessor({
-      iterateContext: { stream: { append: () => {}, appendBatch: () => {} } },
-      propagateChildStreamCreated: () => {},
-    });
 
     expect(state.paused).toBe(true);
     expect(() => processor.validateAppend({ event: { type: "test.event" }, state })).toThrow(
@@ -204,9 +213,9 @@ describe("core processor contract", () => {
       }),
     ).not.toThrow();
 
-    state = coreProcessorContract.stateSchema.parse(
+    state = CoreProcessorContract.stateSchema.parse(
       reduce({
-        contract: coreProcessorContract,
+        contract: CoreProcessorContract,
         state,
         event: {
           offset: 2,
@@ -220,8 +229,8 @@ describe("core processor contract", () => {
   });
 
   it("reduces stream-owned helper events", () => {
-    let state = coreProcessorContract.stateSchema.parse({
-      ...coreProcessorContract.initialState,
+    let state = CoreProcessorContract.stateSchema.parse({
+      ...CoreProcessorContract.initialState,
       path: "/a",
     });
     for (const event of [
@@ -245,39 +254,40 @@ describe("core processor contract", () => {
         payload: { message: "boom" },
       },
     ]) {
-      state = coreProcessorContract.stateSchema.parse(
-        reduce({ contract: coreProcessorContract, state, event }),
+      state = CoreProcessorContract.stateSchema.parse(
+        reduce({ contract: CoreProcessorContract, state, event }),
       );
     }
 
     expect(state.childPaths).toEqual(["/a/b"]);
     expect(state.metadata).toEqual({ title: "Demo stream" });
     expect(state.maxOffset).toBe(3);
-    expect(getAncestorStreamPaths("/a/b/c")).toEqual(["/", "/a", "/a/b"]);
   });
 
   it("rebuilds state by replaying committed events", () => {
-    const state = reduceCoreProcessorStateFromEvents([
-      {
-        offset: 1,
-        type: "events.iterate.com/stream/created",
-        payload: { namespace: "default", path: "/agents" },
-        createdAt: "2026-06-01T12:00:00.000Z",
-      },
-      {
-        offset: 2,
-        type: "events.iterate.com/stream/woken",
-        payload: { incarnationId: "incarnation-1" },
-        createdAt: "2026-06-01T12:00:00.001Z",
-      },
-      {
-        offset: 3,
-        type: "events.iterate.com/stream/child-stream-created",
-        idempotencyKey: "child-stream-created:/agents:/agents/debug",
-        payload: { childPath: "/agents/debug" },
-        createdAt: "2026-06-01T12:00:01.000Z",
-      },
-    ]);
+    const state = reduceEvents({
+      events: [
+        {
+          offset: 1,
+          type: "events.iterate.com/stream/created",
+          payload: { namespace: "default", path: "/agents" },
+          createdAt: "2026-06-01T12:00:00.000Z",
+        },
+        {
+          offset: 2,
+          type: "events.iterate.com/stream/woken",
+          payload: { incarnationId: "incarnation-1" },
+          createdAt: "2026-06-01T12:00:00.001Z",
+        },
+        {
+          offset: 3,
+          type: "events.iterate.com/stream/child-stream-created",
+          idempotencyKey: "child-stream-created:/agents:/agents/debug",
+          payload: { childPath: "/agents/debug" },
+          createdAt: "2026-06-01T12:00:01.000Z",
+        },
+      ],
+    });
 
     expect(state).toMatchObject({
       namespace: "default",
@@ -290,22 +300,24 @@ describe("core processor contract", () => {
   });
 
   it("catches up stored state from events after the stored max offset", () => {
-    const stored = reduceCoreProcessorStateFromEvents([
-      {
-        offset: 1,
-        type: "events.iterate.com/stream/created",
-        payload: { namespace: "default", path: "/agents" },
-        createdAt: "2026-06-01T12:00:00.000Z",
-      },
-      {
-        offset: 2,
-        type: "events.iterate.com/stream/woken",
-        payload: { incarnationId: "incarnation-1" },
-        createdAt: "2026-06-01T12:00:00.001Z",
-      },
-    ]);
+    const stored = reduceEvents({
+      events: [
+        {
+          offset: 1,
+          type: "events.iterate.com/stream/created",
+          payload: { namespace: "default", path: "/agents" },
+          createdAt: "2026-06-01T12:00:00.000Z",
+        },
+        {
+          offset: 2,
+          type: "events.iterate.com/stream/woken",
+          payload: { incarnationId: "incarnation-1" },
+          createdAt: "2026-06-01T12:00:00.001Z",
+        },
+      ],
+    });
 
-    const state = catchUpCoreProcessorState({
+    const state = reduceEvents({
       state: stored,
       events: [
         {

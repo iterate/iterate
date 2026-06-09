@@ -10,6 +10,10 @@ questions as design work, not half-wired runtime behavior.
 - `StreamProcessor<Contract, Deps>` lives in `@iterate-com/streams/stream-processor`.
 - A processor is parameterized by its contract object/type and its processor-specific deps:
   `class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoProcessorDeps>`.
+- Contract values and their matching type aliases are capitalized and share the same name:
+  `RepoProcessorContract`, not `repoProcessorContract`.
+- Contracts describe event schemas, state schemas, and metadata. Reducers live on processor
+  classes, not contracts.
 - The base constructor owns common deps:
   - `iterateContext`, exposed to subclasses as `this.ctx`
   - optional `keepAliveWhile`

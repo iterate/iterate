@@ -29,12 +29,13 @@ export type StreamProcessorContract<Self> = {
   events: EventCatalog;
   processorDeps?: readonly unknown[];
   consumes: readonly string[];
-  reduce?: (args: {
-    contract: Self;
-    state: ProcessorState<Self>;
-    event: ConsumedEvent<Self>;
-  }) => ProcessorState<Self> | null | undefined;
 };
+
+type ProcessorEvent<Contract> = Contract extends { consumes: readonly string[] }
+  ? "*" extends Contract["consumes"][number]
+    ? StreamEvent
+    : ConsumedEvent<Contract>
+  : ConsumedEvent<Contract>;
 
 export type StreamProcessorBaseDeps<Contract, IterateContext> = {
   iterateContext: IterateContext;
@@ -42,14 +43,14 @@ export type StreamProcessorBaseDeps<Contract, IterateContext> = {
 } & StreamProcessorStateStorage<ProcessorState<Contract>>;
 
 export type ReducedEvent<Contract> = {
-  event: DeepReadonly<ConsumedEvent<Contract>>;
+  event: DeepReadonly<ProcessorEvent<Contract>>;
   previousState: DeepReadonly<ProcessorState<Contract>>;
   state: DeepReadonly<ProcessorState<Contract>>;
 };
 
 export type ReduceArgs<Contract> = {
-  event: DeepReadonly<ConsumedEvent<Contract>>;
-  state: DeepReadonly<ProcessorState<Contract>>;
+  event: ProcessorEvent<Contract>;
+  state: ProcessorState<Contract>;
 };
 
 export type ProcessEventArgs<Contract> = ReducedEvent<Contract> & {
@@ -95,7 +96,7 @@ export type StreamProcessorConstructorArgs<
 // class dependency once processor hosting has settled.
 export abstract class StreamProcessor<
   Contract extends StreamProcessorContract<Contract>,
-  Deps extends object = Record<string, never>,
+  Deps extends object = object,
   IterateContext = StreamProcessorIterateContext,
 > extends RpcTarget {
   abstract readonly contract: Contract;
@@ -162,13 +163,7 @@ export abstract class StreamProcessor<
   }
 
   protected reduce(args: ReduceArgs<Contract>): ProcessorState<Contract> | null | undefined {
-    return (
-      this.contract.reduce?.({
-        contract: this.contract,
-        event: args.event as ConsumedEvent<Contract>,
-        state: args.state as ProcessorState<Contract>,
-      }) ?? (args.state as ProcessorState<Contract>)
-    );
+    return args.state;
   }
 
   #reduce(args: {
@@ -180,10 +175,16 @@ export abstract class StreamProcessor<
       processor: {
         contract: {
           ...this.contract,
-          reduce: ({ state, event }) =>
+          reduce: ({
+            state,
+            event,
+          }: {
+            state: ProcessorState<Contract>;
+            event: ConsumedEvent<Contract>;
+          }) =>
             this.reduce({
-              event: event as DeepReadonly<ConsumedEvent<Contract>>,
-              state: state as DeepReadonly<ProcessorState<Contract>>,
+              event: event as ProcessorEvent<Contract>,
+              state,
             }),
         },
       },
@@ -204,6 +205,25 @@ export abstract class StreamProcessor<
   }
 
   protected processEvent(_args: ProcessEventArgs<Contract>): void {}
+
+  processReducedEvent(
+    args: ReducedEvent<Contract> & {
+      checkpointOffset?: number;
+      streamMaxOffset?: number;
+    },
+  ): void {
+    this.processEvent({
+      ...args,
+      checkpointOffset: args.checkpointOffset ?? args.event.offset,
+      streamMaxOffset: args.streamMaxOffset ?? args.event.offset,
+      blockProcessorWhile: () => {
+        throw new Error(
+          "blockProcessorWhile is unavailable when processing a reduced event inline",
+        );
+      },
+      runInBackground: (work) => this.#runInBackground(work),
+    });
+  }
 
   async #processEventBatch(args: {
     events: readonly StreamEvent[];
@@ -228,7 +248,7 @@ export abstract class StreamProcessor<
       if (reduction === undefined) continue;
 
       reducedEvents.push({
-        event: reduction.event as DeepReadonly<ConsumedEvent<Contract>>,
+        event: reduction.event as DeepReadonly<ProcessorEvent<Contract>>,
         previousState: nextState as DeepReadonly<ProcessorState<Contract>>,
         state: reduction.state as DeepReadonly<ProcessorState<Contract>>,
       });
