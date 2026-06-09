@@ -18,7 +18,6 @@ import manifest from "~/app.ts";
 import type { AppContext } from "~/context.ts";
 import type { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { StreamDurableObject } from "~/domains/streams/new-stream-runtime.ts";
-import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 import { os } from "~/orpc/orpc.ts";
 import { projectsRouter } from "~/orpc/routers/projects.ts";
 export {
@@ -38,7 +37,6 @@ type ExampleCapabilityEnv = {
 };
 
 type ExampleCapabilityProps = {
-  activeOrganization?: ActiveOrganizationAuth;
   projectId?: string;
 };
 
@@ -239,9 +237,7 @@ function createCodemodeOrpcContext(input: {
     callableEnv: input.env as unknown as Record<string, unknown>,
     codemodeSession: env.CODEMODE_SESSION,
     // The ORPC capability runs after the original browser request has gone
-    // away, so it cannot reuse request-local objects like `rawRequest`. It can,
-    // however, reconstruct the durable app context from actual Worker bindings
-    // plus the active organization captured into the provider props.
+    // away, so it reconstructs a project-bound app context from Worker bindings.
     config: {} as AppContext["config"],
     db: env.DB ? createD1Client(env.DB) : (undefined as never),
     doCatalog: env.DO_CATALOG ?? env.DB,

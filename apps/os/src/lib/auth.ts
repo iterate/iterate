@@ -1,21 +1,6 @@
 import { redirect } from "@tanstack/react-router";
-import { createServerFn, getGlobalStartContext } from "@tanstack/react-start";
-import { getRequestUrl } from "@tanstack/react-start/server";
-import { z } from "zod";
-import type { UserPrincipal } from "~/auth/principal.ts";
-import {
-  getUserOrganization,
-  getUserPrincipal as getUserPrincipalFromPrincipal,
-  normalizeActiveOrganizationAuth,
-  withActiveOrganization,
-} from "~/lib/active-organization-auth.ts";
-import {
-  normalizeRequestHostname,
-  resolveProjectSlugFromHostname,
-} from "~/lib/project-host-routing.ts";
-
-export type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
-export { normalizeActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
+import type { PublicSessionResponse } from "@iterate-com/auth/client";
+import { createUserPrincipal, type UserPrincipal } from "~/auth/principal.ts";
 
 export type OrganizationRouteAuth = {
   authProjectAccessUrl: string | null;
@@ -23,139 +8,104 @@ export type OrganizationRouteAuth = {
   userId: string;
 };
 
-const RouteAuthInput = z
-  .object({
-    organizationSlug: z.string().optional(),
-  })
-  .optional();
+export function requireOrganizationMemberForSession(
+  session: PublicSessionResponse | null | undefined,
+  location: { href: string },
+) {
+  const principal = requireUserPrincipalFromSession(session, location);
+  if (principal.organizations.length === 0) {
+    throw redirect({ to: "/organization" });
+  }
 
-export const requireActiveOrganizationForRoute = createServerFn({ method: "GET" }).handler(
-  async () => {
-    const principal = requireUserPrincipal();
-
-    const activePrincipal = withActiveOrganization(principal);
-    if (!activePrincipal) {
-      throw redirect({ to: "/organization" });
-    }
-
-    return normalizeActiveOrganizationAuth(activePrincipal);
-  },
-);
-
-export const requireActiveOrganizationForOrgRoute = createServerFn({ method: "GET" })
-  .inputValidator(RouteAuthInput)
-  .handler(async ({ data }) => {
-    const principal = requireUserPrincipal();
-    const activePrincipal = withActiveOrganization(principal, data?.organizationSlug);
-
-    if (!activePrincipal) {
-      throw redirect({ to: "/organization" });
-    }
-
-    return normalizeActiveOrganizationAuth(activePrincipal);
-  });
-
-export const requireSignedInForOrganizationRoute = createServerFn({ method: "GET" }).handler(
-  async (): Promise<OrganizationRouteAuth> => {
-    const principal = requireUserPrincipal();
-    const organization = getUserOrganization(principal);
-
-    if (organization) {
-      throw redirect({
-        to: "/org/$organizationSlug",
-        params: { organizationSlug: organization.slug },
-      });
-    }
-
-    const projectAccessUrl = getAuthProjectAccessUrl();
-    if (projectAccessUrl) {
-      throw redirect({ href: projectAccessUrl });
-    }
-
-    return {
-      authProjectAccessUrl: projectAccessUrl,
-      userId: principal.userId,
-      sessionId: principal.sessionId ?? principal.userId,
-    };
-  },
-);
-
-export const redirectAuthenticatedUserFromAuthRoute = createServerFn({ method: "GET" }).handler(
-  async () => {
-    const principal = getUserPrincipal();
-    if (!principal) {
-      return null;
-    }
-
-    const organization = getUserOrganization(principal);
-    if (!organization) {
-      throw redirect({ to: "/organization" });
-    }
-
-    throw redirect({
-      to: "/org/$organizationSlug",
-      params: { organizationSlug: organization.slug },
-    });
-  },
-);
-
-export const requireAuthenticatedRootRedirectTarget = createServerFn({ method: "GET" }).handler(
-  async () => {
-    const principal = requireUserPrincipal();
-    const organization = getUserOrganization(principal);
-
-    if (!organization) {
-      throw redirect({ to: "/organization" });
-    }
-
-    return {
-      orgSlug: organization.slug,
-      projectSlug: resolveCurrentProjectHostSlug(),
-    };
-  },
-);
-
-function getUserPrincipal(): UserPrincipal | null {
-  return getUserPrincipalFromPrincipal(getGlobalStartContext()?.principal);
+  return null;
 }
 
-function requireUserPrincipal(): UserPrincipal {
-  const principal = getUserPrincipal();
+export function requireOrganizationRouteAccessForSession(
+  session: PublicSessionResponse | null | undefined,
+  location: { href: string },
+  organizationSlug: string,
+) {
+  const principal = requireUserPrincipalFromSession(session, location);
+  if (principal.organizations.length === 0) {
+    throw redirect({ to: "/organization" });
+  }
+
+  if (!principal.organizations.some((organization) => organization.slug === organizationSlug)) {
+    throw redirect({ to: "/projects" });
+  }
+
+  return null;
+}
+
+export function requireSignedInForOrganizationSession(
+  session: PublicSessionResponse | null | undefined,
+  location: { href: string },
+  issuer: string | undefined,
+): OrganizationRouteAuth {
+  const principal = requireUserPrincipalFromSession(session, location);
+
+  if (principal.organizations.length > 0) {
+    throw redirect({ to: "/projects" });
+  }
+
+  const projectAccessUrl = issuer ? `${new URL(issuer).origin}/project-access` : null;
+  if (projectAccessUrl) {
+    throw redirect({ href: projectAccessUrl });
+  }
+
+  return {
+    authProjectAccessUrl: projectAccessUrl,
+    userId: principal.userId,
+    sessionId: principal.sessionId ?? principal.userId,
+  };
+}
+
+export function requireAuthenticatedRootRedirectTargetFromSession(
+  session: PublicSessionResponse | null | undefined,
+  location: { href: string },
+  currentProjectHostSlug: string | null | undefined,
+) {
+  const principal = requireUserPrincipalFromSession(session, location);
+
+  if (principal.organizations.length === 0) {
+    throw redirect({ to: "/organization" });
+  }
+
+  return {
+    projectSlug: currentProjectHostSlug ?? null,
+  };
+}
+
+function getUserPrincipalFromSession(
+  session: PublicSessionResponse | null | undefined,
+): UserPrincipal | null {
+  if (!session?.authenticated) return null;
+
+  return createUserPrincipal({
+    userId: session.user.id,
+    sessionId: session.session.sessionId,
+    organizations: session.session.organizations,
+    projects: session.session.projects,
+  });
+}
+
+function requireUserPrincipalFromSession(
+  session: PublicSessionResponse | null | undefined,
+  location: { href: string },
+): UserPrincipal {
+  const principal = getUserPrincipalFromSession(session);
   if (!principal) {
-    throw redirectToSignIn();
+    throw redirectToSignIn(location.href);
   }
   return principal;
 }
 
-function redirectToSignIn(): never {
-  const request = getRequestUrl();
+function redirectToSignIn(redirectUrl?: string): never {
   throw redirect({
     to: "/sign-in/$",
     params: { _splat: "" },
     search: {
-      redirect_url: request.pathname + request.search,
+      redirect_url: redirectUrl ?? "/",
     },
   });
-}
-
-function resolveCurrentProjectHostSlug() {
-  const context = getGlobalStartContext();
-  const requestUrl = getRequestUrl();
-  const dashboardHostname = context?.config.baseUrl
-    ? normalizeRequestHostname(new URL(context.config.baseUrl).hostname)
-    : null;
-  const requestHostname = normalizeRequestHostname(requestUrl.hostname);
-  if (dashboardHostname && requestHostname === dashboardHostname) return null;
-
-  // Auth redirects can land at `/` after authentication. For project hosts, the
-  // root route must recover the project slug from the hostname so
-  // `<project>.iterate-preview-N.app` lands directly in that project's app/OS.
-  return (
-    resolveProjectSlugFromHostname(requestHostname, context?.projectHostnameBases ?? []) ?? null
-  );
-}
-
-function getAuthProjectAccessUrl() {
-  const issuer = getGlobalStartContext()?.config.iterateAuth?.issuer;
-  return issuer ? `${new URL(issuer).origin}/project-access` : null;
 }

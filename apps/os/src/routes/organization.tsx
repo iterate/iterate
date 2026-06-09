@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
-import { requireSignedInForOrganizationRoute, type OrganizationRouteAuth } from "~/lib/auth.ts";
+import { requireSignedInForOrganizationSession, type OrganizationRouteAuth } from "~/lib/auth.ts";
 
 export const Route = createFileRoute("/organization")({
-  loader: async (): Promise<OrganizationRouteAuth> => await requireSignedInForOrganizationRoute(),
+  loader: ({ context, location }): OrganizationRouteAuth =>
+    requireSignedInForOrganizationSession(context.authSession, location, context.iterateAuthIssuer),
   component: OrganizationRoute,
 });
 

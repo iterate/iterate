@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { parse, serialize } from "hono/utils/cookie";
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
 import * as oauth from "oauth4webapi";
 import { z } from "zod/v4";
 import {
@@ -28,6 +28,7 @@ export type IterateAuthConfig = {
   clientId: string;
   clientSecret: string;
   redirectURI: string;
+  jwks?: JSONWebKeySet;
   resource?: string | string[];
   logoutReturnToOrigins?: string[];
   cookiePrefix?: string;
@@ -128,7 +129,9 @@ function buildAuthenticatedSession(
       name:
         userInfo?.[ITERATE_ORGANIZATIONS_CLAIM]?.find(
           (userInfoOrganization) => userInfoOrganization.id === organization.id,
-        )?.name ?? organization.slug,
+        )?.name ??
+        organization.name ??
+        organization.slug,
     })) ?? null;
 
   return {
@@ -168,7 +171,7 @@ const OAuthState = z.object({
 
 type OAuthState = z.infer<typeof OAuthState>;
 
-type JWKS = ReturnType<typeof createRemoteJWKSet>;
+type JWKS = ReturnType<typeof createRemoteJWKSet> | ReturnType<typeof createLocalJWKSet>;
 
 type OAuthInfra = {
   issuerURL: URL;
@@ -308,6 +311,15 @@ export type AuthenticateResult = {
   responseHeaders: Headers;
 };
 
+export type AuthenticateOptions = {
+  /**
+   * Fetch fresh userinfo claims from the issuer while authenticating a cookie
+   * session. Route and API auth should usually leave this disabled so JWT
+   * validation stays local to the worker isolate.
+   */
+  includeUserInfo?: boolean;
+};
+
 export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfra) {
   const prefix = config.cookiePrefix ?? "iterate";
   const SESSION_COOKIE = `${prefix}_session`;
@@ -322,7 +334,10 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
   }
 
   return {
-    async authenticate({ headers }: { headers: Headers }): Promise<AuthenticateResult> {
+    async authenticate({
+      headers,
+      includeUserInfo = true,
+    }: { headers: Headers } & AuthenticateOptions): Promise<AuthenticateResult> {
       const cookieJar = parse(headers.get("Cookie") ?? "");
       if (!cookieJar) return { session: null, responseHeaders: new Headers() };
 
@@ -359,7 +374,7 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
 
         const accessToken = AccessTokenClaims.parse(rawAccessToken);
         const idToken = IdTokenClaims.parse(rawIdToken);
-        const userInfo = await getUserInfo(tokenSet.accessToken);
+        const userInfo = includeUserInfo ? await getUserInfo(tokenSet.accessToken) : null;
 
         const responseHeaders = new Headers();
         if (refreshed) {
@@ -635,7 +650,9 @@ export function createIterateAuth(config: IterateAuthConfig) {
   }
 
   const issuer = config.issuer ?? DEFAULT_ISSUER;
-  const jwks = createRemoteJWKSet(new URL(`${issuer}/jwks`));
+  const jwks = config.jwks
+    ? createLocalJWKSet(config.jwks)
+    : createRemoteJWKSet(new URL(`${issuer}/jwks`));
   const infra = createOAuthInfra(config, jwks);
 
   const routes = createAuthHandler(config, infra);

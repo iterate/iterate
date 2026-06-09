@@ -19,16 +19,15 @@ import {
   isValidCustomHostname,
   normalizeCustomHostname,
 } from "~/lib/project-host-routing.ts";
-import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
-import { activeOrganizationMiddleware, os, projectScopeMiddleware } from "~/orpc/orpc.ts";
-import { requireProjectScope } from "~/orpc/project-access.ts";
+import { authenticatedUserMiddleware, os, projectScopeMiddleware } from "~/orpc/orpc.ts";
+import { requireAuthorizedProject, requireProjectScope } from "~/orpc/project-access.ts";
 import { projectCodemodeRouter } from "~/orpc/routers/codemode.ts";
 import { projectAgentsRouter } from "~/orpc/routers/agents.ts";
 import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
 import { projectSecretsRouter } from "~/orpc/routers/secrets.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
-import { getAccessibleAuthProject, ProjectsCapability } from "~/capnweb/projects-capability.ts";
+import { ProjectsCapability } from "~/capnweb/projects-capability.ts";
 
 type ProjectRow = {
   id: string;
@@ -115,38 +114,33 @@ function isUniqueConstraintError(error: unknown) {
 export const projectsRouter = {
   projects: {
     create: os.projects.create
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async ({ context, input }) => {
         return await new ProjectsCapability({
-          activeOrganization: context.activeOrganization,
           context,
         }).create(input);
       }),
-    list: os.projects.list.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
+    list: os.projects.list.use(authenticatedUserMiddleware).handler(async ({ context, input }) => {
       return await new ProjectsCapability({
-        activeOrganization: context.activeOrganization,
         context,
       }).list(input);
     }),
-    find: os.projects.find.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
+    find: os.projects.find.use(authenticatedUserMiddleware).handler(async ({ context, input }) => {
       return await new ProjectsCapability({
-        activeOrganization: context.activeOrganization,
         context,
       }).find(input);
     }),
     findBySlug: os.projects.findBySlug
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async ({ context, input }) => {
         return await new ProjectsCapability({
-          activeOrganization: context.activeOrganization,
           context,
         }).findBySlug(input);
       }),
     updateConfig: os.projects.updateConfig
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async ({ context, input }) => {
         const existing = await requireProject({
-          activeOrganization: context.activeOrganization,
           context,
           projectId: input.id,
         });
@@ -195,10 +189,9 @@ export const projectsRouter = {
         return await toProjectWithIngressUrl(context, row);
       }),
     customHostnameStatus: os.projects.customHostnameStatus
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async ({ context, input }) => {
         const row = await requireProject({
-          activeOrganization: context.activeOrganization,
           context,
           projectId: input.id,
         });
@@ -210,10 +203,9 @@ export const projectsRouter = {
         });
       }),
     ensureCustomHostname: os.projects.ensureCustomHostname
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async ({ context, input }) => {
         const row = await requireProject({
-          activeOrganization: context.activeOrganization,
           context,
           projectId: input.id,
         });
@@ -239,10 +231,9 @@ export const projectsRouter = {
         });
       }),
     remove: os.projects.remove
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async ({ context, input }) => {
         return await new ProjectsCapability({
-          activeOrganization: context.activeOrganization,
           context,
         }).remove(input);
       }),
@@ -325,40 +316,8 @@ export const projectsRouter = {
   },
 };
 
-async function requireProject(input: {
-  activeOrganization: ActiveOrganizationAuth;
-  context: AppContext;
-  projectId: string;
-}) {
-  const project = await getProjectById(input.context.db, { id: input.projectId });
-
-  if (!project) {
-    throw new ORPCError("NOT_FOUND", {
-      message: `Project ${input.projectId} not found`,
-    });
-  }
-
-  if (input.activeOrganization.isAdminApi) {
-    return project;
-  }
-
-  if (input.context.principal?.can("read", { projectId: input.projectId })) {
-    return project;
-  }
-
-  if (
-    await getAccessibleAuthProject({
-      activeOrganization: input.activeOrganization,
-      context: input.context,
-      projectId: project.id,
-    })
-  ) {
-    return project;
-  }
-
-  throw new ORPCError("FORBIDDEN", {
-    message: `Project ${input.projectId} not found`,
-  });
+async function requireProject(input: { context: AppContext; projectId: string }) {
+  return await requireAuthorizedProject(input);
 }
 
 function requireD1ObjectCatalog(context: AppContext) {

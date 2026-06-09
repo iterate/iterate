@@ -1,9 +1,13 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { requireAuthenticatedRootRedirectTarget } from "../lib/auth.ts";
+import { requireAuthenticatedRootRedirectTargetFromSession } from "../lib/auth.ts";
 
 export const Route = createFileRoute("/")({
-  loader: async () => {
-    const target = await requireAuthenticatedRootRedirectTarget();
+  loader: ({ context, location }) => {
+    const target = requireAuthenticatedRootRedirectTargetFromSession(
+      context.authSession,
+      location,
+      context.currentProjectHostSlug,
+    );
     if (target.projectSlug) {
       throw redirect({
         to: "/projects/$projectSlug/codemode-sessions/new",
@@ -12,10 +16,6 @@ export const Route = createFileRoute("/")({
       });
     }
 
-    throw redirect({
-      to: "/org/$organizationSlug",
-      params: { organizationSlug: target.orgSlug },
-      replace: true,
-    });
+    throw redirect({ to: "/projects", replace: true });
   },
 });

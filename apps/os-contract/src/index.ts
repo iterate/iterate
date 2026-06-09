@@ -342,7 +342,7 @@ export const osContract = oc.router({
       .route({
         method: "GET",
         path: "/projects/by-slug/{slug}",
-        description: "Get project by slug in the active organization",
+        description: "Get project by globally unique slug",
         tags: ["/projects"],
       })
       .input(z.object({ slug: z.string() }))

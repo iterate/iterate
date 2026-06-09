@@ -6,7 +6,7 @@ import {
   Scripts,
   createRootRouteWithContext,
 } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
+import { getGlobalStartContext } from "@tanstack/react-start";
 import { TanStackDevtools } from "@tanstack/react-devtools";
 import { FormDevtoolsPanel } from "@tanstack/react-form-devtools";
 import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
@@ -19,30 +19,35 @@ import { DefaultErrorComponent } from "@iterate-com/ui/components/route-defaults
 import { AppConfig } from "../app.ts";
 import { orpcClient } from "../orpc/client.ts";
 import appCss from "../styles.css?url";
+import {
+  normalizeRequestHostname,
+  resolveProjectSlugFromHostname,
+} from "~/lib/project-host-routing.ts";
 import type { RouterContext } from "~/router.tsx";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 
-const getInitialAuthSession = createServerFn({ method: "GET" }).handler(
-  ({ context }): PublicSessionResponse => {
-    if (!context.iterateAuthSession) {
-      return { authenticated: false };
-    }
-
+export const Route = createRootRouteWithContext<RouterContext>()({
+  beforeLoad: ({ context }) => {
+    const startContext = getGlobalStartContext();
+    const authSession = context.authSession ?? toPublicSession(startContext?.iterateAuthSession);
     return {
-      authenticated: true,
-      user: context.iterateAuthSession.user,
-      session: context.iterateAuthSession.session,
+      authSession,
+      iterateAuthIssuer: context.iterateAuthIssuer ?? startContext?.config.iterateAuth?.issuer,
+      currentProjectHostSlug:
+        context.currentProjectHostSlug ??
+        resolveCurrentProjectHostSlug({
+          baseUrl: startContext?.config.baseUrl,
+          projectHostnameBases: startContext?.projectHostnameBases ?? [],
+          requestUrl: startContext?.rawRequest?.url,
+        }),
     };
   },
-);
-
-export const Route = createRootRouteWithContext<RouterContext>()({
-  loader: async () => {
+  loader: async ({ context }) => {
     const config = PublicConfigSchema.parse(await orpcClient.__internal.publicConfig({}));
     return {
       config,
-      authSession: await getInitialAuthSession(),
+      authSession: context.authSession ?? { authenticated: false },
     };
   },
   staleTime: Number.POSITIVE_INFINITY,
@@ -61,6 +66,33 @@ export const Route = createRootRouteWithContext<RouterContext>()({
   component: RootComponent,
   errorComponent: RootErrorComponent,
 });
+
+function toPublicSession(
+  session: import("@iterate-com/auth/server").AuthenticatedSession | null | undefined,
+): PublicSessionResponse {
+  if (!session) return { authenticated: false };
+  return {
+    authenticated: true,
+    user: session.user,
+    session: session.session,
+  };
+}
+
+function resolveCurrentProjectHostSlug(input: {
+  baseUrl: string | undefined;
+  projectHostnameBases: string[];
+  requestUrl: string | undefined;
+}) {
+  if (!input.requestUrl) return null;
+
+  const dashboardHostname = input.baseUrl
+    ? normalizeRequestHostname(new URL(input.baseUrl).hostname)
+    : null;
+  const requestHostname = normalizeRequestHostname(new URL(input.requestUrl).hostname);
+  if (dashboardHostname && requestHostname === dashboardHostname) return null;
+
+  return resolveProjectSlugFromHostname(requestHostname, input.projectHostnameBases) ?? null;
+}
 
 function RootDocument({ children }: { children: ReactNode }) {
   return (

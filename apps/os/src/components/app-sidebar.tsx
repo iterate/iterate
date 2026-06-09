@@ -43,28 +43,21 @@ import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 type PublicConfig = PublicAppConfig<AppConfig>;
 
 type AppSidebarProps = {
-  organizationSlug: string;
   routeConfig: PublicRouteConfig;
 };
 
-export function AppSidebar({ organizationSlug, routeConfig }: AppSidebarProps) {
+export function AppSidebar({ routeConfig }: AppSidebarProps) {
   return (
-    <SidebarShell
-      header={<AppSidebarOrganization organizationSlug={organizationSlug} />}
-      footer={<AppSidebarUser />}
-    >
+    <SidebarShell header={<AppSidebarOrganizations />} footer={<AppSidebarUser />}>
       <AppSidebarNav routeConfig={routeConfig} />
     </SidebarShell>
   );
 }
 
-function AppSidebarOrganization({ organizationSlug }: Pick<AppSidebarProps, "organizationSlug">) {
+function AppSidebarOrganizations() {
   const { session } = useAuthClient();
   const organizations = session?.authenticated ? session.session.organizations : [];
-  const activeOrganization =
-    organizations.find((organization) => organization.slug === organizationSlug) ??
-    organizations[0];
-  const activeOrganizationLabel = nonEmptyLabel(activeOrganization?.name, organizationSlug);
+  const label = organizations.length === 1 ? nonEmptyLabel(organizations[0]?.name, "OS") : "OS";
 
   return (
     <SidebarMenu>
@@ -74,7 +67,7 @@ function AppSidebarOrganization({ organizationSlug }: Pick<AppSidebarProps, "org
             render={
               <SidebarMenuButton className="h-10 gap-2 data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground">
                 <Building2 className="size-4" />
-                <span className="truncate">{activeOrganizationLabel}</span>
+                <span className="truncate">{label}</span>
                 <ChevronsUpDown className="ml-auto size-4" />
               </SidebarMenuButton>
             }

@@ -5,6 +5,9 @@ import packageJson from "../package.json" with { type: "json" };
 
 const SlackScope = z.string().trim().min(1);
 const GoogleScope = z.string().trim().min(1);
+const JSONWebKeySet = z.object({
+  keys: z.array(z.looseObject({ kty: z.string().trim().min(1) })),
+});
 
 export const DEFAULT_SLACK_BOT_SCOPES = [
   "channels:history",
@@ -56,6 +59,7 @@ export const AppConfig = BaseAppConfig.extend({
       issuer: publicValue(z.url().default("https://auth.iterate.com/api/auth")),
       clientId: publicValue(z.string().trim().min(1)),
       clientSecret: redacted(z.string().trim().min(1)),
+      jwks: JSONWebKeySet.optional(),
       serviceToken: redacted(z.string().trim().min(1)).optional(),
       resource: publicValue(z.url()).optional(),
     })

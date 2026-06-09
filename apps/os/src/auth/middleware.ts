@@ -14,6 +14,10 @@ import {
   type Principal,
 } from "~/auth/principal.ts";
 
+type OsIterateAuth = ReturnType<typeof createIterateAuth>;
+
+const authClients = new Map<string, OsIterateAuth>();
+
 export const iterateAuthMiddleware = createMiddleware().server(
   async ({ request, context, next }) => {
     const auth = createOsIterateAuth(context, request);
@@ -45,7 +49,7 @@ export const iterateAuthMiddleware = createMiddleware().server(
 );
 
 export async function resolveRequestAuth(input: {
-  auth: ReturnType<typeof createOsIterateAuth>;
+  auth: OsIterateAuth | null;
   context: Pick<AppContext, "config">;
   request: Request;
 }): Promise<{
@@ -82,7 +86,7 @@ export async function resolveRequestAuth(input: {
 }
 
 async function authenticateSession(input: {
-  auth: ReturnType<typeof createOsIterateAuth>;
+  auth: OsIterateAuth | null;
   headers: Headers;
 }): Promise<{
   principal: Principal | null;
@@ -97,7 +101,10 @@ async function authenticateSession(input: {
     };
   }
 
-  const result = await input.auth.authenticate({ headers: input.headers });
+  const result = await input.auth.authenticate({
+    headers: input.headers,
+    includeUserInfo: false,
+  });
   return {
     principal: result.session ? principalFromSession(result.session) : null,
     session: result.session,
@@ -106,7 +113,7 @@ async function authenticateSession(input: {
 }
 
 async function authenticateBearerPrincipal(input: {
-  auth: ReturnType<typeof createOsIterateAuth>;
+  auth: OsIterateAuth | null;
   headers: Headers;
 }): Promise<Principal | null> {
   if (!input.auth) return null;
@@ -130,12 +137,20 @@ export function createOsIterateAuth(context: AppContext, request: Request) {
     ? [resource, ...oauthResourceAudienceVariants(mcpResource)]
     : [resource];
 
-  return createIterateAuth({
+  const authConfig = {
     issuer: config.issuer,
     clientId: config.clientId,
     clientSecret: config.clientSecret.exposeSecret(),
+    jwks: config.jwks,
     redirectURI: `${(context.config.baseUrl ?? requestOrigin).replace(/\/+$/, "")}/api/iterate-auth/callback`,
     resource: resources,
     logoutReturnToOrigins: context.config.baseUrl ? [context.config.baseUrl] : undefined,
-  });
+  };
+  const cacheKey = JSON.stringify(authConfig);
+  const cached = authClients.get(cacheKey);
+  if (cached) return cached;
+
+  const auth = createIterateAuth(authConfig);
+  authClients.set(cacheKey, auth);
+  return auth;
 }

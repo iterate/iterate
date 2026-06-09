@@ -1,11 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { requireActiveOrganizationForOrgRoute } from "~/lib/auth.ts";
+import { requireOrganizationRouteAccessForSession } from "~/lib/auth.ts";
 
 export const Route = createFileRoute("/_app/org/$organizationSlug/")({
-  beforeLoad: ({ params }) =>
-    requireActiveOrganizationForOrgRoute({
-      data: { organizationSlug: params.organizationSlug },
-    }),
+  beforeLoad: ({ context, location, params }) =>
+    requireOrganizationRouteAccessForSession(
+      context.authSession,
+      location,
+      params.organizationSlug,
+    ),
   loader: ({ params }) => ({
     breadcrumb: params.organizationSlug,
   }),

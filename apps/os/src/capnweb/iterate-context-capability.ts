@@ -10,7 +10,6 @@ import type { ProjectStreamsCapability } from "./streams-capability.ts";
 import type { ProjectWorkspaceCapability } from "./workspace-capability.ts";
 import manifest, { AppConfig } from "~/app.ts";
 import type { AppContext } from "~/context.ts";
-import { normalizeActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 
 type RuntimeContext = Pick<ExecutionContext, "exports" | "waitUntil">;
 const INVOKE_MOUNTED = Symbol("IterateContext.invokeMounted");
@@ -246,20 +245,7 @@ export function createProjectsCapability(input: {
   context: AppContext;
   iterateContextProps?: IterateContextProps;
 }) {
-  const principal = input.context.principal;
   return new ProjectsCapability({
-    activeOrganization:
-      principal?.type === "user"
-        ? normalizeActiveOrganizationAuth(principal)
-        : {
-            isAdminApi: true,
-            orgId: "root-context",
-            orgPermissions: [],
-            orgRole: "root",
-            orgSlug: "root-context",
-            sessionId: "root-context",
-            userId: "root-context",
-          },
     context: input.context,
     iterateContextProps: input.iterateContextProps,
   });

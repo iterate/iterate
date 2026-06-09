@@ -70,12 +70,7 @@ async function listOrganizationClaims(
 async function listAccessTokenOrganizationClaims(
   user: Record<string, unknown> | null | undefined,
 ): Promise<IterateAuthAccessTokenOrganizationClaim[]> {
-  const organizations = await listOrganizationClaims(user);
-  return organizations.map((organization) => ({
-    id: organization.id,
-    slug: organization.slug,
-    role: organization.role,
-  }));
+  return await listOrganizationClaims(user);
 }
 
 async function listProjectClaims(
