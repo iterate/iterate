@@ -1,20 +1,27 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { requireAuthenticatedRootRedirectTarget } from "../lib/auth.ts";
+import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
 
 export const Route = createFileRoute("/")({
-  loader: async () => {
-    const target = await requireAuthenticatedRootRedirectTarget();
-    if (target.projectSlug) {
+  loader: async ({ context }) => {
+    await requireAuthenticatedRootRedirectTarget();
+    const projectsData = await context.queryClient.ensureQueryData(
+      projectsListQueryOptions({ limit: 100, offset: 0 }),
+    );
+    const projects = projectsData.projects.filter(
+      (project) => !project.isOrphanedProjectFromAuthService,
+    );
+
+    if (projects.length === 1) {
       throw redirect({
-        to: "/projects/$projectSlug/codemode-sessions/new",
-        params: { projectSlug: target.projectSlug },
+        to: "/projects/$projectSlug",
+        params: { projectSlug: projects[0]!.slug },
         replace: true,
       });
     }
 
     throw redirect({
-      to: "/org/$organizationSlug",
-      params: { organizationSlug: target.orgSlug },
+      to: "/projects",
       replace: true,
     });
   },

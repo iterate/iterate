@@ -14,7 +14,7 @@ describe("dispatchFetchCallable", () => {
         type: "fetch",
         via: {
           type: "url",
-          url: "https://events.iterate.com",
+          url: "https://upstream.example.com",
         },
         fetchRequest: {
           headers: {
@@ -36,7 +36,7 @@ describe("dispatchFetchCallable", () => {
     const proxyRequest = fetchMock.mock.calls[0]?.[0];
     expect(proxyRequest).toBeInstanceOf(Request);
     const request = proxyRequest as Request;
-    expect(request.url).toBe("https://events.iterate.com/api/streams/foo?after=1");
+    expect(request.url).toBe("https://upstream.example.com/api/streams/foo?after=1");
     expect(request.headers.get("accept")).toBe("application/json");
     expect(request.headers.get("x-iterate-project-id")).toBe("proj_local_test");
   });

@@ -266,7 +266,7 @@ _Avoid_: Example runner, run page, execution form
 
 **Project Stream Explorer**:
 The OS project-bound UI for discovering and inspecting every initialized Event Stream Path for one Project.
-_Avoid_: Events app stream explorer, stream tree
+_Avoid_: generic stream explorer, stream tree
 
 ### Agents
 
@@ -295,7 +295,7 @@ A StreamProcessorRunner-provided best-effort in-memory function that lets proces
 _Avoid_: Durable Object `ctx.waitUntil`, durable scheduler, alarm-backed task
 
 **Stream Namespace**:
-The shared stream runtime's stable owner key for a group of Event Stream Paths. OS uses the stable Project ID as the namespace; future runtime users may use non-project namespaces such as `platform`.
+The stream runtime's stable owner key for a group of Event Stream Paths. OS uses the stable Project ID as the namespace; future runtime users may use non-project namespaces such as `platform`.
 _Avoid_: Project ID inside shared stream runtime, tenant path prefix
 
 **Repo Namespace**:
@@ -342,7 +342,7 @@ _Avoid_: RpcTarget, session stub, callback bundle
 
 **StreamsCapability**:
 A Project ID-backed RPC capability for stream operations. Its props bind the shared stream namespace to the Project ID, and optional `streamPath` props narrow calls to one namespace-local Event Stream Path.
-_Avoid_: Generic stream client, Events app stream client
+_Avoid_: Generic stream client, cross-app stream client
 
 **ReposCapability**:
 A Project ID-backed RPC Tool Provider capability for creating, listing, and selecting Repos inside one Project.
@@ -572,7 +572,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - A **Project Route** includes the globally unique **Project** slug.
 - A **Project Slug** is route identity and may change; a **Project ID** is stable identity.
 - A **Project Route** resolves its **Project Slug** before rendering Project-local UI. Project-scoped oRPC procedures still accept `projectSlugOrId` so the same API remains curlable by slug or callable by stable Project ID.
-- The **Project Slug** used in the **Project Route** corresponds to the project slug used by the events app.
+- The **Project Slug** used in the **Project Route** is browser-facing route identity, not stream namespace identity.
 - Every external **Project-Scoped Procedure** accepts `projectSlugOrId`, resolving globally unique Project Slugs and stable Project IDs through the same project-scope access path.
 - A **Project Durable Object Namespace** is infrastructure context; a resolved and authorized **Project** is domain context.
 - Browser routes use pretty Project Slugs in URLs and may pass either the slug or resolved stable Project ID to Project-scoped procedures.

@@ -52,7 +52,7 @@ helper stops tripping deep TypeScript instantiation in OS. The lifecycle
 - [x] Add `CodemodeSession` with lifecycle, D1 catalog, KV inspector, and
       Outerbase mixins.
 - [x] Store the Tool Provider registry on the session.
-- [x] Append codemode events directly to the events app.
+- [x] Append codemode events directly to the project stream runtime.
 - [x] Route one-shot oRPC execution through the session and immediately return
       the committed `script-execution-requested` event.
 - [x] Add a shared `createCodemodeContext()` proxy helper.

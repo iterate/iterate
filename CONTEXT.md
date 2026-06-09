@@ -128,7 +128,6 @@ _Avoid_: app config, runtime config
 - The first OS `packages/streams` migration slice may use a compatibility adapter to run existing OS processor contracts in the new **StreamProcessorRunner**.
 - The first OS `packages/streams` migration slice keeps broad project stream append authority; stream safety and event-type policy are out of scope.
 - The OS `packages/streams` migration uses only the new **Processor Subscription** event schema; legacy callable subscription events are not translated.
-- The OS `packages/streams` migration does not consider `apps/events`; Events app compatibility is out of scope.
 - **SecretsCapability** and **Workspace** lifecycle are out of scope for the first OS `packages/streams` migration slice.
 - **App Config** is available inside deployed app code.
 - **Deployment Config** is available to Alchemy deployment code only.
@@ -157,9 +156,7 @@ _Avoid_: app config, runtime config
 - "dependencies" was used for both public processor contracts and backend services — resolved: use **Processor dependencies** for public contracts/catalogs and **Runtime dependencies** for backend services.
 - "well-behaved processor defaults" sounded moralizing and vague — resolved: use **Standard processor behavior** for the shared self-registration pieces.
 - "project" identity was mixed between slugs and IDs — resolved: use **ProjectId** for durable identity and **ProjectSlug** for routing labels.
-- Events app project context carried slug-shaped values into durable stream identity — resolved: use **ProjectId** as the project-scoped API identifier instead of carrying both fields.
-- Durable Object debug access is usually private/admin-only, but the Events app POC intentionally exposes direct debug links publicly.
-- Durable stream implementation was treated as Events app-owned — resolved: move shared stream implementation and core types into **Stream Runtime**.
+- Durable stream implementation was treated as app-owned — resolved: use **ProjectId** as the project-scoped API identifier and keep stream runtime infrastructure app-agnostic.
 - OS stream access was coupled to the Events contract — resolved: expose an **OS Streams API** that wraps the shared Stream Runtime directly.
 - Processor subscriptions were described as WebSocket callbacks or domain Durable Object `afterAppend` callbacks — resolved for the OS `packages/streams` migration: use **Processor Subscriptions** to standalone **StreamProcessorRunners**.
 - Stream migration was initially discussed as a staged compatibility move with side-by-side bindings — resolved for the POC: cut over the existing `STREAM` binding and port functionality until tests pass again.
@@ -168,7 +165,6 @@ _Avoid_: app config, runtime config
 - Porting Project lifecycle directly to `packages/streams` processor shape could front-load contract churn — resolved for the first slice: use a compatibility adapter for existing OS processor contracts if it keeps current behavior intact.
 - Stream append policy could be tightened during the cutover — resolved for the POC: leave broad append authority in place and focus on getting the new runtime working.
 - Legacy callable subscription events could be translated during migration — resolved for the hardcore cutover: emit and consume only the new `packages/streams` **Processor Subscription** schema.
-- `apps/events` could be considered because older stream language references the Events app — resolved for this migration: ignore `apps/events` entirely.
 - Secrets and workspaces were listed as possible stream-owned domain objects — resolved for the first slice: keep them as existing capabilities/stateful surfaces.
 - "app config" mixed runtime-readable values with deployment-only values — resolved: use **App Config** for app-readable runtime configuration and **Deployment Config** for Alchemy-only deployment inputs.
 - "stream API" and "streams API" were both used for OS's project stream surface — resolved: use **OS Streams API** and **StreamsCapability** because callers can operate over a project-scoped set of streams, not only one stream.

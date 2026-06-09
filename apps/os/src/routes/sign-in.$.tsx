@@ -27,7 +27,7 @@ function SignInRoute() {
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-xl">Sign in to OS</CardTitle>
-          <CardDescription>Continue with Iterate to open your workspace.</CardDescription>
+          <CardDescription>Continue with Iterate to open your projects.</CardDescription>
         </CardHeader>
         <CardContent>
           <Button className="w-full" size="lg" onClick={() => signIn({ returnTo })}>

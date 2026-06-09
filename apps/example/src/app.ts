@@ -8,13 +8,11 @@ export const AppConfig = BaseAppConfig.extend({
   typeId: z.preprocess(
     (value) => value ?? {},
     z.object({
-      prefix: redacted(
-        z
-          .string()
-          .trim()
-          .regex(/^[a-z]+$/)
-          .default("example"),
-      ),
+      prefix: z
+        .string()
+        .trim()
+        .regex(/^[a-z]+$/)
+        .default("example"),
     }),
   ),
   posthog: z.object({

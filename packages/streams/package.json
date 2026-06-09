@@ -11,6 +11,7 @@
     "./processor-runner": "./src/processor-runner.ts",
     "./processors/browser-raw-events/implementation": "./src/processors/browser-raw-events/implementation.ts",
     "./processors/circuit-breaker/implementation": "./src/processors/circuit-breaker/implementation.ts",
+    "./processors/circuit-breaker/contract": "./src/processors/circuit-breaker/contract.ts",
     "./processors/core/contract": "./src/processors/core/contract.ts",
     "./processors/examples/echo/implementation": "./src/processors/examples/echo/implementation.ts",
     "./shared/event": "./src/shared/event.ts",

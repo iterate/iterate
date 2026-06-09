@@ -113,7 +113,7 @@ async function handleSlackCallback(input: {
     webhookProviderIdentifier: tokenData.team.id,
   });
   await upsertProjectSecret(input.context.db, {
-    id: projectSecretId({ typeIdPrefix: input.context.config.typeIdPrefix.exposeSecret() }),
+    id: projectSecretId({ typeIdPrefix: input.context.config.typeIdPrefix }),
     key: providerSecretKey("slack"),
     material: tokenData.access_token,
     metadata: {
@@ -221,7 +221,7 @@ async function handleGoogleCallback(input: {
     scopes: tokenData.scope ?? config.scopes.join(" "),
   });
   await upsertProjectSecret(input.context.db, {
-    id: projectSecretId({ typeIdPrefix: input.context.config.typeIdPrefix.exposeSecret() }),
+    id: projectSecretId({ typeIdPrefix: input.context.config.typeIdPrefix }),
     key: providerSecretKey("google"),
     material: tokenData.access_token,
     metadata: {

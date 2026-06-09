@@ -16,8 +16,6 @@ setup:
     path: apps/example/
   - project: os
     path: apps/os/
-  - project: events
-    path: apps/events/
   - project: semaphore
     path: apps/semaphore/
   - project: auth

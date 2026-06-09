@@ -13,11 +13,12 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import { EventsDebugLink } from "~/components/events-debug-link.tsx";
+import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
 import {
   projectAgentPresetsQueryOptions,
   projectAgentsListQueryOptions,
 } from "~/lib/project-route-query.ts";
+import { streamPathToSplat } from "~/lib/stream-links.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
   loader: async ({ context }) => {
@@ -96,11 +97,7 @@ function ProjectAgentsIndexPage() {
           >
             New preset
           </Button>
-          <EventsDebugLink
-            label="Open namespace in Streams"
-            namespace={project.id}
-            streamPath="/"
-          />
+          <StreamDebugLink label="Open root stream" projectSlug={project.slug} streamPath="/" />
         </div>
       </div>
       <div className="flex w-full flex-col gap-2 md:flex-row">
@@ -199,7 +196,7 @@ function ProjectAgentsIndexPage() {
                         to="/projects/$projectSlug/agents/streams/$"
                         params={{
                           projectSlug: params.projectSlug,
-                          _splat: agent.agentPath,
+                          _splat: streamPathToSplat(agent.agentPath),
                         }}
                       >
                         <EventsStreamPathLabel path={agent.agentPath} className="min-w-0" />
@@ -212,9 +209,9 @@ function ProjectAgentsIndexPage() {
                       {formatRelativeTime(agent.lastWokenAt)}
                     </TableCell>
                     <TableCell className="w-28 text-right">
-                      <EventsDebugLink
+                      <StreamDebugLink
                         label="Open"
-                        namespace={project.id}
+                        projectSlug={project.slug}
                         streamPath={agent.agentPath}
                       />
                     </TableCell>

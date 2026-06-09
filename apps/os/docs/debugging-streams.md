@@ -5,14 +5,12 @@ sequence on a project stream.
 
 ## Local Writer Into Preview Streams
 
-Pick a preview project ID and write directly to its Events namespace. The
-namespace host is `proj__<project-id-with-underscores>.events.iterate-preview-2.com`.
+Pick a preview project ID and write through OS's project stream endpoint.
 
 ```bash
 PROJECT_ID='os_01kr1jm1fwen8a789v0vffb2ty'
-NAMESPACE="proj__${PROJECT_ID//-/_}"
 STREAM='/agents/local-debug'
-BASE_URL="https://${NAMESPACE}.events.iterate-preview-2.com/api/streams${STREAM}"
+BASE_URL="https://os.iterate-preview-2.com/api/projects/${PROJECT_ID}/streams/events${STREAM}"
 
 curl -fsS "$BASE_URL?beforeOffset=end" | tail -40
 ```
@@ -100,7 +98,7 @@ CLOUDFLARE_STREAM='/agents/debug-cloudflare'
 For OpenAI WebSocket, append:
 
 ```bash
-curl -fsS -X POST "https://${NAMESPACE}.events.iterate-preview-2.com/api/streams${OPENAI_STREAM}" \
+curl -fsS -X POST "https://os.iterate-preview-2.com/api/projects/${PROJECT_ID}/streams/events${OPENAI_STREAM}" \
   -H 'content-type: application/json' \
   -d '{
     "type": "events.iterate.com/openai-ws/config-updated",
@@ -111,7 +109,7 @@ curl -fsS -X POST "https://${NAMESPACE}.events.iterate-preview-2.com/api/streams
 For Cloudflare AI / AI Gateway, append:
 
 ```bash
-curl -fsS -X POST "https://${NAMESPACE}.events.iterate-preview-2.com/api/streams${CLOUDFLARE_STREAM}" \
+curl -fsS -X POST "https://os.iterate-preview-2.com/api/projects/${PROJECT_ID}/streams/events${CLOUDFLARE_STREAM}" \
   -H 'content-type: application/json' \
   -d '{
     "type": "events.iterate.com/agent/llm-config-updated",

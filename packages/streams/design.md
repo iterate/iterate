@@ -484,7 +484,7 @@ Working reference implementation: `src/stream-processor.ts (+ stream-processor.t
     accounting goes negative), `afterAppend` to emit `stream/paused`, and `beforeAppend`
     to reject the _next_ event once `state.paused`. "Reduce throws" cannot express this and
     would smear admission logic into the pure reducer that ships to browser projections.
-    Reference: os `packages/shared/src/streams/circuit-breaker.ts`. `beforeAppend` is sync
+    Reference: the legacy shared stream circuit breaker. `beforeAppend` is sync
     today (matches os); async is a future extension if authorization needs I/O.
 - **The Stream DO runs only the core processor inline.**
   The `core` processor owns stream bookkeeping, child-stream topology, and the

@@ -1,37 +1,15 @@
-import { useForm } from "@tanstack/react-form";
-import type { QueryClient } from "@tanstack/react-query";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
-import { useState } from "react";
 import type { Project } from "@iterate-com/os-contract";
 import { Button } from "@iterate-com/ui/components/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@iterate-com/ui/components/dialog";
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from "@iterate-com/ui/components/field";
 import { Identifier } from "@iterate-com/ui/components/identifier";
-import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { z } from "zod";
+import { cacheCreatedProjectQueries } from "~/lib/cache-created-project-queries.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { orpc } from "~/orpc/client.ts";
-
-type ProjectsListData = { projects: Project[]; total: number };
 
 export const Route = createFileRoute("/_app/projects/")({
   loader: async ({ context }) => {
@@ -42,16 +20,6 @@ export const Route = createFileRoute("/_app/projects/")({
     };
   },
   component: ProjectsIndexPage,
-});
-
-const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-const CreateProjectForm = z.object({
-  slug: z
-    .string()
-    .trim()
-    .min(1, "Slug is required")
-    .regex(PROJECT_SLUG_PATTERN, "Slug must be lowercase kebab-case"),
 });
 
 function buildProjectHostname(input: {
@@ -69,7 +37,6 @@ function ProjectsIndexPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { routeConfig } = Route.useLoaderData();
-  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const { data: projectsData } = useQuery(projectsListQueryOptions({ limit: 20, offset: 0 }));
 
   const createProject = useMutation(
@@ -77,7 +44,6 @@ function ProjectsIndexPage() {
       onSuccess: async (project) => {
         cacheCreatedProjectQueries({ project, queryClient });
         void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
-        setIsCreateDialogOpen(false);
         await router.invalidate({ sync: true });
         await router.navigate({
           to: "/projects/$projectSlug",
@@ -99,84 +65,7 @@ function ProjectsIndexPage() {
     }),
   );
 
-  const form = useForm({
-    defaultValues: { slug: "" },
-    validators: {
-      onChange: CreateProjectForm,
-      onSubmit: CreateProjectForm,
-    },
-    onSubmit: async ({ value }) => {
-      const parsed = CreateProjectForm.parse(value);
-      await createProject.mutateAsync({ slug: parsed.slug });
-      form.reset();
-    },
-  });
-
   const hasProjects = (projectsData?.projects.length ?? 0) > 0;
-  const createProjectDialog = (triggerLabel = "New project") => (
-    <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-      <DialogTrigger
-        render={
-          <Button type="button" size="sm">
-            {triggerLabel}
-          </Button>
-        }
-      />
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Create project</DialogTitle>
-          <DialogDescription>
-            Pick a slug for your project. You can configure hostnames later.
-          </DialogDescription>
-        </DialogHeader>
-        <form
-          className="space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            void form.handleSubmit();
-          }}
-        >
-          <FieldGroup>
-            <form.Field name="slug">
-              {(field) => {
-                const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
-
-                return (
-                  <Field data-invalid={isInvalid}>
-                    <FieldLabel htmlFor={field.name}>Slug</FieldLabel>
-                    <Input
-                      id={field.name}
-                      name={field.name}
-                      placeholder="project-slug"
-                      value={field.state.value}
-                      onBlur={field.handleBlur}
-                      onChange={(event) => field.handleChange(event.target.value)}
-                      aria-invalid={isInvalid}
-                    />
-                    <FieldDescription>Lowercase letters, numbers, and hyphens.</FieldDescription>
-                    {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
-                  </Field>
-                );
-              }}
-            </form.Field>
-          </FieldGroup>
-          <DialogFooter showCloseButton>
-            <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
-              {([canSubmit, isSubmitting]) => (
-                <Button
-                  type="submit"
-                  disabled={!canSubmit || isSubmitting || createProject.isPending}
-                >
-                  {isSubmitting || createProject.isPending ? "Creating..." : "Create project"}
-                </Button>
-              )}
-            </form.Subscribe>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
 
   return (
     <section className="space-y-4 p-4">
@@ -185,7 +74,11 @@ function ProjectsIndexPage() {
           <h2 className="text-sm font-semibold">Projects</h2>
           <p className="text-sm text-muted-foreground">Create and manage projects.</p>
         </div>
-        {hasProjects ? createProjectDialog() : null}
+        {hasProjects ? (
+          <Button type="button" size="sm" render={<Link to="/projects/new" />}>
+            New project
+          </Button>
+        ) : null}
       </div>
 
       {!hasProjects ? (
@@ -200,7 +93,9 @@ function ProjectsIndexPage() {
                 Create your first project to start using OS.
               </p>
             </div>
-            {createProjectDialog("Create new project")}
+            <Button type="button" size="sm" render={<Link to="/projects/new" />}>
+              Create new project
+            </Button>
           </div>
         </div>
       ) : (
@@ -299,48 +194,4 @@ function ProjectSlugCell({ project }: { project: Project }) {
       {project.slug}
     </Link>
   );
-}
-
-function cacheCreatedProjectQueries(input: {
-  project: Project & { ingressUrl: string };
-  queryClient: QueryClient;
-}) {
-  const findQuery = orpc.projects.find.queryOptions({ input: { id: input.project.id } });
-  const findBySlugQuery = orpc.projects.findBySlug.queryOptions({
-    input: { slug: input.project.slug },
-  });
-  input.queryClient.setQueryData(findQuery.queryKey, input.project);
-  input.queryClient.setQueryData(findBySlugQuery.queryKey, input.project);
-  const listProject: Project = {
-    id: input.project.id,
-    slug: input.project.slug,
-    customHostname: input.project.customHostname,
-    createdAt: input.project.createdAt,
-    updatedAt: input.project.updatedAt,
-    isOrphanedProjectFromAuthService: input.project.isOrphanedProjectFromAuthService,
-  };
-
-  for (const listInput of [
-    { limit: 20, offset: 0 },
-    { limit: 100, offset: 0 },
-  ] as const) {
-    const listQuery = projectsListQueryOptions(listInput);
-    input.queryClient.setQueryData<ProjectsListData>(listQuery.queryKey, (existing) => {
-      if (!existing) return existing;
-      if (existing.projects.some((project) => project.id === input.project.id)) {
-        return {
-          ...existing,
-          projects: existing.projects.map((project) =>
-            project.id === input.project.id ? listProject : project,
-          ),
-        };
-      }
-
-      return {
-        ...existing,
-        projects: [listProject, ...existing.projects].slice(0, listInput.limit),
-        total: existing.total + 1,
-      };
-    });
-  }
 }
