@@ -49,7 +49,7 @@ function CapnwebReplPage() {
     };
     globals.ctx = lifted;
     globals.env = envRef.current;
-    setCtx(lifted);
+    setCtx(() => lifted);
     setStatus("Connected");
     return () => {
       delete globals.ctx;
