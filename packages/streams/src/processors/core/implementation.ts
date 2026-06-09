@@ -3,7 +3,8 @@
 // of through a subscription runner, because stream bookkeeping must be updated
 // before committed events are delivered to subscribers.
 
-import type { StreamEventInput } from "../../shared/event.ts";
+import type { StreamEvent, StreamEventInput } from "../../shared/event.ts";
+import type { ConsumedEvent } from "../../shared/stream-processors.ts";
 import { StreamProcessor } from "../../stream-processor.ts";
 import {
   CoreProcessorContract,
@@ -44,8 +45,36 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
     }
   }
 
+  // The Stream Durable Object runs this processor inline during append with
+  // externally-owned state (its own KV/SQL recovery path), so these two methods
+  // take and return state explicitly instead of using the batch/checkpoint
+  // lifecycle that ordinary hosted processors get from the base class.
+  reduceEvent(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
+    return this.reduceRawEvent(args)?.state ?? args.state;
+  }
+
+  processReducedEvent(args: {
+    event: StreamEvent;
+    previousState: CoreProcessorState;
+    state: CoreProcessorState;
+  }): void {
+    this.processEvent({
+      event: args.event as ConsumedEvent<CoreProcessorContract>,
+      previousState: args.previousState,
+      state: args.state,
+      checkpointOffset: args.event.offset,
+      streamMaxOffset: args.event.offset,
+      blockProcessorWhile: () => {
+        throw new Error(
+          "blockProcessorWhile is unavailable when processing a reduced event inline",
+        );
+      },
+      runInBackground: (work) => this.runInBackground(work),
+    });
+  }
+
   public override reduce(args: Parameters<StreamProcessor<CoreProcessorContract>["reduce"]>[0]) {
-    const state = args.state as CoreProcessorState;
+    const state = args.state;
     let next: CoreProcessorState = {
       ...state,
       eventCount: state.eventCount + 1,

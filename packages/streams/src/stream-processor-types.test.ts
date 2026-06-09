@@ -2,7 +2,7 @@ import { describe, expectTypeOf, it } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract, type EmittedInput } from "./shared/stream-processors.ts";
 import type { StreamEvent } from "./shared/event.ts";
-import { type DeepReadonly, StreamProcessor } from "./stream-processor.ts";
+import { StreamProcessor } from "./stream-processor.ts";
 
 const DependencyProcessorContract = defineProcessorContract({
   slug: "test.dependency",
@@ -42,7 +42,7 @@ const TypeInferenceProcessorContract = defineProcessorContract({
 });
 
 type TypeInferenceProcessorContract = typeof TypeInferenceProcessorContract;
-type TypeInferenceProcessorState = DeepReadonly<{ count: number }>;
+type TypeInferenceProcessorState = { count: number };
 
 class TypeInferenceProcessor extends StreamProcessor<TypeInferenceProcessorContract> {
   readonly contract = TypeInferenceProcessorContract;
@@ -87,12 +87,19 @@ class TypeInferenceProcessor extends StreamProcessor<TypeInferenceProcessorContr
     expectTypeOf(args.event.payload.localValue).toEqualTypeOf<number>();
   }
 
-  override async processEventBatch(
-    args: Parameters<StreamProcessor<TypeInferenceProcessorContract>["processEventBatch"]>[0],
+  protected override async processBatch(
+    args: Parameters<StreamProcessor<TypeInferenceProcessorContract>["processBatch"]>[0],
   ): Promise<void> {
     expectTypeOf(args.events).toEqualTypeOf<readonly StreamEvent[]>();
+    expectTypeOf(args.previousState).toEqualTypeOf<TypeInferenceProcessorState>();
+    expectTypeOf(args.state).toEqualTypeOf<TypeInferenceProcessorState>();
     expectTypeOf(args.streamMaxOffset).toEqualTypeOf<number>();
-    await super.processEventBatch(args);
+    for (const reducedEvent of args.reducedEvents) {
+      if (reducedEvent.event.type === "events.test/local/input") {
+        expectTypeOf(reducedEvent.event.payload.localValue).toEqualTypeOf<number>();
+      }
+    }
+    await super.processBatch(args);
   }
 }
 

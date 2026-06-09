@@ -12,14 +12,6 @@ import {
   type ProcessorState,
 } from "./shared/stream-processors.ts";
 
-export type DeepReadonly<T> = T extends (...args: never[]) => unknown
-  ? T
-  : T extends readonly (infer Item)[]
-    ? readonly DeepReadonly<Item>[]
-    : T extends object
-      ? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
-      : T;
-
 export type StreamProcessorIterateContext = {
   stream: ProcessorStream;
 };
@@ -33,8 +25,6 @@ export type StreamProcessorContract = {
   consumes: readonly string[];
 };
 
-type ProcessorEvent<Contract> = ConsumedEvent<Contract>;
-
 export type StreamProcessorBaseDeps<Contract, IterateContext> = {
   iterateContext: IterateContext;
   keepAliveWhile?: (work: () => Promise<unknown>) => void;
@@ -43,26 +33,48 @@ export type StreamProcessorBaseDeps<Contract, IterateContext> = {
 // These arg shapes are intentionally not exported: subclass overrides annotate their
 // args as `Parameters<StreamProcessor<Contract>["method"]>[0]` (enforced by the
 // `iterate/stream-processor-override-args` lint rule) so there is exactly one spelling.
+//
+// State and events are passed by reference. Hooks must treat them as immutable:
+// `reduce` returns a new state object instead of mutating its input.
 type ReducedEvent<Contract> = {
-  event: DeepReadonly<ProcessorEvent<Contract>>;
-  previousState: DeepReadonly<ProcessorState<Contract>>;
-  state: DeepReadonly<ProcessorState<Contract>>;
+  event: ConsumedEvent<Contract>;
+  previousState: ProcessorState<Contract>;
+  state: ProcessorState<Contract>;
 };
 
 type ReduceArgs<Contract> = {
-  event: DeepReadonly<ProcessorEvent<Contract>>;
-  state: DeepReadonly<ProcessorState<Contract>>;
+  event: ConsumedEvent<Contract>;
+  state: ProcessorState<Contract>;
 };
 
-type ProcessEventArgs<Contract> = ReducedEvent<Contract> & {
-  streamMaxOffset: number;
-  /**
-   * The offset this batch will checkpoint through once all blocking work
-   * completes — the last event offset in the batch, not this event's offset.
-   */
-  checkpointOffset: number;
+type SideEffectHelpers = {
+  /** Hold the checkpoint (and the next batch) until this work completes. */
   blockProcessorWhile: (work: () => Promise<unknown>) => void;
+  /** Fire-and-forget work; failures are caught and logged. */
   runInBackground: (work: () => Promise<unknown>) => void;
+};
+
+type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
+  SideEffectHelpers & {
+    streamMaxOffset: number;
+    /**
+     * The offset this batch will checkpoint through once all blocking work
+     * completes — the last event offset in the batch, not this event's offset.
+     */
+    checkpointOffset: number;
+  };
+
+type ProcessBatchArgs<Contract> = SideEffectHelpers & {
+  /** New events past the checkpoint, in stream order, consumed or not. */
+  events: readonly StreamEvent[];
+  /** The consumed subset of `events`, each with its reduction result. */
+  reducedEvents: readonly ReducedEvent<Contract>[];
+  /** Processor state when the batch started. */
+  previousState: ProcessorState<Contract>;
+  /** Processor state after every event in the batch has been reduced. */
+  state: ProcessorState<Contract>;
+  streamMaxOffset: number;
+  checkpointOffset: number;
 };
 
 export type StreamProcessorSnapshot<State> = {
@@ -81,11 +93,28 @@ export type StreamProcessorConstructorArgs<
   Contract extends StreamProcessorContract,
   Deps extends object,
   IterateContext = StreamProcessorIterateContext,
-> = {
-  processorKey?: string;
-} & StreamProcessorBaseDeps<Contract, IterateContext> &
-  Deps;
+> = StreamProcessorBaseDeps<Contract, IterateContext> & Deps;
 
+/**
+ * Class-based stream processor.
+ *
+ * The model in one sentence: the host pushes ordered event batches into
+ * `processEventBatch`, the base reduces each new event into state, hands the
+ * batch to `processBatch` for side effects, and checkpoints state + offset once
+ * all blocking work has completed.
+ *
+ * Subclasses override up to three hooks:
+ *
+ * - `reduce` — pure projection of one consumed event into the next state
+ * - `processEvent` — synchronous per-event side effects
+ * - `processBatch` — batch-level side effects (e.g. one SQLite transaction);
+ *   the default implementation calls `processEvent` once per reduced event
+ *
+ * Every hook runs inside the serialized batch section: a later batch never
+ * starts until the previous one has completed or failed, and the checkpoint is
+ * only written after the hooks (plus any `blockProcessorWhile` work) succeed.
+ * `processEventBatch` itself must not be overridden.
+ */
 // Extending RpcTarget is a convenience for exposing processors directly over Cap'n Web.
 // The processing model should not fundamentally depend on RPC; we may remove this base
 // class dependency once processor hosting has settled.
@@ -97,7 +126,6 @@ export abstract class StreamProcessor<
   abstract readonly contract: Contract;
   protected readonly ctx: IterateContext;
   protected readonly deps: Deps;
-  readonly #processorKey: string | undefined;
 
   #checkpointOffset = 0;
   // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: #loadState reads and assigns this via ??=.
@@ -115,10 +143,9 @@ export abstract class StreamProcessor<
 
   constructor(args: StreamProcessorConstructorArgs<Contract, Deps, IterateContext>) {
     super();
-    const { iterateContext, keepAliveWhile, processorKey, readState, writeState, ...deps } = args;
+    const { iterateContext, keepAliveWhile, readState, writeState, ...deps } = args;
     this.ctx = iterateContext;
     this.deps = deps as Deps;
-    this.#processorKey = processorKey;
     this.#keepAliveWhile = keepAliveWhile;
     this.#readState = readState ?? (() => this.#memorySnapshot);
     this.#writeState =
@@ -128,26 +155,27 @@ export abstract class StreamProcessor<
       });
   }
 
-  protected get processorKey(): string {
-    return this.#processorKey ?? this.contract.slug;
-  }
-
-  get state(): DeepReadonly<ProcessorState<Contract>> {
-    return this.#getState() as DeepReadonly<ProcessorState<Contract>>;
+  get state(): ProcessorState<Contract> {
+    return this.#getState();
   }
 
   get checkpointOffset(): number {
     return this.#checkpointOffset;
   }
 
-  async snapshot(): Promise<StreamProcessorSnapshot<DeepReadonly<ProcessorState<Contract>>>> {
+  async snapshot(): Promise<StreamProcessorSnapshot<ProcessorState<Contract>>> {
     await this.#loadState();
     return {
       offset: this.#checkpointOffset,
-      state: this.state,
+      state: this.#getState(),
     };
   }
 
+  /**
+   * The host-facing sink. Batches are serialized in memory: a later batch never
+   * starts until the previous one completed or failed. Do not override this —
+   * extend `processBatch` instead.
+   */
   async processEventBatch(args: {
     events: readonly StreamEvent[];
     streamMaxOffset: number;
@@ -157,18 +185,39 @@ export abstract class StreamProcessor<
     return await next;
   }
 
+  /** Pure projection of one consumed event into the next state. Defaults to identity. */
   protected reduce(args: ReduceArgs<Contract>): ProcessorState<Contract> | null | undefined {
-    return args.state as ProcessorState<Contract>;
+    return args.state;
   }
 
-  reduceEvent(args: {
-    event: StreamEvent;
-    state: ProcessorState<Contract>;
-  }): ProcessorState<Contract> {
-    return (this.#reduce(args)?.state ?? args.state) as ProcessorState<Contract>;
+  /** Synchronous per-event side-effect hook, called by the default `processBatch`. */
+  protected processEvent(_args: ProcessEventArgs<Contract>): void {}
+
+  /**
+   * Batch-level side-effect hook. Runs inside the serialized section, after the
+   * whole batch has been reduced and before the checkpoint is written, so an
+   * override can e.g. commit all projection writes in one SQLite transaction.
+   * Call `super.processBatch(args)` to keep the per-event `processEvent` calls.
+   */
+  protected async processBatch(args: ProcessBatchArgs<Contract>): Promise<void> {
+    for (const reducedEvent of args.reducedEvents) {
+      this.processEvent({
+        ...reducedEvent,
+        streamMaxOffset: args.streamMaxOffset,
+        checkpointOffset: args.checkpointOffset,
+        blockProcessorWhile: args.blockProcessorWhile,
+        runInBackground: args.runInBackground,
+      });
+    }
   }
 
-  #reduce(args: {
+  /**
+   * Reduce one raw stream event against explicit state, without touching the
+   * processor's own state or checkpoint. Returns `undefined` for events this
+   * processor does not consume. Used by the batch loop and by processors that
+   * are also run inline with externally-owned state (the stream core).
+   */
+  protected reduceRawEvent(args: {
     event: StreamEvent;
     state: ProcessorState<Contract>;
   }): ReducedEvent<Contract> | undefined {
@@ -183,39 +232,18 @@ export abstract class StreamProcessor<
     const event = getEventSchema({
       type: args.event.type,
       payloadSchema: eventDefinition.payloadSchema,
-    }).parse(args.event) as DeepReadonly<ProcessorEvent<Contract>>;
+    }).parse(args.event) as ConsumedEvent<Contract>;
 
-    const previousState = args.state as DeepReadonly<ProcessorState<Contract>>;
-    const state = this.reduce({ event, state: previousState }) ?? previousState;
+    const state = this.reduce({ event, state: args.state }) ?? args.state;
     assertObjectProcessorState({ processorSlug: this.contract.slug, value: state });
 
-    return {
-      event,
-      previousState,
-      state: state as DeepReadonly<ProcessorState<Contract>>,
-    };
+    return { event, previousState: args.state, state };
   }
 
-  protected processEvent(_args: ProcessEventArgs<Contract>): void {}
-
-  processReducedEvent(
-    args: Omit<ReducedEvent<Contract>, "event"> & {
-      event: StreamEvent;
-      checkpointOffset?: number;
-      streamMaxOffset?: number;
-    },
-  ): void {
-    this.processEvent({
-      ...args,
-      event: args.event as DeepReadonly<ProcessorEvent<Contract>>,
-      checkpointOffset: args.checkpointOffset ?? args.event.offset,
-      streamMaxOffset: args.streamMaxOffset ?? args.event.offset,
-      blockProcessorWhile: () => {
-        throw new Error(
-          "blockProcessorWhile is unavailable when processing a reduced event inline",
-        );
-      },
-      runInBackground: (work) => this.#runInBackground(work),
+  /** Fire-and-forget async work backed by the host's keep-alive, with failures logged. */
+  protected runInBackground(work: () => Promise<unknown>): void {
+    this.#runKeepAliveBackedWork(work).catch((error: unknown) => {
+      console.error("stream processor background work failed", error);
     });
   }
 
@@ -225,61 +253,50 @@ export abstract class StreamProcessor<
   }): Promise<void> {
     await this.#loadState();
 
-    const batchPreviousState = this.#getState();
-    let nextState = batchPreviousState;
+    const previousState = this.#getState();
+    let state = previousState;
     let checkpointOffset = this.#checkpointOffset;
+    const events: StreamEvent[] = [];
     const reducedEvents: ReducedEvent<Contract>[] = [];
 
-    for (const rawEvent of args.events) {
-      if (rawEvent.offset <= checkpointOffset) continue;
+    for (const event of args.events) {
+      if (event.offset <= checkpointOffset) continue;
+      events.push(event);
+      checkpointOffset = event.offset;
 
-      const reduction = this.#reduce({
-        event: rawEvent,
-        state: nextState,
-      });
-      checkpointOffset = rawEvent.offset;
-
+      const reduction = this.reduceRawEvent({ event, state });
       if (reduction === undefined) continue;
-
       reducedEvents.push(reduction);
-      nextState = reduction.state as ProcessorState<Contract>;
+      state = reduction.state;
     }
 
-    if (checkpointOffset === this.#checkpointOffset) return;
+    if (events.length === 0) return;
 
-    if (reducedEvents.length > 0) {
-      const blockingWork: Promise<unknown>[] = [];
-      try {
-        for (const reducedEvent of reducedEvents) {
-          this.processEvent({
-            ...reducedEvent,
-            checkpointOffset,
-            streamMaxOffset: args.streamMaxOffset,
-            blockProcessorWhile: (work) => {
-              blockingWork.push(this.#runKeepAliveBackedWork(work));
-            },
-            runInBackground: (work) => this.#runInBackground(work),
-          });
-        }
-      } catch (error) {
-        // A processEvent throw fails the batch, but work already registered for
-        // earlier events must still be settled so it cannot reject unobserved.
-        await Promise.allSettled(blockingWork);
-        throw error;
-      }
-
+    const blockingWork: Promise<unknown>[] = [];
+    try {
+      await this.processBatch({
+        events,
+        reducedEvents,
+        previousState,
+        state,
+        streamMaxOffset: args.streamMaxOffset,
+        checkpointOffset,
+        blockProcessorWhile: (work) => {
+          blockingWork.push(this.#runKeepAliveBackedWork(work));
+        },
+        runInBackground: (work) => this.runInBackground(work),
+      });
       await Promise.all(blockingWork);
+    } catch (error) {
+      // A failed batch must still settle work it already registered so nothing
+      // rejects unobserved. The checkpoint is not written; the batch retries.
+      await Promise.allSettled(blockingWork);
+      throw error;
     }
 
-    this.#state = nextState;
+    this.#state = state;
     this.#checkpointOffset = checkpointOffset;
     await this.#saveSnapshot();
-  }
-
-  #runInBackground(work: () => Promise<unknown>): void {
-    this.#runKeepAliveBackedWork(work).catch((error: unknown) => {
-      console.error("stream processor background work failed", error);
-    });
   }
 
   async #runKeepAliveBackedWork(work: () => Promise<unknown>): Promise<unknown> {

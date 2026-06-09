@@ -9,7 +9,7 @@ import unicorn from "eslint-plugin-unicorn";
 const LIFECYCLE_HOOKS = new Set(["beforeAll", "beforeEach", "afterAll", "afterEach"]);
 const VI_MOCK_CALLS = new Set(["vi.mock", "vi.doMock"]);
 const PROPERTY_MATCHERS = new Set(["toBe", "toEqual", "toStrictEqual"]);
-const STREAM_PROCESSOR_OVERRIDE_METHODS = new Set(["reduce", "processEvent", "processEventBatch"]);
+const STREAM_PROCESSOR_OVERRIDE_METHODS = new Set(["reduce", "processEvent", "processBatch"]);
 
 /** @param {string} name */
 const getExpectedName = (name) => {
@@ -379,11 +379,10 @@ const plugin = {
 
                   for (const element of node.body.body) {
                     const methodName = getClassElementName(element);
-                    if (methodName === "processEvents") {
+                    if (methodName === "processEvents" || methodName === "processEventBatch") {
                       context.report({
                         node: element,
-                        message:
-                          "Use processEventBatch, not processEvents, in StreamProcessor subclasses.",
+                        message: `Override processBatch, not ${methodName}: processEventBatch is the serialized public sink and must stay on the base class.`,
                       });
                       continue;
                     }

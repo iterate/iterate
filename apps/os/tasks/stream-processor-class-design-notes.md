@@ -20,13 +20,20 @@ questions as design work, not half-wired runtime behavior.
   - optional `readState` and `writeState`
 - If no state storage is passed, the base uses an in-memory snapshot. That keeps tests and
   stateless experiments cheap.
-- `processEventBatch({ events, streamMaxOffset })` is the public sink.
+- `processEventBatch({ events, streamMaxOffset })` is the public sink. It is not overridable
+  (enforced by lint): the serialization guarantee lives there and must stay on the base class.
 - The base serializes batches in memory. A later batch never starts until the previous batch has
   either completed or failed.
-- The base reduces every new event in the batch first, then calls `processEvent(...)` once per
-  reduced event.
-- `processEvent(...)` is synchronous. Async side effects must be registered through one of the
-  provided helpers.
+- Subclasses extend up to three hooks, all of which run inside the serialized section:
+  - `reduce(...)` — pure projection of one consumed event into the next state;
+  - `processEvent(...)` — synchronous per-event side effects;
+  - `processBatch(...)` — async batch-level side effects (e.g. one SQLite transaction over the
+    already-deduped new events). The default implementation calls `processEvent(...)` once per
+    reduced event; overrides call `super.processBatch(args)` to keep that behavior.
+- The checkpoint (reduced state + offset) is written only after `processBatch` and all
+  `blockProcessorWhile` work succeed.
+- Hooks receive plain state/event types and must treat them as immutable; there is no
+  `DeepReadonly` wrapper because it forced a cast in every real subclass.
 - Subclass overrides annotate their args as
   `Parameters<StreamProcessor<Contract>["method"]>[0]` — the single sanctioned spelling,
   enforced by the `iterate/stream-processor-override-args` lint rule. The arg shapes are
@@ -92,14 +99,16 @@ The stream core is not an ordinary subscription processor:
 - it owns stream runtime state
 - it triggers stream-internal side effects such as child-stream propagation
 
-For that reason the class exposes explicit inline methods used by the `Stream` Durable Object:
+For that reason `CoreStreamProcessor` itself (not the base class) exposes explicit inline methods
+used by the `Stream` Durable Object, built on the protected `reduceRawEvent` helper:
 
 - `validateAppend({ event, state })`
 - `reduceEvent({ event, state })`
 - `processReducedEvent({ event, previousState, state })`
 
-Open question: should the inline core eventually have a sibling base class, or is this explicit
-inline surface enough?
+The base class stays a pure batch/checkpoint model; the inline surface is a core-processor
+specialty. Open question: should the inline core eventually have a sibling base class, or is this
+explicit inline surface enough?
 
 ## Open Decisions
 

@@ -27,22 +27,20 @@ export class BrowserEventFeedProcessor extends StreamProcessor<
   protected override reduce(
     args: Parameters<StreamProcessor<BrowserEventFeedContract>["reduce"]>[0],
   ): FeedState {
-    return planFeedOps(args.state as FeedState, [args.event]).endState;
+    return planFeedOps(args.state, [args.event]).endState;
   }
 
-  override async processEventBatch(
-    args: Parameters<StreamProcessor<BrowserEventFeedContract>["processEventBatch"]>[0],
+  protected override async processBatch(
+    args: Parameters<StreamProcessor<BrowserEventFeedContract>["processBatch"]>[0],
   ): Promise<void> {
-    const checkpoint = await this.snapshot();
-    const events = args.events.filter((event) => event.offset > checkpoint.offset);
-    const { ops } = planFeedOps(checkpoint.state as FeedState, events);
+    const { ops } = planFeedOps(args.previousState, args.events);
 
     if (ops.length > 0) {
       await ensureBrowserEventFeedSchema(this.deps.sql);
       await this.deps.sql.batch(ops.map(feedOpToStatement), { transaction: true });
     }
 
-    await super.processEventBatch(args);
+    await super.processBatch(args);
   }
 }
 

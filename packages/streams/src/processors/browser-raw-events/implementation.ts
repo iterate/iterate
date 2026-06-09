@@ -28,24 +28,18 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
     return await super.snapshot();
   }
 
-  override async processEventBatch(
-    args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEventBatch"]>[0],
+  protected override async processBatch(
+    args: Parameters<StreamProcessor<BrowserRawEventsContract>["processBatch"]>[0],
   ): Promise<void> {
-    const checkpoint = await this.snapshot();
-    const events = args.events.filter((event) => event.offset > checkpoint.offset);
-
-    if (events.length > 0) {
-      await ensureBrowserRawEventsSchema(this.deps.sql);
-      await this.deps.sql.batch(
-        events.map((event) => ({
-          sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
-          params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
-        })),
-        { transaction: true },
-      );
-    }
-
-    await super.processEventBatch(args);
+    await ensureBrowserRawEventsSchema(this.deps.sql);
+    await this.deps.sql.batch(
+      args.events.map((event) => ({
+        sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
+        params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
+      })),
+      { transaction: true },
+    );
+    await super.processBatch(args);
   }
 }
 
