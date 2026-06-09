@@ -1,8 +1,38 @@
-// Browser raw-events SQLite helpers.
-
+import { StreamProcessor, type ProcessEventsArgs } from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
+import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
+import { browserRawEventsContract } from "./contract.ts";
 
 export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 4;
+
+export const BrowserRawEventsContract = browserRawEventsContract;
+export type BrowserRawEventsContract = typeof BrowserRawEventsContract;
+export type BrowserRawEventsState = Record<string, never>;
+
+export type BrowserRawEventsProcessorDeps = {
+  sql: SqlClient;
+};
+
+export class BrowserRawEventsProcessor extends StreamProcessor<
+  BrowserRawEventsContract,
+  BrowserRawEventsProcessorDeps
+> {
+  readonly contract = BrowserRawEventsContract;
+
+  protected override processEvents(args: ProcessEventsArgs<BrowserRawEventsContract>): void {
+    args.blockProcessorWhile(() =>
+      ensureBrowserRawEventsSchema(this.deps.sql).then(() =>
+        this.deps.sql.batch(
+          args.events.map(({ event }) => ({
+            sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
+            params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
+          })),
+          { transaction: true },
+        ),
+      ),
+    );
+  }
+}
 
 const ensureBrowserRawEventsSchema = createSchemaEnsurer({
   run: async (sql) => {

@@ -26,12 +26,12 @@ import {
   type StreamEventRow,
 } from "../../../src/browser/stream-browser-db.ts";
 import { browserProcessorStateStorage } from "../../../src/browser/processor-state-storage.ts";
-import { BROWSER_RAW_EVENTS_SCHEMA_VERSION } from "../../../src/processors/browser-raw-events/implementation.ts";
 import {
+  BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   BrowserRawEventsContract,
   BrowserRawEventsProcessor,
   type BrowserRawEventsState,
-} from "../../../src/processors/browser-raw-events/v2.ts";
+} from "../../../src/processors/browser-raw-events/implementation.ts";
 import { useStreamQuery } from "../../../src/browser/hooks/use-stream-query.ts";
 import { EventFeedView } from "./-event-feed-view.tsx";
 import { StreamStateView } from "./-stream-state-view.tsx";

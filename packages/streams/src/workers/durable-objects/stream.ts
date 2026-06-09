@@ -5,17 +5,16 @@ import {
   type StreamEvent,
   type StreamEventInput,
 } from "../../shared/event.ts";
-import { getInitialProcessorState, runProcessorReduce } from "../../shared/stream-processors.ts";
+import { getInitialProcessorState } from "../../shared/stream-processors.ts";
 import type { ProcessEventBatch, StreamCoreProcessorState } from "../../types.ts";
-import type { ProcessorStream } from "../../processor-runner.ts";
 import {
   getAncestorStreamPaths,
   catchUpCoreProcessorState,
-  coreProcessor,
+  CoreStreamProcessor,
   reduceCoreProcessorStateFromEvents,
 } from "../../processors/core/implementation.ts";
 import { coreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
-import type { StreamProcessorRunnerRpc, StreamRpc } from "../../types.ts";
+import type { StreamRpc } from "../../types.ts";
 import { makeRpcTargetClass, type RpcTargetClass } from "../../shared/rpc-target.ts";
 import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecycle.ts";
 
@@ -34,7 +33,13 @@ const textEncoder = new TextEncoder();
 
 export class Stream extends DurableObject<Env> implements StreamRpc {
   #coreProcessorState: StreamCoreProcessorState;
-  #coreProcessor = coreProcessor.build({
+  #coreProcessor = new CoreStreamProcessor({
+    iterateContext: {
+      stream: {
+        append: (args) => this.append(args),
+        appendBatch: (args) => this.appendBatch(args),
+      },
+    },
     propagateChildStreamCreated: (state) => this.#propagateChildStreamCreated(state),
   });
 
@@ -133,17 +138,6 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   protected writeCoreProcessorState(state: StreamCoreProcessorState): void {
     this.ctx.storage.kv.put("state", state);
-  }
-
-  protected getSubscriptionTarget(args: {
-    configured: CoreProcessorState["subscriptionsByKey"][string];
-    streamName: string;
-    subscriptionKey: string;
-  }): StreamProcessorRunnerRpc | undefined {
-    void args.configured;
-    return this.env.STREAM_PROCESSOR_RUNNER.getByName(
-      `${args.streamName}:${args.subscriptionKey}`,
-    ) as unknown as StreamProcessorRunnerRpc;
   }
 
   #catchUpCoreProcessorState(state: StreamCoreProcessorState): StreamCoreProcessorState {
@@ -360,11 +354,6 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     const events: StreamEvent[] = [];
     const newEvents: StreamEvent[] = [];
     const idempotencyHitsInBatch = new Map<string, StreamEvent>();
-    const appendStream: ProcessorStream = {
-      append: (appendArgs) => this.append(appendArgs),
-      appendBatch: (appendArgs) => this.appendBatch(appendArgs),
-    };
-
     // 1. Prepare events and reduced state.
     for (const eventInput of args.events) {
       const input = StreamEventInputSchema.strict().parse(eventInput);
@@ -383,7 +372,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         }
       }
 
-      this.#coreProcessor.beforeAppend?.({
+      this.#coreProcessor.validateAppend({
         event: input,
         state: workingCoreProcessorState,
       });
@@ -397,28 +386,14 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         throw new Error(`expected offset ${committed.offset}, got ${input.offset}`);
       }
 
-      const previousCoreState = workingCoreProcessorState;
-
-      const coreReduction = runProcessorReduce({
-        processor: { contract: coreProcessorContract },
+      workingCoreProcessorState = this.#coreProcessor.reduce({
         event: committed,
-        state: previousCoreState,
-      });
-      if (coreReduction === undefined) {
-        throw new Error(`core processor cannot reduce event type "${committed.type}"`);
-      }
-
-      workingCoreProcessorState = coreProcessorContract.stateSchema.parse(coreReduction.state);
-
-      this.#coreProcessor.afterAppend?.({
-        event: coreReduction.event,
-        previousState: previousCoreState,
         state: workingCoreProcessorState,
-        streamMaxOffset: committed.offset,
-        stream: appendStream,
-        shouldApplySideEffects: () => true,
-        blockProcessorUntil: (work) => void work(),
-        keepAlive: (work) => void work,
+      });
+
+      this.#coreProcessor.processEvent({
+        event: committed,
+        state: workingCoreProcessorState,
       });
 
       events.push(committed);
@@ -509,16 +484,10 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }): StreamCoreProcessorState {
     const base = args.coreProcessorState ?? this.#coreProcessorState;
 
-    const coreReduction = runProcessorReduce({
-      processor: { contract: coreProcessorContract },
+    return this.#coreProcessor.reduce({
       event: args.event,
       state: base,
     });
-    if (coreReduction === undefined) {
-      throw new Error(`core processor cannot reduce event type "${args.event.type}"`);
-    }
-
-    return coreProcessorContract.stateSchema.parse(coreReduction.state);
   }
 
   /**
@@ -760,14 +729,9 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     subscriptionKey: string;
   }) {
     const streamName = `${this.#coreProcessorState.namespace}:${this.#coreProcessorState.path}`;
-    const target = this.getSubscriptionTarget({
-      configured: args.configured,
-      streamName,
-      subscriptionKey: args.subscriptionKey,
-    });
-    if (target === undefined) return;
-
-    await target.requestSubscription({
+    await this.env.STREAM_PROCESSOR_RUNNER.getByName(
+      `${streamName}:${args.subscriptionKey}`,
+    ).requestSubscription({
       stream: new StreamRpcTarget(this) as unknown as StreamRpc,
       subscriptionKey: args.subscriptionKey,
       streamMaxOffset: this.#coreProcessorState.maxOffset,

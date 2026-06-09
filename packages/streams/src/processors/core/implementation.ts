@@ -4,38 +4,69 @@
 // before committed events are delivered to subscribers.
 
 import type { StreamEvent, StreamEventInput } from "../../shared/event.ts";
-import { implementBuiltinProcessor } from "../../processor.ts";
+import { StreamProcessor, type ProcessEventArgs, type ReduceArgs } from "../../stream-processor.ts";
 import { getInitialProcessorState, runProcessorReduce } from "../../shared/stream-processors.ts";
 import { coreProcessorContract, type CoreProcessorState } from "./contract.ts";
 
-export const coreProcessor = implementBuiltinProcessor(
-  coreProcessorContract,
-  (deps: { propagateChildStreamCreated: (state: CoreProcessorState) => void }) => ({
-    beforeAppend({ event, state }) {
-      assertStreamAppendAllowed({ event, state });
-    },
-    afterAppend({ event, state }) {
-      if (event.type !== "events.iterate.com/stream/created") return;
-      deps.propagateChildStreamCreated(state);
-    },
-  }),
-);
+export const CoreProcessorContract = coreProcessorContract;
+export type CoreProcessorContract = typeof CoreProcessorContract;
 
-export function assertStreamAppendAllowed(args: {
-  event: StreamEventInput;
-  state: { paused: boolean; pauseReason: string | null };
-}) {
-  if (!args.state.paused) return;
-  if (canAppendWhilePaused(args.event)) return;
-  throw new Error(`stream paused: ${args.state.pauseReason ?? "circuit breaker open"}`);
-}
+export type CoreStreamProcessorDeps = {
+  propagateChildStreamCreated: (state: CoreProcessorState) => Promise<void> | void;
+};
 
-function canAppendWhilePaused(event: StreamEventInput) {
-  return (
-    event.type === "events.iterate.com/stream/resumed" ||
-    event.type === "events.iterate.com/stream/error-occurred" ||
-    event.type === "events.iterate.com/stream/woken"
-  );
+export class CoreStreamProcessor extends StreamProcessor<
+  CoreProcessorContract,
+  CoreStreamProcessorDeps
+> {
+  readonly contract = CoreProcessorContract;
+
+  validateAppend(args: { event: StreamEventInput; state: CoreProcessorState }): void {
+    if (!args.state.paused) return;
+
+    switch (args.event.type) {
+      case "events.iterate.com/stream/resumed":
+      case "events.iterate.com/stream/error-occurred":
+      case "events.iterate.com/stream/woken":
+        return;
+      default:
+        throw new Error(`stream paused: ${args.state.pauseReason ?? "circuit breaker open"}`);
+    }
+  }
+
+  public reduce(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState;
+  public override reduce(args: ReduceArgs<CoreProcessorContract>): CoreProcessorState;
+  public reduce(
+    args: ReduceArgs<CoreProcessorContract> | { event: StreamEvent; state: CoreProcessorState },
+  ): CoreProcessorState {
+    const reduction = runProcessorReduce({
+      processor: { contract: this.contract },
+      event: args.event as StreamEvent,
+      state: args.state as CoreProcessorState,
+    });
+    if (reduction === undefined) {
+      throw new Error(`core processor cannot reduce event type "${args.event.type}"`);
+    }
+    return this.contract.stateSchema.parse(reduction.state) as CoreProcessorState;
+  }
+
+  public override processEvent(
+    args:
+      | ProcessEventArgs<CoreProcessorContract>
+      | { event: StreamEvent; state: CoreProcessorState },
+  ): void {
+    switch (args.event.type) {
+      case "events.iterate.com/stream/created":
+        Promise.resolve(
+          this.deps.propagateChildStreamCreated(args.state as CoreProcessorState),
+        ).catch((error: unknown) => {
+          console.error("core stream processor child propagation failed", error);
+        });
+        return;
+      default:
+        return;
+    }
+  }
 }
 
 export function getAncestorStreamPaths(path: string): string[] {

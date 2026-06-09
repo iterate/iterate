@@ -162,10 +162,32 @@ export abstract class StreamProcessor<
   }
 
   protected reduce(args: ReduceArgs<Contract>): ProcessorState<Contract> | null | undefined {
-    return this.contract.reduce?.({
-      contract: this.contract,
-      event: args.event as ConsumedEvent<Contract>,
-      state: args.state as ProcessorState<Contract>,
+    return (
+      this.contract.reduce?.({
+        contract: this.contract,
+        event: args.event as ConsumedEvent<Contract>,
+        state: args.state as ProcessorState<Contract>,
+      }) ?? (args.state as ProcessorState<Contract>)
+    );
+  }
+
+  #reduce(args: {
+    event: StreamEvent;
+    state: ProcessorState<Contract>;
+  }): ReturnType<typeof runProcessorReduce<Contract>> {
+    return runProcessorReduce({
+      event: args.event,
+      processor: {
+        contract: {
+          ...this.contract,
+          reduce: ({ state, event }) =>
+            this.reduce({
+              event: event as DeepReadonly<ConsumedEvent<Contract>>,
+              state: state as DeepReadonly<ProcessorState<Contract>>,
+            }),
+        },
+      },
+      state: args.state,
     });
   }
 
@@ -197,9 +219,8 @@ export abstract class StreamProcessor<
     for (const rawEvent of args.events) {
       if (rawEvent.offset <= checkpointOffset) continue;
 
-      const reduction = runProcessorReduce({
+      const reduction = this.#reduce({
         event: rawEvent,
-        processor: { contract: this.contract },
         state: nextState,
       });
       checkpointOffset = rawEvent.offset;

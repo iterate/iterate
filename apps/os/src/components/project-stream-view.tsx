@@ -17,12 +17,12 @@ import type {
   StreamEventRow,
 } from "@iterate-com/streams/browser/stream-browser-db";
 import { browserProcessorStateStorage } from "@iterate-com/streams/browser/processor-state-storage";
-import { BROWSER_RAW_EVENTS_SCHEMA_VERSION } from "@iterate-com/streams/processors/browser-raw-events/implementation";
 import {
+  BROWSER_RAW_EVENTS_SCHEMA_VERSION,
   BrowserRawEventsContract,
   BrowserRawEventsProcessor,
   type BrowserRawEventsState,
-} from "@iterate-com/streams/processors/browser-raw-events/v2";
+} from "@iterate-com/streams/processors/browser-raw-events/implementation";
 import { StreamEventInput } from "@iterate-com/streams/shared/event";
 import type { StreamPath } from "@iterate-com/shared/streams/types";
 import { parse as parseYaml } from "yaml";

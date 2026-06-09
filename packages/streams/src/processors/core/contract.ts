@@ -8,28 +8,11 @@
 import { z } from "zod";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";
 
-const BuiltInWorkersRpcSubscriber = z.object({
+const SupportedOutboundSubscriber = z.object({
   type: z.literal("built-in"),
   transport: z.literal("workers-rpc"),
   processorSlug: z.string().trim().min(1),
 });
-
-const ProjectWorkerEntrypointSubscriber = z.object({
-  type: z.literal("project-worker-entrypoint"),
-  entrypoint: z.string().trim().min(1).default("default"),
-});
-
-const DurableObjectProcessorSubscriber = z.object({
-  type: z.literal("durable-object-processor"),
-  durableObject: z.string().trim().min(1),
-  processor: z.string().trim().min(1),
-});
-
-const SupportedOutboundSubscriber = z.discriminatedUnion("type", [
-  BuiltInWorkersRpcSubscriber,
-  ProjectWorkerEntrypointSubscriber,
-  DurableObjectProcessorSubscriber,
-]);
 // TODO: Add dynamic-worker when a worker-name/entrypoint dialer exists.
 // TODO: Add webhooks only if we want non-capnweb delivery semantics.
 

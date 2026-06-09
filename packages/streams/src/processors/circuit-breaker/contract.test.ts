@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { coreProcessorContract } from "../core/contract.ts";
-import { assertStreamAppendAllowed } from "../core/implementation.ts";
+import { CoreStreamProcessor } from "../core/implementation.ts";
 import { circuitBreakerProcessorContract, shouldTripCircuitBreaker } from "./contract.ts";
 
 const coreReduce = coreProcessorContract.reduce;
@@ -10,6 +10,11 @@ if (coreReduce === undefined || circuitBreakerReduce === undefined) {
 }
 
 describe("circuit breaker processor", () => {
+  const coreProcessor = new CoreStreamProcessor({
+    iterateContext: { stream: { append: () => {}, appendBatch: () => {} } },
+    propagateChildStreamCreated: () => {},
+  });
+
   it("configures burst and refill via its owned configured event", () => {
     let state = circuitBreakerProcessorContract.stateSchema.parse(
       circuitBreakerProcessorContract.initialState,
@@ -112,7 +117,7 @@ describe("circuit breaker processor", () => {
     expect(coreState.paused).toBe(true);
     expect(circuitBreakerState.availableTokens).toBe(1);
     expect(() =>
-      assertStreamAppendAllowed({
+      coreProcessor.validateAppend({
         event: { type: "test.event", payload: {} },
         state: coreState,
       }),

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { coreProcessorContract } from "./contract.ts";
 import {
-  assertStreamAppendAllowed,
+  CoreStreamProcessor,
   catchUpCoreProcessorState,
   getAncestorStreamPaths,
   reduceCoreProcessorStateFromEvents,
@@ -173,7 +173,7 @@ describe("core processor contract", () => {
     expect(stored.subscriptionsByKey).toEqual({});
   });
 
-  it("owns pause/resume and beforeAppend door logic", () => {
+  it("owns pause/resume and append validation", () => {
     let state = coreProcessorContract.stateSchema.parse(coreProcessorContract.initialState);
     state = coreProcessorContract.stateSchema.parse(
       reduce({
@@ -188,12 +188,17 @@ describe("core processor contract", () => {
       }),
     );
 
+    const processor = new CoreStreamProcessor({
+      iterateContext: { stream: { append: () => {}, appendBatch: () => {} } },
+      propagateChildStreamCreated: () => {},
+    });
+
     expect(state.paused).toBe(true);
-    expect(() => assertStreamAppendAllowed({ event: { type: "test.event" }, state })).toThrow(
+    expect(() => processor.validateAppend({ event: { type: "test.event" }, state })).toThrow(
       "stream paused",
     );
     expect(() =>
-      assertStreamAppendAllowed({
+      processor.validateAppend({
         event: { type: "events.iterate.com/stream/resumed", payload: { reason: "operator" } },
         state,
       }),

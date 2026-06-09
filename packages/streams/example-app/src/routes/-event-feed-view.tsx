@@ -17,12 +17,10 @@ import { browserProcessorStateStorage } from "../../../src/browser/processor-sta
 import {
   BROWSER_EVENT_FEED_SCHEMA_VERSION,
   BROWSER_EVENT_FEED_TABLE,
-} from "../../../src/processors/browser-event-feed/implementation.ts";
-import {
   BrowserEventFeedContract,
   BrowserEventFeedProcessor,
   type BrowserEventFeedState,
-} from "../../../src/processors/browser-event-feed/v2.ts";
+} from "../../../src/processors/browser-event-feed/implementation.ts";
 import { useStreamQuery } from "../../../src/browser/hooks/use-stream-query.ts";
 
 type FeedItemRow = {
