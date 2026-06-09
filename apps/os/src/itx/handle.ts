@@ -29,6 +29,7 @@ import {
   type ProjectAccess,
 } from "./protocol.ts";
 import type { ContextDO } from "./context-do.ts";
+import { createShareToken, SHARE_TOKEN_PARAM } from "./http.ts";
 import type { LiveCapTarget } from "./registry.ts";
 import type { AppConfig } from "~/app.ts";
 import {
@@ -97,7 +98,7 @@ export class Itx extends RpcTarget {
   // ---- the trust kernel ---------------------------------------------------
 
   get caps(): ItxCaps {
-    return new ItxCaps(this.#registryStub());
+    return new ItxCaps(this.#registryStub(), this.#runtime, () => this.#projectStub());
   }
 
   get streams(): ItxStreams {
@@ -282,7 +283,11 @@ function contextStub(env: Env, contextId: string): ContextStub {
  * server-side, which is physics, not API design.
  */
 export class ItxCaps extends RpcTarget {
-  constructor(private readonly registry: RegistryStub) {
+  constructor(
+    private readonly registry: RegistryStub,
+    private readonly runtime: ItxRuntime,
+    private readonly project: () => ProjectStub,
+  ) {
     super();
   }
 
@@ -305,6 +310,28 @@ export class ItxCaps extends RpcTarget {
 
   async describe() {
     return await this.registry.itxDescribe();
+  }
+
+  /**
+   * "Let me show you something real quick": a signed, expiring URL for one
+   * HTTP-exposed cap. Possession grants exactly that cap's fetch surface
+   * until expiry — nothing else (spec §8).
+   */
+  async shareUrl(input: { name: string; path?: string; ttlSeconds?: number }): Promise<string> {
+    const secret = this.runtime.config.adminApiSecret?.exposeSecret();
+    if (!secret) throw new Error("Share URLs need an admin API secret configured.");
+    const projectId = this.runtime.projectId;
+    if (!projectId) throw new Error("Share URLs are project-scoped; narrow to a project first.");
+
+    const ingress = new URL(await this.project().ingressUrl());
+    const expiresAtMs = Date.now() + (input.ttlSeconds ?? 3600) * 1000;
+    const token = await createShareToken({ cap: input.name, expiresAtMs, projectId, secret });
+
+    const url = new URL(ingress);
+    url.hostname = `${input.name}--${ingress.hostname}`;
+    url.pathname = input.path ?? "/";
+    url.searchParams.set(SHARE_TOKEN_PARAM, token);
+    return url.toString();
   }
 }
 

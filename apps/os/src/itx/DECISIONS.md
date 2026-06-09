@@ -91,3 +91,26 @@ chain level per miss — revisit only if latency data complains (see D2).
 Child contexts cost one descriptor lookup (`ctx_…` → owning project) at
 restore time. `ItxEntrypoint.context` is a getter returning a Promise, which
 `await env.ITERATE.context` already handled — no isolate-side change.
+
+## D12: Facet classes must be NAMED exports
+
+`worker.getDurableObjectClass()` against a default-export DO class produces a
+facet whose every call fails with workerd's opaque "internal error;
+reference = …" (observed locally on miniflare 4.20260424 / workerd ~2026-04;
+Cloudflare's own docs only ever show named exports). `define({ kind: "facet" })`
+therefore requires `source.entrypoint`, turning the footgun into an
+instructive error at definition time.
+
+## D13: Facet names exclude codeId — data survives code upgrades
+
+The facet is `cap:${name}` regardless of source version, so redefining a
+facet cap keeps its private SQLite database (Cloudflare's AppRunner relies
+on the same property). If a cap wants a clean slate it can be revoked and
+redefined under a new name; explicit facet deletion is future work.
+
+## D14: Registry logs invoke failures at the supervisor
+
+Errors crossing the Workers RPC boundary back to remote callers can be
+masked as "internal error; reference = …". `ContextRegistry.invoke` logs the
+real error (cap, kind, path, context) before rethrowing — the supervisor is
+the one place the truth is always visible.

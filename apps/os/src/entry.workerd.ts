@@ -35,6 +35,7 @@ import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-ch
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
 import { handleItxFetch, handleProjectHostItxFetch } from "~/itx/fetch.ts";
+import { getItxCapHostIngressRule } from "~/itx/http.ts";
 import { requireProjectScopedAccess } from "~/orpc/project-access.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
@@ -58,6 +59,7 @@ export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { ContextDO } from "~/itx/context-do.ts";
+export { ItxCapIngress } from "~/itx/http.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
@@ -120,6 +122,15 @@ export default {
           lookupRule: async (host) => {
             const row = await getIngressRouteByHost(db, { host: normalizeIngressHost(host) });
             if (row) return ingressRouteRowToRule(row);
+
+            // {cap}--{project}.{base}: HTTP-exposed itx capabilities get their
+            // own hostnames (never paths on the project origin — itx spec §8).
+            const capRule = await getItxCapHostIngressRule({
+              bases: projectHostnameBases,
+              db: env.DB,
+              host,
+            });
+            if (capRule) return capRule;
 
             const platformRule = await getProjectPlatformHostIngressRule({
               appHostname,

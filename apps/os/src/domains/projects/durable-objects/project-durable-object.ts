@@ -56,7 +56,7 @@ import {
   EXAMPLE_EGRESS_SECRET_METADATA,
 } from "~/domains/secrets/example-secret.ts";
 import type { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
-import { ContextRegistry, type LiveCapTarget } from "~/itx/registry.ts";
+import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
 import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
 import type { CapInvoke, CapMeta, CapSource, PathCall } from "~/itx/protocol.ts";
 
@@ -433,6 +433,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
         );
       },
       contextId: projectId,
+      facets: durableObjectFacetsHook(this.ctx),
       loader: projectRuntimeEnv(this.env).LOADER as unknown as ConstructorParameters<
         typeof ContextRegistry
       >[0]["loader"],

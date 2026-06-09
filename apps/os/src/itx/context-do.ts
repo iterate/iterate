@@ -12,7 +12,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { ContextRegistry, type LiveCapTarget } from "./registry.ts";
+import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "./registry.ts";
 import { ITX_AUDIT_STREAM_PATH, ITX_EVENT_TYPES } from "./protocol.ts";
 import type { CapDescription, CapInvoke, CapMeta, CapSource, PathCall } from "./protocol.ts";
 import {
@@ -121,6 +121,7 @@ export class ContextDO extends DurableObject<Env> {
     this.#registry = new ContextRegistry({
       audit: (event) => this.audit(event.type, event.payload),
       contextId: descriptor.id,
+      facets: durableObjectFacetsHook(this.ctx),
       loader: this.env.LOADER as unknown as ConstructorParameters<
         typeof ContextRegistry
       >[0]["loader"],

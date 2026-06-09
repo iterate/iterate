@@ -53,7 +53,10 @@ type WorkerLoaderLike = {
       mainModule: string;
       modules: Record<string, unknown>;
     },
-  ): { getEntrypoint(name?: string): unknown };
+  ): {
+    getEntrypoint(name?: string): unknown;
+    getDurableObjectClass?(name?: string): unknown;
+  };
 };
 
 export type ContextRegistryHost = {
@@ -76,6 +79,16 @@ export type ContextRegistryHost = {
    * table is the authoritative state, the stream is history (D1).
    */
   audit: (event: { type: string; payload: Record<string, unknown> }) => void;
+  /**
+   * Instantiate a Durable Object Facet of the hosting DO (Cloudflare's
+   * supervisor pattern, verbatim). Present only on DO hosts whose runtime
+   * supports `ctx.facets`; facet-kind caps get their own private SQLite
+   * database stored inside the hosting context node.
+   */
+  facets?: (
+    name: string,
+    getClass: () => { class: unknown } | Promise<{ class: unknown }>,
+  ) => unknown;
 };
 
 type CapRow = {
@@ -91,6 +104,35 @@ type LiveConnection = {
   target: LiveCapTarget;
   [Symbol.dispose]: () => void;
 };
+
+/**
+ * Adapt a Durable Object's `ctx.facets` (open beta) to the registry's hook.
+ * Returns the hook even when the runtime lacks facets — the error surfaces
+ * at invoke time with a clear message instead of at registry construction.
+ */
+export function durableObjectFacetsHook(
+  ctx: DurableObjectState,
+): NonNullable<ContextRegistryHost["facets"]> {
+  return (name, getClass) => {
+    const facets = (
+      ctx as unknown as {
+        facets?: {
+          get(
+            name: string,
+            getClass: () => { class: unknown } | Promise<{ class: unknown }>,
+          ): unknown;
+        };
+      }
+    ).facets;
+    if (!facets) {
+      throw new Error(
+        "Durable Object facets are not available in this runtime " +
+          "(ctx.facets is missing — facet caps need the Facets beta).",
+      );
+    }
+    return facets.get(name, getClass);
+  };
+}
 
 export class CapOfflineError extends Error {
   constructor(name: string) {
@@ -180,8 +222,15 @@ export class ContextRegistry {
   }): { name: string; ok: true } {
     assertValidCapName(input.name);
     const kind = input.kind ?? "worker";
-    if (kind === "facet") {
-      throw new Error("Facet capabilities are not implemented yet (itx-spec §10 phase 5).");
+    if (kind === "facet" && !input.source.entrypoint) {
+      // Default-export DO classes make workerd's facet instantiation fail
+      // with an opaque internal error; a NAMED export works. Fail loudly at
+      // definition time instead (observed against workerd 2026-04, see
+      // DECISIONS.md D12).
+      throw new Error(
+        `Facet capability "${input.name}" needs source.entrypoint naming an exported ` +
+          `"class X extends DurableObject" (default exports do not work as facet classes).`,
+      );
     }
     const invoke = input.invoke ?? "members";
 
@@ -229,13 +278,25 @@ export class ContextRegistry {
       throw new Error(`No capability named "${name}" in context ${this.host.contextId}.`);
     }
 
-    const target = this.targetFor(row);
-    if (row.invoke === "path-call") {
-      // One RPC: the provider implements call({ path, args }) and owns its
-      // own method-tree semantics (e.g. forwarding to the Slack web API).
-      return await (target as PathCallTarget).call(call);
+    try {
+      const target = this.targetFor(row);
+      if (row.invoke === "path-call") {
+        // One RPC: the provider implements call({ path, args }) and owns its
+        // own method-tree semantics (e.g. forwarding to the Slack web API).
+        return await (target as PathCallTarget).call(call);
+      }
+      return await replayPathCall(target, call);
+    } catch (error) {
+      // Log at the supervisor: errors crossing the RPC boundary back to the
+      // caller can be masked as "internal error; reference = …", so the only
+      // place the real failure is visible is here.
+      console.error(
+        `[itx] cap "${name}" (${row.kind}/${row.invoke}) failed in ${this.host.contextId} ` +
+          `at path ${call.path.join(".") || "<call>"}:`,
+        error,
+      );
+      throw error;
     }
-    return await replayPathCall(target, call);
   }
 
   private targetFor(row: CapRow): unknown {
@@ -246,41 +307,60 @@ export class ContextRegistry {
         return connection.target;
       }
       case "worker":
-        return this.loadWorkerCap(row);
-      case "facet":
-        throw new Error("Facet capabilities are not implemented yet.");
+        return this.loadWorker(row).getEntrypoint(this.sourceFor(row).entrypoint);
+      case "facet": {
+        const facets = this.host.facets;
+        if (!facets) {
+          throw new Error("Facet capabilities need a Durable-Object host with ctx.facets.");
+        }
+        // Facet name deliberately excludes codeId: the facet's private SQLite
+        // database survives code upgrades (new source, same data) — the same
+        // property Cloudflare's AppRunner example relies on.
+        return facets(`cap:${row.name}`, () => {
+          const source = this.sourceFor(row);
+          const facetClass = this.loadWorker(row).getDurableObjectClass?.(source.entrypoint);
+          if (!facetClass) {
+            throw new Error(
+              `Capability "${row.name}" did not yield a DurableObject class ` +
+                `(facet caps must export one, and the runtime must support getDurableObjectClass).`,
+            );
+          }
+          return { class: facetClass };
+        });
+      }
     }
   }
 
-  private loadWorkerCap(row: CapRow): unknown {
-    const loader = this.host.loader;
-    if (!loader) throw new Error("Worker capabilities need a LOADER binding.");
+  private sourceFor(row: CapRow): CapSource {
     const source = JSON.parse(row.source_json ?? "null") as CapSource | null;
     if (!source) throw new Error(`Capability "${row.name}" has no stored source.`);
+    return source;
+  }
 
-    const worker = loader.get(
-      `itx-cap:${this.host.contextId}:${row.name}:${source.codeId}`,
-      () => ({
-        compatibilityDate: source.compatibilityDate ?? DEFAULT_CAP_COMPATIBILITY_DATE,
-        compatibilityFlags: DEFAULT_CAP_COMPATIBILITY_FLAGS,
-        env: {
-          // The cap's own itx is scoped to its home context — a cap can never
-          // reach wider than where it is defined (Law 4). `cap` is attribution.
-          ITERATE: this.host.loopback("ItxEntrypoint", {
-            props: { cap: row.name, context: this.host.contextId },
-          }),
-        },
-        // Bare fetch() inside the cap IS project egress: secret substitution
-        // and (future) policy live in the Project DO, and the cap's isolate
-        // never sees secret material (Law 5).
-        globalOutbound: this.host.loopback("ProjectEgress", {
-          props: { cap: row.name, context: this.host.contextId, project: this.host.projectId },
+  private loadWorker(row: CapRow): ReturnType<WorkerLoaderLike["get"]> {
+    const loader = this.host.loader;
+    if (!loader) throw new Error("Worker capabilities need a LOADER binding.");
+    const source = this.sourceFor(row);
+
+    return loader.get(`itx-cap:${this.host.contextId}:${row.name}:${source.codeId}`, () => ({
+      compatibilityDate: source.compatibilityDate ?? DEFAULT_CAP_COMPATIBILITY_DATE,
+      compatibilityFlags: DEFAULT_CAP_COMPATIBILITY_FLAGS,
+      env: {
+        // The cap's own itx is scoped to its home context — a cap can never
+        // reach wider than where it is defined (Law 4). `cap` is attribution.
+        ITERATE: this.host.loopback("ItxEntrypoint", {
+          props: { cap: row.name, context: this.host.contextId },
         }),
-        mainModule: source.mainModule,
-        modules: source.modules,
+      },
+      // Bare fetch() inside the cap IS project egress: secret substitution
+      // and (future) policy live in the Project DO, and the cap's isolate
+      // never sees secret material (Law 5).
+      globalOutbound: this.host.loopback("ProjectEgress", {
+        props: { cap: row.name, context: this.host.contextId, project: this.host.projectId },
       }),
-    );
-    return worker.getEntrypoint(source.entrypoint);
+      mainModule: source.mainModule,
+      modules: source.modules,
+    }));
   }
 
   private upsertRow(input: {
