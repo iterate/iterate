@@ -300,7 +300,13 @@ export class ItxCaps extends RpcTarget {
     return await this.registry.itxProvide(input);
   }
 
-  async define(input: { name: string; source: CapSource; invoke?: CapInvoke; meta?: CapMeta }) {
+  async define(input: {
+    name: string;
+    source: CapSource;
+    kind?: "worker" | "facet";
+    invoke?: CapInvoke;
+    meta?: CapMeta;
+  }) {
     return await this.registry.itxDefine(input);
   }
 

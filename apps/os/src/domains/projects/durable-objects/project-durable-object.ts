@@ -392,7 +392,13 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return this.itxRegistry().provide(input);
   }
 
-  async itxDefine(input: { name: string; source: CapSource; invoke?: CapInvoke; meta?: CapMeta }) {
+  async itxDefine(input: {
+    name: string;
+    source: CapSource;
+    kind?: "worker" | "facet";
+    invoke?: CapInvoke;
+    meta?: CapMeta;
+  }) {
     await this.ensureStarted();
     return this.itxRegistry().define(input);
   }

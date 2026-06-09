@@ -75,7 +75,12 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
     },
   });
 
-  const ingress = new URL(String(await projectItx.project.ingressUrl()));
+  // Cast: the deeply-stubified DurableObjectStub type sends tsc into
+  // excessively-deep instantiation when chained off the Itx stub.
+  const projectAdmin = (projectItx as { project: unknown }).project as {
+    ingressUrl(): Promise<string>;
+  };
+  const ingress = new URL(await projectAdmin.ingressUrl());
   const capUrl = new URL(ingress);
   capUrl.hostname = `hello--${ingress.hostname}`;
 

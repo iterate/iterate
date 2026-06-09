@@ -80,7 +80,13 @@ export class ContextDO extends DurableObject<Env> {
     return this.registry().provide(input);
   }
 
-  itxDefine(input: { name: string; source: CapSource; invoke?: CapInvoke; meta?: CapMeta }) {
+  itxDefine(input: {
+    name: string;
+    source: CapSource;
+    kind?: "worker" | "facet";
+    invoke?: CapInvoke;
+    meta?: CapMeta;
+  }) {
     return this.registry().define(input);
   }
 
