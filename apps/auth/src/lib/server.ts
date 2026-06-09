@@ -251,21 +251,37 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
     return _as;
   }
 
-  async function doRefresh(tokenSet: TokenSet): Promise<TokenSet | null> {
-    if (!tokenSet.refreshToken) return null;
-    const as = await getAuthorizationServer();
-    const response = await oauth.refreshTokenGrantRequest(
-      as,
-      oauthClient,
-      clientAuth,
-      tokenSet.refreshToken,
-      {
-        ...httpOptions(),
-        additionalParameters: { resource: resource() },
-      },
-    );
-    const result = await oauth.processRefreshTokenResponse(as, oauthClient, response);
-    return toTokenSet(result, tokenSet);
+  // The auth server rotates refresh tokens on every use and treats reuse of a
+  // rotated token as theft (revoking the whole token family). Concurrent
+  // requests carrying the same cookie must therefore share one refresh
+  // flight per refresh token instead of racing the token endpoint.
+  const refreshFlights = new Map<string, Promise<TokenSet | null>>();
+
+  function doRefresh(tokenSet: TokenSet): Promise<TokenSet | null> {
+    const refreshToken = tokenSet.refreshToken;
+    if (!refreshToken) return Promise.resolve(null);
+
+    const existing = refreshFlights.get(refreshToken);
+    if (existing) return existing;
+
+    const flight = (async () => {
+      const as = await getAuthorizationServer();
+      const response = await oauth.refreshTokenGrantRequest(
+        as,
+        oauthClient,
+        clientAuth,
+        refreshToken,
+        {
+          ...httpOptions(),
+          additionalParameters: { resource: resource() },
+        },
+      );
+      const result = await oauth.processRefreshTokenResponse(as, oauthClient, response);
+      return toTokenSet(result, tokenSet);
+    })();
+    refreshFlights.set(refreshToken, flight);
+    void flight.catch(() => {}).finally(() => refreshFlights.delete(refreshToken));
+    return flight;
   }
 
   async function getUserInfo(accessToken: string): Promise<UserInfoClaims | null> {
@@ -350,15 +366,34 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
 
       if (!tokenSet.idToken) return { session: null, responseHeaders: new Headers() };
 
+      // WebSocket upgrades can't carry Set-Cookie back to the browser, so a
+      // refresh here would rotate the refresh token into a response the
+      // client can never store — burning the session. Upgrades authenticate
+      // with the current access token only; once it expires they fail until
+      // a regular request refreshes the cookie and the client reconnects.
+      const isWebSocketUpgrade = headers.get("upgrade")?.toLowerCase() === "websocket";
+      const accessTokenExpired = tokenSet.accessTokenExpiresAt <= Date.now();
+      const accessTokenExpiresSoon = tokenSet.accessTokenExpiresAt <= Date.now() + REFRESH_SKEW_MS;
+
       let refreshed = false;
-      try {
-        if (tokenSet.accessTokenExpiresAt <= Date.now() + REFRESH_SKEW_MS) {
+      if (accessTokenExpiresSoon && !isWebSocketUpgrade) {
+        try {
           const newTokenSet = await doRefresh(tokenSet);
-          if (!newTokenSet) return { session: null, responseHeaders: new Headers() };
-          tokenSet = newTokenSet;
-          refreshed = true;
+          if (newTokenSet) {
+            tokenSet = newTokenSet;
+            refreshed = true;
+          } else if (accessTokenExpired) {
+            return { session: null, responseHeaders: new Headers() };
+          }
+        } catch {
+          // A failed refresh while the current access token is still valid is
+          // not fatal: serve this request with the existing token and let a
+          // later request retry the refresh.
+          if (accessTokenExpired) {
+            return { session: null, responseHeaders: new Headers() };
+          }
         }
-      } catch {
+      } else if (accessTokenExpired) {
         return { session: null, responseHeaders: new Headers() };
       }
 
