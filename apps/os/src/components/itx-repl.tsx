@@ -71,15 +71,17 @@ export function ItxRepl({
             <div className="flex items-start justify-between gap-3 border-b pb-3">
               <div className="min-w-0 space-y-1 text-sm text-muted-foreground">
                 <p>
-                  <span className="text-foreground">Run TypeScript against Iterate context.</span>{" "}
-                  Start with <code className="font-mono text-xs">ctx</code>, await async calls, and
+                  <span className="text-foreground">
+                    Run TypeScript against your Iterate context.
+                  </span>{" "}
+                  Start with <code className="font-mono text-xs">itx</code>, await async calls, and
                   use <code className="font-mono text-xs">$_</code> or{" "}
                   <code className="font-mono text-xs">_</code> for the last successful result.
                 </p>
                 <p>
                   Try{" "}
                   <code className="font-mono text-xs">
-                    await ctx.projects.list({"{"} limit: 5 {"}"})
+                    await itx.projects.list({"{"} limit: 5 {"}"})
                   </code>
                   , then edit the selected input and run again.
                 </p>

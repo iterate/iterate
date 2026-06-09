@@ -49,7 +49,13 @@ export function createBrowserReplSession(context?: string): BrowserReplSession {
 }
 
 export function ItxReplPage({
-  connectSession = () => createBrowserReplSession(),
+  // NOTE: must be a STABLE reference, not an inline arrow. The connect effect
+  // below depends on `connectSession`; a fresh identity each render would tear
+  // down and re-create the Cap'n Web session on every render — including the
+  // re-render triggered by clicking Run — disposing the stub mid-call
+  // ("RPC stub used after disposed"). createBrowserReplSession() with no arg
+  // connects to the global context; project repls pass their own memoized one.
+  connectSession = createBrowserReplSession,
   initialCode = DEFAULT_BROWSER_REPL_CODE,
   scope,
 }: {
