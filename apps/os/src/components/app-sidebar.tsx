@@ -6,9 +6,8 @@ import {
   Check,
   ChevronsUpDown,
   ExternalLink,
-  Folder,
-  FolderPlus,
   LogOut,
+  Plus,
   UserCircle,
 } from "lucide-react";
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
@@ -89,18 +88,24 @@ function AppSidebarHeader() {
               </SidebarMenuButton>
             }
           />
-          <DropdownMenuContent side="bottom" align="start" className="w-64">
+          <DropdownMenuContent side="bottom" align="start" className="w-60">
             <DropdownMenuGroup>
-              <DropdownMenuLabel>Projects</DropdownMenuLabel>
+              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                Projects
+              </DropdownMenuLabel>
               {projects.length > 0 ? (
                 projects.map((project) => (
                   <DropdownMenuItem
                     key={project.id}
+                    className="gap-2"
                     render={
                       <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} />
                     }
                   >
-                    <Folder />
+                    <span
+                      aria-hidden="true"
+                      className="size-1.5 shrink-0 rounded-full bg-muted-foreground/40"
+                    />
                     <span className="truncate">{project.slug}</span>
                     {project.slug === activeProjectSlug ? <Check className="ml-auto" /> : null}
                   </DropdownMenuItem>
@@ -111,9 +116,12 @@ function AppSidebarHeader() {
                 </DropdownMenuItem>
               )}
               <DropdownMenuSeparator />
-              <DropdownMenuItem render={<Link to="/projects/new" />}>
-                <FolderPlus />
-                <span>Create new project</span>
+              <DropdownMenuItem
+                className="gap-2 text-muted-foreground"
+                render={<Link to="/projects/new" />}
+              >
+                <Plus />
+                <span>New project</span>
               </DropdownMenuItem>
             </DropdownMenuGroup>
           </DropdownMenuContent>
