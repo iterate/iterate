@@ -13,7 +13,6 @@ import { Route as SplitStreamRouteImport } from './routes/split-stream'
 import { Route as BlankRouteImport } from './routes/blank'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as StreamsIndexRouteImport } from './routes/streams/index'
-import { Route as StreamsSplatRouteImport } from './routes/streams.$'
 
 const SplitStreamRoute = SplitStreamRouteImport.update({
   id: '/split-stream',
@@ -35,24 +34,17 @@ const StreamsIndexRoute = StreamsIndexRouteImport.update({
   path: '/streams/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const StreamsSplatRoute = StreamsSplatRouteImport.update({
-  id: '/streams/$',
-  path: '/streams/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/blank': typeof BlankRoute
   '/split-stream': typeof SplitStreamRoute
-  '/streams/$': typeof StreamsSplatRoute
   '/streams/': typeof StreamsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/blank': typeof BlankRoute
   '/split-stream': typeof SplitStreamRoute
-  '/streams/$': typeof StreamsSplatRoute
   '/streams': typeof StreamsIndexRoute
 }
 export interface FileRoutesById {
@@ -60,22 +52,20 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/blank': typeof BlankRoute
   '/split-stream': typeof SplitStreamRoute
-  '/streams/$': typeof StreamsSplatRoute
   '/streams/': typeof StreamsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/blank' | '/split-stream' | '/streams/$' | '/streams/'
+  fullPaths: '/' | '/blank' | '/split-stream' | '/streams/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/blank' | '/split-stream' | '/streams/$' | '/streams'
-  id: '__root__' | '/' | '/blank' | '/split-stream' | '/streams/$' | '/streams/'
+  to: '/' | '/blank' | '/split-stream' | '/streams'
+  id: '__root__' | '/' | '/blank' | '/split-stream' | '/streams/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BlankRoute: typeof BlankRoute
   SplitStreamRoute: typeof SplitStreamRoute
-  StreamsSplatRoute: typeof StreamsSplatRoute
   StreamsIndexRoute: typeof StreamsIndexRoute
 }
 
@@ -109,13 +99,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof StreamsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/streams/$': {
-      id: '/streams/$'
-      path: '/streams/$'
-      fullPath: '/streams/$'
-      preLoaderRoute: typeof StreamsSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
@@ -123,7 +106,6 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BlankRoute: BlankRoute,
   SplitStreamRoute: SplitStreamRoute,
-  StreamsSplatRoute: StreamsSplatRoute,
   StreamsIndexRoute: StreamsIndexRoute,
 }
 export const routeTree = rootRouteImport

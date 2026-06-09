@@ -6,7 +6,7 @@ import { eventsStreamViewerUrl } from "~/lib/events-links.ts";
 
 export function EventsDebugLink({
   className,
-  label = "Open in Events",
+  label = "Open in Streams",
   namespace,
   streamPath,
 }: {
@@ -15,14 +15,17 @@ export function EventsDebugLink({
   namespace: string;
   streamPath: StreamPath;
 }) {
+  const href = eventsStreamViewerUrl({
+    currentOrigin: currentOrigin(),
+    namespace,
+    streamPath,
+  });
+  if (href === null) return null;
+
   return (
     <a
       className={cn(buttonVariants({ variant: "outline", size: "sm" }), className)}
-      href={eventsStreamViewerUrl({
-        currentOrigin: currentOrigin(),
-        namespace,
-        streamPath,
-      })}
+      href={href}
       target="_blank"
       rel="noreferrer"
     >

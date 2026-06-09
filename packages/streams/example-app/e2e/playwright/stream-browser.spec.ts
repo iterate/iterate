@@ -3,13 +3,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { e2eStreamPath, streamRoute } from "../helpers.ts";
 
 // Baseline end-to-end smoke test for the simplified browser mirror: a composer append must
 // go to the server, be delivered back through the single elected subscriber, land in SQLite,
 // and show up through the visible-range SQL query.
 test("stream page appends through the shared browser mirror", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
 
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
@@ -24,7 +25,7 @@ test("stream page appends through the shared browser mirror", async ({ page }) =
 
 test("sidebar circuit breaker config runs the hosted built-in processor", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   await page.getByTestId("circuit-breaker-burst-capacity").fill("1");
@@ -58,7 +59,7 @@ test("sidebar circuit breaker config runs the hosted built-in processor", async 
 // and local_index ordering. The downloaded DB query plan check catches accidental full scans.
 test("event type filter uses the indexed SQLite type column", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   const primaryType = "events.iterate.com/debug/playwright-filter-primary";
@@ -140,7 +141,7 @@ test("random bulk insert creates multiple filterable event types and shows filte
   page,
 }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   await page.getByLabel("Count").fill("80");
@@ -176,7 +177,7 @@ test("random bulk insert creates multiple filterable event types and shows filte
 // virtualizer from SQLite query results and must still settle at the tail.
 test("stream page reload starts at the bottom of an existing local mirror", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   const insertedCount = 200;
@@ -202,11 +203,40 @@ test("stream page reload starts at the bottom of an existing local mirror", asyn
   await expect(page.locator(`[data-index='${expectedCount - 1}']`)).toBeVisible();
 });
 
+test("event feed view starts at the bottom on first visit while replay fills the mirror", async ({
+  browser,
+}) => {
+  const streamPath = `/e2e/${crypto.randomUUID()}`;
+  const setupContext = await browser.newContext();
+  const setupPage = await setupContext.newPage();
+  await setupPage.goto(streamRoute({ path: streamPath }));
+  await expect(eventMeta(setupPage, "events.iterate.com/stream/created").first()).toBeVisible();
+
+  const insertedCount = 200;
+  await setupPage.getByLabel("Count").fill(String(insertedCount));
+  await setupPage.getByLabel("Batch size").fill(String(insertedCount));
+  await setupPage.getByLabel("Seconds").fill("0");
+  await setupPage.getByRole("button", { name: "Stream random events" }).click();
+  await expect(setupPage.getByTestId("insert-state")).toHaveText("done", { timeout: 30_000 });
+  await setupContext.close();
+
+  const freshContext = await browser.newContext();
+  const page = await freshContext.newPage();
+  await page.goto(streamRoute({ path: streamPath, view: "browser-event-feed" }));
+  await expect(page.getByTestId("feed-item-count")).not.toHaveText(/^0 feed items$/, {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("stream-status")).toHaveText("subscribed", { timeout: 30_000 });
+  await expectAtFeedEnd(page);
+  await expect(page.getByTestId("feed-scroll-to-bottom-affordance")).toHaveCount(0);
+  await freshContext.close();
+});
+
 // Guards "instant enough" first draw. This catches regressions where OPFS/wa-sqlite setup,
 // subscription, or reactive query invalidation leaves the page hydrated but visually empty.
 test("first event row draws quickly", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   const firstRowDrawMs = await page.evaluate(() => {
@@ -248,7 +278,10 @@ test("two browser tabs update and hand off leadership after the writer closes", 
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   const otherPage = await context.newPage();
 
-  await Promise.all([page.goto(streamRoute(streamPath)), otherPage.goto(streamRoute(streamPath))]);
+  await Promise.all([
+    page.goto(streamRoute({ path: streamPath })),
+    otherPage.goto(streamRoute({ path: streamPath })),
+  ]);
   await Promise.all([
     expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible(),
     expect(eventMeta(otherPage, "events.iterate.com/stream/created").first()).toBeVisible(),
@@ -293,7 +326,7 @@ test("fresh runtime takes over when a legacy writer lock is still held", async (
   await legacyLockHolder.goto("/blank");
   await holdLegacyWriterLock(legacyLockHolder, streamPath);
 
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(page.getByTestId("subscription-status")).toHaveText("leader");
   await expect(page.getByTestId("event-count")).toHaveText("2");
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
@@ -310,7 +343,7 @@ test("empty follower state is visible in the stream UI", async ({ context, page 
   await lockHolder.goto("/blank");
   await holdCurrentWriterLock(lockHolder, streamPath);
 
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(page.getByTestId("subscription-status")).toHaveText("follower");
   await expect(page.getByTestId("event-count")).toHaveText("0");
   await expect(page.getByTestId("stream-warning")).toContainText(
@@ -358,7 +391,7 @@ test("auto-growing composer stays in the stream scrollbar and preserves tail app
   page,
 }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   await expect
@@ -447,7 +480,7 @@ test("auto-growing composer stays in the stream scrollbar and preserves tail app
 // the last time they were at the tail.
 test("scroll to bottom affordance counts new events while away from tail", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   await page.getByLabel("Count").fill("80");
@@ -481,7 +514,7 @@ test("scroll to bottom affordance keeps counting while scrolling older rows duri
   page,
 }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   await page.getByLabel("Count").fill("100");
@@ -528,7 +561,7 @@ test("expanding the tail event row at stream end stays above the composer", asyn
   test.fail(true, "Known regression: expanded tail rows can grow under the sticky composer.");
 
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   await page.getByLabel("Count").fill("120");
@@ -568,7 +601,7 @@ test("expanding the tail event row at stream end stays above the composer", asyn
 // itself after being scrolled out of the rendered window and mounted again later.
 test("event row open and closed state survives virtual row unmounts", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   await page.getByLabel("Count").fill("160");
@@ -610,7 +643,9 @@ test("split view disposes a replaced same-stream pane and keeps leadership", asy
     `/split-stream?left=${encodeURIComponent(sharedPath)}&right=${encodeURIComponent(sharedPath)}`,
   );
 
-  await expect(page.locator(`[data-stream-path='${cssString(sharedPath)}']`)).toHaveCount(2);
+  await expect(
+    page.locator(`[data-stream-path='${cssString(e2eStreamPath(sharedPath))}']`),
+  ).toHaveCount(2);
   // Two views of the same (path, processor) now SHARE one runtime/connection (within-tab
   // dedup), so both panes reflect that single runtime as the leader — no intra-tab follower.
   await expect
@@ -657,7 +692,7 @@ test("large streams stay virtualized and can scroll from tail to earliest rows",
   page,
 }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   const insertedCount = 1_500;
@@ -698,7 +733,7 @@ test("large streams stay virtualized and can scroll from tail to earliest rows",
 // be a real SQLite database that can be queried from disk, not just a blob with the right name.
 test("downloaded SQLite file can be queried from disk", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   const type = "events.iterate.com/debug/playwright-download";
@@ -726,7 +761,7 @@ test("downloaded SQLite file can be queried from disk", async ({ page }) => {
 // append the server's woken event instead of leaving the mirror stuck on a dead WebSocket.
 test("kill reconnects and appends a new woken event", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(page.getByTestId("event-count")).toHaveText("2");
 
   await page.getByRole("button", { name: "Kill" }).click();
@@ -740,7 +775,7 @@ test("kill reconnects and appends a new woken event", async ({ page }) => {
 // the fresh server stream.
 test("reset discards stale local rows and shows a fresh stream", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
 
   const type = "events.iterate.com/debug/playwright-before-reset";
   await appendComposerEvent(page, {
@@ -764,7 +799,7 @@ test("event-feed view renders specific renderers as singletons and groups by typ
   page,
 }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(`/streams/${streamPath.slice(1)}?view=browser-event-feed`);
+  await page.goto(streamRoute({ path: streamPath, view: "browser-event-feed" }));
 
   await expect(
     page.locator("[data-testid='feed-item'][data-component='stream.created']"),
@@ -809,7 +844,7 @@ test("event-feed view renders specific renderers as singletons and groups by typ
 // live over the runtimeState() RPC and renders it in a fixed-width block.
 test("state view renders the stream runtime state over RPC", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(`/streams/${streamPath.slice(1)}?view=browser-state`);
+  await page.goto(streamRoute({ path: streamPath, view: "browser-state" }));
   await expect(page.getByTestId("stream-state")).toContainText("maxOffset", { timeout: 20_000 });
   await expect(page.getByTestId("stream-state")).toContainText("namespace");
 });
@@ -817,7 +852,7 @@ test("state view renders the stream runtime state over RPC", async ({ page }) =>
 // Regression for the root stream route: `/streams` is its own TanStack route, not the splat
 // route with an empty param. It must still respect the same `?view=` search param.
 test("root stream route respects the selected view", async ({ page }) => {
-  await page.goto("/streams?view=browser-state");
+  await page.goto(streamRoute({ path: "/", view: "browser-state" }));
   await expect(page.getByTestId("stream-state")).toContainText("maxOffset", { timeout: 20_000 });
   await expect(page.getByTestId("stream-state")).toContainText('"path": "/"');
 });
@@ -825,7 +860,7 @@ test("root stream route respects the selected view", async ({ page }) => {
 // The view switcher moves between the three sibling views, preserving the stream path.
 test("view switcher navigates between the three views", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
-  await page.goto(streamRoute(streamPath));
+  await page.goto(streamRoute({ path: streamPath }));
   await expect(eventMeta(page, "events.iterate.com/stream/created").first()).toBeVisible();
 
   await page.getByTestId("view-link-browser-event-feed").click();
@@ -836,11 +871,6 @@ test("view switcher navigates between the three views", async ({ page }) => {
   await expect(page).toHaveURL(/view=browser-state/);
   await expect(page.getByTestId("stream-state")).toContainText("maxOffset", { timeout: 20_000 });
 });
-
-function streamRoute(streamPath: string) {
-  if (streamPath === "/") return "/streams/";
-  return `/streams/${streamPath.slice(1)}`;
-}
 
 function eventMeta(scope: Page | Locator, eventType: string) {
   return scope.locator("[data-testid='event-meta']", { hasText: eventType });
@@ -859,7 +889,7 @@ async function appendComposerEvent(scope: Page | Locator, event: unknown) {
 }
 
 function splitPane(page: Page, streamPath: string) {
-  return page.locator(`[data-stream-path='${cssString(streamPath)}']`);
+  return page.locator(`[data-stream-path='${cssString(e2eStreamPath(streamPath))}']`);
 }
 
 async function isLeader(page: Page) {
@@ -920,6 +950,18 @@ async function streamDistanceFromEnd(page: Page) {
 
 async function expectAtStreamEnd(page: Page) {
   await expect.poll(() => streamDistanceFromEnd(page)).toBeLessThanOrEqual(2);
+}
+
+async function feedDistanceFromEnd(page: Page) {
+  return await page.getByTestId("event-feed").evaluate((element) => {
+    if (!(element instanceof HTMLElement))
+      throw new Error("event feed scroller must be an HTMLElement");
+    return Math.round(element.scrollHeight - element.clientHeight - element.scrollTop);
+  });
+}
+
+async function expectAtFeedEnd(page: Page) {
+  await expect.poll(() => feedDistanceFromEnd(page)).toBeLessThanOrEqual(2);
 }
 
 async function composerDistanceFromScrollerBottom(page: Page) {

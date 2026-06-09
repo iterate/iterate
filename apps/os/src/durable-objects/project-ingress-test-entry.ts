@@ -161,6 +161,7 @@ export { ProjectCapability } from "~/domains/projects/entrypoints/project-capabi
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
+export { IterateContextEntrypoint } from "~/capnweb/iterate-context-capability.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 export {

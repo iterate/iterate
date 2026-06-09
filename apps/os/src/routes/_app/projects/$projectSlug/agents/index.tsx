@@ -96,7 +96,11 @@ function ProjectAgentsIndexPage() {
           >
             New preset
           </Button>
-          <EventsDebugLink label="Open namespace in Events" namespace={project.id} streamPath="/" />
+          <EventsDebugLink
+            label="Open namespace in Streams"
+            namespace={project.id}
+            streamPath="/"
+          />
         </div>
       </div>
       <div className="flex w-full flex-col gap-2 md:flex-row">
