@@ -57,6 +57,7 @@ export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabil
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
+export { ContextDO } from "~/itx/context-do.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";

@@ -8,6 +8,7 @@ import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import manifest, { AppConfig } from "./src/app.ts";
 import type { CodemodeSession } from "./src/domains/codemode/durable-objects/codemode-session.ts";
+import type { ContextDO } from "./src/itx/context-do.ts";
 import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-append-chain-subscriber.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnection } from "./src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
@@ -77,6 +78,11 @@ const codemodeSession = DurableObjectNamespace<CodemodeSession>("codemode-sessio
   className: "CodemodeSession",
   sqlite: true,
 });
+// itx child contexts (apps/os/docs/itx-spec.md §3): one instance per ctx_… id.
+const itxContext = DurableObjectNamespace<ContextDO>("itx-context", {
+  className: "ContextDO",
+  sqlite: true,
+});
 const projectMcpServerConnection = DurableObjectNamespace<ProjectMcpServerConnection>(
   "project-mcp-server-connection-local",
   {
@@ -127,6 +133,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     ARTIFACTS_NAMESPACE: artifactsNamespace,
     LOADER: WorkerLoader(),
     CODEMODE_SESSION: codemodeSession,
+    ITX_CONTEXT: itxContext,
     AGENT: agent,
     ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
     PROJECT: project,

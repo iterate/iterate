@@ -11,7 +11,13 @@
 
 import { newWorkersRpcResponse } from "capnweb";
 import { resolveItx } from "./entrypoint.ts";
-import { GLOBAL_CONTEXT_ID, type ItxProps, type ProjectAccess } from "./protocol.ts";
+import {
+  GLOBAL_CONTEXT_ID,
+  isChildContextId,
+  type ItxProps,
+  type ProjectAccess,
+} from "./protocol.ts";
+import type { ContextDO } from "./context-do.ts";
 import type { ItxRuntime } from "./handle.ts";
 import { authenticateCapnwebAdmin, handleCapnwebAdminCookieRequest } from "./admin-auth-cookie.ts";
 import type { AppConfig } from "~/app.ts";
@@ -44,23 +50,25 @@ export async function handleItxFetch(input: {
     return await handleItxRun({ ...input, access });
   }
 
-  // Bare prefix → global handle; anything else is a project id or slug.
+  // Bare prefix → global handle; anything else is a project id/slug or a
+  // ctx_… child context id.
   let props: ItxProps;
   if (subpath === "") {
     props = { access, context: GLOBAL_CONTEXT_ID };
   } else {
-    const projectId = await resolveAccessibleProjectId({
+    const resolved = await resolveAccessibleContextId({
       access,
       context: input.context,
-      projectIdOrSlug: decodeURIComponent(subpath),
+      env: input.env,
+      idOrSlug: decodeURIComponent(subpath),
     });
-    if (!projectId) return new Response("Not Found", { status: 404 });
-    props = { context: projectId };
+    if (!resolved) return new Response("Not Found", { status: 404 });
+    props = { context: resolved.contextId };
   }
 
   const response = await newWorkersRpcResponse(
     input.request,
-    resolveItx({ env: input.env, exports: workerExports(input.context), props }),
+    await resolveItx({ env: input.env, exports: workerExports(input.context), props }),
   );
   const setCookie = auth.responseHeaders.get("set-cookie");
   if (setCookie) response.headers.append("set-cookie", setCookie);
@@ -94,7 +102,7 @@ export async function handleProjectHostItxFetch(input: {
 
   return await newWorkersRpcResponse(
     input.request,
-    resolveItx({
+    await resolveItx({
       env: input.env,
       exports: input.exports as ItxRuntime["exports"],
       props: { context: input.projectId },
@@ -122,17 +130,36 @@ function accessForPrincipal(principal: Principal): ProjectAccess {
   return principal.type === "admin" ? "all" : principal.projects.map((project) => project.id);
 }
 
-async function resolveAccessibleProjectId(input: {
+/**
+ * Resolve a connect/run target to a context id the caller may hold. The
+ * access check happens HERE (auth boundary) and nowhere deeper: a child
+ * context is accessible iff its owning project is.
+ */
+async function resolveAccessibleContextId(input: {
   access: ProjectAccess;
   context: AppContext;
-  projectIdOrSlug: string;
-}): Promise<string | null> {
-  const row = input.projectIdOrSlug.startsWith("proj_")
-    ? await getProjectById(input.context.db, { id: input.projectIdOrSlug })
-    : await getProjectBySlug(input.context.db, { slug: input.projectIdOrSlug });
+  env: Env;
+  idOrSlug: string;
+}): Promise<{ contextId: string; projectId: string } | null> {
+  if (isChildContextId(input.idOrSlug)) {
+    const contextDo = input.env.ITX_CONTEXT.getByName(
+      input.idOrSlug,
+    ) as unknown as DurableObjectStub<ContextDO>;
+    try {
+      const descriptor = await contextDo.descriptor();
+      if (input.access !== "all" && !input.access.includes(descriptor.projectId)) return null;
+      return { contextId: descriptor.id, projectId: descriptor.projectId };
+    } catch {
+      return null;
+    }
+  }
+
+  const row = input.idOrSlug.startsWith("proj_")
+    ? await getProjectById(input.context.db, { id: input.idOrSlug })
+    : await getProjectBySlug(input.context.db, { slug: input.idOrSlug });
   if (!row) return null;
   if (input.access !== "all" && !input.access.includes(row.id)) return null;
-  return row.id;
+  return { contextId: row.id, projectId: row.id };
 }
 
 // ---- /api/itx/run ----------------------------------------------------------
@@ -186,14 +213,17 @@ async function handleItxRun(input: {
   }
 
   let props: ItxProps;
+  let scriptProjectId: string | null = null;
   if (body.context && body.context !== GLOBAL_CONTEXT_ID) {
-    const projectId = await resolveAccessibleProjectId({
+    const resolved = await resolveAccessibleContextId({
       access: input.access,
       context: input.context,
-      projectIdOrSlug: body.context,
+      env: input.env,
+      idOrSlug: body.context,
     });
-    if (!projectId) return Response.json({ error: "Context not found" }, { status: 404 });
-    props = { context: projectId };
+    if (!resolved) return Response.json({ error: "Context not found" }, { status: 404 });
+    props = { context: resolved.contextId };
+    scriptProjectId = resolved.projectId;
   } else {
     props = { access: input.access, context: GLOBAL_CONTEXT_ID };
   }
@@ -210,10 +240,10 @@ async function handleItxRun(input: {
     // Project scripts get the egress pipe as their global fetch; global
     // scripts inherit the parent's network (they are admin-held by
     // construction — only connect-time auth mints global handles).
-    ...(props.context !== GLOBAL_CONTEXT_ID
+    ...(scriptProjectId !== null
       ? {
           globalOutbound: exports.ProjectEgress!({
-            props: { context: props.context, project: props.context },
+            props: { context: props.context, project: scriptProjectId },
           }) as Fetcher,
         }
       : {}),

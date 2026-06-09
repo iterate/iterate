@@ -77,3 +77,17 @@ fetch-monkeypatch in the old /run harness.
 Registry events (`itx.cap.defined` etc.) append to the context's stream at
 path `/itx` in the project namespace. Child contexts will use their own
 namespace/path when ContextDO lands.
+
+## D10: Child contexts delegate misses upward per call, depth-recursive
+
+`ContextDO.itxInvoke` checks its own registry, then calls its parent's
+`itxInvoke` (project DO or another ContextDO by id prefix). Arbitrary fork
+depth works with zero index machinery; `itxDescribe` merges the chain with
+child entries shadowing and `owner` carrying provenance. One DO hop per
+chain level per miss — revisit only if latency data complains (see D2).
+
+## D11: The restorer is async
+
+Child contexts cost one descriptor lookup (`ctx_…` → owning project) at
+restore time. `ItxEntrypoint.context` is a getter returning a Promise, which
+`await env.ITERATE.context` already handled — no isolate-side change.

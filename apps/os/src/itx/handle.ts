@@ -21,12 +21,14 @@ import { typeid } from "@iterate-com/shared/typeid";
 import { createD1Client } from "sqlfu";
 import { PathProxyRpcTarget } from "./path-proxy.ts";
 import {
+  isChildContextId,
   RESERVED_CAP_NAMES,
   type CapInvoke,
   type CapMeta,
   type CapSource,
   type ProjectAccess,
 } from "./protocol.ts";
+import type { ContextDO } from "./context-do.ts";
 import type { LiveCapTarget } from "./registry.ts";
 import type { AppConfig } from "~/app.ts";
 import {
@@ -54,13 +56,17 @@ export type ItxRuntime = {
   /** Attribution: which capability's isolate holds this handle, if any. */
   cap?: string;
   config: AppConfig;
+  /** "global", a project id, or a ctx_… child context id. */
   contextId: string;
+  /** The owning project; null only on global handles. For project contexts
+   * this equals contextId; for child contexts the restorer resolved it from
+   * the ContextDO's descriptor. */
+  projectId: string | null;
   env: Env;
   /** The parent worker's loopback exports (ctx.exports). */
   exports: Record<string, (options: { props: Record<string, unknown> }) => unknown>;
 };
 
-const GLOBAL = "global";
 const ITX_WORKSPACE_ID = "itx";
 
 export class Itx extends RpcTarget {
@@ -91,7 +97,7 @@ export class Itx extends RpcTarget {
   // ---- the trust kernel ---------------------------------------------------
 
   get caps(): ItxCaps {
-    return new ItxCaps(this.#projectStub());
+    return new ItxCaps(this.#registryStub());
   }
 
   get streams(): ItxStreams {
@@ -164,7 +170,7 @@ export class Itx extends RpcTarget {
     return {
       access: this.#runtime.access,
       cap: this.#runtime.cap,
-      caps: projectId === null ? [] : await this.#projectStub().itxDescribe(),
+      caps: projectId === null ? [] : await this.#registryStub().itxDescribe(),
       context: this.#runtime.contextId,
       project: projectId === null ? null : await this.#projectStub().describe(),
     };
@@ -172,16 +178,49 @@ export class Itx extends RpcTarget {
 
   /** Fallthrough target — also reachable explicitly as itx.cap("name"). */
   cap(name: string): unknown {
-    const project = this.#projectStub();
+    const registry = this.#registryStub();
     return new PathProxyRpcTarget(async ({ path, args }) => {
-      return await project.itxInvoke({ args, name, path });
+      return await registry.itxInvoke({ args, name, path });
     });
+  }
+
+  /**
+   * Create a child context under this one: same anatomy (registry, parent
+   * chain, audit stream), cheaper and disposable — an agent session, a REPL
+   * scratchpad. Returns a handle, because narrowing is construction (Law 4).
+   * Child caps shadow this context's; misses delegate up the chain.
+   */
+  async fork(opts: { name?: string } = {}): Promise<Itx> {
+    const projectId = this.#requireProjectId();
+    const childId = typeid({
+      env: { TYPEID_PREFIX: this.#runtime.config.typeIdPrefix },
+      prefix: "ctx",
+    });
+    await contextStub(this.#runtime.env, childId).initialize({
+      id: childId,
+      name: opts.name,
+      parent: this.#runtime.contextId,
+      projectId,
+    });
+    return new Itx({ ...this.#runtime, cap: undefined, contextId: childId, projectId });
   }
 
   // ---- wiring -------------------------------------------------------------
 
   #projectId(): string | null {
-    return this.#runtime.contextId === GLOBAL ? null : this.#runtime.contextId;
+    return this.#runtime.projectId;
+  }
+
+  /**
+   * The context node that owns this handle's registry: the Project DO for
+   * project contexts, a ContextDO for children. Both speak the same itx*
+   * registry surface; a child node delegates misses up the chain itself.
+   */
+  #registryStub(): RegistryStub {
+    if (isChildContextId(this.#runtime.contextId)) {
+      return contextStub(this.#runtime.env, this.#runtime.contextId);
+    }
+    return this.#projectStub();
   }
 
   #requireProjectId(): string {
@@ -218,9 +257,20 @@ export type Stubify<T> = T extends (...args: infer A) => infer R
     : never;
 
 type ProjectStub = DurableObjectStub<ProjectDurableObject>;
+type ContextStub = DurableObjectStub<ContextDO>;
+
+/** The registry verbs every context node (project or child) exposes. */
+type RegistryStub = Pick<
+  ProjectStub,
+  "itxDefine" | "itxDescribe" | "itxInvoke" | "itxProvide" | "itxRevoke"
+>;
 
 function projectStub(env: Env, projectId: string): ProjectStub {
   return env.PROJECT.getByName(getProjectDurableObjectName(projectId)) as unknown as ProjectStub;
+}
+
+function contextStub(env: Env, contextId: string): ContextStub {
+  return env.ITX_CONTEXT.getByName(contextId) as unknown as ContextStub;
 }
 
 // ---- caps -----------------------------------------------------------------
@@ -232,7 +282,7 @@ function projectStub(env: Env, projectId: string): ProjectStub {
  * server-side, which is physics, not API design.
  */
 export class ItxCaps extends RpcTarget {
-  constructor(private readonly project: ProjectStub) {
+  constructor(private readonly registry: RegistryStub) {
     super();
   }
 
@@ -242,19 +292,19 @@ export class ItxCaps extends RpcTarget {
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {
-    return await this.project.itxProvide(input);
+    return await this.registry.itxProvide(input);
   }
 
   async define(input: { name: string; source: CapSource; invoke?: CapInvoke; meta?: CapMeta }) {
-    return await this.project.itxDefine(input);
+    return await this.registry.itxDefine(input);
   }
 
   async revoke(input: { name: string }) {
-    return await this.project.itxRevoke(input);
+    return await this.registry.itxRevoke(input);
   }
 
   async describe() {
-    return await this.project.itxDescribe();
+    return await this.registry.itxDescribe();
   }
 }
 
@@ -433,7 +483,7 @@ export class ItxProjects extends RpcTarget {
 
   async get(projectIdOrSlug: string): Promise<Itx> {
     const row = await this.requireProjectRow(projectIdOrSlug);
-    return new Itx({ ...this.runtime, contextId: row.id });
+    return new Itx({ ...this.runtime, contextId: row.id, projectId: row.id });
   }
 
   async list(input: { limit?: number; offset?: number } = {}) {

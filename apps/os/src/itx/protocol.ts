@@ -149,4 +149,12 @@ export const ITX_EVENT_TYPES = {
   capProvided: "events.iterate.com/itx/cap-provided",
   capRevoked: "events.iterate.com/itx/cap-revoked",
   capDisconnected: "events.iterate.com/itx/cap-disconnected",
+  contextForked: "events.iterate.com/itx/context-forked",
 } as const;
+
+/** Child context ids: `ctx_…` TypeIDs; project contexts use the project id. */
+export const CHILD_CONTEXT_PREFIX = "ctx";
+
+export function isChildContextId(contextId: string): boolean {
+  return contextId.startsWith(`${CHILD_CONTEXT_PREFIX}_`);
+}
