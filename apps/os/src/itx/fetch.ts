@@ -54,11 +54,14 @@ export async function handleItxFetch(input: {
   // ctx_… child context id.
   let props: ItxProps;
   if (subpath === "") {
-    // The global context is the all-projects handle. Only "all" access
-    // (admins) may hold it — a non-admin must narrow to one of their named
-    // projects. This is also what keeps global /api/itx/run (which inherits
-    // the platform's own egress) out of non-admin hands.
-    if (access !== "all") return new Response("Forbidden", { status: 403 });
+    // A global handle is safe for any authenticated principal: its access is
+    // exactly what they can reach (admins → "all", users → their project
+    // ids), and every built-in narrows through that access check — a user's
+    // global handle can only itx.projects.get(...) their own projects, and
+    // has no project to fetch/stream against until it narrows. The dangerous
+    // case (a global /api/itx/run inheriting the platform's own egress) is
+    // gated separately in handleItxRun, not here. This is also what makes the
+    // global /itx-repl page work for normal logged-in users.
     props = { access, context: GLOBAL_CONTEXT_ID };
   } else {
     const resolved = await resolveAccessibleContextId({
