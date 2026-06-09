@@ -16,6 +16,10 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
+import {
+  projectSecretQueryOptions,
+  projectSecretsListQueryOptions,
+} from "~/lib/project-route-query.ts";
 import { orpc } from "~/orpc/client.ts";
 
 const UpdateSecretForm = z.object({
@@ -25,19 +29,10 @@ const UpdateSecretForm = z.object({
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/$secretId")({
   loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
-    const secret = await context.queryClient.ensureQueryData({
-      ...orpc.project.secrets.get.queryOptions({
-        input: {
-          id: params.secretId,
-          projectSlugOrId: project.id,
-        },
-      }),
-      staleTime: 10_000,
-    });
+    const { project } = context;
+    const secret = await context.queryClient.ensureQueryData(
+      projectSecretQueryOptions({ projectId: project.id, secretId: params.secretId }),
+    );
 
     return {
       breadcrumb: secret.key,
@@ -53,19 +48,14 @@ function ProjectSecretDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { project, secret: loadedSecret } = Route.useLoaderData();
-  const secretQueryOptions = orpc.project.secrets.get.queryOptions({
-    input: {
-      id: params.secretId,
-      projectSlugOrId: project.id,
-    },
+  const secretQueryOptions = projectSecretQueryOptions({
+    projectId: project.id,
+    secretId: params.secretId,
   });
-  const secretsListQueryOptions = orpc.project.secrets.list.queryOptions({
-    input: { projectSlugOrId: project.id },
-  });
+  const secretsListQueryOptions = projectSecretsListQueryOptions(project.id);
   const secretQuery = useQuery({
     ...secretQueryOptions,
     initialData: loadedSecret,
-    staleTime: 10_000,
   });
   const secret = secretQuery.data;
   const defaultValues = useMemo(

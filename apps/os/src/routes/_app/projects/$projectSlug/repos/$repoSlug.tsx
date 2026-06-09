@@ -3,23 +3,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { orpc } from "~/orpc/client.ts";
+import { projectRepoQueryOptions } from "~/lib/project-route-query.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$repoSlug")({
   loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
-    await context.queryClient.ensureQueryData({
-      ...orpc.project.repos.get.queryOptions({
-        input: {
-          projectSlugOrId: project.id,
-          repoSlug: params.repoSlug,
-        },
-      }),
-      staleTime: 10_000,
-    });
+    const { project } = context;
+    await context.queryClient.ensureQueryData(
+      projectRepoQueryOptions({ projectId: project.id, repoSlug: params.repoSlug }),
+    );
 
     return {
       breadcrumb: params.repoSlug,
@@ -32,15 +23,9 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$repoSlu
 function ProjectRepoDetailPage() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
-  const repoQuery = useQuery({
-    ...orpc.project.repos.get.queryOptions({
-      input: {
-        projectSlugOrId: project.id,
-        repoSlug: params.repoSlug,
-      },
-    }),
-    staleTime: 10_000,
-  });
+  const repoQuery = useQuery(
+    projectRepoQueryOptions({ projectId: project.id, repoSlug: params.repoSlug }),
+  );
   const repo = repoQuery.data;
 
   if (!repo) {

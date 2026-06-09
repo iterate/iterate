@@ -35,6 +35,7 @@ type ProjectStreamMessageComposer = {
 export function ProjectStreamView({
   defaultComposerMode,
   emptyLabel = "No events in this stream yet.",
+  headerAccessory,
   messageComposer,
   projectSlugOrId,
   streamPath,
@@ -94,7 +95,7 @@ export function ProjectStreamView({
         );
         await store.appendBatch({ events });
       }
-      setComposerText("");
+      setComposerText(composerMode === "raw" ? composerText : "");
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -126,6 +127,7 @@ export function ProjectStreamView({
         <h1 className="truncate font-mono text-sm font-semibold">{streamPathText}</h1>
         <StreamStatus count={eventCount} snapshot={snapshot} />
       </header>
+      {headerAccessory == null ? null : <div className="shrink-0 border-b">{headerAccessory}</div>}
       <main ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto">
         {countResult.status !== "ok" ? (
           <Centered>

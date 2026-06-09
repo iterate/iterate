@@ -1,7 +1,8 @@
 import { cn } from "@iterate-com/ui/lib/utils";
 import { Loader2Icon } from "lucide-react";
+import type { ComponentPropsWithoutRef } from "react";
 
-function Spinner({ className, ...props }: React.ComponentProps<"svg">) {
+function Spinner({ className, ...props }: ComponentPropsWithoutRef<"svg">) {
   return (
     <Loader2Icon
       role="status"

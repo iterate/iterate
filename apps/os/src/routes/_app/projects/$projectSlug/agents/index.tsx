@@ -14,23 +14,16 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { EventsDebugLink } from "~/components/events-debug-link.tsx";
-import { streamPathToSplat } from "~/lib/stream-links.ts";
-import { orpc } from "~/orpc/client.ts";
+import {
+  projectAgentPresetsQueryOptions,
+  projectAgentsListQueryOptions,
+} from "~/lib/project-route-query.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
-  loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
-    await context.queryClient.ensureQueryData({
-      ...orpc.project.agents.list.queryOptions({ input: { projectSlugOrId: project.id } }),
-      staleTime: 10_000,
-    });
-    await context.queryClient.ensureQueryData({
-      ...orpc.project.agents.listPresets.queryOptions({ input: { projectSlugOrId: project.id } }),
-      staleTime: 10_000,
-    });
+  loader: async ({ context }) => {
+    const { project } = context;
+    await context.queryClient.ensureQueryData(projectAgentsListQueryOptions(project.id));
+    await context.queryClient.ensureQueryData(projectAgentPresetsQueryOptions(project.id));
 
     return {
       breadcrumb: "All",
@@ -52,21 +45,13 @@ function ProjectAgentsIndexPage() {
     key: "lastWokenAt",
     direction: "desc",
   });
-  const agentsQueryOptions = orpc.project.agents.list.queryOptions({
-    input: { projectSlugOrId: project.id },
-  });
+  const agentsQueryOptions = projectAgentsListQueryOptions(project.id);
   const { data } = useQuery({
     ...agentsQueryOptions,
-    staleTime: 10_000,
     refetchInterval: 5_000,
   });
-  const presetsQueryOptions = orpc.project.agents.listPresets.queryOptions({
-    input: { projectSlugOrId: project.id },
-  });
-  const { data: presetsData } = useQuery({
-    ...presetsQueryOptions,
-    staleTime: 10_000,
-  });
+  const presetsQueryOptions = projectAgentPresetsQueryOptions(project.id);
+  const { data: presetsData } = useQuery(presetsQueryOptions);
   const agents = useMemo(() => data?.agents ?? [], [data?.agents]);
   const presets = useMemo(() => presetsData?.presets ?? [], [presetsData?.presets]);
   const visibleAgents = useMemo(() => {
@@ -210,7 +195,7 @@ function ProjectAgentsIndexPage() {
                         to="/projects/$projectSlug/agents/streams/$"
                         params={{
                           projectSlug: params.projectSlug,
-                          _splat: streamPathToSplat(agent.agentPath),
+                          _splat: agent.agentPath,
                         }}
                       >
                         <EventsStreamPathLabel path={agent.agentPath} className="min-w-0" />

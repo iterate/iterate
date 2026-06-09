@@ -17,6 +17,7 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
+import { projectSecretsListQueryOptions } from "~/lib/project-route-query.ts";
 import { orpc } from "~/orpc/client.ts";
 
 const SecretForm = z.object({
@@ -32,15 +33,9 @@ const DEFAULT_SECRET_FORM_VALUES = {
 };
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/")({
-  loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
-    await context.queryClient.ensureQueryData({
-      ...orpc.project.secrets.list.queryOptions({ input: { projectSlugOrId: project.id } }),
-      staleTime: 10_000,
-    });
+  loader: async ({ context }) => {
+    const { project } = context;
+    await context.queryClient.ensureQueryData(projectSecretsListQueryOptions(project.id));
 
     return {
       breadcrumb: "Secrets",
@@ -56,13 +51,8 @@ function ProjectSecretsIndexPage() {
   const queryClient = useQueryClient();
   const { project } = Route.useLoaderData();
   const [filter, setFilter] = useState("");
-  const secretsQueryOptions = orpc.project.secrets.list.queryOptions({
-    input: { projectSlugOrId: project.id },
-  });
-  const { data } = useQuery({
-    ...secretsQueryOptions,
-    staleTime: 10_000,
-  });
+  const secretsQueryOptions = projectSecretsListQueryOptions(project.id);
+  const { data } = useQuery(secretsQueryOptions);
   const upsertSecret = useMutation(
     orpc.project.secrets.upsert.mutationOptions({
       onSuccess: async (secret) => {

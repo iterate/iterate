@@ -1,9 +1,8 @@
 import { Outlet, createFileRoute } from "@tanstack/react-router";
+import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams")({
-  staticData: {
-    breadcrumb: "Streams",
-  },
+  staticData: breadcrumbStaticData("Streams"),
   component: StreamsLayout,
 });
 
