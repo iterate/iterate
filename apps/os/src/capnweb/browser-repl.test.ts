@@ -7,7 +7,6 @@ import {
   evalBrowserReplSessionCode,
   runBrowserReplEntry,
 } from "./browser-repl.ts";
-import { liftLocalProxies, localProxyCaller } from "./local-proxy-wrapper.js";
 
 describe("browser Cap'n Web REPL", () => {
   test("default snippet uses Cap'n Web promise pipelining", async () => {
@@ -24,7 +23,7 @@ describe("browser Cap'n Web REPL", () => {
       }
     }
 
-    const ctx = liftLocalProxies(new RpcStub(new Context()));
+    const ctx = new RpcStub(new Context());
 
     await expect(evalBrowserReplCode({ code: DEFAULT_BROWSER_REPL_CODE, ctx })).resolves.toEqual({
       items: [{ id: "proj_123" }],
@@ -52,20 +51,20 @@ describe("browser Cap'n Web REPL", () => {
     await expect(
       evalBrowserReplCode({
         code: DEFAULT_BROWSER_REPL_CODE,
-        ctx: liftLocalProxies(rpcRoot),
+        ctx: rpcRoot,
       }),
     ).resolves.toEqual({ projects: [], total: 0, limit: 5 });
     expect(thenReads).toBe(0);
   });
 
   test("route entry runner succeeds for the default project list snippet", async () => {
-    const ctx = liftLocalProxies({
+    const ctx = {
       projects: {
         list(input: { limit: number }) {
           return { projects: [{ id: "proj_123" }], total: 1, limit: input.limit };
         },
       },
-    });
+    };
 
     await expect(
       runBrowserReplEntry({
@@ -82,11 +81,11 @@ describe("browser Cap'n Web REPL", () => {
     });
   });
 
-  test("REPL supports pre-await Slack SDK-shaped local proxy calls", async () => {
+  test("REPL supports SDK-shaped calls through a server-side path target", async () => {
     const call = vi.fn(async (input: { args: unknown[]; path: string[] }) => input);
-    const ctx = liftLocalProxies({
-      slack: Promise.resolve(localProxyCaller(call)),
-    });
+    const ctx = {
+      slack: new BrowserPathTarget(call),
+    };
 
     await expect(
       evalBrowserReplCode({
@@ -466,3 +465,39 @@ const persisted = answer();
     expect(alert).toHaveBeenCalledWith("The answer is 42");
   });
 });
+
+class BrowserPathTarget extends RpcTarget {
+  constructor(private readonly callPath: (input: { args: unknown[]; path: string[] }) => unknown) {
+    super();
+    return this.callable([]) as unknown as BrowserPathTarget;
+  }
+
+  private callable(path: string[]): Function {
+    const fn = (...args: unknown[]) => this.callPath({ args, path });
+    return new Proxy(fn, {
+      apply: (_target, _thisArg, args) => this.callPath({ args, path }),
+      get: (target, key, receiver) => {
+        if (key === "then") return undefined;
+        if (typeof key === "symbol" || key in target) return Reflect.get(target, key, receiver);
+        return this.callable([...path, key]);
+      },
+      getOwnPropertyDescriptor: (target, key) => {
+        const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+        if (descriptor) return descriptor;
+        if (key in target) return undefined;
+        if (typeof key === "symbol" || key === "then") return undefined;
+        return {
+          configurable: true,
+          enumerable: false,
+          value: this.callable([...path, key]),
+          writable: false,
+        };
+      },
+      has: (target, key) => {
+        if (typeof key === "symbol") return key in target;
+        if (key === "then") return false;
+        return true;
+      },
+    });
+  }
+}

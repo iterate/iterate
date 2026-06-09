@@ -10,7 +10,6 @@ import {
   DEFAULT_BROWSER_REPL_CODE,
   evalBrowserReplSessionCode,
 } from "../browser-repl.ts";
-import { liftLocalProxies, localProxyCaller } from "../local-proxy-wrapper.js";
 import type { IterateContext } from "../iterate-context-capability.ts";
 import type { ProjectCapabilityApi } from "../../domains/projects/durable-objects/project-durable-object.ts";
 import {
@@ -232,7 +231,7 @@ describe("capnweb browser execution mode", () => {
 
     class BrowserSlackSdkTarget extends RpcTarget {
       sdk() {
-        return localProxyCaller(({ path, args }) => ({
+        return new BrowserPathTarget(({ path, args }) => ({
           args,
           ok: true,
           path,
@@ -246,10 +245,10 @@ describe("capnweb browser execution mode", () => {
     });
 
     const connection = (await projectContext.connections.get(connectionKey)) as any;
-    const ctxWithSlack = liftLocalProxies({ slack: connection.sdk() }) as any;
+    const slack = (await connection.sdk()) as any;
 
     await expect(
-      ctxWithSlack.slack.chat.postMessage({
+      slack.chat.postMessage({
         channel: "C_BROWSER",
         text: "hello from browser",
       }),
@@ -273,7 +272,7 @@ async function withRootIterateFromBrowser(): Promise<RpcStub<IterateContext>> {
   await setCapnwebAdminCookie(new URL(`${ROOT_ITERATE_CONTEXT_PREFIX}/admin-cookie`, baseUrl()));
   const wsUrl = new URL(ROOT_ITERATE_CONTEXT_PREFIX, baseUrl());
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-  return liftLocalProxies(newWebSocketRpcSession<IterateContext>(new WebSocket(wsUrl)));
+  return newWebSocketRpcSession<IterateContext>(new WebSocket(wsUrl));
 }
 
 async function withIterateFromBrowser(input: { ingressUrl: string }): Promise<{
@@ -286,12 +285,48 @@ async function withIterateFromBrowser(input: { ingressUrl: string }): Promise<{
   const project = newWebSocketRpcSession<ProjectCapabilityApi>(new WebSocket(wsUrl));
   const ctxHandle = project.getIterateContext() as unknown as RpcStub<IterateContext>;
   return {
-    ctx: liftLocalProxies(ctxHandle),
+    ctx: ctxHandle,
     [Symbol.dispose]() {
       ctxHandle[Symbol.dispose]?.();
       project[Symbol.dispose]?.();
     },
   };
+}
+
+class BrowserPathTarget extends RpcTarget {
+  constructor(private readonly callPath: (input: { args: unknown[]; path: string[] }) => unknown) {
+    super();
+    return this.callable([]) as unknown as BrowserPathTarget;
+  }
+
+  private callable(path: string[]): Function {
+    const fn = (...args: unknown[]) => this.callPath({ args, path });
+    return new Proxy(fn, {
+      apply: (_target, _thisArg, args) => this.callPath({ args, path }),
+      get: (target, key, receiver) => {
+        if (key === "then") return undefined;
+        if (typeof key === "symbol" || key in target) return Reflect.get(target, key, receiver);
+        return this.callable([...path, key]);
+      },
+      getOwnPropertyDescriptor: (target, key) => {
+        const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+        if (descriptor) return descriptor;
+        if (key in target) return undefined;
+        if (typeof key === "symbol" || key === "then") return undefined;
+        return {
+          configurable: true,
+          enumerable: false,
+          value: this.callable([...path, key]),
+          writable: false,
+        };
+      },
+      has: (target, key) => {
+        if (typeof key === "symbol") return key in target;
+        if (key === "then") return false;
+        return true;
+      },
+    });
+  }
 }
 
 async function setCapnwebAdminCookie(url: URL) {

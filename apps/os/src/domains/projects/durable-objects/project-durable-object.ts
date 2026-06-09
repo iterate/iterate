@@ -23,7 +23,6 @@ import {
   type IterateContext,
   type IterateContextProps,
 } from "~/capnweb/iterate-context-capability.ts";
-import localProxyWrapperSource from "~/capnweb/local-proxy-wrapper.js?raw";
 import {
   authenticateCapnwebAdmin,
   handleCapnwebAdminCookieRequest,
@@ -1385,16 +1384,6 @@ function projectDynamicWorkerCodeWithStreams(input: {
     },
     modules: {
       ...input.workerCode.modules,
-      // Config workers can receive mounted SDK-shaped capabilities such as
-      // ctx.slack. Those mounts cross RPC as localProxyCaller marker values.
-      // The worker must opt in by importing liftLocalProxies from this helper:
-      //
-      //   import { liftLocalProxies } from "./local-proxy-wrapper.js";
-      //   const ctx = liftLocalProxies(await env.ITERATE.context);
-      //
-      // We inject the helper here so a tiny iterate-config worker.js can use the
-      // same SDK path adapter as /run without bundling app internals itself.
-      "local-proxy-wrapper.js": { js: localProxyWrapperSource },
     },
   };
 }
