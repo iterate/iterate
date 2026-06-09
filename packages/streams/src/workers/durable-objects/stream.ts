@@ -15,7 +15,7 @@ import {
   reduceCoreProcessorStateFromEvents,
 } from "../../processors/core/implementation.ts";
 import { coreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
-import type { StreamRpc } from "../../types.ts";
+import type { StreamProcessorRunnerRpc, StreamRpc } from "../../types.ts";
 import { makeRpcTargetClass, type RpcTargetClass } from "../../shared/rpc-target.ts";
 import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecycle.ts";
 
@@ -133,6 +133,17 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   protected writeCoreProcessorState(state: StreamCoreProcessorState): void {
     this.ctx.storage.kv.put("state", state);
+  }
+
+  protected getSubscriptionTarget(args: {
+    configured: CoreProcessorState["subscriptionsByKey"][string];
+    streamName: string;
+    subscriptionKey: string;
+  }): StreamProcessorRunnerRpc | undefined {
+    void args.configured;
+    return this.env.STREAM_PROCESSOR_RUNNER.getByName(
+      `${args.streamName}:${args.subscriptionKey}`,
+    ) as unknown as StreamProcessorRunnerRpc;
   }
 
   #catchUpCoreProcessorState(state: StreamCoreProcessorState): StreamCoreProcessorState {
@@ -749,9 +760,14 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     subscriptionKey: string;
   }) {
     const streamName = `${this.#coreProcessorState.namespace}:${this.#coreProcessorState.path}`;
-    await this.env.STREAM_PROCESSOR_RUNNER.getByName(
-      `${streamName}:${args.subscriptionKey}`,
-    ).requestSubscription({
+    const target = this.getSubscriptionTarget({
+      configured: args.configured,
+      streamName,
+      subscriptionKey: args.subscriptionKey,
+    });
+    if (target === undefined) return;
+
+    await target.requestSubscription({
       stream: new StreamRpcTarget(this) as unknown as StreamRpc,
       subscriptionKey: args.subscriptionKey,
       streamMaxOffset: this.#coreProcessorState.maxOffset,

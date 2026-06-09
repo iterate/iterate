@@ -9,6 +9,7 @@
     "./browser/stream-browser-store": "./src/browser/stream-browser-store.ts",
     "./processor": "./src/processor.ts",
     "./processor-runner": "./src/processor-runner.ts",
+    "./stream-processor-v2": "./src/stream-processor-v2.ts",
     "./processors/browser-raw-events/implementation": "./src/processors/browser-raw-events/implementation.ts",
     "./processors/core/contract": "./src/processors/core/contract.ts",
     "./shared/event": "./src/shared/event.ts",
