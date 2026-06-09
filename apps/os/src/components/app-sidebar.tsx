@@ -1,10 +1,35 @@
-import { useMemo, useState } from "react";
-import { Link, useMatchRoute } from "@tanstack/react-router";
-import { Bug, Building2, ChevronsUpDown, ExternalLink, LogOut, UserCircle } from "lucide-react";
+import { useMemo, useState, type ReactElement } from "react";
+import { Link, useMatches, useMatchRoute } from "@tanstack/react-router";
+import {
+  ArrowLeft,
+  Bug,
+  Check,
+  ChevronsUpDown,
+  CircleDot,
+  ExternalLink,
+  GitBranch,
+  House,
+  KeyRound,
+  LogOut,
+  Network,
+  Plug,
+  Plus,
+  Radio,
+  ScrollText,
+  Settings2,
+  SquareTerminal,
+  UserCircle,
+  type LucideIcon,
+} from "lucide-react";
+import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { useQuery } from "@tanstack/react-query";
+import { Avatar, AvatarFallback } from "@iterate-com/ui/components/avatar";
+import { Button } from "@iterate-com/ui/components/button";
+import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,47 +49,60 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarRail,
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
+  SidebarSeparator,
+  useSidebar,
 } from "@iterate-com/ui/components/sidebar";
-import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import type { AppConfig } from "~/app.ts";
-import { buildProjectMcpUrl, buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
+import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
 
 type AppSidebarProps = {
-  organizationSlug: string;
   routeConfig: PublicRouteConfig;
 };
 
-export function AppSidebar({ organizationSlug, routeConfig }: AppSidebarProps) {
+export function AppSidebar({ routeConfig }: AppSidebarProps) {
+  // Sidebar composition follows shadcn sidebar blocks 07/08:
+  // https://ui.shadcn.com/blocks/sidebar
   return (
-    <SidebarShell
-      header={<AppSidebarOrganization organizationSlug={organizationSlug} />}
-      footer={<AppSidebarUser />}
-    >
-      <AppSidebarNav routeConfig={routeConfig} />
-    </SidebarShell>
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <AppSidebarHeader />
+      </SidebarHeader>
+      <SidebarContent>
+        <AppSidebarNav routeConfig={routeConfig} />
+      </SidebarContent>
+      <SidebarFooter>
+        <AppSidebarUser />
+      </SidebarFooter>
+      <SidebarRail />
+    </Sidebar>
   );
 }
 
-function AppSidebarOrganization({ organizationSlug }: Pick<AppSidebarProps, "organizationSlug">) {
-  const { session } = useAuthClient();
-  const organizations = session?.authenticated ? session.session.organizations : [];
-  const activeOrganization =
-    organizations.find((organization) => organization.slug === organizationSlug) ??
-    organizations[0];
-  const activeOrganizationLabel = nonEmptyLabel(activeOrganization?.name, organizationSlug);
+function AppSidebarHeader() {
+  const matches = useMatches();
+  const { isMobile } = useSidebar();
+  const { data } = useQuery(projectsListQueryOptions({ limit: 100, offset: 0 }));
+  const projects =
+    data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
+  const activeProjectSlug = getActiveProjectSlug(matches);
+  const headerDescription = activeProjectSlug ?? "(select project)";
 
   return (
     <SidebarMenu>
@@ -72,32 +110,62 @@ function AppSidebarOrganization({ organizationSlug }: Pick<AppSidebarProps, "org
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <SidebarMenuButton className="h-10 gap-2 data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground">
-                <Building2 className="size-4" />
-                <span className="truncate">{activeOrganizationLabel}</span>
-                <ChevronsUpDown className="ml-auto size-4" />
+              <SidebarMenuButton
+                size="lg"
+                className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
+              >
+                <span className="flex aspect-square size-8 items-center justify-center rounded-md bg-black">
+                  <IterateLogo className="size-6 rounded-sm" />
+                </span>
+                <span className="grid flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-medium">iterate</span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {headerDescription}
+                  </span>
+                </span>
+                <ChevronsUpDown className="ml-auto" />
               </SidebarMenuButton>
             }
           />
-          <DropdownMenuContent side="bottom" align="start" className="w-56">
+          <DropdownMenuContent
+            align="start"
+            side={isMobile ? "bottom" : "right"}
+            sideOffset={4}
+            className="min-w-56 rounded-lg"
+          >
             <DropdownMenuGroup>
-              <DropdownMenuLabel>Organizations</DropdownMenuLabel>
-              {organizations.map((organization) => (
-                <DropdownMenuItem
-                  key={organization.id}
-                  render={
-                    <Link
-                      to="/org/$organizationSlug"
-                      params={{ organizationSlug: organization.slug }}
-                    />
-                  }
+              <DropdownMenuLabel className="flex items-center justify-between pr-1 text-xs text-muted-foreground">
+                Projects
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="New project"
+                  render={<Link to="/projects/new" />}
                 >
-                  <Building2 />
-                  <span className="truncate">
-                    {nonEmptyLabel(organization.name, organization.slug)}
-                  </span>
+                  <Plus />
+                </Button>
+              </DropdownMenuLabel>
+              {projects.length > 0 ? (
+                projects.map((project) => (
+                  <DropdownMenuItem
+                    key={project.id}
+                    className="gap-2 p-2"
+                    render={
+                      <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} />
+                    }
+                  >
+                    <span className="flex size-6 items-center justify-center rounded-md border text-xs font-medium text-muted-foreground">
+                      {project.slug.slice(0, 1).toLowerCase()}
+                    </span>
+                    <span className="truncate">{project.slug}</span>
+                    {project.slug === activeProjectSlug ? <Check className="ml-auto" /> : null}
+                  </DropdownMenuItem>
+                ))
+              ) : (
+                <DropdownMenuItem disabled className="p-2">
+                  <span className="truncate">No projects yet</span>
                 </DropdownMenuItem>
-              ))}
+              )}
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -108,10 +176,14 @@ function AppSidebarOrganization({ organizationSlug }: Pick<AppSidebarProps, "org
 
 function AppSidebarUser() {
   const { loading, session, signOut } = useAuthClient();
+  const { isMobile } = useSidebar();
   const config = useConfig<PublicConfig>();
+  const accountManagementUrl = authWorkerUrl(config, "/");
   const [debugOpen, setDebugOpen] = useState(false);
   const user = session?.authenticated ? session.user : null;
   const label = nonEmptyLabel(user?.name, user?.email, "Account");
+  const email = user?.email?.trim() ?? "";
+  const initials = userInitials(label);
   const debugInfo = useMemo(
     () => ({
       auth: {
@@ -140,21 +212,56 @@ function AppSidebarUser() {
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
-                <SidebarMenuButton className="h-10 gap-2 data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground">
-                  <UserCircle className="size-4" />
-                  <span className="truncate">{label}</span>
-                  <ChevronsUpDown className="ml-auto size-4" />
+                <SidebarMenuButton
+                  size="lg"
+                  className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
+                >
+                  <Avatar className="size-8 rounded-lg">
+                    <AvatarFallback className="rounded-lg">{initials}</AvatarFallback>
+                  </Avatar>
+                  <span className="grid flex-1 text-left text-sm leading-tight">
+                    <span className="truncate font-medium">{label}</span>
+                    {email ? <span className="truncate text-xs">{email}</span> : null}
+                  </span>
+                  <ChevronsUpDown className="ml-auto" />
                 </SidebarMenuButton>
               }
             />
-            <DropdownMenuContent side="top" align="start" className="w-56">
+            <DropdownMenuContent
+              className="min-w-56 rounded-lg"
+              side={isMobile ? "bottom" : "right"}
+              align="end"
+              sideOffset={4}
+            >
+              <DropdownMenuLabel className="p-0 font-normal">
+                <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
+                  <Avatar className="size-8 rounded-lg">
+                    <AvatarFallback className="rounded-lg">{initials}</AvatarFallback>
+                  </Avatar>
+                  <div className="grid flex-1 text-left text-sm leading-tight">
+                    <span className="truncate font-medium">{label}</span>
+                    {email ? <span className="truncate text-xs">{email}</span> : null}
+                  </div>
+                </div>
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                <DropdownMenuLabel className="truncate">{label}</DropdownMenuLabel>
-                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  render={
+                    <a href={accountManagementUrl}>
+                      <UserCircle />
+                      <span>Manage account</span>
+                      <ExternalLink className="ml-auto" />
+                    </a>
+                  }
+                />
                 <DropdownMenuItem onClick={() => setDebugOpen(true)}>
                   <Bug />
                   <span>View debug info</span>
                 </DropdownMenuItem>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
                 <DropdownMenuItem onClick={() => void signOut()}>
                   <LogOut />
                   <span>Sign out</span>
@@ -189,75 +296,138 @@ function AppSidebarUser() {
   );
 }
 
+function userInitials(label: string) {
+  const parts = label
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const initials = parts
+    .slice(0, 2)
+    .map((part) => part.at(0))
+    .join("")
+    .toUpperCase();
+  return initials || "I";
+}
+
 function nonEmptyLabel(...values: Array<string | null | undefined>) {
   return values.find((value) => value?.trim())?.trim() ?? "";
 }
 
+function authWorkerUrl(config: PublicConfig, path: string) {
+  const origin = authWorkerOrigin(config);
+  return new URL(path, `${origin}/`).toString();
+}
+
+function authWorkerOrigin(config: PublicConfig) {
+  const issuer = config.iterateAuth?.issuer;
+  if (issuer) {
+    try {
+      return new URL(issuer).origin;
+    } catch {
+      // Fall through to the production auth origin.
+    }
+  }
+  return "https://auth.iterate.com";
+}
+
 function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   const matchRoute = useMatchRoute();
+  const matches = useMatches();
   const { data } = useQuery(projectsListQueryOptions({ limit: 100, offset: 0 }));
   const projects =
     data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
+  const activeProjectSlug = getActiveProjectSlug(matches);
+  const activeProject = projects.find((project) => project.slug === activeProjectSlug);
+
+  // Drive the project nav from the active route slug, not list membership, so a valid
+  // project that isn't in the cached list (e.g. beyond the first page) still shows its nav.
+  if (activeProjectSlug) {
+    return (
+      <ProjectSidebarGroup
+        customHostname={activeProject?.customHostname ?? null}
+        projectSlug={activeProjectSlug}
+        projectHostnameBases={routeConfig.projectHostnameBases}
+      />
+    );
+  }
 
   return (
-    <>
-      <SidebarGroup>
-        <SidebarGroupContent>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                render={<Link to="/projects" />}
-                isActive={Boolean(
-                  matchRoute({
-                    to: "/projects",
-                    fuzzy: false,
-                  }),
-                )}
-              >
-                <span>Projects</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                render={<Link to="/capnweb-repl" />}
-                isActive={Boolean(matchRoute({ to: "/capnweb-repl", fuzzy: false }))}
-              >
-                <span>Repl</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
-
-      {projects.map((project) => (
-        <ProjectSidebarGroup
-          key={project.id}
-          customHostname={project.customHostname}
-          mcpBaseUrl={routeConfig.mcpBaseUrl}
-          projectSlug={project.slug}
-          baseUrl={routeConfig.baseUrl}
-          projectHostnameBases={routeConfig.projectHostnameBases}
-        />
-      ))}
-    </>
+    <SidebarGroup>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Projects"
+              render={<Link to="/projects" />}
+              isActive={Boolean(
+                matchRoute({
+                  to: "/projects",
+                  fuzzy: false,
+                }),
+              )}
+            >
+              <ScrollText />
+              <span>Projects</span>
+            </SidebarMenuButton>
+            <SidebarMenuSub>
+              {projects.map((project) => (
+                <SidebarMenuSubItem key={project.id}>
+                  <SidebarMenuSubButton
+                    isActive={Boolean(
+                      matchRoute({
+                        to: "/projects/$projectSlug",
+                        params: { projectSlug: project.slug },
+                        fuzzy: true,
+                      }),
+                    )}
+                    render={
+                      <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} />
+                    }
+                  >
+                    <span>{project.slug}</span>
+                  </SidebarMenuSubButton>
+                </SidebarMenuSubItem>
+              ))}
+            </SidebarMenuSub>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Repl"
+              render={<Link to="/capnweb-repl" />}
+              isActive={Boolean(matchRoute({ to: "/capnweb-repl", fuzzy: false }))}
+            >
+              <SquareTerminal />
+              <span>Repl</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
   );
 }
 
+function getActiveProjectSlug(matches: ReturnType<typeof useMatches>) {
+  return matches
+    .map((match) => match.params)
+    .map((params) =>
+      typeof params === "object" && params && "projectSlug" in params
+        ? params.projectSlug
+        : undefined,
+    )
+    .filter((projectSlug): projectSlug is string => typeof projectSlug === "string")
+    .at(-1);
+}
+
 function ProjectSidebarGroup({
-  baseUrl,
   customHostname,
-  mcpBaseUrl,
   projectHostnameBases,
   projectSlug,
 }: {
-  baseUrl?: string;
   customHostname: string | null;
-  mcpBaseUrl?: string;
   projectHostnameBases: readonly string[];
   projectSlug: string;
 }) {
   const matchRoute = useMatchRoute();
-  const mcpUrl = buildProjectMcpUrl({ baseUrl, mcpBaseUrl, projectSlug, projectHostnameBases });
   const customWorkerUrl = buildProjectWorkerUrl({
     projectSlug,
     customHostname,
@@ -265,139 +435,37 @@ function ProjectSidebarGroup({
   });
 
   return (
-    <SidebarGroup>
-      <SidebarGroupLabel>{projectSlug}</SidebarGroupLabel>
-      <SidebarGroupContent>
-        <SidebarMenuSub>
-          <SidebarMenuSubItem>
-            <SidebarMenuSubButton
-              render={<Link to="/projects/$projectSlug" params={{ projectSlug }} />}
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$projectSlug",
-                  params: { projectSlug },
-                  fuzzy: false,
-                }),
-              )}
-            >
-              <span>Home</span>
-            </SidebarMenuSubButton>
-          </SidebarMenuSubItem>
-          <SidebarMenuSubItem>
-            <SidebarMenuSubButton
-              render={<Link to="/projects/$projectSlug/agents" params={{ projectSlug }} />}
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$projectSlug/agents",
-                  params: { projectSlug },
-                  fuzzy: true,
-                }),
-              )}
-            >
-              <span>Agents</span>
-            </SidebarMenuSubButton>
-          </SidebarMenuSubItem>
-          <SidebarMenuSubItem>
-            <SidebarMenuSubButton
-              render={
-                <Link to="/projects/$projectSlug/codemode-sessions" params={{ projectSlug }} />
-              }
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$projectSlug/codemode-sessions",
-                  params: { projectSlug },
-                  fuzzy: true,
-                }),
-              )}
-            >
-              <span>Codemode Sessions</span>
-            </SidebarMenuSubButton>
-          </SidebarMenuSubItem>
-          <SidebarMenuSubItem>
-            <SidebarMenuSubButton
-              render={<Link to="/projects/$projectSlug/repos" params={{ projectSlug }} />}
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$projectSlug/repos",
-                  params: { projectSlug },
-                  fuzzy: true,
-                }),
-              )}
-            >
-              <span>Repos</span>
-            </SidebarMenuSubButton>
-          </SidebarMenuSubItem>
-          <SidebarMenuSubItem>
-            <SidebarMenuSubButton
-              render={<Link to="/projects/$projectSlug/secrets" params={{ projectSlug }} />}
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$projectSlug/secrets",
-                  params: { projectSlug },
-                  fuzzy: true,
-                }),
-              )}
-            >
-              <span>Secrets</span>
-            </SidebarMenuSubButton>
-          </SidebarMenuSubItem>
-          <SidebarMenuSubItem>
-            <SidebarMenuSubButton
-              render={<Link to="/projects/$projectSlug/examples" params={{ projectSlug }} />}
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$projectSlug/examples",
-                  params: { projectSlug },
-                }),
-              )}
-            >
-              <span>Examples</span>
-            </SidebarMenuSubButton>
-          </SidebarMenuSubItem>
-          <SidebarMenuSubItem>
-            <SidebarMenuSubButton
-              render={<Link to="/projects/$projectSlug/integrations" params={{ projectSlug }} />}
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$projectSlug/integrations",
-                  params: { projectSlug },
-                }),
-              )}
-            >
-              <span>Integrations</span>
-            </SidebarMenuSubButton>
-          </SidebarMenuSubItem>
-          {mcpUrl ? (
-            <SidebarMenuSubItem>
-              <SidebarMenuSubButton
-                render={<Link to="/projects/$projectSlug/mcp" params={{ projectSlug }} />}
+    <>
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            {PROJECT_STREAM_NAV_ITEMS.map((item) => (
+              <ProjectStreamNavItem
+                key={item.label}
+                icon={item.icon}
                 isActive={Boolean(
                   matchRoute({
-                    to: "/projects/$projectSlug/mcp",
+                    to: item.to,
                     params: { projectSlug },
+                    fuzzy: item.fuzzy,
                   }),
                 )}
-              >
-                <span>MCP</span>
-              </SidebarMenuSubButton>
-            </SidebarMenuSubItem>
-          ) : null}
-          <SidebarMenuSubItem>
-            <SidebarMenuSubButton
-              render={<Link to="/projects/$projectSlug/streams" params={{ projectSlug }} />}
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$projectSlug/streams",
-                  params: { projectSlug },
-                  fuzzy: true,
-                }),
-              )}
-            >
-              <span>Streams</span>
-            </SidebarMenuSubButton>
-          </SidebarMenuSubItem>
-          <SidebarMenuSubItem>
-            <SidebarMenuSubButton
+                label={item.label}
+                projectSlug={projectSlug}
+                streamPath={item.streamPath}
+                to={item.to}
+              />
+            ))}
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+      <SidebarSeparator />
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <ProjectSidebarMenuItem
+              icon={Settings2}
+              label="Settings"
               render={<Link to="/projects/$projectSlug/settings" params={{ projectSlug }} />}
               isActive={Boolean(
                 matchRoute({
@@ -405,29 +473,173 @@ function ProjectSidebarGroup({
                   params: { projectSlug },
                 }),
               )}
-            >
-              <span>Settings</span>
-            </SidebarMenuSubButton>
-          </SidebarMenuSubItem>
-          {customWorkerUrl ? (
-            <SidebarMenuSubItem>
-              <SidebarMenuSubButton
-                render={
-                  <a
-                    aria-label={`Open ${projectSlug} custom worker`}
-                    href={customWorkerUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  />
-                }
+            />
+            <ProjectSidebarMenuItem
+              icon={SquareTerminal}
+              label="Repl"
+              render={<Link to="/projects/$projectSlug/repl" params={{ projectSlug }} />}
+              isActive={Boolean(
+                matchRoute({
+                  to: "/projects/$projectSlug/repl",
+                  params: { projectSlug },
+                }),
+              )}
+            />
+            {customWorkerUrl ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  tooltip="Project worker"
+                  render={
+                    <a
+                      aria-label={`Open ${projectSlug} project worker`}
+                      href={customWorkerUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    />
+                  }
+                >
+                  <ExternalLink />
+                  <span>Project worker</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+      <SidebarGroup className="mt-auto">
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                size="sm"
+                className="text-sidebar-foreground/70"
+                tooltip="View all projects"
+                render={<Link to="/projects" />}
               >
-                <ExternalLink />
-                <span>Custom worker</span>
-              </SidebarMenuSubButton>
-            </SidebarMenuSubItem>
-          ) : null}
-        </SidebarMenuSub>
-      </SidebarGroupContent>
-    </SidebarGroup>
+                <ArrowLeft />
+                <span>View all projects</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    </>
+  );
+}
+
+type ProjectStreamNavItemConfig = {
+  fuzzy: boolean;
+  icon: LucideIcon;
+  label: string;
+  streamPath: StreamPathType;
+  to:
+    | "/projects/$projectSlug"
+    | "/projects/$projectSlug/agents"
+    | "/projects/$projectSlug/integrations"
+    | "/projects/$projectSlug/secrets"
+    | "/projects/$projectSlug/repos"
+    | "/projects/$projectSlug/streams"
+    | "/projects/$projectSlug/mcp";
+};
+
+const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
+  {
+    fuzzy: false,
+    icon: House,
+    label: "/",
+    streamPath: StreamPath.parse("/"),
+    to: "/projects/$projectSlug",
+  },
+  {
+    fuzzy: true,
+    icon: CircleDot,
+    label: "/agents",
+    streamPath: StreamPath.parse("/agents"),
+    to: "/projects/$projectSlug/agents",
+  },
+  {
+    fuzzy: false,
+    icon: Plug,
+    label: "/integrations",
+    streamPath: StreamPath.parse("/integrations"),
+    to: "/projects/$projectSlug/integrations",
+  },
+  {
+    fuzzy: true,
+    icon: KeyRound,
+    label: "/secrets",
+    streamPath: StreamPath.parse("/secrets"),
+    to: "/projects/$projectSlug/secrets",
+  },
+  {
+    fuzzy: true,
+    icon: GitBranch,
+    label: "/repos",
+    streamPath: StreamPath.parse("/repos"),
+    to: "/projects/$projectSlug/repos",
+  },
+  {
+    fuzzy: true,
+    icon: Radio,
+    label: "/streams",
+    streamPath: StreamPath.parse("/streams"),
+    to: "/projects/$projectSlug/streams",
+  },
+  {
+    fuzzy: false,
+    icon: Network,
+    label: "/mcp",
+    streamPath: StreamPath.parse("/mcp"),
+    to: "/projects/$projectSlug/mcp",
+  },
+];
+
+function ProjectStreamNavItem({
+  icon: Icon,
+  isActive,
+  label,
+  projectSlug,
+  streamPath,
+  to,
+}: {
+  icon: LucideIcon;
+  isActive: boolean;
+  label: string;
+  projectSlug: string;
+  streamPath: StreamPathType;
+  to: ProjectStreamNavItemConfig["to"];
+}) {
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        render={<Link to={to} params={{ projectSlug }} />}
+        isActive={isActive}
+        tooltip={label}
+      >
+        <Icon />
+        <EventsStreamPathLabel className="text-xs" label={label} path={streamPath} />
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
+function ProjectSidebarMenuItem({
+  icon: Icon,
+  isActive,
+  label,
+  render,
+}: {
+  icon: LucideIcon;
+  isActive: boolean;
+  label: string;
+  render: ReactElement;
+}) {
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton render={render} isActive={isActive} tooltip={label}>
+        <Icon />
+        <span>{label}</span>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   );
 }

@@ -27,21 +27,25 @@ export const Route = createFileRoute("/_app")({
 });
 
 function AppLayout() {
-  const activeOrganization = Route.useRouteContext();
   const { routeConfig, sidebarDefaultOpen } = Route.useLoaderData();
 
   return (
     <SidebarProvider defaultOpen={sidebarDefaultOpen} className="h-svh">
-      <AppSidebar organizationSlug={activeOrganization.orgSlug} routeConfig={routeConfig} />
+      <AppSidebar routeConfig={routeConfig} />
       <SidebarInset className="min-w-0 overflow-hidden">
-        <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
-          <SidebarTrigger className="-ml-1" />
-          <Separator orientation="vertical" className="mr-1 h-4" />
-          <PathBreadcrumbs />
+        <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
+          <div className="flex items-center gap-2 px-4">
+            <SidebarTrigger className="-ml-1" />
+            <Separator
+              orientation="vertical"
+              className="mr-2 data-vertical:h-4 data-vertical:self-auto"
+            />
+            <PathBreadcrumbs />
+          </div>
         </header>
-        <main className="flex min-h-0 flex-1 flex-col overflow-auto">
+        <div className="flex min-h-0 flex-1 flex-col overflow-auto">
           <Outlet />
-        </main>
+        </div>
       </SidebarInset>
     </SidebarProvider>
   );

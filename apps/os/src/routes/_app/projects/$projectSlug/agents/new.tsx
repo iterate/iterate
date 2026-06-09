@@ -68,7 +68,7 @@ const toolProviderOptions = [
   {
     key: "rpcTour",
     label: "RPC capability tour",
-    description: "Workers AI, repos, workspace, subagents, OS oRPC, Slack",
+    description: "Workers AI, repos, project context, subagents, OS oRPC, Slack",
   },
   {
     key: "adHoc",

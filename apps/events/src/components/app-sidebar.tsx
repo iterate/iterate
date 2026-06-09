@@ -2,14 +2,18 @@ import { useEffect, useState } from "react";
 import { Link, useMatchRoute, useSearch } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarHeader,
   SidebarInput,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarRail,
 } from "@iterate-com/ui/components/sidebar";
-import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamsSidebar } from "~/components/streams-sidebar.tsx";
 import { Namespace, type NamespaceValue } from "~/lib/namespace.ts";
@@ -25,13 +29,19 @@ type StreamLinkSearch = {
 
 export function AppSidebar({ namespace }: { namespace: NamespaceValue }) {
   return (
-    <SidebarShell
-      header={<AppSidebarBrand />}
-      footer={<AppSidebarNamespaceFooter namespace={namespace} />}
-    >
-      <AppSidebarNav />
-      <StreamsSidebar />
-    </SidebarShell>
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <AppSidebarBrand />
+      </SidebarHeader>
+      <SidebarContent>
+        <AppSidebarNav />
+        <StreamsSidebar />
+      </SidebarContent>
+      <SidebarFooter>
+        <AppSidebarNamespaceFooter namespace={namespace} />
+      </SidebarFooter>
+      <SidebarRail />
+    </Sidebar>
   );
 }
 

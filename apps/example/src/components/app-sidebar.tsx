@@ -1,13 +1,16 @@
 import { Link, useMatchRoute } from "@tanstack/react-router";
 import {
+  Sidebar,
+  SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarRail,
 } from "@iterate-com/ui/components/sidebar";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
-import { SidebarShell } from "@iterate-com/ui/components/sidebar-shell";
 
 const items = [
   { to: "/debug", label: "Debug" },
@@ -19,9 +22,15 @@ const items = [
 
 export function AppSidebar() {
   return (
-    <SidebarShell header={<AppSidebarBrand />}>
-      <AppSidebarNav />
-    </SidebarShell>
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <AppSidebarBrand />
+      </SidebarHeader>
+      <SidebarContent>
+        <AppSidebarNav />
+      </SidebarContent>
+      <SidebarRail />
+    </Sidebar>
   );
 }
 
