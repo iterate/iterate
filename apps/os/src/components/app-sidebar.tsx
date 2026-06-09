@@ -13,6 +13,7 @@ import {
   LogOut,
   Network,
   Plug,
+  Plus,
   Radio,
   ScrollText,
   Settings2,
@@ -27,6 +28,7 @@ import { useAuthClient } from "@iterate-com/auth/client";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { useQuery } from "@tanstack/react-query";
 import { Avatar, AvatarFallback } from "@iterate-com/ui/components/avatar";
+import { Button } from "@iterate-com/ui/components/button";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import {
   DropdownMenu,
@@ -132,8 +134,16 @@ function AppSidebarHeader() {
             className="min-w-56 rounded-lg"
           >
             <DropdownMenuGroup>
-              <DropdownMenuLabel className="text-xs text-muted-foreground">
+              <DropdownMenuLabel className="flex items-center justify-between pr-1 text-xs text-muted-foreground">
                 Projects
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label="New project"
+                  render={<Link to="/projects/new" />}
+                >
+                  <Plus />
+                </Button>
               </DropdownMenuLabel>
               {projects.length > 0 ? (
                 projects.map((project) => (
