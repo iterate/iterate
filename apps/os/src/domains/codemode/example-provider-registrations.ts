@@ -1,6 +1,5 @@
 import type { Callable } from "@iterate-com/shared/callable/types.ts";
 import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
-import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
 
 type SerializableValue =
   | null
@@ -11,7 +10,6 @@ type SerializableValue =
   | { [key: string]: SerializableValue };
 
 export function createExampleRpcProviderRegistration(input: {
-  activeOrganization?: ActiveOrganizationAuth;
   exportName: string;
   instructions: string;
   path: string[];
@@ -22,7 +20,6 @@ export function createExampleRpcProviderRegistration(input: {
     invocation: {
       kind: "rpc",
       callable: createExampleCapabilityCallable({
-        activeOrganization: input.activeOrganization,
         exportName: input.exportName,
         projectId: input.projectId,
       }),
@@ -32,20 +29,17 @@ export function createExampleRpcProviderRegistration(input: {
 }
 
 export function createExampleCapabilityProviders(input: {
-  activeOrganization?: ActiveOrganizationAuth;
   projectId: string;
 }): ToolProviderRegistration[] {
   return [
     createExampleRpcProviderRegistration({
       exportName: "AiCapability",
-      activeOrganization: input.activeOrganization,
       instructions: "Use ctx.ai.run(model, input) to call the Workers AI binding.",
       path: ["ai"],
       projectId: input.projectId,
     }),
     createExampleRpcProviderRegistration({
       exportName: "ReposCapability",
-      activeOrganization: input.activeOrganization,
       instructions:
         "Use ctx.repos.create({ slug }) to create a Repo, ctx.repos.get({ slug }).getInfo() to inspect one, ctx.repos.ensureIterateConfigInfo({ projectSlug }) to create or inspect the iterate-config Repo, and ctx.repos.list({}) to list Repos.",
       path: ["repos"],
@@ -53,7 +47,6 @@ export function createExampleCapabilityProviders(input: {
     }),
     createExampleRpcProviderRegistration({
       exportName: "AgentCapability",
-      activeOrganization: input.activeOrganization,
       instructions:
         "Use ctx.agents.create() to get a promise-pipelineable subagent handle, e.g. await ctx.agents.create().doThing(args).",
       path: ["agents", "create"],
@@ -61,7 +54,6 @@ export function createExampleCapabilityProviders(input: {
     }),
     createExampleRpcProviderRegistration({
       exportName: "OrpcCapability",
-      activeOrganization: input.activeOrganization,
       instructions:
         "Use ctx.os.listProcedures() and project-scoped OS APIs such as ctx.os.streams.list({}).",
       path: ["os"],
@@ -69,7 +61,6 @@ export function createExampleCapabilityProviders(input: {
     }),
     createExampleRpcProviderRegistration({
       exportName: "SlackCapability",
-      activeOrganization: input.activeOrganization,
       instructions:
         "Use ctx.slack.<Slack Web API method path>(args), for example ctx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action.",
       path: ["slack"],
@@ -79,15 +70,11 @@ export function createExampleCapabilityProviders(input: {
 }
 
 function createExampleCapabilityCallable(input: {
-  activeOrganization?: ActiveOrganizationAuth;
   exportName: string;
   projectId?: string;
 }): Callable {
   const props: { [key: string]: SerializableValue } = {
     ...(input.projectId == null ? {} : { projectId: input.projectId }),
-    ...(input.activeOrganization == null
-      ? {}
-      : { activeOrganization: activeOrganizationToSerializable(input.activeOrganization) }),
   };
   return {
     type: "workers-rpc",
@@ -103,18 +90,5 @@ function createExampleCapabilityCallable(input: {
     },
     rpcMethod: "executeCodemodeFunctionCall",
     argsMode: "object",
-  };
-}
-
-function activeOrganizationToSerializable(activeOrganization: ActiveOrganizationAuth): {
-  [key: string]: SerializableValue;
-} {
-  return {
-    orgId: activeOrganization.orgId,
-    orgPermissions: activeOrganization.orgPermissions,
-    orgRole: activeOrganization.orgRole,
-    orgSlug: activeOrganization.orgSlug,
-    sessionId: activeOrganization.sessionId,
-    userId: activeOrganization.userId,
   };
 }

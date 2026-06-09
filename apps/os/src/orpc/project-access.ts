@@ -1,24 +1,15 @@
 import { ORPCError } from "@orpc/server";
-import { getAccessibleAuthProject } from "~/capnweb/projects-capability.ts";
 import type { AppContext } from "~/context.ts";
 import { getProjectById, getProjectBySlug } from "~/db/queries/.generated/index.ts";
-import {
-  type ActiveOrganizationAuth,
-  resolveActiveOrganizationAuth,
-} from "~/lib/active-organization-auth.ts";
 
 /**
  * Confirms a caller can access an ownerless project before exposing
  * project-scoped capabilities such as Code Mode or stream access. Projects are
  * deliberately not owned by organizations at their core; user access is claimed
- * through Auth project membership, and admin API callers bypass that for
+ * through signed Auth project claims, and admin API callers bypass that for
  * operator work.
  */
-export async function requireActiveOrganizationProject(input: {
-  activeOrganization: ActiveOrganizationAuth;
-  context: AppContext;
-  projectId: string;
-}) {
+export async function requireAuthorizedProject(input: { context: AppContext; projectId: string }) {
   const project = await getProjectById(input.context.db, {
     id: input.projectId,
   });
@@ -29,15 +20,7 @@ export async function requireActiveOrganizationProject(input: {
     });
   }
 
-  if (input.activeOrganization.isAdminApi) {
-    return project;
-  }
-
-  if (input.context.principal?.can("read", { projectId: input.projectId })) {
-    return project;
-  }
-
-  if (await getAccessibleAuthProject(input)) {
+  if (canReadProject(input.context, input.projectId)) {
     return project;
   }
 
@@ -62,37 +45,23 @@ export async function requireProjectScopedAccess(input: {
 
   const project = await resolveProjectBySlugOrId(input);
 
-  const activeOrganization = resolveActiveOrganizationAuth(input.context);
-  if (!activeOrganization) {
-    if (input.context.principal?.type === "user") {
-      throw new ORPCError("FORBIDDEN", {
-        message: "OS requires an active Organization.",
-      });
-    }
+  if (!input.context.principal) {
     throw new ORPCError("UNAUTHORIZED");
   }
 
-  if (activeOrganization.isAdminApi) {
-    return project;
-  }
-
-  if (input.context.principal?.can("read", { projectId: project.id })) {
-    return project;
-  }
-
-  if (
-    await getAccessibleAuthProject({
-      activeOrganization,
-      context: input.context,
-      projectId: project.id,
-    })
-  ) {
+  if (canReadProject(input.context, project.id)) {
     return project;
   }
 
   throw new ORPCError("FORBIDDEN", {
     message: `Project ${input.projectSlugOrId} is not accessible.`,
   });
+}
+
+export function canReadProject(context: Pick<AppContext, "principal">, projectId: string) {
+  return (
+    context.principal?.type === "admin" || context.principal?.can("read", { projectId }) === true
+  );
 }
 
 export function requireProjectScope(

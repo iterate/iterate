@@ -19,8 +19,8 @@ export const IterateAuthOrganizationClaim = z.object({
 });
 export type IterateAuthOrganizationClaim = z.infer<typeof IterateAuthOrganizationClaim>;
 
-export const IterateAuthAccessTokenOrganizationClaim = IterateAuthOrganizationClaim.omit({
-  name: true,
+export const IterateAuthAccessTokenOrganizationClaim = IterateAuthOrganizationClaim.extend({
+  name: z.string().optional(),
 });
 export type IterateAuthAccessTokenOrganizationClaim = z.infer<
   typeof IterateAuthAccessTokenOrganizationClaim

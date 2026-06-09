@@ -3,7 +3,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeader } from "@tanstack/react-start/server";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
-import { requireActiveOrganizationForRoute } from "../lib/auth.ts";
+import { requireOrganizationMemberForSession } from "../lib/auth.ts";
 import { AppSidebar } from "~/components/app-sidebar.tsx";
 import { PathBreadcrumbs } from "~/components/path-breadcrumbs.tsx";
 import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
@@ -14,7 +14,8 @@ const getSidebarDefaultOpen = createServerFn({ method: "GET" }).handler(() => ({
 }));
 
 export const Route = createFileRoute("/_app")({
-  beforeLoad: () => requireActiveOrganizationForRoute(),
+  beforeLoad: ({ context, location }) =>
+    requireOrganizationMemberForSession(context.authSession, location, context.iterateAuthIssuer),
   loader: async ({ context }) => {
     await context.queryClient.ensureQueryData(projectsListQueryOptions({ limit: 100, offset: 0 }));
 
