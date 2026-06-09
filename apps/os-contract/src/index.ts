@@ -312,6 +312,7 @@ export const osContract = oc.router({
             .trim()
             .min(1)
             .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase kebab-case"),
+          organizationSlug: z.string().trim().min(1).optional(),
         }),
       )
       .output(Project.extend({ ingressUrl: z.string().url() })),

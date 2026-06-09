@@ -1,6 +1,7 @@
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
+import { useAuthClient } from "@iterate-com/auth/client";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Field,
@@ -10,6 +11,13 @@ import {
   FieldLabel,
 } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@iterate-com/ui/components/select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
 import { cacheCreatedProjectQueries } from "~/lib/cache-created-project-queries.ts";
@@ -23,11 +31,14 @@ const CreateProjectInput = z.object({
     .trim()
     .min(1, "Slug is required")
     .regex(PROJECT_SLUG_PATTERN, "Slug must be lowercase kebab-case"),
+  organizationSlug: z.string(),
 });
 
 export function CreateProjectForm() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { session } = useAuthClient();
+  const organizations = session?.authenticated ? session.session.organizations : [];
   const createProject = useMutation(
     orpc.projects.create.mutationOptions({
       onSuccess: async (project) => {
@@ -46,14 +57,17 @@ export function CreateProjectForm() {
   );
 
   const form = useForm({
-    defaultValues: { slug: "" },
+    defaultValues: { slug: "", organizationSlug: organizations[0]?.slug ?? "" },
     validators: {
       onChange: CreateProjectInput,
       onSubmit: CreateProjectInput,
     },
     onSubmit: async ({ value }) => {
       const parsed = CreateProjectInput.parse(value);
-      await createProject.mutateAsync({ slug: parsed.slug });
+      await createProject.mutateAsync({
+        slug: parsed.slug,
+        organizationSlug: parsed.organizationSlug || undefined,
+      });
       form.reset();
     },
   });
@@ -68,6 +82,31 @@ export function CreateProjectForm() {
       }}
     >
       <FieldGroup>
+        {organizations.length > 1 ? (
+          <form.Field name="organizationSlug">
+            {(field) => (
+              <Field>
+                <FieldLabel htmlFor={field.name}>Organization</FieldLabel>
+                <Select
+                  value={field.state.value}
+                  onValueChange={(value) => field.handleChange(value ?? "")}
+                >
+                  <SelectTrigger id={field.name}>
+                    <SelectValue placeholder="Select an organization" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {organizations.map((organization) => (
+                      <SelectItem key={organization.slug} value={organization.slug}>
+                        {organization.name ?? organization.slug}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FieldDescription>The organization that will own this project.</FieldDescription>
+              </Field>
+            )}
+          </form.Field>
+        ) : null}
         <form.Field name="slug">
           {(field) => {
             const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;

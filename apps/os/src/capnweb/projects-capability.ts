@@ -97,7 +97,11 @@ export class ProjectsCapability extends RpcTarget {
     return { projects, total: authProjects.length };
   }
 
-  async create(input: { id?: string; slug: string }): Promise<ProjectWithIngressUrl> {
+  async create(input: {
+    id?: string;
+    slug: string;
+    organizationSlug?: string;
+  }): Promise<ProjectWithIngressUrl> {
     const context = this.props.context;
     const authProject =
       context.principal?.type === "user" && input.id
@@ -123,7 +127,7 @@ export class ProjectsCapability extends RpcTarget {
     }
 
     if (context.principal?.type === "user" && !authProject) {
-      const organizationSlug = requireSingleOrganizationSlug(context);
+      const organizationSlug = resolveOrganizationSlugForCreate(context, input.organizationSlug);
       const authWorker = createAuthWorkerServiceClient(context);
       const createdAuthProject = await authWorker.internal.project.createForOrganization({
         id,
@@ -326,8 +330,22 @@ function getAccessibleSignedProject(input: { context: AppContext; projectId: str
   );
 }
 
-function requireSingleOrganizationSlug(context: Pick<AppContext, "principal">) {
+function resolveOrganizationSlugForCreate(
+  context: Pick<AppContext, "principal">,
+  requestedSlug: string | undefined,
+) {
   const organizations = context.principal?.type === "user" ? context.principal.organizations : [];
+
+  if (requestedSlug) {
+    const organization = organizations.find((candidate) => candidate.slug === requestedSlug);
+    if (!organization) {
+      throw new ORPCError("FORBIDDEN", {
+        message: `Organization ${requestedSlug} is not available to this user.`,
+      });
+    }
+    return organization.slug;
+  }
+
   if (organizations.length === 1) {
     return organizations[0]!.slug;
   }
@@ -336,6 +354,6 @@ function requireSingleOrganizationSlug(context: Pick<AppContext, "principal">) {
     message:
       organizations.length === 0
         ? "Project creation requires organization membership."
-        : "Project creation requires an existing signed project claim when the user belongs to multiple organizations.",
+        : "Pass organizationSlug to choose which organization should own the project.",
   });
 }
