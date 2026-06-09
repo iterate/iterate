@@ -22,7 +22,7 @@ export type StreamProcessorIterateContext = {
   stream: ProcessorStream;
 };
 
-export type StreamProcessorContract<Self> = {
+export type StreamProcessorContract<_Self> = {
   slug: string;
   stateSchema: z.ZodType;
   initialState?: unknown;
@@ -31,11 +31,7 @@ export type StreamProcessorContract<Self> = {
   consumes: readonly string[];
 };
 
-type ProcessorEvent<Contract> = Contract extends { consumes: readonly string[] }
-  ? "*" extends Contract["consumes"][number]
-    ? StreamEvent
-    : ConsumedEvent<Contract>
-  : ConsumedEvent<Contract>;
+type ProcessorEvent<Contract> = ConsumedEvent<Contract>;
 
 export type StreamProcessorBaseDeps<Contract, IterateContext> = {
   iterateContext: IterateContext;
@@ -49,23 +45,13 @@ export type ReducedEvent<Contract> = {
 };
 
 export type ReduceArgs<Contract> = {
-  event: ProcessorEvent<Contract>;
-  state: ProcessorState<Contract>;
+  event: DeepReadonly<ProcessorEvent<Contract>>;
+  state: DeepReadonly<ProcessorState<Contract>>;
 };
 
 export type ProcessEventArgs<Contract> = ReducedEvent<Contract> & {
   streamMaxOffset: number;
   checkpointOffset: number;
-  blockProcessorWhile: <Result>(work: () => Promise<Result>) => void;
-  runInBackground: <Result>(work: () => Promise<Result>) => void;
-};
-
-export type ProcessEventsArgs<Contract> = {
-  events: readonly ReducedEvent<Contract>[];
-  previousState: DeepReadonly<ProcessorState<Contract>>;
-  state: DeepReadonly<ProcessorState<Contract>>;
-  checkpointOffset: number;
-  streamMaxOffset: number;
   blockProcessorWhile: <Result>(work: () => Promise<Result>) => void;
   runInBackground: <Result>(work: () => Promise<Result>) => void;
 };
@@ -105,6 +91,7 @@ export abstract class StreamProcessor<
   readonly #processorKey: string | undefined;
 
   #checkpointOffset = 0;
+  // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: #loadState reads and assigns this via ??=.
   #loaded: Promise<void> | undefined;
   #processing: Promise<void> = Promise.resolve();
   #state: ProcessorState<Contract> | undefined;
@@ -163,7 +150,14 @@ export abstract class StreamProcessor<
   }
 
   protected reduce(args: ReduceArgs<Contract>): ProcessorState<Contract> | null | undefined {
-    return args.state;
+    return args.state as ProcessorState<Contract>;
+  }
+
+  reduceEvent(args: {
+    event: StreamEvent;
+    state: ProcessorState<Contract>;
+  }): ProcessorState<Contract> {
+    return this.#reduce(args)?.state ?? args.state;
   }
 
   #reduce(args: {
@@ -183,8 +177,8 @@ export abstract class StreamProcessor<
             event: ConsumedEvent<Contract>;
           }) =>
             this.reduce({
-              event: event as ProcessorEvent<Contract>,
-              state,
+              event: event as DeepReadonly<ProcessorEvent<Contract>>,
+              state: state as DeepReadonly<ProcessorState<Contract>>,
             }),
         },
       },
@@ -192,28 +186,18 @@ export abstract class StreamProcessor<
     });
   }
 
-  protected processEvents(args: ProcessEventsArgs<Contract>): void {
-    for (const reducedEvent of args.events) {
-      this.processEvent({
-        ...reducedEvent,
-        checkpointOffset: args.checkpointOffset,
-        streamMaxOffset: args.streamMaxOffset,
-        blockProcessorWhile: args.blockProcessorWhile,
-        runInBackground: args.runInBackground,
-      });
-    }
-  }
-
   protected processEvent(_args: ProcessEventArgs<Contract>): void {}
 
   processReducedEvent(
-    args: ReducedEvent<Contract> & {
+    args: Omit<ReducedEvent<Contract>, "event"> & {
+      event: StreamEvent;
       checkpointOffset?: number;
       streamMaxOffset?: number;
     },
   ): void {
     this.processEvent({
       ...args,
+      event: args.event as DeepReadonly<ProcessorEvent<Contract>>,
       checkpointOffset: args.checkpointOffset ?? args.event.offset,
       streamMaxOffset: args.streamMaxOffset ?? args.event.offset,
       blockProcessorWhile: () => {
@@ -259,15 +243,15 @@ export abstract class StreamProcessor<
 
     if (reducedEvents.length > 0) {
       this.#blockingWork = [];
-      this.processEvents({
-        events: reducedEvents,
-        previousState: batchPreviousState as DeepReadonly<ProcessorState<Contract>>,
-        state: nextState as DeepReadonly<ProcessorState<Contract>>,
-        checkpointOffset,
-        streamMaxOffset: args.streamMaxOffset,
-        blockProcessorWhile: (work) => this.#blockProcessorWhile(work),
-        runInBackground: (work) => this.#runInBackground(work),
-      });
+      for (const reducedEvent of reducedEvents) {
+        this.processEvent({
+          ...reducedEvent,
+          checkpointOffset,
+          streamMaxOffset: args.streamMaxOffset,
+          blockProcessorWhile: (work) => this.#blockProcessorWhile(work),
+          runInBackground: (work) => this.#runInBackground(work),
+        });
+      }
 
       await this.#awaitBlockingWork();
     }

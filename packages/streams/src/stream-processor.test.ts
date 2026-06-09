@@ -432,7 +432,7 @@ class CoreStreamSim {
     };
 
     const previousCoreProcessorState = entry.coreProcessorState;
-    entry.coreProcessorState = coreInline.reduce({
+    entry.coreProcessorState = coreInline.reduceEvent({
       event: committed,
       state: previousCoreProcessorState,
     });

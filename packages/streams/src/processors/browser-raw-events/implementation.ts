@@ -1,4 +1,4 @@
-import { StreamProcessor, type ProcessEventsArgs } from "../../stream-processor.ts";
+import { StreamProcessor } from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserRawEventsContract } from "./contract.ts";
@@ -19,18 +19,24 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
 > {
   readonly contract = BrowserRawEventsContract;
 
-  protected override processEvents(args: ProcessEventsArgs<BrowserRawEventsContract>): void {
-    args.blockProcessorWhile(() =>
-      ensureBrowserRawEventsSchema(this.deps.sql).then(() =>
-        this.deps.sql.batch(
-          args.events.map(({ event }) => ({
-            sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
-            params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
-          })),
-          { transaction: true },
-        ),
-      ),
-    );
+  override async processEventBatch(
+    args: Parameters<StreamProcessor<BrowserRawEventsContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    const checkpoint = await this.snapshot();
+    const events = args.events.filter((event) => event.offset > checkpoint.offset);
+
+    if (events.length > 0) {
+      await ensureBrowserRawEventsSchema(this.deps.sql);
+      await this.deps.sql.batch(
+        events.map((event) => ({
+          sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
+          params: [event.offset - 1, JSON.stringify(event)] satisfies SqlValue[],
+        })),
+        { transaction: true },
+      );
+    }
+
+    await super.processEventBatch(args);
   }
 }
 

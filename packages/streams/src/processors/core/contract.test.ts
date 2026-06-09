@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
+import type { StreamEvent } from "../../shared/event.ts";
 import { CoreProcessorContract, type CoreProcessorState } from "./contract.ts";
 import { CoreStreamProcessor } from "./implementation.ts";
-import type { StreamEvent } from "../../shared/event.ts";
 
 const processor = new CoreStreamProcessor({
   iterateContext: { stream: { append: () => {}, appendBatch: () => {} } },
 });
 
 function reduce(args: { contract?: unknown; state: CoreProcessorState; event: StreamEvent }) {
-  return processor.reduce(args);
+  return processor.reduceEvent(args);
 }
 
 function reduceEvents(args: {
@@ -19,7 +19,7 @@ function reduceEvents(args: {
     args.state ?? CoreProcessorContract.stateSchema.parse(CoreProcessorContract.initialState);
   for (const event of args.events) {
     if (event.offset <= state.maxOffset) continue;
-    state = processor.reduce({ event, state });
+    state = processor.reduceEvent({ event, state });
   }
   return state;
 }

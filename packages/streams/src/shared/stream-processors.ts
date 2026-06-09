@@ -405,10 +405,10 @@ export type ProcessorState<Contract> = Contract extends {
  * `afterAppend`.
  */
 export type ConsumedEvent<Contract> = Contract extends {
-  events: infer Events extends EventCatalog;
+  events: EventCatalog;
   consumes: infer Consumes extends readonly string[];
 }
-  ? EventFromTypes<Events, ProcessorDepsOf<Contract>, Consumes>
+  ? EventFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Consumes>
   : never;
 
 /**
@@ -420,10 +420,10 @@ export type ConsumedEvent<Contract> = Contract extends {
  * plain object literals.
  */
 export type EmittedInput<Contract> = Contract extends {
-  events: infer Events extends EventCatalog;
+  events: EventCatalog;
   emits: infer Emits extends readonly string[];
 }
-  ? InputFromTypes<Events, ProcessorDepsOf<Contract>, Emits>
+  ? InputFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Emits>
   : never;
 
 /**

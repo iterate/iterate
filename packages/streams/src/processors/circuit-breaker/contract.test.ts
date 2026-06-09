@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { StreamEvent } from "../../shared/event.ts";
 import { CoreProcessorContract, type CoreProcessorState } from "../core/contract.ts";
 import { CoreStreamProcessor } from "../core/implementation.ts";
 import { circuitBreakerProcessorContract, shouldTripCircuitBreaker } from "./contract.ts";
-import type { StreamEvent } from "../../shared/event.ts";
 
 const circuitBreakerReduce = circuitBreakerProcessorContract.reduce;
 if (circuitBreakerReduce === undefined) {
@@ -14,7 +14,7 @@ describe("circuit breaker processor", () => {
     iterateContext: { stream: { append: () => {}, appendBatch: () => {} } },
   });
   const coreReduce = (args: { state: CoreProcessorState; event: StreamEvent }) =>
-    coreProcessor.reduce(args);
+    coreProcessor.reduceEvent(args);
 
   it("configures burst and refill via its owned configured event", () => {
     let state = circuitBreakerProcessorContract.stateSchema.parse(

@@ -304,7 +304,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     let state = args.state;
     for (const event of args.events) {
       if (event.offset <= state.maxOffset) continue;
-      state = this.coreProcessor.reduce({ event, state });
+      state = this.coreProcessor.reduceEvent({ event, state });
     }
     return state;
   }
@@ -396,7 +396,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
       }
 
       const previousCoreProcessorState = workingCoreProcessorState;
-      workingCoreProcessorState = this.coreProcessor.reduce({
+      workingCoreProcessorState = this.coreProcessor.reduceEvent({
         event: committed,
         state: previousCoreProcessorState,
       });
@@ -478,7 +478,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }): StreamCoreProcessorState {
     const base = args.coreProcessorState ?? this.#coreProcessorState;
 
-    return this.coreProcessor.reduce({
+    return this.coreProcessor.reduceEvent({
       event: args.event,
       state: base,
     });

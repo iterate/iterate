@@ -1,6 +1,6 @@
+import type { StreamProcessorSnapshot, StreamProcessorStateStorage } from "../stream-processor.ts";
 import { createSchemaEnsurer } from "./ensure-schema-once.ts";
 import type { SqlClient } from "./stream-browser-db.ts";
-import type { StreamProcessorSnapshot, StreamProcessorStateStorage } from "../stream-processor.ts";
 
 const DEFAULT_SUBSCRIPTION_KEY = "";
 

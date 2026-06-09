@@ -3,8 +3,8 @@
 // of through a subscription runner, because stream bookkeeping must be updated
 // before committed events are delivered to subscribers.
 
-import type { StreamEvent, StreamEventInput } from "../../shared/event.ts";
-import { StreamProcessor, type ProcessEventArgs } from "../../stream-processor.ts";
+import type { StreamEventInput } from "../../shared/event.ts";
+import { StreamProcessor } from "../../stream-processor.ts";
 import {
   CoreProcessorContract,
   SupportedSubscriptionConfiguredEvent,
@@ -12,11 +12,25 @@ import {
 } from "./contract.ts";
 
 export type CoreProcessorContract = typeof CoreProcessorContract;
-type CoreEvent = StreamEvent<string, any>;
 
 export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> {
   readonly contract = CoreProcessorContract;
 
+  // This is an extra method that other stream processors don't have that is called straight
+  // from the durable object. It lets us reject events before they are appended to the stream.
+  //
+  // The idea is that we have a single stream/paused event that is used _by any other processor_
+  // to tell this stream processor to stop accepting events. That event, alongside its counterparty stream/resumed
+  // is reduced into state.paused.
+  //
+  // That way the complicated
+  // loop detection / circuit breaker logic that we will no doubt need can live in other processors.
+
+  // Over time we might make stream/paused more expressive to allow blocking of just certain events from certain
+  // processors.
+  //
+  // This validateAppend method is also where we will implement permissions in the future to ensure not everyone
+  // can append every conceivable event to a stream.
   validateAppend(args: { event: StreamEventInput; state: CoreProcessorState }): void {
     if (!args.state.paused) return;
 
@@ -26,17 +40,15 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
       case "events.iterate.com/stream/woken":
         return;
       default:
-        throw new Error(`stream paused: ${args.state.pauseReason ?? "circuit breaker open"}`);
+        throw new Error(`stream paused: ${args.state.pauseReason ?? "unknown reason"}`);
     }
   }
 
-  public override reduce(args: {
-    event: CoreEvent;
-    state: CoreProcessorState;
-  }): CoreProcessorState {
+  public override reduce(args: Parameters<StreamProcessor<CoreProcessorContract>["reduce"]>[0]) {
+    const state = this.contract.stateSchema.parse(args.state);
     let next: CoreProcessorState = {
-      ...args.state,
-      eventCount: args.state.eventCount + 1,
+      ...state,
+      eventCount: state.eventCount + 1,
       maxOffset: args.event.offset,
     };
 
@@ -97,13 +109,13 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
 
       case "events.iterate.com/stream/child-stream-created": {
         let childPath: string | null;
-        if (args.event.payload.childPath === args.state.path) {
+        if (args.event.payload.childPath === state.path) {
           childPath = null;
-        } else if (args.state.path === "/") {
+        } else if (state.path === "/") {
           const [firstSegment] = args.event.payload.childPath.split("/").filter(Boolean);
           childPath = firstSegment === undefined ? null : `/${firstSegment}`;
         } else {
-          const parentPrefix = `${args.state.path}/`;
+          const parentPrefix = `${state.path}/`;
           if (!args.event.payload.childPath.startsWith(parentPrefix)) {
             childPath = null;
           } else {
@@ -111,7 +123,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
               .slice(parentPrefix.length)
               .split("/")
               .filter(Boolean);
-            childPath = firstSegment === undefined ? null : `${args.state.path}/${firstSegment}`;
+            childPath = firstSegment === undefined ? null : `${state.path}/${firstSegment}`;
           }
         }
 
@@ -122,7 +134,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
         break;
       }
 
-      case "events.iterate.com/stream/subscription-configured":
+      case "events.iterate.com/stream/subscription-configured": {
         const parsed = SupportedSubscriptionConfiguredEvent.safeParse(args.event);
         if (!parsed.success) {
           const { [args.event.payload.subscriptionKey]: _removed, ...subscriptionsByKey } =
@@ -138,13 +150,36 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
           },
         };
         break;
+      }
 
       case "events.iterate.com/stream/processor-registered":
         next = {
           ...next,
           processorsBySlug: {
             ...next.processorsBySlug,
-            [args.event.payload.slug]: { latestRegisteredEvent: args.event },
+            [args.event.payload.slug]: {
+              latestRegisteredEvent: {
+                offset: args.event.offset,
+                type: args.event.type,
+                createdAt: args.event.createdAt,
+                payload: {
+                  slug: args.event.payload.slug,
+                  version: args.event.payload.version,
+                  description: args.event.payload.description,
+                  consumes: [...args.event.payload.consumes],
+                  emits: [...args.event.payload.emits],
+                  ownedEvents: args.event.payload.ownedEvents.map((ownedEvent) => ({
+                    type: ownedEvent.type,
+                    ...(ownedEvent.description === undefined
+                      ? {}
+                      : { description: ownedEvent.description }),
+                    ...(ownedEvent.examples === undefined
+                      ? {}
+                      : { examples: [...ownedEvent.examples] }),
+                  })),
+                },
+              },
+            },
           },
         };
         break;
@@ -152,10 +187,12 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
       default:
         break;
     }
-    return this.contract.stateSchema.parse(next ?? args.state);
+    return this.contract.stateSchema.parse(next ?? state);
   }
 
-  protected override processEvent(args: ProcessEventArgs<CoreProcessorContract>): void {
+  protected override processEvent(
+    args: Parameters<StreamProcessor<CoreProcessorContract>["processEvent"]>[0],
+  ): void {
     switch (args.event.type) {
       case "events.iterate.com/stream/created": {
         if (args.state.path === "/") return;

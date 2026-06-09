@@ -1,8 +1,4 @@
-import {
-  StreamProcessor,
-  type ProcessEventsArgs,
-  type ReduceArgs,
-} from "../../stream-processor.ts";
+import { StreamProcessor } from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserEventFeedContract } from "./contract.ts";
@@ -28,22 +24,25 @@ export class BrowserEventFeedProcessor extends StreamProcessor<
 > {
   readonly contract = BrowserEventFeedContract;
 
-  protected override reduce(args: ReduceArgs<BrowserEventFeedContract>): FeedState {
+  protected override reduce(
+    args: Parameters<StreamProcessor<BrowserEventFeedContract>["reduce"]>[0],
+  ): FeedState {
     return planFeedOps(args.state as FeedState, [args.event]).endState;
   }
 
-  protected override processEvents(args: ProcessEventsArgs<BrowserEventFeedContract>): void {
-    const { ops } = planFeedOps(
-      args.previousState as FeedState,
-      args.events.map(({ event }) => event),
-    );
-    if (ops.length === 0) return;
+  override async processEventBatch(
+    args: Parameters<StreamProcessor<BrowserEventFeedContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    const checkpoint = await this.snapshot();
+    const events = args.events.filter((event) => event.offset > checkpoint.offset);
+    const { ops } = planFeedOps(checkpoint.state as FeedState, events);
 
-    args.blockProcessorWhile(() =>
-      ensureBrowserEventFeedSchema(this.deps.sql).then(() =>
-        this.deps.sql.batch(ops.map(feedOpToStatement), { transaction: true }),
-      ),
-    );
+    if (ops.length > 0) {
+      await ensureBrowserEventFeedSchema(this.deps.sql);
+      await this.deps.sql.batch(ops.map(feedOpToStatement), { transaction: true });
+    }
+
+    await super.processEventBatch(args);
   }
 }
 
