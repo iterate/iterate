@@ -1,11 +1,11 @@
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
   type AgentDurableObject,
   getAgentDurableObjectName,
 } from "../durable-objects/agent-durable-object.ts";
+import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
 
 type AgentCapabilityEnv = {
   AGENT?: DurableObjectNamespace<AgentDurableObject>;

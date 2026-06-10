@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
 import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
-import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "@iterate-com/shared/stream-processors/agent/contract";
+import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
 
 export const OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE =
   "events.iterate.com/os-agent/llm-provider-selected";

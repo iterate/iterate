@@ -3,9 +3,9 @@ import { McpAgent } from "agents/mcp";
 import type { Connection } from "agents";
 import { z } from "zod";
 import { StreamPath, type Event, type EventInput } from "@iterate-com/shared/streams/types";
-import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { upsertD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import packageJson from "../../../../package.json" with { type: "json" };
+import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 import { createExampleCapabilityProviders } from "~/domains/codemode/example-provider-registrations.ts";
 import { createGmailProviderRegistration } from "~/domains/google/gmail-provider-registration.ts";
 import {

@@ -1,5 +1,5 @@
 import type { Callable } from "@iterate-com/shared/callable/types.ts";
-import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
+import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 
 type SerializableValue =
   | null

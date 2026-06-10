@@ -4,7 +4,7 @@ import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/d
 import {
   CodemodeProcessorContract,
   type ToolProviderRegistration,
-} from "@iterate-com/shared/stream-processors/codemode/contract";
+} from "~/domains/codemode/stream-processors/codemode/contract.ts";
 import {
   createCodemodeSession,
   startCodemodeScriptOnSession,

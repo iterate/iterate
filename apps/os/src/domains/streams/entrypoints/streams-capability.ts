@@ -7,7 +7,7 @@ import {
   type StreamCursor,
   StreamPath,
 } from "@iterate-com/shared/streams/types";
-import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
+import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
 import {
   getStreamDurableObjectName,
   getInitializedStreamStub,

@@ -1,7 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
-import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import { createD1Client } from "sqlfu";
+import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
 import { AppConfig } from "~/app.ts";
 import {
   deleteProjectSecretById,

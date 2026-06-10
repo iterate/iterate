@@ -11,6 +11,7 @@ import {
 import { ClientOnly, useNavigate } from "@tanstack/react-router";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { DEFAULT_STREAM_NAMESPACE } from "../../../src/browser/connect.ts";
+import { durableObjectProcessorSubscriber } from "../../../src/shared/callable-subscriber.ts";
 import {
   acquireStreamRuntime,
   type BrowserProcessorConfig,
@@ -745,7 +746,7 @@ function EventRows({
               className="pointer-events-auto grid size-8 cursor-pointer place-items-center rounded-full border border-[#e8ebf0] bg-white text-base leading-none text-[#16181d] opacity-60 shadow-[0_4px_12px_rgb(15_23_42_/_8%)] hover:opacity-90"
               type="button"
               onClick={() => {
-                initialTailScroll.markUserLeftTail();
+                initialTailScroll.markUserLeftTail("scroll-to-top-button");
                 virtualizer.scrollToOffset(0);
               }}
             >
@@ -1424,11 +1425,11 @@ function StreamControlTool({
             type: "events.iterate.com/stream/subscription-configured",
             payload: {
               subscriptionKey,
-              subscriber: {
-                type: "built-in",
-                transport: "workers-rpc",
-                processorSlug: "circuit-breaker",
-              },
+              subscriber: durableObjectProcessorSubscriber({
+                bindingName: "STREAM_PROCESSOR_RUNNER",
+                durableObjectName: `${core.path}:${subscriptionKey}`,
+                processorName: "circuit-breaker",
+              }),
             },
             idempotencyKey: `subscription:${subscriptionKey}`,
           },

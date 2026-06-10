@@ -5,6 +5,28 @@ import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { e2eStreamPath, streamRoute } from "../helpers.ts";
 
+// Local reproduction of CI conditions (slow runner + real network to a deployed worker).
+// Example: E2E_CPU_THROTTLE=6 E2E_NET_LATENCY_MS=100 WORKER_URL=https://... pnpm playwright.
+// No-op unless the env vars are set, so CI and normal local runs are unaffected.
+test.beforeEach(async ({ page }) => {
+  const cpuThrottleRate = Number(process.env.E2E_CPU_THROTTLE ?? "1");
+  const networkLatencyMs = Number(process.env.E2E_NET_LATENCY_MS ?? "0");
+  if (cpuThrottleRate <= 1 && networkLatencyMs <= 0) return;
+  const session = await page.context().newCDPSession(page);
+  if (cpuThrottleRate > 1) {
+    await session.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottleRate });
+  }
+  if (networkLatencyMs > 0) {
+    await session.send("Network.enable");
+    await session.send("Network.emulateNetworkConditions", {
+      offline: false,
+      latency: networkLatencyMs,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+    });
+  }
+});
+
 // Baseline end-to-end smoke test for the simplified browser mirror: a composer append must
 // go to the server, be delivered back through the single elected subscriber, land in SQLite,
 // and show up through the visible-range SQL query.
@@ -981,10 +1003,16 @@ async function expectComposerAtScrollerBottom(page: Page) {
   await expect.poll(() => composerDistanceFromScrollerBottom(page)).toBeLessThanOrEqual(2);
 }
 
+// The scroll helpers below move the viewport with direct `scrollTop` writes (deterministic,
+// frame-addressable), but the page's initial tail pin deliberately releases only on user
+// *input* events — programmatic scroll deltas are indistinguishable from the virtualizer's
+// own convergence writes (see use-initial-tail-scroll.ts). Each helper therefore dispatches
+// a wheel event first: the same signal a real user reading older rows would produce.
 async function scrollStreamBy(page: Page, delta: number) {
   await page.getByTestId("stream-events").evaluate((element, scrollDelta) => {
     if (!(element instanceof HTMLElement))
       throw new Error("stream scroller must be an HTMLElement");
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: scrollDelta }));
     element.scrollTop += scrollDelta;
   }, delta);
 }
@@ -996,6 +1024,7 @@ async function jitterScrollAwayFromBottom(
   await page.getByTestId("stream-events").evaluate(async (element, jitterOptions) => {
     if (!(element instanceof HTMLElement))
       throw new Error("stream scroller must be an HTMLElement");
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: -jitterOptions.delta }));
 
     let direction = -1;
     const finishedAt = performance.now() + jitterOptions.durationMs;
@@ -1026,6 +1055,7 @@ async function scrollToMiddle(page: Page) {
   await page.getByTestId("stream-events").evaluate((element) => {
     if (!(element instanceof HTMLElement))
       throw new Error("stream scroller must be an HTMLElement");
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
     element.scrollTop = Math.floor((element.scrollHeight - element.clientHeight) / 2);
   });
 }
@@ -1034,6 +1064,7 @@ async function sampleUpwardScroll(page: Page, options: { stepCount: number; scro
   return await page.getByTestId("stream-events").evaluate(async (element, scrollOptions) => {
     if (!(element instanceof HTMLElement))
       throw new Error("stream scroller must be an HTMLElement");
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: -scrollOptions.scrollDelta }));
 
     function frame() {
       const virtualRows = [...element.querySelectorAll('[data-testid="virtual-row"]')];

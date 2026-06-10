@@ -6,21 +6,30 @@
 // the circuit-breaker processor.
 
 import { z } from "zod";
+import { Callable } from "@iterate-com/shared/callable/types.ts";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";
 
+/**
+ * The one supported subscriber shape: a Callable descriptor the Stream DO
+ * dispatches with the subscription handshake. The callable names the host
+ * (worker entrypoint or durable object) and the RPC method to invoke; the host
+ * then calls back `subscribeOutbound` to receive batches. No authorization yet:
+ * any appender can point a subscription at any dispatchable target.
+ */
 const SupportedOutboundSubscriber = z.object({
-  type: z.literal("built-in"),
-  transport: z.literal("workers-rpc"),
-  processorSlug: z.string().trim().min(1),
+  type: z.literal("callable"),
+  callable: Callable,
 });
-// TODO: Add dynamic-worker when a worker-name/entrypoint dialer exists.
-// TODO: Add webhooks only if we want non-capnweb delivery semantics.
 
+// Older subscriber shapes still present in stored events/state. They reduce
+// without error but get dropped from supported runtime state, so streams with
+// stale subscriptions simply stop dialing until a callable subscription is
+// (re-)appended.
 const HistoricalOutboundSubscriber = z.union([
   SupportedOutboundSubscriber,
   z.object({
     type: z.literal("built-in"),
-    transport: z.literal("capnweb-websocket"),
+    transport: z.enum(["workers-rpc", "capnweb-websocket"]),
     processorSlug: z.string().trim().min(1),
   }),
   z.object({

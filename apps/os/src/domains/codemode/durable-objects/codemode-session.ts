@@ -10,21 +10,25 @@ import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import {
   deriveDurableObjectNameFromStructuredName,
+  NotInitializedError,
   withLifecycleHooks,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
+import type { Callable } from "@iterate-com/shared/callable/types.ts";
+import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import {
-  CodemodeProcessorContract,
-  type ToolProviderRegistration,
-} from "@iterate-com/shared/stream-processors/codemode/contract";
+  createStreamProcessorHost,
+  type RequestStreamSubscriptionArgs,
+} from "@iterate-com/streams/workers/stream-processor-host";
+import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
+import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
+import { CodemodeProcessor } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
 import type {
   CodemodeProcessorLogger,
   CodemodeProcessorSession,
+  CodemodeScriptExecutionResult,
   CodemodeScriptExecutor,
-} from "@iterate-com/shared/stream-processors/codemode/code-executor";
-import type { ProcessorStreamApi } from "@iterate-com/shared/stream-processors";
-import type { Callable } from "@iterate-com/shared/callable/types.ts";
-import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
+} from "~/domains/codemode/stream-processors/codemode/code-executor.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -34,7 +38,6 @@ import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capabil
 import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
 import { createOpenApiProviderRegistration } from "~/rpc-targets/openapi-provider-registration.ts";
 import { type ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
-import type { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
@@ -111,13 +114,9 @@ export type CodemodeSessionEnv = {
   LOADER?: WorkerLoader;
   PROJECT?: DurableObjectNamespace<ProjectDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
-  STREAM_PROCESSOR_RUNNER: DurableObjectNamespace<StreamProcessorRunner>;
 } & Record<string, unknown>;
 
-type CodemodeSessionStreamApi = Omit<
-  ProcessorStreamApi<typeof CodemodeProcessorContract>,
-  "append" | "appendBatch" | "read" | "subscribe"
-> & {
+type CodemodeSessionStreamApi = {
   append(args: { event: EventInput; streamPath?: string }): Promise<Event>;
   appendBatch(args: { events: EventInput[]; streamPath?: string }): Promise<Event[]>;
   read(args?: {
@@ -170,6 +169,18 @@ const CodemodeSessionBase = withKvInspector({
 })(CodemodeSessionWithOuterbase) as unknown as typeof CodemodeSessionLifecycleBase;
 
 export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
+  host = createStreamProcessorHost(this.ctx);
+  codemode = this.host.add(
+    "codemode",
+    (deps) =>
+      new CodemodeProcessor({
+        ...deps,
+        buildSessionCapabilityCallable: () => this.createSessionCapabilityCallable(),
+        getSessionCapability: () => this.getCodemodeSessionCapability(),
+        scriptExecutor: (input) => this.#executeCodemodeScript(input),
+      }),
+  );
+
   readonly #pendingFunctionCallResults = new Map<
     string,
     {
@@ -189,6 +200,32 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
         }),
       );
     });
+  }
+
+  /**
+   * Subscription entry point dialed by the Stream DO through the callable
+   * subscriber appended in `ensureProcessorSubscription` — or, for routed
+   * Slack-agent streams, through the bootstrap subscription appended by the
+   * Slack integration BEFORE anything has initialized this Durable Object.
+   * Initialize from the runtime name first: the hosted codemode processor's
+   * batch side effects (e.g. `session-started`'s capability callable) read
+   * `this.name`, and a NotInitializedError thrown mid-ingest is swallowed by
+   * the host while the stream pump advances — silently skipping events.
+   */
+  async requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
+    await this.ensureStartedOrInitializeFromRuntimeName();
+    return await this.host.requestStreamSubscription(args);
+  }
+
+  private async ensureStartedOrInitializeFromRuntimeName() {
+    try {
+      return await this.ensureStarted();
+    } catch (error) {
+      if (!(error instanceof NotInitializedError)) throw error;
+      const runtimeName = this.getDurableObjectName();
+      if (runtimeName == null) throw error;
+      return await this.initialize({ name: runtimeName });
+    }
   }
 
   async getStreamPath() {
@@ -454,12 +491,44 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
   async getRunnerState() {
     await this.ensureStarted();
-    return await this.env.STREAM_PROCESSOR_RUNNER.getByName(
-      codemodeProcessorRunnerName({
-        projectId: this.structuredName.projectId,
-        streamPath: this.structuredName.streamPath,
-      }),
-    ).runtimeState();
+    const runtime = this.host.runtimeState("codemode");
+    // The two legacy cursors collapse onto the single class-model checkpoint,
+    // exactly like the retired runner DO's runtimeState() already did.
+    const offset = runtime.snapshot?.offset ?? 0;
+    return {
+      processorName: runtime.processorName,
+      snapshot: runtime.snapshot,
+      subscription: runtime.subscription,
+      state: runtime.snapshot?.state ?? null,
+      reducedThroughOffset: offset,
+      afterAppendCompletedThroughOffset: offset,
+    };
+  }
+
+  /**
+   * Runs a codemode script in a dynamically-loaded worker. This is the
+   * `scriptExecutor` dependency of the hosted CodemodeProcessor; building the
+   * Cloudflare executor lazily keeps project identity resolution
+   * (`ensureStarted`) out of Durable Object field initialization.
+   */
+  async #executeCodemodeScript(
+    input: Parameters<CodemodeScriptExecutor>[0],
+  ): Promise<CodemodeScriptExecutionResult> {
+    const { projectId } = await this.ensureStarted();
+    const projectCapability = this.ctx.exports.ProjectCapability({
+      props: { projectId },
+    });
+    const execute = createCloudflareCodemodeScriptExecutor({
+      env: {
+        PROJECT: projectCapability,
+        project: projectCapability,
+      },
+      getSessionCapability: () => this.getCodemodeSessionCapability(),
+      loader: this.env.LOADER,
+      outboundFetch: projectCapability,
+      wrapSessionCapability: false,
+    });
+    return await execute(input);
   }
 
   private streamsEntrypoint(): CodemodeSessionStreamApi {
@@ -479,17 +548,20 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `codemode-session-processor-subscription:${this.name}:workers-rpc`,
+      // The ":callable" suffix is deliberate: the legacy built-in subscriber was
+      // appended under the un-suffixed key, and idempotency would otherwise drop
+      // this new callable subscriber event on pre-migration streams.
+      idempotencyKey: `codemode-session-processor-subscription:${this.name}:workers-rpc:callable`,
       payload: {
         subscriptionKey: codemodeProcessorSubscriptionKey({
           projectId: this.structuredName.projectId,
           streamPath: this.structuredName.streamPath,
         }),
-        subscriber: {
-          type: "built-in",
-          transport: "workers-rpc",
-          processorSlug: CodemodeProcessorContract.slug,
-        },
+        subscriber: durableObjectProcessorSubscriber({
+          bindingName: "CODEMODE_SESSION",
+          durableObjectName: this.name,
+          processorName: "codemode",
+        }),
       },
     });
   }
@@ -500,11 +572,18 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
       namespace: this.structuredName.projectId,
       path: this.structuredName.streamPath,
     });
-    const maxOffset = (await stream.history({ before: "end" })).at(-1)?.offset ?? 0;
+    // The subscription pump filters delivery by the contract's consumed event
+    // types, so the processor's checkpoint trails the stream head whenever the
+    // tail holds non-codemode events. Catch up to the last CONSUMED event, not
+    // to the stream max offset.
+    const consumedTypes = new Set<string>(this.codemode.contract.consumes);
+    const targetOffset =
+      (await stream.history({ before: "end" }))
+        .filter((event) => consumedTypes.has(event.type))
+        .at(-1)?.offset ?? 0;
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
-      const state = await this.getRunnerState();
-      if (state.reducedThroughOffset >= maxOffset) return;
+      if ((await this.codemode.snapshot()).offset >= targetOffset) return;
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
@@ -596,16 +675,10 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
   }
 
   private async resolveRegisteredProvider(path: string[]) {
-    const runnerState = (await this.getRunnerState()) as any;
-    const state = runnerState.state as {
-      toolProviders: Record<
-        string,
-        {
-          invocation: { kind: "event" | "rpc"; callable?: Callable };
-          path: string[];
-        }
-      >;
-    };
+    // The hosted processor instance IS the codemode reducer for this stream, so
+    // read its typed reduced state directly instead of round-tripping through
+    // the serialized runner-state view.
+    const { state } = await this.codemode.snapshot();
     const candidates = Object.values(state.toolProviders)
       .filter((provider) => provider.path.every((segment, index) => path[index] === segment))
       .sort((left, right) => right.path.length - left.path.length);
@@ -710,17 +783,6 @@ export function codemodeProcessorSubscriptionKey(input: {
   streamPath: StreamPath | string;
 }) {
   return `codemode-session:${getCodemodeSessionName(input)}`;
-}
-
-export function codemodeProcessorRunnerName(input: {
-  projectId: string;
-  streamPath: StreamPath | string;
-}) {
-  const streamPath = StreamPath.parse(input.streamPath);
-  return `${input.projectId}:${streamPath}:${codemodeProcessorSubscriptionKey({
-    projectId: input.projectId,
-    streamPath,
-  })}`;
 }
 
 function parseUnaryCodemodeBuiltinArgs<T>(input: {

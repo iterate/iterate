@@ -68,7 +68,6 @@ export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/rep
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
-export { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 export { PackageStream as StreamDurableObject };
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";

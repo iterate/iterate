@@ -24,13 +24,13 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import {
   type CachedMcpTool,
   connectOutboundMcpFromOurClient,
   describeOutboundMcpFromOurClientTools,
   executeOutboundMcpFromOurClientToolFunction,
 } from "../utils/outbound-mcp-from-our-client-capability-core.ts";
+import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
 
 /**
  * Each Durable Object instance bridges a single remote MCP server. The server
