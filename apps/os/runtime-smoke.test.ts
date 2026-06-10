@@ -91,14 +91,14 @@ function parseAlchemyDeployUrl(output: string): string | undefined {
 }
 
 async function assertSsrHtml(httpBaseUrl: string) {
-  const res = await fetch(new URL("/debug", httpBaseUrl), {
+  const res = await fetch(new URL("/sign-in", httpBaseUrl), {
     signal: AbortSignal.timeout(3_000),
   });
 
   expect(res.ok).toBe(true);
 
   const html = await res.text();
-  expect(html).toContain("Observability / failure demo");
+  expect(html).toContain("Sign in to OS");
 }
 
 function createOpenApiClient(httpBaseUrl: string): ContractRouterClient<typeof osContract> {
@@ -109,10 +109,11 @@ function createOpenApiClient(httpBaseUrl: string): ContractRouterClient<typeof o
   );
 }
 
-async function assertTypedClientPing(httpBaseUrl: string) {
+async function assertTypedClientHealth(httpBaseUrl: string) {
   const client = createOpenApiClient(httpBaseUrl);
-  const body = await client.ping({});
-  expect(body.message).toBe("pong");
+  const body = await client.__internal.health({});
+  expect(body.ok).toBe(true);
+  expect(body.app).toBe("os");
 }
 
 async function assertPublicConfigOverride(httpBaseUrl: string) {
@@ -128,8 +129,8 @@ async function assertOrpcWebSocket(httpBaseUrl: string) {
   );
 
   try {
-    const body = await client.ping({});
-    expect(body.message).toBe("pong");
+    const body = await client.__internal.health({});
+    expect(body.ok).toBe(true);
   } finally {
     websocket.close();
   }
@@ -137,7 +138,7 @@ async function assertOrpcWebSocket(httpBaseUrl: string) {
 
 async function assertFullStack(httpBaseUrl: string) {
   await assertSsrHtml(httpBaseUrl);
-  await assertTypedClientPing(httpBaseUrl);
+  await assertTypedClientHealth(httpBaseUrl);
   await assertPublicConfigOverride(httpBaseUrl);
   await assertOrpcWebSocket(httpBaseUrl);
 }

@@ -121,8 +121,8 @@ function RootErrorComponent(props: { error: unknown; reset: () => void }) {
     <DefaultErrorComponent
       {...props}
       secondaryAction={
-        <Link to="/debug" className="text-sm text-primary hover:underline">
-          Go to debug
+        <Link to="/" className="text-sm text-primary hover:underline">
+          Go home
         </Link>
       }
     />

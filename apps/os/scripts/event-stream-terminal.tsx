@@ -217,9 +217,10 @@ function StreamTerminalApp() {
         return result.event;
       },
       getState: async (input = {}) =>
-        client.project.streams.getState({
-          projectSlugOrId: args.projectSlugOrId,
-          streamPath: resolveStreamPath(input.streamPath),
+        runItxScript({
+          functionSource:
+            "async ({ itx, vars }) => await itx.streams.get(vars.streamPath).getState()",
+          vars: { streamPath: resolveStreamPath(input.streamPath) },
         }),
       listChildren: async (input = {}) => {
         const { streams } = await client.project.streams.list({
@@ -852,6 +853,26 @@ function readFlag(argv: string[], flagName: string) {
     throw new Error(`${flagName} requires a value.`);
   }
   return value;
+}
+
+/**
+ * One-shot itx script against the project context via POST /api/itx/run —
+ * the stream's reduced state has no oRPC procedure anymore; itx is the way.
+ */
+async function runItxScript(input: {
+  functionSource: string;
+  vars: Record<string, unknown>;
+}): Promise<unknown> {
+  const response = await fetch(new URL("/api/itx/run", `${args.baseUrl}/`), {
+    body: JSON.stringify({ context: args.projectSlugOrId, ...input }),
+    headers: { "content-type": "application/json", ...requireAuthHeaders() },
+    method: "POST",
+  });
+  const body = (await response.json()) as { result?: unknown; error?: string };
+  if (!response.ok) {
+    throw new Error(`itx run failed (${response.status}): ${body.error ?? "unknown error"}`);
+  }
+  return body.result;
 }
 
 function createOsClient(baseUrl: string): OrpcClient {
