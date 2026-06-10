@@ -7,6 +7,9 @@ dependsOn: []
 
 # Streams: subscriber presence + reconciler homogenization (plan of record)
 
+**Implementation: https://github.com/iterate/iterate/pull/1460** (draft until
+the deployed-environment e2e run, including the new crash test).
+
 Background and full audit findings:
 `tasks/agents-system-audit-and-reconciler-design.md`. This file reflects the
 decisions from the planning session (June 2026) and supersedes the earlier
