@@ -34,10 +34,6 @@
         "name": "STREAM",
         "class_name": "StreamDurableObject",
       },
-      {
-        "name": "STREAM_PROCESSOR_RUNNER",
-        "class_name": "StreamProcessorRunner",
-      },
     ],
   },
   "d1_databases": [
@@ -69,10 +65,6 @@
     {
       "tag": "v3",
       "new_sqlite_classes": ["RepoDurableObject", "WorkspaceDurableObject", "AgentDurableObject"],
-    },
-    {
-      "tag": "v4",
-      "new_sqlite_classes": ["StreamProcessorRunner"],
     },
   ],
 }

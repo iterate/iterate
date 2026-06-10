@@ -1,6 +1,6 @@
 import { type Event, type EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
+import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import { createDefaultCodemodeProviderRegistrations } from "~/domains/codemode/default-provider-registrations.ts";
 

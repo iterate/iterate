@@ -4,7 +4,7 @@ import {
   listD1ObjectCatalogRecordsByIndex,
   type D1ObjectCatalogRecord,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
+import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
 import type {
   RepoInfo,
   RepoDurableObject,

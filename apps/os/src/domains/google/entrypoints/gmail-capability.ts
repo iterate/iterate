@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createD1Client } from "sqlfu";
-import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
+import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
 import { parseConfig } from "~/config.ts";
 import { getFreshGoogleAccessToken } from "~/domains/secrets/oauth.ts";
 

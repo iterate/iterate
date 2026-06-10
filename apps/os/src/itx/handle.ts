@@ -44,6 +44,7 @@ import {
   getProjectDurableObjectName,
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { isProjectId, mintProjectId } from "~/domains/projects/project-id.ts";
 import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 
@@ -502,12 +503,14 @@ export class ItxProjects extends RpcTarget {
   async create(input: { id?: string; slug: string }) {
     this.requireAllAccess("create projects");
     const db = this.db();
-    const id =
-      input.id ??
-      typeid({
-        env: { TYPEID_PREFIX: this.runtime.config.typeIdPrefix },
-        prefix: "proj",
-      });
+    // Auth is the canonical id minter ("prj_"); this admin-only path mints in
+    // the same format only for the operator/recovery case where there is no
+    // auth org to own the project. A supplied id must already be a project id
+    // (legacy "proj_" still accepted), never a slug.
+    if (input.id !== undefined && !isProjectId(input.id)) {
+      throw new Error("Project ID must start with prj_ (or legacy proj_).");
+    }
+    const id = input.id ?? mintProjectId();
 
     const existingById = await getProjectById(db, { id });
     if (existingById) {
@@ -544,7 +547,7 @@ export class ItxProjects extends RpcTarget {
 
   private async requireProjectRow(projectIdOrSlug: string) {
     const db = this.db();
-    const row = projectIdOrSlug.startsWith("proj_")
+    const row = isProjectId(projectIdOrSlug)
       ? await getProjectById(db, { id: projectIdOrSlug })
       : await getProjectBySlug(db, { slug: projectIdOrSlug });
     if (!row) throw new Error(`Project ${projectIdOrSlug} not found.`);

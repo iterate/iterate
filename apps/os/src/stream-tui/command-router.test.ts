@@ -1,5 +1,5 @@
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { getInitialProcessorState } from "@iterate-com/shared/stream-processors";
+import { getInitialProcessorState } from "@iterate-com/streams/shared/stream-processors";
 import { StreamViewProcessorContract } from "@iterate-com/ui/components/events/stream-view-processor/contract";
 import { describe, expect, test } from "vitest";
 import {

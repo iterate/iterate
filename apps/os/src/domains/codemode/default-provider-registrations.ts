@@ -1,4 +1,4 @@
-import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
+import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
 import { createSecretsProviderRegistration } from "~/domains/secrets/secrets-provider-registration.ts";
 import { createWorkspaceProviderRegistration } from "~/domains/workspaces/entrypoints/workspace-provider-registration.ts";

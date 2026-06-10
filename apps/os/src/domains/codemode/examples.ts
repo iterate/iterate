@@ -1,7 +1,7 @@
 import type { EventInput } from "@iterate-com/shared/streams/types";
-import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { createDefaultCodemodeProviderRegistrations } from "./default-provider-registrations.ts";
 import { createExampleCapabilityProviders } from "./example-provider-registrations.ts";
+import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
 import {
   EXAMPLE_EGRESS_SECRET_KEY,

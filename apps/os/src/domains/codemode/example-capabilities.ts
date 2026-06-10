@@ -12,8 +12,8 @@ import {
   type JsonSchemaToolDescriptors,
 } from "@iterate-com/shared/codemode/json-schema-types";
 import { createRequestLogger } from "@iterate-com/shared/request-logging";
-import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import { createD1Client } from "sqlfu";
+import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
 import type { RequestContext } from "~/request-context.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import type { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";

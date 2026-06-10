@@ -3,6 +3,11 @@ import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-obje
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { type Event } from "@iterate-com/shared/streams/types";
 import {
+  createStreamProcessorHost,
+  type RequestStreamSubscriptionArgs,
+} from "@iterate-com/streams/workers/stream-processor-host";
+import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
+import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
@@ -22,10 +27,10 @@ import {
 } from "~/domains/repos/artifacts.ts";
 import { parseConfig } from "~/config.ts";
 import {
+  RepoStreamProcessor,
   RepoStreamProcessorContract,
   repoStreamPath,
 } from "~/domains/repos/stream-processors/repo-stream-processor.ts";
-import type { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 
 export type RepoStructuredName = {
   projectId: string;
@@ -76,7 +81,6 @@ type RepoEnv = {
   ARTIFACTS_NAMESPACE?: string;
   DO_CATALOG: D1Database;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
-  STREAM_PROCESSOR_RUNNER: DurableObjectNamespace<StreamProcessorRunner>;
 };
 
 const RepoLifecycleBase = createIterateDurableObjectBase<
@@ -97,11 +101,19 @@ const REPO_WRITE_TOKEN_EXPIRES_AT_STORAGE_KEY = "repo.writeTokenExpiresAt";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
+  host = createStreamProcessorHost(this.ctx);
+  repo = this.host.add(RepoStreamProcessorContract.slug, (deps) => new RepoStreamProcessor(deps));
+
   constructor(ctx: DurableObjectState, env: RepoEnv) {
     super(ctx, env);
     this.registerOnFirstInitialize(async (params) => {
       await this.ensureRepoSubscription(params);
     });
+  }
+
+  /** Subscription callables on the repo stream dial this. */
+  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
+    return this.host.requestStreamSubscription(args);
   }
 
   async createRepo(input: CreateRepoInput = {}): Promise<RepoInfo> {
@@ -213,15 +225,17 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
     return (await this.getRepoRunnerState()).state?.repo ?? null;
   }
 
-  private async getRepoRunnerState() {
-    const runner = this.env.STREAM_PROCESSOR_RUNNER.getByName(
-      repoProcessorRunnerName(this.structuredName),
-    ) as unknown as { runtimeState(): Promise<RepoProcessorRuntimeState> };
-    return await runner.runtimeState();
+  /** Legacy runner runtimeState shape over the hosted processor's checkpoint. */
+  private async getRepoRunnerState(): Promise<RepoProcessorRuntimeState> {
+    const snapshot = await this.repo.snapshot();
+    return {
+      state: snapshot.state,
+      reducedThroughOffset: snapshot.offset,
+    };
   }
 
   private async waitForRepoProcessorCatchUp(targetOffset?: number) {
-    const maxOffset = targetOffset ?? (await this.currentStreamMaxOffset());
+    const maxOffset = targetOffset ?? (await this.currentConsumedEventMaxOffset());
     const deadline = Date.now() + 5_000;
     while (Date.now() < deadline) {
       const state = await this.getRepoRunnerState();
@@ -230,13 +244,21 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
     }
   }
 
-  private async currentStreamMaxOffset() {
+  /**
+   * Subscription delivery is filtered by the processor's `contract.consumes`,
+   * so the checkpoint only ever advances to the latest consumed event — not to
+   * the stream head. Waiting on the full max offset would always time out once
+   * a non-consumed event (e.g. subscription-configured) tops the stream.
+   */
+  private async currentConsumedEventMaxOffset() {
     const stream = await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
       namespace: this.structuredName.projectId,
       path: repoStreamPath(this.structuredName.repoSlug),
     });
-    return (await stream.history({ before: "end" })).at(-1)?.offset ?? 0;
+    const consumed = new Set<string>(this.repo.contract.consumes);
+    const events = await stream.history({ before: "end" });
+    return events.filter((event) => consumed.has(event.type)).at(-1)?.offset ?? 0;
   }
 
   private async requireInfo(): Promise<RepoInfo> {
@@ -349,16 +371,20 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
       path: repoStreamPath(params.repoSlug),
     });
 
+    // ":callable" suffix: the subscriber switched from the legacy built-in
+    // runner to a Callable subscription. Changing the idempotency key lets the
+    // new subscription-configured event land on existing streams that already
+    // recorded the old one.
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `repo-subscription:${params.projectId}:${params.repoSlug}:workers-rpc`,
+      idempotencyKey: `repo-subscription:${params.projectId}:${params.repoSlug}:workers-rpc:callable`,
       payload: {
         subscriptionKey: repoProcessorSubscriptionKey(params),
-        subscriber: {
-          type: "built-in",
-          transport: "workers-rpc",
-          processorSlug: RepoStreamProcessorContract.slug,
-        },
+        subscriber: durableObjectProcessorSubscriber({
+          bindingName: "REPO",
+          durableObjectName: getRepoDurableObjectName(params),
+          processorName: RepoStreamProcessorContract.slug,
+        }),
       },
     });
   }
@@ -378,11 +404,6 @@ type RepoProcessorRuntimeState = {
 
 function repoProcessorSubscriptionKey(input: RepoStructuredName) {
   return `repo:${input.projectId}:${input.repoSlug}`;
-}
-
-function repoProcessorRunnerName(input: RepoStructuredName) {
-  const streamPath = repoStreamPath(input.repoSlug);
-  return `${input.projectId}:${streamPath}:${repoProcessorSubscriptionKey(input)}`;
 }
 
 export function getRepoDurableObjectName(name: RepoStructuredName) {

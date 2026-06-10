@@ -14,7 +14,7 @@
 
 import type { RpcPromise, RpcStub } from "capnweb";
 import type { StreamEvent, StreamEventInput } from "../shared/event.ts";
-import type { ProcessorStream } from "../processor-runner.ts";
+import type { ProcessorStream } from "../types.ts";
 import type { StreamProcessorSnapshot } from "../stream-processor.ts";
 import type { StreamCoreProcessorState, StreamRpc } from "../types.ts";
 import {

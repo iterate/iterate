@@ -9,6 +9,53 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// Regression: a brand-new stream announces itself to every ancestor stream so
+// each maintains childPaths (this is what `project.streams.list` walks). The
+// announcement is a core-processor side effect of the `stream/created` append;
+// it once ran mid-append against the pre-commit "uninitialized" core state and
+// dialed `uninitialized:/...` durable objects instead of the real ancestors.
+test("creating a stream registers childPaths on its ancestor streams", async () => {
+  const { getInitializedStreamStub } = await import("~/domains/streams/new-stream-runtime.ts");
+  const { StreamPath } = await import("@iterate-com/shared/streams/types");
+  const namespace = "proj__local__childpaths";
+  const streamNamespace = env.STREAM as unknown as Parameters<
+    typeof getInitializedStreamStub
+  >[0]["durableObjectNamespace"];
+
+  const child = await getInitializedStreamStub({
+    durableObjectNamespace: streamNamespace,
+    namespace,
+    path: StreamPath.parse("/probe/a"),
+  });
+  await child.getState();
+
+  const root = await getInitializedStreamStub({
+    durableObjectNamespace: streamNamespace,
+    namespace,
+    path: StreamPath.parse("/"),
+  });
+  const intermediate = await getInitializedStreamStub({
+    durableObjectNamespace: streamNamespace,
+    namespace,
+    path: StreamPath.parse("/probe"),
+  });
+
+  // The ancestor announcements are fire-and-forget background appends.
+  const deadline = Date.now() + 5_000;
+  let rootState = await root.getState();
+  let intermediateState = await intermediate.getState();
+  while (
+    Date.now() < deadline &&
+    (rootState.childPaths.length === 0 || intermediateState.childPaths.length === 0)
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    rootState = await root.getState();
+    intermediateState = await intermediate.getState();
+  }
+  expect(rootState.childPaths).toEqual(["/probe"]);
+  expect(intermediateState.childPaths).toEqual(["/probe/a"]);
+});
+
 describe("Project ingress routing", () => {
   test("routes iterate.localhost project hosts through the Project Durable Object", async () => {
     const createResponse = await SELF.fetch("https://os.iterate.localhost/__test/create-project");

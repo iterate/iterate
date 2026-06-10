@@ -1,7 +1,7 @@
 import { McpAgent } from "agents/mcp";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
-import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
+import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
 import type { ProjectMcpServerConnectionProps } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 
 export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
@@ -20,7 +20,6 @@ export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/rep
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
-export { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";

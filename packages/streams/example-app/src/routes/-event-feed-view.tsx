@@ -199,7 +199,7 @@ function FeedItemRows({
               className="pointer-events-auto grid size-8 cursor-pointer place-items-center rounded-full border border-[#e8ebf0] bg-white text-base leading-none text-[#16181d] opacity-60 shadow-[0_4px_12px_rgb(15_23_42_/_8%)] hover:opacity-90"
               type="button"
               onClick={() => {
-                initialTailScroll.markUserLeftTail();
+                initialTailScroll.markUserLeftTail("scroll-to-top-button");
                 virtualizer.scrollToOffset(0);
               }}
             >

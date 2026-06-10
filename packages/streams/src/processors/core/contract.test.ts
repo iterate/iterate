@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../../shared/event.ts";
+import { durableObjectProcessorSubscriber } from "../../shared/callable-subscriber.ts";
 import { CoreProcessorContract, type CoreProcessorState } from "./contract.ts";
 import { CoreStreamProcessor } from "./implementation.ts";
+
+const callableSubscriber = (processorName: string) =>
+  durableObjectProcessorSubscriber({
+    bindingName: "PROCESSOR_HOST",
+    durableObjectName: "host-1",
+    processorName,
+  });
 
 const processor = new CoreStreamProcessor({
   iterateContext: { stream: { append: () => {}, appendBatch: () => {} } },
@@ -74,11 +82,7 @@ describe("core processor contract", () => {
           idempotencyKey: "subscription:echo",
           payload: {
             subscriptionKey: "echo",
-            subscriber: {
-              type: "built-in",
-              transport: "workers-rpc",
-              processorSlug: "echo-example",
-            },
+            subscriber: callableSubscriber("echo-example"),
           },
           createdAt: "2026-06-01T12:00:01.000Z",
         },
@@ -131,17 +135,17 @@ describe("core processor contract", () => {
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
             subscriptionKey: "echo",
-            subscriber: {
-              type: "built-in",
-              transport: "workers-rpc",
-              processorSlug: "echo-example",
-            },
+            subscriber: callableSubscriber("echo-example"),
           },
           createdAt: "2026-06-01T12:00:01.000Z",
         },
       }),
     );
 
+    expect(state.subscriptionsByKey.echo?.latestConfiguredEvent.offset).toBe(1);
+
+    // Re-configuring with a historical (pre-callable) subscriber shape replaces
+    // the subscription and drops it from supported runtime state.
     state = CoreProcessorContract.stateSchema.parse(
       reduce({
         contract: CoreProcessorContract,
@@ -153,7 +157,7 @@ describe("core processor contract", () => {
             subscriptionKey: "echo",
             subscriber: {
               type: "built-in",
-              transport: "capnweb-websocket",
+              transport: "workers-rpc",
               processorSlug: "echo-example",
             },
           },

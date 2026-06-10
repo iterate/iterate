@@ -41,7 +41,6 @@ export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 export { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
 export { SlackIntegrationDurableObject } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
-export { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 export { CaptunServerShard };
 export { PackageStream as StreamDurableObject };

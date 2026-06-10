@@ -6,7 +6,6 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
-import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { RequestContext } from "~/request-context.ts";
 import {
@@ -18,6 +17,7 @@ import {
   listAllProjects,
 } from "~/db/queries/.generated/index.ts";
 import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { isProjectId, mintProjectId } from "~/domains/projects/project-id.ts";
 
 type ProjectRow = {
   id: string;
@@ -85,19 +85,46 @@ export class ProjectsCapability extends RpcTarget {
     organizationSlug?: string;
   }): Promise<ProjectWithIngressUrl> {
     const context = this.props.context;
+
+    // A user may pass `id` only to (re-)adopt a project they already own in
+    // auth — the "create from auth scope" recovery flow after a db reset
+    // replays their signed project claims. Any other id is refused.
     const authProject =
       context.principal?.type === "user" && input.id
         ? getAccessibleSignedProject({ context, projectId: input.id })
         : null;
-
     if (context.principal?.type === "user" && input.id && !authProject) {
       throw new ORPCError("FORBIDDEN", {
         message: `Project ${input.id} is not available to this user.`,
       });
     }
 
-    const id = authProject?.id ?? resolveProjectId({ id: input.id, context });
-    let slug = authProject?.slug ?? input.slug;
+    // Resolve the canonical (id, slug). The auth worker is the id authority:
+    // for a brand-new user project we let it mint (prj_…) and adopt what it
+    // returns, so OS never invents an id that could collide. OS mints only in
+    // the operator path, where there is no auth org to own the project.
+    let id: string;
+    let slug: string;
+    if (authProject) {
+      id = authProject.id;
+      slug = authProject.slug;
+    } else if (context.principal?.type === "user") {
+      const organizationSlug = resolveOrganizationSlugForCreate(context, input.organizationSlug);
+      const authWorker = createAuthWorkerServiceClient(context);
+      const createdAuthProject = await authWorker.internal.project.createForOrganization({
+        organizationSlug,
+        name: input.slug,
+        slug: input.slug,
+      });
+      id = createdAuthProject.id;
+      slug = createdAuthProject.slug;
+    } else {
+      id = resolveOperatorProjectId(input.id);
+      slug = input.slug;
+    }
+
+    // Idempotent on id: re-adoption or a retried operator create returns the
+    // existing row rather than failing.
     const existingById = await getProjectById(context.db, { id });
     if (existingById) {
       if (existingById.slug !== slug) {
@@ -106,24 +133,6 @@ export class ProjectsCapability extends RpcTarget {
         });
       }
       return await toProjectWithIngressUrl(existingById);
-    }
-
-    if (context.principal?.type === "user" && !authProject) {
-      const organizationSlug = resolveOrganizationSlugForCreate(context, input.organizationSlug);
-      const authWorker = createAuthWorkerServiceClient(context);
-      const createdAuthProject = await authWorker.internal.project.createForOrganization({
-        id,
-        organizationSlug,
-        name: slug,
-        slug,
-        metadata: { osProjectId: id },
-      });
-      if (createdAuthProject.id !== id) {
-        throw new Error(
-          `Auth project creation returned ${createdAuthProject.id} instead of requested ${id}.`,
-        );
-      }
-      slug = createdAuthProject.slug;
     }
 
     const existing = await getProjectBySlug(context.db, { slug });
@@ -236,10 +245,11 @@ export async function requireProject(input: {
     throw new ORPCError("BAD_REQUEST", { message: "Project ID or slug is required" });
   }
 
-  const project =
-    projectIdOrSlug.startsWith("proj_") || isValidTypeId(projectIdOrSlug, "proj")
-      ? await getProjectById(input.context.db, { id: projectIdOrSlug })
-      : await getProjectBySlug(input.context.db, { slug: projectIdOrSlug });
+  // isProjectId recognises both the canonical `prj_` and legacy `proj_`
+  // prefixes; anything else is treated as a slug. Shared so this can't drift.
+  const project = isProjectId(projectIdOrSlug)
+    ? await getProjectById(input.context.db, { id: projectIdOrSlug })
+    : await getProjectBySlug(input.context.db, { slug: projectIdOrSlug });
 
   if (!project) {
     throw new ORPCError("NOT_FOUND", {
@@ -259,20 +269,19 @@ export async function requireProject(input: {
   });
 }
 
-function resolveProjectId(input: { id?: string; context: Pick<RequestContext, "config"> }) {
-  if (input.id) {
-    if (!isValidTypeId(input.id, "proj")) {
-      throw new ORPCError("BAD_REQUEST", {
-        message: "Project ID must be a valid TypeID with prefix proj.",
-      });
-    }
-    return input.id;
+// Operator/admin create has no auth organization to own the project, so OS
+// mints the id itself — using auth's `prj_` format so there's one id space. A
+// caller-supplied id must already be a project id (we never coin a new prefix).
+function resolveOperatorProjectId(id: string | undefined): string {
+  if (id === undefined) {
+    return mintProjectId();
   }
-
-  return typeid({
-    env: { TYPEID_PREFIX: input.context.config.typeIdPrefix },
-    prefix: "proj",
-  });
+  if (!isProjectId(id)) {
+    throw new ORPCError("BAD_REQUEST", {
+      message: "Project ID must start with prj_ (or legacy proj_).",
+    });
+  }
+  return id;
 }
 
 function projectDurableObject(projectId: string) {

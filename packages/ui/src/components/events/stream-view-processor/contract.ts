@@ -4,7 +4,7 @@ import {
   getInitialProcessorState,
   runProcessorReduce,
   type StreamEvent,
-} from "@iterate-com/shared/stream-processors";
+} from "@iterate-com/streams/shared/stream-processors";
 import type { Event, StreamPath } from "@iterate-com/shared/streams/types";
 import type {
   EventsStreamActivityState,
