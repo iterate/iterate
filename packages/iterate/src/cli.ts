@@ -930,36 +930,37 @@ const launcherProcedures = {
 
   chat: os
     .input(
-      (() => {
-        const resolvedConfig = resolveConfig(process.cwd());
-        const shape = ({
-          project: z
-            .string()
-            .trim()
-            .min(1)
-            .describe("OS project slug or ID"),
-          streamPath: z
-            .string()
-            .trim()
-            .min(1)
-            .startsWith("/")
-            .describe("Project stream path to open"),
-        })
-
-        return resolvedConfig instanceof Error ? z.object(shape) : z.object({
-          ...shape,
-          ...(resolvedConfig.config.defaultProject && {project: shape.project.default(resolvedConfig.config.defaultProject)}),
-        })
-      })(),
+      z.object({
+        project: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .describe("OS project slug or ID. Defaults to the active config's defaultProject."),
+        streamPath: z
+          .string()
+          .trim()
+          .min(1)
+          .startsWith("/")
+          .describe("Project stream path to open"),
+      }),
     )
     .meta({
       description: "Open the Iterate chat terminal UI",
     })
     .handler(async ({ input }) => {
+      // Resolved here, not in the input schema: the schema is built at module
+      // load, before `--config` has been consumed.
       const resolved = resolveConfig(process.cwd(), { throw: true });
+      const project = input.project || resolved.config.defaultProject;
+      if (!project) {
+        throw new Error(
+          `No project specified. Pass --project or set "defaultProject" on config "${resolved.name}" in ${CONFIG_PATH}.`,
+        );
+      }
       const command = buildChatCommand({
         osBaseUrl: resolved.config.osBaseUrl,
-        projectSlugOrId: input.project,
+        projectSlugOrId: project,
         streamPath: input.streamPath,
         entrypointPath: resolveStreamTuiEntrypointPath(),
       });

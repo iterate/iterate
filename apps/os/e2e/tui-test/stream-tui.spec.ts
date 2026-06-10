@@ -13,20 +13,13 @@ test.use({
   columns: 100,
   rows: 32,
   // TUI Test owns only the terminal harness. The app still starts through the
-  // same iterate CLI path a user runs from the repo root.
+  // same `pnpm iterate chat` path a user runs from the repo. The OS base URL
+  // comes from the config file that run.ts writes (via XDG_CONFIG_HOME), and
+  // auth comes from the admin secret in the inherited doppler environment.
   // Primary API reference: https://github.com/microsoft/tui-test#terminal-program
   program: {
-    file: "node",
-    args: [
-      "../../../../packages/iterate/bin/iterate.js",
-      "chat",
-      "--os-base-url",
-      process.env.APP_CONFIG_BASE_URL || "https://os.iterate.com",
-      "--project-slug-or-id",
-      projectSlugOrId,
-      "--stream-path",
-      streamPath,
-    ],
+    file: "pnpm",
+    args: ["-w", "iterate", "chat", "--project", projectSlugOrId, "--stream-path", streamPath],
   },
 });
 

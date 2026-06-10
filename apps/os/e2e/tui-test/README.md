@@ -4,7 +4,7 @@ These specs use Microsoft TUI Test as the checked-in black-box terminal runner. 
 PTY. The app still starts through the real user-facing CLI:
 
 ```bash
-node packages/iterate/bin/iterate.js chat --project-slug-or-id public --stream-path ...
+pnpm iterate chat --project public --stream-path ...
 ```
 
 Run the stable workflow/layout assertions with:
