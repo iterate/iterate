@@ -12,6 +12,7 @@
 
 import type { Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
 import type { ItxBrowserClient } from "./connection.ts";
+import { isItxAccessError } from "./errors.ts";
 
 export type StreamTailStatus = "connecting" | "live" | "error";
 
@@ -138,7 +139,8 @@ export function acquireStreamTailStore(
       // A failed start with a healthy socket produces no status transition,
       // so the reconnect watcher alone would leave the tail stuck on
       // "error" — retry with capped backoff while anyone is still retained.
-      scheduleRetry(current);
+      // Access failures are the exception: retrying cannot authorize us.
+      if (!isItxAccessError(error)) scheduleRetry(current);
     }
   }
 

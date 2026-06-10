@@ -25,6 +25,7 @@ import {
 import type { RpcStub } from "capnweb";
 import type { Itx } from "../handle.ts";
 import { useItxClient } from "./context.ts";
+import { isItxAccessError } from "./errors.ts";
 
 /** A connected handle as queryFn/mutationFn receive it. */
 export type ItxHandle = RpcStub<Itx>;
@@ -55,6 +56,9 @@ export function useItxQuery<TData>(options: UseItxQueryOptions<TData>): UseQuery
   const client = useItxClient();
   const { project, queryFn, ...queryOptions } = options;
   return useQuery({
+    // Access failures (forbidden/not-found) can't be retried away — surface
+    // them immediately instead of holding the pending state through retries.
+    retry: (failureCount, error) => !isItxAccessError(error) && failureCount < 1,
     ...queryOptions,
     queryFn: async () => await queryFn(await client.project(project)),
   });

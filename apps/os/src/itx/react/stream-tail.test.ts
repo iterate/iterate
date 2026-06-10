@@ -44,7 +44,7 @@ type RecordedSubscribe = {
 
 function createFakeClient() {
   let status: ItxConnectionStatus = "connected";
-  let failSubscribes = false;
+  let failSubscribes: string | false = false;
   let serverEventCount = 0;
   let getStateImpl: (() => Promise<{ eventCount: number }>) | null = null;
   const statusListeners = new Set<() => void>();
@@ -58,7 +58,7 @@ function createFakeClient() {
         unsubscribe: vi.fn(),
       };
       subscribeCalls.push(call);
-      if (failSubscribes) throw new Error("subscribe exploded");
+      if (failSubscribes !== false) throw new Error(failSubscribes);
       return { unsubscribe: call.unsubscribe };
     },
   );
@@ -83,8 +83,8 @@ function createFakeClient() {
     subscribeCalls,
     subscribeStatus,
     getState,
-    setSubscribeFailing(fail: boolean) {
-      failSubscribes = fail;
+    setSubscribeFailing(fail: boolean, message = "subscribe exploded") {
+      failSubscribes = fail ? message : false;
     },
     /** What the server reports as eventCount when the liveness probe asks. */
     setServerEventCount(count: number) {
@@ -291,6 +291,22 @@ describe("acquireStreamTailStore", () => {
     // The newest 500 survive.
     expect(events[0]!.offset).toBe(208);
     expect(events[events.length - 1]!.offset).toBe(707);
+  });
+
+  test("access errors surface immediately and are never retried", async () => {
+    const fake = createFakeClient();
+    fake.setSubscribeFailing(true, "Project prj_nope not found.");
+    const store = acquireStreamTailStore(fake.client, "proj", "/itx");
+
+    store.retain();
+    await flush();
+    expect(store.getSnapshot().status).toBe("error");
+    expect(store.getSnapshot().error).toBe("Project prj_nope not found.");
+
+    // Retrying cannot authorize us: no backoff timer, ever.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flush();
+    expect(fake.subscribe).toHaveBeenCalledTimes(1);
   });
 
   test("the liveness probe restarts a silently dead subscription from the last offset", async () => {
