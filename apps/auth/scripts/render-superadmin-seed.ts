@@ -17,8 +17,18 @@ function escapeSqlString(value: string) {
 
 // Translates the minimatch-style allowlist patterns ("*@nustom.com") into SQL
 // LIKE patterns so the seed can promote pre-existing users at deploy time; the
-// create-hook in auth.ts handles new signups.
+// create-hook in auth.ts handles new signups. minimatch supports far more
+// syntax (braces, character classes, negation) than LIKE can express, so we
+// refuse anything beyond the * and ? wildcards — failing the deploy beats
+// silently promoting a different set of users here than the signup hook does.
+// For email strings (which never contain "/"), * and ? translate exactly.
 function allowlistPatternToSqlLike(pattern: string) {
+  if (!/^[a-z0-9*?@._+-]+$/.test(pattern)) {
+    throw new Error(
+      `SUPERADMIN_ALLOWLIST pattern "${pattern}" uses minimatch syntax the deploy-time SQL ` +
+        `backfill cannot translate; only the * and ? wildcards are supported.`,
+    );
+  }
   return escapeSqlString(
     pattern.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_"),
   )
@@ -26,22 +36,39 @@ function allowlistPatternToSqlLike(pattern: string) {
     .replaceAll("?", "_");
 }
 
+// Each pattern's backfill runs exactly once, tracked in superadminBackfill:
+// the seed file re-imports on every deploy (its rendered timestamp changes the
+// file hash), and without the marker a superadmin demoted via the admin API
+// would be re-promoted by the next deploy. New signups are promoted by the
+// auth.ts hook, so the backfill only needs to catch users who existed before
+// their pattern was allowlisted.
 function renderSuperadminBackfillSql(allowlist: string[], now: string) {
   if (allowlist.length === 0) {
     return "";
   }
 
-  const conditions = allowlist
-    .map((pattern) => `lower(email) LIKE '${allowlistPatternToSqlLike(pattern)}' ESCAPE '\\'`)
-    .join("\n   OR ");
-
-  return `
+  const statements = allowlist.map((pattern) => {
+    const like = allowlistPatternToSqlLike(pattern);
+    const marker = escapeSqlString(pattern);
+    return `
 UPDATE user
 SET role = 'admin',
     updatedAt = '${escapeSqlString(now)}'
-WHERE (${conditions})
-  AND (role IS NULL OR role != 'admin');
+WHERE lower(email) LIKE '${like}' ESCAPE '\\'
+  AND (role IS NULL OR role != 'admin')
+  AND NOT EXISTS (SELECT 1 FROM superadminBackfill WHERE pattern = '${marker}');
+
+INSERT OR IGNORE INTO superadminBackfill (pattern, appliedAt)
+VALUES ('${marker}', '${escapeSqlString(now)}');
 `;
+  });
+
+  return `
+CREATE TABLE IF NOT EXISTS superadminBackfill (
+  pattern TEXT PRIMARY KEY,
+  appliedAt TEXT NOT NULL
+);
+${statements.join("")}`;
 }
 
 async function main() {

@@ -18,7 +18,8 @@
  * - the signup hook in auth.ts, for emails matching SUPERADMIN_ALLOWLIST
  *   (default `*@nustom.com`),
  * - the deploy-time seed SQL (scripts/render-superadmin-seed.ts), which
- *   backfills users who existed before their email domain was allowlisted,
+ *   backfills users who existed before their email domain was allowlisted —
+ *   once per pattern, so it never overrides a later manual demotion,
  * - manually, via the better-auth admin API.
  *
  * Nothing demotes automatically: someone whose email leaves the allowlist
