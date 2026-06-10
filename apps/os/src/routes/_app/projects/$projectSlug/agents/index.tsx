@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "@iterate-com/ui/components/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { Input } from "@iterate-com/ui/components/input";
+import { toast } from "@iterate-com/ui/components/sonner";
 import {
   Table,
   TableBody,
@@ -14,46 +14,74 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
-import {
-  projectAgentPresetsQueryOptions,
-  projectAgentsListQueryOptions,
-} from "~/lib/project-route-query.ts";
+import type { ItxAgents } from "~/itx/facades.ts";
+import { useItx } from "~/itx/use-itx.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
-  loader: async ({ context }) => {
-    const { project } = context;
-    await context.queryClient.ensureQueryData(projectAgentsListQueryOptions(project.id));
-    await context.queryClient.ensureQueryData(projectAgentPresetsQueryOptions(project.id));
-
-    return {
-      breadcrumb: "All",
-      project,
-    };
-  },
+  // useItx never SSRs (it throws on the server — see ~/itx/use-itx.ts); the
+  // table paints from its own poll once the socket connects.
+  ssr: false,
+  loader: ({ context }) => ({
+    breadcrumb: "All",
+    project: context.project,
+  }),
   component: ProjectAgentsIndexPage,
 });
 
 type SortKey = "agentPath" | "createdAt" | "lastWokenAt";
 type SortDirection = "asc" | "desc";
+type AgentRow = Awaited<ReturnType<ItxAgents["list"]>>["agents"][number];
+type PresetRow = Awaited<ReturnType<ItxAgents["presets"]>>["presets"][number];
 
 function ProjectAgentsIndexPage() {
+  return (
+    <Suspense
+      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
+    >
+      <ProjectAgentsIndexContent />
+    </Suspense>
+  );
+}
+
+function ProjectAgentsIndexContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
   const { project } = Route.useLoaderData();
+  const itx = useItx(project.id);
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({
     key: "lastWokenAt",
     direction: "desc",
   });
-  const agentsQueryOptions = projectAgentsListQueryOptions(project.id);
-  const { data } = useQuery({
-    ...agentsQueryOptions,
-    refetchInterval: 5_000,
-  });
-  const presetsQueryOptions = projectAgentPresetsQueryOptions(project.id);
-  const { data: presetsData } = useQuery(presetsQueryOptions);
-  const agents = useMemo(() => data?.agents ?? [], [data?.agents]);
-  const presets = useMemo(() => presetsData?.presets ?? [], [presetsData?.presets]);
+  const [agents, setAgents] = useState<AgentRow[]>([]);
+  const [presets, setPresets] = useState<PresetRow[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async (initial: boolean) => {
+      try {
+        const [agentsResult, presetsResult] = await Promise.all([
+          itx.agents.list(),
+          itx.agents.presets(),
+        ]);
+        if (cancelled) return;
+        setAgents(agentsResult.agents);
+        setPresets(presetsResult.presets);
+      } catch (error) {
+        // Poll failures stay quiet — the next tick retries; only the first
+        // load surfaces, so a broken page says why.
+        if (!cancelled && initial) {
+          toast.error(error instanceof Error ? error.message : String(error));
+        }
+      }
+    };
+    void load(true);
+    const interval = setInterval(() => void load(false), 5_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [itx]);
   const visibleAgents = useMemo(() => {
     const query = filter.trim().toLowerCase();
     return agents

@@ -3,7 +3,6 @@ import { orpc } from "~/orpc/client.ts";
 
 export const PROJECT_ROUTE_STALE_TIME = 30_000;
 export const PROJECT_CHILD_ROUTE_STALE_TIME = 10_000;
-export const PROJECT_AGENT_RUNTIME_STALE_TIME = 5_000;
 export const PROJECT_LIFECYCLE_STALE_TIME = 1_000;
 
 export function projectBySlugQueryOptions(projectSlug: string) {
@@ -28,48 +27,6 @@ export function projectLifecycleStateQueryOptions(projectId: string) {
   return {
     ...orpc.project.lifecycleState.queryOptions({ input: { projectSlugOrId: projectId } }),
     staleTime: PROJECT_LIFECYCLE_STALE_TIME,
-  };
-}
-
-export function projectAgentsListQueryOptions(projectId: string) {
-  return {
-    ...orpc.project.agents.list.queryOptions({ input: { projectSlugOrId: projectId } }),
-    staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
-  };
-}
-
-export function projectAgentPresetsQueryOptions(projectId: string) {
-  return {
-    ...orpc.project.agents.listPresets.queryOptions({ input: { projectSlugOrId: projectId } }),
-    staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
-  };
-}
-
-export function projectAgentRuntimeStateQueryOptions(input: {
-  agentPath: string;
-  projectId: string;
-}) {
-  return {
-    ...orpc.project.agents.runtimeState.queryOptions({
-      input: { agentPath: input.agentPath, projectSlugOrId: input.projectId },
-    }),
-    staleTime: PROJECT_AGENT_RUNTIME_STALE_TIME,
-  };
-}
-
-export function projectInboundMcpSessionsQueryOptions(projectId: string) {
-  return {
-    ...orpc.project.inboundMcpServer.listSessions.queryOptions({
-      input: { projectSlugOrId: projectId },
-    }),
-    staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
-  };
-}
-
-export function projectReposListQueryOptions(projectId: string) {
-  return {
-    ...orpc.project.repos.list.queryOptions({ input: { projectSlugOrId: projectId } }),
-    staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
   };
 }
 

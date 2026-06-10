@@ -12,10 +12,12 @@ import { getItxErrorCode, ItxError } from "./errors.ts";
 import type { ItxRuntime } from "./handle.ts";
 import { getUserPrincipal } from "~/auth/principal.ts";
 import {
+  configureAgentPreset,
   getAgentStub,
   listAgentPresets,
   listProjectAgents,
 } from "~/domains/agents/agent-directory.ts";
+import type { AgentLlmProvider, AgentPresetEvent } from "~/domains/agents/agent-presets.ts";
 import { listInboundMcpSessions } from "~/domains/inbound-mcp-server/session-directory.ts";
 import {
   createGoogleAuthorizationUrl,
@@ -39,6 +41,17 @@ export class ItxAgents extends RpcTarget {
 
   async presets() {
     return await listAgentPresets({ projectId: this.projectId });
+  }
+
+  async configurePreset(input: {
+    basePath: string;
+    events: AgentPresetEvent[];
+    model: string;
+    provider: AgentLlmProvider;
+    runOpts: Record<string, unknown>;
+    systemPrompt: string;
+  }) {
+    return await configureAgentPreset({ ...input, projectId: this.projectId });
   }
 
   async sendMessage(input: { agentPath: string; channel?: string; message: string }) {

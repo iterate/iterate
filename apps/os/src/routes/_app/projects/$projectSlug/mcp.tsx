@@ -1,38 +1,65 @@
-import { useQuery } from "@tanstack/react-query";
+import { Suspense, useEffect, useState } from "react";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { Identifier } from "@iterate-com/ui/components/identifier";
+import { toast } from "@iterate-com/ui/components/sonner";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import type { ItxMcp } from "~/itx/facades.ts";
+import { useItx } from "~/itx/use-itx.ts";
 import { buildProjectMcpUrl } from "~/lib/project-host-routing.ts";
-import { projectInboundMcpSessionsQueryOptions } from "~/lib/project-route-query.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/mcp")({
-  loader: async ({ context }) => {
-    const { project } = context;
-    await context.queryClient.ensureQueryData(projectInboundMcpSessionsQueryOptions(project.id));
-    const routeConfig = await getPublicRouteConfig();
-
-    return {
-      breadcrumb: "MCP",
-      project,
-      routeConfig,
-    };
-  },
+  // useItx never SSRs (it throws on the server — see ~/itx/use-itx.ts); the
+  // session list paints from its own load once the socket connects.
+  ssr: false,
+  loader: async ({ context }) => ({
+    breadcrumb: "MCP",
+    project: context.project,
+    routeConfig: await getPublicRouteConfig(),
+  }),
   component: ProjectMcpPage,
 });
 
+type McpSession = Awaited<ReturnType<ItxMcp["listSessions"]>>["sessions"][number];
+
 function ProjectMcpPage() {
+  return (
+    <Suspense
+      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
+    >
+      <ProjectMcpContent />
+    </Suspense>
+  );
+}
+
+function ProjectMcpContent() {
   const params = Route.useParams();
   const { project, routeConfig } = Route.useLoaderData();
-  const { data: sessionsData } = useQuery(projectInboundMcpSessionsQueryOptions(project.id));
+  const itx = useItx(project.id);
+  const [sessions, setSessions] = useState<McpSession[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    itx.mcp
+      .listSessions()
+      .then((result) => {
+        if (!cancelled) setSessions(result.sessions);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) toast.error(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [itx]);
+
   const mcpUrl = buildProjectMcpUrl({
     baseUrl: routeConfig.baseUrl,
     mcpBaseUrl: routeConfig.mcpBaseUrl,
     projectSlug: project.slug,
     projectHostnameBases: routeConfig.projectHostnameBases,
   });
-  const sessions = sessionsData?.sessions ?? [];
 
   if (!mcpUrl) {
     return (

@@ -1,5 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Save } from "lucide-react";
 import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
@@ -23,8 +22,7 @@ import {
   parseAgentPresetEventsYaml,
   parseAgentRunOptsJson,
 } from "~/domains/agents/agent-presets.ts";
-import { projectAgentPresetsQueryOptions } from "~/lib/project-route-query.ts";
-import { orpcClient } from "~/orpc/client.ts";
+import { getBrowserItx } from "~/itx/use-itx.ts";
 
 const emptyEventsYaml = "[]\n";
 
@@ -44,7 +42,6 @@ function NewAgentPresetPage() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [basePathInput, setBasePathInput] = useState("/agents");
   const [provider, setProvider] = useState<AgentLlmProvider>(DEFAULT_AGENT_LLM_PROVIDER);
   const [model, setModel] = useState(DEFAULT_OPENAI_AGENT_MODEL);
@@ -65,34 +62,34 @@ function NewAgentPresetPage() {
     [basePathInput, customEventsYaml, model, provider, runOpts, systemPrompt],
   );
 
-  const presetsQueryOptions = projectAgentPresetsQueryOptions(project.id);
-  const savePreset = useMutation({
-    mutationFn: async () => {
-      if (preview.error) throw new Error(preview.error);
-      return await orpcClient.project.agents.configurePreset({
+  const [saving, setSaving] = useState(false);
+
+  // Mutate-only itx use: getBrowserItx in the handler — no Suspense, no SSR
+  // concern (handlers only run in the browser).
+  async function submit() {
+    if (preview.error) return;
+    setSaving(true);
+    try {
+      const itx = await getBrowserItx(project.id);
+      const result = await itx.agents.configurePreset({
         basePath: preview.basePath,
         events: preview.customEvents,
         model: model.trim(),
-        projectSlugOrId: project.id,
         provider,
         runOpts: provider === "cloudflare-ai" ? parseAgentRunOptsJson(runOpts) : {},
         systemPrompt: systemPrompt.trim(),
       });
-    },
-    onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: presetsQueryOptions.queryKey });
       toast.success(`Configured ${result.basePath}.`);
       void navigate({
         to: "/projects/$projectSlug/agents",
         params,
       });
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
-  });
-
-  const submit = useCallback(() => {
-    savePreset.mutate();
-  }, [savePreset]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   function selectProvider(nextProvider: AgentLlmProvider) {
     setProvider(nextProvider);
@@ -201,9 +198,9 @@ function NewAgentPresetPage() {
                 YAML preview of events saved for {preview.basePath}.
               </p>
             </div>
-            <Button onClick={submit} disabled={savePreset.isPending || preview.error != null}>
+            <Button onClick={() => void submit()} disabled={saving || preview.error != null}>
               <Save className="size-4" />
-              {savePreset.isPending ? "Saving..." : "Save preset"}
+              {saving ? "Saving..." : "Save preset"}
             </Button>
           </div>
 

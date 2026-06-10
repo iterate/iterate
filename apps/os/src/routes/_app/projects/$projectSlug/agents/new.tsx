@@ -1,5 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Play } from "lucide-react";
 import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
@@ -25,8 +24,8 @@ import {
   agentProcessorSubscriptionConfiguredEvents,
   defaultAgentProcessorSlugs,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
+import { getBrowserItx } from "~/itx/use-itx.ts";
 import { agentPathFromInput } from "~/lib/agent-links.ts";
-import { orpcClient } from "~/orpc/client.ts";
 
 const emptyEventsYaml = "[]\n";
 
@@ -67,16 +66,16 @@ function NewAgentPage() {
     [agentPathInput, customEventsYaml, model, project.id, provider, runOpts, systemPrompt],
   );
 
-  const createAgent = useMutation({
-    mutationFn: async () => {
-      if (preview.error) throw new Error(preview.error);
-      return await orpcClient.project.streams.appendBatch({
-        events: preview.events,
-        projectSlugOrId: project.id,
-        streamPath: preview.agentPath,
-      });
-    },
-    onSuccess: () => {
+  const [creating, setCreating] = useState(false);
+
+  // Mutate-only itx use: getBrowserItx in the handler — no Suspense, no SSR
+  // concern (handlers only run in the browser).
+  async function submit() {
+    if (preview.error) return;
+    setCreating(true);
+    try {
+      const itx = await getBrowserItx(project.id);
+      await itx.streams.get(preview.agentPath).appendBatch(preview.events);
       void navigate({
         to: "/projects/$projectSlug/agents/streams/$",
         params: {
@@ -84,13 +83,12 @@ function NewAgentPage() {
           _splat: preview.agentPath,
         },
       });
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
-  });
-
-  const submit = useCallback(() => {
-    createAgent.mutate();
-  }, [createAgent]);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCreating(false);
+    }
+  }
 
   function selectProvider(nextProvider: AgentLlmProvider) {
     setProvider(nextProvider);
@@ -199,9 +197,9 @@ function NewAgentPage() {
                 YAML preview of events appendBatch will append to {preview.agentPath}.
               </p>
             </div>
-            <Button onClick={submit} disabled={createAgent.isPending || preview.error != null}>
+            <Button onClick={() => void submit()} disabled={creating || preview.error != null}>
               <Play className="size-4" />
-              {createAgent.isPending ? "Creating..." : "Create agent"}
+              {creating ? "Creating..." : "Create agent"}
             </Button>
           </div>
 
