@@ -20,23 +20,20 @@ import {
   VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
   VOICE_AGENT_INPUT_SAMPLE_RATE,
   VOICE_AGENT_OUTPUT_SAMPLE_RATE,
+  VOICE_AGENT_PROVIDER_CONNECTED_EVENT_TYPE,
   VOICE_AGENT_PROVIDER_GEMINI_LIVE,
   VOICE_AGENT_PROVIDER_GROK_REALTIME,
   VOICE_AGENT_PROVIDER_OPENAI_REALTIME,
+  VOICE_AGENT_PROVIDER_SESSION_READY_EVENT_TYPE,
+  VOICE_AGENT_PROVIDER_STATUS_CHANGED_EVENT_TYPE,
   VOICE_AGENT_SETUP_CONFIGURED_EVENT_TYPE,
   type VoiceAgentProvider,
 } from "@iterate-com/shared/stream-processors/voice-agent/contract";
 import { EventInput, StreamPath, type Event } from "@iterate-com/shared/streams/types";
 import {
   voiceAgentCircuitBreakerConfiguredEvent,
-  streamProcessorSubscriptionConfiguredEvent,
   voiceAgentSubscriptionConfiguredEvent,
 } from "~/domains/voice-agents/voice-agent-subscription.ts";
-import {
-  GEMINI_LIVE_VOICE_PROCESSOR_SLUG,
-  GROK_REALTIME_VOICE_PROCESSOR_SLUG,
-  OPENAI_REALTIME_VOICE_PROCESSOR_SLUG,
-} from "~/domains/stream-processors/stream-processor-slugs.ts";
 import type { appRouter } from "~/orpc/root.ts";
 
 type OrpcClient = RouterClient<typeof appRouter>;
@@ -124,11 +121,6 @@ async function main() {
         streamPath: options.streamPath,
       }),
       voiceAgentSubscriptionConfiguredEvent({
-        projectId: projectSlugOrId,
-        streamPath: options.streamPath,
-      }),
-      streamProcessorSubscriptionConfiguredEvent({
-        processorSlug: voiceProviderProcessorSlug(options.provider),
         projectId: projectSlugOrId,
         streamPath: options.streamPath,
       }),
@@ -252,26 +244,17 @@ async function watchStream(input: {
     for await (const event of stream as AsyncIterable<Event>) {
       console.log(`${event.offset} ${event.type}`);
 
-      if (
-        event.type === "events.iterate.com/voice-agent/gemini-live-websocket-connected" ||
-        event.type === "events.iterate.com/voice-agent/openai-realtime-websocket-connected" ||
-        event.type === "events.iterate.com/voice-agent/grok-realtime-websocket-connected"
-      ) {
+      if (event.type === VOICE_AGENT_PROVIDER_CONNECTED_EVENT_TYPE) {
         input.seen.providerConnected = true;
       }
-      if (
-        event.type === "events.iterate.com/voice-agent/gemini-live-setup-completed" ||
-        event.type === "events.iterate.com/voice-agent/openai-realtime-session-updated" ||
-        event.type === "events.iterate.com/voice-agent/grok-realtime-session-updated"
-      ) {
+      if (event.type === VOICE_AGENT_PROVIDER_SESSION_READY_EVENT_TYPE) {
         input.seen.setupCompleted = true;
       }
-      if (
-        event.type === "events.iterate.com/voice-agent/gemini-live-turn-completed" ||
-        event.type === "events.iterate.com/voice-agent/openai-realtime-response-done" ||
-        event.type === "events.iterate.com/voice-agent/grok-realtime-response-done"
-      ) {
-        input.seen.turnCompleted = true;
+      if (event.type === VOICE_AGENT_PROVIDER_STATUS_CHANGED_EVENT_TYPE) {
+        const payload = event.payload as { status?: unknown };
+        if (payload.status === "turn-completed" || payload.status === "response-done") {
+          input.seen.turnCompleted = true;
+        }
       }
       if (event.type === VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE) {
         const payload = event.payload as { dataBase64?: unknown };
@@ -587,17 +570,6 @@ function voiceOption(values: Map<string, string>) {
       return DEFAULT_OPENAI_REALTIME_VOICE;
     case VOICE_AGENT_PROVIDER_GROK_REALTIME:
       return DEFAULT_GROK_REALTIME_VOICE;
-  }
-}
-
-function voiceProviderProcessorSlug(provider: VoiceAgentProvider) {
-  switch (provider) {
-    case VOICE_AGENT_PROVIDER_GEMINI_LIVE:
-      return GEMINI_LIVE_VOICE_PROCESSOR_SLUG;
-    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
-      return OPENAI_REALTIME_VOICE_PROCESSOR_SLUG;
-    case VOICE_AGENT_PROVIDER_GROK_REALTIME:
-      return GROK_REALTIME_VOICE_PROCESSOR_SLUG;
   }
 }
 

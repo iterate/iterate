@@ -1,12 +1,22 @@
+// Captures mic audio, downsamples it to the target rate with a box low-pass
+// filter, and posts fixed-size PCM16 chunks to the main thread.
+//
+// The audio thread must stay allocation-free in steady state: samples live in a
+// fixed Float32Array ring buffer addressed by absolute sample counters, and the
+// only per-chunk allocation is the transferable Int16Array that leaves the
+// worklet.
 class PcmInputProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.enabled = false;
     this.targetSampleRate = 16000;
     this.chunkSamples = 1600;
-    this.pending = [];
-    this.output = [];
-    this.readIndex = 0;
+    this.capacity = 32768;
+    this.ring = new Float32Array(this.capacity);
+    this.writeCount = 0; // total samples written, ever
+    this.readPos = 0; // fractional absolute read position
+    this.chunk = new Int16Array(this.chunkSamples);
+    this.chunkLength = 0;
 
     this.port.onmessage = (event) => {
       const message = event.data || {};
@@ -14,12 +24,14 @@ class PcmInputProcessor extends AudioWorkletProcessor {
         this.targetSampleRate = message.targetSampleRate || 16000;
         const chunkMs = message.chunkMs || 100;
         this.chunkSamples = Math.max(1, Math.round((this.targetSampleRate * chunkMs) / 1000));
+        this.chunk = new Int16Array(this.chunkSamples);
+        this.chunkLength = 0;
       } else if (message.type === "set-enabled") {
         this.enabled = Boolean(message.enabled);
         if (!this.enabled) {
-          this.pending = [];
-          this.output = [];
-          this.readIndex = 0;
+          this.writeCount = 0;
+          this.readPos = 0;
+          this.chunkLength = 0;
         }
       }
     };
@@ -33,32 +45,49 @@ class PcmInputProcessor extends AudioWorkletProcessor {
     if (!channel || channel.length === 0) return true;
 
     for (let index = 0; index < channel.length; index++) {
-      this.pending.push(channel[index] || 0);
+      this.ring[this.writeCount % this.capacity] = channel[index] || 0;
+      this.writeCount++;
+    }
+    if (this.writeCount - this.readPos > this.capacity) {
+      this.readPos = this.writeCount - this.capacity;
     }
 
     const ratio = sampleRate / this.targetSampleRate;
-    while (this.readIndex < this.pending.length) {
-      const sample = this.pending[Math.floor(this.readIndex)] || 0;
-      this.output.push(floatToInt16(sample));
-      this.readIndex += ratio;
-
-      if (this.output.length >= this.chunkSamples) {
-        this.flushOutput();
+    while (this.readPos + ratio <= this.writeCount) {
+      this.chunk[this.chunkLength++] = floatToInt16(
+        this.boxAverage(this.readPos, this.readPos + ratio),
+      );
+      this.readPos += ratio;
+      if (this.chunkLength >= this.chunkSamples) {
+        this.flushChunk();
       }
-    }
-
-    const consumed = Math.floor(this.readIndex);
-    if (consumed > 0) {
-      this.pending.splice(0, consumed);
-      this.readIndex -= consumed;
     }
 
     return true;
   }
 
-  flushOutput() {
-    const samples = this.output.splice(0, this.chunkSamples);
-    const pcm = new Int16Array(samples);
+  // Average every source sample covered by [from, to), weighting partial
+  // samples by coverage. Acts as a low-pass at the target Nyquist, so
+  // downsampling doesn't fold high frequencies into the speech band the way
+  // take-every-Nth decimation does.
+  boxAverage(from, to) {
+    let sum = 0;
+    let weight = 0;
+    let pos = from;
+    while (pos < to) {
+      const index = Math.floor(pos);
+      const next = Math.min(index + 1, to);
+      const sliceWeight = next - pos;
+      sum += this.ring[index % this.capacity] * sliceWeight;
+      weight += sliceWeight;
+      pos = next;
+    }
+    return weight > 0 ? sum / weight : 0;
+  }
+
+  flushChunk() {
+    const pcm = this.chunk.slice(0, this.chunkLength);
+    this.chunkLength = 0;
     this.port.postMessage(
       {
         type: "pcm",

@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   assertNever,
   buildProcessorIdempotencyKey,
+  defineProcessorContract,
   implementProcessor,
   type ConsumedEvent,
   type ProcessorStreamApi,
@@ -10,44 +11,558 @@ import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
 import {
   AGENT_INPUT_ADDED_EVENT_TYPE,
+  VOICE_AGENT_ERROR_OCCURRED_EVENT_TYPE,
   VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
   VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
   VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
   VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE,
   VOICE_AGENT_OUTPUT_SAMPLE_RATE,
+  VOICE_AGENT_PROVIDER_CONNECTED_EVENT_TYPE,
+  VOICE_AGENT_PROVIDER_DISCONNECTED_EVENT_TYPE,
   VOICE_AGENT_PROVIDER_GEMINI_LIVE,
   VOICE_AGENT_PROVIDER_GROK_REALTIME,
+  VOICE_AGENT_PROVIDER_MESSAGE_RECEIVED_EVENT_TYPE,
+  VOICE_AGENT_PROVIDER_MESSAGE_SENT_EVENT_TYPE,
   VOICE_AGENT_PROVIDER_OPENAI_REALTIME,
+  VOICE_AGENT_PROVIDER_SESSION_READY_EVENT_TYPE,
+  VOICE_AGENT_PROVIDER_STATUS_CHANGED_EVENT_TYPE,
   VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE,
   VOICE_AGENT_SETUP_CONFIGURED_EVENT_TYPE,
   type VoiceAgentProvider,
+  type VoiceAgentProviderStatus,
   VoiceAgentProcessorContract,
   type VoiceAgentSetup,
-  type VoiceAgentState,
 } from "./contract.ts";
 
 type VoiceAgentStreamApi = ProcessorStreamApi<typeof VoiceAgentProcessorContract>;
 type VoiceAgentConsumedEvent = ConsumedEvent<typeof VoiceAgentProcessorContract>;
+type VoiceAgentInputEvent = Extract<
+  VoiceAgentConsumedEvent,
+  {
+    type:
+      | typeof VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE
+      | typeof VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE;
+  }
+>;
+type VoiceAgentAppendableEvent = Parameters<VoiceAgentStreamApi["append"]>[0]["event"];
 type JsonValue = z.infer<ReturnType<typeof z.json>>;
+
+export type VoiceAgentProcessorDeps = {
+  geminiApiKey: string;
+  openAiApiKey: string;
+  xAiApiKey: string;
+  /** Wakes the colocated code agent so messageAgent tool calls have someone listening. */
+  ensureCodeAgent?: () => Promise<void>;
+  /** Test seam: replaces the outbound fetch-upgrade WebSocket. */
+  openProviderWebSocket?: (input: {
+    provider: VoiceAgentProvider;
+    url: URL;
+    headers: Record<string, string>;
+  }) => Promise<WebSocket>;
+};
 
 type ProviderConnection = {
   id: string;
   provider: VoiceAgentProvider;
-  ready: Promise<void>;
-  receiveSequence: number;
-  sendSequence: number;
-  handledToolCallIds: Set<string>;
   socket: WebSocket;
   urlForLog: string;
+  ready: Promise<void>;
+  resolveReady: () => void;
+  sendSequence: number;
+  receiveSequence: number;
+  handledToolCallIds: Set<string>;
+  /** Serializes incoming provider message handling so appends keep provider order. */
+  handlerChain: Promise<void>;
+  /** Serializes every stream append from this connection so output frames land in order. */
+  appendChain: Promise<unknown>;
 };
 
-type ProviderConnectionArgs = {
+type ProviderContext = {
   connection: ProviderConnection;
-  createOutputSequence(): number;
-  getLastInputStreamId(): string;
-  resolveReady(): void;
   streamApi: VoiceAgentStreamApi;
+  createOutputSequence: () => number;
+  getLastInputStreamId: () => string;
 };
+
+const WEBSOCKET_OPEN = 1;
+const PROVIDER_READY_TIMEOUT_MS = 30_000;
+/** Strings longer than this are truncated in provider message audit events. */
+export const AUDIT_MAX_STRING_LENGTH = 256;
+
+export function createVoiceAgentProcessor(deps: VoiceAgentProcessorDeps) {
+  let connection: ProviderConnection | null = null;
+  let openingConnection: Promise<ProviderConnection> | null = null;
+  let outputSequence = 0;
+  let lastInputStreamId = "voice-agent";
+  let sendChain: Promise<void> = Promise.resolve();
+  let ensureCodeAgentPromise: Promise<void> | null = null;
+
+  const getConnection = async (
+    setup: VoiceAgentSetup,
+    streamApi: VoiceAgentStreamApi,
+  ): Promise<ProviderConnection> => {
+    if (
+      connection?.provider === setup.provider &&
+      connection.socket.readyState === WEBSOCKET_OPEN
+    ) {
+      return connection;
+    }
+    if (openingConnection != null) {
+      return await openingConnection;
+    }
+
+    connection?.socket.close(1000, "Replacing stale voice-agent provider connection.");
+    openingConnection = openProviderConnection({
+      deps,
+      setup,
+      streamApi,
+      createOutputSequence: () => outputSequence++,
+      getLastInputStreamId: () => lastInputStreamId,
+      markConnectionClosed: (closedConnection) => {
+        if (connection?.id === closedConnection.id) connection = null;
+      },
+    });
+    try {
+      connection = await openingConnection;
+      return connection;
+    } finally {
+      openingConnection = null;
+    }
+  };
+
+  return implementProcessor(VoiceAgentProcessorContract, {
+    async afterAppend({ event, state, streamApi, waitUntil }) {
+      await standardProcessorBehavior.afterAppend({
+        contract: VoiceAgentProcessorContract,
+        state,
+        streamApi,
+      });
+      if (deps.ensureCodeAgent != null) {
+        ensureCodeAgentPromise ??= deps.ensureCodeAgent().catch((error) => {
+          ensureCodeAgentPromise = null;
+          throw error;
+        });
+        await ensureCodeAgentPromise;
+      }
+
+      switch (event.type) {
+        case CoreProcessorRegisteredEventType:
+          return;
+        case VOICE_AGENT_SETUP_CONFIGURED_EVENT_TYPE:
+        case "events.iterate.com/voice-agent/config-updated":
+          connection?.socket.close(1000, "Voice-agent setup changed.");
+          connection = null;
+          openingConnection = null;
+          return;
+        case VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE:
+        case VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE: {
+          // Frames must reach the provider socket in stream order, so forwarding is
+          // serialized; audit appends are enqueued without blocking the next send.
+          const task = (sendChain = sendChain.then(() =>
+            forwardInputEvent({
+              deps,
+              event,
+              getConnection: (setup) => getConnection(setup, streamApi),
+              rememberInputStreamId: (streamId) => {
+                lastInputStreamId = streamId;
+              },
+              setup: state.setup,
+              streamApi,
+            }),
+          ));
+          if (waitUntil == null) {
+            await task;
+          } else {
+            waitUntil(task);
+          }
+          return;
+        }
+        default:
+          return assertNever(event);
+      }
+    },
+  });
+}
+
+/**
+ * Streams created before the unified voice-agent processor hold WebSocket
+ * subscriptions to per-provider slugs (`voice-agent/<provider>`). This no-op
+ * processor keeps those subscriptions from erroring on every wake; opening the
+ * conversation page subscribes the stream to the unified processor.
+ */
+export function createRetiredVoiceAgentProviderProcessor(slug: string) {
+  return implementProcessor(
+    defineProcessorContract({
+      slug,
+      version: "0.2.0",
+      description:
+        "Retired per-provider voice-agent processor slug. Superseded by the unified voice-agent processor; consumes nothing.",
+      stateSchema: z.object({}),
+      initialState: {},
+      events: {},
+      consumes: [],
+      emits: [],
+    }),
+    {},
+  );
+}
+
+async function forwardInputEvent(args: {
+  deps: VoiceAgentProcessorDeps;
+  event: VoiceAgentInputEvent;
+  getConnection: (setup: VoiceAgentSetup) => Promise<ProviderConnection>;
+  rememberInputStreamId: (streamId: string) => void;
+  setup: VoiceAgentSetup | null;
+  streamApi: VoiceAgentStreamApi;
+}) {
+  const { event, setup, streamApi } = args;
+  if (setup == null) {
+    await appendInputError({
+      error: new Error(
+        "Voice-agent setup-configured event is required before appending input events.",
+      ),
+      event,
+      streamApi,
+    });
+    return;
+  }
+
+  const endpoint = providerEndpoints[setup.provider];
+  if (endpoint.apiKey(args.deps).trim() === "") {
+    await appendInputError({
+      error: new Error(endpoint.missingKeyMessage),
+      event,
+      streamApi,
+    });
+    return;
+  }
+
+  if (event.type === VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE) {
+    args.rememberInputStreamId(event.payload.streamId);
+  }
+
+  let connection: ProviderConnection;
+  try {
+    connection = await args.getConnection(setup);
+    await withTimeout(
+      connection.ready,
+      PROVIDER_READY_TIMEOUT_MS,
+      `Timed out waiting for ${endpoint.label} setup.`,
+    );
+  } catch (error) {
+    await appendInputError({ error, event, streamApi });
+    return;
+  }
+
+  for (const message of buildInputMessages({ event, provider: connection.provider })) {
+    sendProviderMessage({
+      connection,
+      message,
+      sourceEventOffset: event.offset,
+      streamApi,
+    });
+  }
+}
+
+function buildInputMessages(args: {
+  event: VoiceAgentInputEvent;
+  provider: VoiceAgentProvider;
+}): JsonValue[] {
+  const { event, provider } = args;
+
+  if (event.type === VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE) {
+    switch (provider) {
+      case VOICE_AGENT_PROVIDER_GEMINI_LIVE:
+        return [
+          {
+            realtimeInput: {
+              audio: {
+                data: event.payload.dataBase64,
+                mimeType: `audio/pcm;rate=${event.payload.sampleRate}`,
+              },
+            },
+          },
+        ];
+      case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
+        // OpenAI Realtime only accepts 24 kHz PCM16.
+        return [
+          {
+            type: "input_audio_buffer.append",
+            audio: resamplePcm16Base64({
+              dataBase64: event.payload.dataBase64,
+              fromSampleRate: event.payload.sampleRate,
+              toSampleRate: 24_000,
+            }),
+          },
+        ];
+      case VOICE_AGENT_PROVIDER_GROK_REALTIME:
+        return [{ type: "input_audio_buffer.append", audio: event.payload.dataBase64 }];
+      default:
+        return assertNever(provider);
+    }
+  }
+
+  const text = providerInputText(event.payload);
+  switch (provider) {
+    case VOICE_AGENT_PROVIDER_GEMINI_LIVE:
+      return [
+        {
+          clientContent: {
+            turns: [{ role: "user", parts: [{ text }] }],
+            turnComplete: true,
+          },
+        },
+      ];
+    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
+    case VOICE_AGENT_PROVIDER_GROK_REALTIME:
+      return [
+        {
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text }],
+          },
+        },
+        { type: "response.create" },
+      ];
+    default:
+      return assertNever(provider);
+  }
+}
+
+function providerInputText(payload: { text: string; source?: string }) {
+  if (payload.source !== "code-agent") return payload.text;
+  return [
+    "BACKGROUND AGENT MESSAGE TO RELAY TO THE HUMAN YOU ARE SPEAKING TO:",
+    payload.text,
+    "",
+    "This message is not from the caller. It is from the background code-capable agent you asked for help.",
+    "Your job is to relay this message to the human you are speaking to in natural speech.",
+    "If the background agent's message is a question, ask that question to the human you are speaking to. Do not answer the question yourself.",
+    "If the background agent's message is an answer or update, tell the human you are speaking to that answer or update directly.",
+    "Do not say thanks, thank you, thanks for the update, or any other gratitude/acknowledgement phrase.",
+    "Do not say the caller told you this. Do not describe the background agent as if it is another participant in the call.",
+  ].join("\n");
+}
+
+// Provider endpoints.
+
+type ProviderEndpoint = {
+  label: string;
+  apiKey: (deps: VoiceAgentProcessorDeps) => string;
+  missingKeyMessage: string;
+  url: (deps: VoiceAgentProcessorDeps, setup: VoiceAgentSetup) => URL;
+  urlForLog: (setup: VoiceAgentSetup) => string;
+  headers: (deps: VoiceAgentProcessorDeps) => Record<string, string>;
+  buildSessionSetupMessage: (setup: VoiceAgentSetup) => JsonValue;
+  handleMessage: (ctx: ProviderContext, data: unknown) => Promise<void>;
+};
+
+const providerEndpoints: Record<VoiceAgentProvider, ProviderEndpoint> = {
+  [VOICE_AGENT_PROVIDER_GEMINI_LIVE]: {
+    label: "Gemini Live",
+    apiKey: (deps) => deps.geminiApiKey,
+    missingKeyMessage: "APP_CONFIG_GEMINI_API_KEY is not configured.",
+    url: (deps) => geminiLiveUrl(deps.geminiApiKey),
+    urlForLog: () => geminiLiveUrl("").toString(),
+    headers: () => ({}),
+    buildSessionSetupMessage: (setup) => ({
+      setup: {
+        model: setup.model.startsWith("models/") ? setup.model : `models/${setup.model}`,
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: setup.voiceName },
+            },
+          },
+        },
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        systemInstruction: {
+          parts: [{ text: systemInstructionWithMessageAgent(setup.systemInstruction) }],
+        },
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: "messageAgent",
+                description: MESSAGE_AGENT_TOOL_DESCRIPTION,
+                parameters: messageAgentParameters(),
+              },
+            ],
+          },
+        ],
+        ...(setup.messageAgentToolChoice === "required"
+          ? {
+              toolConfig: {
+                functionCallingConfig: {
+                  mode: "ANY",
+                  allowedFunctionNames: ["messageAgent"],
+                },
+              },
+            }
+          : {}),
+      },
+    }),
+    handleMessage: handleGeminiMessage,
+  },
+  [VOICE_AGENT_PROVIDER_OPENAI_REALTIME]: {
+    label: "OpenAI Realtime",
+    apiKey: (deps) => deps.openAiApiKey,
+    missingKeyMessage: "APP_CONFIG_OPEN_AI_API_KEY is not configured.",
+    url: (_deps, setup) => realtimeUrl("https://api.openai.com/v1/realtime", setup.model),
+    urlForLog: (setup) => realtimeUrl("https://api.openai.com/v1/realtime", setup.model).toString(),
+    headers: (deps) => ({ Authorization: `Bearer ${deps.openAiApiKey}` }),
+    buildSessionSetupMessage: (setup) => ({
+      type: "session.update",
+      session: {
+        type: "realtime",
+        instructions: systemInstructionWithMessageAgent(setup.systemInstruction),
+        audio: {
+          input: {
+            format: { type: "audio/pcm", rate: 24_000 },
+            turn_detection: {
+              type: "server_vad",
+              create_response: true,
+              interrupt_response: true,
+            },
+            transcription: { model: "gpt-4o-mini-transcribe" },
+          },
+          output: {
+            format: { type: "audio/pcm", rate: VOICE_AGENT_OUTPUT_SAMPLE_RATE },
+            voice: setup.voiceName,
+          },
+        },
+        tools: [openAiCompatibleMessageAgentTool()],
+        tool_choice: setup.messageAgentToolChoice === "required" ? "required" : "auto",
+      },
+    }),
+    handleMessage: handleOpenAiCompatibleMessage,
+  },
+  [VOICE_AGENT_PROVIDER_GROK_REALTIME]: {
+    label: "Grok Realtime",
+    apiKey: (deps) => deps.xAiApiKey,
+    missingKeyMessage: "APP_CONFIG_X_AI_API_KEY is not configured.",
+    url: (_deps, setup) => realtimeUrl("https://api.x.ai/v1/realtime", setup.model),
+    urlForLog: (setup) => realtimeUrl("https://api.x.ai/v1/realtime", setup.model).toString(),
+    headers: (deps) => ({ Authorization: `Bearer ${deps.xAiApiKey}` }),
+    buildSessionSetupMessage: (setup) => ({
+      type: "session.update",
+      session: {
+        instructions: systemInstructionWithMessageAgent(setup.systemInstruction),
+        voice: setup.voiceName,
+        turn_detection: { type: "server_vad" },
+        audio: {
+          input: { format: { type: "audio/pcm", rate: 16_000 } },
+          output: { format: { type: "audio/pcm", rate: VOICE_AGENT_OUTPUT_SAMPLE_RATE } },
+        },
+        tools: [openAiCompatibleMessageAgentTool()],
+        tool_choice: setup.messageAgentToolChoice === "required" ? "required" : "auto",
+      },
+    }),
+    handleMessage: handleOpenAiCompatibleMessage,
+  },
+};
+
+async function openProviderConnection(args: {
+  deps: VoiceAgentProcessorDeps;
+  setup: VoiceAgentSetup;
+  streamApi: VoiceAgentStreamApi;
+  createOutputSequence: () => number;
+  getLastInputStreamId: () => string;
+  markConnectionClosed: (connection: ProviderConnection) => void;
+}): Promise<ProviderConnection> {
+  const endpoint = providerEndpoints[args.setup.provider];
+  let resolveReady: () => void = () => {};
+  let rejectReady: (error: Error) => void = () => {};
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+
+  const openSocket = args.deps.openProviderWebSocket ?? openFetchWebSocket;
+  const socket = await openSocket({
+    provider: args.setup.provider,
+    url: endpoint.url(args.deps, args.setup),
+    headers: endpoint.headers(args.deps),
+  });
+
+  const connection: ProviderConnection = {
+    id: crypto.randomUUID(),
+    provider: args.setup.provider,
+    socket,
+    urlForLog: endpoint.urlForLog(args.setup),
+    ready,
+    resolveReady,
+    sendSequence: 0,
+    receiveSequence: 0,
+    handledToolCallIds: new Set(),
+    handlerChain: Promise.resolve(),
+    appendChain: Promise.resolve(),
+  };
+  const ctx: ProviderContext = {
+    connection,
+    streamApi: args.streamApi,
+    createOutputSequence: args.createOutputSequence,
+    getLastInputStreamId: args.getLastInputStreamId,
+  };
+
+  socket.addEventListener("message", (event) => {
+    connection.handlerChain = connection.handlerChain
+      .then(() => endpoint.handleMessage(ctx, event.data))
+      .catch((error) => {
+        enqueueAppend(connection, args.streamApi, {
+          type: VOICE_AGENT_ERROR_OCCURRED_EVENT_TYPE,
+          idempotencyKey: `voice-agent:${connection.id}:message-handler-error:${connection.receiveSequence}`,
+          payload: { message: stringifyError(error) },
+        });
+      });
+  });
+  socket.addEventListener("close", (event) => {
+    args.markConnectionClosed(connection);
+    rejectReady(
+      new Error(event.reason || `${endpoint.label} WebSocket closed before setup completed.`),
+    );
+    enqueueAppend(connection, args.streamApi, {
+      type: VOICE_AGENT_PROVIDER_DISCONNECTED_EVENT_TYPE,
+      idempotencyKey: `voice-agent:${connection.id}:provider-disconnected`,
+      payload: {
+        provider: connection.provider,
+        connectionId: connection.id,
+        code: event.code,
+        reason: event.reason || undefined,
+        wasClean: event.wasClean,
+      },
+    });
+  });
+  socket.addEventListener("error", () => {
+    args.markConnectionClosed(connection);
+    rejectReady(new Error(`${endpoint.label} WebSocket errored before setup completed.`));
+  });
+
+  enqueueAppend(connection, args.streamApi, {
+    type: VOICE_AGENT_PROVIDER_CONNECTED_EVENT_TYPE,
+    idempotencyKey: `voice-agent:${connection.id}:provider-connected`,
+    payload: {
+      provider: connection.provider,
+      connectionId: connection.id,
+      model: args.setup.model,
+      url: connection.urlForLog,
+    },
+  });
+
+  sendProviderMessage({
+    connection,
+    message: endpoint.buildSessionSetupMessage(args.setup),
+    streamApi: args.streamApi,
+  });
+
+  return connection;
+}
+
+// Gemini Live message handling.
 
 type GeminiServerMessage = {
   setupComplete?: Record<string, unknown>;
@@ -64,19 +579,84 @@ type GeminiServerMessage = {
     outputTranscription?: { text?: string };
   };
   toolCall?: {
-    functionCalls?: GeminiFunctionCall[];
-  };
-  toolCallCancellation?: {
-    ids?: string[];
+    functionCalls?: Array<{ id?: string; name?: string; args?: unknown }>;
   };
   goAway?: { timeLeft?: string };
 };
 
-type GeminiFunctionCall = {
-  id?: string;
-  name?: string;
-  args?: unknown;
-};
+async function handleGeminiMessage(ctx: ProviderContext, data: unknown) {
+  const message = JSON.parse(await websocketMessageToText(data)) as GeminiServerMessage;
+  const sequence = ctx.connection.receiveSequence++;
+  enqueueProviderMessageAudit({
+    ctx,
+    direction: "received",
+    message: message as JsonValue,
+    sequence,
+  });
+
+  if (message.setupComplete != null) {
+    ctx.connection.resolveReady();
+    enqueueAppend(ctx.connection, ctx.streamApi, {
+      type: VOICE_AGENT_PROVIDER_SESSION_READY_EVENT_TYPE,
+      idempotencyKey: `voice-agent:${ctx.connection.id}:provider-session-ready`,
+      payload: { provider: ctx.connection.provider, connectionId: ctx.connection.id },
+    });
+  }
+
+  for (const functionCall of message.toolCall?.functionCalls ?? []) {
+    await handleToolCall({
+      ctx,
+      callId: functionCall.id,
+      name: functionCall.name,
+      argumentsValue: functionCall.args,
+      respond: (callId, output) => ({
+        toolResponse: {
+          functionResponses: [
+            { id: callId, name: functionCall.name ?? "unknown_tool", response: output },
+          ],
+        },
+      }),
+    });
+  }
+
+  // Gemini terminates Live sessions after a fixed duration; surface the warning
+  // instead of silently reconnecting into a fresh session with no context.
+  if (message.goAway != null) {
+    enqueueProviderStatus(ctx, "going-away", sequence);
+  }
+
+  const serverContent = message.serverContent;
+  if (serverContent == null) return;
+
+  for (const part of serverContent.modelTurn?.parts ?? []) {
+    if (part.inlineData?.data) {
+      enqueueOutputAudioFrame(ctx, part.inlineData.data);
+    }
+  }
+
+  if (serverContent.interrupted) {
+    enqueueProviderStatus(ctx, "output-interrupted", sequence);
+    enqueueSpeakerBufferClear(ctx, "output-interrupted", sequence);
+  }
+  if (serverContent.turnComplete) {
+    enqueueProviderStatus(ctx, "turn-completed", sequence);
+  }
+
+  enqueueTranscription(
+    ctx,
+    "input-transcription",
+    serverContent.inputTranscription?.text,
+    sequence,
+  );
+  enqueueTranscription(
+    ctx,
+    "output-transcription",
+    serverContent.outputTranscription?.text,
+    sequence,
+  );
+}
+
+// OpenAI-compatible (OpenAI Realtime / Grok Realtime) message handling.
 
 type RealtimeServerMessage = {
   type?: string;
@@ -84,10 +664,7 @@ type RealtimeServerMessage = {
   transcript?: string;
   error?: { message?: string };
   item?: RealtimeFunctionCallItem;
-  response?: {
-    output?: RealtimeFunctionCallItem[];
-    status?: string;
-  };
+  response?: { output?: RealtimeFunctionCallItem[] };
 };
 
 type RealtimeFunctionCallItem = {
@@ -97,992 +674,150 @@ type RealtimeFunctionCallItem = {
   arguments?: string;
 };
 
-type OpenAiCompatibleEventPrefix = "openai-realtime" | "grok-realtime";
-type OpenAiCompatibleStatusEventSuffix =
-  | "session-updated"
-  | "speech-started"
-  | "speech-stopped"
-  | "output-audio-done"
-  | "response-done";
-type OpenAiCompatibleStatusEventType =
-  | `events.iterate.com/voice-agent/openai-realtime-${OpenAiCompatibleStatusEventSuffix}`
-  | `events.iterate.com/voice-agent/grok-realtime-${OpenAiCompatibleStatusEventSuffix}`;
-
-export type VoiceAgentProcessorDeps = {
-  geminiApiKey: string;
-  openAiApiKey: string;
-  xAiApiKey: string;
-  openGeminiLiveWebSocket?: (input: { apiKey: string }) => Promise<WebSocket>;
-  openOpenAiRealtimeWebSocket?: (input: { apiKey: string; model: string }) => Promise<WebSocket>;
-  openGrokRealtimeWebSocket?: (input: { apiKey: string; model: string }) => Promise<WebSocket>;
-};
-
-const ProviderConnectedReadyState = 1;
-
-export function createVoiceAgentProcessor(input: { ensureCodeAgent?: () => Promise<void> } = {}) {
-  let ensureCodeAgentPromise: Promise<void> | null = null;
-
-  return implementProcessor(VoiceAgentProcessorContract, {
-    async afterAppend({ state, streamApi }) {
-      await standardProcessorBehavior.afterAppend({
-        contract: VoiceAgentProcessorContract,
-        state,
-        streamApi,
-      });
-      if (input.ensureCodeAgent == null) return;
-      ensureCodeAgentPromise ??= input.ensureCodeAgent().catch((error) => {
-        ensureCodeAgentPromise = null;
-        throw error;
-      });
-      await ensureCodeAgentPromise;
-    },
-  });
-}
-
-export function createVoiceAgentProviderProcessor(
-  input: VoiceAgentProcessorDeps & {
-    processorSlug: string;
-    provider: VoiceAgentProvider;
-  },
-) {
-  return createVoiceAgentRealtimeProcessor({
-    contract: {
-      ...VoiceAgentProcessorContract,
-      slug: input.processorSlug,
-      description: `${providerLabel(input.provider)} realtime voice provider adapter for the canonical voice-agent stream protocol.`,
-    } as typeof VoiceAgentProcessorContract,
-    deps: input,
-    provider: input.provider,
-  });
-}
-
-function createVoiceAgentRealtimeProcessor(args: {
-  contract: typeof VoiceAgentProcessorContract;
-  deps: VoiceAgentProcessorDeps;
-  provider: VoiceAgentProvider;
-}) {
-  let connection: ProviderConnection | null = null;
-  let openingConnection: Promise<ProviderConnection> | null = null;
-  let outputSequence = 0;
-  let lastInputStreamId = "voice-agent";
-
-  return implementProcessor(args.contract, {
-    async afterAppend({ event, state, streamApi, waitUntil }) {
-      await standardProcessorBehavior.afterAppend({
-        contract: args.contract,
-        state,
-        streamApi,
-      });
-
-      const getConnection = async (setup: VoiceAgentSetup) => {
-        if (
-          connection?.provider === setup.provider &&
-          connection.socket.readyState === ProviderConnectedReadyState
-        ) {
-          return connection;
-        }
-
-        if (openingConnection != null) {
-          return await openingConnection;
-        }
-
-        connection?.socket.close(1000, "Voice-agent provider changed.");
-        openingConnection = openProviderConnection({
-          deps: args.deps,
-          setup,
-          streamApi,
-          createOutputSequence: () => outputSequence++,
-          getLastInputStreamId: () => lastInputStreamId,
-          markConnectionClosed: (closedConnection) => {
-            if (connection?.id === closedConnection.id) connection = null;
-          },
-        });
-        try {
-          connection = await openingConnection;
-          return connection;
-        } finally {
-          openingConnection = null;
-        }
-      };
-
-      switch (event.type) {
-        case CoreProcessorRegisteredEventType:
-        case VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE:
-        case VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE:
-        case "events.iterate.com/voice-agent/transcription-appended":
-        case VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE:
-        case "events.iterate.com/voice-agent/error-occurred":
-        case "events.iterate.com/voice-agent/gemini-live-websocket-connected":
-        case "events.iterate.com/voice-agent/gemini-live-websocket-disconnected":
-        case "events.iterate.com/voice-agent/gemini-live-setup-completed":
-        case "events.iterate.com/voice-agent/gemini-live-message-sent":
-        case "events.iterate.com/voice-agent/gemini-live-message-received":
-        case "events.iterate.com/voice-agent/gemini-live-output-interrupted":
-        case "events.iterate.com/voice-agent/gemini-live-turn-completed":
-        case "events.iterate.com/voice-agent/openai-realtime-websocket-connected":
-        case "events.iterate.com/voice-agent/openai-realtime-websocket-disconnected":
-        case "events.iterate.com/voice-agent/openai-realtime-session-updated":
-        case "events.iterate.com/voice-agent/openai-realtime-message-sent":
-        case "events.iterate.com/voice-agent/openai-realtime-message-received":
-        case "events.iterate.com/voice-agent/openai-realtime-speech-started":
-        case "events.iterate.com/voice-agent/openai-realtime-speech-stopped":
-        case "events.iterate.com/voice-agent/openai-realtime-output-audio-done":
-        case "events.iterate.com/voice-agent/openai-realtime-response-done":
-        case "events.iterate.com/voice-agent/grok-realtime-websocket-connected":
-        case "events.iterate.com/voice-agent/grok-realtime-websocket-disconnected":
-        case "events.iterate.com/voice-agent/grok-realtime-session-updated":
-        case "events.iterate.com/voice-agent/grok-realtime-message-sent":
-        case "events.iterate.com/voice-agent/grok-realtime-message-received":
-        case "events.iterate.com/voice-agent/grok-realtime-speech-started":
-        case "events.iterate.com/voice-agent/grok-realtime-speech-stopped":
-        case "events.iterate.com/voice-agent/grok-realtime-output-audio-done":
-        case "events.iterate.com/voice-agent/grok-realtime-response-done":
-          return;
-        case VOICE_AGENT_SETUP_CONFIGURED_EVENT_TYPE:
-        case "events.iterate.com/voice-agent/config-updated":
-          connection?.socket.close(1000, "Voice-agent setup changed.");
-          connection = null;
-          openingConnection = null;
-          return;
-        case VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE: {
-          const task = forwardInputAudioFrame({
-            deps: args.deps,
-            event,
-            getConnection,
-            provider: args.provider,
-            rememberInputStreamId: (streamId) => {
-              lastInputStreamId = streamId;
-            },
-            state,
-            streamApi,
-          });
-          if (waitUntil == null) {
-            await task;
-          } else {
-            waitUntil(task);
-          }
-          return;
-        }
-        case VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE: {
-          const task = forwardInputText({
-            deps: args.deps,
-            event,
-            getConnection,
-            provider: args.provider,
-            state,
-            streamApi,
-          });
-          if (waitUntil == null) {
-            await task;
-          } else {
-            waitUntil(task);
-          }
-          return;
-        }
-        default:
-          return assertNever(event);
-      }
-    },
-  });
-}
-
-async function forwardInputAudioFrame(args: {
-  deps: VoiceAgentProcessorDeps;
-  event: Extract<
-    VoiceAgentConsumedEvent,
-    { type: typeof VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE }
-  >;
-  getConnection(setup: VoiceAgentSetup): Promise<ProviderConnection>;
-  provider: VoiceAgentProvider;
-  rememberInputStreamId(streamId: string): void;
-  state: VoiceAgentState;
-  streamApi: VoiceAgentStreamApi;
-}) {
-  const setup = args.state.setup;
-  if (setup == null) {
-    await appendProcessorError({
-      error: new Error(
-        "Voice-agent setup-configured event is required before appending input audio.",
-      ),
-      event: args.event,
-      streamApi: args.streamApi,
-    });
-    return;
-  }
-  if (setup.provider !== args.provider) {
-    return;
-  }
-
-  const missingKeyError = missingApiKeyError({ deps: args.deps, provider: setup.provider });
-  if (missingKeyError != null) {
-    await appendProcessorError({
-      error: new Error(missingKeyError),
-      event: args.event,
-      streamApi: args.streamApi,
-    });
-    return;
-  }
-
-  args.rememberInputStreamId(args.event.payload.streamId);
-
-  let connection: ProviderConnection;
-  try {
-    connection = await args.getConnection(setup);
-    await withTimeout(
-      connection.ready,
-      30_000,
-      `Timed out waiting for ${providerLabel(setup.provider)} setup.`,
-    );
-  } catch (error) {
-    await appendProcessorError({
-      error,
-      event: args.event,
-      streamApi: args.streamApi,
-    });
-    return;
-  }
-
-  await sendInputAudioFrame({
-    connection,
-    event: args.event,
-    streamApi: args.streamApi,
-  });
-}
-
-async function sendInputAudioFrame(args: {
-  connection: ProviderConnection;
-  event: Extract<
-    VoiceAgentConsumedEvent,
-    { type: typeof VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE }
-  >;
-  streamApi: VoiceAgentStreamApi;
-}) {
-  const sequence = args.connection.sendSequence++;
-  switch (args.connection.provider) {
-    case VOICE_AGENT_PROVIDER_GEMINI_LIVE: {
-      const message = {
-        realtimeInput: {
-          audio: {
-            data: args.event.payload.dataBase64,
-            mimeType: `audio/pcm;rate=${args.event.payload.sampleRate}`,
-          },
-        },
-      } satisfies JsonValue;
-      args.connection.socket.send(JSON.stringify(message));
-      await appendProviderMessageSent({
-        connection: args.connection,
-        eventType: providerMessageSentEventType(args.connection.provider),
-        message,
-        sequence,
-        sourceEventOffset: args.event.offset,
-        streamApi: args.streamApi,
-      });
-      return;
-    }
-    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
-    case VOICE_AGENT_PROVIDER_GROK_REALTIME: {
-      const message = {
-        type: "input_audio_buffer.append",
-        audio:
-          args.connection.provider === VOICE_AGENT_PROVIDER_OPENAI_REALTIME
-            ? resamplePcm16Base64({
-                dataBase64: args.event.payload.dataBase64,
-                fromSampleRate: args.event.payload.sampleRate,
-                toSampleRate: 24_000,
-              })
-            : args.event.payload.dataBase64,
-      } satisfies JsonValue;
-      args.connection.socket.send(JSON.stringify(message));
-      await appendProviderMessageSent({
-        connection: args.connection,
-        eventType: providerMessageSentEventType(args.connection.provider),
-        message,
-        sequence,
-        sourceEventOffset: args.event.offset,
-        streamApi: args.streamApi,
-      });
-      return;
-    }
-    default:
-      return assertNever(args.connection.provider);
-  }
-}
-
-async function forwardInputText(args: {
-  deps: VoiceAgentProcessorDeps;
-  event: Extract<
-    VoiceAgentConsumedEvent,
-    { type: typeof VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE }
-  >;
-  getConnection(setup: VoiceAgentSetup): Promise<ProviderConnection>;
-  provider: VoiceAgentProvider;
-  state: VoiceAgentState;
-  streamApi: VoiceAgentStreamApi;
-}) {
-  const setup = args.state.setup;
-  if (setup == null) {
-    await appendProcessorError({
-      error: new Error(
-        "Voice-agent setup-configured event is required before appending input text.",
-      ),
-      event: args.event,
-      streamApi: args.streamApi,
-    });
-    return;
-  }
-  if (setup.provider !== args.provider) return;
-
-  const missingKeyError = missingApiKeyError({ deps: args.deps, provider: setup.provider });
-  if (missingKeyError != null) {
-    await appendProcessorError({
-      error: new Error(missingKeyError),
-      event: args.event,
-      streamApi: args.streamApi,
-    });
-    return;
-  }
-
-  let connection: ProviderConnection;
-  try {
-    connection = await args.getConnection(setup);
-    await withTimeout(
-      connection.ready,
-      30_000,
-      `Timed out waiting for ${providerLabel(setup.provider)} setup.`,
-    );
-  } catch (error) {
-    await appendProcessorError({
-      error,
-      event: args.event,
-      streamApi: args.streamApi,
-    });
-    return;
-  }
-
-  await sendInputText({
-    connection,
-    event: args.event,
-    streamApi: args.streamApi,
-  });
-}
-
-async function sendInputText(args: {
-  connection: ProviderConnection;
-  event: Extract<
-    VoiceAgentConsumedEvent,
-    { type: typeof VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE }
-  >;
-  streamApi: VoiceAgentStreamApi;
-}) {
-  switch (args.connection.provider) {
-    case VOICE_AGENT_PROVIDER_GEMINI_LIVE: {
-      const sequence = args.connection.sendSequence++;
-      const message = {
-        clientContent: {
-          turns: [{ role: "user", parts: [{ text: providerInputText(args.event) }] }],
-          turnComplete: true,
-        },
-      } satisfies JsonValue;
-      args.connection.socket.send(JSON.stringify(message));
-      await appendProviderMessageSent({
-        connection: args.connection,
-        eventType: providerMessageSentEventType(args.connection.provider),
-        message,
-        sequence,
-        sourceEventOffset: args.event.offset,
-        streamApi: args.streamApi,
-      });
-      return;
-    }
-    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
-    case VOICE_AGENT_PROVIDER_GROK_REALTIME: {
-      const itemSequence = args.connection.sendSequence++;
-      const itemMessage = {
-        type: "conversation.item.create",
-        item: {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: providerInputText(args.event) }],
-        },
-      } satisfies JsonValue;
-      args.connection.socket.send(JSON.stringify(itemMessage));
-      await appendProviderMessageSent({
-        connection: args.connection,
-        eventType: providerMessageSentEventType(args.connection.provider),
-        message: itemMessage,
-        sequence: itemSequence,
-        sourceEventOffset: args.event.offset,
-        streamApi: args.streamApi,
-      });
-
-      const responseSequence = args.connection.sendSequence++;
-      const responseMessage = { type: "response.create" } satisfies JsonValue;
-      args.connection.socket.send(JSON.stringify(responseMessage));
-      await appendProviderMessageSent({
-        connection: args.connection,
-        eventType: providerMessageSentEventType(args.connection.provider),
-        message: responseMessage,
-        sequence: responseSequence,
-        sourceEventOffset: args.event.offset,
-        streamApi: args.streamApi,
-      });
-      return;
-    }
-    default:
-      return assertNever(args.connection.provider);
-  }
-}
-
-function providerInputText(
-  event: Extract<
-    VoiceAgentConsumedEvent,
-    { type: typeof VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE }
-  >,
-) {
-  if (event.payload.source !== "code-agent") return event.payload.text;
-  return [
-    "BACKGROUND AGENT MESSAGE TO RELAY TO THE HUMAN YOU ARE SPEAKING TO:",
-    event.payload.text,
-    "",
-    "This message is not from the caller. It is from the background code-capable agent you asked for help.",
-    "Your job is to relay this message to the human you are speaking to in natural speech.",
-    "If the background agent's message is a question, ask that question to the human you are speaking to. Do not answer the question yourself.",
-    "If the background agent's message is an answer or update, tell the human you are speaking to that answer or update directly.",
-    "Do not say thanks, thank you, thanks for the update, or any other gratitude/acknowledgement phrase.",
-    "Do not say the caller told you this. Do not describe the background agent as if it is another participant in the call.",
-  ].join("\n");
-}
-
-async function openProviderConnection(args: {
-  deps: VoiceAgentProcessorDeps;
-  setup: VoiceAgentSetup;
-  streamApi: VoiceAgentStreamApi;
-  createOutputSequence(): number;
-  getLastInputStreamId(): string;
-  markConnectionClosed(connection: ProviderConnection): void;
-}): Promise<ProviderConnection> {
-  const setup = args.setup;
-  switch (setup.provider) {
-    case VOICE_AGENT_PROVIDER_GEMINI_LIVE:
-      return await openGeminiLiveConnection({ ...args, setup });
-    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
-      return await openOpenAiRealtimeConnection({ ...args, setup });
-    case VOICE_AGENT_PROVIDER_GROK_REALTIME:
-      return await openGrokRealtimeConnection({ ...args, setup });
-    default:
-      return assertNever(setup);
-  }
-}
-
-// Gemini Live handlers.
-
-async function openGeminiLiveConnection(args: {
-  deps: VoiceAgentProcessorDeps;
-  setup: Extract<VoiceAgentSetup, { provider: typeof VOICE_AGENT_PROVIDER_GEMINI_LIVE }>;
-  streamApi: VoiceAgentStreamApi;
-  createOutputSequence(): number;
-  getLastInputStreamId(): string;
-  markConnectionClosed(connection: ProviderConnection): void;
-}): Promise<ProviderConnection> {
-  const connection = await createProviderConnection({
-    openSocket:
-      args.deps.openGeminiLiveWebSocket == null
-        ? () => openGeminiLiveWebSocket({ apiKey: args.deps.geminiApiKey })
-        : () => args.deps.openGeminiLiveWebSocket?.({ apiKey: args.deps.geminiApiKey }),
-    provider: VOICE_AGENT_PROVIDER_GEMINI_LIVE,
-    setup: args.setup,
-    streamApi: args.streamApi,
-    urlForLog: geminiLiveUrl({ apiKey: "" }).toString(),
-    onMessage: handleGeminiMessage,
-    markConnectionClosed: args.markConnectionClosed,
-    createOutputSequence: args.createOutputSequence,
-    getLastInputStreamId: args.getLastInputStreamId,
-  });
-
-  await appendProviderConnected({
-    connection,
-    eventType: "events.iterate.com/voice-agent/gemini-live-websocket-connected",
-    model: args.setup.model,
-    streamApi: args.streamApi,
-  });
-
-  const setupMessage = {
-    setup: {
-      model: normalizeGeminiModelName(args.setup.model),
-      generationConfig: {
-        responseModalities: ["AUDIO"],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: args.setup.voiceName },
-          },
-        },
-      },
-      inputAudioTranscription: {},
-      outputAudioTranscription: {},
-      systemInstruction: {
-        parts: [{ text: systemInstructionWithMessageAgent(args.setup.systemInstruction) }],
-      },
-      tools: [geminiMessageAgentTool()],
-      ...(args.setup.messageAgentToolChoice === "required"
-        ? { toolConfig: geminiRequiredMessageAgentToolConfig() }
-        : {}),
-    },
-  } satisfies JsonValue;
-  const sequence = connection.sendSequence++;
-  connection.socket.send(JSON.stringify(setupMessage));
-  await appendProviderMessageSent({
-    connection,
-    eventType: "events.iterate.com/voice-agent/gemini-live-message-sent",
-    message: setupMessage,
-    sequence,
-    streamApi: args.streamApi,
-  });
-
-  return connection;
-}
-
-async function handleGeminiMessage(args: ProviderConnectionArgs & { data: unknown }) {
-  const text = await websocketMessageToText(args.data);
-  const message = JSON.parse(text) as GeminiServerMessage;
-  const sequence = args.connection.receiveSequence++;
-  await appendProviderMessageReceived({
-    connection: args.connection,
-    eventType: providerMessageReceivedEventType(args.connection.provider),
+async function handleOpenAiCompatibleMessage(ctx: ProviderContext, data: unknown) {
+  const message = JSON.parse(await websocketMessageToText(data)) as RealtimeServerMessage;
+  const sequence = ctx.connection.receiveSequence++;
+  enqueueProviderMessageAudit({
+    ctx,
+    direction: "received",
     message: message as JsonValue,
     sequence,
-    streamApi: args.streamApi,
-  });
-
-  if (message.setupComplete != null) {
-    args.resolveReady();
-    await args.streamApi.append({
-      event: {
-        type: "events.iterate.com/voice-agent/gemini-live-setup-completed",
-        idempotencyKey: `voice-agent:${args.connection.id}:gemini-live-setup-completed`,
-        payload: { connectionId: args.connection.id },
-      },
-    });
-  }
-
-  for (const functionCall of message.toolCall?.functionCalls ?? []) {
-    await handleGeminiFunctionCall({
-      connection: args.connection,
-      functionCall,
-      streamApi: args.streamApi,
-    });
-  }
-
-  const serverContent = message.serverContent;
-  if (serverContent == null) return;
-
-  for (const part of serverContent.modelTurn?.parts ?? []) {
-    const dataBase64 = part.inlineData?.data;
-    if (!dataBase64) continue;
-    await appendOutputAudioFrame({
-      connection: args.connection,
-      createOutputSequence: args.createOutputSequence,
-      dataBase64,
-      getLastInputStreamId: args.getLastInputStreamId,
-      streamApi: args.streamApi,
-    });
-  }
-
-  if (serverContent.interrupted) {
-    const sourceEventType = "events.iterate.com/voice-agent/gemini-live-output-interrupted";
-    await args.streamApi.append({
-      event: {
-        type: sourceEventType,
-        idempotencyKey: `voice-agent:${args.connection.id}:gemini-live-output-interrupted:${sequence}`,
-        payload: { connectionId: args.connection.id },
-      },
-    });
-    await appendSpeakerBufferClearRequested({
-      connection: args.connection,
-      reason: "output-interrupted",
-      sequence,
-      sourceEventType,
-      streamApi: args.streamApi,
-    });
-  }
-
-  if (serverContent.turnComplete) {
-    await args.streamApi.append({
-      event: {
-        type: "events.iterate.com/voice-agent/gemini-live-turn-completed",
-        idempotencyKey: `voice-agent:${args.connection.id}:gemini-live-turn-completed:${sequence}`,
-        payload: { connectionId: args.connection.id },
-      },
-    });
-  }
-
-  await appendTranscriptionEvents({
-    connectionId: args.connection.id,
-    inputText: serverContent.inputTranscription?.text,
-    sequence,
-    outputText: serverContent.outputTranscription?.text,
-    streamApi: args.streamApi,
-  });
-}
-
-// OpenAI Realtime handlers.
-
-async function openOpenAiRealtimeConnection(args: {
-  deps: VoiceAgentProcessorDeps;
-  setup: Extract<VoiceAgentSetup, { provider: typeof VOICE_AGENT_PROVIDER_OPENAI_REALTIME }>;
-  streamApi: VoiceAgentStreamApi;
-  createOutputSequence(): number;
-  getLastInputStreamId(): string;
-  markConnectionClosed(connection: ProviderConnection): void;
-}): Promise<ProviderConnection> {
-  const connection = await createProviderConnection({
-    openSocket:
-      args.deps.openOpenAiRealtimeWebSocket == null
-        ? () =>
-            openOpenAiRealtimeWebSocket({
-              apiKey: args.deps.openAiApiKey,
-              model: args.setup.model,
-            })
-        : () =>
-            args.deps.openOpenAiRealtimeWebSocket?.({
-              apiKey: args.deps.openAiApiKey,
-              model: args.setup.model,
-            }),
-    provider: VOICE_AGENT_PROVIDER_OPENAI_REALTIME,
-    setup: args.setup,
-    streamApi: args.streamApi,
-    urlForLog: openAiRealtimeUrl({ model: args.setup.model }).toString(),
-    onMessage: handleOpenAiRealtimeMessage,
-    markConnectionClosed: args.markConnectionClosed,
-    createOutputSequence: args.createOutputSequence,
-    getLastInputStreamId: args.getLastInputStreamId,
-  });
-
-  await appendProviderConnected({
-    connection,
-    eventType: "events.iterate.com/voice-agent/openai-realtime-websocket-connected",
-    model: args.setup.model,
-    streamApi: args.streamApi,
-  });
-
-  const setupMessage = {
-    type: "session.update",
-    session: {
-      type: "realtime",
-      instructions: systemInstructionWithMessageAgent(args.setup.systemInstruction),
-      audio: {
-        input: {
-          format: { type: "audio/pcm", rate: 24_000 },
-          turn_detection: {
-            type: "server_vad",
-            create_response: true,
-            interrupt_response: true,
-          },
-          transcription: { model: "gpt-4o-mini-transcribe" },
-        },
-        output: {
-          format: { type: "audio/pcm", rate: VOICE_AGENT_OUTPUT_SAMPLE_RATE },
-          voice: args.setup.voiceName,
-        },
-      },
-      tools: [openAiCompatibleMessageAgentTool()],
-      tool_choice: openAiCompatibleMessageAgentToolChoice(args.setup.messageAgentToolChoice),
-    },
-  } satisfies JsonValue;
-  const sequence = connection.sendSequence++;
-  connection.socket.send(JSON.stringify(setupMessage));
-  await appendProviderMessageSent({
-    connection,
-    eventType: "events.iterate.com/voice-agent/openai-realtime-message-sent",
-    message: setupMessage,
-    sequence,
-    streamApi: args.streamApi,
-  });
-
-  return connection;
-}
-
-async function handleOpenAiRealtimeMessage(args: ProviderConnectionArgs & { data: unknown }) {
-  await handleOpenAiCompatibleRealtimeMessage({
-    ...args,
-    eventPrefix: "openai-realtime",
-  });
-}
-
-// Grok Realtime handlers.
-
-async function openGrokRealtimeConnection(args: {
-  deps: VoiceAgentProcessorDeps;
-  setup: Extract<VoiceAgentSetup, { provider: typeof VOICE_AGENT_PROVIDER_GROK_REALTIME }>;
-  streamApi: VoiceAgentStreamApi;
-  createOutputSequence(): number;
-  getLastInputStreamId(): string;
-  markConnectionClosed(connection: ProviderConnection): void;
-}): Promise<ProviderConnection> {
-  const connection = await createProviderConnection({
-    openSocket:
-      args.deps.openGrokRealtimeWebSocket == null
-        ? () => openGrokRealtimeWebSocket({ apiKey: args.deps.xAiApiKey, model: args.setup.model })
-        : () =>
-            args.deps.openGrokRealtimeWebSocket?.({
-              apiKey: args.deps.xAiApiKey,
-              model: args.setup.model,
-            }),
-    provider: VOICE_AGENT_PROVIDER_GROK_REALTIME,
-    setup: args.setup,
-    streamApi: args.streamApi,
-    urlForLog: grokRealtimeUrl({ model: args.setup.model }).toString(),
-    onMessage: handleGrokRealtimeMessage,
-    markConnectionClosed: args.markConnectionClosed,
-    createOutputSequence: args.createOutputSequence,
-    getLastInputStreamId: args.getLastInputStreamId,
-  });
-
-  await appendProviderConnected({
-    connection,
-    eventType: "events.iterate.com/voice-agent/grok-realtime-websocket-connected",
-    model: args.setup.model,
-    streamApi: args.streamApi,
-  });
-
-  const setupMessage = {
-    type: "session.update",
-    session: {
-      instructions: systemInstructionWithMessageAgent(args.setup.systemInstruction),
-      voice: args.setup.voiceName,
-      turn_detection: { type: "server_vad" },
-      audio: {
-        input: { format: { type: "audio/pcm", rate: 16_000 } },
-        output: { format: { type: "audio/pcm", rate: VOICE_AGENT_OUTPUT_SAMPLE_RATE } },
-      },
-      tools: [openAiCompatibleMessageAgentTool()],
-      tool_choice: openAiCompatibleMessageAgentToolChoice(args.setup.messageAgentToolChoice),
-    },
-  } satisfies JsonValue;
-  const sequence = connection.sendSequence++;
-  connection.socket.send(JSON.stringify(setupMessage));
-  await appendProviderMessageSent({
-    connection,
-    eventType: "events.iterate.com/voice-agent/grok-realtime-message-sent",
-    message: setupMessage,
-    sequence,
-    streamApi: args.streamApi,
-  });
-
-  return connection;
-}
-
-async function handleGrokRealtimeMessage(args: ProviderConnectionArgs & { data: unknown }) {
-  await handleOpenAiCompatibleRealtimeMessage({
-    ...args,
-    eventPrefix: "grok-realtime",
-  });
-}
-
-async function handleOpenAiCompatibleRealtimeMessage(
-  args: ProviderConnectionArgs & {
-    data: unknown;
-    eventPrefix: OpenAiCompatibleEventPrefix;
-  },
-) {
-  const text = await websocketMessageToText(args.data);
-  const message = JSON.parse(text) as RealtimeServerMessage;
-  const sequence = args.connection.receiveSequence++;
-  await appendProviderMessageReceived({
-    connection: args.connection,
-    eventType: providerMessageReceivedEventType(args.connection.provider),
-    message: message as JsonValue,
-    sequence,
-    streamApi: args.streamApi,
   });
 
   switch (message.type) {
     case "session.updated":
-      args.resolveReady();
-      await args.streamApi.append({
-        event: {
-          type: openAiCompatibleEventType(args.eventPrefix, "session-updated"),
-          idempotencyKey: `voice-agent:${args.connection.id}:${args.eventPrefix}-session-updated`,
-          payload: { connectionId: args.connection.id },
-        },
+      ctx.connection.resolveReady();
+      enqueueAppend(ctx.connection, ctx.streamApi, {
+        type: VOICE_AGENT_PROVIDER_SESSION_READY_EVENT_TYPE,
+        idempotencyKey: `voice-agent:${ctx.connection.id}:provider-session-ready`,
+        payload: { provider: ctx.connection.provider, connectionId: ctx.connection.id },
       });
       return;
     case "response.output_audio.delta":
     case "response.audio.delta":
       if (typeof message.delta === "string") {
-        await appendOutputAudioFrame({
-          connection: args.connection,
-          createOutputSequence: args.createOutputSequence,
-          dataBase64: message.delta,
-          getLastInputStreamId: args.getLastInputStreamId,
-          streamApi: args.streamApi,
-        });
+        enqueueOutputAudioFrame(ctx, message.delta);
       }
       return;
     case "conversation.item.input_audio_transcription.completed":
-      await appendTranscriptionEvents({
-        connectionId: args.connection.id,
-        inputText: message.transcript,
-        sequence,
-        streamApi: args.streamApi,
-      });
+      enqueueTranscription(ctx, "input-transcription", message.transcript, sequence);
       return;
     case "response.output_audio_transcript.delta":
     case "response.audio_transcript.delta":
-      await appendTranscriptionEvents({
-        connectionId: args.connection.id,
-        outputText: message.delta,
-        sequence,
-        streamApi: args.streamApi,
-      });
+      enqueueTranscription(ctx, "output-transcription", message.delta, sequence);
       return;
     case "input_audio_buffer.speech_started":
-      {
-        const sourceEventType = openAiCompatibleEventType(args.eventPrefix, "speech-started");
-        await appendProviderStatusEvent({
-          connection: args.connection,
-          eventType: sourceEventType,
-          sequence,
-          streamApi: args.streamApi,
-        });
-        await appendSpeakerBufferClearRequested({
-          connection: args.connection,
-          reason: "input-speech-started",
-          sequence,
-          sourceEventType,
-          streamApi: args.streamApi,
-        });
-      }
+      enqueueProviderStatus(ctx, "speech-started", sequence);
+      enqueueSpeakerBufferClear(ctx, "input-speech-started", sequence);
       return;
     case "input_audio_buffer.speech_stopped":
-      await appendProviderStatusEvent({
-        connection: args.connection,
-        eventType: openAiCompatibleEventType(args.eventPrefix, "speech-stopped"),
-        sequence,
-        streamApi: args.streamApi,
-      });
+      enqueueProviderStatus(ctx, "speech-stopped", sequence);
       return;
     case "response.output_audio.done":
     case "response.audio.done":
-      await appendProviderStatusEvent({
-        connection: args.connection,
-        eventType: openAiCompatibleEventType(args.eventPrefix, "output-audio-done"),
-        sequence,
-        streamApi: args.streamApi,
-      });
+      enqueueProviderStatus(ctx, "output-audio-done", sequence);
       return;
     case "response.output_item.done":
-      await handleOpenAiCompatibleFunctionCallItem({
-        connection: args.connection,
-        item: message.item,
-        streamApi: args.streamApi,
-      });
+      await handleOpenAiCompatibleFunctionCallItem(ctx, message.item);
       return;
     case "response.done":
-      await appendProviderStatusEvent({
-        connection: args.connection,
-        eventType: openAiCompatibleEventType(args.eventPrefix, "response-done"),
-        sequence,
-        streamApi: args.streamApi,
-      });
+      enqueueProviderStatus(ctx, "response-done", sequence);
       for (const item of message.response?.output ?? []) {
-        await handleOpenAiCompatibleFunctionCallItem({
-          connection: args.connection,
-          item,
-          streamApi: args.streamApi,
-        });
+        await handleOpenAiCompatibleFunctionCallItem(ctx, item);
       }
       return;
     case "error":
-      throw new Error(
-        message.error?.message ?? `${providerLabel(args.connection.provider)} returned an error.`,
-      );
+      // Providers send recoverable errors (e.g. rejected client events) on a live
+      // session; record them without tearing the connection down.
+      enqueueAppend(ctx.connection, ctx.streamApi, {
+        type: VOICE_AGENT_ERROR_OCCURRED_EVENT_TYPE,
+        idempotencyKey: `voice-agent:${ctx.connection.id}:provider-error:${sequence}`,
+        payload: {
+          message:
+            message.error?.message ??
+            `${providerEndpoints[ctx.connection.provider].label} returned an error.`,
+        },
+      });
+      return;
     default:
       return;
   }
 }
 
-async function handleGeminiFunctionCall(args: {
-  connection: ProviderConnection;
-  functionCall: GeminiFunctionCall;
-  streamApi: VoiceAgentStreamApi;
-}) {
-  const callId = args.functionCall.id;
-  if (callId == null || callId.trim() === "") return;
-  if (args.connection.handledToolCallIds.has(callId)) return;
-  args.connection.handledToolCallIds.add(callId);
-
-  const toolResult =
-    args.functionCall.name === "messageAgent"
-      ? await appendMessageAgentInput({
-          argumentsValue: args.functionCall.args,
-          callId,
-          connection: args.connection,
-          streamApi: args.streamApi,
-        })
-      : {
-          ok: false,
-          message: `Unknown tool: ${args.functionCall.name ?? "<missing>"}`,
-        };
-
-  await sendGeminiFunctionResponse({
-    callId,
-    connection: args.connection,
-    name: args.functionCall.name ?? "unknown_tool",
-    output: toolResult,
-    streamApi: args.streamApi,
+async function handleOpenAiCompatibleFunctionCallItem(
+  ctx: ProviderContext,
+  item: RealtimeFunctionCallItem | undefined,
+) {
+  if (item?.type !== "function_call") return;
+  await handleToolCall({
+    ctx,
+    callId: item.call_id,
+    name: item.name,
+    argumentsValue: item.arguments,
+    respond: (callId, output) => ({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: callId,
+        output: JSON.stringify(output),
+      },
+    }),
+    followUp: { type: "response.create", response: { tool_choice: "none" } },
   });
 }
 
-async function handleOpenAiCompatibleFunctionCallItem(args: {
-  connection: ProviderConnection;
-  item: RealtimeFunctionCallItem | undefined;
-  streamApi: VoiceAgentStreamApi;
+// messageAgent tool plumbing.
+
+const MESSAGE_AGENT_TOOL_DESCRIPTION =
+  "Ask the code-capable background agent to do work or answer a question. Use for actions, investigation, code, data lookup, or anything requiring tools.";
+
+async function handleToolCall(args: {
+  ctx: ProviderContext;
+  callId: string | undefined;
+  name: string | undefined;
+  argumentsValue: unknown;
+  respond: (callId: string, output: JsonValue) => JsonValue;
+  followUp?: JsonValue;
 }) {
-  if (args.item?.type !== "function_call") return;
-  const callId = args.item.call_id;
+  const { ctx } = args;
+  const callId = args.callId;
   if (callId == null || callId.trim() === "") return;
-  if (args.connection.handledToolCallIds.has(callId)) return;
-  args.connection.handledToolCallIds.add(callId);
+  if (ctx.connection.handledToolCallIds.has(callId)) return;
+  ctx.connection.handledToolCallIds.add(callId);
 
   const toolResult =
-    args.item.name === "messageAgent"
-      ? await appendMessageAgentInput({
-          argumentsValue: args.item.arguments,
-          callId,
-          connection: args.connection,
-          streamApi: args.streamApi,
-        })
-      : {
-          ok: false,
-          message: `Unknown tool: ${args.item.name ?? "<missing>"}`,
-        };
+    args.name === "messageAgent"
+      ? await appendMessageAgentInput({ ctx, callId, argumentsValue: args.argumentsValue })
+      : { ok: false, message: `Unknown tool: ${args.name ?? "<missing>"}` };
 
-  await sendOpenAiCompatibleFunctionCallOutput({
-    callId,
-    connection: args.connection,
-    output: toolResult,
-    sequenceSourceEventOffset: undefined,
-    streamApi: args.streamApi,
+  sendProviderMessage({
+    connection: ctx.connection,
+    message: args.respond(callId, toolResult),
+    streamApi: ctx.streamApi,
   });
+  if (args.followUp != null) {
+    sendProviderMessage({
+      connection: ctx.connection,
+      message: args.followUp,
+      streamApi: ctx.streamApi,
+    });
+  }
 }
 
 async function appendMessageAgentInput(args: {
-  argumentsValue: unknown;
+  ctx: ProviderContext;
   callId: string;
-  connection: ProviderConnection;
-  streamApi: VoiceAgentStreamApi;
+  argumentsValue: unknown;
 }) {
   const parsed = parseMessageAgentArguments(args.argumentsValue);
   if (!parsed.ok) return parsed;
 
-  await args.streamApi.append({
-    event: {
-      type: AGENT_INPUT_ADDED_EVENT_TYPE,
-      idempotencyKey: `voice-agent:${args.connection.id}:${args.connection.provider}:message-agent:${args.callId}:agent-input`,
-      payload: {
-        content: parsed.message,
-        llmRequestPolicy: { behaviour: "after-current-request" },
-      },
+  await enqueueAppend(args.ctx.connection, args.ctx.streamApi, {
+    type: AGENT_INPUT_ADDED_EVENT_TYPE,
+    idempotencyKey: `voice-agent:${args.ctx.connection.id}:${args.ctx.connection.provider}:message-agent:${args.callId}:agent-input`,
+    payload: {
+      content: parsed.message,
+      llmRequestPolicy: { behaviour: "after-current-request" },
     },
   });
 
@@ -1119,79 +854,6 @@ function parseMessageAgentArguments(
   return { ok: true, message: message.trim() };
 }
 
-async function sendGeminiFunctionResponse(args: {
-  callId: string;
-  connection: ProviderConnection;
-  name: string;
-  output: JsonValue;
-  sequenceSourceEventOffset?: number;
-  streamApi: VoiceAgentStreamApi;
-}) {
-  const sequence = args.connection.sendSequence++;
-  const message = {
-    toolResponse: {
-      functionResponses: [
-        {
-          id: args.callId,
-          name: args.name,
-          response: args.output,
-        },
-      ],
-    },
-  } satisfies JsonValue;
-  args.connection.socket.send(JSON.stringify(message));
-  await appendProviderMessageSent({
-    connection: args.connection,
-    eventType: providerMessageSentEventType(args.connection.provider),
-    message,
-    sequence,
-    sourceEventOffset: args.sequenceSourceEventOffset,
-    streamApi: args.streamApi,
-  });
-}
-
-async function sendOpenAiCompatibleFunctionCallOutput(args: {
-  callId: string;
-  connection: ProviderConnection;
-  output: JsonValue;
-  sequenceSourceEventOffset?: number;
-  streamApi: VoiceAgentStreamApi;
-}) {
-  const itemSequence = args.connection.sendSequence++;
-  const itemMessage = {
-    type: "conversation.item.create",
-    item: {
-      type: "function_call_output",
-      call_id: args.callId,
-      output: JSON.stringify(args.output),
-    },
-  } satisfies JsonValue;
-  args.connection.socket.send(JSON.stringify(itemMessage));
-  await appendProviderMessageSent({
-    connection: args.connection,
-    eventType: providerMessageSentEventType(args.connection.provider),
-    message: itemMessage,
-    sequence: itemSequence,
-    sourceEventOffset: args.sequenceSourceEventOffset,
-    streamApi: args.streamApi,
-  });
-
-  const responseSequence = args.connection.sendSequence++;
-  const responseMessage = {
-    type: "response.create",
-    response: { tool_choice: "none" },
-  } satisfies JsonValue;
-  args.connection.socket.send(JSON.stringify(responseMessage));
-  await appendProviderMessageSent({
-    connection: args.connection,
-    eventType: providerMessageSentEventType(args.connection.provider),
-    message: responseMessage,
-    sequence: responseSequence,
-    sourceEventOffset: args.sequenceSourceEventOffset,
-    streamApi: args.streamApi,
-  });
-}
-
 function systemInstructionWithMessageAgent(systemInstruction: string) {
   return [
     systemInstruction,
@@ -1220,464 +882,141 @@ function openAiCompatibleMessageAgentTool() {
   return {
     type: "function",
     name: "messageAgent",
-    description:
-      "Ask the code-capable background agent to do work or answer a question. Use for actions, investigation, code, data lookup, or anything requiring tools.",
+    description: MESSAGE_AGENT_TOOL_DESCRIPTION,
     parameters: messageAgentParameters({ additionalProperties: false }),
   } satisfies JsonValue;
 }
 
-function openAiCompatibleMessageAgentToolChoice(choice: VoiceAgentSetup["messageAgentToolChoice"]) {
-  return choice === "required" ? "required" : "auto";
+// Append helpers. Everything appended on behalf of a connection goes through
+// the connection's append chain so events land on the stream in emission order.
+
+function enqueueAppend(
+  connection: ProviderConnection,
+  streamApi: VoiceAgentStreamApi,
+  event: VoiceAgentAppendableEvent,
+): Promise<unknown> {
+  const next = connection.appendChain.then(() => streamApi.append({ event }));
+  connection.appendChain = next.catch((error) => {
+    console.error("voice-agent stream append failed", { error, type: event.type });
+  });
+  return next;
 }
 
-function geminiMessageAgentTool() {
-  return {
-    functionDeclarations: [
-      {
-        name: "messageAgent",
-        description:
-          "Ask the code-capable background agent to do work or answer a question. Use for actions, investigation, code, data lookup, or anything requiring tools.",
-        parameters: messageAgentParameters(),
-      },
-    ],
-  } satisfies JsonValue;
-}
-
-function geminiRequiredMessageAgentToolConfig() {
-  return {
-    functionCallingConfig: {
-      mode: "ANY",
-      allowedFunctionNames: ["messageAgent"],
-    },
-  } satisfies JsonValue;
-}
-
-// Shared provider helpers.
-
-async function createProviderConnection(args: {
-  openSocket(): Promise<WebSocket> | undefined;
-  provider: VoiceAgentProvider;
-  setup: VoiceAgentSetup;
-  streamApi: VoiceAgentStreamApi;
-  urlForLog: string;
-  onMessage(args: ProviderConnectionArgs & { data: unknown }): Promise<void>;
-  createOutputSequence(): number;
-  getLastInputStreamId(): string;
-  markConnectionClosed(connection: ProviderConnection): void;
-}): Promise<ProviderConnection> {
-  const connectionId = crypto.randomUUID();
-  let resolveReady: () => void = () => {};
-  let rejectReady: (error: Error) => void = () => {};
-  const ready = new Promise<void>((resolve, reject) => {
-    resolveReady = resolve;
-    rejectReady = reject;
-  });
-  const socket = await args.openSocket();
-  if (socket == null) throw new Error(`Could not open ${providerLabel(args.provider)} WebSocket.`);
-
-  const connection: ProviderConnection = {
-    id: connectionId,
-    provider: args.provider,
-    ready,
-    receiveSequence: 0,
-    sendSequence: 0,
-    handledToolCallIds: new Set(),
-    socket,
-    urlForLog: args.urlForLog,
-  };
-
-  socket.addEventListener("message", (event) => {
-    void args
-      .onMessage({
-        connection,
-        createOutputSequence: args.createOutputSequence,
-        data: event.data,
-        getLastInputStreamId: args.getLastInputStreamId,
-        resolveReady,
-        streamApi: args.streamApi,
-      })
-      .catch((error) => {
-        void args.streamApi.append({
-          event: {
-            type: "events.iterate.com/voice-agent/error-occurred",
-            idempotencyKey: `voice-agent:${connection.id}:message-handler-error:${connection.receiveSequence}`,
-            payload: {
-              message: stringifyError(error),
-            },
-          },
-        });
-      });
-  });
-  socket.addEventListener("close", (event) => {
-    args.markConnectionClosed(connection);
-    rejectReady(
-      new Error(
-        event.reason || `${providerLabel(args.provider)} WebSocket closed before setup completed.`,
-      ),
-    );
-    const eventType = providerDisconnectedEventType(args.provider);
-    void args.streamApi.append({
-      event: {
-        type: eventType,
-        idempotencyKey: `voice-agent:${connection.id}:${eventType.split("/").at(-1)}`,
-        payload: {
-          connectionId,
-          code: event.code,
-          reason: event.reason || undefined,
-          wasClean: event.wasClean,
-        },
-      },
-    });
-  });
-  socket.addEventListener("error", () => {
-    args.markConnectionClosed(connection);
-    rejectReady(
-      new Error(`${providerLabel(args.provider)} WebSocket errored before setup completed.`),
-    );
-  });
-
-  return connection;
-}
-
-async function appendProviderConnected(args: {
+function sendProviderMessage(args: {
   connection: ProviderConnection;
-  eventType:
-    | "events.iterate.com/voice-agent/gemini-live-websocket-connected"
-    | "events.iterate.com/voice-agent/openai-realtime-websocket-connected"
-    | "events.iterate.com/voice-agent/grok-realtime-websocket-connected";
-  model: string;
-  streamApi: VoiceAgentStreamApi;
-}) {
-  await args.streamApi.append({
-    event: {
-      type: args.eventType,
-      idempotencyKey: `voice-agent:${args.connection.id}:${args.eventType.split("/").at(-1)}`,
-      payload: {
-        connectionId: args.connection.id,
-        model: args.model,
-        url: args.connection.urlForLog,
-      },
-    },
-  });
-}
-
-async function appendProviderMessageSent(args: {
-  connection: ProviderConnection;
-  eventType:
-    | "events.iterate.com/voice-agent/gemini-live-message-sent"
-    | "events.iterate.com/voice-agent/openai-realtime-message-sent"
-    | "events.iterate.com/voice-agent/grok-realtime-message-sent";
   message: JsonValue;
-  sequence: number;
   sourceEventOffset?: number;
   streamApi: VoiceAgentStreamApi;
 }) {
-  await args.streamApi.append({
-    event: {
-      type: args.eventType,
-      idempotencyKey: `voice-agent:${args.connection.id}:${args.eventType.split("/").at(-1)}:${args.sequence}`,
-      payload: {
-        connectionId: args.connection.id,
-        sequence: args.sequence,
-        sourceEventOffset: args.sourceEventOffset,
-        message: args.message,
-      },
+  const sequence = args.connection.sendSequence++;
+  args.connection.socket.send(JSON.stringify(args.message));
+  enqueueAppend(args.connection, args.streamApi, {
+    type: VOICE_AGENT_PROVIDER_MESSAGE_SENT_EVENT_TYPE,
+    idempotencyKey: `voice-agent:${args.connection.id}:provider-message-sent:${sequence}`,
+    payload: {
+      provider: args.connection.provider,
+      connectionId: args.connection.id,
+      sequence,
+      sourceEventOffset: args.sourceEventOffset,
+      message: redactLargeStringsForAudit(args.message),
     },
   });
 }
 
-async function appendProviderMessageReceived(args: {
-  connection: ProviderConnection;
-  eventType:
-    | "events.iterate.com/voice-agent/gemini-live-message-received"
-    | "events.iterate.com/voice-agent/openai-realtime-message-received"
-    | "events.iterate.com/voice-agent/grok-realtime-message-received";
+function enqueueProviderMessageAudit(args: {
+  ctx: ProviderContext;
+  direction: "received";
   message: JsonValue;
   sequence: number;
-  streamApi: VoiceAgentStreamApi;
 }) {
-  await args.streamApi.append({
-    event: {
-      type: args.eventType,
-      idempotencyKey: `voice-agent:${args.connection.id}:${args.eventType.split("/").at(-1)}:${args.sequence}`,
-      payload: {
-        connectionId: args.connection.id,
-        sequence: args.sequence,
-        message: args.message,
-      },
+  enqueueAppend(args.ctx.connection, args.ctx.streamApi, {
+    type: VOICE_AGENT_PROVIDER_MESSAGE_RECEIVED_EVENT_TYPE,
+    idempotencyKey: `voice-agent:${args.ctx.connection.id}:provider-message-received:${args.sequence}`,
+    payload: {
+      provider: args.ctx.connection.provider,
+      connectionId: args.ctx.connection.id,
+      sequence: args.sequence,
+      message: redactLargeStringsForAudit(args.message),
     },
   });
 }
 
-async function appendProviderStatusEvent(args: {
-  connection: ProviderConnection;
-  eventType: OpenAiCompatibleStatusEventType;
-  sequence: number;
-  streamApi: VoiceAgentStreamApi;
-}) {
-  await args.streamApi.append({
-    event: {
-      type: args.eventType,
-      idempotencyKey: `voice-agent:${args.connection.id}:${args.eventType.split("/").at(-1)}:${args.sequence}`,
-      payload: { connectionId: args.connection.id },
+function enqueueProviderStatus(
+  ctx: ProviderContext,
+  status: VoiceAgentProviderStatus,
+  sequence: number,
+) {
+  enqueueAppend(ctx.connection, ctx.streamApi, {
+    type: VOICE_AGENT_PROVIDER_STATUS_CHANGED_EVENT_TYPE,
+    idempotencyKey: `voice-agent:${ctx.connection.id}:provider-status:${status}:${sequence}`,
+    payload: {
+      provider: ctx.connection.provider,
+      connectionId: ctx.connection.id,
+      status,
     },
   });
 }
 
-async function appendSpeakerBufferClearRequested(args: {
-  connection: ProviderConnection;
-  reason: "output-interrupted" | "input-speech-started";
-  sequence: number;
-  sourceEventType: string;
-  streamApi: VoiceAgentStreamApi;
-}) {
-  await args.streamApi.append({
-    event: {
-      type: VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE,
-      idempotencyKey: `voice-agent:${args.connection.id}:speaker-buffer-clear-requested:${args.sequence}:${args.sourceEventType}`,
-      payload: {
-        connectionId: args.connection.id,
-        provider: args.connection.provider,
-        reason: args.reason,
-        sourceEventType: args.sourceEventType,
-      },
+function enqueueSpeakerBufferClear(
+  ctx: ProviderContext,
+  reason: "output-interrupted" | "input-speech-started",
+  sequence: number,
+) {
+  enqueueAppend(ctx.connection, ctx.streamApi, {
+    type: VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE,
+    idempotencyKey: `voice-agent:${ctx.connection.id}:speaker-buffer-clear:${sequence}`,
+    payload: {
+      provider: ctx.connection.provider,
+      connectionId: ctx.connection.id,
+      reason,
     },
   });
 }
 
-async function appendOutputAudioFrame(args: {
-  connection: ProviderConnection;
-  createOutputSequence(): number;
-  dataBase64: string;
-  getLastInputStreamId(): string;
-  streamApi: VoiceAgentStreamApi;
-}) {
-  const bytes = base64ByteLength(args.dataBase64);
-  const sequence = args.createOutputSequence();
-  await args.streamApi.append({
-    event: {
-      type: VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
-      idempotencyKey: `voice-agent:${args.connection.id}:output-audio:${sequence}`,
-      payload: {
-        channels: 1,
-        dataBase64: args.dataBase64,
-        durationMs: Math.round((bytes / 2 / VOICE_AGENT_OUTPUT_SAMPLE_RATE) * 1000),
-        encoding: "pcm_s16le",
-        sampleRate: VOICE_AGENT_OUTPUT_SAMPLE_RATE,
-        sequence,
-        streamId: args.getLastInputStreamId(),
-      },
+function enqueueOutputAudioFrame(ctx: ProviderContext, dataBase64: string) {
+  const bytes = base64ByteLength(dataBase64);
+  const sequence = ctx.createOutputSequence();
+  enqueueAppend(ctx.connection, ctx.streamApi, {
+    type: VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
+    idempotencyKey: `voice-agent:${ctx.connection.id}:output-audio:${sequence}`,
+    payload: {
+      channels: 1,
+      dataBase64,
+      durationMs: Math.round((bytes / 2 / VOICE_AGENT_OUTPUT_SAMPLE_RATE) * 1000),
+      encoding: "pcm_s16le",
+      sampleRate: VOICE_AGENT_OUTPUT_SAMPLE_RATE,
+      sequence,
+      streamId: ctx.getLastInputStreamId(),
     },
   });
 }
 
-async function appendTranscriptionEvents(args: {
-  connectionId: string;
-  inputText?: string;
-  sequence: number;
-  outputText?: string;
-  streamApi: VoiceAgentStreamApi;
-}) {
-  if (args.inputText) {
-    await args.streamApi.append({
-      event: {
-        type: VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE,
-        idempotencyKey: `voice-agent:${args.connectionId}:input-transcription-output-text:${args.sequence}`,
-        payload: {
-          connectionId: args.connectionId,
-          source: "input-transcription",
-          text: args.inputText,
-        },
-      },
-    });
-  }
-  if (args.outputText) {
-    await args.streamApi.append({
-      event: {
-        type: VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE,
-        idempotencyKey: `voice-agent:${args.connectionId}:output-transcription-output-text:${args.sequence}`,
-        payload: {
-          connectionId: args.connectionId,
-          source: "output-transcription",
-          text: args.outputText,
-        },
-      },
-    });
-  }
-}
-
-async function openGeminiLiveWebSocket(input: { apiKey: string }): Promise<WebSocket> {
-  return await openFetchWebSocket({
-    headers: {},
-    providerLabel: "Gemini Live",
-    url: geminiLiveUrl({ apiKey: input.apiKey }),
-  });
-}
-
-async function openOpenAiRealtimeWebSocket(input: {
-  apiKey: string;
-  model: string;
-}): Promise<WebSocket> {
-  return await openFetchWebSocket({
-    headers: { Authorization: `Bearer ${input.apiKey}` },
-    providerLabel: "OpenAI Realtime",
-    url: openAiRealtimeUrl({ model: input.model }),
-  });
-}
-
-async function openGrokRealtimeWebSocket(input: {
-  apiKey: string;
-  model: string;
-}): Promise<WebSocket> {
-  return await openFetchWebSocket({
-    headers: { Authorization: `Bearer ${input.apiKey}` },
-    providerLabel: "Grok Realtime",
-    url: grokRealtimeUrl({ model: input.model }),
-  });
-}
-
-async function openFetchWebSocket(input: {
-  headers: Record<string, string>;
-  providerLabel: string;
-  url: URL;
-}): Promise<WebSocket> {
-  const response = (await fetch(input.url, {
-    headers: {
-      ...input.headers,
-      Upgrade: "websocket",
+function enqueueTranscription(
+  ctx: ProviderContext,
+  source: "input-transcription" | "output-transcription",
+  text: string | undefined,
+  sequence: number,
+) {
+  if (!text) return;
+  enqueueAppend(ctx.connection, ctx.streamApi, {
+    type: VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE,
+    idempotencyKey: `voice-agent:${ctx.connection.id}:${source}:${sequence}`,
+    payload: {
+      connectionId: ctx.connection.id,
+      source,
+      text,
     },
-  })) as Response & { webSocket?: WebSocket & { accept(): void } };
-  if (!response.webSocket) {
-    throw new Error(
-      `${input.providerLabel} WebSocket upgrade failed with HTTP ${response.status}.`,
-    );
-  }
-  response.webSocket.accept();
-  return response.webSocket;
+  });
 }
 
-function geminiLiveUrl(input: { apiKey: string }) {
-  const url = new URL(
-    "https://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
-  );
-  if (input.apiKey) {
-    url.searchParams.set("key", input.apiKey);
-  }
-  return url;
-}
-
-function openAiRealtimeUrl(input: { model: string }) {
-  const url = new URL("https://api.openai.com/v1/realtime");
-  url.searchParams.set("model", input.model);
-  return url;
-}
-
-function grokRealtimeUrl(input: { model: string }) {
-  const url = new URL("https://api.x.ai/v1/realtime");
-  url.searchParams.set("model", input.model);
-  return url;
-}
-
-function normalizeGeminiModelName(model: string) {
-  return model.startsWith("models/") ? model : `models/${model}`;
-}
-
-function missingApiKeyError(input: {
-  deps: VoiceAgentProcessorDeps;
-  provider: VoiceAgentProvider;
-}) {
-  switch (input.provider) {
-    case VOICE_AGENT_PROVIDER_GEMINI_LIVE:
-      return input.deps.geminiApiKey.trim() === ""
-        ? "APP_CONFIG_GEMINI_API_KEY is not configured."
-        : null;
-    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
-      return input.deps.openAiApiKey.trim() === ""
-        ? "APP_CONFIG_OPEN_AI_API_KEY is not configured."
-        : null;
-    case VOICE_AGENT_PROVIDER_GROK_REALTIME:
-      return input.deps.xAiApiKey.trim() === ""
-        ? "APP_CONFIG_X_AI_API_KEY is not configured."
-        : null;
-    default:
-      return assertNever(input.provider);
-  }
-}
-
-function providerDisconnectedEventType(provider: VoiceAgentProvider) {
-  switch (provider) {
-    case VOICE_AGENT_PROVIDER_GEMINI_LIVE:
-      return "events.iterate.com/voice-agent/gemini-live-websocket-disconnected";
-    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
-      return "events.iterate.com/voice-agent/openai-realtime-websocket-disconnected";
-    case VOICE_AGENT_PROVIDER_GROK_REALTIME:
-      return "events.iterate.com/voice-agent/grok-realtime-websocket-disconnected";
-    default:
-      return assertNever(provider);
-  }
-}
-
-function providerMessageSentEventType(provider: VoiceAgentProvider) {
-  switch (provider) {
-    case VOICE_AGENT_PROVIDER_GEMINI_LIVE:
-      return "events.iterate.com/voice-agent/gemini-live-message-sent";
-    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
-      return "events.iterate.com/voice-agent/openai-realtime-message-sent";
-    case VOICE_AGENT_PROVIDER_GROK_REALTIME:
-      return "events.iterate.com/voice-agent/grok-realtime-message-sent";
-    default:
-      return assertNever(provider);
-  }
-}
-
-function providerMessageReceivedEventType(provider: VoiceAgentProvider) {
-  switch (provider) {
-    case VOICE_AGENT_PROVIDER_GEMINI_LIVE:
-      return "events.iterate.com/voice-agent/gemini-live-message-received";
-    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
-      return "events.iterate.com/voice-agent/openai-realtime-message-received";
-    case VOICE_AGENT_PROVIDER_GROK_REALTIME:
-      return "events.iterate.com/voice-agent/grok-realtime-message-received";
-    default:
-      return assertNever(provider);
-  }
-}
-
-function openAiCompatibleEventType(
-  prefix: OpenAiCompatibleEventPrefix,
-  suffix: OpenAiCompatibleStatusEventSuffix,
-): OpenAiCompatibleStatusEventType {
-  return `events.iterate.com/voice-agent/${prefix}-${suffix}`;
-}
-
-function providerLabel(provider: VoiceAgentProvider) {
-  switch (provider) {
-    case VOICE_AGENT_PROVIDER_GEMINI_LIVE:
-      return "Gemini Live";
-    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
-      return "OpenAI Realtime";
-    case VOICE_AGENT_PROVIDER_GROK_REALTIME:
-      return "Grok Realtime";
-    default:
-      return assertNever(provider);
-  }
-}
-
-async function appendProcessorError(args: {
+async function appendInputError(args: {
   error: unknown;
-  event: Extract<
-    VoiceAgentConsumedEvent,
-    {
-      type:
-        | typeof VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE
-        | typeof VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE;
-    }
-  >;
+  event: VoiceAgentInputEvent;
   streamApi: VoiceAgentStreamApi;
 }) {
   await args.streamApi.append({
     event: {
-      type: "events.iterate.com/voice-agent/error-occurred",
+      type: VOICE_AGENT_ERROR_OCCURRED_EVENT_TYPE,
       idempotencyKey: buildProcessorIdempotencyKey({
         processor: VoiceAgentProcessorContract,
         key:
@@ -1694,6 +1033,65 @@ async function appendProcessorError(args: {
   });
 }
 
+/**
+ * Provider messages embed base64 PCM that would otherwise double the stream's
+ * audio storage. Audit copies keep structure but truncate long strings; the
+ * canonical audio lives exactly once in input/output frame events.
+ */
+export function redactLargeStringsForAudit(value: JsonValue): JsonValue {
+  if (typeof value === "string") {
+    if (value.length <= AUDIT_MAX_STRING_LENGTH) return value;
+    return `${value.slice(0, 64)}… [${value.length - 64} more chars redacted]`;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => redactLargeStringsForAudit(item));
+  }
+  if (value != null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, redactLargeStringsForAudit(item)]),
+    );
+  }
+  return value;
+}
+
+// Transport helpers.
+
+async function openFetchWebSocket(input: {
+  provider: VoiceAgentProvider;
+  url: URL;
+  headers: Record<string, string>;
+}): Promise<WebSocket> {
+  const response = (await fetch(input.url, {
+    headers: {
+      ...input.headers,
+      Upgrade: "websocket",
+    },
+  })) as Response & { webSocket?: WebSocket & { accept(): void } };
+  if (!response.webSocket) {
+    throw new Error(
+      `${providerEndpoints[input.provider].label} WebSocket upgrade failed with HTTP ${response.status}.`,
+    );
+  }
+  response.webSocket.accept();
+  return response.webSocket;
+}
+
+function geminiLiveUrl(apiKey: string) {
+  const url = new URL(
+    "https://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
+  );
+  if (apiKey) {
+    url.searchParams.set("key", apiKey);
+  }
+  return url;
+}
+
+function realtimeUrl(base: string, model: string) {
+  const url = new URL(base);
+  url.searchParams.set("model", model);
+  return url;
+}
+
 async function websocketMessageToText(message: unknown): Promise<string> {
   if (typeof message === "string") return message;
   if (message instanceof ArrayBuffer) return new TextDecoder().decode(message);
@@ -1707,7 +1105,7 @@ function base64ByteLength(base64: string) {
   return Math.max(0, Math.floor((base64.length * 3) / 4) - padding);
 }
 
-function resamplePcm16Base64(input: {
+export function resamplePcm16Base64(input: {
   dataBase64: string;
   fromSampleRate: number;
   toSampleRate: number;

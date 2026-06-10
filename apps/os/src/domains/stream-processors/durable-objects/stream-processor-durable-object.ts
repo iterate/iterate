@@ -3,13 +3,8 @@ import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-obje
 import { NotInitializedError } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withStreamProcessor } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor";
 import {
-  VOICE_AGENT_PROVIDER_GEMINI_LIVE,
-  VOICE_AGENT_PROVIDER_GROK_REALTIME,
-  VOICE_AGENT_PROVIDER_OPENAI_REALTIME,
-} from "@iterate-com/shared/stream-processors/voice-agent/contract";
-import {
+  createRetiredVoiceAgentProviderProcessor,
   createVoiceAgentProcessor,
-  createVoiceAgentProviderProcessor,
 } from "@iterate-com/shared/stream-processors/voice-agent/implementation";
 import type {
   Processor,
@@ -230,40 +225,36 @@ const streamProcessorRegistry: Record<string, RegistryEntry> = {
   [VOICE_AGENT_PROCESSOR_SLUG]: {
     create: (env, params) =>
       createVoiceAgentProcessor({
+        geminiApiKey: readProviderApiKey(env, {
+          configKey: "geminiApiKey",
+          envOverrideKey: "APP_CONFIG_GEMINI_API_KEY",
+          plainSecretKey: "GEMINI_API_KEY",
+        }),
+        openAiApiKey: readProviderApiKey(env, {
+          configKey: "openAiApiKey",
+          envOverrideKey: "APP_CONFIG_OPEN_AI_API_KEY",
+          plainSecretKey: "OPENAI_API_KEY",
+        }),
+        xAiApiKey: readProviderApiKey(env, {
+          configKey: "xAiApiKey",
+          envOverrideKey: "APP_CONFIG_X_AI_API_KEY",
+          plainSecretKey: "XAI_API_KEY",
+        }),
         ensureCodeAgent: async () => {
           await ensureVoiceAgentCodeAgent({ env, params });
         },
       }),
   },
+  // Streams created before the unified voice-agent processor still hold
+  // subscriptions to these slugs; route them to a no-op so wakes don't error.
   [GEMINI_LIVE_VOICE_PROCESSOR_SLUG]: {
-    create: (env) =>
-      createVoiceAgentProviderProcessor({
-        geminiApiKey: readGeminiApiKey(env as Record<string, unknown>),
-        openAiApiKey: readOpenAiApiKey(env as Record<string, unknown>),
-        processorSlug: GEMINI_LIVE_VOICE_PROCESSOR_SLUG,
-        provider: VOICE_AGENT_PROVIDER_GEMINI_LIVE,
-        xAiApiKey: readXAiApiKey(env as Record<string, unknown>),
-      }),
+    create: () => createRetiredVoiceAgentProviderProcessor(GEMINI_LIVE_VOICE_PROCESSOR_SLUG),
   },
   [OPENAI_REALTIME_VOICE_PROCESSOR_SLUG]: {
-    create: (env) =>
-      createVoiceAgentProviderProcessor({
-        geminiApiKey: readGeminiApiKey(env as Record<string, unknown>),
-        openAiApiKey: readOpenAiApiKey(env as Record<string, unknown>),
-        processorSlug: OPENAI_REALTIME_VOICE_PROCESSOR_SLUG,
-        provider: VOICE_AGENT_PROVIDER_OPENAI_REALTIME,
-        xAiApiKey: readXAiApiKey(env as Record<string, unknown>),
-      }),
+    create: () => createRetiredVoiceAgentProviderProcessor(OPENAI_REALTIME_VOICE_PROCESSOR_SLUG),
   },
   [GROK_REALTIME_VOICE_PROCESSOR_SLUG]: {
-    create: (env) =>
-      createVoiceAgentProviderProcessor({
-        geminiApiKey: readGeminiApiKey(env as Record<string, unknown>),
-        openAiApiKey: readOpenAiApiKey(env as Record<string, unknown>),
-        processorSlug: GROK_REALTIME_VOICE_PROCESSOR_SLUG,
-        provider: VOICE_AGENT_PROVIDER_GROK_REALTIME,
-        xAiApiKey: readXAiApiKey(env as Record<string, unknown>),
-      }),
+    create: () => createRetiredVoiceAgentProviderProcessor(GROK_REALTIME_VOICE_PROCESSOR_SLUG),
   },
 };
 
@@ -354,52 +345,23 @@ function streamProcessorWebSocketMessageToString(message: string | ArrayBuffer):
   return new TextDecoder().decode(message);
 }
 
-function readGeminiApiKey(env: Record<string, unknown>) {
-  const override = env.APP_CONFIG_GEMINI_API_KEY;
+function readProviderApiKey(
+  env: StreamProcessorDurableObjectEnv,
+  keys: { configKey: string; envOverrideKey: string; plainSecretKey: string },
+) {
+  const record = env as Record<string, unknown>;
+  const override = record[keys.envOverrideKey];
   if (typeof override === "string") return override;
-  const plainSecret = env.GEMINI_API_KEY;
+  const plainSecret = record[keys.plainSecretKey];
   if (typeof plainSecret === "string") return plainSecret;
 
-  const rawConfig = env.APP_CONFIG;
+  const rawConfig = record.APP_CONFIG;
   if (typeof rawConfig !== "string" || rawConfig.trim() === "") return "";
 
   try {
-    const parsed = JSON.parse(rawConfig) as { geminiApiKey?: unknown };
-    return typeof parsed.geminiApiKey === "string" ? parsed.geminiApiKey : "";
-  } catch {
-    return "";
-  }
-}
-
-function readOpenAiApiKey(env: Record<string, unknown>) {
-  const override = env.APP_CONFIG_OPEN_AI_API_KEY;
-  if (typeof override === "string") return override;
-  const plainSecret = env.OPENAI_API_KEY;
-  if (typeof plainSecret === "string") return plainSecret;
-
-  const rawConfig = env.APP_CONFIG;
-  if (typeof rawConfig !== "string" || rawConfig.trim() === "") return "";
-
-  try {
-    const parsed = JSON.parse(rawConfig) as { openAiApiKey?: unknown };
-    return typeof parsed.openAiApiKey === "string" ? parsed.openAiApiKey : "";
-  } catch {
-    return "";
-  }
-}
-
-function readXAiApiKey(env: Record<string, unknown>) {
-  const override = env.APP_CONFIG_X_AI_API_KEY;
-  if (typeof override === "string") return override;
-  const plainSecret = env.XAI_API_KEY;
-  if (typeof plainSecret === "string") return plainSecret;
-
-  const rawConfig = env.APP_CONFIG;
-  if (typeof rawConfig !== "string" || rawConfig.trim() === "") return "";
-
-  try {
-    const parsed = JSON.parse(rawConfig) as { xAiApiKey?: unknown };
-    return typeof parsed.xAiApiKey === "string" ? parsed.xAiApiKey : "";
+    const parsed = JSON.parse(rawConfig) as Record<string, unknown>;
+    const value = parsed[keys.configKey];
+    return typeof value === "string" ? value : "";
   } catch {
     return "";
   }

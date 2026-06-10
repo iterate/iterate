@@ -1,16 +1,12 @@
 import { z } from "zod";
-import {
-  assertNever,
-  defineProcessorContract,
-  reduceProcessorEvents,
-  type StreamEvent,
-} from "../stream-processor.ts";
+import { assertNever, defineProcessorContract } from "../stream-processor.ts";
 import { CoreProcessorRegisteredEventType } from "../core/contract.ts";
 import { standardProcessorBehavior } from "../core/standard-processor-behavior.ts";
+import { AgentProcessorContract } from "../agent/contract.ts";
 
-export const VOICE_AGENT_PROVIDER_GEMINI_LIVE = "gemini-live";
-export const VOICE_AGENT_PROVIDER_OPENAI_REALTIME = "openai-realtime";
-export const VOICE_AGENT_PROVIDER_GROK_REALTIME = "grok-realtime";
+export const VOICE_AGENT_PROVIDER_GEMINI_LIVE = "gemini-live" as const;
+export const VOICE_AGENT_PROVIDER_OPENAI_REALTIME = "openai-realtime" as const;
+export const VOICE_AGENT_PROVIDER_GROK_REALTIME = "grok-realtime" as const;
 
 export const DEFAULT_GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
 export const DEFAULT_GEMINI_LIVE_VOICE = "Zephyr";
@@ -37,7 +33,39 @@ export const VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE =
   "events.iterate.com/voice-agent/output-text-appended";
 export const VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE =
   "events.iterate.com/voice-agent/speaker-buffer-clear-requested";
+export const VOICE_AGENT_ERROR_OCCURRED_EVENT_TYPE =
+  "events.iterate.com/voice-agent/error-occurred";
+export const VOICE_AGENT_PROVIDER_CONNECTED_EVENT_TYPE =
+  "events.iterate.com/voice-agent/provider-connected";
+export const VOICE_AGENT_PROVIDER_DISCONNECTED_EVENT_TYPE =
+  "events.iterate.com/voice-agent/provider-disconnected";
+export const VOICE_AGENT_PROVIDER_SESSION_READY_EVENT_TYPE =
+  "events.iterate.com/voice-agent/provider-session-ready";
+export const VOICE_AGENT_PROVIDER_MESSAGE_SENT_EVENT_TYPE =
+  "events.iterate.com/voice-agent/provider-message-sent";
+export const VOICE_AGENT_PROVIDER_MESSAGE_RECEIVED_EVENT_TYPE =
+  "events.iterate.com/voice-agent/provider-message-received";
+export const VOICE_AGENT_PROVIDER_STATUS_CHANGED_EVENT_TYPE =
+  "events.iterate.com/voice-agent/provider-status-changed";
 export const AGENT_INPUT_ADDED_EVENT_TYPE = "events.iterate.com/agent/input-added";
+
+export const VoiceAgentProvider = z.enum([
+  VOICE_AGENT_PROVIDER_GEMINI_LIVE,
+  VOICE_AGENT_PROVIDER_OPENAI_REALTIME,
+  VOICE_AGENT_PROVIDER_GROK_REALTIME,
+]);
+
+export const VOICE_AGENT_PROVIDER_STATUSES = [
+  "speech-started",
+  "speech-stopped",
+  "output-audio-done",
+  "response-done",
+  "output-interrupted",
+  "turn-completed",
+  "going-away",
+] as const;
+
+const VoiceAgentProviderStatus = z.enum(VOICE_AGENT_PROVIDER_STATUSES);
 
 const VoiceAgentAudioFramePayload = z.object({
   streamId: z.string().trim().min(1),
@@ -62,125 +90,55 @@ const VoiceAgentOutputTextPayload = z.object({
 
 const MessageAgentToolChoice = z.enum(["auto", "required"]).default("auto");
 
-const GeminiSetupPayload = z.object({
-  provider: z.literal(VOICE_AGENT_PROVIDER_GEMINI_LIVE),
-  model: z.string().trim().min(1).default(DEFAULT_GEMINI_LIVE_MODEL),
-  voiceName: z.string().trim().min(1).default(DEFAULT_GEMINI_LIVE_VOICE),
-  systemInstruction: z.string().default(DEFAULT_VOICE_AGENT_SYSTEM_INSTRUCTION),
-  messageAgentToolChoice: MessageAgentToolChoice,
-});
+function providerSetupSchema<const Provider extends string>(
+  provider: Provider,
+  defaults: { model: string; voiceName: string },
+) {
+  return z.object({
+    provider: z.literal(provider),
+    model: z.string().trim().min(1).default(defaults.model),
+    voiceName: z.string().trim().min(1).default(defaults.voiceName),
+    systemInstruction: z.string().default(DEFAULT_VOICE_AGENT_SYSTEM_INSTRUCTION),
+    messageAgentToolChoice: MessageAgentToolChoice,
+  });
+}
 
-const OpenAiSetupPayload = z.object({
-  provider: z.literal(VOICE_AGENT_PROVIDER_OPENAI_REALTIME),
-  model: z.string().trim().min(1).default(DEFAULT_OPENAI_REALTIME_MODEL),
-  voiceName: z.string().trim().min(1).default(DEFAULT_OPENAI_REALTIME_VOICE),
-  systemInstruction: z.string().default(DEFAULT_VOICE_AGENT_SYSTEM_INSTRUCTION),
-  messageAgentToolChoice: MessageAgentToolChoice,
-});
-
-const GrokSetupPayload = z.object({
-  provider: z.literal(VOICE_AGENT_PROVIDER_GROK_REALTIME),
-  model: z.string().trim().min(1).default(DEFAULT_GROK_REALTIME_MODEL),
-  voiceName: z.string().trim().min(1).default(DEFAULT_GROK_REALTIME_VOICE),
-  systemInstruction: z.string().default(DEFAULT_VOICE_AGENT_SYSTEM_INSTRUCTION),
-  messageAgentToolChoice: MessageAgentToolChoice,
+const GeminiSetupPayload = providerSetupSchema(VOICE_AGENT_PROVIDER_GEMINI_LIVE, {
+  model: DEFAULT_GEMINI_LIVE_MODEL,
+  voiceName: DEFAULT_GEMINI_LIVE_VOICE,
 });
 
 const VoiceAgentSetup = z.discriminatedUnion("provider", [
   GeminiSetupPayload,
-  OpenAiSetupPayload,
-  GrokSetupPayload,
+  providerSetupSchema(VOICE_AGENT_PROVIDER_OPENAI_REALTIME, {
+    model: DEFAULT_OPENAI_REALTIME_MODEL,
+    voiceName: DEFAULT_OPENAI_REALTIME_VOICE,
+  }),
+  providerSetupSchema(VOICE_AGENT_PROVIDER_GROK_REALTIME, {
+    model: DEFAULT_GROK_REALTIME_MODEL,
+    voiceName: DEFAULT_GROK_REALTIME_VOICE,
+  }),
 ]);
 
-const ProviderJson = z.json();
-
-const ConnectionState = z
-  .discriminatedUnion("status", [
-    z.object({ status: z.literal("idle") }),
-    z.object({
-      status: z.literal("connected"),
-      connectionId: z.string().min(1),
-      provider: z.union([
-        z.literal(VOICE_AGENT_PROVIDER_GEMINI_LIVE),
-        z.literal(VOICE_AGENT_PROVIDER_OPENAI_REALTIME),
-        z.literal(VOICE_AGENT_PROVIDER_GROK_REALTIME),
-      ]),
-    }),
-    z.object({
-      status: z.literal("disconnected"),
-      connectionId: z.string().min(1).optional(),
-      provider: z
-        .union([
-          z.literal(VOICE_AGENT_PROVIDER_GEMINI_LIVE),
-          z.literal(VOICE_AGENT_PROVIDER_OPENAI_REALTIME),
-          z.literal(VOICE_AGENT_PROVIDER_GROK_REALTIME),
-        ])
-        .optional(),
-      reason: z.string().optional(),
-    }),
-    z.object({ status: z.literal("error"), message: z.string().min(1) }),
-  ])
-  .default({ status: "idle" });
-
-const ProviderWebSocketConnectedPayload = z.object({
+const ProviderConnectionPayload = z.object({
+  provider: VoiceAgentProvider,
   connectionId: z.string().min(1),
-  model: z.string().min(1),
-  url: z.string().url(),
-});
-
-const ProviderWebSocketDisconnectedPayload = z.object({
-  connectionId: z.string().min(1).optional(),
-  code: z.number().int().optional(),
-  reason: z.string().optional(),
-  wasClean: z.boolean().optional(),
-});
-
-const ProviderMessagePayload = z.object({
-  connectionId: z.string().min(1),
-  sequence: z.number().int().nonnegative(),
-  sourceEventOffset: z.number().int().positive().optional(),
-  message: ProviderJson,
-});
-
-const ProviderConnectionIdPayload = z.object({
-  connectionId: z.string().min(1),
-});
-
-const AgentInputAddedPayload = z.object({
-  content: z.string().trim().min(1),
-  llmRequestPolicy: z
-    .discriminatedUnion("behaviour", [
-      z.object({ behaviour: z.literal("dont-trigger-request") }),
-      z.object({ behaviour: z.literal("interrupt-current-request") }),
-      z.object({ behaviour: z.literal("after-current-request") }),
-    ])
-    .default({ behaviour: "after-current-request" }),
 });
 
 export const VoiceAgentProcessorContract = defineProcessorContract({
   slug: "voice-agent",
-  version: "0.1.0",
+  version: "0.2.0",
   description:
-    "Forwards appended input PCM frames to Gemini Live, OpenAI Realtime, or Grok Realtime and appends returned output PCM frames back into the same stream.",
+    "Forwards appended input PCM frames and text to the realtime voice provider selected by setup-configured (Gemini Live, OpenAI Realtime, or Grok Realtime) and appends returned output PCM frames back into the same stream.",
   stateSchema: z.object({
     ...standardProcessorBehavior.stateShape,
     setup: VoiceAgentSetup.nullable().default(null),
-    inputFrameCount: z.number().int().nonnegative().default(0),
-    outputFrameCount: z.number().int().nonnegative().default(0),
-    inputTextCount: z.number().int().nonnegative().default(0),
-    outputTextCount: z.number().int().nonnegative().default(0),
-    connection: ConnectionState,
-    lastInputText: z.string().optional(),
-    lastOutputText: z.string().optional(),
-    lastInputTranscription: z.string().optional(),
-    lastOutputTranscription: z.string().optional(),
   }),
   initialState: {
     ...standardProcessorBehavior.initialState,
   },
-  processorDeps: [...standardProcessorBehavior.processorDeps],
+  processorDeps: [...standardProcessorBehavior.processorDeps, AgentProcessorContract],
   events: {
-    // Common voice-agent events.
     [VOICE_AGENT_SETUP_CONFIGURED_EVENT_TYPE]: {
       description:
         "Required voice-agent setup. Selects the realtime voice provider and provider-specific model/voice configuration before audio starts.",
@@ -213,145 +171,62 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
         "Text produced by the selected realtime voice provider, usually a transcript or diagnostic text.",
       payloadSchema: VoiceAgentOutputTextPayload,
     },
-    "events.iterate.com/voice-agent/transcription-appended": {
-      description: "Provider transcription text for either input or output audio.",
-      payloadSchema: z.object({
-        connectionId: z.string().min(1),
-        direction: z.enum(["input", "output"]),
-        text: z.string(),
-      }),
-    },
     [VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE]: {
       description:
         "Provider-neutral command for subscribed voice clients to drop locally queued speaker audio.",
-      payloadSchema: z.object({
-        connectionId: z.string().min(1),
-        provider: z.union([
-          z.literal(VOICE_AGENT_PROVIDER_GEMINI_LIVE),
-          z.literal(VOICE_AGENT_PROVIDER_OPENAI_REALTIME),
-          z.literal(VOICE_AGENT_PROVIDER_GROK_REALTIME),
-        ]),
+      payloadSchema: ProviderConnectionPayload.extend({
         reason: z.enum(["output-interrupted", "input-speech-started"]),
-        sourceEventType: z.string().min(1),
       }),
     },
-    "events.iterate.com/voice-agent/error-occurred": {
-      description: "The voice-agent processor could not process or forward an audio frame.",
+    [VOICE_AGENT_ERROR_OCCURRED_EVENT_TYPE]: {
+      description: "The voice-agent processor could not process or forward an input event.",
       payloadSchema: z.object({
         message: z.string().min(1),
         sourceEventOffset: z.number().int().positive().optional(),
       }),
     },
-    [AGENT_INPUT_ADDED_EVENT_TYPE]: {
+    [VOICE_AGENT_PROVIDER_CONNECTED_EVENT_TYPE]: {
+      description: "The processor opened a WebSocket to the selected realtime voice provider.",
+      payloadSchema: ProviderConnectionPayload.extend({
+        model: z.string().min(1),
+        url: z.string().url(),
+      }),
+    },
+    [VOICE_AGENT_PROVIDER_DISCONNECTED_EVENT_TYPE]: {
+      description: "The realtime voice provider WebSocket closed.",
+      payloadSchema: ProviderConnectionPayload.extend({
+        code: z.number().int().optional(),
+        reason: z.string().optional(),
+        wasClean: z.boolean().optional(),
+      }),
+    },
+    [VOICE_AGENT_PROVIDER_SESSION_READY_EVENT_TYPE]: {
+      description: "The realtime voice provider acknowledged session setup and is ready for audio.",
+      payloadSchema: ProviderConnectionPayload,
+    },
+    [VOICE_AGENT_PROVIDER_MESSAGE_SENT_EVENT_TYPE]: {
       description:
-        "Input for the colocated code-capable agent. Grok Message Agent tool calls append this event so the normal agent processor can do the requested work.",
-      payloadSchema: AgentInputAddedPayload,
+        "Audit copy of a JSON message sent to the provider. Large strings (audio payloads) are redacted.",
+      payloadSchema: ProviderConnectionPayload.extend({
+        sequence: z.number().int().nonnegative(),
+        sourceEventOffset: z.number().int().positive().optional(),
+        message: z.json(),
+      }),
     },
-
-    // Gemini Live events.
-    "events.iterate.com/voice-agent/gemini-live-websocket-connected": {
-      description: "The backend processor opened a Gemini Live WebSocket.",
-      payloadSchema: ProviderWebSocketConnectedPayload,
+    [VOICE_AGENT_PROVIDER_MESSAGE_RECEIVED_EVENT_TYPE]: {
+      description:
+        "Audit copy of a JSON message received from the provider. Large strings (audio payloads) are redacted.",
+      payloadSchema: ProviderConnectionPayload.extend({
+        sequence: z.number().int().nonnegative(),
+        message: z.json(),
+      }),
     },
-    "events.iterate.com/voice-agent/gemini-live-websocket-disconnected": {
-      description: "The Gemini Live WebSocket closed.",
-      payloadSchema: ProviderWebSocketDisconnectedPayload,
-    },
-    "events.iterate.com/voice-agent/gemini-live-setup-completed": {
-      description: "Gemini accepted the session setup message.",
-      payloadSchema: ProviderConnectionIdPayload,
-    },
-    "events.iterate.com/voice-agent/gemini-live-message-sent": {
-      description: "A JSON message was sent to Gemini Live.",
-      payloadSchema: ProviderMessagePayload,
-    },
-    "events.iterate.com/voice-agent/gemini-live-message-received": {
-      description: "A JSON message was received from Gemini Live.",
-      payloadSchema: ProviderMessagePayload.omit({ sourceEventOffset: true }),
-    },
-    "events.iterate.com/voice-agent/gemini-live-output-interrupted": {
-      description: "Gemini reported that user activity interrupted current output.",
-      payloadSchema: ProviderConnectionIdPayload,
-    },
-    "events.iterate.com/voice-agent/gemini-live-turn-completed": {
-      description: "Gemini reported that the current model turn completed.",
-      payloadSchema: ProviderConnectionIdPayload,
-    },
-
-    // OpenAI Realtime events.
-    "events.iterate.com/voice-agent/openai-realtime-websocket-connected": {
-      description: "The backend processor opened an OpenAI Realtime WebSocket.",
-      payloadSchema: ProviderWebSocketConnectedPayload,
-    },
-    "events.iterate.com/voice-agent/openai-realtime-websocket-disconnected": {
-      description: "The OpenAI Realtime WebSocket closed.",
-      payloadSchema: ProviderWebSocketDisconnectedPayload,
-    },
-    "events.iterate.com/voice-agent/openai-realtime-session-updated": {
-      description: "OpenAI accepted the session.update message.",
-      payloadSchema: ProviderConnectionIdPayload,
-    },
-    "events.iterate.com/voice-agent/openai-realtime-message-sent": {
-      description: "A JSON message was sent to OpenAI Realtime.",
-      payloadSchema: ProviderMessagePayload,
-    },
-    "events.iterate.com/voice-agent/openai-realtime-message-received": {
-      description: "A JSON message was received from OpenAI Realtime.",
-      payloadSchema: ProviderMessagePayload.omit({ sourceEventOffset: true }),
-    },
-    "events.iterate.com/voice-agent/openai-realtime-speech-started": {
-      description: "OpenAI server VAD detected speech start.",
-      payloadSchema: ProviderConnectionIdPayload,
-    },
-    "events.iterate.com/voice-agent/openai-realtime-speech-stopped": {
-      description: "OpenAI server VAD detected speech stop.",
-      payloadSchema: ProviderConnectionIdPayload,
-    },
-    "events.iterate.com/voice-agent/openai-realtime-output-audio-done": {
-      description: "OpenAI reported that output audio finished streaming.",
-      payloadSchema: ProviderConnectionIdPayload,
-    },
-    "events.iterate.com/voice-agent/openai-realtime-response-done": {
-      description: "OpenAI reported that the current response completed.",
-      payloadSchema: ProviderConnectionIdPayload,
-    },
-
-    // Grok Realtime events.
-    "events.iterate.com/voice-agent/grok-realtime-websocket-connected": {
-      description: "The backend processor opened a Grok Realtime WebSocket.",
-      payloadSchema: ProviderWebSocketConnectedPayload,
-    },
-    "events.iterate.com/voice-agent/grok-realtime-websocket-disconnected": {
-      description: "The Grok Realtime WebSocket closed.",
-      payloadSchema: ProviderWebSocketDisconnectedPayload,
-    },
-    "events.iterate.com/voice-agent/grok-realtime-session-updated": {
-      description: "Grok accepted the session.update message.",
-      payloadSchema: ProviderConnectionIdPayload,
-    },
-    "events.iterate.com/voice-agent/grok-realtime-message-sent": {
-      description: "A JSON message was sent to Grok Realtime.",
-      payloadSchema: ProviderMessagePayload,
-    },
-    "events.iterate.com/voice-agent/grok-realtime-message-received": {
-      description: "A JSON message was received from Grok Realtime.",
-      payloadSchema: ProviderMessagePayload.omit({ sourceEventOffset: true }),
-    },
-    "events.iterate.com/voice-agent/grok-realtime-speech-started": {
-      description: "Grok server VAD detected speech start.",
-      payloadSchema: ProviderConnectionIdPayload,
-    },
-    "events.iterate.com/voice-agent/grok-realtime-speech-stopped": {
-      description: "Grok server VAD detected speech stop.",
-      payloadSchema: ProviderConnectionIdPayload,
-    },
-    "events.iterate.com/voice-agent/grok-realtime-output-audio-done": {
-      description: "Grok reported that output audio finished streaming.",
-      payloadSchema: ProviderConnectionIdPayload,
-    },
-    "events.iterate.com/voice-agent/grok-realtime-response-done": {
-      description: "Grok reported that the current response completed.",
-      payloadSchema: ProviderConnectionIdPayload,
+    [VOICE_AGENT_PROVIDER_STATUS_CHANGED_EVENT_TYPE]: {
+      description:
+        "Provider-neutral session status signal (speech start/stop, turn completion, interruption, imminent provider shutdown).",
+      payloadSchema: ProviderConnectionPayload.extend({
+        status: VoiceAgentProviderStatus,
+      }),
     },
   },
   consumes: [
@@ -360,69 +235,19 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
     VOICE_AGENT_CONFIG_UPDATED_EVENT_TYPE,
     VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
     VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
-    VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
-    VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE,
-    "events.iterate.com/voice-agent/transcription-appended",
-    VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE,
-    "events.iterate.com/voice-agent/error-occurred",
-    "events.iterate.com/voice-agent/gemini-live-websocket-connected",
-    "events.iterate.com/voice-agent/gemini-live-websocket-disconnected",
-    "events.iterate.com/voice-agent/gemini-live-setup-completed",
-    "events.iterate.com/voice-agent/gemini-live-message-sent",
-    "events.iterate.com/voice-agent/gemini-live-message-received",
-    "events.iterate.com/voice-agent/gemini-live-output-interrupted",
-    "events.iterate.com/voice-agent/gemini-live-turn-completed",
-    "events.iterate.com/voice-agent/openai-realtime-websocket-connected",
-    "events.iterate.com/voice-agent/openai-realtime-websocket-disconnected",
-    "events.iterate.com/voice-agent/openai-realtime-session-updated",
-    "events.iterate.com/voice-agent/openai-realtime-message-sent",
-    "events.iterate.com/voice-agent/openai-realtime-message-received",
-    "events.iterate.com/voice-agent/openai-realtime-speech-started",
-    "events.iterate.com/voice-agent/openai-realtime-speech-stopped",
-    "events.iterate.com/voice-agent/openai-realtime-output-audio-done",
-    "events.iterate.com/voice-agent/openai-realtime-response-done",
-    "events.iterate.com/voice-agent/grok-realtime-websocket-connected",
-    "events.iterate.com/voice-agent/grok-realtime-websocket-disconnected",
-    "events.iterate.com/voice-agent/grok-realtime-session-updated",
-    "events.iterate.com/voice-agent/grok-realtime-message-sent",
-    "events.iterate.com/voice-agent/grok-realtime-message-received",
-    "events.iterate.com/voice-agent/grok-realtime-speech-started",
-    "events.iterate.com/voice-agent/grok-realtime-speech-stopped",
-    "events.iterate.com/voice-agent/grok-realtime-output-audio-done",
-    "events.iterate.com/voice-agent/grok-realtime-response-done",
   ],
   emits: [
     ...standardProcessorBehavior.emits,
     VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
     VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE,
-    "events.iterate.com/voice-agent/transcription-appended",
     VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE,
-    "events.iterate.com/voice-agent/error-occurred",
-    "events.iterate.com/voice-agent/gemini-live-websocket-connected",
-    "events.iterate.com/voice-agent/gemini-live-websocket-disconnected",
-    "events.iterate.com/voice-agent/gemini-live-setup-completed",
-    "events.iterate.com/voice-agent/gemini-live-message-sent",
-    "events.iterate.com/voice-agent/gemini-live-message-received",
-    "events.iterate.com/voice-agent/gemini-live-output-interrupted",
-    "events.iterate.com/voice-agent/gemini-live-turn-completed",
-    "events.iterate.com/voice-agent/openai-realtime-websocket-connected",
-    "events.iterate.com/voice-agent/openai-realtime-websocket-disconnected",
-    "events.iterate.com/voice-agent/openai-realtime-session-updated",
-    "events.iterate.com/voice-agent/openai-realtime-message-sent",
-    "events.iterate.com/voice-agent/openai-realtime-message-received",
-    "events.iterate.com/voice-agent/openai-realtime-speech-started",
-    "events.iterate.com/voice-agent/openai-realtime-speech-stopped",
-    "events.iterate.com/voice-agent/openai-realtime-output-audio-done",
-    "events.iterate.com/voice-agent/openai-realtime-response-done",
-    "events.iterate.com/voice-agent/grok-realtime-websocket-connected",
-    "events.iterate.com/voice-agent/grok-realtime-websocket-disconnected",
-    "events.iterate.com/voice-agent/grok-realtime-session-updated",
-    "events.iterate.com/voice-agent/grok-realtime-message-sent",
-    "events.iterate.com/voice-agent/grok-realtime-message-received",
-    "events.iterate.com/voice-agent/grok-realtime-speech-started",
-    "events.iterate.com/voice-agent/grok-realtime-speech-stopped",
-    "events.iterate.com/voice-agent/grok-realtime-output-audio-done",
-    "events.iterate.com/voice-agent/grok-realtime-response-done",
+    VOICE_AGENT_ERROR_OCCURRED_EVENT_TYPE,
+    VOICE_AGENT_PROVIDER_CONNECTED_EVENT_TYPE,
+    VOICE_AGENT_PROVIDER_DISCONNECTED_EVENT_TYPE,
+    VOICE_AGENT_PROVIDER_SESSION_READY_EVENT_TYPE,
+    VOICE_AGENT_PROVIDER_MESSAGE_SENT_EVENT_TYPE,
+    VOICE_AGENT_PROVIDER_MESSAGE_RECEIVED_EVENT_TYPE,
+    VOICE_AGENT_PROVIDER_STATUS_CHANGED_EVENT_TYPE,
     AGENT_INPUT_ADDED_EVENT_TYPE,
   ],
   reduce({ contract, state, event }) {
@@ -433,157 +258,30 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
     });
 
     switch (event.type) {
-      // Common reducers.
       case CoreProcessorRegisteredEventType:
+      case VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE:
+      case VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE:
         return nextState;
       case VOICE_AGENT_SETUP_CONFIGURED_EVENT_TYPE:
-        return {
-          ...nextState,
-          setup: event.payload,
-          connection: { status: "idle" as const },
-        };
+        return { ...nextState, setup: event.payload };
       case VOICE_AGENT_CONFIG_UPDATED_EVENT_TYPE:
         return {
           ...nextState,
           setup: {
-            provider: "gemini-live" as const,
+            provider: VOICE_AGENT_PROVIDER_GEMINI_LIVE,
             model: event.payload.model,
             voiceName: event.payload.voiceName,
             systemInstruction: event.payload.systemInstruction,
-            messageAgentToolChoice: "auto" as const,
-          },
-          connection: { status: "idle" as const },
-        };
-      case VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE:
-        return { ...nextState, inputFrameCount: nextState.inputFrameCount + 1 };
-      case VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE:
-        return {
-          ...nextState,
-          inputTextCount: nextState.inputTextCount + 1,
-          lastInputText: event.payload.text,
-        };
-      case VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE:
-        return { ...nextState, outputFrameCount: nextState.outputFrameCount + 1 };
-      case VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE:
-        return {
-          ...nextState,
-          outputTextCount: nextState.outputTextCount + 1,
-          lastOutputText: event.payload.text,
-        };
-      case "events.iterate.com/voice-agent/transcription-appended":
-        return event.payload.direction === "input"
-          ? { ...nextState, lastInputTranscription: event.payload.text }
-          : { ...nextState, lastOutputTranscription: event.payload.text };
-      case VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE:
-        return nextState;
-      case "events.iterate.com/voice-agent/error-occurred":
-        return {
-          ...nextState,
-          connection: { status: "error" as const, message: event.payload.message },
-        };
-
-      // Gemini Live reducers.
-      case "events.iterate.com/voice-agent/gemini-live-websocket-connected":
-        return {
-          ...nextState,
-          connection: {
-            status: "connected" as const,
-            connectionId: event.payload.connectionId,
-            provider: "gemini-live" as const,
+            messageAgentToolChoice: event.payload.messageAgentToolChoice,
           },
         };
-      case "events.iterate.com/voice-agent/gemini-live-websocket-disconnected":
-        return {
-          ...nextState,
-          connection: {
-            status: "disconnected" as const,
-            connectionId: event.payload.connectionId,
-            provider: "gemini-live" as const,
-            reason: event.payload.reason,
-          },
-        };
-      case "events.iterate.com/voice-agent/gemini-live-message-sent":
-      case "events.iterate.com/voice-agent/gemini-live-message-received":
-      case "events.iterate.com/voice-agent/gemini-live-setup-completed":
-      case "events.iterate.com/voice-agent/gemini-live-output-interrupted":
-      case "events.iterate.com/voice-agent/gemini-live-turn-completed":
-        return nextState;
-
-      // OpenAI Realtime reducers.
-      case "events.iterate.com/voice-agent/openai-realtime-websocket-connected":
-        return {
-          ...nextState,
-          connection: {
-            status: "connected" as const,
-            connectionId: event.payload.connectionId,
-            provider: "openai-realtime" as const,
-          },
-        };
-      case "events.iterate.com/voice-agent/openai-realtime-websocket-disconnected":
-        return {
-          ...nextState,
-          connection: {
-            status: "disconnected" as const,
-            connectionId: event.payload.connectionId,
-            provider: "openai-realtime" as const,
-            reason: event.payload.reason,
-          },
-        };
-      case "events.iterate.com/voice-agent/openai-realtime-session-updated":
-      case "events.iterate.com/voice-agent/openai-realtime-message-sent":
-      case "events.iterate.com/voice-agent/openai-realtime-message-received":
-      case "events.iterate.com/voice-agent/openai-realtime-speech-started":
-      case "events.iterate.com/voice-agent/openai-realtime-speech-stopped":
-      case "events.iterate.com/voice-agent/openai-realtime-output-audio-done":
-      case "events.iterate.com/voice-agent/openai-realtime-response-done":
-        return nextState;
-
-      // Grok Realtime reducers.
-      case "events.iterate.com/voice-agent/grok-realtime-websocket-connected":
-        return {
-          ...nextState,
-          connection: {
-            status: "connected" as const,
-            connectionId: event.payload.connectionId,
-            provider: "grok-realtime" as const,
-          },
-        };
-      case "events.iterate.com/voice-agent/grok-realtime-websocket-disconnected":
-        return {
-          ...nextState,
-          connection: {
-            status: "disconnected" as const,
-            connectionId: event.payload.connectionId,
-            provider: "grok-realtime" as const,
-            reason: event.payload.reason,
-          },
-        };
-      case "events.iterate.com/voice-agent/grok-realtime-session-updated":
-      case "events.iterate.com/voice-agent/grok-realtime-message-sent":
-      case "events.iterate.com/voice-agent/grok-realtime-message-received":
-      case "events.iterate.com/voice-agent/grok-realtime-speech-started":
-      case "events.iterate.com/voice-agent/grok-realtime-speech-stopped":
-      case "events.iterate.com/voice-agent/grok-realtime-output-audio-done":
-      case "events.iterate.com/voice-agent/grok-realtime-response-done":
-        return nextState;
       default:
         return assertNever(event);
     }
   },
 });
 
-export function reduceVoiceAgentEvents(args: {
-  events: readonly StreamEvent[];
-  state?: VoiceAgentState;
-}): VoiceAgentState {
-  return reduceProcessorEvents({
-    contract: VoiceAgentProcessorContract,
-    events: args.events,
-    state: args.state,
-  });
-}
-
 export type VoiceAgentState = z.infer<typeof VoiceAgentProcessorContract.stateSchema>;
-export type VoiceAgentProvider = z.infer<typeof VoiceAgentSetup>["provider"];
+export type VoiceAgentProvider = z.infer<typeof VoiceAgentProvider>;
 export type VoiceAgentSetup = z.infer<typeof VoiceAgentSetup>;
-export type VoiceAgentAudioFramePayload = z.infer<typeof VoiceAgentAudioFramePayload>;
+export type VoiceAgentProviderStatus = z.infer<typeof VoiceAgentProviderStatus>;

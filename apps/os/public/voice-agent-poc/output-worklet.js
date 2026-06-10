@@ -1,12 +1,21 @@
+// Plays queued PCM16 frames through the speaker, resampling from the source
+// rate to the device rate with linear interpolation.
+//
+// Audio lives in a fixed Float32Array ring buffer addressed by absolute sample
+// counters, so steady-state playback performs no allocation and no array
+// shifting on the audio thread.
 class PcmOutputProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.sourceSampleRate = 24000;
     this.minBufferMs = 80;
-    this.queue = [];
-    this.readIndex = 0;
+    this.capacity = 24000 * 30; // 30 seconds of queued audio
+    this.ring = new Float32Array(this.capacity);
+    this.writeCount = 0; // total samples enqueued, ever
+    this.readPos = 0; // fractional absolute read position
     this.started = false;
     this.underruns = 0;
+    this.drainedAt = null;
     this.reportCounter = 0;
 
     this.port.onmessage = (event) => {
@@ -15,19 +24,35 @@ class PcmOutputProcessor extends AudioWorkletProcessor {
         this.sourceSampleRate = message.sourceSampleRate || 24000;
         this.minBufferMs = message.minBufferMs || 80;
       } else if (message.type === "enqueue") {
-        const pcm = new Int16Array(message.buffer);
-        for (let index = 0; index < pcm.length; index++) {
-          this.queue.push(pcm[index] / 32768);
-        }
-        if (!this.started && this.queuedMs() >= this.minBufferMs) {
-          this.started = true;
-        }
+        this.enqueue(new Int16Array(message.buffer));
       } else if (message.type === "clear") {
-        this.queue = [];
-        this.readIndex = 0;
+        this.readPos = this.writeCount;
         this.started = false;
+        this.drainedAt = null;
       }
     };
+  }
+
+  enqueue(pcm) {
+    for (let index = 0; index < pcm.length; index++) {
+      this.ring[this.writeCount % this.capacity] = pcm[index] / 32768;
+      this.writeCount++;
+    }
+    if (this.writeCount - this.readPos > this.capacity) {
+      this.readPos = this.writeCount - this.capacity;
+    }
+
+    // Audio arriving shortly after the buffer drained means the drain was a
+    // genuine underrun (the provider was mid-utterance), not the natural end
+    // of an utterance.
+    if (!this.started && this.drainedAt != null && currentTime - this.drainedAt < 0.25) {
+      this.underruns++;
+      this.drainedAt = null;
+    }
+    if (!this.started && this.queuedMs() >= this.minBufferMs) {
+      this.started = true;
+      this.drainedAt = null;
+    }
   }
 
   process(_inputs, outputs) {
@@ -40,35 +65,24 @@ class PcmOutputProcessor extends AudioWorkletProcessor {
 
     for (let frame = 0; frame < frameCount; frame++) {
       let value = 0;
-      if (this.started && this.readIndex < this.queue.length) {
-        const leftIndex = Math.floor(this.readIndex);
-        const rightIndex = Math.min(leftIndex + 1, this.queue.length - 1);
-        const fraction = this.readIndex - leftIndex;
-        const left = this.queue[leftIndex] || 0;
-        const right = this.queue[rightIndex] || left;
+      if (this.started && this.readPos < this.writeCount) {
+        const leftIndex = Math.floor(this.readPos);
+        const fraction = this.readPos - leftIndex;
+        const left = this.ring[leftIndex % this.capacity] || 0;
+        const right =
+          leftIndex + 1 < this.writeCount ? this.ring[(leftIndex + 1) % this.capacity] : left;
         value = left + (right - left) * fraction;
+        this.readPos += ratio;
       }
-
       for (let channel = 0; channel < channelCount; channel++) {
         output[channel][frame] = value;
       }
-
-      if (this.started) {
-        this.readIndex += ratio;
-      }
     }
 
-    if (this.started && this.readIndex >= this.queue.length) {
-      this.queue = [];
-      this.readIndex = 0;
+    if (this.started && this.readPos >= this.writeCount) {
+      this.readPos = this.writeCount;
       this.started = false;
-      this.underruns++;
-    }
-
-    const consumed = Math.floor(this.readIndex);
-    if (consumed > 0) {
-      this.queue.splice(0, consumed);
-      this.readIndex -= consumed;
+      this.drainedAt = currentTime;
     }
 
     this.reportCounter++;
@@ -85,7 +99,7 @@ class PcmOutputProcessor extends AudioWorkletProcessor {
   }
 
   queuedMs() {
-    return (Math.max(0, this.queue.length - this.readIndex) / this.sourceSampleRate) * 1000;
+    return (Math.max(0, this.writeCount - this.readPos) / this.sourceSampleRate) * 1000;
   }
 }
 

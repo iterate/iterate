@@ -33,14 +33,8 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { cn } from "@iterate-com/ui/lib/utils";
 import {
   voiceAgentCircuitBreakerConfiguredEvent,
-  streamProcessorSubscriptionConfiguredEvent,
   voiceAgentSubscriptionConfiguredEvent,
 } from "~/domains/voice-agents/voice-agent-subscription.ts";
-import {
-  GEMINI_LIVE_VOICE_PROCESSOR_SLUG,
-  GROK_REALTIME_VOICE_PROCESSOR_SLUG,
-  OPENAI_REALTIME_VOICE_PROCESSOR_SLUG,
-} from "~/domains/stream-processors/stream-processor-slugs.ts";
 import { createBrowserOpenApiClient, orpc } from "~/orpc/client.ts";
 
 type ProviderOption = {
@@ -158,11 +152,6 @@ function VoiceAgentsIndexPage() {
             streamPath,
           }),
           voiceAgentSubscriptionConfiguredEvent({
-            projectId: project.id,
-            streamPath,
-          }),
-          streamProcessorSubscriptionConfiguredEvent({
-            processorSlug: voiceProviderProcessorSlug(selectedProvider),
             projectId: project.id,
             streamPath,
           }),
@@ -375,15 +364,4 @@ function voiceAgentSlugFromStreamPath(streamPath: string) {
     return streamPath.slice(LEGACY_VOICE_AGENT_STREAM_PATH_PREFIX.length);
   }
   return streamPath;
-}
-
-function voiceProviderProcessorSlug(provider: VoiceAgentProvider) {
-  switch (provider) {
-    case VOICE_AGENT_PROVIDER_GEMINI_LIVE:
-      return GEMINI_LIVE_VOICE_PROCESSOR_SLUG;
-    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
-      return OPENAI_REALTIME_VOICE_PROCESSOR_SLUG;
-    case VOICE_AGENT_PROVIDER_GROK_REALTIME:
-      return GROK_REALTIME_VOICE_PROCESSOR_SLUG;
-  }
 }

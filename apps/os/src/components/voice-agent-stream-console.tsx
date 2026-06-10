@@ -2,11 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Activity, Mic, Play, Square, Volume2, Waves } from "lucide-react";
 import {
+  VOICE_AGENT_ERROR_OCCURRED_EVENT_TYPE,
   VOICE_AGENT_INPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
   VOICE_AGENT_INPUT_SAMPLE_RATE,
   VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE,
   VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE,
   VOICE_AGENT_OUTPUT_SAMPLE_RATE,
+  VOICE_AGENT_PROVIDER_CONNECTED_EVENT_TYPE,
+  VOICE_AGENT_PROVIDER_SESSION_READY_EVENT_TYPE,
+  VOICE_AGENT_PROVIDER_STATUS_CHANGED_EVENT_TYPE,
   VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE,
 } from "@iterate-com/shared/stream-processors/voice-agent/contract";
 import { STREAM_RESUMED_TYPE } from "@iterate-com/shared/streams/core-event-types";
@@ -27,6 +31,11 @@ const CHANNELS = 1;
 const INPUT_CHUNK_MS = 100;
 const OUTPUT_MIN_BUFFER_MS = 80;
 const OUTPUT_TONE_CHUNK_MS = 40;
+// Bounded mic upload queue: if append round trips fall behind realtime, drop the
+// oldest frames instead of growing voice latency for the rest of the session.
+const MAX_PENDING_INPUT_FRAMES = 20;
+const RECONNECT_DELAY_MS = 1_000;
+const RECONNECT_MAX_DELAY_MS = 10_000;
 
 type VoiceAudioFramePayload = {
   streamId: string;
@@ -42,6 +51,15 @@ type AudioStats = {
   frames: number;
   bytes: number;
 };
+
+type ProviderLabel = "Gemini" | "OpenAI" | "Grok";
+
+function providerLabel(provider: unknown): ProviderLabel | "Provider" {
+  if (provider === "gemini-live") return "Gemini";
+  if (provider === "openai-realtime") return "OpenAI";
+  if (provider === "grok-realtime") return "Grok";
+  return "Provider";
+}
 
 type TranscriptLine = {
   id: number;
@@ -67,16 +85,20 @@ export function VoiceAgentStreamConsole({
   title,
 }: VoiceAgentStreamConsoleProps) {
   const streamIdRef = useRef(crypto.randomUUID());
-  const appendQueueRef = useRef(Promise.resolve());
+  const pendingInputEventsRef = useRef<EventInput[]>([]);
+  const inputFlushInFlightRef = useRef(false);
   const inputSequenceRef = useRef(0);
   const outputSequenceRef = useRef(0);
-  const playedOffsetsRef = useRef(new Set<number>());
+  // Stream offsets are monotonic, so one number replaces an ever-growing Set.
+  const lastPlayedOffsetRef = useRef(0);
+  const lastSeenOffsetRef = useRef<number | null>(null);
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const inputNodeRef = useRef<AudioWorkletNode | null>(null);
   const inputMonitorRef = useRef<GainNode | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
   const outputNodeRef = useRef<AudioWorkletNode | null>(null);
+  const outputNodePromiseRef = useRef<Promise<AudioWorkletNode> | null>(null);
 
   const [streamStatus, setStreamStatus] = useState<"connecting" | "live" | "error">("connecting");
   const [captureStatus, setCaptureStatus] = useState<"idle" | "starting" | "capturing">("idle");
@@ -86,6 +108,7 @@ export function VoiceAgentStreamConsole({
   const [autoGainControl, setAutoGainControl] = useState(true);
   const [toneSeconds, setToneSeconds] = useState(1);
   const [inputStats, setInputStats] = useState<AudioStats>({ frames: 0, bytes: 0 });
+  const [droppedInputFrames, setDroppedInputFrames] = useState(0);
   const [outputStats, setOutputStats] = useState<AudioStats>({ frames: 0, bytes: 0 });
   const [outputQueueMs, setOutputQueueMs] = useState(0);
   const [outputUnderruns, setOutputUnderruns] = useState(0);
@@ -106,43 +129,66 @@ export function VoiceAgentStreamConsole({
     const controller = new AbortController();
     let isCurrent = true;
     let iterator: AsyncIterator<Event> | undefined;
+    lastSeenOffsetRef.current = null;
 
-    setStreamStatus("connecting");
+    const stopped = () => !isCurrent || controller.signal.aborted;
+
+    // Subscribe and keep the console alive across transport drops: resume from
+    // the last seen offset with backoff instead of dying on the first error.
     void (async () => {
-      try {
-        await createBrowserOpenApiClient().project.streams.create({
-          projectSlugOrId: project.id,
-          streamPath,
-        });
+      let reconnectDelayMs = RECONNECT_DELAY_MS;
+      let initialized = false;
 
-        if (enableVoiceAgentProcessor) {
-          await ensureVoiceAgentStreamInfrastructure({
-            projectId: project.id,
-            streamPath,
-          });
+      while (!stopped()) {
+        setStreamStatus("connecting");
+        try {
+          if (!initialized) {
+            await createBrowserOpenApiClient().project.streams.create({
+              projectSlugOrId: project.id,
+              streamPath,
+            });
+            if (enableVoiceAgentProcessor) {
+              await ensureVoiceAgentStreamInfrastructure({
+                projectId: project.id,
+                streamPath,
+              });
+            }
+            initialized = true;
+          }
+
+          const stream = await createBrowserOpenApiClient().project.streams.streamEvents(
+            {
+              afterOffset: lastSeenOffsetRef.current ?? "end",
+              projectSlugOrId: project.id,
+              streamPath,
+            },
+            { signal: controller.signal },
+          );
+          iterator = stream[Symbol.asyncIterator]();
+          if (stopped()) return;
+          setStreamStatus("live");
+          reconnectDelayMs = RECONNECT_DELAY_MS;
+
+          for await (const value of stream) {
+            if (stopped()) return;
+            // One malformed or unplayable event must not kill the subscription.
+            try {
+              const event = Event.parse(value);
+              lastSeenOffsetRef.current = event.offset;
+              handleStreamEvent(event);
+            } catch (error) {
+              setLastError(error instanceof Error ? error.message : String(error));
+            }
+          }
+        } catch (error) {
+          if (stopped()) return;
+          setLastError(error instanceof Error ? error.message : String(error));
         }
 
-        const stream = await createBrowserOpenApiClient().project.streams.streamEvents(
-          {
-            afterOffset: "end",
-            projectSlugOrId: project.id,
-            streamPath,
-          },
-          { signal: controller.signal },
-        );
-        iterator = stream[Symbol.asyncIterator]();
-        if (!isCurrent || controller.signal.aborted) return;
-        setStreamStatus("live");
-
-        for await (const value of stream) {
-          if (!isCurrent || controller.signal.aborted) return;
-          const event = Event.parse(value);
-          await handleStreamEvent(event);
-        }
-      } catch (error) {
-        if (!isCurrent || controller.signal.aborted) return;
+        if (stopped()) return;
         setStreamStatus("error");
-        setLastError(error instanceof Error ? error.message : String(error));
+        await new Promise((resolve) => setTimeout(resolve, reconnectDelayMs));
+        reconnectDelayMs = Math.min(reconnectDelayMs * 2, RECONNECT_MAX_DELAY_MS);
       }
     })();
 
@@ -160,61 +206,40 @@ export function VoiceAgentStreamConsole({
     };
   }, []);
 
-  async function handleStreamEvent(event: Event) {
+  function handleStreamEvent(event: Event) {
     if (event.type === VOICE_AGENT_OUTPUT_AUDIO_FRAME_APPENDED_EVENT_TYPE) {
-      await playOutputEvent(event);
+      // Playback must never block the subscription loop: a suspended
+      // AudioContext can keep resume() pending until a user gesture arrives.
+      void playOutputEvent(event).catch((error) => {
+        setLastError(error instanceof Error ? error.message : String(error));
+      });
       return;
     }
-    if (event.type === "events.iterate.com/voice-agent/gemini-live-websocket-connected") {
-      setProviderStatus("Gemini connected");
+    if (event.type === VOICE_AGENT_PROVIDER_CONNECTED_EVENT_TYPE) {
+      const payload = event.payload as { provider?: unknown };
+      setProviderStatus(`${providerLabel(payload.provider)} connected`);
       return;
     }
-    if (event.type === "events.iterate.com/voice-agent/openai-realtime-websocket-connected") {
-      setProviderStatus("OpenAI connected");
+    if (event.type === VOICE_AGENT_PROVIDER_SESSION_READY_EVENT_TYPE) {
+      const payload = event.payload as { provider?: unknown };
+      setProviderStatus(`${providerLabel(payload.provider)} ready`);
       return;
     }
-    if (event.type === "events.iterate.com/voice-agent/grok-realtime-websocket-connected") {
-      setProviderStatus("Grok connected");
-      return;
-    }
-    if (event.type === "events.iterate.com/voice-agent/gemini-live-setup-completed") {
-      setProviderStatus("Gemini ready");
-      return;
-    }
-    if (event.type === "events.iterate.com/voice-agent/openai-realtime-session-updated") {
-      setProviderStatus("OpenAI ready");
-      return;
-    }
-    if (event.type === "events.iterate.com/voice-agent/grok-realtime-session-updated") {
-      setProviderStatus("Grok ready");
+    if (event.type === VOICE_AGENT_PROVIDER_STATUS_CHANGED_EVENT_TYPE) {
+      const payload = event.payload as { provider?: unknown; status?: unknown };
+      const label = providerLabel(payload.provider);
+      if (payload.status === "output-interrupted") setProviderStatus(`${label} interrupted`);
+      else if (payload.status === "turn-completed" || payload.status === "response-done") {
+        setProviderStatus("Turn complete");
+      } else if (payload.status === "going-away") {
+        setProviderStatus(`${label} session ending soon`);
+      } else if (payload.status === "speech-started") setProviderStatus("Listening…");
+      else if (payload.status === "speech-stopped") setProviderStatus("Thinking…");
       return;
     }
     if (event.type === VOICE_AGENT_SPEAKER_BUFFER_CLEAR_REQUESTED_EVENT_TYPE) {
       clearPlayback();
       setProviderStatus("Speaker buffer cleared");
-      return;
-    }
-    if (event.type === "events.iterate.com/voice-agent/gemini-live-output-interrupted") {
-      setProviderStatus("Gemini interrupted");
-      return;
-    }
-    if (
-      event.type === "events.iterate.com/voice-agent/gemini-live-turn-completed" ||
-      event.type === "events.iterate.com/voice-agent/openai-realtime-response-done" ||
-      event.type === "events.iterate.com/voice-agent/grok-realtime-response-done"
-    ) {
-      setProviderStatus("Turn complete");
-      return;
-    }
-    if (event.type === "events.iterate.com/voice-agent/transcription-appended") {
-      const payload = event.payload as { direction?: unknown; text?: unknown };
-      if (typeof payload.text === "string") {
-        appendTranscriptLine({
-          direction: payload.direction === "input" ? "input" : "output",
-          eventOffset: event.offset,
-          text: payload.text,
-        });
-      }
       return;
     }
     if (event.type === VOICE_AGENT_OUTPUT_TEXT_APPENDED_EVENT_TYPE) {
@@ -228,7 +253,7 @@ export function VoiceAgentStreamConsole({
       }
       return;
     }
-    if (event.type === "events.iterate.com/voice-agent/error-occurred") {
+    if (event.type === VOICE_AGENT_ERROR_OCCURRED_EVENT_TYPE) {
       const payload = event.payload as { message?: unknown };
       setLastError(typeof payload.message === "string" ? payload.message : "Voice agent error");
     }
@@ -265,39 +290,51 @@ export function VoiceAgentStreamConsole({
   async function ensureOutputAudio() {
     if (outputAudioContextRef.current && outputNodeRef.current) {
       if (outputAudioContextRef.current.state !== "running") {
-        await outputAudioContextRef.current.resume();
+        // Never await resume(): without a user gesture the promise can stay
+        // pending forever under autoplay policy. The worklet buffers messages
+        // posted to a suspended context, so playback starts once it resumes.
+        void outputAudioContextRef.current.resume().catch(() => {});
       }
       return outputNodeRef.current;
     }
 
-    const context = new AudioContext();
-    await context.audioWorklet.addModule("/voice-agent-poc/output-worklet.js");
-    const node = new AudioWorkletNode(context, "pcm-output-processor", {
-      numberOfInputs: 0,
-      numberOfOutputs: 1,
-      outputChannelCount: [1],
-    });
-    node.port.postMessage({
-      type: "configure",
-      minBufferMs: OUTPUT_MIN_BUFFER_MS,
-      sourceSampleRate: VOICE_AGENT_OUTPUT_SAMPLE_RATE,
-    });
-    node.port.onmessage = (event) => {
-      if (event.data?.type === "status") {
-        setOutputQueueMs(event.data.queuedMs ?? 0);
-        setOutputUnderruns(event.data.underruns ?? 0);
-      }
-    };
-    node.connect(context.destination);
-    outputAudioContextRef.current = context;
-    outputNodeRef.current = node;
-    setPlaybackReady(true);
-    return node;
+    // Concurrent callers (output frames arrive in bursts) must share one context.
+    outputNodePromiseRef.current ??= (async () => {
+      const context = new AudioContext();
+      await context.audioWorklet.addModule("/voice-agent-poc/output-worklet.js");
+      const node = new AudioWorkletNode(context, "pcm-output-processor", {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+      });
+      node.port.postMessage({
+        type: "configure",
+        minBufferMs: OUTPUT_MIN_BUFFER_MS,
+        sourceSampleRate: VOICE_AGENT_OUTPUT_SAMPLE_RATE,
+      });
+      node.port.onmessage = (event) => {
+        if (event.data?.type === "status") {
+          setOutputQueueMs(event.data.queuedMs ?? 0);
+          setOutputUnderruns(event.data.underruns ?? 0);
+        }
+      };
+      node.connect(context.destination);
+      outputAudioContextRef.current = context;
+      outputNodeRef.current = node;
+      setPlaybackReady(true);
+      return node;
+    })();
+    try {
+      return await outputNodePromiseRef.current;
+    } catch (error) {
+      outputNodePromiseRef.current = null;
+      throw error;
+    }
   }
 
   async function playOutputEvent(event: Event) {
-    if (playedOffsetsRef.current.has(event.offset)) return;
-    playedOffsetsRef.current.add(event.offset);
+    if (event.offset <= lastPlayedOffsetRef.current) return;
+    lastPlayedOffsetRef.current = event.offset;
 
     const payload = parseAudioPayload(event.payload);
     if (!payload || payload.sampleRate !== VOICE_AGENT_OUTPUT_SAMPLE_RATE) return;
@@ -391,22 +428,43 @@ export function VoiceAgentStreamConsole({
       bytes: stats.bytes + buffer.byteLength,
     }));
 
-    appendQueueRef.current = appendQueueRef.current
-      .then(async () => {
-        await createBrowserOpenApiClient().project.streams.append({
+    const pending = pendingInputEventsRef.current;
+    pending.push(event);
+    if (pending.length > MAX_PENDING_INPUT_FRAMES) {
+      const dropped = pending.length - MAX_PENDING_INPUT_FRAMES;
+      pending.splice(0, dropped);
+      setDroppedInputFrames((count) => count + dropped);
+    }
+    void flushInputFrames();
+  }
+
+  // Single in-flight uploader: whatever accumulated while the previous request
+  // was on the wire goes out as one batch, so latency stays bounded.
+  async function flushInputFrames() {
+    if (inputFlushInFlightRef.current) return;
+    inputFlushInFlightRef.current = true;
+    try {
+      while (pendingInputEventsRef.current.length > 0) {
+        const events = pendingInputEventsRef.current.splice(
+          0,
+          pendingInputEventsRef.current.length,
+        );
+        await createBrowserOpenApiClient().project.streams.appendBatch({
           projectSlugOrId: project.id,
           streamPath,
-          event,
+          events,
         });
-      })
-      .catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        setLastError(message);
-        if (message.includes("stream is paused")) {
-          stopCapture();
-          setProviderStatus("Stream paused");
-        }
-      });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLastError(message);
+      if (message.includes("stream is paused")) {
+        stopCapture();
+        setProviderStatus("Stream paused");
+      }
+    } finally {
+      inputFlushInFlightRef.current = false;
+    }
   }
 
   async function appendTone() {
@@ -442,6 +500,7 @@ export function VoiceAgentStreamConsole({
     outputNodeRef.current = null;
     void outputAudioContextRef.current?.close();
     outputAudioContextRef.current = null;
+    outputNodePromiseRef.current = null;
     setPlaybackReady(false);
   }
 
@@ -544,10 +603,11 @@ export function VoiceAgentStreamConsole({
                 )}
               </div>
             </div>
-            <div className="grid gap-3 p-4 md:grid-cols-3">
+            <div className="grid gap-3 p-4 md:grid-cols-4">
               <Metric label="Capture" value={captureStatusLabel(captureStatus)} />
               <Metric label="Input frames" value={String(inputStats.frames)} />
               <Metric label="Input bytes" value={formatBytes(inputStats.bytes)} />
+              <Metric label="Dropped" value={String(droppedInputFrames)} />
             </div>
             <div className="grid gap-3 border-t p-4 md:grid-cols-3">
               <ToggleRow
