@@ -55,8 +55,7 @@ export type McpClientProps = {
 
 export class McpClient extends WorkerEntrypoint<Env, McpClientProps> {
   async call(input: PathCall): Promise<unknown> {
-    const workerCtx = Reflect.get(this, "ctx") as ExecutionContext<McpClientProps>;
-    const props = workerCtx.props;
+    const props = this.ctx.props;
     if (!props.serverUrl) {
       throw new Error("McpClient needs props.serverUrl (the remote MCP server).");
     }
@@ -68,7 +67,7 @@ export class McpClient extends WorkerEntrypoint<Env, McpClientProps> {
 
     const itx = await resolveItx({
       env: this.env,
-      exports: workerCtx.exports as unknown as ItxRuntime["exports"],
+      exports: this.ctx.exports as unknown as ItxRuntime["exports"],
       props: { cap: props.cap, context: props.context },
     });
 
