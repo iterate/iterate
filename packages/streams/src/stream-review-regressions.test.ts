@@ -112,6 +112,13 @@ function fakeStream() {
         path: "/r",
         events: batch,
         streamMaxOffset: log.at(-1)?.offset ?? 0,
+        // Hosts under test never read batch state; a stub keeps the fake honest
+        // to the StreamEventBatch shape without dragging in the core reducer.
+        state: {
+          namespace: "stream",
+          path: "/r",
+          maxOffset: log.at(-1)?.offset ?? 0,
+        } as StreamEventBatch["state"],
       }),
     ).catch(() => undefined);
   };

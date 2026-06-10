@@ -8,12 +8,29 @@ export type StreamCoreProcessorState = CoreProcessorState;
 export type StreamEventBatch = {
   namespace: string;
   path: string;
+  /**
+   * The delivered events in offset order. Empty in exactly two cases: the
+   * initial push every subscription receives on open (state +
+   * `streamMaxOffset`, no events yet to deliver) and every batch of an
+   * `events: false` (state-only) subscription. Kept as an empty array rather
+   * than omitted so the batch shape is stable across modes.
+   */
   events: StreamEvent[];
   /**
    * Piggybacked on each delivery so subscribers can compute lag without an
    * extra runtimeState() round trip.
    */
   streamMaxOffset: number;
+  /**
+   * The stream's core reduced state as of `streamMaxOffset`, read at delivery
+   * time. At the live edge this is exactly the state after this batch's last
+   * event; while a subscriber is catching up on a backlog it can be ahead of
+   * `events.at(-1)?.offset` (the stream has committed more than this batch
+   * carries). One subscription primitive carries both events and state, so a
+   * subscriber paints its first render and stays current without separate
+   * getState calls or polling.
+   */
+  state: StreamCoreProcessorState;
 };
 
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
@@ -43,8 +60,10 @@ export type StreamRpc = {
     limit?: number;
   }): MaybePromise<StreamEvent[]>;
   /**
-   * Subscribes to catch-up then live event batches. Type-filtered subscriptions
-   * are planned, but not part of this first simplified storage shape.
+   * Subscribes to catch-up then live event batches. Every subscription
+   * immediately receives one batch carrying the current `state` and
+   * `streamMaxOffset` (plus the replayed events when `replayAfterOffset`
+   * yields any), so the first render never needs a separate getState call.
    */
   subscribe(args: {
     subscriptionKey?: SubscriptionKey;
@@ -52,6 +71,14 @@ export type StreamRpc = {
     replayAfterOffset?: number;
     /** Only deliver these event types. Omit (or include `"*"`) for everything. */
     eventTypes?: readonly string[];
+    /**
+     * `false` = state-only mode: batches arrive with `events: []` but current
+     * `state`/`streamMaxOffset`, one per state advance (appends a slow
+     * subscriber missed are coalesced). Replay is meaningless without events,
+     * so state-only subscriptions are implicitly live-from-now —
+     * `replayAfterOffset` is ignored. Defaults to `true`.
+     */
+    events?: boolean;
   }): MaybePromise<StreamSubscriptionHandle>;
   runtimeState(): MaybePromise<{
     coreProcessorState: StreamCoreProcessorState;

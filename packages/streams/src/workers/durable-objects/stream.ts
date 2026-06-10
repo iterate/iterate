@@ -531,6 +531,17 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
    * the old connection. Omit `subscriptionKey` for an anonymous subscription; the stream
    * assigns a random key and returns it. Call the returned `unsubscribe()` to stop
    * delivery.
+   *
+   * Every batch carries the stream's core reduced `state` as of
+   * `streamMaxOffset` (see {@link StreamEventBatch}), and every subscription —
+   * with or without replay — immediately receives one batch on open so the
+   * subscriber can paint its first render without a separate getState call:
+   * the replay batch when there is one, otherwise a batch with `events: []`.
+   *
+   * Pass `events: false` for a state-only subscription: same batches, but
+   * `events` is always `[]` and consecutive appends coalesce into one state
+   * delivery. Replay is meaningless without events, so state-only
+   * subscriptions are implicitly live-from-now (`replayAfterOffset` ignored).
    */
   subscribe(args: {
     subscriptionKey?: string;
@@ -538,6 +549,8 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     replayAfterOffset?: number;
     /** Only deliver these event types. Omit (or include `"*"`) for everything. */
     eventTypes?: readonly string[];
+    /** `false` = state-only batches (`events: []`, live-from-now). Default `true`. */
+    events?: boolean;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
     return this.#openConnection({ ...args, subscriptionKey, direction: "inbound" });
@@ -610,6 +623,18 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
    * doubled, no matter the interleaving. A backlog (subscriber fell behind, or first
    * replay of 10k events) drains 100 at a time, yielding between batches so other
    * connections and incoming appends still make progress.
+   *
+   * Two protocol additions ride the same pump:
+   * - Every batch carries `state` (the core reduced state, read at delivery
+   *   time alongside `streamMaxOffset` — the two always correspond).
+   * - The first drain always delivers at least one batch (the "initial push"):
+   *   if replay produced events, that batch is it; otherwise an `events: []`
+   *   batch with the current state goes out, so even a live-only subscription
+   *   hears something immediately instead of waiting for the next append.
+   *
+   * `deliverEvents: false` (state-only) keeps the cursor at the state's
+   * maxOffset and sends one `events: []` batch per drain — consecutive appends
+   * a slow subscriber missed coalesce into a single state delivery.
    */
   #openConnection(args: {
     direction: "inbound" | "outbound";
@@ -617,6 +642,8 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
     eventTypes?: readonly string[];
+    /** `false` = state-only batches. Default `true`. */
+    events?: boolean;
     onClose?: () => void;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     const subscriptionKey = args.subscriptionKey.trim();
@@ -639,7 +666,16 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     // it later from the pump, after subscribe() has returned:
     // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
     const processEventBatch = retainProcessEventBatch(args.processEventBatch);
-    let cursor = args.replayAfterOffset ?? this.#coreProcessorState.maxOffset;
+    const deliverEvents = args.events !== false;
+    // State-only subscriptions are implicitly live-from-now: replay without
+    // events is meaningless, so replayAfterOffset is ignored in that mode.
+    let cursor = deliverEvents
+      ? (args.replayAfterOffset ?? this.#coreProcessorState.maxOffset)
+      : this.#coreProcessorState.maxOffset;
+    // The initial push: the first drain must deliver at least one batch so a
+    // subscriber paints its first render from `state` without waiting for an
+    // append. Cleared by whichever batch goes out first.
+    let initialBatchPending = true;
     let draining = false;
     let open = true;
 
@@ -658,15 +694,33 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
       draining = true;
       try {
         while (open) {
-          const readEvents = this.getEvents({ afterOffset: cursor, limit: 100 }); // limit hardcoded for now
-          const lastOffset = readEvents.at(-1)?.offset;
-          if (lastOffset === undefined) return; // caught up; the next append wakes us again
-          cursor = lastOffset;
-          const events =
-            eventTypeFilter === undefined
-              ? readEvents
-              : readEvents.filter((event) => eventTypeFilter.has(event.type));
-          if (events.length === 0) continue; // whole batch filtered out; keep draining
+          let events: StreamEvent[] = [];
+          if (deliverEvents) {
+            const readEvents = this.getEvents({ afterOffset: cursor, limit: 100 }); // limit hardcoded for now
+            const lastOffset = readEvents.at(-1)?.offset;
+            if (lastOffset === undefined) {
+              // Caught up; the next append wakes us again. The first drain
+              // still owes the initial state batch — fall through to send it.
+              if (!initialBatchPending) return;
+            } else {
+              cursor = lastOffset;
+              events =
+                eventTypeFilter === undefined
+                  ? readEvents
+                  : readEvents.filter((event) => eventTypeFilter.has(event.type));
+              // Whole batch filtered out; keep draining (unless the initial
+              // push is still owed, in which case this delivery doubles as it).
+              if (events.length === 0 && !initialBatchPending) continue;
+            }
+          } else {
+            // State-only: one `events: []` batch per state advance. Reading
+            // maxOffset and parking on it coalesces appends a slow subscriber
+            // missed into a single delivery of the latest state.
+            const stateMaxOffset = this.#coreProcessorState.maxOffset;
+            if (stateMaxOffset <= cursor && !initialBatchPending) return;
+            cursor = stateMaxOffset;
+          }
+          initialBatchPending = false;
           connection.batchesSent += 1;
           connection.eventsSent += events.length;
           connection.lastDeliveredAt = new Date().toISOString();
@@ -680,6 +734,9 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
             path: this.#coreProcessorState.path,
             events,
             streamMaxOffset: this.#coreProcessorState.maxOffset,
+            // Read in the same synchronous block as streamMaxOffset, so the
+            // two always correspond (state-at-streamMaxOffset; see types.ts).
+            state: this.#coreProcessorState,
           });
           disposeIgnoredRpcResult(pendingBatch);
           await Promise.resolve();
@@ -857,6 +914,7 @@ function installSubscribeRpcTargetOverride(target: RpcTargetClass<StreamRpc, Str
         const subscription = await this.source.subscribe({
           subscriptionKey: args.subscriptionKey,
           replayAfterOffset: args.replayAfterOffset,
+          events: args.events,
           processEventBatch,
         });
 

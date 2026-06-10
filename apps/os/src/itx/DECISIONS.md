@@ -215,3 +215,37 @@ Three pieces, one seam each:
   same error inline instead. Only the streams index prefetches today;
   breadcrumbs stay lazy by choice and are seeded for free through the shared
   per-path cache keys.
+
+## D20: Stream subscriptions carry reduced state — the ONE reactive primitive
+
+`ItxStream.subscribe` is now the single reactive primitive for both events
+and reduced state; getState-polling reactivity is superseded.
+
+- **Every batch carries `state`**: the stream's public state (the exact
+  `getState()` shape — `coreStateToStreamState` in stream-runtime.ts is the
+  one projection both paths share, so subscribe-state === getState-state by
+  construction) as of `streamMaxOffset`. The Stream DO already holds its core
+  reduced state current after each append; the pump attaches it to every
+  delivery in the same synchronous block that reads `streamMaxOffset`, so the
+  two always correspond. During backlog catch-up the state can be ahead of
+  the batch's last event — it is state-at-streamMaxOffset, not
+  state-at-batch-end-of-a-partial-drain.
+- **`events: false` is state-only mode**: the same batches with `events: []`
+  (an empty array, not an omitted key — shape stability), one delivery per
+  state advance with missed appends coalesced. Replay without events is
+  meaningless, so state-only subscriptions are implicitly live-from-now and
+  `afterOffset`/`replayAfterOffset` is ignored.
+- **The initial push**: EVERY subscription (both modes) immediately receives
+  one batch — current state, `streamMaxOffset`, plus the replayed events when
+  events-mode replay yields any. A live-only subscription no longer waits for
+  the next append to hear anything: a subscriber paints its first render from
+  the subscription alone, no separate getState call.
+- **`onStateChange(cb)` sugar** on ItxStream is exactly
+  `subscribe(batch => cb(batch.state), { events: false, afterOffset: "end" })`
+  (with callback-stub retention, since the sugar's wrapper outlives the
+  originating RPC). This serves the upcoming one-hook browser layer: `useItx`
+  - `stream.onStateChange(setState)`, no query cache.
+
+Verified at the pump (packages/streams stream.workers.test.ts), through the
+capability loopback (`pnpm test:itx-stream-subscribe`), and over capnweb
+(itx-subscribe.e2e.test.ts).

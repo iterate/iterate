@@ -12,6 +12,11 @@ const e2eItFails = process.env.STREAM_STAGING_E2E === "true" ? it.fails : it.ski
 class TestSubscriptionCallback extends RpcTarget {
   readonly batches: StreamEvent[][] = [];
 
+  /** All delivered events, flattened — initial/state-only batches are empty. */
+  get events(): StreamEvent[] {
+    return this.batches.flat();
+  }
+
   processEventBatch(args: { events: StreamEvent[]; streamMaxOffset: number }): undefined {
     this.batches.push(args.events);
   }
@@ -443,7 +448,9 @@ describe("stream capnweb protocol", () => {
         payload: { path },
       },
     });
-    await waitFor(() => callbackA.batches.length === 1 && callbackB.batches.length === 1, 1_000);
+    // Live-only subscriptions deliver an initial empty state batch before any
+    // append, so count delivered EVENTS rather than batches.
+    await waitFor(() => callbackA.events.length === 1 && callbackB.events.length === 1, 1_000);
     expect(callbackA.batches.at(-1)).toEqual([appended]);
     expect(callbackB.batches.at(-1)).toEqual([appended]);
 
@@ -454,8 +461,8 @@ describe("stream capnweb protocol", () => {
         payload: { path },
       },
     });
-    await waitFor(() => callbackB.batches.length === 2, 1_000);
-    expect(callbackA.batches.length).toBe(1);
+    await waitFor(() => callbackB.events.length === 2, 1_000);
+    expect(callbackA.events.length).toBe(1);
   });
 
   e2eIt("runs a hosted outbound processor from subscription-configured", async () => {
@@ -556,7 +563,7 @@ describe("stream capnweb protocol", () => {
       payload: { path },
     };
     const appended = await publisher.stream.append({ event: input });
-    await waitFor(() => callback.batches.length === 1, 1_000);
+    await waitFor(() => callback.events.length === 1, 1_000);
 
     expect(appended).toMatchObject({
       type: input.type,
@@ -564,40 +571,44 @@ describe("stream capnweb protocol", () => {
       offset: 3,
       createdAt: expect.any(String),
     });
-    expect(callback.batches).toEqual([[appended]]);
+    // The subscription's initial state push (events: []) precedes the live
+    // batch; the appended event arrives exactly once, in the last batch.
+    expect(callback.batches.at(-1)).toEqual([appended]);
+    expect(callback.events).toEqual([appended]);
     expect(outboundFrames(frames, afterSubscribe)).toEqual([]);
 
     const inbound = parsedFrames(frames)
       .slice(afterSubscribe)
       .filter((frame) => frame.direction === "in");
     expect(inbound.every((frame) => isPushOrReleaseFrame(frame.data))).toBe(true);
-    expect(inbound.filter((frame) => isPushFrame(frame.data))).toMatchObject([
-      {
-        direction: "in",
-        data: [
-          "push",
+    // The last push frame is the live delivery; the initial state batch may
+    // land before or after the `afterSubscribe` snapshot, so only the live
+    // frame's shape is asserted.
+    expect(inbound.filter((frame) => isPushFrame(frame.data)).at(-1)).toMatchObject({
+      direction: "in",
+      data: [
+        "push",
+        [
+          "pipeline",
+          expect.any(Number),
+          [],
           [
-            "pipeline",
-            expect.any(Number),
-            [],
-            [
-              {
-                events: [
-                  [
-                    {
-                      type: input.type,
-                      payload: input.payload,
-                      offset: 3,
-                      createdAt: expect.any(String),
-                    },
-                  ],
+            {
+              events: [
+                [
+                  {
+                    type: input.type,
+                    payload: input.payload,
+                    offset: 3,
+                    createdAt: expect.any(String),
+                  },
                 ],
-              },
-            ],
+              ],
+            },
           ],
         ],
-      },
-    ]);
+      ],
+    });
   });
 });
 

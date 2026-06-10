@@ -18,6 +18,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../../shared/event.ts";
+import type { StreamEventBatch } from "../../types.ts";
 import { PublicStreamRpcTarget, type Stream } from "./stream.ts";
 
 const STREAM = (env as unknown as { STREAM: DurableObjectNamespace<Stream> }).STREAM;
@@ -169,6 +170,126 @@ describe("T8 — Stream DO smoke (coverage)", () => {
         // Replay from 0 includes the seeded created/woken events plus our append.
         expect(seen).toContain(target.offset);
         expect(Math.min(...seen)).toBe(1);
+      } finally {
+        subscription.unsubscribe();
+      }
+    });
+  });
+});
+
+describe("subscription protocol — every batch carries state, every subscribe gets an initial push", () => {
+  // Drain helper: the pump delivers through microtasks/timers in the same
+  // isolate, so a few timer ticks are enough for it to park.
+  async function settlePump(until: () => boolean, ticks = 20) {
+    for (let i = 0; i < ticks && !until(); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  it("attaches state matching the stream's own reduced state (the getState source) to each batch", async () => {
+    await runInDurableObject(freshStream(), async (stream) => {
+      await stream.append({ event: { type: "test.state", payload: { n: 1 } } });
+
+      const batches: StreamEventBatch[] = [];
+      const subscription = await stream.subscribe({
+        replayAfterOffset: 0,
+        processEventBatch: (batch) => void batches.push(batch),
+      });
+
+      try {
+        await settlePump(() => batches.length >= 1);
+        const runtime = await stream.runtimeState();
+        const last = batches.at(-1)!;
+        // The exact object getState projections are built from — at the live
+        // edge, state-as-of-batch-end IS the current core processor state.
+        expect(last.state).toEqual(runtime.coreProcessorState);
+        expect(last.state.maxOffset).toBe(last.streamMaxOffset);
+
+        const appended = await stream.append({ event: { type: "test.state", payload: { n: 2 } } });
+        await settlePump(() => batches.at(-1)?.events.at(-1)?.offset === appended.offset);
+        const live = batches.at(-1)!;
+        expect(live.events.at(-1)?.offset).toBe(appended.offset);
+        expect(live.state.maxOffset).toBe(appended.offset);
+        expect(live.state.eventCount).toBe(appended.offset);
+      } finally {
+        subscription.unsubscribe();
+      }
+    });
+  });
+
+  it("delivers an immediate initial state batch on a live-only subscription (no replay)", async () => {
+    await runInDurableObject(freshStream(), async (stream) => {
+      const batches: StreamEventBatch[] = [];
+      const subscription = await stream.subscribe({
+        // No replayAfterOffset: live-only. Before this protocol existed, this
+        // subscription heard nothing until the next append.
+        processEventBatch: (batch) => void batches.push(batch),
+      });
+
+      try {
+        await settlePump(() => batches.length >= 1);
+        expect(batches).toHaveLength(1);
+        expect(batches[0]!.events).toEqual([]);
+        expect(batches[0]!.streamMaxOffset).toBe(subscription.streamMaxOffset);
+        expect(batches[0]!.state.maxOffset).toBe(subscription.streamMaxOffset);
+      } finally {
+        subscription.unsubscribe();
+      }
+    });
+  });
+
+  it("folds the initial push into the replay batch when replayAfterOffset yields events", async () => {
+    await runInDurableObject(freshStream(), async (stream) => {
+      const appended = await stream.append({ event: { type: "test.replay-state", payload: {} } });
+
+      const batches: StreamEventBatch[] = [];
+      const subscription = await stream.subscribe({
+        replayAfterOffset: 0,
+        processEventBatch: (batch) => void batches.push(batch),
+      });
+
+      try {
+        await settlePump(() => batches.length >= 1);
+        // ONE batch: the replayed events carry the state — no separate empty
+        // initial batch when replay already delivered something.
+        expect(batches).toHaveLength(1);
+        expect(batches[0]!.events.map((event) => event.offset)).toEqual([1, 2, appended.offset]);
+        expect(batches[0]!.state.maxOffset).toBe(appended.offset);
+      } finally {
+        subscription.unsubscribe();
+      }
+    });
+  });
+
+  it("events: false delivers state-bearing batches with no events, coalescing appends", async () => {
+    await runInDurableObject(freshStream(), async (stream) => {
+      const batches: StreamEventBatch[] = [];
+      const subscription = await stream.subscribe({
+        events: false,
+        // Ignored: state-only subscriptions are implicitly live-from-now.
+        replayAfterOffset: 0,
+        processEventBatch: (batch) => void batches.push(batch),
+      });
+
+      try {
+        await settlePump(() => batches.length >= 1);
+        // Initial push only — replayAfterOffset: 0 must NOT replay history.
+        expect(batches).toHaveLength(1);
+        expect(batches[0]!.events).toEqual([]);
+        expect(batches[0]!.state.maxOffset).toBe(subscription.streamMaxOffset);
+
+        const last = (await stream.appendBatch({
+          events: [
+            { type: "test.state-only", payload: { n: 1 } },
+            { type: "test.state-only", payload: { n: 2 } },
+          ],
+        }))!.at(-1)!;
+        await settlePump(() => (batches.at(-1)?.state.maxOffset ?? 0) >= last.offset);
+
+        // Every delivery is events-free; the latest carries the latest state.
+        expect(batches.every((batch) => batch.events.length === 0)).toBe(true);
+        expect(batches.at(-1)!.state.maxOffset).toBe(last.offset);
+        expect(batches.at(-1)!.streamMaxOffset).toBe(last.offset);
       } finally {
         subscription.unsubscribe();
       }

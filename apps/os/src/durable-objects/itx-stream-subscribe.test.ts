@@ -12,7 +12,15 @@ const TEST_EVENT_TYPE = "test.iterate.com/itx-subscribe/marker";
 // Must match the harness entrypoint's project id (itx-stream-subscribe-test-entry.ts).
 const PROJECT_ID = "proj__test__itxsubscribe";
 
-type EventBatch = { events: StreamEvent[]; streamMaxOffset: number };
+type StreamState = {
+  namespace: string;
+  path: string;
+  eventCount: number;
+  childPaths: string[];
+  metadata: Record<string, unknown>;
+};
+
+type EventBatch = { events: StreamEvent[]; state: StreamState; streamMaxOffset: number };
 
 type HarnessStub = {
   append(input: {
@@ -20,11 +28,15 @@ type HarnessStub = {
     event: { type: string; payload: Record<string, unknown> };
   }): Promise<StreamEvent>;
   appendOutsidePolicy(input: { path: string }): Promise<void>;
-  getState(input: { path: string }): Promise<{ childPaths: string[] }>;
+  getState(input: { path: string }): Promise<StreamState>;
   read(input: { path: string }): Promise<StreamEvent[]>;
   subscribe(
-    input: { afterOffset: StreamCursor; path: string },
+    input: { afterOffset: StreamCursor; events?: boolean; path: string },
     onEventBatch: (batch: EventBatch) => unknown,
+  ): Promise<{ unsubscribe(): Promise<void> }>;
+  onStateChange(
+    input: { path: string },
+    onState: (state: StreamState) => unknown,
   ): Promise<{ unsubscribe(): Promise<void> }>;
 };
 
@@ -85,6 +97,97 @@ describe("itx stream subscribe against a real Stream Durable Object", () => {
 
     await harness.append({ path, event: markerEvent("four") });
     await vi.waitFor(() => expect(collector.markers()).toEqual(["three", "four"]));
+
+    await subscription.unsubscribe();
+  });
+
+  test("every batch carries the stream's public state — the exact getState shape", async () => {
+    const path = newStreamPath();
+    await harness.append({ path, event: markerEvent("seed") });
+
+    const collector = createCollector();
+    const subscription = await harness.subscribe(
+      { afterOffset: "start", path },
+      collector.onEventBatch,
+    );
+    await vi.waitFor(() => expect(collector.markers()).toEqual(["seed"]));
+
+    // subscribe-state === getState: same projection, same shape, same values.
+    const state = await harness.getState({ path });
+    const batchState = collector.batches.at(-1)!.state;
+    expect(batchState).toEqual(state);
+    expect(Object.keys(batchState).sort()).toEqual([
+      "childPaths",
+      "eventCount",
+      "metadata",
+      "namespace",
+      "path",
+    ]);
+
+    await subscription.unsubscribe();
+  });
+
+  test("a live-only subscription immediately delivers an initial state batch", async () => {
+    const path = newStreamPath();
+    await harness.append({ path, event: markerEvent("pre") });
+
+    const collector = createCollector();
+    const subscription = await harness.subscribe(
+      { afterOffset: "end", path },
+      collector.onEventBatch,
+    );
+
+    // No append after subscribing — the initial push alone must arrive, so a
+    // subscriber can paint its first render without a separate getState call.
+    await vi.waitFor(() => expect(collector.batches.length).toBeGreaterThanOrEqual(1));
+    expect(collector.batches[0]!.events).toEqual([]);
+    // created + woken + "pre" are already committed.
+    expect(collector.batches[0]!.state.eventCount).toBeGreaterThanOrEqual(3);
+    expect(collector.batches[0]!.streamMaxOffset).toBeGreaterThanOrEqual(3);
+
+    await subscription.unsubscribe();
+  });
+
+  test("events: false delivers state-only batches: initial state, then state after appends", async () => {
+    const path = newStreamPath();
+    const collector = createCollector();
+    const subscription = await harness.subscribe(
+      // afterOffset is ignored in state-only mode (implicitly live-from-now).
+      { afterOffset: "start", events: false, path },
+      collector.onEventBatch,
+    );
+
+    await vi.waitFor(() => expect(collector.batches.length).toBeGreaterThanOrEqual(1));
+    expect(collector.batches[0]!.events).toEqual([]);
+    const initialEventCount = collector.batches[0]!.state.eventCount;
+
+    await harness.append({ path, event: markerEvent("bump") });
+    await vi.waitFor(() =>
+      expect(collector.batches.at(-1)!.state.eventCount).toBeGreaterThan(initialEventCount),
+    );
+    // Despite afterOffset "start", no events are ever delivered.
+    expect(collector.batches.every((batch) => batch.events.length === 0)).toBe(true);
+
+    await subscription.unsubscribe();
+  });
+
+  test("onStateChange pushes the current state immediately, then after every append", async () => {
+    const path = newStreamPath();
+    await harness.append({ path, event: markerEvent("first") });
+
+    const states: StreamState[] = [];
+    const subscription = await harness.onStateChange({ path }, (state) => {
+      states.push(state);
+    });
+
+    await vi.waitFor(() => expect(states.length).toBeGreaterThanOrEqual(1));
+    const initial = states[0]!;
+    expect(initial.namespace).toBe(PROJECT_ID);
+    expect(initial.path).toBe(path);
+    const initialEventCount = initial.eventCount;
+
+    await harness.append({ path, event: markerEvent("second") });
+    await vi.waitFor(() => expect(states.at(-1)!.eventCount).toBeGreaterThan(initialEventCount));
 
     await subscription.unsubscribe();
   });
