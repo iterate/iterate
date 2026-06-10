@@ -31,9 +31,9 @@ function freshStream() {
 }
 
 describe("T3 — PublicStreamRpcTarget must not expose protected DO methods (C3)", () => {
-  // FAILS until C3 is fixed (makeRpcTargetClass should allowlist the StreamRpc
-  // API instead of copying every prototype method). Flip `it.fails` -> `it`.
-  it.fails("does not proxy readCoreProcessorState / writeCoreProcessorState", () => {
+  // Fixed in Stage 1: makeRpcTargetClass now allowlists the StreamRpc API, so
+  // the protected core-state helpers are no longer proxied.
+  it("does not proxy readCoreProcessorState / writeCoreProcessorState", () => {
     const exposed = Object.getOwnPropertyNames(PublicStreamRpcTarget.prototype);
     expect(exposed).not.toContain("writeCoreProcessorState");
     expect(exposed).not.toContain("readCoreProcessorState");
