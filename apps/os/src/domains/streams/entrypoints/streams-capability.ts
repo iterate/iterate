@@ -12,11 +12,11 @@ import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-code
 import {
   getStreamDurableObjectName,
   getInitializedStreamStub,
-  toLegacyEvent,
-  toNewAfterOffset,
+  withStreamPath,
+  toAfterOffset,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 
 type StreamsCapabilityEnv = {
   STREAM: DurableObjectNamespace<StreamDurableObject>;
@@ -215,10 +215,10 @@ export class StreamsCapability extends WorkerEntrypoint<
     ) as unknown as StreamRpc;
 
     // "end" is live-only — replayAfterOffset must be ABSENT for that
-    // (toNewAfterOffset's MAX_SAFE_INTEGER sentinel would filter live
+    // (toAfterOffset's MAX_SAFE_INTEGER sentinel would filter live
     // batches out forever; it has history-read semantics).
     const replayAfterOffset =
-      input.afterOffset === "end" ? undefined : toNewAfterOffset(input.afterOffset);
+      input.afterOffset === "end" ? undefined : toAfterOffset(input.afterOffset);
 
     // RPC param stubs are implicitly disposed when this call completes; the
     // wrapper below outlives it, so retain the callback with dup() (no-op
@@ -245,7 +245,7 @@ export class StreamsCapability extends WorkerEntrypoint<
       processEventBatch: (batch) => {
         void Promise.resolve(
           callback({
-            events: batch.events.map((event) => toLegacyEvent(event, path)),
+            events: batch.events.map((event) => withStreamPath(event, path)),
             streamMaxOffset: batch.streamMaxOffset,
           }),
         ).catch(teardown);
@@ -485,12 +485,12 @@ async function* liveNamespaceStreamEvents(args: {
   });
   handle = await streamStub.subscribe({
     processEventBatch: subscription.processEventBatch,
-    replayAfterOffset: toNewAfterOffset(args.afterOffset),
+    replayAfterOffset: toAfterOffset(args.afterOffset),
   });
 
   for await (const batch of subscription) {
     for (const event of batch.events) {
-      yield toLegacyEvent(event, args.path);
+      yield withStreamPath(event, args.path);
     }
   }
 }

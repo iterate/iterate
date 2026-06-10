@@ -1,9 +1,8 @@
 import { useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { StreamState, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
 import { useAdminItx } from "~/lib/admin-itx.ts";
-import { StreamNavigationState } from "~/lib/stream-navigation-state.ts";
 
 export const Route = createFileRoute("/admin/streams/$namespace/")({
   component: AdminStreamNamespacePage,
@@ -17,9 +16,7 @@ function AdminStreamNamespacePage() {
     () => ({
       key: ["admin", "streams", namespace] as const,
       getState: async (streamPath: StreamPathType) =>
-        StreamNavigationState.parse(
-          await itx.streams.namespace(namespace).get(streamPath).getState(),
-        ),
+        StreamState.parse(await itx.streams.namespace(namespace).get(streamPath).getState()),
     }),
     [itx, namespace],
   );

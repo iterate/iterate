@@ -14,7 +14,7 @@ import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 import { type AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import {
   AGENT_HOST_PROCESSOR_SLUG,

@@ -5,7 +5,7 @@ import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 import {
   configuredAgentSetupEvents,
   normalizeAgentPresetBasePath,

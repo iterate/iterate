@@ -8,14 +8,10 @@ import {
 } from "./event-base-types.ts";
 import {
   CircuitBreakerConfiguredEventInput,
-  CircuitBreakerState,
   StreamPausedEventInput,
   StreamResumedEventInput,
 } from "./circuit-breaker-types.ts";
-import {
-  ExternalSubscriberState,
-  StreamSubscriptionConfiguredEventInput,
-} from "./external-subscriber-types.ts";
+import { StreamSubscriptionConfiguredEventInput } from "./external-subscriber-types.ts";
 import { HtmlRendererConfiguredEventInput } from "./html-renderer-types.ts";
 import {
   STREAM_CHILD_STREAM_CREATED_TYPE,
@@ -160,18 +156,20 @@ export type EventInput = GenericEventInput;
 export const Event = GenericEventBase.extend({});
 export type Event = GenericEvent;
 
-const ProcessorsState = z.object({
-  "circuit-breaker": CircuitBreakerState,
-  "external-subscriber": ExternalSubscriberState,
-});
-
+/**
+ * The externally visible state of one stream, served by `getState()`. This is
+ * a projection of the Stream Durable Object's core reduced state (see
+ * `toStreamState` in apps/os stream-runtime.ts, the only producer) —
+ * deliberately just the tree shape that navigation UIs and scripts consume.
+ * Processor internals (circuit breaker counters, subscriber records) are DO
+ * implementation detail and are not part of this contract.
+ */
 export const StreamState = z.object({
   namespace: StreamNamespace,
   path: StreamPath,
   eventCount: z.number().int().nonnegative(),
   childPaths: z.array(StreamPath),
   metadata: JSONObject,
-  processors: ProcessorsState,
 });
 export type StreamState = z.infer<typeof StreamState>;
 

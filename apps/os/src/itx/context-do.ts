@@ -25,7 +25,7 @@ import type {
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 export type ContextDescriptor = {

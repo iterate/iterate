@@ -11,7 +11,7 @@ import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 import {
   REPO_DEFAULT_BRANCH,
   REPO_README_PATH,

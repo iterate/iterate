@@ -15,7 +15,7 @@ afterEach(() => {
 // it once ran mid-append against the pre-commit "uninitialized" core state and
 // dialed `uninitialized:/...` durable objects instead of the real ancestors.
 test("creating a stream registers childPaths on its ancestor streams", async () => {
-  const { getInitializedStreamStub } = await import("~/domains/streams/new-stream-runtime.ts");
+  const { getInitializedStreamStub } = await import("~/domains/streams/stream-runtime.ts");
   const { StreamPath } = await import("@iterate-com/shared/streams/types");
   const namespace = "proj__local__childpaths";
   const streamNamespace = env.STREAM as unknown as Parameters<

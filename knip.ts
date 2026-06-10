@@ -116,7 +116,6 @@ const config: KnipConfig = {
     "apps/os/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
     "apps/os/src/db/queries/.generated/index.ts": ["files", "exports", "types"],
     "apps/os/src/db/queries/.generated/tables.ts": ["files", "types"],
-    "apps/os/src/durable-objects/test-stream-durable-object.ts": ["files", "exports"],
     "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
     "apps/os/src/**": ["exports", "types"],
     "apps/os/e2e/test-support/**": ["exports", "types"],
