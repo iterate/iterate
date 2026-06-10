@@ -1,6 +1,6 @@
 // Implements the "project-lifecycle" processor.
 // A pure projection of Project lifecycle facts (creation, config worker builds,
-// DNS provisioning) into reduced state. Hosted on ProjectDurableObject via
+// setup tasks) into reduced state. Hosted on ProjectDurableObject via
 // createStreamProcessorHost; it has no side effects of its own.
 
 import { z } from "zod";
@@ -12,10 +12,6 @@ export const PROJECT_LIFECYCLE_STREAM_PATH = StreamPath.parse("/");
 const PROJECT_CREATED_EVENT_TYPE = "events.iterate.com/project/created";
 export const PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE =
   "events.iterate.com/project/config-worker-built";
-export const PROJECT_CNAME_RECORD_CREATED_EVENT_TYPE =
-  "events.iterate.com/project/cname-record-created";
-export const PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE =
-  "events.iterate.com/project/cname-record-creation-failed";
 const LEGACY_PROJECT_CREATED_EVENT_TYPE = "events.iterate.com/os/project-created";
 
 export const ProjectLifecycleProcessorContract = defineProcessorContract({
@@ -64,36 +60,11 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
         repoSlug: z.string().trim().min(1),
       }),
     },
-    [PROJECT_CNAME_RECORD_CREATED_EVENT_TYPE]: {
-      description: "A Project wildcard CNAME record was created in Cloudflare DNS.",
-      payloadSchema: z.object({
-        base: z.string().trim().min(1),
-        cloudflareRecord: z.record(z.string(), z.unknown()),
-        name: z.string().trim().min(1),
-        projectId: z.string().trim().min(1),
-        projectSlug: z.string().trim().min(1),
-        target: z.string().trim().min(1),
-        zoneId: z.string().trim().min(1),
-        zoneName: z.string().trim().min(1),
-      }),
-    },
-    [PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE]: {
-      description: "Project wildcard CNAME record creation failed.",
-      payloadSchema: z.object({
-        base: z.string().trim().min(1).optional(),
-        message: z.string().trim().min(1),
-        name: z.string().trim().min(1).optional(),
-        projectId: z.string().trim().min(1),
-        projectSlug: z.string().trim().min(1),
-      }),
-    },
   },
   consumes: [
     PROJECT_CREATED_EVENT_TYPE,
     LEGACY_PROJECT_CREATED_EVENT_TYPE,
     PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE,
-    PROJECT_CNAME_RECORD_CREATED_EVENT_TYPE,
-    PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE,
   ],
   emits: [],
 });

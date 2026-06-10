@@ -70,7 +70,6 @@ Not implemented in this slice:
 
 - [ ] Custom hostname lifecycle and routing for `<custom-host>`,
       `mcp.<custom-host>`, and `streams.<custom-host>`.
-- [ ] Cloudflare DNS record creation.
 - [ ] Cloudflare custom hostname setup and certificate provisioning.
 - [ ] Project-owned dashboard host routing such as
       `iterate.<project-ingress-host>`.
@@ -225,7 +224,6 @@ The Project DO is responsible for lifecycle creation:
 
 After the desired durable state is written, asynchronous work can continue:
 
-- Cloudflare DNS records
 - custom hostname setup
 - certificate provisioning
 - future route repair/reconciliation
@@ -516,7 +514,6 @@ Implement the architecture skeleton and first vertical slice:
 Do not implement in this first slice:
 
 - [ ] Cloudflare custom hostname automation
-- [ ] DNS record provisioning
 - [ ] certificate provisioning
 - [ ] slug alias lifecycle
 - [ ] full Project Route Authorization policy language
