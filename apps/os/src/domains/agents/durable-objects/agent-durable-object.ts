@@ -13,7 +13,6 @@ import {
 import { withStreamProcessor } from "@iterate-com/shared/durable-object-utils/mixins/with-stream-processor";
 import { createAgentChatProcessor } from "@iterate-com/shared/stream-processors/agent-chat/implementation";
 import { createAgentProcessor } from "@iterate-com/shared/stream-processors/agent/implementation";
-import { VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE } from "@iterate-com/shared/stream-processors/voice-agent/contract";
 import {
   type CloudflareAiProcessorDeps,
   createCloudflareAiProcessor,
@@ -171,9 +170,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
         this.#processorsRegistered = true;
       }
       if (params.agentPath !== AGENTS_STREAM_PATH) {
-        if (!isVoiceAgentPath(params.agentPath)) {
-          await this.ensureAgentWorkspace(params);
-        }
+        await this.ensureAgentWorkspace(params);
         await this.ensureCodemodeSession(params);
       }
       await this.ensureAgentSubscription(params);
@@ -299,16 +296,10 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       throw new Error(`Unknown agent chat tool function chat.${functionName}`);
     }
 
-    const message = parseChatToolMessage(input.args[0]);
-    const event = isVoiceAgentPath(this.structuredName.agentPath)
-      ? await this.appendVoiceAgentTextInput({
-          idempotencyKey: `voice-agent-chat-tool:send-message:${input.functionCallId}`,
-          message,
-        })
-      : await this.appendAssistantResponse({
-          idempotencyKey: `agent-chat-tool:send-message:${input.functionCallId}`,
-          message,
-        });
+    const event = await this.appendAssistantResponse({
+      idempotencyKey: `agent-chat-tool:send-message:${input.functionCallId}`,
+      message: parseChatToolMessage(input.args[0]),
+    });
     return { event };
   }
 
@@ -437,26 +428,26 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
       agentPath: params.agentPath,
       presets: readAgentPathPrefixPresets(rootEvents),
     });
-    const baseSetupEvents =
-      preset?.events ?? defaultAgentSetupEvents(DEFAULT_AGENT_LLM_PROVIDER, params.agentPath);
-    const setupEvents = isVoiceAgentPath(params.agentPath)
-      ? voiceAgentCodeAgentSetupEvents({
-          baseEvents: baseSetupEvents,
-          streamPath: params.agentPath,
-        })
-      : baseSetupEvents;
+    const isVoiceAgent = isVoiceAgentPath(params.agentPath);
+    const setupEvents = isVoiceAgent
+      ? voiceAgentCodeAgentSetupEvents({ streamPath: params.agentPath })
+      : (preset?.events ?? defaultAgentSetupEvents(DEFAULT_AGENT_LLM_PROVIDER, params.agentPath));
     const hasSetupPrompt = setupEvents.some(
       (event) => event.type === "events.iterate.com/agent/system-prompt-updated",
     );
 
     for (const [index, event] of setupEvents.entries()) {
       const idempotencyKey = `os-agent-setup:${normalizeIdempotencyKeyPart(
-        preset?.basePath ?? "default",
+        isVoiceAgent ? "/agents/voice" : (preset?.basePath ?? "default"),
       )}:${index}:${event.type}`;
       if (events.some((existingEvent) => existingEvent.idempotencyKey === idempotencyKey)) {
         continue;
       }
-      if (preset == null && hasEquivalentDefaultSetupEvent({ event, existingEvents: events })) {
+      if (
+        preset == null &&
+        !isVoiceAgent &&
+        hasEquivalentDefaultSetupEvent({ event, existingEvents: events })
+      ) {
         continue;
       }
       await streamApi.append({
@@ -652,19 +643,6 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     });
   }
 
-  private async appendVoiceAgentTextInput(input: { idempotencyKey: string; message: string }) {
-    return await this.streamsEntrypoint(this.structuredName.agentPath).append({
-      event: {
-        type: VOICE_AGENT_INPUT_TEXT_APPENDED_EVENT_TYPE,
-        idempotencyKey: input.idempotencyKey,
-        payload: {
-          source: "code-agent",
-          text: input.message,
-        },
-      },
-    });
-  }
-
   private async appendCodemodeCompletionInput(input: {
     event: Event;
     idempotencyKey: string;
@@ -685,14 +663,11 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     });
   }
 
-  private createAgentChatToolProvider(
-    params: AgentDurableObjectStructuredName,
-  ): ToolProviderRegistration {
+  private createAgentChatToolProvider(): ToolProviderRegistration {
     return {
       path: ["chat"],
-      instructions: isVoiceAgentPath(params.agentPath)
-        ? "On voice-agent streams, ctx.chat.sendMessage({ message }) appends a voice-agent text input for the realtime voice operator to say aloud. Keep the message concise and directly speakable."
-        : "Use ctx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
+      instructions:
+        "Use ctx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
       invocation: {
         kind: "rpc",
         callable: {
@@ -740,7 +715,7 @@ export class AgentDurableObject extends AgentBase<AgentDurableObjectEnv> {
     params: AgentDurableObjectStructuredName,
   ): ToolProviderRegistration[] {
     return [
-      ...(isSlackAgentPath(params.agentPath) ? [] : [this.createAgentChatToolProvider(params)]),
+      ...(isSlackAgentPath(params.agentPath) ? [] : [this.createAgentChatToolProvider()]),
       this.createAgentDebugToolProvider(),
       ...createExampleCapabilityProviders({ projectId: params.projectId }),
       createGmailProviderRegistration({ projectId: params.projectId }),
