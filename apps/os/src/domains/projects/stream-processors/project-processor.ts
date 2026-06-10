@@ -16,16 +16,15 @@
 // worker build deliberately does NOT gate create-completed: ingress requests
 // build on demand, so a failed build self-heals on the next request.
 //
-// The processor also forwards every live event on the project's root stream
-// to the project worker's optional `processEvent` hook — user code reacting
-// to its project's events.
+// The processor also forwards live events on the project's root stream to
+// the project worker's optional `processEvent` hook — user code reacting to
+// its project's events. The `"*"` in `consumes` is what makes the stream
+// deliver unfiltered batches. Delivery is best-effort and begins once a
+// worker build exists; events before the first build are not replayed.
 
 import { z } from "zod";
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
-import {
-  assertNever,
-  defineProcessorContract,
-} from "@iterate-com/streams/shared/stream-processors";
+import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
 import type { StreamEvent } from "@iterate-com/streams/shared/event";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
@@ -97,7 +96,11 @@ export const ProjectProcessorContract = defineProcessorContract({
       }),
     },
   },
+  // "*" makes the stream deliver every event (the worker forwarding in
+  // processEventBatch needs unfiltered batches); the named types are what
+  // reduce projects into state.
   consumes: [
+    "*",
     PROJECT_CREATE_REQUESTED_EVENT_TYPE,
     PROJECT_CREATED_EVENT_TYPE,
     WORKER_BUILT_EVENT_TYPE,
@@ -154,7 +157,9 @@ export class ProjectProcessor extends StreamProcessor<
       case PROJECT_CREATE_COMPLETED_EVENT_TYPE:
         return { ...state, phase: "ready" };
       default:
-        return assertNever(event);
+        // Wildcard-delivered events (any other type on the root stream) are
+        // forwarded to the worker in processEventBatch, never reduced.
+        return state;
     }
   }
 

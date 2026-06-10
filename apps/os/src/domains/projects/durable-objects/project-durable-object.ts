@@ -274,9 +274,22 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
       payload: { projectId: input.projectId, slug: input.slug },
     });
 
-    // Everything else — example secret, agents root, worker build, the
-    // created/create-completed events — happens in ProjectProcessor.
+    // The creation steps — example secret, agents root, the created/
+    // create-completed events — run in ProjectProcessor. Wait for them so a
+    // project is BORN with its guarantees (e.g. itx.fetch right after create
+    // finds the example secret); only the worker build stays async.
+    await this.waitForCreateCompleted(input.projectId);
     return toSummary(facts);
+  }
+
+  private async waitForCreateCompleted(projectId: string) {
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      const snapshot = await this.projectProcessor.snapshot();
+      if (snapshot.state.phase === "ready") return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    console.warn(`[ProjectDO] createProject(${projectId}) returning before create-completed.`);
   }
 
   async getSummary(): Promise<ProjectSummary> {

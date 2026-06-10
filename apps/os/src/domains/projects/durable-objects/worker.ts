@@ -188,6 +188,7 @@ export class WorkerHost {
   #deps: WorkerHostDeps;
   #entrypoint: { commitOid: string; entrypoint: LoadedWorkerEntrypoint } | null = null;
   #buildPromise: Promise<WorkerCheckout> | null = null;
+  #buildChain: Promise<unknown> = Promise.resolve();
 
   constructor(deps: WorkerHostDeps) {
     this.#deps = deps;
@@ -211,8 +212,22 @@ export class WorkerHost {
     return cached ? { status: "ready", checkout: cached } : { status: "building" };
   }
 
-  /** Clone, build, validate-load, and persist a fresh checkout. */
-  async buildFresh(project: WorkerProject): Promise<WorkerCheckout> {
+  /**
+   * Clone, build, validate-load, and persist a fresh checkout. Builds are
+   * SERIALIZED: every caller (background rebuilds, the creation step,
+   * callWorkerFunction) shares one checkout directory in the workspace, so
+   * overlapping clone/read cycles would corrupt each other.
+   */
+  buildFresh(project: WorkerProject): Promise<WorkerCheckout> {
+    const build = this.#buildChain.then(
+      () => this.#buildFresh(project),
+      () => this.#buildFresh(project),
+    );
+    this.#buildChain = build.catch(() => {});
+    return build;
+  }
+
+  async #buildFresh(project: WorkerProject): Promise<WorkerCheckout> {
     const checkout = await this.#checkoutFromRepo(project);
     this.load({ checkout, projectId: project.id });
     await this.#deps.ctx.storage.put(CHECKOUT_STORAGE_KEY, checkout);

@@ -57,6 +57,10 @@ export class ProjectIngressEntrypoint extends WorkerEntrypoint<
       const worker = this.env.LOADER.get(
         workerCacheKey({ commitOid: version.commitOid, projectId: summary.id }),
         async () => {
+          // Benign race: if a rebuild lands between getWorkerVersion and this
+          // cold-isolate miss callback, newer code loads under the stale key.
+          // The very next request keys the new commit and converges; the stale
+          // isolate just ages out.
           const checkout = await project.getWorkerCheckout();
           return withWorkerEnv({
             exports: readLoopbackExports(this.ctx.exports),
