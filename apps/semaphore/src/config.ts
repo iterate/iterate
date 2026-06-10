@@ -11,6 +11,11 @@ import { z } from "zod";
  * `.exposeSecret()` and never serialize their value.
  */
 export const AppConfig = z.object({
+  // alchemy's IterateApp derives the worker route + proxied DNS record from
+  // baseUrl (deriveWorkerRouteHosts in packages/shared/src/alchemy/iterate-app.ts).
+  // Drop it and the custom hostname (semaphore.<base>) keeps resolving via DNS
+  // but has no route bound to the worker, so Cloudflare answers 522.
+  baseUrl: publicValue(z.url().optional()),
   logs: AppLogsConfig.default({ stdoutFormat: "pretty", filtering: { rules: [] } }),
   posthog: z.object({
     apiKey: publicValue(z.string().trim().min(1)),

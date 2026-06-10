@@ -166,6 +166,29 @@ Two findings worth keeping:
   is almost certainly preview-infra (WS on preview wildcard hosts), not the
   refactor — flagged for follow-up confirmation, not claimed fixed.
 
+- **`Preview / deploy` red was `apps/semaphore`, not `apps/os` — a dropped
+  `baseUrl` in the migrated config.** On PR #1411 the deploy job failed at
+  `scripts/preview/router.ts:113` after a ~9-minute silent gap (the readiness
+  poll's 10-min budget, `preview.ts:43`). The misleading part: `os`'s readiness
+  passed (`status: awaiting-tests`); the recorded state showed **semaphore**
+  `deploy-failed` with `Readiness check returned 522 for
+https://semaphore.iterate-preview-2.com/api/__internal/health`. The semaphore
+  worker was healthy on its `*.workers.dev` URL (200) but the custom hostname
+  answered 522. Root cause: this PR rewrote `apps/semaphore/src/config.ts` as a
+  fresh `z.object({...})` instead of `BaseAppConfig.extend({...})`, dropping the
+  inherited `baseUrl` field. `IterateApp` derives the worker route + proxied DNS
+  from `runtimeConfig.baseUrl` (`deriveWorkerRouteHosts`,
+  `packages/shared/src/alchemy/iterate-app.ts`); with `baseUrl` undefined it
+  created no route, so the leftover hostname resolved via DNS but had no worker
+  bound → Cloudflare 522. Fix: add `baseUrl: publicValue(z.url().optional())`
+  back to the schema (the Doppler config already supplies `APP_CONFIG_BASE_URL`).
+  Lessons: (1) when a deploy "hangs" then fails, read the recorded preview state
+  for the _per-app_ status and message — the failing app may not be the one you
+  changed most; (2) a 522 on a custom hostname that's 200 on `workers.dev` is a
+  missing/unbound worker route, not a worker bug; (3) replacing a
+  `BaseAppConfig.extend(...)` with a hand-written object silently drops the base
+  fields the platform depends on — prefer extending the base.
+
 ## Learnings
 
 - An unauthenticated debug endpoint that echoes `process.env` is a secret leak
