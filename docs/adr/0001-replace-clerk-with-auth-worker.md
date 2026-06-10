@@ -69,3 +69,12 @@ not just MCP.
 - CONTEXT.md terms "Clerk Organization", "Clerk User", "Clerk OAuth Token", "Clerk Session
   Token" are replaced with auth-worker-native equivalents.
 - ADR 0001 (use Clerk as MCP OAuth server) is superseded.
+
+## Amendment: project ID minting (implemented reality)
+
+Decision 2 above did not survive contact with the implementation. The auth worker is the
+canonical minter of project ids, in the format `prj_<uuid>` (`generateId("prj")` in
+`apps/auth/src/server/orpc/routers/_shared.ts`). OS mints only in operator/recovery paths
+where no auth organization owns the project, using the same `prj_` prefix
+(`apps/os/src/domains/projects/project-id.ts`). `proj_` is a legacy OS-typeid prefix that is
+no longer minted; `isProjectId` still recognises it on old rows.

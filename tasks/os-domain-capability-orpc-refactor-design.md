@@ -1,5 +1,5 @@
 ---
-state: planned
+state: todo
 priority: high
 size: large
 dependsOn:

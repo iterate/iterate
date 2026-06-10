@@ -78,16 +78,16 @@ We want to have _few_ abstractions.
 
 # Services
 
-Before changing a service, consult first-party docs for the actual libraries in use. In practice that usually means TanStack Start / Router / Query / Form, Hono, oRPC, Drizzle, Vite, shadcn/ui, and Zod.
+Before changing a service, consult first-party docs for the actual libraries in use. In practice that usually means TanStack Start / Router / Query / Form, Hono, oRPC, Vite, shadcn/ui, and Zod.
 
 Canonical service stack:
 
-- Hono up front in `server.ts` / `src/server/app.ts`
+- Hono for worker HTTP routing where the app has one (e.g. `apps/auth`, `apps/iterate-com`)
 - TanStack Start in SPA mode
 - TanStack Router file-based routes
 - oRPC + `@orpc/tanstack-query`
 - TanStack Form + shadcn field components from `packages/ui`
-- Drizzle + sqlite/libsql
+- DB: sqlfu + D1 (`apps/os`, `apps/auth`), raw SQL migrations on D1 (`apps/semaphore`), or DO-local SQLite
 
 Service patterns that should stay true:
 
@@ -96,7 +96,7 @@ Service patterns that should stay true:
 - Use `throw redirect()` in `beforeLoad` instead of render-time navigation
 - Import shadcn components from `@iterate-com/ui/components/*`, not local copies
 - For TanStack Form, prefer `validators: { onChange, onSubmit }`, `FieldError errors={field.state.meta.errors}`, and `Select` `onValueChange`
-- For Drizzle JSON columns, parse in the Zod schema via `.transform(...)`, not in the handler
+- For JSON columns, parse in the Zod schema via `.transform(...)`, not in the handler
 
 **Everything that can be, should be an orpc procedure**
 
