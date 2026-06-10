@@ -6,7 +6,11 @@
 import { z } from "zod";
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
-export { repoStreamPath } from "~/domains/repos/repo-stream-path.ts";
+import { StreamPath } from "@iterate-com/shared/streams/types";
+
+export function repoStreamPath(repoSlug: string) {
+  return StreamPath.parse(`/repos/${repoSlug}`);
+}
 
 export const RepoStreamProcessorContract = defineProcessorContract({
   slug: "repo",

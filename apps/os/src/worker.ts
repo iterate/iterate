@@ -173,7 +173,14 @@ export default {
   },
 
   async queue(batch: MessageBatch, env: Env) {
-    await handleArtifactEventsBatch(batch, env);
+    if (batch.queue.endsWith("-artifact-events")) {
+      await handleArtifactEventsBatch(batch, env);
+      return;
+    }
+    console.warn("[os] received unhandled queue batch", {
+      messageCount: batch.messages.length,
+      queue: batch.queue,
+    });
   },
 };
 

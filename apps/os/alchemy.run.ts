@@ -97,6 +97,9 @@ const mcpRouteHostname = routeHostnameForUrl(ctx.runtimeConfig.mcp?.baseUrl);
 const eventDocsRouteHostname = eventDocsHostnameForAppBaseUrl(ctx.runtimeConfig.baseUrl);
 const artifactsAccountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
 const artifactsNamespace = `${ctx.workerName}-repos`;
+// Stream namespace for worker-global (non-project-scoped) streams, such as the
+// raw Cloudflare event capture stream at /cloudflare/events.
+const globalStreamNamespace = `${ctx.workerName}-global`;
 const outboundMcpFromOurClientCapability =
   DurableObjectNamespace<OutboundMcpFromOurClientCapability>(
     "outbound-mcp-from-our-client-capability",
@@ -169,24 +172,14 @@ const debugAppendChainSubscriber = ctx.app.local
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   main: "./src/worker.ts",
-  wranglerTransform(spec) {
-    const queues = (spec.queues ?? {}) as Record<string, unknown>;
-    const consumers = (queues.consumers ?? []) as Array<Record<string, unknown>>;
-    consumers.push({
-      queue: artifactEventsQueue.name,
-      max_batch_size: 10,
-      max_batch_timeout: 5,
-      max_retries: 3,
-      retry_delay: 30,
-    });
-    return { ...spec, queues: { ...queues, consumers } };
-  },
+  eventSources: [artifactEventsQueue],
   bindings: {
     DB: db,
     DO_CATALOG: db,
     AI: Ai(),
     ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
     ARTIFACTS_NAMESPACE: artifactsNamespace,
+    GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
     LOADER: WorkerLoader(),
     CODEMODE_SESSION: codemodeSession,
     ITX_CONTEXT: itxContext,
