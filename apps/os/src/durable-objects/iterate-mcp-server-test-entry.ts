@@ -114,7 +114,7 @@ function propsForRequest(request: Request): ProjectMcpServerConnectionProps {
         { id: "proj__test__other", slug: "other-project", ...orgFields },
       ],
       scopes: isAdmin
-        ? ["profile"]
+        ? ["superadmin"]
         : ["profile", "project", "project:proj__test__inboundmcp", "project:proj__test__other"],
       userId: isAdmin ? "admin-api-secret" : "user_test",
     };
