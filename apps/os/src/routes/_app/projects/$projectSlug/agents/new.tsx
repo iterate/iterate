@@ -1,11 +1,9 @@
 import { useCallback, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Play, RotateCcw } from "lucide-react";
-import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { Play } from "lucide-react";
 import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
-import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { NativeSelect, NativeSelectOption } from "@iterate-com/ui/components/native-select";
@@ -13,19 +11,6 @@ import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized
 import { toast } from "@iterate-com/ui/components/sonner";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Textarea } from "@iterate-com/ui/components/textarea";
-import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
-import { CodemodeAdHocProviderFields } from "~/components/codemode-session-controls.tsx";
-import {
-  type CodemodeAdHocProviderFieldsValue,
-  buildAdHocProviderInputs,
-  createEmptyAdHocProviderFields,
-} from "~/domains/codemode/ad-hoc-provider-inputs.ts";
-import { createDefaultCodemodeProviderRegistrations } from "~/domains/codemode/default-provider-registrations.ts";
-import { createExampleCapabilityProviders } from "~/domains/codemode/example-provider-registrations.ts";
-import {
-  codemodeProviderRegistrationEvents,
-  providersForCodemodeProviderInputs,
-} from "~/domains/codemode/examples.ts";
 import {
   type AgentLlmProvider,
   DEFAULT_AGENT_LLM_PROVIDER,
@@ -57,26 +42,6 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
   component: NewAgentPage,
 });
 
-type ToolProviderKey = "default" | "rpcTour" | "adHoc";
-
-const toolProviderOptions = [
-  {
-    key: "default",
-    label: "Default runtime tools",
-    description: "fetch, streams, Slack",
-  },
-  {
-    key: "rpcTour",
-    label: "RPC capability tour",
-    description: "Workers AI, repos, project context, subagents, OS oRPC, Slack",
-  },
-  {
-    key: "adHoc",
-    label: "Ad-hoc providers",
-    description: "Outbound MCP and OpenAPI forms below",
-  },
-] satisfies Array<{ description: string; key: ToolProviderKey; label: string }>;
-
 function NewAgentPage() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
@@ -87,35 +52,19 @@ function NewAgentPage() {
   const [runOpts, setRunOpts] = useState('{"gateway":{"id":"default"}}');
   const [systemPrompt, setSystemPrompt] = useState(defaultAgentSystemPrompt());
   const [customEventsYaml, setCustomEventsYaml] = useState(emptyEventsYaml);
-  const [selectedToolProviders, setSelectedToolProviders] = useState<Set<ToolProviderKey>>(
-    () => new Set(["default", "rpcTour", "adHoc"]),
-  );
-  const [adHocProviderFields, setAdHocProviderFields] = useState(createEmptyAdHocProviderFields);
 
   const preview = useMemo(
     () =>
       buildPreviewEvents({
         agentPathInput,
-        adHocProviderFields,
         customEventsYaml,
         model,
         projectId: project.id,
         provider,
         runOpts,
-        selectedToolProviders,
         systemPrompt,
       }),
-    [
-      adHocProviderFields,
-      agentPathInput,
-      customEventsYaml,
-      model,
-      project.id,
-      provider,
-      runOpts,
-      selectedToolProviders,
-      systemPrompt,
-    ],
+    [agentPathInput, customEventsYaml, model, project.id, provider, runOpts, systemPrompt],
   );
 
   const createAgent = useMutation({
@@ -153,18 +102,6 @@ function NewAgentPage() {
         return DEFAULT_CLOUDFLARE_AGENT_MODEL;
       }
       return current;
-    });
-  }
-
-  function toggleToolProvider(key: ToolProviderKey) {
-    setSelectedToolProviders((current) => {
-      const next = new Set(current);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
     });
   }
 
@@ -252,56 +189,6 @@ function NewAgentPage() {
               </FieldDescription>
             </Field>
           </FieldGroup>
-
-          <div className="space-y-3 rounded-lg border bg-card p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="space-y-1">
-                <p className="text-sm font-medium">Tool providers</p>
-                <p className="text-sm text-muted-foreground">
-                  Selected providers compile into codemode tool registration events.
-                </p>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setSelectedToolProviders(new Set(["default", "rpcTour", "adHoc"]));
-                  setAdHocProviderFields(createEmptyAdHocProviderFields());
-                }}
-              >
-                <RotateCcw className="size-4" />
-                Reset
-              </Button>
-            </div>
-
-            <div className="grid gap-2">
-              {toolProviderOptions.map((option) => (
-                <label
-                  key={option.key}
-                  htmlFor={`agent-tool-provider-${option.key}`}
-                  className="flex items-start gap-3 rounded-md border p-3 text-sm"
-                >
-                  <Checkbox
-                    id={`agent-tool-provider-${option.key}`}
-                    checked={selectedToolProviders.has(option.key)}
-                    onCheckedChange={() => toggleToolProvider(option.key)}
-                  />
-                  <span className="min-w-0 space-y-1">
-                    <span className="block font-medium">{option.label}</span>
-                    <span className="block text-muted-foreground">{option.description}</span>
-                  </span>
-                </label>
-              ))}
-            </div>
-
-            {selectedToolProviders.has("adHoc") ? (
-              <CodemodeAdHocProviderFields
-                value={adHocProviderFields}
-                onChange={setAdHocProviderFields}
-              />
-            ) : null}
-          </div>
         </div>
 
         <aside className="min-h-[42rem] space-y-3">
@@ -337,14 +224,12 @@ function NewAgentPage() {
 }
 
 function buildPreviewEvents(input: {
-  adHocProviderFields: CodemodeAdHocProviderFieldsValue;
   agentPathInput: string;
   customEventsYaml: string;
   model: string;
   projectId: string;
   provider: AgentLlmProvider;
   runOpts: string;
-  selectedToolProviders: Set<ToolProviderKey>;
   systemPrompt: string;
 }): { agentPath: StreamPath; error?: string; events: EventInput[] } {
   let agentPath = StreamPath.parse("/agents/assistant");
@@ -354,28 +239,10 @@ function buildPreviewEvents(input: {
     if (input.systemPrompt.trim() === "") throw new Error("System prompt is required.");
     const customEvents = parseAgentEventInputsYaml(input.customEventsYaml);
     const runOpts = input.provider === "cloudflare-ai" ? parseAgentRunOptsJson(input.runOpts) : {};
-    const providers = [
-      ...(input.selectedToolProviders.has("default")
-        ? createDefaultCodemodeProviderRegistrations({
-            projectId: input.projectId,
-            streamPath: agentPath,
-          })
-        : []),
-      ...(input.selectedToolProviders.has("rpcTour")
-        ? createExampleCapabilityProviders({ projectId: input.projectId })
-        : []),
-      createAgentChatToolProvider({
-        agentPath,
-        projectId: input.projectId,
-      }),
-      ...(input.selectedToolProviders.has("adHoc")
-        ? providersForCodemodeProviderInputs({
-            projectId: input.projectId,
-            providers: buildAdHocProviderInputs(input.adHocProviderFields),
-          })
-        : []),
-    ];
 
+    // Tool capabilities are no longer compiled into stream events here: the
+    // Agent Durable Object seeds its itx context (and the matching
+    // capability-noted events) on first wake.
     return {
       agentPath,
       events: [
@@ -392,7 +259,6 @@ function buildPreviewEvents(input: {
           projectId: input.projectId,
         }),
         ...customEvents,
-        ...codemodeProviderRegistrationEvents(dedupeToolProviders(providers)),
       ],
     };
   } catch (error) {
@@ -402,45 +268,4 @@ function buildPreviewEvents(input: {
       events: [],
     };
   }
-}
-
-function createAgentChatToolProvider(input: {
-  agentPath: StreamPath;
-  projectId: string;
-}): ToolProviderRegistration {
-  return {
-    path: ["chat"],
-    instructions:
-      "Use ctx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
-    invocation: {
-      kind: "rpc",
-      callable: {
-        type: "workers-rpc",
-        via: {
-          type: "env-binding",
-          bindingType: "durable-object-namespace",
-          bindingName: "AGENT",
-          durableObject: {
-            name: deriveDurableObjectNameFromStructuredName({
-              structuredName: {
-                agentPath: input.agentPath,
-                projectId: input.projectId,
-              },
-            }),
-          },
-        },
-        rpcMethod: "executeCodemodeFunctionCall",
-        argsMode: "object",
-      },
-    },
-  };
-}
-
-function dedupeToolProviders(providers: ToolProviderRegistration[]) {
-  const byPath = new Map<string, ToolProviderRegistration>();
-  for (const provider of providers) {
-    const key = provider.path.join("/");
-    if (!byPath.has(key)) byPath.set(key, provider);
-  }
-  return [...byPath.values()];
 }

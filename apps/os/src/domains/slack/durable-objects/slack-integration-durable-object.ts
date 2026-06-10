@@ -20,11 +20,6 @@ import {
   AGENT_HOST_PROCESSOR_SLUG,
   agentProcessorSubscriptionConfiguredEvent,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
-import {
-  codemodeProcessorSubscriptionKey,
-  getCodemodeSessionName,
-} from "~/domains/codemode/durable-objects/codemode-session.ts";
-import { createCodemodeSessionStartupEvents } from "~/domains/codemode/codemode-session-rpc.ts";
 import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-streams.ts";
 import {
   getSlackAgentDurableObjectName,
@@ -218,34 +213,6 @@ export function routedStreamBootstrapEvents(input: {
         }),
       },
     },
-    {
-      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      // ":callable" suffix: see the slack-agent subscription above.
-      idempotencyKey: `codemode-session-processor-subscription:${input.projectId}:${streamPath}:workers-rpc:callable`,
-      payload: {
-        subscriptionKey: codemodeProcessorSubscriptionKey({
-          projectId: input.projectId,
-          streamPath,
-        }),
-        subscriber: durableObjectProcessorSubscriber({
-          bindingName: "CODEMODE_SESSION",
-          durableObjectName: getCodemodeSessionName({
-            projectId: input.projectId,
-            streamPath,
-          }),
-          processorName: "codemode",
-        }),
-      },
-    },
-    // The forwarded Slack webhook can immediately become a bang-command
-    // codemode script. Keep codemode subscribed, with its default providers
-    // registered, before that webhook enters the routed stream.
-    ...createCodemodeSessionStartupEvents({
-      events: [],
-      projectId: input.projectId,
-      providers: [],
-      streamPath,
-    }),
     // Subscribe the agent host using the same subscription key the AgentDurableObject uses, so the
     // host this bootstrap starts and the one AgentDurableObject.onInstanceWake re-declares dedupe to
     // a single runner. The host wakes the AgentDurableObject for this stream (see

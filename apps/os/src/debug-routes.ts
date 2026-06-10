@@ -333,8 +333,6 @@ function readDebugDurableObjectNamespace(
   objectKind: string,
 ): DebugDurableObjectNamespace | null {
   switch (objectKind) {
-    case "codemode-session":
-      return env.CODEMODE_SESSION as unknown as DebugDurableObjectNamespace;
     case "project":
       return env.PROJECT as unknown as DebugDurableObjectNamespace;
     case "project-mcp-server-connection":

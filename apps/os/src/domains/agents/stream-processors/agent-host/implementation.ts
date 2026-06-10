@@ -206,14 +206,14 @@ export async function runAgentItxScript(args: {
 }) {
   const contextId = await args.deps.getItxContextId();
   await runItxScript({
+    // The runner's one shape is `async (itx) => …`; the model's code goes
+    // through verbatim (older histories say `async (ctx) =>` — the parameter
+    // name is the author's business, the single argument is the handle).
     executionId: args.executionId,
     recordRequested: args.recordRequested,
     env: args.deps.runnerEnv,
     exports: args.deps.workerExports as ItxRuntime["exports"],
-    // LLM scripts are written `async (ctx) => { … }`; itx scripts take
-    // ({ itx, vars }). ctx IS the itx handle — the agent's caps (chat, debug,
-    // ai, os, gmail) and built-ins (fetch, streams) line up name-for-name.
-    functionSource: `async ({ itx, vars }) => { const ctx = itx; return await (${args.code})(ctx, vars); }`,
+    functionSource: args.code,
     projectId: args.projectId,
     props: { context: contextId },
     record: { namespace: args.projectId, path: args.streamPath },
@@ -263,6 +263,12 @@ const CODEMODE_FENCE_RE =
 
 export function extractCodemodeScript(content: string): string | null {
   const trimmed = content.trim();
+  if (trimmed.startsWith("async (itx) => {") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+
+  // Legacy spelling from pre-itx agent histories; the parameter name is the
+  // author's business — the single argument is the handle either way.
   if (trimmed.startsWith("async (ctx) => {") && trimmed.endsWith("}")) {
     return trimmed;
   }

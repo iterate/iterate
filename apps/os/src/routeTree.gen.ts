@@ -45,13 +45,10 @@ import { Route as AppProjectsProjectSlugAgentsRouteRouteImport } from './routes/
 import { Route as AppProjectsProjectSlugStreamsIndexRouteImport } from './routes/_app/projects/$projectSlug/streams/index'
 import { Route as AppProjectsProjectSlugSecretsIndexRouteImport } from './routes/_app/projects/$projectSlug/secrets/index'
 import { Route as AppProjectsProjectSlugReposIndexRouteImport } from './routes/_app/projects/$projectSlug/repos/index'
-import { Route as AppProjectsProjectSlugCodemodeSessionsIndexRouteImport } from './routes/_app/projects/$projectSlug/codemode-sessions/index'
 import { Route as AppProjectsProjectSlugAgentsIndexRouteImport } from './routes/_app/projects/$projectSlug/agents/index'
 import { Route as AppProjectsProjectSlugStreamsSplatRouteImport } from './routes/_app/projects/$projectSlug/streams/$'
 import { Route as AppProjectsProjectSlugSecretsSecretIdRouteImport } from './routes/_app/projects/$projectSlug/secrets/$secretId'
 import { Route as AppProjectsProjectSlugReposRepoSlugRouteImport } from './routes/_app/projects/$projectSlug/repos/$repoSlug'
-import { Route as AppProjectsProjectSlugCodemodeSessionsNewRouteImport } from './routes/_app/projects/$projectSlug/codemode-sessions/new'
-import { Route as AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRouteImport } from './routes/_app/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
 import { Route as AppProjectsProjectSlugAgentsNewPresetRouteImport } from './routes/_app/projects/$projectSlug/agents/new-preset'
 import { Route as AppProjectsProjectSlugAgentsNewRouteImport } from './routes/_app/projects/$projectSlug/agents/new'
 import { Route as DocsStreamsProcessorsProcessorSlugEventsSplatRouteImport } from './routes/docs.streams.processors.$processorSlug.events.$'
@@ -253,12 +250,6 @@ const AppProjectsProjectSlugReposIndexRoute =
     path: '/repos/',
     getParentRoute: () => AppProjectsProjectSlugRouteRoute,
   } as any)
-const AppProjectsProjectSlugCodemodeSessionsIndexRoute =
-  AppProjectsProjectSlugCodemodeSessionsIndexRouteImport.update({
-    id: '/codemode-sessions/',
-    path: '/codemode-sessions/',
-    getParentRoute: () => AppProjectsProjectSlugRouteRoute,
-  } as any)
 const AppProjectsProjectSlugAgentsIndexRoute =
   AppProjectsProjectSlugAgentsIndexRouteImport.update({
     id: '/',
@@ -281,18 +272,6 @@ const AppProjectsProjectSlugReposRepoSlugRoute =
   AppProjectsProjectSlugReposRepoSlugRouteImport.update({
     id: '/repos/$repoSlug',
     path: '/repos/$repoSlug',
-    getParentRoute: () => AppProjectsProjectSlugRouteRoute,
-  } as any)
-const AppProjectsProjectSlugCodemodeSessionsNewRoute =
-  AppProjectsProjectSlugCodemodeSessionsNewRouteImport.update({
-    id: '/codemode-sessions/new',
-    path: '/codemode-sessions/new',
-    getParentRoute: () => AppProjectsProjectSlugRouteRoute,
-  } as any)
-const AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute =
-  AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRouteImport.update({
-    id: '/codemode-sessions/$codemodeSessionName',
-    path: '/codemode-sessions/$codemodeSessionName',
     getParentRoute: () => AppProjectsProjectSlugRouteRoute,
   } as any)
 const AppProjectsProjectSlugAgentsNewPresetRoute =
@@ -355,13 +334,10 @@ export interface FileRoutesByFullPath {
   '/docs/streams/processors/': typeof DocsStreamsProcessorsIndexRoute
   '/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
-  '/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
-  '/projects/$projectSlug/codemode-sessions/new': typeof AppProjectsProjectSlugCodemodeSessionsNewRoute
   '/projects/$projectSlug/repos/$repoSlug': typeof AppProjectsProjectSlugReposRepoSlugRoute
   '/projects/$projectSlug/secrets/$secretId': typeof AppProjectsProjectSlugSecretsSecretIdRoute
   '/projects/$projectSlug/streams/$': typeof AppProjectsProjectSlugStreamsSplatRoute
   '/projects/$projectSlug/agents/': typeof AppProjectsProjectSlugAgentsIndexRoute
-  '/projects/$projectSlug/codemode-sessions/': typeof AppProjectsProjectSlugCodemodeSessionsIndexRoute
   '/projects/$projectSlug/repos/': typeof AppProjectsProjectSlugReposIndexRoute
   '/projects/$projectSlug/secrets/': typeof AppProjectsProjectSlugSecretsIndexRoute
   '/projects/$projectSlug/streams/': typeof AppProjectsProjectSlugStreamsIndexRoute
@@ -395,13 +371,10 @@ export interface FileRoutesByTo {
   '/docs/streams/processors': typeof DocsStreamsProcessorsIndexRoute
   '/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
-  '/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
-  '/projects/$projectSlug/codemode-sessions/new': typeof AppProjectsProjectSlugCodemodeSessionsNewRoute
   '/projects/$projectSlug/repos/$repoSlug': typeof AppProjectsProjectSlugReposRepoSlugRoute
   '/projects/$projectSlug/secrets/$secretId': typeof AppProjectsProjectSlugSecretsSecretIdRoute
   '/projects/$projectSlug/streams/$': typeof AppProjectsProjectSlugStreamsSplatRoute
   '/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsIndexRoute
-  '/projects/$projectSlug/codemode-sessions': typeof AppProjectsProjectSlugCodemodeSessionsIndexRoute
   '/projects/$projectSlug/repos': typeof AppProjectsProjectSlugReposIndexRoute
   '/projects/$projectSlug/secrets': typeof AppProjectsProjectSlugSecretsIndexRoute
   '/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsIndexRoute
@@ -445,13 +418,10 @@ export interface FileRoutesById {
   '/docs/streams/processors/': typeof DocsStreamsProcessorsIndexRoute
   '/_app/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/_app/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
-  '/_app/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
-  '/_app/projects/$projectSlug/codemode-sessions/new': typeof AppProjectsProjectSlugCodemodeSessionsNewRoute
   '/_app/projects/$projectSlug/repos/$repoSlug': typeof AppProjectsProjectSlugReposRepoSlugRoute
   '/_app/projects/$projectSlug/secrets/$secretId': typeof AppProjectsProjectSlugSecretsSecretIdRoute
   '/_app/projects/$projectSlug/streams/$': typeof AppProjectsProjectSlugStreamsSplatRoute
   '/_app/projects/$projectSlug/agents/': typeof AppProjectsProjectSlugAgentsIndexRoute
-  '/_app/projects/$projectSlug/codemode-sessions/': typeof AppProjectsProjectSlugCodemodeSessionsIndexRoute
   '/_app/projects/$projectSlug/repos/': typeof AppProjectsProjectSlugReposIndexRoute
   '/_app/projects/$projectSlug/secrets/': typeof AppProjectsProjectSlugSecretsIndexRoute
   '/_app/projects/$projectSlug/streams/': typeof AppProjectsProjectSlugStreamsIndexRoute
@@ -495,13 +465,10 @@ export interface FileRouteTypes {
     | '/docs/streams/processors/'
     | '/projects/$projectSlug/agents/new'
     | '/projects/$projectSlug/agents/new-preset'
-    | '/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
-    | '/projects/$projectSlug/codemode-sessions/new'
     | '/projects/$projectSlug/repos/$repoSlug'
     | '/projects/$projectSlug/secrets/$secretId'
     | '/projects/$projectSlug/streams/$'
     | '/projects/$projectSlug/agents/'
-    | '/projects/$projectSlug/codemode-sessions/'
     | '/projects/$projectSlug/repos/'
     | '/projects/$projectSlug/secrets/'
     | '/projects/$projectSlug/streams/'
@@ -535,13 +502,10 @@ export interface FileRouteTypes {
     | '/docs/streams/processors'
     | '/projects/$projectSlug/agents/new'
     | '/projects/$projectSlug/agents/new-preset'
-    | '/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
-    | '/projects/$projectSlug/codemode-sessions/new'
     | '/projects/$projectSlug/repos/$repoSlug'
     | '/projects/$projectSlug/secrets/$secretId'
     | '/projects/$projectSlug/streams/$'
     | '/projects/$projectSlug/agents'
-    | '/projects/$projectSlug/codemode-sessions'
     | '/projects/$projectSlug/repos'
     | '/projects/$projectSlug/secrets'
     | '/projects/$projectSlug/streams'
@@ -584,13 +548,10 @@ export interface FileRouteTypes {
     | '/docs/streams/processors/'
     | '/_app/projects/$projectSlug/agents/new'
     | '/_app/projects/$projectSlug/agents/new-preset'
-    | '/_app/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
-    | '/_app/projects/$projectSlug/codemode-sessions/new'
     | '/_app/projects/$projectSlug/repos/$repoSlug'
     | '/_app/projects/$projectSlug/secrets/$secretId'
     | '/_app/projects/$projectSlug/streams/$'
     | '/_app/projects/$projectSlug/agents/'
-    | '/_app/projects/$projectSlug/codemode-sessions/'
     | '/_app/projects/$projectSlug/repos/'
     | '/_app/projects/$projectSlug/secrets/'
     | '/_app/projects/$projectSlug/streams/'
@@ -866,13 +827,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectSlugReposIndexRouteImport
       parentRoute: typeof AppProjectsProjectSlugRouteRoute
     }
-    '/_app/projects/$projectSlug/codemode-sessions/': {
-      id: '/_app/projects/$projectSlug/codemode-sessions/'
-      path: '/codemode-sessions'
-      fullPath: '/projects/$projectSlug/codemode-sessions/'
-      preLoaderRoute: typeof AppProjectsProjectSlugCodemodeSessionsIndexRouteImport
-      parentRoute: typeof AppProjectsProjectSlugRouteRoute
-    }
     '/_app/projects/$projectSlug/agents/': {
       id: '/_app/projects/$projectSlug/agents/'
       path: '/'
@@ -899,20 +853,6 @@ declare module '@tanstack/react-router' {
       path: '/repos/$repoSlug'
       fullPath: '/projects/$projectSlug/repos/$repoSlug'
       preLoaderRoute: typeof AppProjectsProjectSlugReposRepoSlugRouteImport
-      parentRoute: typeof AppProjectsProjectSlugRouteRoute
-    }
-    '/_app/projects/$projectSlug/codemode-sessions/new': {
-      id: '/_app/projects/$projectSlug/codemode-sessions/new'
-      path: '/codemode-sessions/new'
-      fullPath: '/projects/$projectSlug/codemode-sessions/new'
-      preLoaderRoute: typeof AppProjectsProjectSlugCodemodeSessionsNewRouteImport
-      parentRoute: typeof AppProjectsProjectSlugRouteRoute
-    }
-    '/_app/projects/$projectSlug/codemode-sessions/$codemodeSessionName': {
-      id: '/_app/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
-      path: '/codemode-sessions/$codemodeSessionName'
-      fullPath: '/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
-      preLoaderRoute: typeof AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRouteImport
       parentRoute: typeof AppProjectsProjectSlugRouteRoute
     }
     '/_app/projects/$projectSlug/agents/new-preset': {
@@ -1009,11 +949,8 @@ interface AppProjectsProjectSlugRouteRouteChildren {
   AppProjectsProjectSlugReplRoute: typeof AppProjectsProjectSlugReplRoute
   AppProjectsProjectSlugSettingsRoute: typeof AppProjectsProjectSlugSettingsRoute
   AppProjectsProjectSlugIndexRoute: typeof AppProjectsProjectSlugIndexRoute
-  AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute: typeof AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
-  AppProjectsProjectSlugCodemodeSessionsNewRoute: typeof AppProjectsProjectSlugCodemodeSessionsNewRoute
   AppProjectsProjectSlugReposRepoSlugRoute: typeof AppProjectsProjectSlugReposRepoSlugRoute
   AppProjectsProjectSlugSecretsSecretIdRoute: typeof AppProjectsProjectSlugSecretsSecretIdRoute
-  AppProjectsProjectSlugCodemodeSessionsIndexRoute: typeof AppProjectsProjectSlugCodemodeSessionsIndexRoute
   AppProjectsProjectSlugReposIndexRoute: typeof AppProjectsProjectSlugReposIndexRoute
   AppProjectsProjectSlugSecretsIndexRoute: typeof AppProjectsProjectSlugSecretsIndexRoute
 }
@@ -1030,16 +967,10 @@ const AppProjectsProjectSlugRouteRouteChildren: AppProjectsProjectSlugRouteRoute
     AppProjectsProjectSlugReplRoute: AppProjectsProjectSlugReplRoute,
     AppProjectsProjectSlugSettingsRoute: AppProjectsProjectSlugSettingsRoute,
     AppProjectsProjectSlugIndexRoute: AppProjectsProjectSlugIndexRoute,
-    AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute:
-      AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute,
-    AppProjectsProjectSlugCodemodeSessionsNewRoute:
-      AppProjectsProjectSlugCodemodeSessionsNewRoute,
     AppProjectsProjectSlugReposRepoSlugRoute:
       AppProjectsProjectSlugReposRepoSlugRoute,
     AppProjectsProjectSlugSecretsSecretIdRoute:
       AppProjectsProjectSlugSecretsSecretIdRoute,
-    AppProjectsProjectSlugCodemodeSessionsIndexRoute:
-      AppProjectsProjectSlugCodemodeSessionsIndexRoute,
     AppProjectsProjectSlugReposIndexRoute:
       AppProjectsProjectSlugReposIndexRoute,
     AppProjectsProjectSlugSecretsIndexRoute:
