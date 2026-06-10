@@ -22,11 +22,13 @@ export function projectStreamViewerPathname(input: {
   const streamSplat = streamPathSplat(input.streamPath);
   const basePath = ["projects", input.projectSlug, "streams"].map(encodeURIComponent).join("/");
 
-  return streamSplat ? `/${basePath}/${streamSplat}` : `/${basePath}/`;
+  return `/${basePath}/${streamSplat}`;
 }
 
 function streamPathSplat(streamPath: StreamPath | string) {
-  if (streamPath === "/") return "";
+  // The root stream must stay distinguishable from the streams index route
+  // (`/streams/`), so it keeps an encoded slash as its splat segment.
+  if (streamPath === "/") return "%2F";
   return streamPath
     .replace(/^\/+/, "")
     .split("/")

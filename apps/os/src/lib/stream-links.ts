@@ -24,6 +24,12 @@ export function streamPathChild(input: { parent: StreamPath; childSegment: strin
   return StreamPath.parse(`${parent}/${segment}`);
 }
 
+export function streamPathParent(path: StreamPath) {
+  const segments = path.split("/").filter(Boolean);
+  if (segments.length <= 1) return StreamPath.parse("/");
+  return StreamPath.parse(`/${segments.slice(0, -1).join("/")}`);
+}
+
 export function streamPathAncestors(path: StreamPath) {
   if (path === "/") return ["/" as StreamPath];
 
