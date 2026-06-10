@@ -18,32 +18,25 @@
 //    where `itx.fetch` IS project egress.
 //
 // State lives in the project's root event stream, projected by
-// ProjectProcessor (stream-processors/project-processor.ts); creation is
-// event-sourced (create-requested → created → … → create-completed). The
-// DO's own SQLite holds only the itx registry's capability table; the worker
-// checkout cache is plain DO storage. There is no bespoke project table.
+// ProjectProcessor (stream-processors/project-processor.ts), which also owns
+// every creation side effect — including the one D1 `projects` projection.
+// The DO's own SQLite holds only the itx registry's capability table; the
+// worker checkout cache is plain DO storage. There is no bespoke project
+// table and no lifecycle mixin: the DO is addressed by the plain project id.
 //
-// Endgame for egress (out of scope here): a stateless egress capability with
-// policy cached outside the DO, consulting the DO only for secrets and
-// approvals — and the captun intercept tunnel replaced by a live
-// egress-shadowing capability provided over capnweb-with-WebSockets
-// (github.com/iterate/capnweb): a connected client `provide`s a fetch stub
-// that shadows default egress instead of holding a bespoke tunnel.
+// Endgame for egress (itx-next.md §9, out of scope here): a stateless egress
+// capability with policy cached outside the DO, and the captun intercept
+// tunnel replaced by a live egress-shadowing capability provided over
+// capnweb-with-WebSockets.
 
-import { env } from "cloudflare:workers";
-import { z } from "zod";
+import { DurableObject, env } from "cloudflare:workers";
 import { acceptCaptunTunnel, type Fetcher } from "captun";
-import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import type { StreamEvent } from "@iterate-com/streams/shared/event";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
 import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
-import { jsonataReactorEventTypes } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -51,26 +44,20 @@ import {
 } from "~/domains/streams/stream-runtime.ts";
 import { parseConfig } from "~/config.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
+import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import {
-  AGENTS_STREAM_PATH,
-  type AgentDurableObject,
-  getAgentDurableObjectName,
-} from "~/domains/agents/durable-objects/agent-durable-object.ts";
-import { normalizeIngressHost } from "~/ingress/host-routing.ts";
-import {
-  PROJECT_CREATE_REQUESTED_EVENT_TYPE,
   PROJECT_STREAM_PATH,
-  ProjectProcessor,
+  projectFacts,
   ProjectProcessorContract,
   type ProjectFacts,
-} from "~/domains/projects/stream-processors/project-processor.ts";
+} from "~/domains/projects/stream-processors/project/contract.ts";
+import { ProjectProcessor } from "~/domains/projects/stream-processors/project/implementation.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import {
   bundleWorkerCode,
   cloneWorkerRepo,
   readLoopbackExports,
   WorkerHost,
-  type LoadedWorkerEntrypoint,
   type WorkerCheckout,
   type WorkerCode,
   type WorkerLoaderBinding,
@@ -82,11 +69,6 @@ import {
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
-import {
-  EXAMPLE_EGRESS_SECRET_KEY,
-  EXAMPLE_EGRESS_SECRET_MATERIAL,
-  EXAMPLE_EGRESS_SECRET_METADATA,
-} from "~/domains/secrets/example-secret.ts";
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
 import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
@@ -100,20 +82,9 @@ import type {
 
 type CaptunServerTunnel = Fetcher & Disposable;
 
-export type ProjectStructuredName = {
-  projectId: string;
-};
-
-const ProjectStructuredName = z.object({
-  projectId: z.string(),
-});
-
-const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
-
+/** Project DOs are addressed by the plain project id. */
 export function getProjectDurableObjectName(projectId: string) {
-  return deriveDurableObjectNameFromStructuredName({
-    structuredName: { projectId },
-  });
+  return projectId;
 }
 
 /**
@@ -141,7 +112,6 @@ type ProjectEnv = {
   AGENT: DurableObjectNamespace<AgentDurableObject>;
   APP_CONFIG: string;
   DB: D1Database;
-  DO_CATALOG: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
@@ -151,24 +121,11 @@ type ProjectRuntimeEnv = {
   WORKSPACE: DurableObjectNamespace;
 };
 
-const ProjectDurableObjectBase = createIterateDurableObjectBase<
-  typeof ProjectStructuredName,
-  Pick<ProjectEnv, "DO_CATALOG">
->({
-  className: "ProjectDurableObject",
-  getDatabase: (env) => env.DO_CATALOG,
-  indexes: {
-    projectId: (params) => params.projectId,
-  },
-  nameSchema: ProjectStructuredName,
-});
-
-export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
+export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   // ---- processor: the project's durable state ----------------------------
   //
   // The root stream ("/") is the record; ProjectProcessor projects it into
-  // the snapshot this DO reads back. Side effects of creation run inside the
-  // processor through the `creation` deps below.
+  // the snapshot this DO reads back and owns every creation side effect.
 
   host = createStreamProcessorHost(this.ctx);
   workerHost = new WorkerHost({
@@ -189,34 +146,14 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
     (deps) =>
       new ProjectProcessor({
         ...deps,
-        creation: {
-          summarize: (input) => this.summarizeProject(input),
-          ensureExampleEgressSecret: ({ projectId }) => this.ensureExampleEgressSecret(projectId),
-          ensureAgentsRoot: ({ projectId }) => this.ensureAgentsRoot(projectId),
-          writeAgentsRootRule: ({ projectId }) => this.writeAgentsRootRule(projectId),
-          buildWorker: async (project) => {
-            const checkout = await this.workerHost.buildFresh({
-              id: project.projectId,
-              slug: project.slug,
-            });
-            return {
-              commitOid: checkout.commitOid,
-              mainModule: checkout.workerCode.mainModule,
-            };
-          },
-        },
-        forwardEventToWorker: (event) => this.forwardEventToWorker(event),
+        appConfig: () => this.getAppConfig(),
+        env: this.env,
+        exports: this.ctx.exports,
+        workerHost: this.workerHost,
       }),
   );
 
   #projectEgressInterceptTunnel: CaptunServerTunnel | null = null;
-
-  constructor(ctx: DurableObjectState, env: ProjectEnv) {
-    super(ctx, env);
-    this.registerOnFirstInitialize(async (params) => {
-      await this.ensureProjectSubscription(params.projectId);
-    });
-  }
 
   /** Subscription callables on the project's root stream dial this. */
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
@@ -225,7 +162,6 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
 
   /** The ProjectProcessor's checkpoint: `{ offset, state }`. */
   async getProjectState() {
-    await this.ensureStarted();
     return await this.projectProcessor.snapshot();
   }
 
@@ -236,31 +172,30 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
   // agents can create unclaimed projects that a user or organization claims
   // later, similar to Stripe sandboxes.
 
+  /** The DO name IS the project id (see getProjectDurableObjectName). */
+  private get projectId(): string {
+    const name = this.ctx.id.name;
+    if (!name) throw new Error("ProjectDurableObject must be addressed by name (the project id).");
+    return name;
+  }
+
   async createProject(input: CreateProjectInput): Promise<ProjectSummary> {
-    await this.initialize({
-      name: getProjectDurableObjectName(input.projectId),
-    });
-    await this.ensureStarted();
-
-    // The D1 projection lands before the event: platform-host routing
-    // resolves hosts from the projects table, so the row must exist before
-    // the first ingress request or custom-hostname update.
-    await upsertProjectProjection({ db: this.env.DB, input });
-
-    const facts = this.summarizeProject(input);
+    // Both appends are idempotent, as is every downstream creation step —
+    // calling createProject again is a no-op that returns the summary.
+    await this.ensureProjectSubscription(input.projectId);
     const stream = await this.projectStream(input.projectId);
     await stream.append({
-      type: PROJECT_CREATE_REQUESTED_EVENT_TYPE,
+      type: "events.iterate.com/project/create-requested",
       idempotencyKey: `project-create-requested:${input.projectId}`,
       payload: { projectId: input.projectId, slug: input.slug },
     });
 
-    // The creation steps — example secret, agents root, the created/
-    // create-completed events — run in ProjectProcessor. Wait for them so a
-    // project is BORN with its guarantees (e.g. itx.fetch right after create
-    // finds the example secret); only the worker build stays async.
+    // The creation steps — D1 projection, example secret, agents root, the
+    // created/create-completed events — run in ProjectProcessor. Wait for
+    // them so a project is BORN with its guarantees (e.g. itx.fetch right
+    // after create finds the example secret); only the worker build is async.
     await this.waitForCreateCompleted(input.projectId);
-    return toSummary(facts);
+    return toSummary(projectFacts({ config: this.getAppConfig(), ...input }));
   }
 
   private async waitForCreateCompleted(projectId: string) {
@@ -274,12 +209,10 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
   }
 
   async getSummary(): Promise<ProjectSummary> {
-    await this.ensureStarted();
     return await this.requireSummary();
   }
 
   async describe(): Promise<ProjectSummary & { ingressUrl: string }> {
-    await this.ensureStarted();
     return {
       ...(await this.requireSummary()),
       ingressUrl: await this.ingressUrl(),
@@ -287,7 +220,6 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
   }
 
   async ingressUrl(): Promise<string> {
-    await this.ensureStarted();
     const summary = await this.requireSummary();
     const config = this.getAppConfig();
     const row = await this.env.DB.prepare(`SELECT custom_hostname FROM projects WHERE id = ?`)
@@ -313,7 +245,6 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {
-    await this.ensureStarted();
     return this.itxRegistry().provide(input);
   }
 
@@ -325,28 +256,24 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {
-    await this.ensureStarted();
     return this.itxRegistry().define(input);
   }
 
   async itxRevoke(input: { name: string }) {
-    await this.ensureStarted();
     return this.itxRegistry().revoke(input);
   }
 
   async itxDescribe() {
-    await this.ensureStarted();
     return this.itxRegistry().describe();
   }
 
   async itxInvoke(input: PathCall & { name: string }) {
-    await this.ensureStarted();
     return await this.itxRegistry().invoke(input.name, { args: input.args, path: input.path });
   }
 
   private itxRegistry(): ContextRegistry {
     if (this.#itxRegistry) return this.#itxRegistry;
-    const projectId = this.structuredName.projectId;
+    const projectId = this.projectId;
     this.#itxRegistry = new ContextRegistry({
       // Best-effort audit trail on the project's /itx stream; the registry's
       // SQLite table is the authoritative state (itx DECISIONS.md D1).
@@ -383,7 +310,7 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
         return factory(options);
       },
       projectId,
-      sql: this.getDurableObjectSql(),
+      sql: this.ctx.storage.sql,
     });
     return this.#itxRegistry;
   }
@@ -402,7 +329,6 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
     | { status: "ready"; commitOid: string; summary: ProjectSummary }
     | { status: "building"; summary: ProjectSummary }
   > {
-    await this.ensureStarted();
     const summary = await this.requireSummary();
     const version = await this.workerHost.versionForDispatch(summary);
     if (version.status === "ready") {
@@ -416,7 +342,6 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
    * this lazily, so the code payload only crosses RPC on a cold isolate.
    */
   async getWorkerCheckout(): Promise<WorkerCheckout> {
-    await this.ensureStarted();
     const summary = await this.requireSummary();
     return (
       (await this.workerHost.getCachedCheckout()) ?? (await this.workerHost.buildFresh(summary))
@@ -431,30 +356,10 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
    * Builds fresh so tool calls always see the latest pushed config.
    */
   async callWorkerFunction(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
-    await this.ensureStarted();
     const summary = await this.requireSummary();
     const checkout = await this.workerHost.buildFresh(summary);
     const entrypoint = this.workerHost.load({ checkout, projectId: summary.id });
     return await replayPathCall(entrypoint, { args: input.args ?? [], path: input.path });
-  }
-
-  /** Best-effort delivery of live root-stream events to the worker's hook. */
-  private async forwardEventToWorker(event: StreamEvent) {
-    try {
-      if (!(await this.workerHost.isReady())) return;
-      const summary = await this.currentSummary();
-      if (!summary) return;
-      const checkout = await this.workerHost.getCachedCheckout();
-      if (!checkout) return;
-      const entrypoint = this.workerHost.load({ checkout, projectId: summary.id });
-      await entrypoint.processEvent?.({
-        event: event as unknown as Parameters<
-          NonNullable<LoadedWorkerEntrypoint["processEvent"]>
-        >[0]["event"],
-      });
-    } catch (error) {
-      console.error("Project worker processEvent failed.", error);
-    }
   }
 
   protected async cloneWorkerRepo(input: WorkerWorkspace & { repo: RepoInfo }) {
@@ -484,10 +389,9 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
       return await fetch(request);
     }
 
-    await this.ensureStarted();
     const secrets = getSecretsCapability({
       exports: readLoopbackExports(this.ctx.exports),
-      props: { projectId: this.structuredName.projectId },
+      props: { projectId: this.projectId },
     });
 
     // Use one request-level intercept decision for both secret substitution and
@@ -559,71 +463,6 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
     this.#projectEgressInterceptTunnel = tunnel;
   }
 
-  // ---- creation steps (called by ProjectProcessor) -------------------------
-
-  /** Pure: the project's hosts derive entirely from (projectId, slug, config). */
-  private summarizeProject(input: { projectId: string; slug: string }): ProjectFacts {
-    const config = this.getAppConfig();
-    const hosts = projectHosts({
-      bases: config.projectHostnameBases,
-      projectId: input.projectId,
-      slug: input.slug,
-    });
-    return {
-      defaultHost: hosts.defaultHost,
-      hosts: hosts.projectHosts,
-      projectId: input.projectId,
-      slug: input.slug,
-    };
-  }
-
-  private async ensureExampleEgressSecret(projectId: string) {
-    const secrets = getSecretsCapability({
-      exports: readLoopbackExports(this.ctx.exports),
-      props: { projectId },
-    });
-
-    const existing = await secrets.getSecretSummaryByKeyOrNull({
-      key: EXAMPLE_EGRESS_SECRET_KEY,
-    });
-    if (existing) return;
-
-    await secrets.setSecret({
-      key: EXAMPLE_EGRESS_SECRET_KEY,
-      material: EXAMPLE_EGRESS_SECRET_MATERIAL,
-      metadata: EXAMPLE_EGRESS_SECRET_METADATA,
-    });
-  }
-
-  private async ensureAgentsRoot(projectId: string) {
-    await getInitializedDoStub({
-      allowCreate: true,
-      namespace: this.env.AGENT,
-      name: getAgentDurableObjectName({
-        agentPath: AGENTS_STREAM_PATH,
-        projectId,
-      }),
-    });
-  }
-
-  private async writeAgentsRootRule(projectId: string) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: projectId,
-      path: AGENTS_STREAM_PATH,
-    });
-
-    await stream.append({
-      type: jsonataReactorEventTypes.ruleConfigured,
-      idempotencyKey: `agents-child-stream-setup:${projectId}`,
-      payload: {
-        slug: "agents-child-stream-setup",
-        matcher: "type = 'events.iterate.com/stream/child-stream-created'",
-        reactions: [],
-      },
-    });
-  }
-
   // ---- plumbing ------------------------------------------------------------
 
   private async requireSummary(): Promise<ProjectSummary> {
@@ -637,14 +476,14 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
     if (snapshot.state.project) return toSummary(snapshot.state.project);
 
     // Cold path: the snapshot can lag the create-requested append by a beat.
-    // The D1 projection is written synchronously in createProject and hosts
-    // derive purely from (projectId, slug, config), so reconstruct from D1.
-    const projectId = this.structuredName.projectId;
+    // The D1 projection is the first creation step and hosts derive purely
+    // from (projectId, slug, config), so reconstruct from D1.
+    const projectId = this.projectId;
     const row = await this.env.DB.prepare(`SELECT slug FROM projects WHERE id = ?`)
       .bind(projectId)
       .first<{ slug: string }>();
     if (!row) return null;
-    return toSummary(this.summarizeProject({ projectId, slug: row.slug }));
+    return toSummary(projectFacts({ config: this.getAppConfig(), projectId, slug: row.slug }));
   }
 
   private async projectStream(projectId: string) {
@@ -658,7 +497,7 @@ export class ProjectDurableObject extends ProjectDurableObjectBase<ProjectEnv> {
   private async ensureProjectSubscription(projectId: string) {
     const stream = await this.projectStream(projectId);
     await stream.append({
-      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+      type: "events.iterate.com/stream/subscription-configured",
       idempotencyKey: `project-subscription:${projectId}:project-processor`,
       payload: {
         subscriptionKey: `project:${projectId}`,
@@ -682,33 +521,6 @@ function toSummary(facts: ProjectFacts): ProjectSummary {
     slug: facts.slug,
     defaultHost: facts.defaultHost,
     hosts: facts.hosts,
-  };
-}
-
-async function upsertProjectProjection(input: { db: D1Database; input: CreateProjectInput }) {
-  const row = await input.db
-    .prepare(
-      `INSERT INTO projects (id, slug, updated_at)
-       VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S', 'now'))
-       ON CONFLICT(id) DO UPDATE SET
-        slug = excluded.slug,
-        updated_at = excluded.updated_at
-       RETURNING id`,
-    )
-    .bind(input.input.projectId, input.input.slug)
-    .first<{ id: string }>();
-
-  if (!row) throw new Error(`Project ${input.input.projectId} projection was not written.`);
-}
-
-export function projectHosts(input: { bases: readonly string[]; projectId: string; slug: string }) {
-  const hosts = input.bases.flatMap((base) => [
-    normalizeIngressHost(`${input.slug}.${base}`),
-    normalizeIngressHost(`${input.projectId}.${base}`),
-  ]);
-  return {
-    defaultHost: normalizeIngressHost(`${input.slug}.${input.bases[0] ?? "iterate.localhost"}`),
-    projectHosts: hosts,
   };
 }
 

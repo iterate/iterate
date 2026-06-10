@@ -1,3 +1,4 @@
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -6,7 +7,7 @@ import {
   getProjectDurableObjectName,
   ProjectDurableObject as RealProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
-import { PROJECT_STREAM_PATH } from "~/domains/projects/stream-processors/project-processor.ts";
+import { PROJECT_STREAM_PATH } from "~/domains/projects/stream-processors/project/contract.ts";
 import {
   getRepoDurableObjectName,
   type RepoInfo,
@@ -165,7 +166,7 @@ export {
 } from "./mock-artifacts-binding.ts";
 export { CodemodeSession } from "~/durable-objects/codemode-session-tombstone.ts";
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
-export { PROJECT_STREAM_PATH } from "~/domains/projects/stream-processors/project-processor.ts";
+export { PROJECT_STREAM_PATH } from "~/domains/projects/stream-processors/project/contract.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 
@@ -248,6 +249,16 @@ export default {
         durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
         namespace: "proj__local__test",
         path: PROJECT_STREAM_PATH,
+      });
+
+      return Response.json({ events: await stream.history({ before: "end" }) });
+    }
+
+    if (url.pathname === "/__test/global-projects-stream") {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
+        namespace: "global",
+        path: StreamPath.parse("/projects"),
       });
 
       return Response.json({ events: await stream.history({ before: "end" }) });

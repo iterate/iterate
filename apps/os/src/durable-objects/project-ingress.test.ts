@@ -112,6 +112,27 @@ describe("Project ingress routing", () => {
     });
     expect(projectState.offset).toBeGreaterThanOrEqual(4);
 
+    // Creation cross-posts create-requested onto the deployment-wide global
+    // audit stream (namespace "global", path /projects).
+    const globalResponse = await SELF.fetch(
+      "https://os.iterate.localhost/__test/global-projects-stream",
+    );
+    expect(globalResponse.ok).toBe(true);
+    const globalBody = (await globalResponse.json()) as {
+      events: Array<{ type: string; payload: Record<string, unknown> }>;
+    };
+    expect(globalBody.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "events.iterate.com/project/create-requested",
+          payload: expect.objectContaining({
+            projectId: "proj__local__test",
+            slug: "demo",
+          }),
+        }),
+      ]),
+    );
+
     // Creation side effects (the processor's create-requested steps) have
     // completed once phase is "ready" — the example secret is one of them.
     const exampleSecret = await env.DB.prepare(

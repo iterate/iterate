@@ -1,0 +1,272 @@
+// Implements the "project" processor (see ./contract.ts for the event
+// taxonomy), hosted on ProjectDurableObject via createStreamProcessorHost.
+//
+// `reduce` projects the lifecycle events into state (the DO keeps no project
+// table of its own — this snapshot IS the project's durable state).
+// `processEvent` owns the creation side effects END TO END: the one D1
+// `projects` projection (platform-host routing reads it), the example egress
+// secret, the agents root, and a cross-post of create-requested onto the
+// deployment-wide `global` namespace's /projects stream (the global audit
+// surface for project lifecycle). Every step is idempotent so at-least-once
+// delivery is safe. The worker build deliberately does NOT gate
+// create-completed: ingress requests build on demand, so a failed build
+// self-heals on the next request.
+//
+// The processor also forwards live events on the project's root stream to
+// the project worker's optional `processEvent` hook — user code reacting to
+// its project's events. Delivery is best-effort and begins once a worker
+// build exists; events before the first build are not replayed.
+
+import { StreamProcessor } from "@iterate-com/streams/stream-processor";
+import type { StreamEvent } from "@iterate-com/streams/shared/event";
+import { StreamPath } from "@iterate-com/shared/streams/types";
+import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { projectFacts, ProjectProcessorContract, type ProjectProcessorState } from "./contract.ts";
+import {
+  getInitializedStreamStub,
+  type StreamDurableObjectNamespace,
+  type StreamDurableObject,
+} from "~/domains/streams/new-stream-runtime.ts";
+import {
+  AGENTS_STREAM_PATH,
+  type AgentDurableObject,
+  getAgentDurableObjectName,
+} from "~/domains/agents/durable-objects/agent-durable-object.ts";
+import { jsonataReactorEventTypes } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
+import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+import {
+  EXAMPLE_EGRESS_SECRET_KEY,
+  EXAMPLE_EGRESS_SECRET_MATERIAL,
+  EXAMPLE_EGRESS_SECRET_METADATA,
+} from "~/domains/secrets/example-secret.ts";
+import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
+import {
+  readLoopbackExports,
+  type LoadedWorkerEntrypoint,
+  type WorkerHost,
+} from "~/domains/projects/durable-objects/worker.ts";
+import type { AppConfig } from "~/config.ts";
+
+export { PROJECT_STREAM_PATH, projectFacts, ProjectProcessorContract } from "./contract.ts";
+export type { ProjectFacts, ProjectProcessorState } from "./contract.ts";
+
+/**
+ * High-level deps from the hosting DO: bindings, its loopback exports, and
+ * the worker host. The step LOGIC lives in this class, not behind closures.
+ */
+export type ProjectProcessorDeps = {
+  env: {
+    AGENT: DurableObjectNamespace<AgentDurableObject>;
+    DB: D1Database;
+    STREAM: DurableObjectNamespace<StreamDurableObject>;
+  };
+  /** The hosting DO's `ctx.exports` (loopback entrypoints, e.g. secrets). */
+  exports: unknown;
+  workerHost: WorkerHost;
+  appConfig: () => AppConfig;
+};
+
+export class ProjectProcessor extends StreamProcessor<
+  ProjectProcessorContract,
+  ProjectProcessorDeps
+> {
+  readonly contract = ProjectProcessorContract;
+
+  protected override reduce(
+    args: Parameters<StreamProcessor<ProjectProcessorContract>["reduce"]>[0],
+  ): ProjectProcessorState {
+    const { event, state } = args;
+    switch (event.type) {
+      case "events.iterate.com/project/create-requested":
+        return { ...state, phase: state.phase === "ready" ? state.phase : "creating" };
+      case "events.iterate.com/project/created":
+        return { ...state, project: event.payload };
+      case "events.iterate.com/project/config-worker-built":
+        return {
+          ...state,
+          worker: {
+            commitOid: event.payload.commitOid,
+            mainModule: event.payload.mainModule,
+            repoSlug: event.payload.repoSlug,
+          },
+        };
+      case "events.iterate.com/project/create-completed":
+        return { ...state, phase: "ready" };
+      default:
+        // Wildcard-delivered events (any other type on the root stream) are
+        // forwarded to the worker in processEventBatch, never reduced.
+        return state;
+    }
+  }
+
+  protected override processEvent(
+    args: Parameters<StreamProcessor<ProjectProcessorContract>["processEvent"]>[0],
+  ): void {
+    const { event } = args;
+    if (event.type !== "events.iterate.com/project/create-requested") return;
+    const { projectId, slug } = event.payload;
+
+    args.blockProcessorWhile(async () => {
+      const facts = projectFacts({ config: this.deps.appConfig(), projectId, slug });
+      await this.#upsertProjectProjection({ projectId, slug });
+      await this.#crossPostToGlobalProjects({ projectId, slug });
+      await this.ctx.stream.append({
+        event: {
+          type: "events.iterate.com/project/created",
+          idempotencyKey: `project-created:${projectId}`,
+          payload: facts,
+        },
+      });
+      await this.#ensureExampleEgressSecret(projectId);
+      await this.#ensureAgentsRoot(projectId);
+      await this.#writeAgentsRootRule(projectId);
+      await this.ctx.stream.append({
+        event: {
+          type: "events.iterate.com/project/create-completed",
+          idempotencyKey: `project-create-completed:${projectId}`,
+          payload: { projectId },
+        },
+      });
+    });
+
+    // The build is observable (worker-built event) but never gates creation:
+    // ingress builds on demand, so a failure here self-heals on next request.
+    args.runInBackground(async () => {
+      const checkout = await this.deps.workerHost.buildFresh({ id: projectId, slug });
+      await this.ctx.stream.append({
+        event: {
+          type: "events.iterate.com/project/config-worker-built",
+          idempotencyKey: `project-config-worker-built:${projectId}:${checkout.commitOid}`,
+          payload: {
+            commitOid: checkout.commitOid,
+            mainModule: checkout.workerCode.mainModule,
+            projectId,
+            repoSlug: ITERATE_CONFIG_REPO_SLUG,
+          },
+        },
+      });
+    });
+  }
+
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<ProjectProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    await super.processEventBatch(args);
+    // Forward EVERY live event (consumed or not) to the project worker.
+    const project = args.state.project;
+    if (!project) return;
+    for (const event of args.events) {
+      if (event.offset <= args.sideEffectsAfterOffset) continue;
+      args.runInBackground(() => this.#forwardEventToWorker(project.projectId, event));
+    }
+  }
+
+  // ---- creation steps -------------------------------------------------------
+
+  /**
+   * The one D1 projection of project identity. Platform-host routing
+   * (src/ingress/lookup.ts) resolves <slug>.<base> hosts from this table.
+   */
+  async #upsertProjectProjection(input: { projectId: string; slug: string }) {
+    const row = await this.deps.env.DB.prepare(
+      `INSERT INTO projects (id, slug, updated_at)
+       VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S', 'now'))
+       ON CONFLICT(id) DO UPDATE SET
+        slug = excluded.slug,
+        updated_at = excluded.updated_at
+       RETURNING id`,
+    )
+      .bind(input.projectId, input.slug)
+      .first<{ id: string }>();
+
+    if (!row) throw new Error(`Project ${input.projectId} projection was not written.`);
+  }
+
+  /**
+   * The deployment-wide audit surface for project lifecycle: every
+   * create-requested is cross-posted to /projects in the "global" namespace.
+   */
+  async #crossPostToGlobalProjects(input: { projectId: string; slug: string }) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.deps.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: "global",
+      path: StreamPath.parse("/projects"),
+    });
+    await stream.append({
+      type: "events.iterate.com/project/create-requested",
+      idempotencyKey: `project-create-requested:${input.projectId}`,
+      payload: { projectId: input.projectId, slug: input.slug },
+    });
+  }
+
+  async #ensureExampleEgressSecret(projectId: string) {
+    const secrets = getSecretsCapability({
+      exports: readLoopbackExports(this.deps.exports),
+      props: { projectId },
+    });
+
+    const existing = await secrets.getSecretSummaryByKeyOrNull({
+      key: EXAMPLE_EGRESS_SECRET_KEY,
+    });
+    if (existing) return;
+
+    await secrets.setSecret({
+      key: EXAMPLE_EGRESS_SECRET_KEY,
+      material: EXAMPLE_EGRESS_SECRET_MATERIAL,
+      metadata: EXAMPLE_EGRESS_SECRET_METADATA,
+    });
+  }
+
+  async #ensureAgentsRoot(projectId: string) {
+    await getInitializedDoStub({
+      allowCreate: true,
+      namespace: this.deps.env.AGENT,
+      name: getAgentDurableObjectName({
+        agentPath: AGENTS_STREAM_PATH,
+        projectId,
+      }),
+    });
+  }
+
+  async #writeAgentsRootRule(projectId: string) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.deps.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: projectId,
+      path: AGENTS_STREAM_PATH,
+    });
+
+    await stream.append({
+      type: jsonataReactorEventTypes.ruleConfigured,
+      idempotencyKey: `agents-child-stream-setup:${projectId}`,
+      payload: {
+        slug: "agents-child-stream-setup",
+        matcher: "type = 'events.iterate.com/stream/child-stream-created'",
+        reactions: [],
+      },
+    });
+  }
+
+  // ---- worker forwarding ----------------------------------------------------
+
+  /**
+   * Best-effort delivery to the worker's `processEvent` hook, via the cached
+   * checkout (deliberately NOT itx.worker.processEvent — that path builds a
+   * fresh checkout per call, which is right for tool calls but absurd per
+   * event; forwarding wants the warm isolate).
+   */
+  async #forwardEventToWorker(projectId: string, event: StreamEvent) {
+    try {
+      if (!(await this.deps.workerHost.isReady())) return;
+      const checkout = await this.deps.workerHost.getCachedCheckout();
+      if (!checkout) return;
+      const entrypoint = this.deps.workerHost.load({ checkout, projectId });
+      await entrypoint.processEvent?.({
+        event: event as unknown as Parameters<
+          NonNullable<LoadedWorkerEntrypoint["processEvent"]>
+        >[0]["event"],
+      });
+    } catch (error) {
+      console.error("Project worker processEvent failed.", error);
+    }
+  }
+}
