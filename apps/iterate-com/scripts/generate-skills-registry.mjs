@@ -6,7 +6,7 @@ import matter from "gray-matter";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appDir = resolve(scriptDir, "..");
 const repoRoot = resolve(appDir, "..", "..");
-const sourceSkillsDir = resolve(repoRoot, "skills");
+const sourceSkillsDir = resolve(repoRoot, ".opencode", "skills");
 const outputFile = resolve(appDir, "backend/generated/skills-registry.ts");
 
 function toPosixPath(pathname) {
@@ -33,7 +33,9 @@ async function listFilesRecursively(dirPath) {
 async function readSkillsFromRepo() {
   const rootEntries = await readdir(sourceSkillsDir, { withFileTypes: true }).catch((error) => {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return [];
+      throw new Error(
+        `Skills directory not found: ${sourceSkillsDir}. Repo skills live in .opencode/skills; refusing to emit an empty registry.`,
+      );
     }
     throw error;
   });

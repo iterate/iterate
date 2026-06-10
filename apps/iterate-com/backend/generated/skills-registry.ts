@@ -13,6 +13,24 @@ export interface WellKnownSkillsRegistry {
 }
 
 export const wellKnownSkillsRegistry: WellKnownSkillsRegistry = {
-  skills: [],
-  fileContents: {},
+  skills: [
+    {
+      name: "example-skill",
+      description:
+        "Minimal smoke-test skill that verifies iterate's skills-registry publishing pipeline end to end.",
+      files: ["SKILL.md"],
+    },
+    {
+      name: "playwriter-spec",
+      description:
+        "Run a Playwright e2e test manually in the browser via Playwriter while debugging and adapting in-flight.",
+      files: ["SKILL.md"],
+    },
+  ],
+  fileContents: {
+    "example-skill/SKILL.md":
+      "---\nname: example-skill\ndescription: Minimal smoke-test skill that verifies iterate's skills-registry publishing pipeline end to end.\npublish: true\n---\n\n# Example Skill\n\nThis skill is intentionally minimal. It exists to verify the publishing pipeline: it has `publish: true`, so its presence in the generated registry (`apps/iterate-com/backend/generated/skills-registry.ts`, served at `/.well-known/skills` by the iterate.com worker) confirms the generator and endpoint work.\n\nIt also serves as the template for a publishable skill: a directory under `.opencode/skills/` containing a `SKILL.md` whose frontmatter has `name` (matching the directory name), `description`, and `publish: true`.\n",
+    "playwriter-spec/SKILL.md":
+      "---\nname: playwriter-spec\ndescription: Run a Playwright e2e test manually in the browser via Playwriter while debugging and adapting in-flight.\npublish: true\n---\n\n# Manual E2E via Playwriter\n\nUse when an app e2e test is flaky or in flux and you want to execute the same flow manually with live debugging.\n\nTests live under each app, e.g. `apps/os/e2e/`, not a root `spec/` directory.\n\n## Workflow\n\n1. Read the target test file fully.\n2. Extract user journey, setup, and assertions.\n3. Reproduce steps in Playwriter (observe → act → observe).\n4. Debug in-place if behavior diverges.\n5. Record timings, blockers, and recovery actions.\n6. If asked, patch the test or product to match reliable behavior.\n\n## Rules\n\n- Stay faithful to test intent; explain deviations.\n- Prefer product signals over sleeps (loading UI, toasts, status text).\n- Summarize: pass/fail, evidence, concrete fixes.\n\n## Running tests\n\n```bash\nAPP_CONFIG_BASE_URL=https://… pnpm --dir apps/os e2e\n```\n\nSee each app's `package.json` for required env vars.\n",
+  },
 };

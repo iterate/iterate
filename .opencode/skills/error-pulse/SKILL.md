@@ -37,17 +37,11 @@ If blocked, uncertain, or impact is broad, post in `#error-pulse` (`C09K1CTN4M7`
 - Use `@channel` for urgent incidents requiring immediate attention.
 - Use `@here` for important but not time-critical issues.
 
-When you open or continue a Slack thread, subscribe it to your current agent session so replies route back to you:
-
-```bash
-iterate tool subscribe-slack-thread --channel C09K1CTN4M7 --thread-ts <thread_ts> --session-id <session_id>
-```
-
-Use `get-current-session-id` tool to get `<session_id>`.
+There is no automated mechanism to route Slack thread replies back to your agent session (the old `iterate tool subscribe-slack-thread` daemon tooling was removed in PR #1341). Follow-up on escalation threads is manual: check threads you started while your run is still active, and assume a human picks up the thread after your run ends.
 
 ## Slack thread behavior
 
-When you are subscribed to a thread, reply to questions and direct asks even if you are not @mentioned. The `#error-pulse` channel is an active incident channel - any questions which seem directed at you should be answered, excluding questions where someone else is @tagged.
+While you are active in a thread, reply to questions and direct asks even if you are not @mentioned. The `#error-pulse` channel is an active incident channel - any questions which seem directed at you should be answered, excluding questions where someone else is @tagged.
 
 ## Slack message requirements
 
