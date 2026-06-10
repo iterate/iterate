@@ -232,10 +232,7 @@ export const projectsRouter = {
       .use(projectScopeMiddleware)
       .handler(async ({ context }) => {
         const project = requireProjectScope(context);
-        // Await the property to get the processor stub before calling —
-        // workerd does not pipeline calls through property accesses.
-        const processor = await projectStateDurableObject(project.id).projectProcessor;
-        return await processor.snapshot();
+        return await projectStateDurableObject(project.id).processor().snapshot();
       }),
     agents: projectAgentsRouter,
     repos: projectReposRouter,
@@ -272,9 +269,9 @@ function projectDurableObject(projectId: string) {
 }
 
 // Processors extend RpcTarget (capnweb's, which IS cloudflare:workers' inside
-// workerd), so the public `projectProcessor` property traverses the stub.
+// workerd), so `processor()` traverses the stub and pipelines in one call.
 type ProjectStateRpc = {
-  projectProcessor: { snapshot(): Promise<unknown> };
+  processor(): { snapshot(): Promise<unknown> };
 };
 
 function projectStateDurableObject(projectId: string): ProjectStateRpc {

@@ -154,17 +154,16 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   );
 
   /**
-   * The processor is part of the DO's public surface: a prototype getter
-   * (own instance fields don't cross Workers RPC) returning an RpcTarget, so
-   * callers traverse it directly:
+   * The project's processor, part of the DO's public surface and traversable
+   * in one expression:
    *
-   *   const processor = await itx.project.projectProcessor;
-   *   await processor.snapshot();
+   *   await itx.project.processor().snapshot();
    *
-   * (Await the property before calling — workerd does not pipeline calls
-   * through property accesses in a single expression.)
+   * A METHOD, not a getter: workerd pipelines calls on call results, but not
+   * through property accesses (and own instance fields don't cross Workers
+   * RPC at all), so the property spelling needed an await at the boundary.
    */
-  get projectProcessor() {
+  processor() {
     return this.#projectProcessor;
   }
 
@@ -203,7 +202,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     // That's it — no waiting. The creation steps (D1 projection, repo,
     // example secret, agents root, created/create-completed events) run in
     // ProjectProcessor and leave a trail on the root stream; callers redirect
-    // to the project immediately and watch `projectProcessor.snapshot()`
+    // to the project immediately and watch `processor().snapshot()`
     // (phase: creating → ready) if they care about progress.
     return toSummary(projectFacts({ config: this.getAppConfig(), ...input }));
   }
@@ -472,7 +471,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   }
 
   private async currentSummary(): Promise<ProjectSummary | null> {
-    const snapshot = await this.projectProcessor.snapshot();
+    const snapshot = await this.#projectProcessor.snapshot();
     if (snapshot.state.project) return toSummary(snapshot.state.project);
 
     // Cold path: the snapshot can lag the create-requested append by a beat.

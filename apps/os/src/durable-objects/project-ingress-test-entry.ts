@@ -274,16 +274,13 @@ export default {
     }
 
     if (url.pathname === "/__test/project-state") {
-      // Traverses the DO stub's public `projectProcessor` getter — processors
-      // are RpcTargets (capnweb's RpcTarget IS cloudflare:workers' inside
-      // workerd). Await the property to get the processor stub, then call;
-      // workerd does not pipeline calls through property accesses in one
-      // expression.
+      // Traverses the DO stub's `processor()` in ONE pipelined expression —
+      // processors are RpcTargets (capnweb's RpcTarget IS cloudflare:workers'
+      // inside workerd), and workerd pipelines calls on call results.
       const project = env.PROJECT.getByName(
         getProjectDurableObjectName("proj__local__test"),
       ) as unknown as ProjectStateRpc;
-      const processor = await project.projectProcessor;
-      return Response.json(await processor.snapshot());
+      return Response.json(await project.processor().snapshot());
     }
 
     if (url.pathname === "/__test/iterate-config-repo") {
@@ -324,7 +321,7 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 type ProjectStateRpc = {
-  projectProcessor: { snapshot(): Promise<unknown> };
+  processor(): { snapshot(): Promise<unknown> };
 };
 
 type ProjectEgressInterceptTestRpc = {
