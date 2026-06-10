@@ -1,11 +1,7 @@
 // Contract for the "slack" processor mounted on `/integrations/slack`.
 //
-// Migrated from `packages/shared/src/stream-processors/slack/contract.ts` onto
-// the class-based StreamProcessor model. Event wire formats (types + payload
-// schemas) are unchanged. The standardProcessorBehavior registration slice is
-// gone: the stream processor host announces contracts after each subscription
-// handshake instead (migration log D11), and the reducer now lives on the
-// `SlackProcessor` class.
+// The stream processor host announces contracts after each subscription
+// handshake; the reducer lives on the `SlackProcessor` class.
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";

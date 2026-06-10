@@ -1,9 +1,9 @@
-// Implements the "slack-agent" processor on the class-based StreamProcessor
-// model. Migrated from
-// `packages/shared/src/stream-processors/slack-agent/implementation.ts`;
-// emitted event types/payloads and idempotency keys are unchanged.
+// Implements the "slack-agent" processor.
 //
-// Side-effect policy (see migration log D5/D6):
+// Emitted event types, payloads, and idempotency keys are stable wire formats
+// — changing them breaks dedup against events already committed to streams.
+//
+// Side-effect policy:
 // - Slack Web API calls (status updates, reactions) run inside
 //   `blockProcessorWhile` so the checkpoint only advances once they finished;
 //   sequences like "commit agent input, then add the eyes reaction" keep their

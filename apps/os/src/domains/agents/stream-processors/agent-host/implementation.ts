@@ -1,10 +1,8 @@
-// Implements the "agent-host" processor as a class-based StreamProcessor.
+// Implements the "agent-host" processor.
 //
-// Recreated from the inline `createAgentHostProcessor` that used to live in
-// the deleted legacy stream-processor runner. The host-side-effect handlers
-// moved here from agent-durable-object.ts; keeping them out of the Durable
-// Object module avoids a runtime import cycle now that the DO constructs this
-// processor in a class field initializer.
+// Host-side-effect handlers live here rather than in agent-durable-object.ts:
+// keeping them out of the Durable Object module avoids a runtime import cycle,
+// since the DO constructs this processor in a class field initializer.
 
 import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import { StreamPath as StreamPathSchema } from "@iterate-com/shared/streams/types";
