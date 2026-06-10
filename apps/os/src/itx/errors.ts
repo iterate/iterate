@@ -79,15 +79,17 @@ export class ItxError extends Error {
 
 /**
  * Duck-typed detection (works on both ends of any RPC boundary): an ItxError
- * is anything named "ItxError" carrying one of the five codes. Returns the
- * code, or undefined for everything else — including socket/connection
- * failures, which is what makes "retry only when code-less or INTERNAL"
- * predicates work.
+ * is any object carrying one of the five codes. `name` is deliberately NOT
+ * consulted — capnweb drops it in transit (see {@link ItxError}), so a name
+ * check would reject every error that crossed a capnweb session. The closed
+ * five-code set is what keeps this from false-positiving on other `code`-
+ * bearing errors (Node's ECONNREFUSED etc). Returns the code, or undefined
+ * for everything else — including socket/connection failures, which is what
+ * makes "retry only when code-less or INTERNAL" predicates work.
  */
 export function getItxErrorCode(error: unknown): ItxErrorCode | undefined {
   if (typeof error !== "object" || error === null) return undefined;
-  const candidate = error as { code?: unknown; name?: unknown };
-  if (candidate.name !== "ItxError") return undefined;
+  const candidate = error as { code?: unknown };
   if (typeof candidate.code !== "string" || !ITX_ERROR_CODE_SET.has(candidate.code)) {
     return undefined;
   }
