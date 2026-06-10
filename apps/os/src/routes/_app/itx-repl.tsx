@@ -5,9 +5,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
+import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import {
+  browserReplExternalScopesEqual,
   BROWSER_REPL_EXAMPLES,
+  createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
   runBrowserReplEntry,
   type BrowserReplEntry,
@@ -75,11 +77,16 @@ export function ItxReplPage({
   const [status, setStatus] = useState("Connecting...");
   const [entries, setEntries] = useState<BrowserReplEntry[]>([]);
   const [examplesOpen, setExamplesOpen] = useState(false);
-  const [selectAllSignal, setSelectAllSignal] = useState(0);
   const envRef = useRef<Record<string, unknown>>({});
-  const scopeRef = useRef<Record<string, unknown>>({ RpcTarget, ...scope });
-  // Keep the scope in sync when navigating between project repls (same route, new params).
-  scopeRef.current = { RpcTarget, ...scope };
+  const externalScopeRef = useRef(scope);
+  const scopeRef = useRef<Record<string, unknown>>(createBrowserReplScope(scope));
+
+  // Keep injected values in sync when navigating between project repls, without
+  // wiping REPL-created bindings on ordinary state updates.
+  if (!browserReplExternalScopesEqual(externalScopeRef.current, scope)) {
+    externalScopeRef.current = scope;
+    scopeRef.current = createBrowserReplScope(scope);
+  }
 
   useEffect(() => {
     const globals = globalThis as typeof globalThis & {
@@ -119,6 +126,7 @@ export function ItxReplPage({
     const trimmedCode = code.trim();
     if (!itx || trimmedCode === "") return;
     setStatus("Running...");
+    setCode("");
     const entry = await runBrowserReplEntry({
       code: trimmedCode,
       env: envRef.current,
@@ -126,7 +134,6 @@ export function ItxReplPage({
       scope: scopeRef.current,
     });
     setEntries((current) => [...current, entry]);
-    setSelectAllSignal((current) => current + 1);
     setStatus("Connected");
   }
 
@@ -146,7 +153,6 @@ export function ItxReplPage({
       onRun={() => void run()}
       onSelectExample={selectExample}
       onSetExamplesOpen={setExamplesOpen}
-      selectAllSignal={selectAllSignal}
       status={status}
     />
   );

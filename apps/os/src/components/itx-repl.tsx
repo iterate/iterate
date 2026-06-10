@@ -13,6 +13,7 @@ import {
   SourceCodeBlock,
   type SourceCodeBlockExtension,
 } from "@iterate-com/ui/components/source-code-block";
+import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
   Sheet,
   SheetContent,
@@ -36,7 +37,6 @@ export interface ItxReplProps {
   onRun: () => void;
   onSelectExample: (code: string) => void;
   onSetExamplesOpen: (open: boolean) => void;
-  selectAllSignal: number;
   status: string;
 }
 
@@ -50,7 +50,6 @@ export function ItxRepl({
   onRun,
   onSelectExample,
   onSetExamplesOpen,
-  selectAllSignal,
   status,
 }: ItxReplProps) {
   const typeScriptExtensions = useReplTypeScriptExtensions({
@@ -114,12 +113,16 @@ export function ItxRepl({
                     title="Console"
                   />
                 ) : null}
-                <ReplCollapsibleCodeBlock
-                  code={entry.output}
-                  language={entry.outputLanguage}
-                  title={entry.status === "error" ? "Error" : "Result"}
-                  variant={entry.status === "error" ? "error" : "default"}
-                />
+                {entry.status === "success" ? (
+                  <ReplCollapsibleSerializedBlock data={entry.result} title="Result" />
+                ) : (
+                  <ReplCollapsibleCodeBlock
+                    code={entry.output}
+                    language={entry.outputLanguage}
+                    title="Error"
+                    variant="error"
+                  />
+                )}
               </div>
             ))}
             <div className="flex flex-col gap-2 border-l-2 border-primary/50 py-2 pr-3 pl-3">
@@ -138,7 +141,6 @@ export function ItxRepl({
                 onChange={onChangeCode}
                 onModEnter={onRun}
                 plainChrome
-                selectAllSignal={selectAllSignal}
                 showCopyButton={false}
                 showLineNumbers={false}
               />
@@ -276,7 +278,7 @@ function ReplCodeBlock(input: { code: string; language: "json" | "text" | "types
       }
       language={input.language}
       plainChrome
-      showCopyButton={false}
+      showCopyButton
       showLineNumbers={false}
     />
   );
@@ -306,6 +308,29 @@ function ReplCollapsibleCodeBlock(input: {
         <div className={input.variant === "error" ? "[&_.cm-content]:text-destructive" : ""}>
           <ReplCodeBlock code={input.code} language={input.language} />
         </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+function ReplCollapsibleSerializedBlock(input: { data: unknown; title: string }) {
+  return (
+    <Collapsible defaultOpen>
+      <div className="flex items-center justify-between gap-2">
+        <CollapsibleTrigger className="group flex items-center gap-1 text-xs font-medium text-muted-foreground">
+          <ChevronDown className="size-3 -rotate-90 transition-transform [[data-panel-open]_&]:rotate-0" />
+          {input.title}
+        </CollapsibleTrigger>
+      </div>
+      <CollapsibleContent>
+        <SerializedObjectCodeBlock
+          className="max-h-96"
+          data={input.data}
+          initialFormat="json"
+          showCopyButton
+          showLineNumbers
+          showToggle
+        />
       </CollapsibleContent>
     </Collapsible>
   );
