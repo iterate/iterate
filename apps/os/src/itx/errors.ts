@@ -77,15 +77,18 @@ export class ItxError extends Error {
 
 /**
  * Duck-typed detection (works on both ends of any RPC boundary): an ItxError
- * is anything named "ItxError" carrying one of the five codes. Returns the
- * code, or undefined for everything else — including socket/connection
- * failures, which is what makes "retry only when code-less or INTERNAL"
- * predicates work.
+ * is anything carrying one of the five codes as `code`. Deliberately NOT
+ * gated on `error.name` — capnweb's receiver rebuilds a plain `Error` and a
+ * custom name does not survive the wire (verified against capnweb 0.8.0's
+ * deserializer and a live deployment; a name gate rejects every real
+ * crossing). Foreign `code` strings (ENOENT, SQLITE_*) are outside the
+ * five-code set, so collisions don't arise. Returns the code, or undefined
+ * for everything else — including socket/connection failures, which is what
+ * makes "retry only when code-less or INTERNAL" predicates work.
  */
 export function getItxErrorCode(error: unknown): ItxErrorCode | undefined {
   if (typeof error !== "object" || error === null) return undefined;
-  const candidate = error as { code?: unknown; name?: unknown };
-  if (candidate.name !== "ItxError") return undefined;
+  const candidate = error as { code?: unknown };
   if (typeof candidate.code !== "string" || !ITX_ERROR_CODE_SET.has(candidate.code)) {
     return undefined;
   }
