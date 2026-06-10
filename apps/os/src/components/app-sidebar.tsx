@@ -20,6 +20,7 @@ import {
   Shield,
   SquareTerminal,
   UserCircle,
+  Waves,
   type LucideIcon,
 } from "lucide-react";
 import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
@@ -552,6 +553,7 @@ type ProjectStreamNavItemConfig = {
   to:
     | "/projects/$projectSlug"
     | "/projects/$projectSlug/agents"
+    | "/projects/$projectSlug/voice-agents"
     | "/projects/$projectSlug/integrations"
     | "/projects/$projectSlug/secrets"
     | "/projects/$projectSlug/repos"
@@ -573,6 +575,13 @@ const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
     label: "/agents",
     streamPath: StreamPath.parse("/agents"),
     to: "/projects/$projectSlug/agents",
+  },
+  {
+    fuzzy: true,
+    icon: Waves,
+    label: "/agents/voice",
+    streamPath: StreamPath.parse("/agents/voice"),
+    to: "/projects/$projectSlug/voice-agents",
   },
   {
     fuzzy: false,
