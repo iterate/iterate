@@ -119,6 +119,8 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
       state: args.state,
       checkpointOffset: args.event.offset,
       streamMaxOffset: args.event.offset,
+      // Inline appends are always live, never historical replay.
+      sideEffectsAfterOffset: 0,
       blockProcessorWhile: () => {
         throw new Error(
           "blockProcessorWhile is unavailable when processing a reduced event inline",

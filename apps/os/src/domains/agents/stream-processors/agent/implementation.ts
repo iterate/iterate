@@ -95,18 +95,53 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // fire it — convert the schedule into a request now. The handoff is
         // keyed off the original scheduled event, so if the dead timer's
         // append did land, this dedups instead of double-requesting.
-        if (state.currentRequest?.phase !== "scheduled" || this.#scheduledLlmRequest !== null) {
+        if (state.currentRequest?.phase === "scheduled" && this.#scheduledLlmRequest === null) {
+          const scheduled = state.currentRequest;
+          args.blockProcessorWhile(() =>
+            this.#requestLlmWorkForSchedule({
+              requestId: scheduled.requestId,
+              ...(scheduled.scheduledOffset === undefined
+                ? {}
+                : { scheduledEvent: { offset: scheduled.scheduledOffset } }),
+            }),
+          );
           return;
         }
-        const scheduled = state.currentRequest;
-        args.blockProcessorWhile(() =>
-          this.#requestLlmWorkForSchedule({
-            requestId: scheduled.requestId,
-            ...(scheduled.scheduledOffset === undefined
-              ? {}
-              : { scheduledEvent: { offset: scheduled.scheduledOffset } }),
-          }),
-        );
+        // Anchor-skip recovery. A triggering input below the side-effect
+        // anchor was reduced into state but its scheduling side effect never
+        // ran — this happens when the input is appended before this
+        // processor's subscription is configured (e.g. a Slack webhook racing
+        // the agent's bootstrap on a freshly created thread stream). The
+        // anchor gate keeps this recovery off the live path: triggers above
+        // the anchor are owned by the `input-added` handler, and a request
+        // fact that already covers the trigger clears `pendingTriggerOffset`
+        // in the reducer before this event is processed. Appends are keyed
+        // off the trigger event, exactly like the live path, so a raced
+        // duplicate dedups in the stream.
+        if (
+          state.pendingTriggerOffset === null ||
+          state.pendingTriggerOffset > args.sideEffectsAfterOffset
+        ) {
+          return;
+        }
+        const triggerEvent = { offset: state.pendingTriggerOffset };
+        if (state.currentRequest === null) {
+          if (this.#scheduledLlmRequest !== null) return;
+          args.blockProcessorWhile(() =>
+            this.#appendLlmRequestScheduled({ sourceEvent: triggerEvent, state }),
+          );
+          return;
+        }
+        // A request is in flight: record the skipped trigger as a durable
+        // queued fact, the same shape the live path appends, so the terminal
+        // request event schedules the follow-up turn. Recovery never
+        // interrupts in-flight work — even an interrupt-policy input degrades
+        // to after-current-request here. The scheduled phase needs no queued
+        // fact: its handoff rebuilds the request body from full committed
+        // history, which already includes the skipped trigger.
+        if (state.currentRequest.phase === "requested") {
+          args.blockProcessorWhile(() => this.#emitQueued({ sourceEvent: triggerEvent }));
+        }
         return;
       }
       case "events.iterate.com/agent/capability-noted":
@@ -309,8 +344,16 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         },
       },
     })) as StreamEvent;
+    // The append dedups on the idempotency key, so the committed payload may
+    // carry a different requestId than this call generated (a raced duplicate
+    // schedule, or a batch retry re-running this side effect). The timer must
+    // track the durable requestId — the handoff re-reads committed history and
+    // bails on a mismatch, which would wedge the schedule until the next
+    // subscriber-connected recovery.
+    const committedRequestId =
+      (scheduledEvent.payload as { requestId?: string }).requestId ?? requestId;
     this.#armLlmRequestDebounceTimer({
-      requestId,
+      requestId: committedRequestId,
       debounceMs,
       scheduledEvent,
     });
