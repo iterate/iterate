@@ -128,10 +128,19 @@ export function ProjectStreamView({
   const [rawText, setRawText] = useState(DEFAULT_RAW_EVENT_YAML);
   const [submitError, setSubmitError] = useState<string | undefined>();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Only auto-scroll the raw view to the bottom when the viewport is already
+  // pinned there. Yanking a scrolled-up reader back to the bottom on every
+  // append shifts the virtualized window far enough that the whole visible
+  // range re-queries and flashes grey skeletons before SQLite returns the new
+  // rows. Lives here (not in the raw view) so the composer can re-pin it.
+  const rawStickToBottomRef = useRef(true);
 
   async function runSubmit(action: () => Promise<void>) {
     setIsSubmitting(true);
     setSubmitError(undefined);
+    // The user just appended from the composer at the bottom, so follow the
+    // new event down even if they had scrolled up earlier.
+    rawStickToBottomRef.current = true;
     try {
       await action();
     } catch (error) {
@@ -199,7 +208,11 @@ export function ProjectStreamView({
           reductionKey={`${projectSlugOrId}:${streamPathText}`}
         />
       ) : activeTab === "raw" ? (
-        <ProjectStreamRawView database={store.streamDatabase} emptyLabel={connectionLabel} />
+        <ProjectStreamRawView
+          database={store.streamDatabase}
+          emptyLabel={connectionLabel}
+          stickToBottomRef={rawStickToBottomRef}
+        />
       ) : (
         <ProjectStreamStateView store={store} />
       )}
@@ -420,9 +433,11 @@ const ALL_EVENT_TYPES = "__all__";
 function ProjectStreamRawView({
   database,
   emptyLabel,
+  stickToBottomRef,
 }: {
   database: StreamBrowserDatabase;
   emptyLabel: string;
+  stickToBottomRef: RefObject<boolean>;
 }) {
   const [eventTypeFilter, setEventTypeFilter] = useState<string>(ALL_EVENT_TYPES);
   const typeFilter = eventTypeFilter === ALL_EVENT_TYPES ? null : eventTypeFilter;
@@ -440,11 +455,6 @@ function ProjectStreamRawView({
   const eventCount = Number(countResult.data[0]?.count ?? 0);
   const [expandedOffsets, setExpandedOffsets] = useState<ReadonlySet<number>>(new Set());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  // Only auto-scroll to the bottom when the viewport is already pinned there.
-  // Yanking a scrolled-up reader back to the bottom on every append shifts the
-  // virtualized window far enough that the whole visible range re-queries and
-  // flashes grey skeletons before SQLite returns the new rows.
-  const stickToBottomRef = useRef(true);
 
   useLayoutEffect(() => {
     if (!stickToBottomRef.current) return;
