@@ -95,7 +95,9 @@ describe("project MCP exec_js static codemode provider stack", () => {
       });
 
       const procedures = await os.listProcedures();
-      const streamList = await os.streams.list({});
+      // ctx.os only forwards unary project.* oRPC procedures, so read the root
+      // stream through project.streams.read (there is no streams.get procedure).
+      const rootRead = await os.streams.read({ streamPath: "/" });
 
       const appended = await streams.append({
         event: {
@@ -128,8 +130,7 @@ describe("project MCP exec_js static codemode provider stack", () => {
           petCount: Array.isArray(pets) ? pets.length : 0,
         },
         orpc: {
-          sawStreamsList: procedures.includes("streams") && procedures.includes("list"),
-          streamCount: streamList.streams.length,
+          canReadRootStream: rootRead != null && Array.isArray(rootRead.events),
           typeDefinitionsContainCtxOs: procedures.includes("ctx") && procedures.includes("os"),
         },
         raced,
@@ -182,7 +183,7 @@ describe("project MCP exec_js static codemode provider stack", () => {
         hasFindPetsByStatus: true,
       },
       orpc: {
-        sawStreamsList: true,
+        canReadRootStream: true,
       },
       repo: {
         defaultBranch: "main",
@@ -347,7 +348,7 @@ function parseRunCodeResult(text: string) {
     caughtMessage: string;
     fetchedPackage: string;
     openApi: { hasFindPetsByStatus: boolean; petCount: number };
-    orpc: { sawStreamsList: boolean; streamCount: number };
+    orpc: { canReadRootStream: boolean };
     raced: string;
     repo: { defaultBranch: string; slug: string };
     slack: { skipped: true } | { channel: string; ok: boolean; skipped: false; ts: string };

@@ -87,15 +87,6 @@ export const InboundMcpSession = z.object({
 });
 export type InboundMcpSession = z.output<typeof InboundMcpSession>;
 
-export const StreamCatalogRecord = z.object({
-  name: z.string(),
-  namespace: z.string(),
-  streamPath: StreamPath,
-  createdAt: z.string(),
-  lastWokenAt: z.string(),
-});
-export type StreamCatalogRecord = z.output<typeof StreamCatalogRecord>;
-
 export const ProjectIntegrationConnection = z.object({
   connected: z.boolean(),
   externalId: z.string().nullable(),
@@ -613,15 +604,6 @@ export const osContract = oc.router({
         .output(z.object({ deleted: z.boolean() })),
     },
     streams: {
-      list: oc
-        .route({
-          method: "GET",
-          path: "/projects/{projectSlugOrId}/streams",
-          description: "List initialized streams for a project",
-          tags: ["/project", "/streams"],
-        })
-        .input(ProjectScopedInput)
-        .output(z.object({ streams: z.array(StreamCatalogRecord) })),
       create: oc
         .route({
           method: "POST",

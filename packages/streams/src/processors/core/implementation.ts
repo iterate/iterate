@@ -167,17 +167,6 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
         if (childPath !== null && !next.childPaths.includes(childPath)) {
           next = { ...next, childPaths: [...next.childPaths, childPath] };
         }
-
-        // Besides the truncated immediate-child segment above, keep the FULL
-        // announced path when it is strictly under this stream. The root
-        // stream's descendantPaths is the namespace's stream catalog (this is
-        // what makes listing a namespace a single getState("/") call).
-        const isDescendant =
-          announcedPath !== state.path &&
-          (state.path === "/" || announcedPath.startsWith(`${state.path}/`));
-        if (isDescendant && !next.descendantPaths.includes(announcedPath)) {
-          next = { ...next, descendantPaths: [...next.descendantPaths, announcedPath] };
-        }
         break;
       }
 
