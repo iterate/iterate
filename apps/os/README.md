@@ -16,8 +16,9 @@ It combines:
 ## How To Use It
 
 Browser users start at the app host and sign in through the Iterate Auth
-Worker. Project routes are project-scoped, and organization-level settings live
-under `/org/:organizationSlug`:
+Worker. There are no organization routes in OS — users without an organization
+are redirected to the auth worker's project-access flow. App routes are
+project-scoped:
 
 ```text
 /projects
@@ -25,7 +26,7 @@ under `/org/:organizationSlug`:
 /projects/:projectSlug/codemode-sessions
 /projects/:projectSlug/streams
 /projects/:projectSlug/settings
-/org/:organizationSlug
+/new-project
 ```
 
 Project slugs are globally unique and exist for readable URLs. Runtime work uses
@@ -47,15 +48,18 @@ pnpm e2e -t "OS preview smoke"
 pnpm cli claude-mcp      # open Claude against the OS MCP server in your local Doppler config
 pnpm sqlfu:generate      # regenerate sqlfu migrations/query wrappers
 pnpm sqlfu:check         # compare migrations to definitions.sql
-pnpm cf:deploy           # production deploy
+pnpm cf:deploy           # deploy to whatever Doppler/Alchemy stage is ambient
+pnpm deploy              # production deploy (wraps cf:deploy in doppler --config prd)
 ```
 
 ## Running Real-Worker Tests
 
-Some e2e tests, including Cap'n Web and capability-prototype tests, are meant to
-run against a real OS Worker, not the Workers Vitest pool. Start the worker in
-one terminal, then run tests from another terminal through the matching Doppler
-config so `APP_CONFIG_BASE_URL` and admin auth secrets point at that worker.
+Some e2e tests are meant to run against a real OS Worker, not the Workers
+Vitest pool. There are two lanes: `pnpm e2e` (config `e2e/vitest.config.ts`)
+and the itx suite `pnpm e2e:itx` (config `src/itx/e2e/vitest.config.ts`).
+Start the worker in one terminal, then run tests from another terminal through
+the matching Doppler config so `APP_CONFIG_BASE_URL` and admin auth secrets
+point at that worker.
 
 Tunnel-backed dev uses your normal engineer config. For Jonas:
 
@@ -68,7 +72,7 @@ pnpm dev
 doppler run --project os --config dev_jonas -- pnpm exec tsx ./alchemy.run.ts
 
 # Terminal 2: run deployed-worker-style e2e against that tunnel.
-doppler run --project os --config dev_jonas -- pnpm exec vitest run --config src/capnweb/e2e/vitest.config.ts
+doppler run --project os --config dev_jonas -- pnpm e2e
 ```
 
 `pnpm dev` is the shorthand for the local Doppler/Alchemy dev flow. It uses the
@@ -82,7 +86,7 @@ For tests that do not need the public tunnel, prefer localhost-oriented dev:
 pnpm dev:localhost
 
 # Terminal 2: run real-worker e2e against localhost config.
-doppler run --project os --config dev_localhost -- pnpm exec vitest run --config src/domains/capability-prototype/e2e.vitest.config.ts
+doppler run --project os --config dev_localhost -- pnpm e2e:itx
 ```
 
 Use `dev_localhost` when validating new local-only routes because it avoids
@@ -113,8 +117,9 @@ The script pattern is documented in
 
 ## Important Files
 
-- `src/app.ts` defines the app manifest and runtime config schema.
-- `src/entry.workerd.ts` is the Cloudflare Worker entrypoint.
+- `src/worker.ts` is the Cloudflare Worker entrypoint (hostname/path dispatch,
+  Durable Object and entrypoint exports).
+- `src/config.ts` holds the `AppConfig` runtime config schema.
 - `src/domains` contains domain-local Durable Objects, WorkerEntrypoints, tool
   providers, and focused README/AGENTS notes.
 - `src/start.ts` installs the auth-worker request middleware.

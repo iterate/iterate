@@ -5,44 +5,71 @@ short README.
 
 ## Runtime Shape
 
-OS has no public product pages. Browser users without a Clerk session are sent
-to `/sign-in`; signed-in users use Clerk organization context through
-organization-scoped routes under `/orgs/:organizationSlug`.
+One Worker (`src/worker.ts`) serves three kinds of traffic, dispatched on
+hostname and path:
 
-The browser talks to `/api` over oRPC/OpenAPI. SSR uses the same typed router
-through the in-process router client. The Worker entrypoint assembles request
-context (`manifest`, `config`, `db`, `log`, Durable Object namespaces) and wraps
-requests with the shared `withEvlog()` runtime logging helper.
+1. Infrastructure routes that bypass the app entirely: the captun tunnel relay
+   at `/__iterate/captun` and admin-token debug routes.
+2. Project ingress: requests to project hosts (`<slug>.iterate.app`, custom
+   hostnames) route to the project's callable, never the dashboard.
+3. The OS dashboard: a TanStack Start app (SSR + oRPC API).
 
-Project-scoped oRPC procedures should stay thin. The app worker authenticates
-the caller, resolves project slug or ID to the stable Project ID, checks project
-access, and calls the Project Durable Object for lifecycle behavior. D1 tables
-such as `projects` and ingress rules are queryable projections, not the
-lifecycle authority.
+Inside the evlog-wrapped pipeline, the worker tries handlers in order before
+falling through to TanStack Start: the canonical MCP endpoint, project-host
+ingress, docs markdown, project stream RPC, `/api/itx`, and the
+`/__durable-objects` debug proxy. Runtime config is parsed from `env` per
+request (never at module scope — isolates can outlive binding-only deploys).
+
+The TanStack handler receives a `RequestContext` (`src/request-context.ts`)
+with request-scoped state only: `config`, `db` (sqlfu over D1), `log`,
+`rawRequest`, `waitUntil`, `workerExports`. Worker bindings are NOT threaded
+through context — server code imports `env` from `cloudflare:workers`.
+
+Authentication uses the Iterate Auth Worker (no Clerk; see
+[ADR 0001](../../docs/adr/0001-replace-clerk-with-auth-worker.md)).
+`iterateAuthMiddleware` (`src/auth/middleware.ts`, registered as Start request
+middleware in `src/start.ts`) serves the auth-worker callback routes and
+resolves the caller into a `principal`: the admin API secret, an OAuth bearer
+token, or a session cookie. Users without an organization are redirected to
+the auth worker's project-access flow.
+
+Project-scoped oRPC procedures stay thin. The worker authenticates the caller,
+resolves project slug or ID to the stable Project ID, checks project access
+(signed Auth project claims; admin API callers bypass for operator work), and
+calls the Project Durable Object for lifecycle behavior. D1 tables such as
+`projects` and ingress rules are queryable projections, not the lifecycle
+authority.
 
 ## API And Routing
 
-The main app routes are:
+The main app routes (`src/routes/`):
 
 ```text
-/orgs/:organizationSlug/projects
-/orgs/:organizationSlug/projects/:projectSlug
-/orgs/:organizationSlug/projects/:projectSlug/codemode-sessions
-/orgs/:organizationSlug/projects/:projectSlug/codemode-sessions/new
-/orgs/:organizationSlug/projects/:projectSlug/streams
-/orgs/:organizationSlug/projects/:projectSlug/streams/*
-/orgs/:organizationSlug/projects/:projectSlug/settings
+/                                  redirects: project-host slug or single
+                                   project -> /projects/:projectSlug,
+                                   otherwise -> /projects
+/projects
+/projects/:projectSlug             ProjectHomePage (lifecycle state + stream view)
+/projects/:projectSlug/codemode-sessions[/new, /:name]
+/projects/:projectSlug/streams[/*]
+/projects/:projectSlug/agents, /repos, /secrets, /integrations, /mcp, /repl, /settings
+/new-project
+/sign-in, /sign-up
 ```
 
-The project root redirects to `codemode-sessions`. The authenticated app root
-redirects to `codemode-sessions/new` for the user's first available project.
+There are no organization routes; organization membership and selection live
+in the auth worker.
 
-Project-scoped oRPC procedures live under the singular `project` router. The
-plural `projects` router is for collection operations such as listing and
-creating projects. Project-scoped procedures accept `projectSlugOrId`; callers
-may pass a globally unique slug for curlable requests or a stable Project ID.
+The browser talks to oRPC at `/api/orpc` (and `/api/orpc-ws` for WebSocket).
+The same router is served as OpenAPI under `/api`, with Scalar docs at
+`/api/docs` and the spec at `/api/openapi.json`. The unauthenticated
+`__internal.*` operator subtree (health, publicConfig, CLI procedure listing)
+is served at `/api/__internal/*` and is what `pnpm cli rpc` discovers.
 
-Examples:
+Project-scoped procedures live under the singular `project` router; the plural
+`projects` router is for collection operations. Project-scoped procedures
+accept `projectSlugOrId` — a globally unique slug for curlable requests or a
+stable Project ID:
 
 ```text
 os.projects.list()
@@ -53,8 +80,11 @@ os.project.codemode.listSessions({ projectSlugOrId })
 os.project.inboundMcpServer.listSessions({ projectSlugOrId })
 ```
 
-REST/OpenAPI paths mirror the same project scope, for example
-`/projects/{projectSlugOrId}/streams`.
+itx — the capability handle system — has its own endpoints: `/api/itx`
+(global handle), `/api/itx/:projectIdOrSlug` (project handle, capnweb over
+WebSocket), and `POST /api/itx/run` (run an itx script in a loader isolate).
+See [`../src/itx/README.md`](../src/itx/README.md) and
+[itx-spec.md](./itx-spec.md).
 
 ## Project Ingress
 
@@ -62,40 +92,32 @@ OS classifies hostnames before TanStack Start and dashboard authentication:
 
 ```text
 request hostname
-  -> D1 exact-host ingress lookup
-    -> ProjectIngressEntrypoint({ projectId }) -> ProjectDurableObject.ingressFetch()
-    -> OS app fallback
+  -> D1 exact-host ingress lookup (src/ingress/lookup.ts, scoped by
+     APP_CONFIG_PROJECT_HOSTNAME_BASES)
+    -> project-host itx handling (src/itx/fetch.ts)
+    -> dispatch the rule's Fetch Callable (src/ingress/host-routing.ts)
+  -> OS app fallback
 ```
 
-`ProjectIngressEntrypoint` and `ProjectMcpServerEntrypoint` are named exports
-from the main OS Worker. They receive stable `projectId` props. Slug-to-ID
-resolution should happen before hot ingress, when project projections are
-written.
+Project-owned ingress mutations go through the Project Durable Object: it
+records desired state locally and writes global D1 projection rows for the hot
+Worker path. Durable Object SQLite and D1 are not one atomic transaction, so
+repair/reconciliation is explicit follow-up work.
 
-Project-owned ingress mutations should go through the Project Durable Object.
-The Durable Object records desired state locally and writes global D1 projection
-rows for the hot Worker path. Durable Object SQLite and D1 are not one atomic
-transaction, so repair/reconciliation should be explicit follow-up work.
+`ProjectMcpServerEntrypoint` still exists as a named export but is a
+tombstone: it returns `410 Gone` because project MCP hostnames moved to the
+canonical MCP endpoint (below).
 
 ## Streams
 
 `StreamDurableObject` is supplied by `@iterate-com/streams`. It knows about
 `namespace` and `path`, not projects. OS uses the stable Project ID as the
-stream namespace, which means OS stream paths are project-local:
+stream namespace, which means OS stream paths are project-local, such as
+`/codemode-sessions/<id>`.
 
-```text
-/codemode-sessions/<id>
-/mcp-server-sessions/<id>
-```
-
-The Project Stream Explorer lives at:
-
-```text
-/orgs/:organizationSlug/projects/:projectSlug/streams
-```
-
-Detail pages are splat routes. `/streams/foo/bar` opens stream path `/foo/bar`
-inside the project-bound namespace.
+The stream explorer lives at `/projects/:projectSlug/streams`. Detail pages
+are splat routes: `/streams/foo/bar` opens stream path `/foo/bar` inside the
+project-bound namespace.
 
 OS deploys the stream Durable Object from the main worker script and binds
 `STREAM` to that local namespace.
@@ -105,44 +127,49 @@ OS deploys the stream Durable Object from the main worker script and binds
 Durable Objects should use the shared Iterate Durable Object base from
 `@iterate-com/shared/durable-object-utils/iterate-durable-object` unless there
 is a specific reason not to. That base composes the runtime core adapters,
-lifecycle hooks, D1 object catalog projection, local SQLite inspector, and local
-KV inspector.
+lifecycle hooks, D1 object catalog projection, local SQLite inspector, and
+local KV inspector.
 
-The main Worker exposes public Durable Object utility routes for initialization,
-inspection, listing, and repair. These are infrastructure routes, not TanStack
-product routes.
-
-Current direct debug fetch routes include:
+The worker exposes an admin-token-gated debug proxy that forwards into a
+Durable Object's fetch handler:
 
 ```text
-/__durable-objects/project/<name>/__outerbase
-/__durable-objects/project/<name>/__kv
-/__durable-objects/codemode-session/<name>/__outerbase
-/__durable-objects/project-mcp-server-connection/<name>/__kv
-/durable-objects/stream/...
+/__durable-objects/<kind>/<name>/<path>
 ```
+
+where `<kind>` is one of `project`, `codemode-session`,
+`project-mcp-server-connection`, `stream` (`src/debug-routes.ts`). Other debug
+routes there: `/__debug/append-chain`, `/__debug/seed-iterate-config-base`,
+and the itx egress echo at `/api/itx/egress-echo`.
 
 ## MCP Directionality
 
 OS has two MCP flows:
 
-- Inbound MCP: external MCP clients connect to a project MCP hostname. The
-  request enters `ProjectMcpServerEntrypoint`, authenticates with an OS admin
-  token or a Clerk user token, and delegates session state to
-  `ProjectMcpServerConnection`.
+- Inbound MCP: external MCP clients connect to the canonical MCP endpoint.
+  `handleMcpFetch` (`src/domains/inbound-mcp-server/mcp-handler.ts`) matches
+  the URL from `APP_CONFIG_MCP__BASE_URL` (for example
+  `https://mcp.iterate.com`; localhost-oriented dev defaults to
+  `<baseUrl>/api/__mcp`) and delegates session state to the
+  `ProjectMcpServerConnection` Durable Object via `McpAgent.serve`.
 - Outbound MCP: a codemode session uses an external MCP server as a Tool
-  Provider. `OutboundMcpFromOurClientCapability` owns the client connection and
-  exposes `executeCodemodeFunctionCall(...)`.
+  Provider. `OutboundMcpFromOurClientCapability` owns the client connection
+  and exposes `executeCodemodeFunctionCall(...)`.
 
-Keep these separate in naming and code. Inbound MCP may execute codemode, but it
-is not itself a codemode Tool Provider.
+Keep these separate in naming and code. Inbound MCP may execute codemode, but
+it is not itself a codemode Tool Provider.
 
-Project MCP hostnames expose RFC 9728 protected-resource metadata at
-`/.well-known/oauth-protected-resource`, pointing clients at Clerk as the
-authorization server. The MCP entrypoint accepts Clerk OAuth access tokens for
-OAuth MCP clients and Clerk session tokens for first-party/e2e clients. If a
-Clerk token has no active organization claim, OS checks the user's Clerk
-organization memberships before running the project access check.
+Inbound MCP requests authenticate two ways, tried in order:
+
+1. The platform admin API secret — full access to every project in the
+   deployment (`superadmin` scope).
+2. An Iterate Auth OAuth bearer token — project access is the intersection of
+   the token's `projects` claim and its `project:<id>` scope entries.
+
+The MCP endpoint exposes RFC 9728 protected-resource metadata at
+`/.well-known/oauth-protected-resource`, pointing clients at the Iterate Auth
+issuer (`iterateAuth.issuer`, default `https://auth.iterate.com/api/auth`) as
+the authorization server.
 
 ## Codemode
 
@@ -152,20 +179,21 @@ or MCP.
 Primary surfaces:
 
 - UI: project codemode session pages.
-- oRPC: `project.codemode.createSession`,
-  `project.codemode.executeScript`, and `project.streams` reads.
-- MCP: `exec_js` on the canonical MCP endpoint, such as
-  `https://mcp.iterate.com`.
+- oRPC: `project.codemode.createSession`, `project.codemode.executeScript`,
+  and `project.streams` reads.
+- MCP: `exec_js` on the canonical MCP endpoint.
 
-Default providers are registered for every session. The important built-ins are
-`ctx.fetch`, `ctx.console`, `ctx.streams`, worker AI examples, OpenAPI examples,
-repo/workspace handles, `ctx.agents.create()` subagent handles, Slack Web API
-calls, and oRPC discovery/execution examples.
+Default providers
+(`src/domains/codemode/default-provider-registrations.ts`) are registered for
+every session: the workspace handle, `ctx.fetch`, `ctx.streams`, `ctx.slack`,
+project Secrets (`ctx.secrets`), and outbound MCP servers (`ctx.mcp.exa`,
+`ctx.mcp.context7`). Agent and MCP-server sessions additionally register the
+example capability providers (`example-provider-registrations.ts`): `ctx.ai`,
+`ctx.repos`, `ctx.agents.create()`, and `ctx.os`.
 
-The codemode oRPC provider exposes the real `os.project.*` subtree as
-project-bound `ctx.os.*`. It injects only the stable Project ID as
-`projectSlugOrId`, rejects caller-supplied `projectSlugOrId`, and strips that
-field from generated codemode types/listings.
+The `ctx.os` provider (`OrpcCapability`) exposes the real `os.project.*`
+subtree project-bound: it injects the stable Project ID as `projectSlugOrId`
+and strips that field from generated codemode types/listings.
 
 Slack and other event-mediated providers can append function-call completions
 from outside the codemode processor. RPC providers return through
@@ -181,26 +209,28 @@ sqlfu is the database source of truth:
 - `src/db/queries/.generated` and `src/db/migrations/.generated` are generated
   by `pnpm sqlfu:generate`.
 
-Use sqlfu for schema changes and migrations. Do not hand-write migration history
-outside the sqlfu workflow.
+Use sqlfu for schema changes and migrations. Do not hand-write migration
+history outside the sqlfu workflow.
 
-Persisted records should make scope explicit with first-class columns. Common
-scopes are Project, Clerk Organization, Clerk User, and Global. Do not hide
-ownership or routing scope only inside JSON metadata or callable props.
+Persisted records should make scope explicit with first-class columns (for
+example a project ID column), not hide ownership or routing scope inside JSON
+metadata or callable props.
 
 ## Runtime Config
 
-Runtime config is built from optional base JSON in `APP_CONFIG` plus nested
-`APP_CONFIG_*` overrides. Overrides use `__` as the nesting separator and are
-converted to the schema's camelCase shape.
+Runtime config is parsed by `src/config.ts` from optional base JSON in
+`APP_CONFIG` plus nested `APP_CONFIG_*` overrides. Overrides use `__` as the
+nesting separator and are converted to the schema's camelCase shape.
 
 Examples:
 
 ```text
 APP_CONFIG_BASE_URL=https://os.iterate.com
-APP_CONFIG_CLERK__PUBLISHABLE_KEY=pk_test_...
-APP_CONFIG_CLERK__SECRET_KEY=sk_test_...
-APP_CONFIG_CLERK__JWT_KEY='-----BEGIN PUBLIC KEY-----...'
+APP_CONFIG_MCP__BASE_URL=https://mcp.iterate.com
+APP_CONFIG_ITERATE_AUTH__ISSUER=https://auth.iterate.com/api/auth
+APP_CONFIG_ITERATE_AUTH__CLIENT_ID=...
+APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET=...
+APP_CONFIG_ADMIN_API_SECRET=...
 APP_CONFIG_PROJECT_HOSTNAME_BASES=["iterate.app"]
 APP_CONFIG_LOGS__STDOUT_FORMAT=pretty
 APP_CONFIG_SLACK_BOT_TOKEN=xoxb-...
@@ -208,48 +238,38 @@ APP_CONFIG_INTEGRATIONS__SLACK='{"oauthClientId":"123.456","oauthClientSecret":"
 APP_CONFIG_INTEGRATIONS__GOOGLE='{"oauthClientId":"...","oauthClientSecret":"..."}'
 ```
 
-The final merged object must satisfy the app schema in `src/app.ts`.
-Frontend-visible config is exposed through the typed
-`__internal.publicConfig` oRPC procedure.
+Fields marked `redacted(...)` in the schema parse into `Redacted` wrappers
+that must be unwrapped with `.exposeSecret()` and never serialize. Fields
+marked `publicValue(...)` are the only ones exposed to the browser, through
+the unauthenticated `__internal.publicConfig` oRPC procedure.
 
-`integrations.slack` and `integrations.google` are Runtime Config, not
-deployment config. They are supplied by Doppler as grouped JSON values so each
-provider's OAuth client values are updated atomically. Local Docker/workerd runs
-receive the same config through `doppler run`. Slack uses one OAuth client for
-OS; the Slack team ID claimed during OAuth decides which project receives
-signed Slack webhooks.
+`integrations.slack` and `integrations.google` are grouped JSON values in
+Doppler so each provider's OAuth client values update atomically. Slack uses
+one OAuth client for OS; the Slack team ID claimed during OAuth decides which
+project receives signed Slack webhooks.
 
-## Clerk
+## Auth Client Sync
 
-Clerk apps and Doppler config are managed by
-`apps/os/scripts/sync-clerk-apps.ts`. Re-run it after changing the Clerk auth
-shape so dev, preview, and production Doppler configs stay aligned with the
-matching Clerk app and OAuth app.
+OAuth clients in the Iterate Auth Worker and the matching Doppler values are
+managed by `scripts/sync-auth-clients.ts` (`pnpm auth:sync-clients`). For each
+target Doppler config (`dev_<name>`, `preview_1`–`preview_9`, `prd`) it
+ensures two OAuth clients (web + MCP/CLI) via the auth contract's
+`internal.oauth.ensureClient`, then writes `APP_CONFIG_BASE_URL`,
+`APP_CONFIG_MCP__BASE_URL`, `APP_CONFIG_PROJECT_HOSTNAME_BASES`, and the
+`ITERATE_OAUTH_*` / `ITERATE_MCP_OAUTH_*` values back to Doppler.
 
-Required setup:
+It requires `SERVICE_AUTH_TOKEN` (run through Doppler for the auth project).
+`AUTH_CLIENT_SYNC_TARGETS` filters targets;
+`ROTATE_AUTH_CLIENT_SECRETS=1` rotates client secrets.
 
-1. Enable Organizations for the Clerk application.
-2. Configure OS to require organization context and hide personal-account mode.
-3. Store the publishable key, secret key, and JWT public key in OS runtime
-   config.
-4. Create a Clerk OAuth Application for OS MCP/CLI clients.
-5. Keep MCP authorization project-scoped in OS app code; Clerk OAuth scopes
-   should stay Clerk-supported scopes such as `openid`, `email`, and `profile`.
+## Deployment
 
-Useful first-party references:
-
-- Clerk TanStack Start middleware:
-  `https://clerk.com/docs/reference/tanstack-react-start/clerk-middleware`
-- Clerk organization components:
-  `https://clerk.com/docs/organizations/overview`
-- Clerk OAuth token verification:
-  `https://clerk.com/docs/guides/configure/auth-strategies/oauth/verify-oauth-tokens`
-- Clerk request authentication and accepted token types:
-  `https://clerk.com/docs/reference/backend/authenticate-request`
-- Clerk test session-token flow:
-  `https://clerk.com/docs/testing/overview`
-- Clerk CLI:
-  `https://clerk.com/docs/cli`
+`alchemy.run.ts` defines the deployment: one worker with D1 (`os-db`), the
+Durable Object namespaces, a `WorkerLoader`, the Workers AI binding, and extra
+route hostnames for the MCP base URL, the event-docs host, and each project
+hostname base. The ambient Doppler config selects the stage: `pnpm cf:deploy`
+deploys to whatever stage your environment points at; `pnpm deploy` is the
+production wrapper (`doppler run --config prd`).
 
 ## Smoke Tests
 
@@ -259,7 +279,7 @@ Preview worker smoke:
 doppler run --project os --config preview_2 -- pnpm e2e -t "OS preview smoke"
 ```
 
-Full browser smoke with Clerk and `agent-browser`:
+Browser smoke with `agent-browser`:
 
 - [Preview Agent Browser Smoke](./preview-agent-browser-smoke.md)
 
@@ -272,17 +292,11 @@ doppler run --project os --config preview_2 -- pnpm e2e -t "project MCP exec_js"
 
 The MCP smoke accepts either:
 
-- `OS_E2E_MCP_BEARER_TOKEN`: an explicit Clerk OAuth access token or Clerk
-  session token for a user whose Clerk organization has access to the project.
+- `OS_E2E_MCP_BEARER_TOKEN`: an Iterate Auth OAuth access token for a user
+  with access to the project.
 - `OS_E2E_ADMIN_API_SECRET`, `OS_ADMIN_API_SECRET`, or
   `APP_CONFIG_ADMIN_API_SECRET`: an OS admin token for deployment-level smoke
   tests that do not need user/project membership setup.
-
-For browserless Clerk e2e, do not pass a Clerk Testing Token as the bearer
-token. Clerk Testing Tokens are only bot-detection bypass tokens for Frontend
-API requests. Create a Clerk user, create a session for that user, create a
-session token from that session, and pass the returned session token as
-`Authorization: Bearer <session_token>` through `OS_E2E_MCP_BEARER_TOKEN`.
 
 When `APP_CONFIG_SLACK_BOT_TOKEN` is present in the test process, the codemode
 MCP test discovers `#slack-agent-e2e-test` and includes a real

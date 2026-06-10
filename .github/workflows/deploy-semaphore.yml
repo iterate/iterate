@@ -13,9 +13,10 @@ on:
       - main
     paths:
       - apps/semaphore/**
-      - apps/semaphore-contract/**
       - packages/shared/src/alchemy/**
-      - packages/shared/src/apps/**
+      - packages/shared/src/config.ts
+      - packages/shared/src/dev/**
+      - packages/shared/src/evlog/**
       - packages/ui/**
       - packages/mock-http-proxy/**
   workflow_dispatch:
@@ -74,7 +75,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |-
           set -euo pipefail
-          public_url="$(doppler run -- pnpm tsx -e 'import { resolveNewStyleCloudflareAppBaseUrlFromEnv } from "@iterate-com/shared/apps/new-style-cloudflare-apps"; console.log(resolveNewStyleCloudflareAppBaseUrlFromEnv(process.env) ?? "");')"
+          public_url="$(doppler run -- node -e 'const env=process.env; const appConfig=env.APP_CONFIG?.trim()?JSON.parse(env.APP_CONFIG):{}; console.log(env.APP_CONFIG_BASE_URL || appConfig.baseUrl || "");')"
           if [ -n "$public_url" ]; then
             echo "public_url=${public_url}" >> "$GITHUB_OUTPUT"
           fi

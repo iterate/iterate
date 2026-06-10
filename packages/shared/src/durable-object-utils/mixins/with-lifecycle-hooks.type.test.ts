@@ -6,15 +6,7 @@ import { withLifecycleHooks as publicWithLifecycleHooks } from "@iterate-com/sha
 import type { D1ObjectCatalogRecord } from "./with-lifecycle-hooks.ts";
 import { withDurableObjectCore } from "./with-durable-object-core.ts";
 import { withKvInspector } from "./with-kv-inspector.ts";
-import { withMultiplexedAlarms } from "./with-multiplexed-alarms.ts";
-import type { MultiplexedAlarmRecord } from "./with-multiplexed-alarms.ts";
 import { withOuterbase } from "./with-outerbase.ts";
-import {
-  registerDurableObjectPublicRoute,
-  withPublicFetchRoute,
-} from "./with-public-fetch-route.ts";
-import { withScheduler } from "./with-scheduler.ts";
-import type { SchedulerRecord } from "./with-scheduler.ts";
 import { getInitializedDoStub, withLifecycleHooks } from "./with-lifecycle-hooks.ts";
 
 type Env = {
@@ -339,84 +331,6 @@ describe("withLifecycleHooks D1 object catalog types", () => {
   });
 });
 
-describe("withMultiplexedAlarms types", () => {
-  it("adds public diagnostic reads and protected scheduling methods", () => {
-    const AlarmRoomBase = withMultiplexedAlarms<RoomInit>()(RoomBase);
-
-    class AlarmRoom extends AlarmRoomBase<Env> {
-      async scheduleDailySummary() {
-        await this.scheduleMultiplexedAlarm({
-          key: "daily-summary",
-          runAt: Date.now(),
-          method: "sendDailySummary",
-          payload: { room: this.name },
-        });
-
-        expectTypeOf(await this.cancelMultiplexedAlarm("daily-summary")).toEqualTypeOf<boolean>();
-      }
-
-      protected sendDailySummary(payload: unknown) {
-        expectTypeOf(payload).toEqualTypeOf<unknown>();
-      }
-    }
-
-    const alarmRoom = {} as AlarmRoom;
-
-    expectTypeOf(alarmRoom.getMultiplexedAlarms()).toEqualTypeOf<MultiplexedAlarmRecord[]>();
-
-    // Mutation APIs are for subclasses/mixins, not external callers.
-    // @ts-expect-error scheduleMultiplexedAlarm is protected.
-    alarmRoom.scheduleMultiplexedAlarm;
-
-    // @ts-expect-error cancelMultiplexedAlarm is protected.
-    alarmRoom.cancelMultiplexedAlarm;
-  });
-});
-
-describe("withScheduler types", () => {
-  it("adds public diagnostic reads and protected schedule mutation", async () => {
-    const ScheduledRoomBase = withScheduler<RoomInit>()(
-      withMultiplexedAlarms<RoomInit>()(RoomBase),
-    );
-
-    class ScheduledRoom extends ScheduledRoomBase<Env> {
-      async enableDailySummary() {
-        const schedule = await this.schedule({
-          key: "daily-summary",
-          method: "sendDailySummary",
-          payload: { room: this.name },
-          recurrence: {
-            type: "cron",
-            expression: "0 9 * * *",
-          },
-        });
-
-        expectTypeOf(schedule).toEqualTypeOf<SchedulerRecord>();
-        expectTypeOf(await this.cancelSchedule("daily-summary")).toEqualTypeOf<boolean>();
-      }
-
-      protected sendDailySummary(payload: unknown, schedule: SchedulerRecord) {
-        expectTypeOf(payload).toEqualTypeOf<unknown>();
-        expectTypeOf(schedule.key).toEqualTypeOf<string>();
-      }
-    }
-
-    const scheduledRoom = {} as ScheduledRoom;
-
-    expectTypeOf(
-      scheduledRoom.getSchedule("daily-summary"),
-    ).toEqualTypeOf<SchedulerRecord | null>();
-    expectTypeOf(scheduledRoom.getSchedules()).toEqualTypeOf<SchedulerRecord[]>();
-
-    // Mutation APIs are for subclasses/mixins, not external callers.
-    // @ts-expect-error schedule is protected.
-    scheduledRoom.schedule;
-
-    // @ts-expect-error cancelSchedule is protected.
-    scheduledRoom.cancelSchedule;
-  });
-});
-
 describe("inspector mixin types", () => {
   it("preserves the generic DurableObject base shape through fetch wrappers", () => {
     const InspectorBase = withKvInspector({
@@ -436,30 +350,5 @@ describe("inspector mixin types", () => {
     // Constructor<FetchBase>` result is enough. If this stops compiling, a
     // wrapper erased the normal `Base<Env>` Durable Object shape.
     expectTypeOf(inspector.fetch).toBeFunction();
-  });
-});
-
-describe("public fetch route mixin types", () => {
-  it("adds an instance path helper and preserves the generic Durable Object base shape", () => {
-    const PublicRouteRoomBase = withPublicFetchRoute({
-      namespaceSlug: "rooms",
-      defaultAddressing: "by-structured-name",
-    })(RoomBase);
-
-    class PublicRouteRoom extends PublicRouteRoomBase<Env> {}
-
-    const publicRouteRoom = {} as PublicRouteRoom;
-    const publicRouteNamespace = {} as DurableObjectNamespace<PublicRouteRoom>;
-
-    expectTypeOf(publicRouteRoom.getPublicDurableObjectPath()).toEqualTypeOf<string>();
-    expectTypeOf(
-      publicRouteRoom.getPublicDurableObjectPath({ mode: "by-id" }),
-    ).toEqualTypeOf<string>();
-    const registration = registerDurableObjectPublicRoute({
-      namespace: publicRouteNamespace,
-      class: PublicRouteRoom,
-    });
-
-    expectTypeOf(registration.namespaceSlug).toEqualTypeOf<string>();
   });
 });

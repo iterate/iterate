@@ -13,15 +13,23 @@
 // a getSecret(...) placeholder and the echo sees the material.
 
 import { expect, test } from "vitest";
-import { connectItx, type ItxClient } from "../client.ts";
+import {
+  adminApiSecret,
+  baseUrl,
+  connectGlobal,
+  registerCreatedProjectCleanup,
+} from "./e2e-env.ts";
 
 const SECRET_KEY = "example.egress_api_key";
 const SECRET_MATERIAL = "example-secret-value";
 const HEADER = "x-itx-egress-probe";
 
+const createdProjectIds = registerCreatedProjectCleanup();
+
 test("itx.fetch substitutes secrets through project egress (explicit door)", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `itx-egress-${suffix()}` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   const response = await projectItx.fetch(echoUrl(), {
@@ -39,6 +47,7 @@ test("bare fetch() in a project itx script goes through egress (implicit door)",
   const project = (await itx.projects.create({ slug: `itx-egress-run-${suffix()}` })) as {
     id: string;
   };
+  createdProjectIds.push(project.id);
 
   // The script calls PLAIN fetch — no itx involvement. globalOutbound does
   // the rest because the run harness loaded it that way.
@@ -72,6 +81,7 @@ test("bare fetch() inside a worker cap goes through egress (implicit door)", asy
   const project = (await itx.projects.create({ slug: `itx-egress-cap-${suffix()}` })) as {
     id: string;
   };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   await projectItx.caps.define({
@@ -123,29 +133,6 @@ function echoedHeader(body: unknown): string {
 
 function suffix() {
   return crypto.randomUUID().slice(0, 8);
-}
-
-function connectGlobal(): ItxClient {
-  return connectItx({ baseUrl: baseUrl(), token: adminApiSecret() });
-}
-
-function adminApiSecret() {
-  const secret =
-    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
-    "";
-  if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required for itx e2e tests.");
-  return secret;
-}
-
-function baseUrl() {
-  const url =
-    process.env.OS_ITX_E2E_BASE_URL?.trim().replace(/\/+$/, "") ||
-    process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "") ||
-    "";
-  if (!url) throw new Error("APP_CONFIG_BASE_URL is required for itx e2e tests.");
-  return url;
 }
 
 /**

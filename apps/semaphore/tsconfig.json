@@ -1,5 +1,5 @@
 {
-  "include": ["**/*.ts", "**/*.tsx", "raw-sql.d.ts", "alchemy.run.ts"],
+  "include": ["**/*.ts", "**/*.tsx", "alchemy.run.ts"],
   "compilerOptions": {
     "target": "ES2024",
     "jsx": "react-jsx",

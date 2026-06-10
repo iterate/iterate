@@ -28,7 +28,7 @@ Tests live under each app, e.g. `apps/os/e2e/`, not a root `spec/` directory.
 ## Running tests
 
 ```bash
-OS_BASE_URL=https://… pnpm --dir apps/os test:e2e
+APP_CONFIG_BASE_URL=https://… pnpm --dir apps/os e2e
 ```
 
 See each app's `package.json` for required env vars.

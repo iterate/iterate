@@ -8,7 +8,7 @@ Repo-wide rules:
 - Include file extensions (`.ts`, etc.) for relative imports
 - Use `node:` prefix for Node imports
 - Prefer named exports
-- Acronyms: all caps except `Id` (e.g. `callbackURL`, `userId`)
+- No all-caps acronyms in identifiers (e.g. `makeOrpcUrl` not `makeORPCURL`; `callbackUrl`, `userId`)
 - Use pnpm for packages
 - Use dedent for template strings
 - Unit tests: `*.test.ts` next to source

@@ -1,6 +1,6 @@
 import { os } from "@orpc/server";
 import { z } from "zod";
-import { createSemaphoreClient } from "../../apps/semaphore-contract/src/client.ts";
+import { createSemaphoreClient } from "../../apps/semaphore/src/contract.ts";
 import { ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE } from "./preview-inventory.ts";
 import {
   cleanupCloudflarePreviewForPullRequest,

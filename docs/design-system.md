@@ -1,10 +1,15 @@
 # Design System
 
-We use shadcn/ui components with vanilla shadcn style. Install additional components using `npx shadcn@latest add <component>`.
+We use shadcn/ui components (style `base-nova`, see `packages/ui/components.json`). The shared components live in `packages/ui` and are imported as `@iterate-com/ui/components/*` — never copy them locally. Add new shadcn components inside `packages/ui` with `npx shadcn@latest add <component>`.
+
+```tsx
+import { Button } from "@iterate-com/ui/components/button";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@iterate-com/ui/components/field";
+```
 
 ## App Consistency
 
-Layout patterns, component usage, and structural patterns for the OS app live in `apps/os`.
+Layout patterns, component usage, and structural patterns for the OS app live in `apps/os`. Look at existing routes in `apps/os/src/routes` before inventing new patterns.
 
 ## Data fetching
 
@@ -18,38 +23,23 @@ Use `useSuspenseQuery` sparingly — only when the whole component is meaningles
 
 ### Page Titles
 
-Don't add page titles (h1) - the breadcrumbs in the header provide context. Use `HeaderActions` to place action buttons in the header.
-
-```tsx
-import { HeaderActions } from "@/components/header-actions.tsx";
-
-<HeaderActions>
-  <Button size="sm">
-    <Plus className="h-4 w-4" />
-    <span className="sr-only">New Item</span>
-  </Button>
-</HeaderActions>;
-```
+Don't add page titles (h1) — the breadcrumbs in the header (`PathBreadcrumbs` in `apps/os`) provide context.
 
 ### Responsive Padding
 
 Use `p-4 md:p-8` for page containers, never fixed `p-8`.
-
-### Content Width
-
-Main content is constrained to phone-width (`max-w-md` / 448px) in layouts. The sidebar is separate.
 
 ### Data Lists
 
 Use card layout for data lists (not tables). Cards work well on all screen sizes:
 
 ```tsx
-<div className="space-y-3">
+<div className="flex flex-col gap-3">
   {items.map((item) => (
     <div className="flex items-start justify-between gap-4 p-4 border rounded-lg bg-card">
-      <div className="min-w-0 flex-1 space-y-1">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex items-center gap-2">
-          <Circle className="h-2 w-2 fill-green-500 text-green-500" />
+          <Circle className="size-2 fill-green-500 text-green-500" />
           <span className="font-medium truncate">{item.name}</span>
         </div>
         <div className="text-sm text-muted-foreground">
@@ -66,7 +56,7 @@ Use card layout for data lists (not tables). Cards work well on all screen sizes
 
 Key patterns:
 
-- `space-y-3` for card spacing
+- `flex flex-col gap-*` for stacking — never `space-y-*` / `space-x-*` (see `.agents/skills/shadcn/SKILL.md`)
 - `flex items-start justify-between gap-4 p-4` for card layout
 - `min-w-0 flex-1` on content to enable truncation
 - Status dots with `Circle` icon + fill color
@@ -80,21 +70,9 @@ Prefer `Sheet` (slides in from side) over `Dialog` (modal popup) for forms and a
 
 Use `flex flex-col gap-4 sm:flex-row sm:items-center` for layouts that should stack on mobile.
 
-### Standalone Pages (no sidebar)
-
-Use `CenteredLayout` for pages without the sidebar (login, new-organization, user settings):
-
-```tsx
-import { CenteredLayout } from "@/components/centered-layout.tsx";
-
-<CenteredLayout>
-  <div className="w-full max-w-md space-y-6">{/* content */}</div>
-</CenteredLayout>;
-```
-
 ## Core Principles
 
-- Use theme colors from Tailwind config - no random colors or gradients
+- Use theme colors from the Tailwind theme (`bg-card`, `text-muted-foreground`, …) — no random colors or gradients
 - Don't repeat bland copy in multiple places to "fill space"
 - Prefer toast notifications over inline success/error messages
 
@@ -102,7 +80,7 @@ import { CenteredLayout } from "@/components/centered-layout.tsx";
 
 ### Item
 
-Use the `Item` component for lists, grids, or table-like layouts instead of raw `<div>`s.
+Use the `Item` component (`@iterate-com/ui/components/item`) for lists, grids, or table-like layouts instead of raw `<div>`s.
 
 Docs: https://ui.shadcn.com/docs/components/item
 
@@ -110,7 +88,7 @@ Docs: https://ui.shadcn.com/docs/components/item
 
 ### Card
 
-Use `<Card variant="muted">` for grid layouts with muted backgrounds. Use regular `Card` for rich, multi-paragraph content.
+Use `Card` (`@iterate-com/ui/components/card`) for rich, multi-paragraph content. It has a `size` prop (`"default" | "sm"`) — no `variant` prop.
 
 ### Field Components
 
@@ -124,7 +102,7 @@ import {
   FieldLabel,
   FieldLegend,
   FieldSet,
-} from "@/components/ui/field";
+} from "@iterate-com/ui/components/field";
 
 <FieldGroup>
   <FieldSet>
@@ -144,16 +122,16 @@ import {
 
 Use `Accordion` for advanced/optional fields or multi-stage forms.
 
-### EmptyState
+### Empty
 
-Use the `EmptyState` component from `@/components/empty-state` for empty states.
+Use the `Empty` family (`Empty`, `EmptyHeader`, `EmptyTitle`, `EmptyDescription` from `@iterate-com/ui/components/empty`) for empty states.
 
 ### Sonner (Toast)
 
-Use `toast` from "sonner" for notifications - the Toaster is already set up.
+Use `toast` from `@iterate-com/ui/components/sonner` for notifications — the Toaster is already set up.
 
 ```tsx
-import { toast } from "sonner";
+import { toast } from "@iterate-com/ui/components/sonner";
 
 // Prefer this
 toast.success("Settings updated successfully");

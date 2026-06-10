@@ -1,6 +1,5 @@
 import { Fragment, useMemo, useState } from "react";
 import { Link, useMatches, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import {
@@ -16,7 +15,7 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { projectStreamsListQueryOptions } from "~/lib/project-route-query.ts";
+import { useProjectStreamsList } from "~/lib/itx-queries.ts";
 import type {
   RouteBreadcrumbLoaderData,
   RouteBreadcrumbStaticData,
@@ -180,15 +179,15 @@ function StreamSegmentNavigator({
 }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
-  const streamsQuery = useQuery(projectStreamsListQueryOptions(streamBreadcrumb.projectId));
+  const streamsQuery = useProjectStreamsList(streamBreadcrumb.projectId);
   const siblingPaths = useMemo(() => {
     const parentPath = streamPathParent(segmentPath);
-    const paths = (streamsQuery.data?.streams ?? [])
+    const paths = (streamsQuery.data ?? [])
       .map((stream) => stream.streamPath)
       .filter((path) => isImmediateChild({ childPath: path, parentPath }));
     if (!paths.includes(segmentPath)) paths.push(segmentPath);
     return paths.toSorted((left, right) => left.localeCompare(right));
-  }, [segmentPath, streamsQuery.data?.streams]);
+  }, [segmentPath, streamsQuery.data]);
 
   function navigateToSibling(path: StreamPathType) {
     setOpen(false);
@@ -241,16 +240,16 @@ function StreamChildrenBreadcrumb({
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [newChildSegment, setNewChildSegment] = useState("");
-  const streamsQuery = useQuery(projectStreamsListQueryOptions(streamBreadcrumb.projectId));
+  const streamsQuery = useProjectStreamsList(streamBreadcrumb.projectId);
   const children = useMemo(
     () =>
-      (streamsQuery.data?.streams ?? []).filter((stream) =>
+      (streamsQuery.data ?? []).filter((stream) =>
         isImmediateChild({
           childPath: stream.streamPath,
           parentPath: streamBreadcrumb.streamPath,
         }),
       ),
-    [streamsQuery.data?.streams, streamBreadcrumb.streamPath],
+    [streamsQuery.data, streamBreadcrumb.streamPath],
   );
 
   function navigateToChild(childPath: StreamPathType) {

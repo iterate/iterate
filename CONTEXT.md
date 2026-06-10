@@ -100,11 +100,9 @@ _Avoid_: app config, runtime config
 - **Standard processor behavior** is copied into a processor contract and implementation; it is not a separate processor identity.
 - A **ProjectId** identifies durable stream storage.
 - A **ProjectSlug** may route users to a project, but must not be used as durable stream identity.
-- In the Events app, a project subdomain segment is interpreted as **ProjectId**.
-- Project-scoped Events app APIs should carry **ProjectId**, not parallel slug and ID fields.
-- The current Events app POC may expose direct Durable Object debug links publicly.
+- Project-scoped stream APIs should carry **ProjectId**, not parallel slug and ID fields.
 - **Stream Runtime** belongs in shared code; app contracts may import or re-export its core types.
-- OS uses the **OS Streams API** for stream access and must not depend on the Events app or Events contract.
+- OS uses the **OS Streams API** for stream access; the standalone Events app that once owned streams has been deleted.
 - A **StreamsCapability** is always scoped to one **ProjectId**.
 - A **StreamsCapability** may be narrowed to one default stream path, making path arguments optional for operations such as append and read.
 - In a narrowed **StreamsCapability**, stream paths without a leading slash, including `./` paths, are relative to the default stream path.
@@ -116,7 +114,7 @@ _Avoid_: app config, runtime config
 - A **Connection** may yield a project-wide **Secret** that runtime capabilities can read.
 - In the current OS secrets slice, every **Connection** is project-level; user-level and organization-level Connections are out of scope.
 - A **Provider Claim** binds one **Webhook Provider Identifier** to exactly one **ProjectId**.
-- Clerk Organizations do not scope **Provider Claims**.
+- Organizations (in the Iterate Auth Worker, which replaced Clerk) do not scope **Provider Claims**; claims bind to a **ProjectId** directly.
 - A **Webhook Provider Identifier** must not resolve to more than one **ProjectId**.
 - A **Slack Team Claim** is the lookup record for routing inbound Slack webhooks to the claimed ProjectId.
 - Google Connections are project-level in the current OS secrets slice.

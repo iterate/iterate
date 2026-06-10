@@ -6,7 +6,8 @@ title: FAQ
 
 ## Is iterate open source?
 
-Yes, core components are open source in this repo.
+Yes, core components are developed in the open at
+[github.com/iterate/iterate](https://github.com/iterate/iterate).
 
 ## Where do I configure my agent?
 

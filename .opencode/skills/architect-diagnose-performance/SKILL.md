@@ -11,7 +11,6 @@ Use when there are latency spikes, timeout increases, throughput drops, or capac
 
 - Cloudflare Observability MCP (latency/error distributions)
 - PostHog MCP (user-facing impact/error trends)
-- Fly signals (machine health/usage)
 - Recent git commits/PRs for regression correlation
 
 ## Workflow

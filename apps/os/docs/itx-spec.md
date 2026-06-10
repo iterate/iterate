@@ -1,11 +1,13 @@
 # itx: Contexts, Capabilities, and the One True Handle
 
-Status: IMPLEMENTED on the `itx-implementation` branch (PR #1407). This spec is
-the design of record; the living code is in `apps/os/src/itx/` — see
+Status: IMPLEMENTED — merged to `main` in PR #1407. This spec is the design of
+record; the living code is in `apps/os/src/itx/` — see
 `apps/os/src/itx/README.md` (architecture + diagrams) and
-`apps/os/src/itx/DECISIONS.md` (where reality diverged from this spec). All six
-phases below shipped and are proven by `pnpm e2e:itx` against a deployed
-preview (node + browser execution modes).
+`apps/os/src/itx/DECISIONS.md` (where reality diverged from this spec). The
+implementation is proven by `pnpm e2e:itx` against a deployed worker (node +
+browser execution modes). Known divergence from the phase plan: the client
+reconnect loop (§6.3) was never built — `connectItx` in `src/itx/client.ts` is
+one-shot, so a dropped connection drops the live caps it provided.
 
 ## 0. Summary
 
@@ -184,7 +186,8 @@ interface LiveConnections {
 The interface exists so that when workerd ships hibernation-surviving outbound
 stub storage (workerd#6087), we swap the Map for the runtime facility and
 delete the reconnect caveat without touching callers. Until then: eviction
-drops live caps; providers run reconnect loops; `itx.<liveCap>` throws
+drops live caps; providers must reconnect and re-provide (the automatic
+reconnect loop was never built — see §6.3); `itx.<liveCap>` throws
 `CapOfflineError { name, provider }` while disconnected. Do NOT add queuing or
 durable delivery on live stubs — durable delivery is a stream.
 
@@ -398,8 +401,11 @@ await itx.caps.provide("mac", { invoke: "path-call", target: new MacSdk() });
 const r = await itx.fetch("https://api.stripe.com/v1/charges", { ... });
 ```
 
-The client ships a reconnect loop (provide-on-open); disconnection is a normal
-`itx.cap.disconnected` event. The same client is the browser client; React
+The client was specced to ship a reconnect loop (provide-on-open), with
+disconnection as a normal `itx.cap.disconnected` event — **not implemented**:
+`connectItx` (`src/itx/client.ts`) is one-shot, and there is no
+`itx.cap.disconnected` event; a dropped connection simply drops the caps it
+provided. The same client is the browser client; React
 hooks (`useItx()`, `useCap(name)`) are a thin layer over it and are the
 eventual replacement for oRPC — out of scope for this spec beyond ensuring
 nothing blocks it (capnweb in the browser already works; promise pipelining

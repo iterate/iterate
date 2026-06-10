@@ -1,7 +1,7 @@
 import { oc } from "@orpc/contract";
 import { z } from "zod";
-import { INTERNAL_OPENAPI_TAG } from "./openapi.ts";
 
+const INTERNAL_OPENAPI_TAG = "/__internal";
 const EmptyInput = z.object({}).optional().default({});
 
 export const internalContract = oc.router({

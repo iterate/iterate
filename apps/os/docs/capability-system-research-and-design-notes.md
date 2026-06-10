@@ -1,5 +1,10 @@
 # Capability System Research And Design Notes
 
+> **Status: historical research notes.** The design that came out of this work
+> is [itx-spec.md](./itx-spec.md), implemented in
+> [`../src/itx/`](../src/itx/README.md). Read those for current reality; this
+> file is kept as the record of how we got there.
+
 Last updated: 2026-06-08
 
 ## Jonas Scratchpad: Desired Code Shapes

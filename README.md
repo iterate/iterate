@@ -56,7 +56,7 @@ More: [apps/os README](apps/os/AGENTS.md).
 
 ```bash
 pnpm install
-pnpm dev          # local OS dev server
+pnpm dev          # local auth + OS dev servers
 ```
 
 Before PRs:
@@ -69,23 +69,22 @@ pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
 
 **Start here:** `apps/os/`
 
-| Path                | What                                                                               |
-| ------------------- | ---------------------------------------------------------------------------------- |
-| `apps/os/`          | **Main app** — product dashboard (`os.iterate.com`; dev: `{user}.iterate-dev.com`) |
-| `packages/iterate/` | `iterate` CLI — delegates to local source when run inside this repo                |
-| `docs/`             | Detailed documentation                                                             |
-| `tasks/`            | Work tracking (markdown + frontmatter)                                             |
-| `apps/iterate-com/` | iterate.com marketing site                                                         |
+| Path                | What                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------- |
+| `apps/os/`          | **Main app** — product dashboard (`os.iterate.com`; dev: `os.iterate-dev-<user>.com`) |
+| `packages/iterate/` | `iterate` CLI — delegates to local source when run inside this repo                   |
+| `docs/`             | Detailed documentation                                                                |
+| `tasks/`            | Work tracking (markdown + frontmatter)                                                |
+| `apps/iterate-com/` | iterate.com marketing site                                                            |
 
 Other Cloudflare apps (`semaphore`, …) are supporting services — see `docs/architecture.md`.
 
 ## Common commands
 
 ```bash
-pnpm dev                      # local OS dev server
-pnpm mcp:dev                  # local MCP app against local auth
+pnpm dev                      # apps/auth + apps/os together, OS pointed at local auth (localhost:7101)
 pnpm --dir apps/auth dev      # auth app only
-pnpm os dev                   # same, explicit apps/os path
+pnpm os dev                   # apps/os only, against the auth issuer from your Doppler config
 pnpm test && pnpm typecheck && pnpm lint && pnpm format
 ```
 
@@ -106,12 +105,6 @@ Dev server, Doppler, Cloudflare, previews, and deploys:
 - [TypeScript conventions](docs/typescript-conventions.md)
 - [Design system & React](docs/design-system.md)
 - [Vitest patterns](docs/vitest-patterns.md)
-
-### Deploy & Cloudflare
-
-- [DevOps: Cloudflare, Doppler, And Alchemy](docs/devops-cloudflare-doppler-alchemy-setup.md)
-- [Drizzle migrations](.agents/skills/drizzle-migrations/SKILL.md) — not for `apps/os` (sqlfu/D1)
-- [Fixing Drizzle migration conflicts](docs/fixing-drizzle-migration-conflicts.md)
 
 ### Tasks & agent docs
 

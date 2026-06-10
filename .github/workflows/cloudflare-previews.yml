@@ -32,7 +32,9 @@ jobs:
               ".github/workflows/cloudflare-previews.yml",
               ".github/ts-workflows/workflows/cloudflare-previews.ts",
               "packages/shared/src/alchemy/**",
-              "packages/shared/src/apps/**",
+              "packages/shared/src/config.ts",
+              "packages/shared/src/dev/**",
+              "packages/shared/src/evlog/**",
               "packages/ui/**",
               "packages/mock-http-proxy/**",
               "scripts/preview/**",
@@ -43,7 +45,6 @@ jobs:
               "apps/auth/**",
               "apps/auth-contract/**",
               "apps/semaphore/**",
-              "apps/semaphore-contract/**",
             ];
             const __handler = async function should_run_preview({ context, github }) {
               const pullRequest = context.payload.pull_request;
