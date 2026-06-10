@@ -23,6 +23,34 @@ export const DEFAULT_AUTH_HANDLER_BASE_PATH = "/api/iterate-auth";
 const SCOPES = ["openid", "profile", "email", "offline_access"] as const;
 const REFRESH_SKEW_MS = 30_000;
 
+/**
+ * Collapses concurrent calls keyed by the same string into a single in-flight
+ * promise. The OAuth refresh-token grant rotates the refresh token and revokes
+ * the whole family if a rotated token is presented twice, so two requests
+ * carrying the same session cookie must not both hit the token endpoint —
+ * otherwise the loser's "reuse" nukes the session and logs the user out. The
+ * entry is removed once settled so the next (rotated) token starts fresh.
+ */
+export function createSingleFlight<T>(): (key: string, fn: () => Promise<T>) => Promise<T> {
+  const inFlight = new Map<string, Promise<T>>();
+  return (key, fn) => {
+    const existing = inFlight.get(key);
+    if (existing) return existing;
+    // Clear inside the awaited promise's own finally so the entry is gone the
+    // moment callers observe the result — the next (rotated-token) cycle starts
+    // clean, while everyone racing the current cycle still shares this flight.
+    const flight = (async () => {
+      try {
+        return await fn();
+      } finally {
+        inFlight.delete(key);
+      }
+    })();
+    inFlight.set(key, flight);
+    return flight;
+  };
+}
+
 export type IterateAuthConfig = {
   issuer?: string;
   clientId: string;
@@ -251,21 +279,31 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
     return _as;
   }
 
-  async function doRefresh(tokenSet: TokenSet): Promise<TokenSet | null> {
-    if (!tokenSet.refreshToken) return null;
-    const as = await getAuthorizationServer();
-    const response = await oauth.refreshTokenGrantRequest(
-      as,
-      oauthClient,
-      clientAuth,
-      tokenSet.refreshToken,
-      {
-        ...httpOptions(),
-        additionalParameters: { resource: resource() },
-      },
-    );
-    const result = await oauth.processRefreshTokenResponse(as, oauthClient, response);
-    return toTokenSet(result, tokenSet);
+  // The auth server rotates refresh tokens on every use and treats reuse of a
+  // rotated token as theft (revoking the whole token family). Concurrent
+  // requests carrying the same cookie must therefore share one refresh
+  // flight per refresh token instead of racing the token endpoint.
+  const refreshSingleFlight = createSingleFlight<TokenSet | null>();
+
+  function doRefresh(tokenSet: TokenSet): Promise<TokenSet | null> {
+    const refreshToken = tokenSet.refreshToken;
+    if (!refreshToken) return Promise.resolve(null);
+
+    return refreshSingleFlight(refreshToken, async () => {
+      const as = await getAuthorizationServer();
+      const response = await oauth.refreshTokenGrantRequest(
+        as,
+        oauthClient,
+        clientAuth,
+        refreshToken,
+        {
+          ...httpOptions(),
+          additionalParameters: { resource: resource() },
+        },
+      );
+      const result = await oauth.processRefreshTokenResponse(as, oauthClient, response);
+      return toTokenSet(result, tokenSet);
+    });
   }
 
   async function getUserInfo(accessToken: string): Promise<UserInfoClaims | null> {
@@ -350,15 +388,34 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
 
       if (!tokenSet.idToken) return { session: null, responseHeaders: new Headers() };
 
+      // WebSocket upgrades can't carry Set-Cookie back to the browser, so a
+      // refresh here would rotate the refresh token into a response the
+      // client can never store — burning the session. Upgrades authenticate
+      // with the current access token only; once it expires they fail until
+      // a regular request refreshes the cookie and the client reconnects.
+      const isWebSocketUpgrade = headers.get("upgrade")?.toLowerCase() === "websocket";
+      const accessTokenExpired = tokenSet.accessTokenExpiresAt <= Date.now();
+      const accessTokenExpiresSoon = tokenSet.accessTokenExpiresAt <= Date.now() + REFRESH_SKEW_MS;
+
       let refreshed = false;
-      try {
-        if (tokenSet.accessTokenExpiresAt <= Date.now() + REFRESH_SKEW_MS) {
+      if (accessTokenExpiresSoon && !isWebSocketUpgrade) {
+        try {
           const newTokenSet = await doRefresh(tokenSet);
-          if (!newTokenSet) return { session: null, responseHeaders: new Headers() };
-          tokenSet = newTokenSet;
-          refreshed = true;
+          if (newTokenSet) {
+            tokenSet = newTokenSet;
+            refreshed = true;
+          } else if (accessTokenExpired) {
+            return { session: null, responseHeaders: new Headers() };
+          }
+        } catch {
+          // A failed refresh while the current access token is still valid is
+          // not fatal: serve this request with the existing token and let a
+          // later request retry the refresh.
+          if (accessTokenExpired) {
+            return { session: null, responseHeaders: new Headers() };
+          }
         }
-      } catch {
+      } else if (accessTokenExpired) {
         return { session: null, responseHeaders: new Headers() };
       }
 

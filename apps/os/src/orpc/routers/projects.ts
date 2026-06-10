@@ -13,7 +13,7 @@ import {
   ensureProjectCustomHostname,
   ensureProjectCustomHostnameStatus,
 } from "~/domains/projects/cloudflare-custom-hostnames.ts";
-import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnectionStructuredName } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import {
   isReservedProjectHostname,
@@ -28,7 +28,7 @@ import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
 import { projectSecretsRouter } from "~/orpc/routers/secrets.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
-import { ProjectsCapability } from "~/capnweb/projects-capability.ts";
+import { ProjectsCapability } from "~/domains/projects/project-directory.ts";
 
 type ProjectRow = {
   id: string;
@@ -316,7 +316,7 @@ async function requireProject(input: { context: RequestContext; projectId: strin
 }
 
 function projectDurableObject(projectId: string) {
-  return env.PROJECT.getByName(getProjectDurableObjectName(projectId));
+  return getProjectDurableObjectStub(projectId);
 }
 
 type ProjectLifecycleStateRpc = {
@@ -324,7 +324,5 @@ type ProjectLifecycleStateRpc = {
 };
 
 function projectLifecycleDurableObject(projectId: string): ProjectLifecycleStateRpc {
-  return env.PROJECT.getByName(
-    getProjectDurableObjectName(projectId),
-  ) as unknown as ProjectLifecycleStateRpc;
+  return getProjectDurableObjectStub(projectId) as unknown as ProjectLifecycleStateRpc;
 }

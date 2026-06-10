@@ -15,7 +15,10 @@ import {
   upsertProjectConnection,
   upsertProjectSecret,
 } from "~/domains/secrets/secrets-store.ts";
-import { getSlackIntegrationDurableObjectName } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
+import {
+  getSlackIntegrationDurableObjectName,
+  getSlackIntegrationStub,
+} from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import {
   oauthRedirectUri,
   providerSecretKey,
@@ -311,7 +314,7 @@ async function handleVerifiedSlackWebhook(input: {
     return Response.json({ error: "Slack team is not claimed by a project." }, { status: 404 });
   }
   const slackIntegrationName = getSlackIntegrationDurableObjectName(connection.projectId);
-  const slackIntegration = env.SLACK_INTEGRATION.getByName(slackIntegrationName) as unknown as {
+  const slackIntegration = getSlackIntegrationStub(connection.projectId) as unknown as {
     ensureReady(): Promise<unknown>;
     initialize(input: { name: string }): Promise<unknown>;
   };

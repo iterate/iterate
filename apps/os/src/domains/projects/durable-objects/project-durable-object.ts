@@ -1,13 +1,13 @@
+import { env } from "cloudflare:workers";
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
-import { newWorkersRpcResponse, type RpcStub } from "capnweb";
 import { acceptCaptunTunnel, type Fetcher } from "captun";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { jsonataReactorEventTypes } from "@iterate-com/shared/stream-processors/jsonata-reactor/contract";
-import { type Event } from "@iterate-com/shared/streams/types";
+import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
 import { typeid } from "@iterate-com/shared/typeid";
 import {
   getInitializedStreamStub,
@@ -16,18 +16,8 @@ import {
 } from "~/domains/streams/new-stream-runtime.ts";
 import { parseConfig } from "~/config.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
-import {
-  createCapnwebRequestContext,
-  createIterateContext,
-  createProjectsCapability,
-  type IterateContext,
-  type IterateContextProps,
-} from "~/capnweb/iterate-context-capability.ts";
-import {
-  authenticateCapnwebAdmin,
-  handleCapnwebAdminCookieRequest,
-} from "~/capnweb/admin-auth-cookie.ts";
-import { ProjectCapability } from "~/capnweb/project-capability.ts";
+import type { ItxProps } from "~/itx/protocol.ts";
+import type { ProjectEgressProps } from "~/itx/entrypoint.ts";
 import {
   AGENTS_STREAM_PATH,
   type AgentDurableObject,
@@ -66,13 +56,12 @@ import {
   EXAMPLE_EGRESS_SECRET_METADATA,
 } from "~/domains/secrets/example-secret.ts";
 import type { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
+import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
+import { replayPathCall } from "~/itx/path-proxy.ts";
+import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
+import type { CapInvoke, CapMeta, CapSource, PathCall } from "~/itx/protocol.ts";
 
 type CaptunServerTunnel = Fetcher & Disposable;
-type ProjectCapnwebConnectionTarget = Record<string, any>;
-type ProjectCapnwebConnection = Disposable & {
-  target: RpcStub<ProjectCapnwebConnectionTarget>;
-};
-
 export type ProjectStructuredName = {
   projectId: string;
 };
@@ -87,6 +76,15 @@ export function getProjectDurableObjectName(projectId: string) {
   });
 }
 
+/**
+ * Mint a Project DO stub. Lives here (a trusted domain DO file) so ingress code
+ * never accesses the raw PROJECT binding — see the
+ * no-raw-durable-object-binding-access lint rule.
+ */
+export function getProjectDurableObjectStub(projectId: string) {
+  return env.PROJECT.getByName(getProjectDurableObjectName(projectId));
+}
+
 export type ProjectSummary = {
   id: string;
   slug: string;
@@ -94,7 +92,7 @@ export type ProjectSummary = {
   hosts: string[];
 };
 
-export type ProjectCapabilityApi = Pick<
+export type ProjectCapability = Pick<
   ProjectDurableObject,
   | "afterAppend"
   | "callConfigWorkerFunction"
@@ -103,16 +101,16 @@ export type ProjectCapabilityApi = Pick<
   | "egressFetch"
   | "fetch"
   | "getConfigWorker"
-  | "getConnection"
-  | "getIterateContext"
   | "getProjectLifecycleRunnerState"
   | "getSummary"
   | "ingressFetch"
   | "ingressUrl"
-  | "provideCapability"
-> & {
-  getCapability(props?: { scopes?: unknown }): ProjectCapabilityApi;
-};
+  | "itxDefine"
+  | "itxDescribe"
+  | "itxInvoke"
+  | "itxProvide"
+  | "itxRevoke"
+>;
 
 export type CreateProjectInput = {
   projectId: string;
@@ -154,7 +152,6 @@ export type ProjectDynamicWorkerEntrypoint = {
   [Symbol.dispose]?(): void;
   fetch(request: Request): Response | Promise<Response>;
   afterAppend?(input: { event: Event }): unknown | Promise<unknown>;
-  getIterateContextProps?(): Partial<IterateContextProps> | Promise<Partial<IterateContextProps>>;
 };
 
 type ProjectDynamicWorkerModule =
@@ -220,7 +217,6 @@ const PROJECT_CONFIG_REFRESH_INTERVAL_MS = 10_000;
 const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.js";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-04-27";
 const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
-const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 type ProjectConfigWorkspaceName = {
@@ -255,10 +251,6 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   } | null = null;
   #projectEgressInterceptTunnel: CaptunServerTunnel | null = null;
   #projectConfigWorkerBuildPromise: Promise<ProjectDynamicWorkerEntrypoint> | null = null;
-  // Live Cap'n Web connections keyed by caller-chosen names. Like stream
-  // processor connections, these are runtime-only sockets, not durable project
-  // state; reconnecting recreates the target under the same key.
-  #capnwebConnections = new Map<string, ProjectCapnwebConnection>();
 
   constructor(ctx: DurableObjectState, env: ProjectEnv) {
     super(ctx, env);
@@ -391,76 +383,91 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     };
   }
 
-  getCapability(_props: { scopes?: unknown } = {}): ProjectCapability {
-    const context = createCapnwebRequestContext({
-      ctx: this.ctx,
-      env: this.env as unknown as Env,
-      method: "CAPNWEB",
-      path: "capnweb://project-capability",
-    });
-    return new ProjectCapability({
-      context,
-      project: this,
-      projectId: this.structuredName.projectId,
-    });
-  }
+  // ---- itx capability registry (apps/os/docs/itx-spec.md §4) --------------
+  //
+  // The Project DO hosts the PROJECT CONTEXT: it embeds the registry and is
+  // the supervisor for every capability invocation in this project. These
+  // five methods are the entire registry surface; itx handles (src/itx/) call
+  // them over Workers RPC and never reach the registry any other way.
 
-  getConnection(connectionKey: string): RpcStub<ProjectCapnwebConnectionTarget> {
-    const connection = this.#capnwebConnections.get(connectionKey);
-    if (!connection) {
-      throw new Error(`Project Cap'n Web connection ${connectionKey} is not connected.`);
-    }
-    // Hand callers a duplicate handle. Disposing the returned stub should
-    // release that caller's reference, not tear down the registered socket that
-    // other ctx.project.connections.get(key) callers may still need.
-    return connection.target.dup();
-  }
+  #itxRegistry: ContextRegistry | null = null;
 
-  provideCapability(input: {
-    connectionKey: string;
-    rpcTarget: RpcStub<ProjectCapnwebConnectionTarget>;
+  async itxProvide(input: {
+    name: string;
+    target: LiveCapTarget;
+    invoke?: CapInvoke;
+    meta?: CapMeta;
   }) {
-    const connectionKey = input.connectionKey.trim();
-    if (!connectionKey) throw new Error("Project capability connection key is required.");
-
-    // Cap'n Web may release the argument stub when provideCapability() returns.
-    // Store a duplicate so the provided capability remains callable until the
-    // provider's project Cap'n Web session breaks or this key is replaced.
-    const target = input.rpcTarget.dup();
-    const connection: ProjectCapnwebConnection = {
-      target,
-      [Symbol.dispose]: () => {
-        if (this.#capnwebConnections.get(connectionKey) === connection) {
-          this.#capnwebConnections.delete(connectionKey);
-        }
-        target[Symbol.dispose]?.();
-      },
-    };
-
-    this.#capnwebConnections.get(connectionKey)?.[Symbol.dispose]();
-    this.#capnwebConnections.set(connectionKey, connection);
-    target.onRpcBroken?.(() => connection[Symbol.dispose]());
-
-    return { connectionKey, ok: true };
+    await this.ensureStarted();
+    return this.itxRegistry().provide(input);
   }
 
-  async getIterateContext(props?: IterateContextProps): Promise<IterateContext> {
+  async itxDefine(input: {
+    name: string;
+    source: CapSource;
+    kind?: "worker" | "facet";
+    invoke?: CapInvoke;
+    meta?: CapMeta;
+  }) {
     await this.ensureStarted();
-    const summary = this.requireSummary();
-    const context = createCapnwebRequestContext({
-      ctx: this.ctx,
-      env: this.env as unknown as Env,
-      method: "CAPNWEB",
-      path: "capnweb://project-durable-object",
+    return this.itxRegistry().define(input);
+  }
+
+  async itxRevoke(input: { name: string }) {
+    await this.ensureStarted();
+    return this.itxRegistry().revoke(input);
+  }
+
+  async itxDescribe() {
+    await this.ensureStarted();
+    return this.itxRegistry().describe();
+  }
+
+  async itxInvoke(input: PathCall & { name: string }) {
+    await this.ensureStarted();
+    return await this.itxRegistry().invoke(input.name, { args: input.args, path: input.path });
+  }
+
+  private itxRegistry(): ContextRegistry {
+    if (this.#itxRegistry) return this.#itxRegistry;
+    const projectId = this.structuredName.projectId;
+    this.#itxRegistry = new ContextRegistry({
+      // Best-effort audit trail on the project's /itx stream; the registry's
+      // SQLite table is the authoritative state (itx DECISIONS.md D1).
+      audit: (event) => {
+        this.ctx.waitUntil(
+          (async () => {
+            const stream = await getInitializedStreamStub({
+              durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+              namespace: projectId,
+              path: StreamPath.parse(ITX_AUDIT_STREAM_PATH),
+            });
+            await stream.append({ payload: event.payload, type: event.type });
+          })().catch((error) => {
+            console.error(`[itx] audit append failed for ${projectId}:`, error);
+          }),
+        );
+      },
+      contextId: projectId,
+      facets: durableObjectFacetsHook(this.ctx),
+      loader: projectRuntimeEnv(this.env).LOADER as unknown as ConstructorParameters<
+        typeof ContextRegistry
+      >[0]["loader"],
+      loopback: (exportName, options) => {
+        const exports = this.ctx.exports as unknown as Record<
+          string,
+          (options: Record<string, unknown>) => unknown
+        >;
+        const factory = exports[exportName];
+        if (typeof factory !== "function") {
+          throw new Error(`Loopback export ${exportName} is not available.`);
+        }
+        return factory(options);
+      },
+      projectId,
+      sql: this.getDurableObjectSql(),
     });
-    return createIterateContext({
-      context,
-      projects: createProjectsCapability({
-        context,
-        iterateContextProps: props ?? { scopes: { projects: [summary.id] } },
-      }),
-      props: props ?? { scopes: { projects: [summary.id] } },
-    });
+    return this.#itxRegistry;
   }
 
   async ingressUrl(): Promise<string> {
@@ -505,8 +512,6 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     await this.ensureStarted();
     const summary = this.requireSummary();
     const url = new URL(request.url);
-    const capnwebResponse = await this.handleProjectCapnwebFetch(request);
-    if (capnwebResponse) return capnwebResponse;
 
     if (url.pathname === "/__iterate/intercept-project-egress") {
       return this.acceptProjectEgressInterceptTunnel(request);
@@ -590,64 +595,25 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return await fetch(outboundRequest);
   }
 
-  async callConfigWorkerFunction(input: {
-    args?: unknown[];
-    functionName: string;
-    iterateContextProps?: IterateContextProps;
-  }): Promise<unknown> {
+  async callConfigWorkerFunction(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
     await this.ensureStarted();
     const summary = this.requireSummary();
     const checkout = await this.buildFreshProjectDynamicWorker(summary);
-    // Tool calls need one subtle extra step compared with ingress fetch.
+    // The config worker's env.ITERATE is a project-scoped ItxEntrypoint wired
+    // at load time, so tool calls need no per-call context construction. If a
+    // tool wants shortcuts like itx.slack, those are registry capabilities
+    // (itx.caps.provide/define) — durable wiring, not per-load props. This is
+    // what deleted the old getIterateContextProps() two-step load.
     //
-    // The project config worker may export getIterateContextProps() to describe
-    // context mounts it wants during RPC-style tool execution. That is useful
-    // for project-local tools such as:
-    //
-    //   postDailyReport() {
-    //     const ctx = await env.ITERATE.context;
-    //     return ctx.slack.chat.postMessage(...);
-    //   }
-    //
-    // where ctx.slack is not a built-in domain capability, but a mount pointing
-    // at a live parent-provided RpcTarget registered through
-    // ctx.project.connections.
-    //
-    // Dynamic worker env bindings are fixed when the worker is loaded, so the
-    // host has to load the worker once with the ordinary project context, ask
-    // for its desired mount props, then load the same code again with
-    // env.ITERATE constructed from those props for the actual tool call.
-    const defaultEntrypoint = this.loadProjectDynamicWorkerEntrypoint({
+    // Every public method/getter on the config worker entrypoint is proxied
+    // automatically via the shared path replay — exactly like worker/facet
+    // caps — so adding an exported method makes itx.worker.foo() work with no
+    // wiring here.
+    const entrypoint = this.loadProjectDynamicWorkerEntrypoint({
       checkout,
       projectId: summary.id,
     });
-    const iterateContextProps =
-      input.iterateContextProps ??
-      (await this.resolveProjectConfigIterateContextProps({
-        entrypoint: defaultEntrypoint,
-        projectId: summary.id,
-      }));
-    const entrypoint =
-      iterateContextProps == null
-        ? defaultEntrypoint
-        : this.loadProjectDynamicWorkerEntrypoint({
-            checkout,
-            iterateContextProps,
-            projectId: summary.id,
-          });
-
-    try {
-      const fn = entrypoint[input.functionName];
-      if (typeof fn !== "function") {
-        throw new Error(`Project config worker does not export ${input.functionName}.`);
-      }
-
-      return await Reflect.apply(fn, entrypoint, input.args ?? []);
-    } finally {
-      if (entrypoint !== defaultEntrypoint) {
-        entrypoint[Symbol.dispose]?.();
-      }
-    }
+    return await replayPathCall(entrypoint, { args: input.args ?? [], path: input.path });
   }
 
   async getConfigWorker(): Promise<ProjectDynamicWorkerEntrypoint> {
@@ -658,17 +624,6 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
 
   async fetch(request: Request): Promise<Response> {
     return await this.ingressFetch(request);
-  }
-
-  private async handleProjectCapnwebFetch(request: Request): Promise<Response | null> {
-    const pathname = new URL(request.url).pathname;
-    if (pathname === `${PROJECT_CAPNWEB_PATH}/admin-cookie`) {
-      return await handleCapnwebAdminCookieRequest({ config: this.getAppConfig(), request });
-    }
-    if (pathname !== PROJECT_CAPNWEB_PATH) return null;
-    const principal = authenticateCapnwebAdmin({ config: this.getAppConfig(), request });
-    if (!principal) return new Response("Unauthorized", { status: 401 });
-    return newWorkersRpcResponse(request, this.getCapability());
   }
 
   private acceptProjectEgressInterceptTunnel(request: Request): Response {
@@ -796,91 +751,50 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
   }
 
-  private async resolveProjectConfigIterateContextProps(input: {
-    entrypoint: ProjectDynamicWorkerEntrypoint;
-    projectId: string;
-  }): Promise<IterateContextProps | undefined> {
-    let configProps: Partial<IterateContextProps>;
-    try {
-      // Workers RPC stubs do not give us a trustworthy optional-method probe:
-      // reading a missing method can still produce a callable stub, and the
-      // runtime reports "does not implement the method" only when that stub is
-      // invoked. Calling and handling that one RPC error keeps worker.js simple:
-      // export getIterateContextProps() when you want mounts; omit it otherwise.
-      configProps = await input.entrypoint.getIterateContextProps!();
-    } catch (error) {
-      if (isMissingProjectConfigEntrypointMethod(error, "getIterateContextProps")) {
-        return undefined;
-      }
-      throw error;
-    }
-
-    // This hook is intentionally one-way: project config code can contribute
-    // ergonomic mounts, but the host owns authority. In particular:
-    //
-    // - We accept only `mounts` from the worker result.
-    // - We always overwrite scopes with this project id.
-    // - A malicious or buggy worker returning `{ scopes: { projects: "all" } }`
-    //   is therefore harmless here.
-    //
-    // That keeps the future "worker.js defines its IterateContext shape" model
-    // compatible with object-capability security: config code may name
-    // capabilities it can already reach through project-local mounts, but it
-    // cannot mint new project access.
-    return {
-      mounts: Array.isArray(configProps.mounts) ? configProps.mounts : undefined,
-      scopes: { projects: [input.projectId] },
-    };
-  }
-
   private loadProjectDynamicWorkerEntrypoint(input: {
     checkout: ProjectConfigCheckout;
-    iterateContextProps?: IterateContextProps;
     projectId: string;
   }): ProjectDynamicWorkerEntrypoint {
     const { checkout } = input;
-    if (
-      !input.iterateContextProps &&
-      this.#dynamicWorkerEntrypoint?.commitOid === checkout.commitOid
-    ) {
+    if (this.#dynamicWorkerEntrypoint?.commitOid === checkout.commitOid) {
       return this.#dynamicWorkerEntrypoint.entrypoint;
     }
 
     const loader = projectRuntimeEnv(this.env).LOADER;
-    const workerCode = projectDynamicWorkerCodeWithStreams({
-      iterate: readLoopbackExports(this.ctx).IterateContextEntrypoint({
-        props: input.iterateContextProps ?? { scopes: { projects: [input.projectId] } },
+    const exports = readLoopbackExports(this.ctx);
+    const workerCode = projectDynamicWorkerCodeWithBindings({
+      // The config worker is cap #0's code: it gets a project-scoped itx
+      // (env.ITERATE.context) and the project egress pipe as its global
+      // fetch. It can never reach wider than its own project, and its bare
+      // fetch() gets secret substitution like every other loaded isolate.
+      globalOutbound: exports.ProjectEgress({
+        props: { cap: "configWorker", context: input.projectId, project: input.projectId },
       }),
-      streams: readLoopbackExports(this.ctx).StreamsCapability({
+      iterate: exports.ItxEntrypoint({
+        props: { cap: "configWorker", context: input.projectId },
+      }),
+      streams: exports.StreamsCapability({
         props: { projectId: input.projectId },
       }),
       workerCode: checkout.workerCode,
     });
-    const worker = input.iterateContextProps
-      ? // Custom context props may include per-call mounts, so they cannot share
-        // the cached ingress/config-worker instance keyed only by commit oid. Use
-        // load() for this one invocation, dispose it after the method returns, and
-        // leave the normal cached get() path for ingress/default tool calls.
-        loader.load(workerCode)
-      : loader.get(
-          projectDynamicWorkerId({
-            commitOid: checkout.commitOid,
-            projectId: input.projectId,
-          }),
-          () => workerCode,
-        );
+    const worker = loader.get(
+      projectDynamicWorkerId({
+        commitOid: checkout.commitOid,
+        projectId: input.projectId,
+      }),
+      () => workerCode,
+    );
     const entrypoint = worker.getEntrypoint();
 
     if (!isProjectDynamicWorkerEntrypoint(entrypoint)) {
       throw new Error("Project dynamic worker entrypoint is missing fetch.");
     }
 
-    if (!input.iterateContextProps) {
-      this.#dynamicWorkerEntrypoint = {
-        commitOid: checkout.commitOid,
-        entrypoint,
-      };
-    }
+    this.#dynamicWorkerEntrypoint = {
+      commitOid: checkout.commitOid,
+      entrypoint,
+    };
     return entrypoint;
   }
 
@@ -1371,7 +1285,8 @@ function projectDynamicWorkerCode(input: string) {
   };
 }
 
-function projectDynamicWorkerCodeWithStreams(input: {
+function projectDynamicWorkerCodeWithBindings(input: {
+  globalOutbound: Fetcher;
   iterate: Fetcher;
   streams: Fetcher;
   workerCode: ProjectDynamicWorkerCode;
@@ -1383,6 +1298,7 @@ function projectDynamicWorkerCodeWithStreams(input: {
       ITERATE: input.iterate,
       STREAMS: input.streams,
     },
+    globalOutbound: input.globalOutbound,
     modules: {
       ...input.workerCode.modules,
     },
@@ -1391,10 +1307,6 @@ function projectDynamicWorkerCodeWithStreams(input: {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
-}
-
-function isMissingProjectConfigEntrypointMethod(error: unknown, methodName: string) {
-  return errorMessage(error).includes(`does not implement the method "${methodName}"`);
 }
 
 async function bundledProjectDynamicWorkerCode(
@@ -1562,7 +1474,8 @@ function projectRuntimeEnv(env: ProjectEnv): ProjectRuntimeEnv {
 
 function readLoopbackExports(ctx: DurableObjectState) {
   return ctx.exports as unknown as Cloudflare.Exports & {
-    IterateContextEntrypoint(input: { props: IterateContextProps }): Fetcher;
+    ItxEntrypoint(input: { props: ItxProps }): Fetcher;
+    ProjectEgress(input: { props: ProjectEgressProps }): Fetcher;
     StreamsCapability(input: { props: StreamsCapabilityProps }): Fetcher;
   };
 }

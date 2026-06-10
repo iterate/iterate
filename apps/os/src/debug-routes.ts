@@ -9,7 +9,7 @@ import { seedIterateConfigBaseRepo } from "~/domains/repos/iterate-config-base-s
 import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
 
-const EGRESS_ECHO_PATH = "/api/captnweb/egress-echo";
+const EGRESS_ECHO_PATH = "/api/itx/egress-echo";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 /**

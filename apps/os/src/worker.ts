@@ -27,9 +27,8 @@ import { handleDebugRoutes, handleDurableObjectDebugFetch } from "~/debug-routes
 import { dispatchFetchCallable, matchIngressRequest } from "~/ingress/host-routing.ts";
 import { lookupIngressRule } from "~/ingress/lookup.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
-import { handleRootIterateContextFetch } from "~/capnweb/root-context-fetch.ts";
+import { handleItxFetch, handleProjectHostItxFetch } from "~/itx/fetch.ts";
 import { handleProjectStreamRpcFetch } from "~/domains/streams/project-stream-rpc.ts";
-import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 // Durable objects and RPC entrypoints must be exported from the worker's main
 // module so the runtime can find the classes the bindings refer to:
@@ -51,7 +50,9 @@ export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.t
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
-export { IterateContextEntrypoint } from "~/capnweb/iterate-context-capability.ts";
+export { ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
+export { ContextDO } from "~/itx/context-do.ts";
+export { ItxCapIngress } from "~/itx/http.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
@@ -64,7 +65,6 @@ export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capabil
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 
 const CAPTUN_TUNNEL_ROUTE_PREFIX = "/__iterate/captun";
-const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
@@ -109,16 +109,17 @@ export default {
             }),
         });
         if (ingressMatch) {
-          const pathname = new URL(request.url).pathname;
-          const projectId = ingressMatch.rule.projectId;
-          const servesProjectCapnweb =
-            projectId &&
-            (pathname === PROJECT_CAPNWEB_PATH ||
-              pathname === `${PROJECT_CAPNWEB_PATH}/admin-cookie`);
-          if (servesProjectCapnweb) {
-            return await env.PROJECT.getByName(getProjectDurableObjectName(projectId)).fetch(
+          // Project-host itx sessions terminate HERE in the stateless worker,
+          // never in the Project DO (itx Law 7 — the hibernation-ready seam).
+          if (ingressMatch.rule.projectId) {
+            const projectItxResponse = await handleProjectHostItxFetch({
+              config: requestConfig,
+              env,
+              exports: ctx.exports,
+              projectId: ingressMatch.rule.projectId,
               request,
-            );
+            });
+            if (projectItxResponse) return projectItxResponse;
           }
           return await dispatchFetchCallable({
             callable: ingressMatch.rule.callable,
@@ -142,13 +143,8 @@ export default {
         const streamRpcResponse = await handleProjectStreamRpcFetch({ context, env, request });
         if (streamRpcResponse) return streamRpcResponse;
 
-        const capnwebResponse = await handleRootIterateContextFetch({
-          request,
-          env,
-          context,
-          config,
-        });
-        if (capnwebResponse) return capnwebResponse;
+        const itxResponse = await handleItxFetch({ config, context, env, request });
+        if (itxResponse) return itxResponse;
 
         const durableObjectDebugResponse = await handleDurableObjectDebugFetch({
           request,

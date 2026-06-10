@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import {
@@ -36,6 +37,11 @@ export function getSlackIntegrationDurableObjectName(projectId: string) {
   return deriveDurableObjectNameFromStructuredName({
     structuredName: { projectId },
   });
+}
+
+/** Mint a Slack-integration DO stub from a trusted domain file (see lint rule). */
+export function getSlackIntegrationStub(projectId: string) {
+  return env.SLACK_INTEGRATION.getByName(getSlackIntegrationDurableObjectName(projectId));
 }
 
 type SlackIntegrationEnv = {
