@@ -22,7 +22,10 @@
 // the stream pumps batches into `processor.ingest`.
 
 import type { StreamProcessorSnapshot } from "../stream-processor.ts";
-import type { SubscriptionConfiguredEvent } from "../processors/core/contract.ts";
+import type {
+  ProcessorContractAnnouncement,
+  SubscriptionConfiguredEvent,
+} from "../processors/core/contract.ts";
 import type { StreamEvent } from "../shared/event.ts";
 import type { StreamCoreProcessorState, StreamRpc, StreamSubscriptionHandle } from "../types.ts";
 
@@ -75,7 +78,14 @@ export type HostedProcessorRuntimeState = {
 // `StreamProcessor<any, ...>` bound would compare #-private fields nominally
 // and reject concrete subclasses over their state types.)
 type AnyHostedProcessor = {
-  contract: { slug: string; consumes: readonly string[] };
+  contract: {
+    slug: string;
+    version?: string;
+    description?: string;
+    consumes: readonly string[];
+    emits?: readonly string[];
+    events: Record<string, { description?: string; payloadSchema?: unknown }>;
+  };
   ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void>;
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
 };
@@ -122,6 +132,13 @@ export type StreamProcessorHost = {
 
 export function createStreamProcessorHost(ctx: DurableObjectState): StreamProcessorHost {
   const entries = new Map<string, HostedEntry>();
+
+  // One id per host DO instance. It rides on each subscription's
+  // subscriber-connected presence fact: a connected event with a new
+  // incarnationId tells every reconciling processor that this host's
+  // non-serializable runtime state (timers, in-flight requests, sockets)
+  // was reset.
+  const hostIncarnationId = crypto.randomUUID();
 
   const snapshotKey = (name: string) => `stream-processor:${name}:snapshot`;
   const anchorKey = (name: string) => `stream-processor:${name}:side-effects-after-offset`;
@@ -182,6 +199,14 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       // The contract is the filter: the stream only delivers event types the
       // processor consumes. A `"*"` in consumes means unfiltered delivery.
       eventTypes: entry.processor.contract.consumes,
+      // The stream appends this identity as a subscriber-connected presence
+      // fact; the contract announcement feeds its processorsBySlug registry.
+      // Recovery re-subscriptions pass the same incarnationId — each (re)open
+      // genuinely is a new connection and re-lands on the roster.
+      subscriber: {
+        incarnationId: hostIncarnationId,
+        processor: announceContract(entry.processor.contract),
+      },
       processEventBatch: (batch) => {
         // Serialize ingest per processor so the generation gate is re-checked
         // *between* batches: a batch queued on a now-dead connection must be
@@ -317,43 +342,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       entry.consecutiveIngestFailures = 0;
 
       await openSubscription(name);
-
-      // Announce the processor's contract on the stream (idempotent per
-      // slug+version). This replaces the old per-processor
-      // standardProcessorBehavior self-registration.
-      const contract = entry.processor.contract as {
-        slug: string;
-        version?: string;
-        description?: string;
-        consumes: readonly string[];
-        emits?: readonly string[];
-        events: Record<string, { description?: string }>;
-      };
-      ctx.waitUntil(
-        Promise.resolve(
-          entry.stream.append({
-            event: {
-              type: "events.iterate.com/stream/processor-registered",
-              idempotencyKey: `processor-registered:${contract.slug}:${contract.version ?? "0"}`,
-              payload: {
-                slug: contract.slug,
-                version: contract.version ?? "0",
-                description: contract.description ?? "",
-                consumes: [...contract.consumes],
-                emits: [...(contract.emits ?? [])],
-                ownedEvents: Object.entries(contract.events).map(([type, definition]) => ({
-                  type,
-                  ...(definition.description === undefined
-                    ? {}
-                    : { description: definition.description }),
-                })),
-              },
-            },
-          }),
-        ).catch((error: unknown) => {
-          console.error(`stream processor "${name}" failed to register contract`, error);
-        }),
-      );
     },
 
     runtimeState(processorName) {
@@ -374,6 +362,27 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
               },
       };
     },
+  };
+}
+
+function announceContract(contract: {
+  slug: string;
+  version?: string;
+  description?: string;
+  consumes: readonly string[];
+  emits?: readonly string[];
+  events: Record<string, { description?: string; payloadSchema?: unknown }>;
+}): ProcessorContractAnnouncement {
+  return {
+    slug: contract.slug,
+    version: contract.version ?? "0",
+    description: contract.description ?? "",
+    consumes: [...contract.consumes],
+    emits: [...(contract.emits ?? [])],
+    ownedEvents: Object.entries(contract.events).map(([type, definition]) => ({
+      type,
+      ...(definition.description === undefined ? {} : { description: definition.description }),
+    })),
   };
 }
 

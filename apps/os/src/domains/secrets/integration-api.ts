@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { getInitializedStreamStub } from "~/domains/streams/new-stream-runtime.ts";
+import { getInitializedStreamStub } from "~/domains/streams/stream-runtime.ts";
 import type { Principal } from "~/auth/principal.ts";
 import type { RequestContext } from "~/request-context.ts";
 import {

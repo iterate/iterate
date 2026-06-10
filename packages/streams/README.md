@@ -165,10 +165,10 @@ Hosting:
 
 - Workers: `createStreamProcessorHost(this.ctx)` in
   `src/workers/stream-processor-host.ts` hosts named processors inside a
-  Durable Object. The host announces each processor's contract on the stream
-  with an idempotent `events.iterate.com/stream/processor-registered` append —
-  there is no per-processor `standardProcessorBehavior` self-registration
-  anymore.
+  Durable Object. The host passes each processor's contract announcement in
+  its subscribe call; the stream appends it as part of the
+  `events.iterate.com/stream/subscriber-connected` presence fact — there is no
+  per-processor `standardProcessorBehavior` self-registration anymore.
 - Browser: `acquireStreamRuntime` in `src/browser/stream-browser-store.ts`
   hosts a processor over a capnweb connection with a Web Locks writer election
   (see `CONTEXT.md`).

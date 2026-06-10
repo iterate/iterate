@@ -495,10 +495,10 @@ Working reference implementation: `src/stream-processor.ts (+ stream-processor.t
   More complex circuit breakers can sit elsewhere in the network and use the same
   paused/resumed contract.
 
-- **Ordinary processors include standard processor behavior by copying the shared pieces.**
-  `standardProcessorBehavior` contributes the registration state field, the
-  `events.iterate.com/stream/processor-registered` dependency, and the hook that appends
-  that registration event once per processor version. Keep owned event type strings inline
+- **Contract announcements ride the connect handshake.** The processor host passes
+  each processor's contract in its subscribe call and the stream records it on the
+  `events.iterate.com/stream/subscriber-connected` presence fact (the standalone
+  `processor-registered` event is gone). Keep owned event type strings inline
   in the processor contract, consumes/emits arrays, and reducer; repeating one durable
   event string inside a processor definition is clearer than hiding it behind aliases.
 

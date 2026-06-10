@@ -16,7 +16,7 @@ import type {
   EventsStreamViewState,
 } from "@iterate-com/ui/components/events/feed-items";
 import { useTerminalDimensions } from "@opentui/react";
-import { Fragment, useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef, type ReactNode } from "react";
 import { stringify as stringifyYaml } from "yaml";
 import type { StreamTuiView } from "./navigation-state.ts";
 import {
@@ -73,7 +73,7 @@ export function TuiEventsStreamView(props: {
   commandDocs: readonly string[];
   onComposerInput: (value: string) => void;
   onComposerSubmit: (value: string) => void;
-}) {
+}): ReactNode {
   const { width } = useTerminalDimensions();
   // Full terminal width minus scrollbox borders and content padding, with one
   // extra right gutter so right-aligned feed rows do not touch the scrollbar.

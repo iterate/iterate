@@ -45,7 +45,7 @@ const findLocalModule = () => {
       // Prefer TS source in monorepo dev, fall back to dist
       const repoSrc = join(repoPkg, "src/index.ts");
       if (existsSync(repoSrc)) return repoSrc;
-      const repoDist = join(repoPkg, "dist/index.js");
+      const repoDist = join(repoPkg, "dist/index.mjs");
       if (existsSync(repoDist)) return repoDist;
     }
   }
@@ -56,7 +56,7 @@ const findLocalModule = () => {
     const nmScript = join(nmRoot, "node_modules/.bin/iterate");
     if (existsSync(nmScript) && realpathSync(nmScript) !== selfReal) {
       // Published package — use dist
-      const nmDist = join(nmRoot, "node_modules/iterate/dist/index.js");
+      const nmDist = join(nmRoot, "node_modules/iterate/dist/index.mjs");
       if (existsSync(nmDist)) return nmDist;
     }
   }
@@ -70,9 +70,9 @@ if (localModule) {
   await runCli();
 } else {
   // No delegation — run our own copy.
-  // In monorepo dev: src/index.ts exists. Published: dist/index.js exists.
+  // In monorepo dev: src/index.ts exists. Published: dist/index.mjs exists.
   const srcPath = join(pkgRoot, "src/index.ts");
-  const distPath = join(pkgRoot, "dist/index.js");
+  const distPath = join(pkgRoot, "dist/index.mjs");
   const modulePath = existsSync(srcPath) ? srcPath : distPath;
   const { runCli } = await import(modulePath);
   await runCli();

@@ -18,6 +18,7 @@ import {
 } from "~/db/queries/.generated/index.ts";
 import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { isProjectId, mintProjectId } from "~/domains/projects/project-id.ts";
+import { principalIsAdmin } from "~/auth/principal.ts";
 
 type ProjectRow = {
   id: string;
@@ -58,7 +59,7 @@ export class ProjectsCapability extends RpcTarget {
     const context = this.props.context;
     const limit = input.limit ?? 100;
     const offset = input.offset ?? 0;
-    if (context.principal?.type === "admin") {
+    if (context.principal != null && principalIsAdmin(context.principal)) {
       const [totalRow, rows] = await Promise.all([
         countAllProjects(context.db),
         listAllProjects(context.db, { limit, offset }),
@@ -258,7 +259,7 @@ export async function requireProject(input: {
   }
 
   if (
-    input.context.principal?.type === "admin" ||
+    (input.context.principal != null && principalIsAdmin(input.context.principal)) ||
     input.context.principal?.can("read", { projectId: project.id })
   ) {
     return project;

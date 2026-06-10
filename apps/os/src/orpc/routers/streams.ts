@@ -9,10 +9,10 @@ import {
 } from "~/domains/streams/entrypoints/streams-capability.ts";
 import {
   getStreamDurableObjectName,
-  toLegacyEvent,
-  toNewAfterOffset,
+  withStreamPath,
+  toAfterOffset,
   type StreamDurableObjectNamespace,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
 
@@ -99,7 +99,7 @@ function getProjectStreamsCapability(context: RequestContext, projectId: string)
 }
 
 async function* subscribeProjectStreamEvents(input: {
-  afterOffset?: Parameters<typeof toNewAfterOffset>[0];
+  afterOffset?: Parameters<typeof toAfterOffset>[0];
   context: RequestContext;
   projectId: string;
   signal?: AbortSignal;
@@ -127,13 +127,14 @@ async function* subscribeProjectStreamEvents(input: {
     input.signal?.addEventListener("abort", onAbort, { once: true });
     handle = await streamStub.subscribe({
       processEventBatch: subscription.processEventBatch,
-      replayAfterOffset: toNewAfterOffset(input.afterOffset),
+      replayAfterOffset: toAfterOffset(input.afterOffset),
+      subscriber: { description: "orpc-bridge" },
     });
 
     for await (const batch of subscription) {
       if (input.signal?.aborted) return;
       for (const event of batch.events) {
-        yield toLegacyEvent(event, streamPath);
+        yield withStreamPath(event, streamPath);
       }
     }
   } finally {

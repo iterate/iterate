@@ -15,7 +15,7 @@ import {
   AGENTS_STREAM_PATH,
   getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
-import { toLegacyEvent, toNewEventInput } from "~/domains/streams/new-stream-runtime.ts";
+import { withStreamPath, toStreamEventInput } from "~/domains/streams/stream-runtime.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
 import { runItxScript } from "~/itx/run.ts";
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
@@ -58,7 +58,7 @@ export class AgentHostProcessor extends StreamProcessor<
     args: Parameters<StreamProcessor<AgentHostProcessorContract>["processEvent"]>[0],
   ): void {
     const { projectId, streamPath } = this.deps.getStreamContext();
-    const event = toLegacyEvent(args.event, streamPath);
+    const event = withStreamPath(args.event, streamPath);
 
     // Wake this stream's agent WITHOUT blocking the host's checkpoint. The agent's
     // onInstanceWake waits for every processor on the stream (including this agent-host) to
@@ -134,7 +134,7 @@ export class AgentHostProcessor extends StreamProcessor<
       await handleItxExecutionCompletedForAgent({
         appendInput: async (input) => {
           await this.ctx.stream.append({
-            event: toNewEventInput(input.event) as StreamEventInput,
+            event: toStreamEventInput(input.event) as StreamEventInput,
           });
         },
         event,

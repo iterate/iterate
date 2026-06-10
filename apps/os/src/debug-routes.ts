@@ -2,7 +2,7 @@ import { StreamPath } from "@iterate-com/shared/streams/types.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 import type { AppConfig } from "~/config.ts";
 import type { CloudflareArtifactsBinding } from "~/domains/repos/artifacts.ts";
 import { seedIterateConfigBaseRepo } from "~/domains/repos/iterate-config-base-seed.ts";

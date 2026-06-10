@@ -18,7 +18,7 @@ import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 import { parseConfig } from "~/config.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
 import type { ItxProps } from "~/itx/protocol.ts";

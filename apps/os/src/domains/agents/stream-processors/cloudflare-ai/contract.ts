@@ -5,6 +5,7 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
+import { CoreProcessorContract } from "@iterate-com/streams/processors/core/contract";
 import { AgentProcessorContract } from "../agent/contract.ts";
 
 const LlmRequestId = z.number().int().positive();
@@ -26,8 +27,16 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
       .default({}),
   }),
   initialState: {},
-  processorDeps: [AgentProcessorContract],
+  processorDeps: [AgentProcessorContract, CoreProcessorContract],
   events: {
+    "events.iterate.com/cloudflare-ai/llm-request-attempt-failed": {
+      description:
+        "An execution attempt for an agent LLM request died before its terminal events landed (e.g. the hosting durable object crashed mid-request). Appended by the reconciler before it re-executes, so the stream honestly records the crash and the retry.",
+      payloadSchema: z.object({
+        llmRequestId: LlmRequestId,
+        reason: z.enum(["host-restarted", "unrecoverable"]),
+      }),
+    },
     "events.iterate.com/cloudflare-ai/llm-request-started": {
       description:
         "The Cloudflare AI processor started executing an agent LLM request. The llmRequestId is the offset of the source agent/llm-request-requested event.",
@@ -65,9 +74,13 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
     "events.iterate.com/cloudflare-ai/llm-request-started",
     "events.iterate.com/cloudflare-ai/llm-request-completed",
     "events.iterate.com/agent/llm-request-requested",
+    // The reconcile trigger: a fresh subscriber connection means some host's
+    // runtime state was reset — check for started-but-not-executing requests.
+    "events.iterate.com/stream/subscriber-connected",
   ],
   emits: [
     "events.iterate.com/cloudflare-ai/llm-request-started",
+    "events.iterate.com/cloudflare-ai/llm-request-attempt-failed",
     "events.iterate.com/cloudflare-ai/llm-request-completed",
     "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-request-completed",

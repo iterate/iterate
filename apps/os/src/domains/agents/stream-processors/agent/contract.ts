@@ -9,8 +9,8 @@
 // Migrated from packages/shared/src/stream-processors/agent/contract.ts.
 // Wire formats (event types and payload schemas) are unchanged. The
 // standardProcessorBehavior registration slice (`hasRegisteredCurrentVersion`
-// state + core stream-processor-registered consumption) is gone: the stream
-// processor host announces contracts via `stream/processor-registered` now.
+// state + core stream-processor-registered consumption) is gone: contract
+// announcements now ride the host's `stream/subscriber-connected` fact.
 
 import { z } from "zod";
 import {
@@ -22,6 +22,7 @@ import {
   type ConsumedEvent,
   type StreamEvent,
 } from "@iterate-com/streams/shared/stream-processors";
+import { CoreProcessorContract } from "@iterate-com/streams/processors/core/contract";
 
 export const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.6";
 
@@ -49,7 +50,20 @@ export const AgentProcessorContract = defineProcessorContract({
       .default({ model: DEFAULT_WORKERS_AI_AGENT_MODEL, runOpts: {}, debounceMs: 1000 }),
     currentRequest: z
       .discriminatedUnion("phase", [
-        z.object({ phase: z.literal("scheduled"), requestId: z.string() }),
+        z.object({
+          phase: z.literal("scheduled"),
+          requestId: z.string(),
+          /**
+           * Offset of the llm-request-scheduled event. The durable half of the
+           * debounce: a fresh instance (whose in-memory timer died with its
+           * predecessor) re-derives the request handoff — and its idempotency
+           * key — from this, so the recovery path and the timer path converge
+           * on the same llm-request-requested append. Optional so checkpoints
+           * written before this field existed still parse; recovery falls
+           * back to finding the scheduled event in stream history.
+           */
+          scheduledOffset: z.number().int().positive().optional(),
+        }),
         z.object({ phase: z.literal("requested"), llmRequestId: z.number().int().positive() }),
       ])
       .nullable()
@@ -57,6 +71,9 @@ export const AgentProcessorContract = defineProcessorContract({
     pendingTriggerCount: z.number().int().nonnegative().default(0),
   }),
   initialState: {},
+  // The core contract owns `stream/subscriber-connected`, the scheduler's
+  // reconcile trigger.
+  processorDeps: [CoreProcessorContract],
   events: {
     "events.iterate.com/agent/capability-noted": {
       description:
@@ -211,6 +228,7 @@ export const AgentProcessorContract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/agent/capability-noted",
+    "events.iterate.com/stream/subscriber-connected",
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/output-added",
@@ -243,8 +261,11 @@ export type AgentConsumedEvent = ConsumedEvent<typeof AgentProcessorContract>;
  */
 export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumedEvent }) {
   const { state, event } = args;
+  // subscriber-connected is consumed for side effects only (the scheduler's
+  // reconcile trigger); like capability-noted it leaves state alone.
   switch (event.type) {
     case "events.iterate.com/agent/capability-noted":
+    case "events.iterate.com/stream/subscriber-connected":
       return state;
     case "events.iterate.com/agent/system-prompt-updated":
       return { ...state, systemPrompt: event.payload.systemPrompt };
@@ -270,7 +291,11 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
     case "events.iterate.com/agent/llm-request-scheduled":
       return {
         ...state,
-        currentRequest: { phase: "scheduled" as const, requestId: event.payload.requestId },
+        currentRequest: {
+          phase: "scheduled" as const,
+          requestId: event.payload.requestId,
+          scheduledOffset: event.offset,
+        },
         pendingTriggerCount: 0,
       };
     case "events.iterate.com/agent/llm-request-requested":

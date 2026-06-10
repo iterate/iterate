@@ -2,7 +2,7 @@ import { createD1Client } from "sqlfu";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 import {
   getProjectDurableObjectName,
   ProjectDurableObject as RealProjectDurableObject,

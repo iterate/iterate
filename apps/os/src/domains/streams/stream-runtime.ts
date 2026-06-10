@@ -1,20 +1,8 @@
 import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
-import type {
-  StreamEvent as NewStreamEvent,
-  StreamEventInput as NewStreamEventInput,
-} from "@iterate-com/streams/shared/event";
+import type { StreamEvent, StreamEventInput } from "@iterate-com/streams/shared/event";
 import type { StreamRpc } from "@iterate-com/streams/types";
-import {
-  DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
-  DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE,
-} from "@iterate-com/streams/processors/circuit-breaker/contract";
-import type {
-  Event,
-  EventInput,
-  StreamState,
-  StreamCursor,
-} from "@iterate-com/shared/streams/types";
-import { StreamPath } from "@iterate-com/shared/streams/types";
+import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
+import { StreamPath, StreamState } from "@iterate-com/shared/streams/types";
 
 export type StreamDurableObject = Stream;
 export type StreamDurableObjectNamespace = DurableObjectNamespace<Stream>;
@@ -51,9 +39,9 @@ export async function getInitializedStreamStub(input: {
 
   return {
     async append(event) {
-      return toLegacyEvent(
+      return withStreamPath(
         await stub.append({
-          event: toNewEventInput(event),
+          event: toStreamEventInput(event),
         }),
         path,
       );
@@ -61,90 +49,72 @@ export async function getInitializedStreamStub(input: {
     async appendBatch(events) {
       return (
         await stub.appendBatch({
-          events: events.map((event) => toNewEventInput(event)),
+          events: events.map((event) => toStreamEventInput(event)),
         })
-      ).map((event) => toLegacyEvent(event, path));
+      ).map((event) => withStreamPath(event, path));
     },
     async getState() {
-      return toLegacyStreamState(await stub.runtimeState());
+      return toStreamState(await stub.runtimeState());
     },
     async history(query = {}) {
       const events = await stub.getEvents({
-        afterOffset: toNewAfterOffset(query.after),
-        beforeOffset: toNewBeforeOffset(query.before),
+        afterOffset: toAfterOffset(query.after),
+        beforeOffset: toBeforeOffset(query.before),
       });
-      return events.map((event) => toLegacyEvent(event, path));
+      return events.map((event) => withStreamPath(event, path));
     },
     async stream(query = {}) {
       const events = await stub.getEvents({
-        afterOffset: toNewAfterOffset(query.after),
-        beforeOffset: toNewBeforeOffset(query.before),
+        afterOffset: toAfterOffset(query.after),
+        beforeOffset: toBeforeOffset(query.before),
       });
-      return eventsToNdjsonStream(events.map((event) => toLegacyEvent(event, path)));
+      return eventsToNdjsonStream(events.map((event) => withStreamPath(event, path)));
     },
   };
 }
 
-function toLegacyStreamState(
+/**
+ * Project the Stream Durable Object's core reduced state onto the public
+ * {@link StreamState} contract. Parsed (not cast) so the contract and this
+ * projection can never silently drift apart — a past version fabricated a
+ * "legacy" processors payload behind `as` casts that the schema rejected at
+ * runtime, which broke every stream navigation UI.
+ */
+export function toStreamState(
   runtimeState: Awaited<ReturnType<StreamRpc["runtimeState"]>>,
 ): StreamState {
   const core = runtimeState.coreProcessorState;
-  return {
+  return StreamState.parse({
     namespace: core.namespace,
-    path: StreamPath.parse(core.path),
+    path: core.path,
     eventCount: core.eventCount,
-    childPaths: core.childPaths.map((childPath: string) => StreamPath.parse(childPath)),
-    metadata: core.metadata as StreamState["metadata"],
-    processors: {
-      "circuit-breaker": {
-        paused: core.paused,
-        pauseReason: core.pauseReason,
-        pausedAt: null,
-        config: {
-          burstCapacity: DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
-          refillRatePerMinute: DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE,
-        },
-        availableTokens: DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
-        lastRefillAtMs: null,
-      },
-      "external-subscriber": {
-        subscribersBySlug: Object.fromEntries(
-          Object.entries(core.subscriptionsByKey).map(([key]) => [
-            key,
-            {
-              slug: key,
-              type: "callable",
-              callable: {},
-            },
-          ]),
-        ) as StreamState["processors"]["external-subscriber"]["subscribersBySlug"],
-      },
-    },
-  };
+    childPaths: core.childPaths,
+    metadata: core.metadata,
+  });
 }
 
-export function toLegacyEvent(event: NewStreamEvent, streamPath: StreamPath): Event {
+export function withStreamPath(event: StreamEvent, streamPath: StreamPath): Event {
   return {
     ...event,
     streamPath,
   } as Event;
 }
 
-export function toNewEventInput(event: EventInput): NewStreamEventInput {
+export function toStreamEventInput(event: EventInput): StreamEventInput {
   const { offset, ...rest } = event as EventInput & { offset?: number };
   return {
     ...rest,
     ...(offset == null ? {} : { offset }),
-  } as NewStreamEventInput;
+  } as StreamEventInput;
 }
 
-export function toNewAfterOffset(cursor: StreamCursor | undefined): number | undefined {
+export function toAfterOffset(cursor: StreamCursor | undefined): number | undefined {
   if (cursor == null || cursor === "start") return 0;
   if (cursor === "end") return Number.MAX_SAFE_INTEGER;
   return cursor;
 }
 
-function toNewBeforeOffset(cursor: StreamCursor | undefined): number | null | undefined {
+function toBeforeOffset(cursor: StreamCursor | undefined): number | null | undefined {
   if (cursor == null || cursor === "end") return null;
   if (cursor === "start") return 1;
   return cursor;
