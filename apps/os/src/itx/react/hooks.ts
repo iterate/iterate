@@ -11,13 +11,11 @@
 //   const create = useItxMutation({
 //     project: projectSlug,
 //     mutationFn: (itx, input: { streamPath: string }) => itx.streams.create(input),
-//     invalidates: [itxKey.project(projectSlug, "streams")],
 //   });
 
 import {
   useMutation,
   useQuery,
-  useQueryClient,
   type QueryKey,
   type UseMutationOptions,
   type UseMutationResult,
@@ -32,11 +30,10 @@ import { useItxClient } from "./context.ts";
 export type ItxHandle = RpcStub<Itx>;
 
 /**
- * Query-key conventions for itx-backed data. Mutations invalidate by prefix,
- * so keep keys hierarchical: ["itx", "project", slug, domain, ...rest].
+ * Query-key conventions for itx-backed data. Invalidate by prefix, so keep
+ * keys hierarchical: ["itx", "project", slug, domain, ...rest].
  */
 export const itxKey = {
-  global: (...parts: readonly unknown[]): QueryKey => ["itx", "global", ...parts],
   project: (projectSlugOrId: string, ...parts: readonly unknown[]): QueryKey => [
     "itx",
     "project",
@@ -49,8 +46,8 @@ export type UseItxQueryOptions<TData> = Omit<
   UseQueryOptions<TData, Error, TData, QueryKey>,
   "queryFn"
 > & {
-  /** Narrow to this project's context; omit for the global handle. */
-  project?: string;
+  /** The project context the queryFn's handle is narrowed to. */
+  project: string;
   queryFn: (itx: ItxHandle) => Promise<TData>;
 };
 
@@ -59,10 +56,7 @@ export function useItxQuery<TData>(options: UseItxQueryOptions<TData>): UseQuery
   const { project, queryFn, ...queryOptions } = options;
   return useQuery({
     ...queryOptions,
-    queryFn: async () => {
-      const itx = await (project === undefined ? client.itx() : client.project(project));
-      return await queryFn(itx);
-    },
+    queryFn: async () => await queryFn(await client.project(project)),
   });
 }
 
@@ -70,30 +64,18 @@ export type UseItxMutationOptions<TData, TVariables> = Omit<
   UseMutationOptions<TData, Error, TVariables>,
   "mutationFn"
 > & {
-  /** Narrow to this project's context; omit for the global handle. */
-  project?: string;
+  /** The project context the mutationFn's handle is narrowed to. */
+  project: string;
   mutationFn: (itx: ItxHandle, variables: TVariables) => Promise<TData>;
-  /** Query-key prefixes invalidated after a successful mutation. */
-  invalidates?: readonly QueryKey[];
 };
 
 export function useItxMutation<TData, TVariables = void>(
   options: UseItxMutationOptions<TData, TVariables>,
 ): UseMutationResult<TData, Error, TVariables> {
   const client = useItxClient();
-  const queryClient = useQueryClient();
-  const { project, mutationFn, invalidates, onSuccess, ...mutationOptions } = options;
+  const { project, mutationFn, ...mutationOptions } = options;
   return useMutation({
     ...mutationOptions,
-    mutationFn: async (variables) => {
-      const itx = await (project === undefined ? client.itx() : client.project(project));
-      return await mutationFn(itx, variables);
-    },
-    onSuccess: async (data, variables, mutateResult, context) => {
-      await Promise.all(
-        (invalidates ?? []).map((queryKey) => queryClient.invalidateQueries({ queryKey })),
-      );
-      await onSuccess?.(data, variables, mutateResult, context);
-    },
+    mutationFn: async (variables) => await mutationFn(await client.project(project), variables),
   });
 }

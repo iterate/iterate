@@ -1,21 +1,19 @@
-// One <ItxProvider> per app owns one lazy itx connection per tab.
-//
-// StrictMode-safe lifecycle: the client is created once in a state
-// initializer; the effect only arms/disarms it, and connecting is lazy, so
-// the dev-mode mount→unmount→mount cycle costs nothing.
+// One itx client per tab, created lazily on first render in a browser. React
+// never tears it down — the provider sits at the app root, the socket is
+// lazy, and a tab's connection dies with the tab. (dispose() exists on the
+// client for tests and non-app embeddings.)
 
-import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { createItxBrowserClient } from "./connection.ts";
+import { createItxBrowserClient, type ItxBrowserClient } from "./connection.ts";
 import { ItxClientContext } from "./context.ts";
 
+let browserClient: ItxBrowserClient | null = null;
+
+function getBrowserClient(): ItxBrowserClient {
+  browserClient ??= createItxBrowserClient();
+  return browserClient;
+}
+
 export function ItxProvider({ children }: { children: ReactNode }) {
-  const [client] = useState(() => createItxBrowserClient());
-
-  useEffect(() => {
-    client.activate();
-    return () => client.deactivate();
-  }, [client]);
-
-  return <ItxClientContext value={client}>{children}</ItxClientContext>;
+  return <ItxClientContext value={getBrowserClient()}>{children}</ItxClientContext>;
 }

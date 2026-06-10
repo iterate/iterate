@@ -1,8 +1,12 @@
-// Browser-side itx connection: ONE WebSocket per tab to /api/itx (the global
-// context), session-cookie authenticated, with lazy connect and automatic
-// reconnect. Project handles are derived in-session via itx.projects.get()
-// (narrowing is construction, Law 4) and cached per connection epoch — live
-// refs are runtime-only and rebuilt by reconnection (Law 1).
+// Browser-side itx connection: the app shares ONE WebSocket per tab to
+// /api/itx (the global context), session-cookie authenticated, with lazy
+// connect and automatic reconnect. (The itx REPL deliberately keeps its own
+// isolated session — see createBrowserReplSession in itx-repl.tsx — so it can
+// dispose and reconnect without touching app subscriptions.)
+//
+// Project handles are derived in-session via itx.projects.get() (narrowing is
+// construction, Law 4) and cached until the socket closes — live refs are
+// runtime-only and rebuilt by reconnection (Law 1).
 //
 // Framework-free on purpose: provider.tsx/hooks.ts are the React 19 layer on
 // top. The status surface (subscribeStatus/getStatus) is shaped for
@@ -22,12 +26,8 @@ export function createItxBrowserClient() {
   let status: ItxConnectionStatus = "idle";
   const statusListeners = new Set<() => void>();
 
-  // One "session" per successful socket open. Epoch increments on every new
-  // session so per-session caches (derived project handles) never leak across
-  // reconnects.
-  let session: { socket: WebSocket; stub: RpcStub<Itx>; epoch: number } | null = null;
-  let epoch = 0;
-  let active = true;
+  let session: { socket: WebSocket; stub: RpcStub<Itx> } | null = null;
+  let disposed = false;
   let backoffMs = INITIAL_BACKOFF_MS;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let waiters: PromiseWithResolvers<RpcStub<Itx>>[] = [];
@@ -49,13 +49,12 @@ export function createItxBrowserClient() {
 
     const socket = new WebSocket(url);
     socket.addEventListener("open", () => {
-      if (!active) {
+      if (disposed) {
         socket.close();
         return;
       }
-      epoch += 1;
       const stub = newWebSocketRpcSession<Itx>(socket);
-      session = { epoch, socket, stub };
+      session = { socket, stub };
       backoffMs = INITIAL_BACKOFF_MS;
       setStatus("connected");
       const settled = waiters;
@@ -67,7 +66,7 @@ export function createItxBrowserClient() {
         session = null;
         projectHandles.clear();
       }
-      if (!active) {
+      if (disposed) {
         setStatus("idle");
         return;
       }
@@ -82,7 +81,7 @@ export function createItxBrowserClient() {
 
   /** Resolve the global-context handle, connecting (or reconnecting) lazily. */
   function itx(): Promise<RpcStub<Itx>> {
-    if (!active) return Promise.reject(new Error("The itx client has been disposed."));
+    if (disposed) return Promise.reject(new Error("The itx client has been disposed."));
     if (session) return Promise.resolve(session.stub);
     const waiter = Promise.withResolvers<RpcStub<Itx>>();
     waiters.push(waiter);
@@ -90,15 +89,23 @@ export function createItxBrowserClient() {
     return waiter.promise;
   }
 
-  /** A project-narrowed handle, derived in-session and cached per epoch. */
+  /** A project-narrowed handle, derived in-session and cached until close. */
   function project(projectSlugOrId: string): Promise<RpcStub<Itx>> {
     const cached = projectHandles.get(projectSlugOrId);
     if (cached) return cached;
+    // capnweb types projects.get() by its RpcTarget return; re-assert the
+    // stub as the full Itx surface (a project handle IS an Itx handle).
     const handle = itx().then(
       (stub) => stub.projects.get(projectSlugOrId) as unknown as Promise<RpcStub<Itx>>,
     );
     projectHandles.set(projectSlugOrId, handle);
-    handle.catch(() => projectHandles.delete(projectSlugOrId));
+    handle.catch(() => {
+      // Only evict our own entry — by the time an old handle rejects, the
+      // cache may already hold a fresh post-reconnect one.
+      if (projectHandles.get(projectSlugOrId) === handle) {
+        projectHandles.delete(projectSlugOrId);
+      }
+    });
     return handle;
   }
 
@@ -110,16 +117,13 @@ export function createItxBrowserClient() {
       statusListeners.add(listener);
       return () => statusListeners.delete(listener);
     },
-    /** Re-arm after deactivate (StrictMode remounts). Lazy — no socket yet. */
-    activate() {
-      active = true;
-    },
     /**
-     * Close the socket and stop reconnecting. Pending callers reject. The
-     * client can be re-activated; the next itx() call reconnects fresh.
+     * Close the socket and stop reconnecting, permanently. Pending callers
+     * reject. The app never calls this — the per-tab client lives until the
+     * tab does — but tests and non-app embeddings need a clean teardown.
      */
-    deactivate() {
-      active = false;
+    dispose() {
+      disposed = true;
       if (retryTimer !== null) {
         clearTimeout(retryTimer);
         retryTimer = null;

@@ -21,10 +21,11 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { Spinner } from "@iterate-com/ui/components/spinner";
 import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
-import { projectStreamsListQueryOptions } from "~/lib/project-route-query.ts";
+import { projectStreamsListKey, useProjectStreamsList } from "~/lib/itx-queries.ts";
 import { streamPathFromInput } from "~/lib/stream-links.ts";
-import { itxKey, useItxMutation, useItxQuery } from "~/itx/react/index.ts";
+import { useItxMutation } from "~/itx/react/index.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
   loader: ({ context }) => ({
@@ -47,21 +48,13 @@ function ProjectStreamsIndexPage() {
     key: "lastWokenAt",
     direction: "desc",
   });
-  const { data, isPending, error, refetch } = useItxQuery({
-    project: project.id,
-    queryKey: itxKey.project(project.id, "streams", "list"),
-    queryFn: (itx) => itx.streams.list(),
-  });
+  const { data, isPending, error, refetch } = useProjectStreamsList(project.id);
   const createStream = useItxMutation({
     project: project.id,
     mutationFn: (itx, input: { streamPath: string }) => itx.streams.create(input),
-    invalidates: [itxKey.project(project.id, "streams")],
     onSuccess: async (_state, input) => {
-      // Breadcrumbs and sibling pages still read the stream list through the
-      // oRPC query until the cutover finishes — keep both caches honest.
-      await queryClient.invalidateQueries({
-        queryKey: projectStreamsListQueryOptions(project.id).queryKey,
-      });
+      // Breadcrumbs share this cache entry, so one invalidation reaches both.
+      await queryClient.invalidateQueries({ queryKey: projectStreamsListKey(project.id) });
       setFilter("");
       void navigate({
         to: "/projects/$projectSlug/streams/$",
@@ -168,11 +161,9 @@ function ProjectStreamsIndexPage() {
           </Button>
         </Empty>
       ) : isPending ? (
-        <Empty className="rounded-lg border">
-          <EmptyHeader>
-            <EmptyTitle>Loading streams…</EmptyTitle>
-          </EmptyHeader>
-        </Empty>
+        <div className="flex h-24 items-center justify-center rounded-lg border">
+          <Spinner />
+        </div>
       ) : streams.length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
