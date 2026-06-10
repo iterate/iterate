@@ -311,15 +311,15 @@ by crippling the node. Naming: keep `global`, not `root` — it's already the
 literal namespace name in the streams domain.
 
 **The access model is deliberately two-tier, and it shipped (PR #1418):**
-the only scopes that exist are `superadmin` (server-granted via the `admin`
-role only — client-requested scope is always stripped; auto-granted to
-`@nustom.com` accounts) and `project:<id>` strings. Superadmin resolves to
-access `"all"`; everyone else may do project-scoped things iff the project
-id is literally in their scopes. There is no separate "global namespace
-grant" — global authority IS superadmin. The code keeps ONE seam where
-finer-grained permissions would slot in later; we deliberately build none
-of it now. #1418 also already ships the first slice of this section: the
-`/admin` UI connects to the global itx over Cap'n Web, and `itx.streams`
+admin is the Better Auth admin-plugin role (`user.role === "admin"`,
+surfaced to OS as `role` / `is_admin` token claims), while OAuth project
+selection remains `project:<id>` scope strings. Admin resolves to access
+`"all"`; everyone else may do project-scoped things iff the project id is
+literally in their scopes. There is no separate "global namespace grant" —
+global authority IS admin. The code keeps ONE seam where finer-grained
+permissions would slot in later; we deliberately build none of it now.
+#1418 also already ships the first slice of this section: the `/admin` UI
+connects to the global itx over Cap'n Web, and `itx.streams`
 on a global handle targets the deployment-wide `global` namespace, gated
 on access `"all"`.
 
@@ -613,10 +613,9 @@ default — tombstone rows? Defer until someone needs them.
   Not a `source` worker either — its code lives in the project's build
   artifact (the registry points, never pins). Kept as a spelling so
   `entrypoint` always names the export you call (§1).
-- ~~Access model granularity?~~ → Shipped in #1418: `superadmin`
-  (role-granted) + `project:<id>` scopes, nothing else. One seam in the
-  code for finer-grained later; no implementation now. Global authority =
-  superadmin (§3).
+- ~~Access model granularity?~~ → Shipped in #1418: Better Auth admin role +
+  `project:<id>` scopes, nothing else. One seam in the code for finer-grained
+  later; no implementation now. Global authority = admin (§3).
 - ~~`global` vs `root`?~~ → `global` (leaning; it's the existing literal
   namespace name, e.g. Slack webhook receiving streams).
 
