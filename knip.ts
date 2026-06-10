@@ -26,6 +26,8 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "src/durable-objects/project-ingress-test-entry.ts",
       "src/durable-objects/itx-stream-subscribe.vitest.config.ts",
       "src/durable-objects/itx-stream-subscribe-test-entry.ts",
+      "src/durable-objects/itx-server-handle.vitest.config.ts",
+      "src/durable-objects/itx-server-handle-test-entry.ts",
     ],
     ignoreDependencies: [
       ...(base.ignoreDependencies ?? []),

@@ -1,0 +1,31 @@
+{
+  "name": "os-itx-server-handle-vitest",
+  "main": "itx-server-handle-test-entry.ts",
+  "compatibility_date": "2026-04-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "APP_CONFIG": "{\"adminApiSecret\":\"itx-server-handle-admin-secret\",\"openAiApiKey\":\"openai-test-key\",\"projectHostnameBases\":[\"iterate.localhost\"],\"typeIdPrefix\":\"os\"}",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_id": "os-itx-server-handle-vitest",
+      "database_name": "os-itx-server-handle-vitest",
+      "preview_database_id": "os-itx-server-handle-vitest",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "STREAM",
+        "class_name": "StreamDurableObject",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["StreamDurableObject"],
+    },
+  ],
+}

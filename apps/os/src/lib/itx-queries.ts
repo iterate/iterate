@@ -1,9 +1,12 @@
-// Shared itx-backed query definitions. Co-locating key + queryFn keeps every
-// consumer of the same data on the same TanStack cache entry, so one
-// invalidation reaches all of them.
+// Shared itx-backed query definitions. Each piece of data has exactly ONE
+// {key, queryFn, staleTime} definition (an ItxQueryDefinition), consumed by
+// the React hook AND by route-loader prefetches (prefetchItxQuery) — so a
+// loader can never seed a different cache entry than the component reads,
+// and one invalidation reaches every consumer.
 
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { itxKey, useItxQuery } from "~/itx/react/index.ts";
+import type { ItxQueryDefinition } from "~/itx/loader.ts";
 import { PROJECT_CHILD_ROUTE_STALE_TIME } from "~/lib/project-route-query.ts";
 import { StreamNavigationState } from "~/lib/stream-navigation-state.ts";
 
@@ -11,12 +14,25 @@ export function projectStreamStateKey(projectId: string, streamPath: StreamPathT
   return itxKey.project(projectId, "streams", "state", streamPath);
 }
 
-export function useProjectStreamState(input: { projectId: string; streamPath: StreamPathType }) {
-  return useItxQuery({
+/**
+ * One stream's reduced state, parsed to the navigation shape. Shared by the
+ * streams index tree (which seeds the root path from its route loader), the
+ * breadcrumb navigators, and any future view of the same stream — all on the
+ * same cache entry per path.
+ */
+export function projectStreamStateQuery(input: {
+  projectId: string;
+  streamPath: StreamPathType;
+}): ItxQueryDefinition<StreamNavigationState> {
+  return {
     project: input.projectId,
     queryKey: projectStreamStateKey(input.projectId, input.streamPath),
     queryFn: async (itx) =>
       StreamNavigationState.parse(await itx.streams.get(input.streamPath).getState()),
     staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
-  });
+  };
+}
+
+export function useProjectStreamState(input: { projectId: string; streamPath: StreamPathType }) {
+  return useItxQuery(projectStreamStateQuery(input));
 }
