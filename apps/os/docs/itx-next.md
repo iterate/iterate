@@ -63,13 +63,16 @@ type WorkerRef = // where an rpc target's worker lives — ONE shape for everyth
   | { type: "source"; source: CapSource }; // a dynamic worker materialized from stored source
 ```
 
-`project-worker` is NOT a primitive: it normalizes at define time to
-reaching the first-party `ProjectWorker` loopback forwarder with this
-project's id (the registry already injects context attribution). It is not
-a `source` worker either — its code lives in the project's build artifact
-and changes on deploy, so the registry can only point at it, never pin it.
-The dedicated spelling exists purely so `entrypoint` always names the
-export YOU call (not the forwarder) and `describe()` stays informative.
+`project-worker` SHIPPED (this section's litmus test below is a live e2e):
+the call crosses to the Project DO as data and is replayed there against
+`getEntrypoint(entrypoint, { props })` on the project's freshly-built
+worker — loader entrypoints cannot cross an RPC boundary, which is why
+this is a dispatch hook rather than the loopback-forwarder normalization
+an earlier draft described. It is not a `source` worker: its code lives in
+the project's repo (worker.js / bundled package) and rebuilds on push, so
+the registry only points at it, never pins it. `entrypoint` names the
+export YOU call; props = definer parameterization + injected
+`{ cap, context, projectId }` attribution, same as loopback refs.
 
 (Revised on review from a flat nine-kind union: the Workers-RPC-reachable
 kinds — binding, loopback, entrypoint, durable-object, config-worker,
@@ -338,7 +341,7 @@ Remaining questions:
 - Confirm the uncurried `{ namespace, … }` accessor pattern uniformly
   across repos/streams/workspaces.
 
-## 4. Drop codemode (the proving use case for all of the above)
+## 4. Drop codemode — SHIPPED 2026-06-10 (#1445/#1446/#1447, stateless MCP #1464)
 
 A codemode session is a child context that doesn't know it yet. The
 `CodemodeProcessor` reduces `tool-provider-registered` events into a provider
@@ -576,6 +579,26 @@ default — tombstone rows? Defer until someone needs them.
 
 ## Resolved (was open, now decided)
 
+- ~~Script calling convention?~~ → ONE shape: `async (itx) => …`, the single
+  argument is the handle. No conventions in the runner; parameterization is
+  the caller's concern (/api/itx/run bakes its `vars` into the source).
+  All ctx-era vocabulary swept; `extractCodemodeScript` tolerates the
+  legacy `async (ctx)` prefix from old histories (param name is the
+  author's business).
+- ~~project-worker ref mechanism?~~ → SHIPPED. Not loopback-forwarder
+  normalization: the call crosses to the Project DO as data (loader
+  entrypoints can't cross RPC) and replays against
+  `getEntrypoint(name, { props })` on the freshly built worker. The §1
+  litmus test is a live e2e: first-party McpClient (loopback) and a
+  user-space class pushed to the project repo (project-worker), same shape.
+- ~~Does alchemy handle DO class deletion?~~ → Yes (#1464,
+  OutboundMcpFromOurClientCapability): removing the namespace emits the
+  deleted_classes migration. Tombstone only needed when durable stream
+  subscribers dial the namespace (CodemodeSession).
+- ~~capnweb error identity?~~ → capnweb 0.8.0 drops custom error names on
+  reconstruction (`ERROR_TYPES[name] || Error`, props loop skips `name`).
+  ItxError detection is duck-typed via code/details, never name/instanceof.
+
 - ~~Root registry from day one?~~ → Global context gets the same anatomy as
   every context; no special-casing. Authority lives in access, not in node
   shape.
@@ -618,6 +641,21 @@ default — tombstone rows? Defer until someone needs them.
   later; no implementation now. Global authority = admin (§3).
 - ~~`global` vs `root`?~~ → `global` (leaning; it's the existing literal
   namespace name, e.g. Slack webhook receiving streams).
+
+## New debts (2026-06-10 evening)
+
+- `itx.workspace.git.*` (the nested WorkspaceGitCapability RpcTarget) fails
+  with "RPC receiver does not implement the method" both over capnweb and
+  from loader isolates — the flat `gitClone`/`gitAdd`/`gitCommit`/`gitPush`
+  methods work everywhere and are what scripts should use until the nested
+  target is fixed or removed.
+- Vite `server.allowedHosts` started blocking the dev tunnel host
+  (`os.iterate-dev-jonas.com`) for local e2e; localhost works. Find which
+  main change dropped the tunnel hosts from allowedHosts.
+- prd cleanup after tombstone soak: CodemodeSession class + stale stream
+  subscriber events, then namespace deletion (mechanically proven safe).
+- Legacy `executeCodemodeFunctionCall` methods on capability entrypoints —
+  delete once nothing dials them; `packages/shared/src/codemode/*` rename.
 
 ## Open questions (rolled up)
 

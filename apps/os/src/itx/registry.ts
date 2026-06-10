@@ -79,6 +79,18 @@ export type ContextRegistryHost = {
    */
   binding?: (name: string) => unknown;
   /**
+   * Dispatch a call against the project worker (the worker built from the
+   * project's own repo) for `{ type: "project-worker" }` refs. The whole
+   * call crosses as data because loader entrypoints cannot cross an RPC
+   * boundary — the Project DO loads the worker and replays in place.
+   */
+  projectWorker?: (input: {
+    call: PathCall;
+    entrypoint?: string;
+    invoke: CapInvoke;
+    props: Record<string, unknown>;
+  }) => Promise<unknown>;
+  /**
    * Create a loopback service-binding stub for a named export of the parent
    * worker, parameterized by props. Used to hand worker caps their
    * env.ITERATE (an ItxEntrypoint scoped to THIS context — a cap can never
@@ -320,8 +332,11 @@ export class ContextRegistry {
     //             concurrent / back-to-back calls never share or close it),
     //  - worker → the fresh per-call entrypoint stub,
     //  - facet  → the per-call facet stub.
-    const { target, dispose } = this.borrowTarget(row);
+    // project-worker refs return a custom dispatch instead of a target: the
+    // call crosses to the Project DO as data and is replayed there.
+    const { dispatch, target, dispose } = this.borrowTarget(row);
     try {
+      if (dispatch) return await dispatch(call);
       if (row.invoke === "path-call") {
         // One RPC: the provider implements call({ path, args }) and owns its
         // own method-tree semantics (e.g. forwarding to the Slack web API).
@@ -347,7 +362,11 @@ export class ContextRegistry {
    * The two-case shape (types.ts): a capability is either held up by a live
    * connection, or its serializable target is resolved at invoke time.
    */
-  private borrowTarget(row: CapRow): { target: unknown; dispose: () => void } {
+  private borrowTarget(row: CapRow): {
+    target?: unknown;
+    dispose: () => void;
+    dispatch?: (call: PathCall) => Promise<unknown>;
+  } {
     if (row.kind === "live") {
       const connection = this.#live.get(row.name);
       if (!connection) throw new CapOfflineError(row.name);
@@ -358,13 +377,18 @@ export class ContextRegistry {
       const target = connection.target.dup ? connection.target.dup() : connection.target;
       return { target, dispose: () => disposeIfPossible(target) };
     }
-    return this.resolveTarget(row.name, targetOf(row));
+    return this.resolveTarget(row.name, targetOf(row), row.invoke);
   }
 
   private resolveTarget(
     name: string,
     target: SerializableCapTarget,
-  ): { target: unknown; dispose: () => void } {
+    invoke: CapInvoke,
+  ): {
+    target?: unknown;
+    dispose: () => void;
+    dispatch?: (call: PathCall) => Promise<unknown>;
+  } {
     if (target.type === "url") {
       throw new Error(
         `Capability "${name}": url targets are not implemented yet (Law 7 — the dial must ` +
@@ -436,8 +460,30 @@ export class ContextRegistry {
         const entrypoint = this.loadWorker(name, source).getEntrypoint(source.entrypoint);
         return { target: entrypoint, dispose: () => disposeIfPossible(entrypoint) };
       }
+      case "project-worker": {
+        const projectWorker = this.host.projectWorker;
+        if (!projectWorker) {
+          throw new Error(`Capability "${name}": this host cannot reach the project worker.`);
+        }
+        return {
+          dispatch: (call) =>
+            projectWorker({
+              call,
+              entrypoint: target.entrypoint,
+              invoke,
+              props: {
+                ...target.props,
+                // Attribution + spoof-proof project scoping, exactly like
+                // loopback refs.
+                cap: name,
+                context: this.host.contextId,
+                projectId: this.host.projectId,
+              },
+            }),
+          dispose: () => {},
+        };
+      }
       case "durable-object":
-      case "project-worker":
         throw new Error(
           `Capability "${name}": ${worker.type} refs are not implemented yet (itx-next.md §1).`,
         );

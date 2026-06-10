@@ -218,6 +218,131 @@ test.skipIf(!MCP_TEST_SERVER_URL)(
   },
 );
 
+test("user-space caps: a named export of the project worker is a first-class capability", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-uw` })) as {
+    id: string;
+    slug: string;
+  };
+  createdProjectIds.push(project.id);
+  using projectItx = await itx.projects.get(project.id);
+
+  // (1) Ship user code: replace worker.js in the project's iterate-config
+  // repo with one that ALSO exports a capability class. This is the §1
+  // litmus test's user-space half — same shape as the first-party McpClient,
+  // reached via { type: "project-worker" } instead of { type: "loopback" }.
+  const marker = `litmus-${RUN_SUFFIX}`;
+  const userWorker = `import { WorkerEntrypoint } from "cloudflare:workers";
+
+export default {
+  async fetch() {
+    return new Response("user worker");
+  },
+};
+
+export class PetstoreClient extends WorkerEntrypoint {
+  async call({ path, args }) {
+    if (path.join(".") === "listOperations") {
+      return { operations: ["getPet", "listPets"], specUrl: this.ctx.props.specUrl ?? null };
+    }
+    if (path.join(".") === "echo") {
+      const { cap, context, projectId, ...definerProps } = this.ctx.props;
+      return { args, attribution: { cap, context, projectId }, definerProps };
+    }
+    throw new Error("PetstoreClient does not implement " + path.join("."));
+  }
+}
+`;
+
+  // The push runs as an itx script (the in-isolate path agents use); the
+  // worker source travels via the endpoint's vars.
+  const pushScript = async ({
+    itx: scriptItx,
+    vars,
+  }: {
+    itx: Record<string, any>;
+    vars: { projectSlug: string; workerSource: string };
+  }) => {
+    const repo = await scriptItx.repos.ensureIterateConfigInfo({
+      projectSlug: vars.projectSlug,
+    });
+    const url = new URL(repo.remote);
+    url.username = "x";
+    url.password = repo.token.split("?")[0];
+    const dir = "/litmus-config";
+    await scriptItx.workspace.gitClone({
+      branch: repo.defaultBranch,
+      depth: 1,
+      dir,
+      url: url.toString(),
+    });
+    await scriptItx.workspace.writeFile(`${dir}/worker.js`, vars.workerSource);
+    await scriptItx.workspace.gitAdd({ dir, filepath: "worker.js" });
+    await scriptItx.workspace.gitCommit({
+      author: { email: "e2e@iterate.com", name: "itx e2e" },
+      dir,
+      message: "add PetstoreClient capability export",
+    });
+    await scriptItx.workspace.gitPush({ dir, ref: repo.defaultBranch, remote: "origin" });
+    return { pushed: true };
+  };
+  const pushResponse = await fetch(new URL("/api/itx/run", baseUrl()), {
+    body: JSON.stringify({
+      context: project.id,
+      functionSource: pushScript.toString(),
+      vars: { projectSlug: project.slug, workerSource: userWorker },
+    }),
+    headers: authHeaders(),
+    method: "POST",
+  });
+  const pushBody = (await pushResponse.json()) as { error?: string; result?: unknown };
+  if (!pushResponse.ok) throw new Error(`push script failed: ${pushBody.error}`);
+  expect(pushBody.result).toEqual({ pushed: true });
+
+  // (2) Point a cap at the user's export — entrypoint names THEIR class.
+  await projectItx.caps.define({
+    invoke: "path-call",
+    meta: { instructions: "Petstore API. Call listOperations() first." },
+    name: "petstore",
+    target: {
+      entrypoint: "PetstoreClient",
+      props: { marker, specUrl: "https://petstore.example.com/openapi.json" },
+      type: "rpc",
+      worker: { type: "project-worker" },
+    },
+  });
+
+  // (3) Call it like any other capability. The Project DO rebuilds the
+  // worker from the fresh push and instantiates the named export per call.
+  const handle = projectItx as never as Record<string, any>;
+  const listed = (await handle.petstore.listOperations()) as {
+    operations: string[];
+    specUrl: string;
+  };
+  expect(listed).toEqual({
+    operations: ["getPet", "listPets"],
+    specUrl: "https://petstore.example.com/openapi.json",
+  });
+
+  // (4) Props discipline: definer parameterization arrives intact, and the
+  // registry-injected attribution can't be spoofed by the definer.
+  const echoed = (await handle.petstore.echo({ hello: 1 })) as {
+    args: unknown[];
+    attribution: { cap: string; context: string; projectId: string };
+    definerProps: Record<string, unknown>;
+  };
+  expect(echoed.args).toEqual([{ hello: 1 }]);
+  expect(echoed.attribution).toEqual({
+    cap: "petstore",
+    context: project.id,
+    projectId: project.id,
+  });
+  expect(echoed.definerProps).toEqual({
+    marker,
+    specUrl: "https://petstore.example.com/openapi.json",
+  });
+});
+
 test("script executions leave a two-event record on the /itx stream", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-rec` })) as { id: string };

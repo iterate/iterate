@@ -140,6 +140,21 @@ export class ContextDO extends DurableObject<Env> {
       audit: (event) => this.audit(event.type, event.payload),
       // Gated on DIALABLE_BINDINGS inside the registry before this is called.
       binding: (name) => (this.env as unknown as Record<string, unknown>)[name],
+      // Child contexts reach the project worker through the owning project's
+      // DO — the call crosses as data (loader entrypoints can't cross RPC).
+      projectWorker: (input) =>
+        (
+          this.env.PROJECT.getByName(
+            getProjectDurableObjectName(descriptor.projectId),
+          ) as unknown as {
+            itxProjectWorkerCall(input: {
+              call: PathCall;
+              entrypoint?: string;
+              invoke: CapInvoke;
+              props: Record<string, unknown>;
+            }): Promise<unknown>;
+          }
+        ).itxProjectWorkerCall(input),
       contextId: descriptor.id,
       facets: durableObjectFacetsHook(this.ctx),
       loader: this.env.LOADER as unknown as ConstructorParameters<

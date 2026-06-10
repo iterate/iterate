@@ -213,8 +213,12 @@ export function assertDefinableCapTarget(name: string, target: SerializableCapTa
       }
       capSourceCacheKey(worker.source);
       return;
-    case "durable-object":
     case "project-worker":
+      // entrypoint optional (defaults to the worker's default export); props
+      // are definer-supplied parameterization, attribution is injected at
+      // dial time like every other ref.
+      return;
+    case "durable-object":
       throw new Error(
         `Capability "${name}": ${worker.type} refs are not implemented yet (itx-next.md §1).`,
       );

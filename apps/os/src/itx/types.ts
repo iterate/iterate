@@ -340,12 +340,11 @@ export type WorkerRef =
    * `McpClient`, `OpenApiClient`, thin policy wrappers around bindings. */
   | { type: "loopback" }
   /** The project worker — user space: export a class from your repo's
-   * worker entry and point a cap at it. Already runs behind the egress
-   * pipe; no new trust surface. NOT a primitive: this is strict sugar for
-   * reaching the first-party `ProjectWorker` loopback forwarder with this
-   * project's id, normalized at define time — the spelling exists so
-   * `entrypoint` always names the export YOU call and `describe()` stays
-   * informative. */
+   * worker entry (`worker.js`) and point a cap at it; `entrypoint` names
+   * YOUR export. Already runs behind the egress pipe; no new trust surface.
+   * Mechanically the call crosses to the Project DO as data and is replayed
+   * there (loader entrypoints cannot cross an RPC boundary); the entrypoint
+   * is instantiated per call with definer props + injected attribution. */
   | { type: "project-worker" }
   /** A Durable Object, addressed by namespace binding + instance name. */
   | { type: "durable-object"; binding: string; name: string }
