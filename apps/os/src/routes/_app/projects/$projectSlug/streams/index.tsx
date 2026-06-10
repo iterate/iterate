@@ -1,52 +1,37 @@
-import { useMemo } from "react";
-import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { Suspense, useMemo } from "react";
+import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
-import { itxKey, useItxClient } from "~/itx/react/index.ts";
-import { prefetchItxQuery } from "~/itx/loader.ts";
-import { projectStreamStateQuery } from "~/lib/itx-queries.ts";
-
-const ROOT_STREAM_PATH = StreamPath.parse("/");
+import { useItx } from "~/itx/use-itx.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
-  loader: async ({ context }) => {
-    // Seed the root stream state — the query that gates the tree's first
-    // paint — so SSR dehydrates it and client navigations land warm. Best
-    // effort: prefetchItxQuery swallows failures, the component's own query
-    // surfaces them inline.
-    await prefetchItxQuery({
-      queryClient: context.queryClient,
-      query: projectStreamStateQuery({
-        projectId: context.project.id,
-        streamPath: ROOT_STREAM_PATH,
-      }),
-    });
-    return {
-      breadcrumb: "Tree",
-      project: context.project,
-    };
-  },
+  // useItx never SSRs (it throws on the server — see ~/itx/use-itx.ts), and
+  // there is no loader prefetch anymore: the tree paints from its own live
+  // subscriptions once the socket connects.
+  ssr: false,
+  loader: ({ context }) => ({
+    breadcrumb: "Tree",
+    project: context.project,
+  }),
   component: ProjectStreamsIndexPage,
 });
 
 function ProjectStreamsIndexPage() {
+  return (
+    <Suspense
+      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
+    >
+      <ProjectStreamsIndexContent />
+    </Suspense>
+  );
+}
+
+function ProjectStreamsIndexContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const itxClient = useItxClient();
   const { project } = Route.useLoaderData();
-  const source = useMemo(
-    () => ({
-      // StreamTreeBrowser keys node queries as [...key, "state", path], which
-      // lands exactly on projectStreamStateKey(...) — the entry the route
-      // loader seeds and the breadcrumb navigators read.
-      key: itxKey.project(project.id, "streams"),
-      getState: async (streamPath: StreamPathType) =>
-        await projectStreamStateQuery({ projectId: project.id, streamPath }).queryFn(
-          await itxClient.project(project.id),
-        ),
-    }),
-    [itxClient, project.id],
-  );
+  const itx = useItx(project.id);
+  const source = useMemo(() => (streamPath: StreamPathType) => itx.streams.get(streamPath), [itx]);
 
   function openStream(streamPath: StreamPathType) {
     void navigate({

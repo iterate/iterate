@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { Suspense, useMemo } from "react";
+import { ClientOnly, createFileRoute } from "@tanstack/react-router";
 import {
   createBrowserReplSession,
   ItxReplPage,
@@ -15,6 +15,12 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repl")({
   },
   component: ProjectItxReplPage,
 });
+
+function TailConnecting() {
+  return (
+    <p className="border-t px-3 py-2 text-xs text-muted-foreground">Connecting itx activity...</p>
+  );
+}
 
 function ProjectItxReplPage() {
   const { project } = Route.useRouteContext();
@@ -35,7 +41,14 @@ function ProjectItxReplPage() {
         />
       </div>
       <div className="flex max-h-56 min-h-0 flex-col">
-        <ItxActivityTail projectId={project.id} />
+        {/* useItx never SSRs and suspends until its socket connects, so the
+            tail needs both gates: ClientOnly (this route still SSRs) and a
+            Suspense boundary. */}
+        <ClientOnly fallback={<TailConnecting />}>
+          <Suspense fallback={<TailConnecting />}>
+            <ItxActivityTail projectId={project.id} />
+          </Suspense>
+        </ClientOnly>
       </div>
     </div>
   );

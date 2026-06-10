@@ -249,3 +249,45 @@ and reduced state; getState-polling reactivity is superseded.
 Verified at the pump (packages/streams stream.workers.test.ts), through the
 capability loopback (`pnpm test:itx-stream-subscribe`), and over capnweb
 (itx-subscribe.e2e.test.ts).
+
+## D21: The browser layer is ONE hook — useItx (supersedes D19 and the shared-socket-per-tab decision)
+
+Owner decision: the TanStack-Query-for-itx + SSR + shared-socket architecture
+was too complicated for what the browser actually needs, which is "a connected
+handle, please". `apps/os/src/itx/use-itx.ts` replaces all of it:
+
+- **`useItx(context?)` suspends until connected** (React 19 `use()` on a
+  module-singleton promise per context key) and returns the live
+  `RpcStub<Itx>`. `getBrowserItx(context?)` is the same singleton for
+  non-hook code (event handlers). That's the whole API.
+- **Per-context module-singleton sockets, no refcounting, no teardown on
+  unmount.** The map exists only because Suspense needs a stable promise
+  across render replays — NOT as a pooling layer. Multiple sockets per tab
+  are explicitly fine (the repl keeps its own `createBrowserReplSession`;
+  the admin layout keeps its own session too).
+- **No query cache.** Stream-shaped data subscribes (`onStateChange` /
+  `subscribe` — D20 is the protocol this rides on: every subscription's
+  initial push carries current state, so a subscription alone paints a first
+  render). One-shot lookups are an awaited `getState()` into component state.
+- **No reconnect machinery.** Socket death evicts the map entry and
+  re-renders subscribers (useSyncExternalStore); they find no entry, dial
+  fresh, re-suspend. No backoff, no offset resume, no liveness probes:
+  re-fetching current state via the initial push IS the recovery.
+- **No SSR for itx components — the hook THROWS on the server.** Verified
+  posture: a forever-pending `use()` during streaming SSR keeps the response
+  stream open (React waits for suspended boundaries before closing it),
+  while a server-side throw inside a Suspense boundary streams the fallback
+  and recovers client-side — and outside one it fails loudly instead of
+  hanging the worker. Consumers sit under `ssr: false` routes (the streams
+  pages), behind `<ClientOnly>` (the repl's activity tail), or behind a
+  client-only connect effect (the admin layout).
+
+Deleted with this: `itx/react/` (provider, connection with
+backoff-reconnect, query bridge, stream-tail multiplexer, useStreamEvents),
+`itx/server.ts` (`getServerItx`), `itx/loader.ts`
+(`getLoaderItx`/`prefetchItxQuery`), `lib/itx-queries.ts`, and the
+itx-server-handle worker test harness — D19's SSR/loader-prefetch design and
+the plan's "one global-context WebSocket per tab" decision are superseded.
+`errors.ts` (`getItxErrorCode`/`isItxAccessError`) stays: catch blocks and
+error boundaries still read codes; there is just no retry-predicate layer to
+feed them to.

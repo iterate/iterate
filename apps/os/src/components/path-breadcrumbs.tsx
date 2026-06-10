@@ -1,7 +1,7 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useMatches, useNavigate } from "@tanstack/react-router";
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
-import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { StreamState, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import {
   Breadcrumb,
   BreadcrumbEllipsis,
@@ -15,7 +15,7 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { useProjectStreamState } from "~/lib/itx-queries.ts";
+import { getBrowserItx } from "~/itx/use-itx.ts";
 import type {
   RouteBreadcrumbLoaderData,
   RouteBreadcrumbStaticData,
@@ -134,6 +134,42 @@ export function PathBreadcrumbs() {
   );
 }
 
+/**
+ * The child paths of one stream, fetched into local state while `enabled`
+ * (popover open). One getState round trip over the project's itx socket
+ * (getBrowserItx) per open — no query cache, no subscription; the popover is
+ * short-lived and reopening refetches. These components only mount on stream
+ * pages (streamBreadcrumb loaderData), which are `ssr: false` routes, so the
+ * browser-only itx hook contract holds.
+ */
+function useStreamChildPaths(input: {
+  enabled: boolean;
+  projectId: string;
+  streamPath: StreamPathType;
+}): StreamPathType[] | undefined {
+  const [childPaths, setChildPaths] = useState<StreamPathType[]>();
+  const { enabled, projectId, streamPath } = input;
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    void getBrowserItx(projectId)
+      .then(async (itx) => await itx.streams.get(streamPath).getState())
+      .then((state) => {
+        if (!cancelled) setChildPaths([...StreamState.parse(state).childPaths]);
+      })
+      .catch(() => {
+        // Navigation chrome: a failed lookup just means no siblings to offer.
+        if (!cancelled) setChildPaths([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, projectId, streamPath]);
+
+  return childPaths;
+}
+
 function BreadcrumbLabel({ crumb }: { crumb: { label: string; streamPath?: StreamPathType } }) {
   if (!crumb.streamPath) return <>{crumb.label}</>;
   return <EventsStreamPathLabel path={crumb.streamPath} label={crumb.label} />;
@@ -180,15 +216,16 @@ function StreamSegmentNavigator({
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const parentPath = streamPathParent(segmentPath);
-  const parentStateQuery = useProjectStreamState({
+  const fetchedSiblings = useStreamChildPaths({
+    enabled: open,
     projectId: streamBreadcrumb.projectId,
     streamPath: parentPath,
   });
   const siblingPaths = useMemo(() => {
-    const paths = [...(parentStateQuery.data?.childPaths ?? [])];
+    const paths = [...(fetchedSiblings ?? [])];
     if (!paths.includes(segmentPath)) paths.push(segmentPath);
     return paths.toSorted((left, right) => left.localeCompare(right));
-  }, [parentStateQuery.data?.childPaths, segmentPath]);
+  }, [fetchedSiblings, segmentPath]);
 
   function navigateToSibling(path: StreamPathType) {
     setOpen(false);
@@ -241,16 +278,14 @@ function StreamChildrenBreadcrumb({
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [newChildSegment, setNewChildSegment] = useState("");
-  const streamStateQuery = useProjectStreamState({
+  const fetchedChildren = useStreamChildPaths({
+    enabled: open,
     projectId: streamBreadcrumb.projectId,
     streamPath: streamBreadcrumb.streamPath,
   });
   const children = useMemo(
-    () =>
-      [...(streamStateQuery.data?.childPaths ?? [])].toSorted((left, right) =>
-        left.localeCompare(right),
-      ),
-    [streamStateQuery.data?.childPaths],
+    () => [...(fetchedChildren ?? [])].toSorted((left, right) => left.localeCompare(right)),
+    [fetchedChildren],
   );
 
   function navigateToChild(childPath: StreamPathType) {
@@ -311,7 +346,9 @@ function StreamChildrenBreadcrumb({
               />
             </form>
             <div className="max-h-48 overflow-y-auto p-1">
-              {children.length === 0 ? (
+              {fetchedChildren === undefined ? (
+                <p className="px-2 py-1.5 text-center text-xs text-muted-foreground">Loading...</p>
+              ) : children.length === 0 ? (
                 <p className="px-2 py-1.5 text-center text-xs text-muted-foreground">
                   No children yet
                 </p>

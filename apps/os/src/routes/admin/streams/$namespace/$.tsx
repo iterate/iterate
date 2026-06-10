@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
-import { StreamState, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
 import { useAdminItx } from "~/lib/admin-itx.ts";
 import { adminStreamRpcPath } from "~/lib/stream-rpc-paths.ts";
@@ -24,11 +24,7 @@ function AdminStreamDetailPage() {
   const itx = useAdminItx();
   const navigate = useNavigate();
   const source = useMemo(
-    () => ({
-      key: ["admin", "streams", namespace] as const,
-      getState: async (path: StreamPathType) =>
-        StreamState.parse(await itx.streams.namespace(namespace).get(path).getState()),
-    }),
+    () => (path: StreamPathType) => itx.streams.namespace(namespace).get(path),
     [itx, namespace],
   );
 
