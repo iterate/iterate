@@ -94,7 +94,7 @@ export type ItxCapIngressProps = {
  */
 export class ItxCapIngress extends WorkerEntrypoint<Env, ItxCapIngressProps> {
   async fetch(request: Request): Promise<Response> {
-    const props = (Reflect.get(this, "ctx") as ExecutionContext<ItxCapIngressProps>).props;
+    const props = this.ctx.props;
     const config = parseConfig(this.env);
     const project = this.env.PROJECT.getByName(getProjectDurableObjectName(props.projectId));
 

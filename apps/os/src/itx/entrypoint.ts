@@ -67,11 +67,10 @@ export async function resolveItx(input: {
  */
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxProps> {
   get context(): Promise<Itx> {
-    const workerCtx = Reflect.get(this, "ctx") as ExecutionContext<ItxProps>;
     return resolveItx({
       env: this.env,
-      exports: workerCtx.exports as unknown as ItxRuntime["exports"],
-      props: workerCtx.props,
+      exports: this.ctx.exports as unknown as ItxRuntime["exports"],
+      props: this.ctx.props,
     });
   }
 }
@@ -93,7 +92,7 @@ export type ProjectEgressProps = {
  */
 export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
   async fetch(request: Request): Promise<Response> {
-    const props = (Reflect.get(this, "ctx") as ExecutionContext<ProjectEgressProps>).props;
+    const props = this.ctx.props;
     return await this.env.PROJECT.getByName(getProjectDurableObjectName(props.project)).egressFetch(
       request,
     );
@@ -122,7 +121,7 @@ export type BindingCapabilityProps = {
  */
 export class BindingCapability extends WorkerEntrypoint<Env, BindingCapabilityProps> {
   async call(input: PathCall): Promise<unknown> {
-    const props = (Reflect.get(this, "ctx") as ExecutionContext<BindingCapabilityProps>).props;
+    const props = this.ctx.props;
     if (!DIALABLE_BINDINGS.has(props.binding)) {
       throw new Error(`Binding "${props.binding}" is not dialable as a capability.`);
     }

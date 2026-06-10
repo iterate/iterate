@@ -123,6 +123,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
 test("platform bindings are dialable capabilities (raw + wrapped)", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-ai` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   // (1) Raw binding ref: env.AI itself is the target; members replay applies
@@ -175,6 +176,47 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
     { invoke: "path-call", kind: "rpc", name: "aiWrapped" },
   ]);
 });
+
+// A remote MCP server to test against: explicit env wins; otherwise the mock
+// provider worker (same source the inbound-MCP e2e suite uses), if deployed.
+const MCP_TEST_SERVER_URL =
+  process.env.OS_E2E_MCP_SERVER_URL?.trim() ||
+  (process.env.MOCK_PROVIDER_BASE_URL
+    ? `${process.env.MOCK_PROVIDER_BASE_URL.replace(/\/+$/, "")}/mcp`
+    : "");
+
+test.skipIf(!MCP_TEST_SERVER_URL)(
+  "the first-party McpClient cap bridges a remote MCP server",
+  async () => {
+    using itx = connectGlobal();
+    const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-mcp` })) as { id: string };
+    createdProjectIds.push(project.id);
+    using projectItx = await itx.projects.get(project.id);
+
+    await projectItx.caps.define({
+      invoke: "path-call",
+      meta: { instructions: "Test MCP server. Call listTools() first." },
+      name: "mcptest",
+      target: {
+        entrypoint: "McpClient",
+        props: { serverUrl: MCP_TEST_SERVER_URL },
+        type: "rpc",
+        worker: { type: "loopback" },
+      },
+    });
+
+    const handle = projectItx as never as Record<string, any>;
+    const listed = (await handle.mcptest.listTools()) as { tools: { name: string }[] };
+    expect(Array.isArray(listed.tools)).toBe(true);
+    expect(listed.tools.length).toBeGreaterThan(0);
+
+    // Call the first listed tool with empty args — the mock provider's tools
+    // are unary echoes; any structured result proves the bridge end to end.
+    const firstTool = listed.tools[0]!.name;
+    const result = await handle.mcptest[firstTool]({});
+    expect(result).toBeDefined();
+  },
+);
 
 test("worker caps hold a correctly scoped itx of their own", async () => {
   using itx = connectGlobal();

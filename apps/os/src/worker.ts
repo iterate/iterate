@@ -53,6 +53,7 @@ export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabil
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { BindingCapability, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
+export { McpClient } from "~/itx/caps/mcp-client.ts";
 export { ContextDO } from "~/itx/context-do.ts";
 export { ItxCapIngress } from "~/itx/http.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
