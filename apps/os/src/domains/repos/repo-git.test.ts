@@ -100,6 +100,31 @@ describe("applyRepoFileChanges", () => {
   });
 });
 
+describe("checkout of a brand-new branch", () => {
+  // The createMissingBranchFrom fallback in checkoutRepoBranch relies on the
+  // shell git wrapper's checkout({ branch }) creating the branch at HEAD
+  // (git.branch + git.checkout) even though no local or origin/ ref exists.
+  test("wrapper checkout({branch}) creates and switches to the branch", async () => {
+    const { filesystem, git } = await seedLocalRepo({ "README.md": "# hello\n" });
+
+    const result = await git.checkout({ branch: "feature-x" });
+    expect(result).toEqual({ branch: "feature-x", created: true });
+    expect((await git.branch({})).current).toBe("feature-x");
+
+    const changedPaths = await applyRepoFileChanges({
+      changes: [{ content: "x\n", path: "new.txt" }],
+      filesystem,
+      git,
+    });
+    expect(changedPaths).toEqual(["new.txt"]);
+
+    const commit = await git.commit({ author: REPO_COMMIT_AUTHOR, message: "On feature-x" });
+    const log = await git.log({ depth: 2, ref: "feature-x" });
+    expect(log[0]?.oid).toBe(commit.oid);
+    expect(log[1]?.message).toContain("Seed");
+  });
+});
+
 describe("RepoFileChange", () => {
   test("strips leading slashes from paths", () => {
     expect(RepoFileChange.parse({ content: "x", path: "/src/index.ts" })).toEqual({
