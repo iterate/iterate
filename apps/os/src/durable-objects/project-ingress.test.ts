@@ -67,32 +67,113 @@ describe("Project ingress routing", () => {
       slug: "demo",
     });
 
-    const ingressRows = await env.DB.prepare(
-      `SELECT host, project_id, callable_json
-       FROM ingress_routes
-       WHERE project_id = ?
-       ORDER BY host ASC`,
-    )
-      .bind("proj__local__test")
-      .all<{ host: string; project_id: string; callable_json: string }>();
-    expect(ingressRows.results.map((row) => row.host)).toEqual([
-      "demo.iterate.localhost",
-      "proj__local__test.iterate.localhost",
-    ]);
-    expect(
-      ingressRows.results.map((row) => ({
-        host: row.host,
-        exportName: (
-          JSON.parse(row.callable_json) as {
-            via: { exportName: string };
-          }
-        ).via.exportName,
-      })),
-    ).toEqual([
-      { host: "demo.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
-      { host: "proj__local__test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
+    await waitForProjectStreamEvents([
+      expect.objectContaining({
+        type: "events.iterate.com/project/create-requested",
+        payload: expect.objectContaining({
+          projectId: "proj__local__test",
+          slug: "demo",
+        }),
+      }),
+      expect.objectContaining({
+        type: "events.iterate.com/project/created",
+        payload: expect.objectContaining({
+          defaultHost: "demo.iterate.localhost",
+          projectId: "proj__local__test",
+          slug: "demo",
+        }),
+      }),
+      expect.objectContaining({
+        type: "events.iterate.com/project/repo-initialized",
+        payload: expect.objectContaining({
+          projectId: "proj__local__test",
+          repoSlug: "iterate-config",
+        }),
+      }),
+      expect.objectContaining({
+        type: "events.iterate.com/project/create-completed",
+        payload: expect.objectContaining({
+          projectId: "proj__local__test",
+        }),
+      }),
+      expect.objectContaining({
+        type: "events.iterate.com/project/config-worker-built",
+        payload: expect.objectContaining({
+          mainModule: "worker.js",
+          projectId: "proj__local__test",
+          repoSlug: "iterate-config",
+        }),
+      }),
     ]);
 
+    const projectState = await waitForProjectState();
+    expect(projectState.state.project).toMatchObject({
+      defaultHost: "demo.iterate.localhost",
+      projectId: "proj__local__test",
+      slug: "demo",
+    });
+    expect(projectState.state.phase).toBe("ready");
+    expect(projectState.state.worker).toMatchObject({
+      mainModule: "worker.js",
+      repoSlug: "iterate-config",
+    });
+    expect(projectState.offset).toBeGreaterThanOrEqual(4);
+
+    // itx.project deep-traverses in one expression (path proxy; regression
+    // for "value.bind is not a function" when the fallthrough Proxy bound
+    // getter results).
+    const phaseResponse = await SELF.fetch(
+      "https://os.iterate.localhost/__test/itx-project-processor-phase",
+    );
+    expect(phaseResponse.ok).toBe(true);
+    const { phase } = (await phaseResponse.json()) as { phase: string };
+    expect(["none", "creating", "ready"]).toContain(phase);
+
+    // Creation cross-posts create-requested onto the deployment-wide global
+    // audit stream (namespace "global", path /projects).
+    const globalResponse = await SELF.fetch(
+      "https://os.iterate.localhost/__test/global-projects-stream",
+    );
+    expect(globalResponse.ok).toBe(true);
+    const globalBody = (await globalResponse.json()) as {
+      events: Array<{ type: string; payload: Record<string, unknown> }>;
+    };
+    expect(globalBody.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "events.iterate.com/project/create-requested",
+          payload: expect.objectContaining({
+            projectId: "proj__local__test",
+            slug: "demo",
+          }),
+        }),
+      ]),
+    );
+
+    // A spoofed create-requested naming another project is ignored: no
+    // reduced-state change, no D1 row for the foreign id.
+    const spoofResponse = await SELF.fetch(
+      "https://os.iterate.localhost/__test/append-spoofed-create",
+    );
+    expect(spoofResponse.ok).toBe(true);
+    const { offset: spoofOffset } = (await spoofResponse.json()) as { offset: number };
+    await vi.waitFor(async () => {
+      const state = await (
+        await SELF.fetch("https://os.iterate.localhost/__test/project-state")
+      ).json();
+      expect((state as { offset: number }).offset).toBeGreaterThanOrEqual(spoofOffset);
+    });
+    const afterSpoof = (await (
+      await SELF.fetch("https://os.iterate.localhost/__test/project-state")
+    ).json()) as { state: { project: { projectId: string } } };
+    expect(afterSpoof.state.project.projectId).toBe("proj__local__test");
+    const evilRow = await env.DB.prepare(`SELECT id FROM projects WHERE id = ?`)
+      .bind("proj__local__evil")
+      .first();
+    expect(evilRow).toBeNull();
+
+    // Creation side effects (the processor's create-requested steps) have
+    // completed once phase is "ready" — the example secret is one of them.
     const exampleSecret = await env.DB.prepare(
       `SELECT key, material
        FROM project_secrets
@@ -105,43 +186,6 @@ describe("Project ingress routing", () => {
       key: EXAMPLE_EGRESS_SECRET_KEY,
       material: EXAMPLE_EGRESS_SECRET_MATERIAL,
     });
-
-    const streamResponse = await SELF.fetch("https://os.iterate.localhost/__test/project-stream");
-    expect(streamResponse.ok).toBe(true);
-    const streamBody = (await streamResponse.json()) as {
-      events: Array<{ type: string; payload: Record<string, unknown> }>;
-    };
-    expect(streamBody.events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "events.iterate.com/project/created",
-          payload: expect.objectContaining({
-            defaultHost: "demo.iterate.localhost",
-            projectId: "proj__local__test",
-            slug: "demo",
-          }),
-        }),
-      ]),
-    );
-    await waitForProjectLifecycleEvents([
-      expect.objectContaining({
-        type: "events.iterate.com/project/config-worker-built",
-        payload: expect.objectContaining({
-          mainModule: "worker.js",
-          projectId: "proj__local__test",
-          repoSlug: "iterate-config",
-        }),
-      }),
-    ]);
-
-    const lifecycleState = await waitForProjectLifecycleState();
-    expect(lifecycleState.state.project).toMatchObject({
-      defaultHost: "demo.iterate.localhost",
-      projectId: "proj__local__test",
-      slug: "demo",
-    });
-    expect(lifecycleState.reducedThroughOffset).toBeGreaterThanOrEqual(4);
-    expect(lifecycleState.afterAppendCompletedThroughOffset).toBeGreaterThanOrEqual(4);
 
     const repoResponse = await SELF.fetch(
       "https://os.iterate.localhost/__test/iterate-config-repo",
@@ -327,6 +371,43 @@ describe("Project ingress routing", () => {
   });
 });
 
+test("project config worker receives root-stream events and appends facts back", async () => {
+  await createProject();
+
+  // The config worker must be built before forwarding delivers to it (the
+  // gate is the ready flag set by provisioning).
+  await waitForProjectStreamEvents([
+    expect.objectContaining({ type: "events.iterate.com/project/config-worker-built" }),
+  ]);
+
+  // Append a fact to the project root stream. The project-config-worker
+  // processor (subscribed to "/") forwards it to the config worker's
+  // afterAppend export, which echoes it onto /config-worker-saw — proving the
+  // whole chain: subscription wiring, blocking forward, entrypoint
+  // resolution, and the object-export env argument, all in real workerd.
+  const appendResponse = await SELF.fetch(
+    "https://os.iterate.localhost/__test/append-project-event?n=42",
+  );
+  expect(appendResponse.ok).toBe(true);
+
+  const deadline = Date.now() + 10_000;
+  let latest: unknown;
+  while (Date.now() < deadline) {
+    const response = await SELF.fetch(
+      "https://os.iterate.localhost/__test/read-stream?path=/config-worker-saw",
+    );
+    latest = await response.json();
+    const body = latest as { events: Array<{ type: string; payload: Record<string, unknown> }> };
+    const saw = body.events.find((event) => event.type === "test.project/config-worker-saw");
+    if (saw) {
+      expect(saw.payload).toMatchObject({ n: 42 });
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`config worker never saw the ping: ${JSON.stringify(latest)}`);
+});
+
 async function createProject() {
   const response = await SELF.fetch("https://os.iterate.localhost/__test/create-project");
   expect(response.ok).toBe(true);
@@ -351,33 +432,36 @@ function headersToArrays(headers: Headers) {
   return Object.fromEntries([...headers].map(([key, value]) => [key, [value]]));
 }
 
-async function waitForProjectLifecycleState() {
+async function waitForProjectState() {
   const deadline = Date.now() + 5_000;
   let latest: unknown;
 
   while (Date.now() < deadline) {
-    const response = await SELF.fetch(
-      "https://os.iterate.localhost/__test/project-lifecycle-state",
-    );
+    const response = await SELF.fetch("https://os.iterate.localhost/__test/project-state");
     latest = await response.json();
-    const state = latest as {
-      afterAppendCompletedThroughOffset: number;
-      reducedThroughOffset: number;
+    const snapshot = latest as {
+      offset: number;
       state: {
+        phase: string;
         project: { projectId: string } | null;
+        worker: { commitOid: string } | null;
       };
     };
-    if (state.state.project?.projectId === "proj__local__test") {
-      return state;
+    if (
+      snapshot.state.project?.projectId === "proj__local__test" &&
+      snapshot.state.phase === "ready" &&
+      snapshot.state.worker !== null
+    ) {
+      return snapshot;
     }
 
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 
-  throw new Error(`Timed out waiting for project lifecycle state: ${JSON.stringify(latest)}`);
+  throw new Error(`Timed out waiting for project state: ${JSON.stringify(latest)}`);
 }
 
-async function waitForProjectLifecycleEvents(expectedEvents: unknown[]) {
+async function waitForProjectStreamEvents(expectedEvents: unknown[]) {
   const deadline = Date.now() + 5_000;
   let latest: unknown;
 
