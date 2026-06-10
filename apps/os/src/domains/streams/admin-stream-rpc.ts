@@ -2,6 +2,8 @@ import { newWorkersRpcResponse } from "capnweb";
 import { PublicStreamRpcTarget } from "@iterate-com/streams/workers/durable-objects/stream";
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { authenticateCapnwebAdmin } from "~/itx/admin-auth-cookie.ts";
+import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
+import { principalIsAdmin } from "~/auth/principal.ts";
 import { getStreamDurableObjectName } from "~/domains/streams/stream-runtime.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import type { AppConfig } from "~/config.ts";
@@ -25,8 +27,8 @@ export async function handleAdminStreamRpcFetch(input: {
   const route = parseAdminStreamRpcRoute(input.request);
   if (!route) return null;
 
-  const principal = authenticateCapnwebAdmin({ config: input.config, request: input.request });
-  if (!principal) return new Response("Unauthorized", { status: 401 });
+  const auth = await authenticateAdminStreamRequest(input);
+  if (!auth.ok) return new Response("Unauthorized", { status: 401 });
 
   const namespace = StreamNamespace.parse(route.namespace);
   const streamPath = resolveStreamPath(route.streamPath);
@@ -64,4 +66,20 @@ function parseAdminStreamRpcRoute(request: Request): {
         ? "/"
         : decodeURIComponent(encodedStreamPath),
   };
+}
+
+async function authenticateAdminStreamRequest(input: {
+  config: AppConfig;
+  context: RequestContext;
+  request: Request;
+}) {
+  const capnwebAdmin = authenticateCapnwebAdmin({ config: input.config, request: input.request });
+  if (capnwebAdmin) return { ok: true };
+
+  const resolvedAuth = await resolveRequestAuth({
+    auth: createOsIterateAuth(input.context, input.request),
+    context: input.context,
+    request: input.request,
+  });
+  return { ok: resolvedAuth.principal ? principalIsAdmin(resolvedAuth.principal) : false };
 }

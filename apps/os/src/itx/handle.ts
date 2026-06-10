@@ -677,5 +677,11 @@ export class ItxProjects extends RpcTarget {
 }
 
 function toProjectSummary(row: { id: string; slug: string; [key: string]: unknown }) {
-  return { id: row.id, slug: row.slug };
+  return {
+    id: row.id,
+    slug: row.slug,
+    customHostname: typeof row.custom_hostname === "string" ? row.custom_hostname : null,
+    createdAt: typeof row.created_at === "string" ? row.created_at : null,
+    updatedAt: typeof row.updated_at === "string" ? row.updated_at : null,
+  };
 }
