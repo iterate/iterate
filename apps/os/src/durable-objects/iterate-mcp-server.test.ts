@@ -32,7 +32,7 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
       const result = await client.callTool({
         name: "exec_js",
         arguments: {
-          code: `async (ctx) => {
+          code: `async (itx) => {
   const message = \`hello from \${"inbound mcp"}\`;
   console.log(message);
   return { message, value: 6 * 7 };
@@ -65,21 +65,14 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
             }),
           }),
           expect.objectContaining({
-            type: "events.iterate.com/codemode/script-execution-requested",
+            type: "events.iterate.com/itx/execution-requested",
           }),
           expect.objectContaining({
-            type: "events.iterate.com/codemode/log-emitted",
+            type: "events.iterate.com/itx/execution-completed",
             payload: expect.objectContaining({
-              message: "hello from inbound mcp",
-            }),
-          }),
-          expect.objectContaining({
-            type: "events.iterate.com/codemode/script-execution-completed",
-            payload: expect.objectContaining({
-              outcome: {
-                status: "returned",
-                value: { message: "hello from inbound mcp", value: 42 },
-              },
+              logs: expect.arrayContaining([expect.stringContaining("hello from inbound mcp")]),
+              ok: true,
+              result: { message: "hello from inbound mcp", value: 42 },
             }),
           }),
           expect.objectContaining({
@@ -88,141 +81,6 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
               projectId: "proj__test__inboundmcp",
               streamPath,
               toolName: "exec_js",
-            }),
-          }),
-        ]),
-      );
-    } finally {
-      await closeMcpClient({ client, transport });
-    }
-  });
-
-  test("auto-loads static codemode tool providers for exec_js", async () => {
-    const transport = new StreamableHTTPClientTransport(
-      new URL("https://mcp-project.iterate-preview-test.app/mcp"),
-      {
-        fetch: (input, init) => SELF.fetch(new Request(input, init)),
-      },
-    );
-    const client = new Client({ name: "mcp-provider-matrix-e2e", version: "1.0.0" });
-
-    try {
-      await client.connect(transport);
-
-      const result = await client.callTool({
-        name: "exec_js",
-        arguments: {
-          code: `async (ctx) => {
-  const operations = await ctx.integrations.http.catalog.listOperations();
-  const mcpTools = await ctx.mcp.cloudflareDocs.listTools();
-  const echo = await ctx.mcp.cloudflareDocs["echo.text"]({ text: "hello static MCP" });
-  const agentHandle = await ctx.agents.create();
-
-  const [pet, workspace, agent, pipelinedAgent, composed] = await Promise.all([
-    ctx.integrations.http.catalog.getPet({ petId: "fido", include: "owner" }),
-    ctx.workspace.writeFile("/inbound-mcp-workspace.txt", "workspace from inbound MCP\\n")
-      .then(() => ctx.workspace.readFile("/inbound-mcp-workspace.txt")),
-    agentHandle.sendMessage({ message: "hi", subPath: "mcp" }),
-    ctx.agents.create().doThing({ label: "promise-pipeline", value: 21 }),
-    ctx.integrations.builtinMatrix.compose({
-      petId: "otto",
-      text: "composition",
-      value: 21,
-    }),
-  ]);
-  agentHandle[Symbol.dispose]?.();
-
-  return {
-    agent,
-    composed,
-    echo,
-    mcpToolNames: mcpTools.tools.map((tool) => tool.name),
-    operationIds: operations.map((operation) => operation.operationId),
-    pet,
-    pipelinedAgent,
-    workspace,
-  };
-}`,
-        },
-      });
-
-      expect(result.isError).not.toBe(true);
-      expect(parseRunCodeResult(result.content)).toMatchObject({
-        agent: { message: "hi", subPath: "mcp" },
-        composed: {
-          echo: { echoed: "provider saw composition", provider: "public-mcp" },
-          leaf: { provider: "leaf", value: 42 },
-          pet: { include: "owner", name: "Pet OTTO", petId: "otto", provider: "openapi" },
-          provider: "builtin-matrix",
-        },
-        echo: { echoed: "hello static MCP", provider: "public-mcp" },
-        mcpToolNames: ["echo.text"],
-        operationIds: ["getPet"],
-        pet: { include: "owner", name: "Pet FIDO", petId: "fido", provider: "openapi" },
-        pipelinedAgent: { doubled: 42, label: "promise-pipeline", value: 21 },
-        workspace: "workspace from inbound MCP\n",
-      });
-
-      const sessionId = transport.sessionId;
-      expect(sessionId).toBeTruthy();
-      const streamPath = mcpSessionStreamPath("mcp-provider-matrix-e2e", sessionId ?? "");
-
-      const events = await readCurrentStreamEvents(streamPath);
-      expect(events).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "events.iterate.com/codemode/tool-provider-registered",
-            payload: expect.objectContaining({
-              path: ["integrations", "http", "catalog"],
-            }),
-          }),
-          expect.objectContaining({
-            type: "events.iterate.com/codemode/tool-provider-registered",
-            payload: expect.objectContaining({
-              path: ["mcp", "cloudflareDocs"],
-            }),
-          }),
-          expect.objectContaining({
-            type: "events.iterate.com/codemode/function-call-requested",
-            payload: expect.objectContaining({
-              invocationKind: "rpc",
-              path: ["integrations", "builtinMatrix", "compose"],
-            }),
-          }),
-          expect.objectContaining({
-            type: "events.iterate.com/codemode/function-call-requested",
-            payload: expect.objectContaining({
-              invocationKind: "rpc",
-              path: ["agents", "create"],
-              providerPath: ["agents", "create"],
-            }),
-          }),
-          expect.objectContaining({
-            type: "events.iterate.com/codemode/function-call-completed",
-            payload: expect.objectContaining({
-              invocationKind: "rpc",
-              outcome: expect.objectContaining({
-                status: "returned",
-                value: { kind: "live-value", type: "function" },
-              }),
-              path: ["agents", "create"],
-              providerPath: ["agents", "create"],
-            }),
-          }),
-          expect.objectContaining({
-            type: "events.iterate.com/codemode/script-execution-completed",
-            payload: expect.objectContaining({
-              outcome: expect.objectContaining({
-                value: expect.objectContaining({
-                  agent: expect.objectContaining({ message: "hi", subPath: "mcp" }),
-                  pet: expect.objectContaining({ petId: "fido", provider: "openapi" }),
-                  pipelinedAgent: expect.objectContaining({
-                    doubled: 42,
-                    label: "promise-pipeline",
-                  }),
-                }),
-                status: "returned",
-              }),
             }),
           }),
         ]),

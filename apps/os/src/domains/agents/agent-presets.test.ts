@@ -150,7 +150,7 @@ describe("agent presets", () => {
           type: "events.iterate.com/agent/system-prompt-updated",
           payload: {
             systemPrompt:
-              "You are an Iterate agent responding from Slack. Send Slack replies with ctx.slack.chat.postMessage({ channel, thread_ts, text }).",
+              "You are an Iterate agent responding from Slack. Send Slack replies with itx.slack.chat.postMessage({ channel, thread_ts, text }).",
           },
         },
       ],
@@ -228,11 +228,11 @@ describe("agent presets", () => {
     const prompt = defaultAgentSystemPrompt("/agents/test");
     expect(prompt).toContain("/agents/test");
     expect(prompt).toContain("return undefined");
-    expect(prompt).toContain("If you're not sure about the shape of the result of a function call");
+    expect(prompt).toContain("If you're not sure about the shape of the result of a call");
     expect(prompt).toContain("Promise.all");
-    expect(prompt).toContain("ctx.<path>.<method>(args)");
-    expect(prompt).toContain("ctx.slack.chat.postMessage({ channel, thread_ts, text })");
-    expect(prompt).toContain("ctx.streams.read()");
+    expect(prompt).toContain("itx.<name>.<method>(args)");
+    expect(prompt).toContain("itx.slack.chat.postMessage({ channel, thread_ts, text })");
+    expect(prompt).toContain("itx.streams.get(");
   });
 
   it("tells Slack agents not to reply to FYI-only thread events", () => {
@@ -240,8 +240,8 @@ describe("agent presets", () => {
     expect(prompt).toContain("Do not chime in just because a Slack event arrived.");
     expect(prompt).toContain("explicitly mentioned");
     expect(prompt).toContain("surrounding thread context clearly calls for agent action");
-    expect(prompt).toContain("async (ctx) => {}");
-    expect(prompt).toContain("Do not call `ctx.slack.chat.postMessage` for FYI-only updates.");
+    expect(prompt).toContain("async (itx) => {}");
+    expect(prompt).toContain("Do not call `itx.slack.chat.postMessage` for FYI-only updates.");
   });
 
   it("distinguishes invalid run options JSON from non-object run options", () => {

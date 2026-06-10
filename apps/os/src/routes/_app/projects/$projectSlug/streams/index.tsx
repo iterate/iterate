@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
+import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
 import { useItxClient } from "~/itx/react/index.ts";
 import { StreamNavigationState } from "~/lib/stream-navigation-state.ts";
 
@@ -39,9 +39,5 @@ function ProjectStreamsIndexPage() {
     });
   }
 
-  return (
-    <section className="flex min-h-0 flex-1 flex-col p-4">
-      <StreamTreeBrowser source={source} onOpenPath={openStream} />
-    </section>
-  );
+  return <StreamExplorerTreePage source={source} onOpenPath={openStream} />;
 }

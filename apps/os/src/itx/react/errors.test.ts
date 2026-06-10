@@ -4,14 +4,15 @@ import { getItxErrorCode, isItxAccessError } from "./errors.ts";
 
 /**
  * What the far side of a capnweb session holds after an ItxError crosses:
- * a plain reconstructed Error with name and the thrown error's own
- * enumerable props reattached — class identity gone. (capnweb 0.8.0
+ * a plain reconstructed Error with the thrown error's own enumerable props
+ * reattached — class identity gone and `name` DROPPED. (capnweb 0.8.0
  * serializes `["error", name, message, stack?, props?]` with props from
- * `Object.keys(error)` minus name/message/stack.)
+ * `Object.keys(error)` minus name/message/stack, but the receiver only maps
+ * builtin names to their classes — an unknown name reconstructs as plain
+ * `Error` and is skipped again in the props loop, so it never comes back.)
  */
 function simulateCapnwebCrossing(error: Error): Error {
   const received = new Error(error.message);
-  received.name = error.name;
   for (const key of Object.keys(error)) {
     if (key === "name" || key === "message" || key === "stack") continue;
     (received as unknown as Record<string, unknown>)[key] = (
@@ -57,10 +58,9 @@ describe("ItxError", () => {
 describe("getItxErrorCode", () => {
   test("reads the code from anything ItxError-shaped", () => {
     expect(getItxErrorCode(new ItxError({ code: "CONFLICT", message: "taken" }))).toBe("CONFLICT");
-    const duckTyped = Object.assign(new Error("rejected"), {
-      code: "FORBIDDEN",
-      name: "ItxError",
-    });
+    // What a capnweb crossing actually leaves behind: plain Error + code,
+    // no name. This shape MUST be detected.
+    const duckTyped = Object.assign(new Error("rejected"), { code: "FORBIDDEN" });
     expect(getItxErrorCode(duckTyped)).toBe("FORBIDDEN");
   });
 
@@ -69,12 +69,11 @@ describe("getItxErrorCode", () => {
     expect(getItxErrorCode(new Error("network timeout"))).toBeUndefined();
     expect(getItxErrorCode("Unauthorized")).toBeUndefined();
     expect(getItxErrorCode(null)).toBeUndefined();
-    // Wrong name: a coded error that isn't ours.
-    expect(getItxErrorCode(Object.assign(new Error("x"), { code: "NOT_FOUND" }))).toBeUndefined();
-    // Right name, unknown code.
+    // A coded error from someone else: code outside the five-code set.
     expect(
-      getItxErrorCode(Object.assign(new Error("x"), { code: "TEAPOT", name: "ItxError" })),
+      getItxErrorCode(Object.assign(new Error("x"), { code: "ECONNREFUSED" })),
     ).toBeUndefined();
+    expect(getItxErrorCode(Object.assign(new Error("x"), { code: "TEAPOT" }))).toBeUndefined();
   });
 });
 

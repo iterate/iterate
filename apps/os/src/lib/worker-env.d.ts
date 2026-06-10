@@ -9,7 +9,6 @@ type WorkerMainModule = Pick<
     keyof WorkerEntryExports,
     | "AgentCapability"
     | "AiCapability"
-    | "FetchCapability"
     | "GmailCapability"
     | "ItxEntrypoint"
     | "ProjectEgress"

@@ -5,7 +5,7 @@ import {
   type AgentDurableObject,
   getAgentDurableObjectName,
 } from "../durable-objects/agent-durable-object.ts";
-import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
+import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 
 type AgentCapabilityEnv = {
   AGENT?: DurableObjectNamespace<AgentDurableObject>;

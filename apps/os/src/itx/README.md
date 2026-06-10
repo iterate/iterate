@@ -43,7 +43,7 @@ These invariants ARE the architecture. Every file here serves one of them.
 | **child context**    | `ctx_…`, hosted by `ContextDO`, created by `itx.fork()`. An agent session, a REPL scratchpad. Same anatomy, disposable.                                                 |
 | **cap**              | A named registry entry: `live` (connected provider's stub), `worker` (stored source, stateless), `facet` (stored source extending `DurableObject`, own private SQLite). |
 | **itx**              | A live handle on a context — the only thing user code touches.                                                                                                          |
-| **itx script**       | A function `({ itx, vars }) => result`, runnable identically from every execution mode.                                                                                 |
+| **itx script**       | A function `(itx) => result`, runnable identically from every execution mode (vars are baked in client-side).                                                           |
 | **connect**          | credential → handle (`/api/itx`). The only auth point.                                                                                                                  |
 | **provide / define** | Register a live / durable capability.                                                                                                                                   |
 | **fork**             | Create a child context.                                                                                                                                                 |

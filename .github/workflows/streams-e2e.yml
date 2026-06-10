@@ -94,20 +94,30 @@ jobs:
 
           echo "Streams worker did not become ready."
           exit 1
-      - name: Run streams Vitest e2e
+      - name: Run streams Vitest e2e while installing Playwright browser
         run: |-
+          pnpm --dir packages/streams/example-app exec playwright install --with-deps chromium &
+          playwright_install_pid=$!
+          vitest_status=1
           for attempt in 1 2 3; do
             if pnpm --dir packages/streams/example-app vitest; then
-              exit 0
+              vitest_status=0
+              break
             fi
             echo "Streams Vitest e2e failed (attempt $attempt/3)."
             if [ "$attempt" != "3" ]; then
               sleep 10
             fi
           done
-          exit 1
-      - name: Install Playwright browser
-        run: pnpm --dir packages/streams/example-app exec playwright install --with-deps chromium
+
+          playwright_install_status=0
+          wait "$playwright_install_pid" || playwright_install_status=$?
+          if [ "$vitest_status" -ne 0 ]; then
+            exit "$vitest_status"
+          fi
+          if [ "$playwright_install_status" -ne 0 ]; then
+            exit "$playwright_install_status"
+          fi
       - name: Run streams Playwright e2e
         run: pnpm --dir packages/streams/example-app playwright
       - name: Upload Playwright artifacts

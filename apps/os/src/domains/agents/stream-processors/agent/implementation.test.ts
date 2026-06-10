@@ -259,7 +259,7 @@ describe("AgentProcessor", () => {
         agentEvent({
           type: "events.iterate.com/agent/capability-noted",
           payload: {
-            instructions: "Use ctx.chat.sendMessage({ message }) for chat output.",
+            instructions: "Use itx.chat.sendMessage({ message }) for chat output.",
             name: "chat",
           },
           offset: 44,
@@ -277,8 +277,8 @@ describe("AgentProcessor", () => {
       },
     });
     const payload = appended[1]?.payload as { content: string };
-    expect(payload.content).toContain("ctx.chat");
-    expect(payload.content).toContain("ctx.chat.sendMessage({ message })");
+    expect(payload.content).toContain("itx.chat");
+    expect(payload.content).toContain("itx.chat.sendMessage({ message })");
     expect(payload.content).toContain("offset 44");
   });
 
