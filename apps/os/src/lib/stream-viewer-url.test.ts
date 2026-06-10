@@ -20,4 +20,14 @@ describe("stream viewer URLs", () => {
       }),
     ).toBe("/projects/project%2Fslash/streams/spaces%20and/slashes");
   });
+
+  it("links the root stream to the %2F splat, not the streams index", () => {
+    expect(
+      buildProjectStreamViewerUrl({
+        baseUrl: "https://os.iterate.com",
+        projectSlug: "test",
+        streamPath: "/",
+      }),
+    ).toBe("https://os.iterate.com/projects/test/streams/%2F");
+  });
 });

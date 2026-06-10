@@ -9,7 +9,7 @@ import {
 } from "@iterate-com/ui/components/collapsible";
 import { z } from "zod";
 import { ExistingCodemodeSessionControls } from "~/components/codemode-session-controls.tsx";
-import { ProjectStreamView } from "~/components/project-stream-view.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { projectCodemodeSessionQueryOptions } from "~/lib/project-route-query.ts";
 
 const Search = z.object({
