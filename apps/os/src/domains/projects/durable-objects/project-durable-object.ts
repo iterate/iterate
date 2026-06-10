@@ -10,12 +10,11 @@
 //    dispatched by the stateless ProjectIngressEntrypoint, which loads the
 //    worker itself and only asks this DO for the checkout.
 //
-// 3. EGRESS AUTHORITY — `egressFetch` is the project's one pipe to the
-//    outside world (Law 5): secret placeholder substitution, the egress
-//    intercept tunnel, and (future) human-in-the-loop approval live here.
-//    Calling `fetch` on the project worker gets the project's homepage;
-//    calling `fetch` on the project gets egress — matching itx vocabulary,
-//    where `itx.fetch` IS project egress.
+// Egress does NOT live here anymore: it is the `egress` capability on
+// platform:project (itx/code-contexts.ts) — a stateless pipe (EgressPipe)
+// shadowable per-session by a live provider (the old captun intercept
+// tunnel, reborn as `itx.caps.provide({ name: "egress", … })`). This DO has
+// NO fetch surface at all.
 //
 // State lives in the project's root event stream, projected by
 // ProjectProcessor (stream-processors/project-processor.ts), which also owns
@@ -23,14 +22,8 @@
 // The DO's own SQLite holds only the itx registry's capability table; the
 // worker checkout cache is plain DO storage. There is no bespoke project
 // table and no lifecycle mixin: the DO is addressed by the plain project id.
-//
-// Endgame for egress (itx-next.md §9, out of scope here): a stateless egress
-// capability with policy cached outside the DO, and the captun intercept
-// tunnel replaced by a live egress-shadowing capability provided over
-// capnweb-with-WebSockets.
 
 import { DurableObject, env } from "cloudflare:workers";
-import { acceptCaptunTunnel, type Fetcher } from "captun";
 import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
 import type { StreamEvent } from "@iterate-com/streams/shared/event";
 import {
@@ -44,7 +37,6 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
 import { parseConfig } from "~/config.ts";
-import { authenticateAdminBearer } from "~/auth/admin.ts";
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import {
   PROJECT_STREAM_PATH,
@@ -57,7 +49,6 @@ import {
   ProjectConfigWorkerProcessor,
   ProjectConfigWorkerProcessorContract,
 } from "~/domains/projects/stream-processors/project-config-worker/implementation.ts";
-import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import {
   bundleWorkerCode,
   cloneWorkerRepo,
@@ -75,7 +66,6 @@ import {
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { readRemoteBranchOid } from "~/domains/repos/repo-git.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
-import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
 import { platformProjectContext } from "~/itx/code-contexts.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
@@ -87,8 +77,6 @@ import type {
   PathCallTarget,
   SerializableCapTarget,
 } from "~/itx/protocol.ts";
-
-type CaptunServerTunnel = Fetcher & Disposable;
 
 /** Project DOs are addressed by the plain project id. */
 export function getProjectDurableObjectName(projectId: string) {
@@ -213,8 +201,6 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   get processor() {
     return this.#projectProcessor;
   }
-
-  #projectEgressInterceptTunnel: CaptunServerTunnel | null = null;
 
   /** Subscription callables on the project's root stream dial this. */
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
@@ -520,99 +506,6 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     return await bundleWorkerCode(files);
   }
 
-  // ---- egress --------------------------------------------------------------
-
-  /**
-   * `fetch` on the project IS egress (the worker's `fetch` is the homepage).
-   * The one exception is the egress intercept tunnel's WebSocket handshake,
-   * which must ride the fetch path — upgrades cannot cross RPC methods.
-   */
-  async fetch(request: Request): Promise<Response> {
-    if (new URL(request.url).pathname === "/__iterate/intercept-project-egress") {
-      return this.acceptProjectEgressInterceptTunnel(request);
-    }
-    return await this.egressFetch(request);
-  }
-
-  async egressFetch(request: Request): Promise<Response> {
-    if (!isHttpRequestUrl(request.url)) {
-      return await fetch(request);
-    }
-
-    const secrets = getSecretsCapability({
-      exports: readLoopbackExports(this.ctx.exports),
-      props: { projectId: this.projectId },
-    });
-
-    // Use one request-level intercept decision for both secret substitution and
-    // routing so a newly connected tunnel cannot see real secret material.
-    const egressInterceptTunnel = this.#projectEgressInterceptTunnel;
-    const [secretSubstitutionError, substitutedHeaders] =
-      await substituteProjectEgressSecretHeaders({
-        headers: request.headers,
-        projectEgressInterceptActive: !!egressInterceptTunnel,
-        secrets,
-      });
-    if (secretSubstitutionError) return secretSubstitutionError;
-
-    const outboundHeaders = new Headers(request.headers);
-    for (const [header, value] of Object.entries(substitutedHeaders)) {
-      outboundHeaders.set(header, value);
-    }
-    const outboundRequest = new Request(request, { headers: outboundHeaders });
-
-    if (egressInterceptTunnel) {
-      return await egressInterceptTunnel.fetch(outboundRequest);
-    }
-
-    return await fetch(outboundRequest);
-  }
-
-  private acceptProjectEgressInterceptTunnel(request: Request): Response {
-    const expectedToken = this.getAppConfig().adminApiSecret?.exposeSecret();
-    if (!expectedToken) {
-      return Response.json(
-        { error: "Project Egress Intercept Tunnel is disabled." },
-        { status: 404 },
-      );
-    }
-
-    if (
-      !authenticateAdminBearer({
-        authorizationHeader: request.headers.get("authorization"),
-        config: this.getAppConfig(),
-      })
-    ) {
-      return Response.json({ error: "Unauthorized." }, { status: 401 });
-    }
-
-    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-      return Response.json(
-        { error: "Project Egress Intercept Tunnel requires a WebSocket upgrade." },
-        { status: 400 },
-      );
-    }
-
-    const { response, tunnel } = acceptCaptunTunnel({
-      onDisconnect: () => {
-        if (this.#projectEgressInterceptTunnel === tunnel) {
-          this.#projectEgressInterceptTunnel = null;
-        }
-      },
-    });
-
-    this.replaceProjectEgressInterceptTunnel(tunnel);
-    return response;
-  }
-
-  protected replaceProjectEgressInterceptTunnel(tunnel: CaptunServerTunnel) {
-    if (this.#projectEgressInterceptTunnel) {
-      console.warn("Replacing active Project Egress Intercept Tunnel.");
-      this.#projectEgressInterceptTunnel[Symbol.dispose]();
-    }
-    this.#projectEgressInterceptTunnel = tunnel;
-  }
-
   // ---- plumbing ------------------------------------------------------------
 
   private async requireSummary(): Promise<ProjectSummary> {
@@ -684,11 +577,6 @@ function toSummary(facts: ProjectFacts): ProjectSummary {
     defaultHost: facts.defaultHost,
     hosts: facts.hosts,
   };
-}
-
-function isHttpRequestUrl(urlString: string) {
-  const url = new URL(urlString);
-  return url.protocol === "http:" || url.protocol === "https:";
 }
 
 function projectRuntimeEnv(env: ProjectEnv): ProjectRuntimeEnv {

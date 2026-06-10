@@ -54,7 +54,6 @@ export class UrlDial extends WorkerEntrypoint<Env, UrlDialProps> {
     const headers = new Headers(props.headers ?? {});
     const [substitutionError, substitutedHeaders] = await substituteProjectEgressSecretHeaders({
       headers,
-      projectEgressInterceptActive: false,
       secrets: getSecretsCapability({
         exports: this.ctx.exports as unknown as Pick<Cloudflare.Exports, "SecretsCapability">,
         props: { projectId: props.projectId },

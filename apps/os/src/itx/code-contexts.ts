@@ -67,10 +67,9 @@ export function defineCodeContext(
 }
 
 /**
- * The defaults every project context delegates to. Deliberately small to
- * start: `ai` is the first hardwired built-in to become an ordinary
- * capability definition (§8's "cap #0 disappears" direction — repos,
- * workspace, and streams follow as their handle accessors migrate).
+ * The defaults every project context delegates to (§8: "cap #0 disappears").
+ * Code holds composition (Law 1): these are ordinary capability definitions
+ * a context falls through to, shadowable per-context — which is the point.
  */
 export const platformProjectContext = defineCodeContext("platform:project", (caps) => {
   caps.define({
@@ -86,6 +85,78 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
       props: { binding: "AI" },
       type: "rpc",
       worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    invoke: "members",
+    meta: {
+      instructions:
+        "Project egress: itx.egress.fetch(request) — also what itx.fetch() and " +
+        "every loaded isolate's bare fetch() dispatch to. Secret placeholders " +
+        "in headers are substituted in the default pipe. Provide a live " +
+        "`egress` cap to intercept all egress for your session (the provider " +
+        "sees placeholders raw, never material).",
+    },
+    name: "egress",
+    target: {
+      entrypoint: "EgressPipe",
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    invoke: "members",
+    meta: {
+      instructions: "The project's git repos: itx.repos.list(), itx.repos.get({ slug }), …",
+    },
+    name: "repos",
+    target: {
+      entrypoint: "ReposCapability",
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    invoke: "members",
+    meta: {
+      instructions:
+        "The project's workspace: readFile/writeFile and gitClone/gitAdd/" +
+        "gitCommit/gitPush/gitStatus.",
+    },
+    name: "workspace",
+    target: {
+      entrypoint: "WorkspaceCapability",
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    invoke: "path-call",
+    meta: {
+      instructions:
+        "The project's own worker (built from its repo). Every export is " +
+        "callable: itx.worker.someTool(args), at any depth.",
+    },
+    name: "worker",
+    target: {
+      entrypoint: "ProjectWorker",
+      props: { invoke: "members" },
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    invoke: "members",
+    meta: {
+      instructions:
+        "The Project Durable Object's whole surface (cap #0): " +
+        "itx.project.getSummary(), itx.project.processor.snapshot(), ….",
+    },
+    name: "project",
+    target: {
+      type: "rpc",
+      // Name omitted: the registry defaults it to the owning project id.
+      worker: { binding: "PROJECT", type: "durable-object" },
     },
   });
 });

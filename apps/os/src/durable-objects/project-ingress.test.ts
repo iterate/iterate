@@ -312,18 +312,7 @@ describe("Project ingress routing", () => {
     fetchSpy.mockRestore();
   });
 
-  test("requires the admin API secret for the Project Egress Intercept Route", async () => {
-    await createProject();
-
-    const response = await SELF.fetch(
-      "https://demo.iterate.localhost/__iterate/intercept-project-egress",
-    );
-
-    expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toMatchObject({ error: "Unauthorized." });
-  });
-
-  test("withholds egress header secrets and forwards through a Project Egress Intercept Tunnel", async () => {
+  test("a live egress provider shadows the default and sees placeholders RAW", async () => {
     await createProject();
     await SELF.fetch(
       "https://os.iterate.localhost/__test/upsert-secret?key=openai&material=mvp-secret-value",
@@ -346,10 +335,14 @@ describe("Project ingress routing", () => {
     };
 
     expect(body.url).toBe("https://api.example.com/v1/models?x=1");
-    expect(body.headers["x-iterate-test-secret"]).toEqual([
-      `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested "getSecret('openai')"`,
-    ]);
+    // The shadow receives the placeholder UNSUBSTITUTED — an interceptor
+    // never sees secret material.
+    expect(body.headers["x-iterate-test-secret"]).toEqual([`getSecret('openai')`]);
     expect(JSON.stringify(body)).not.toContain("mvp-secret-value");
+
+    // Revoking the live provider restores the default pipe (and keeps the
+    // following tests on unshadowed egress).
+    await SELF.fetch("https://os.iterate.localhost/__test/revoke-egress-shadow");
   });
 
   test("fails egress descriptively when a referenced secret is missing", async () => {

@@ -227,14 +227,21 @@ export class Itx extends RpcTarget {
   }
 
   /**
-   * Explicit project egress (Law 5). Secrets are substituted inside the
-   * Project DO's egress hop — `fetch("https://api.x.com", { headers: {
-   * authorization: 'getSecret("X_TOKEN")' } })` never sees the material.
-   * Isolates the platform loads get this same pipe bound as global fetch.
+   * Explicit project egress (Law 5): sugar for the `egress` capability —
+   * `fetch("https://api.x.com", { headers: { authorization:
+   * 'getSecret("X_TOKEN")' } })` never sees the material (the default
+   * EgressPipe substitutes it; a live `egress` provider sees placeholders
+   * raw). Isolates the platform loads get the same dispatch bound as their
+   * global fetch, so shadowing covers every door.
    */
   async fetch(input: Request | string, init?: RequestInit): Promise<Response> {
     const request = typeof input === "string" ? new Request(input, init) : input;
-    return await this.#projectStub().egressFetch(request);
+    this.#requireProjectId();
+    return (await this.#registryStub().itxInvoke({
+      args: [request],
+      name: "egress",
+      path: ["fetch"],
+    })) as Response;
   }
 
   async describe() {

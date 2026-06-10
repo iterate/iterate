@@ -51,7 +51,7 @@ export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.t
 export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-capability.ts";
 export { AiCapability, OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
-export { BindingCapability, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
+export { BindingCapability, EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { McpClient } from "~/itx/caps/mcp-client.ts";
 export { ProjectWorker } from "~/itx/caps/project-worker.ts";
 export { UrlDial } from "~/itx/caps/url-dial.ts";

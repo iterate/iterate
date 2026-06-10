@@ -1,3 +1,4 @@
+import { RpcTarget } from "cloudflare:workers";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
   getInitializedStreamStub,
@@ -91,19 +92,21 @@ type TestProjectConfigWorkspace = {
   removePath(input: { force: boolean; path: string; recursive: boolean }): Promise<void>;
 };
 
-export class ProjectDurableObject extends RealProjectDurableObject {
-  installTestProjectEgressInterceptTunnel() {
-    this.replaceProjectEgressInterceptTunnel({
-      fetch(request: Request) {
-        return Response.json({
-          headers: headersToArrays(request.headers),
-          url: request.url,
-        });
-      },
-      [Symbol.dispose]() {},
+/**
+ * A live `egress` provider — the capability-model replacement for the old
+ * captun intercept tunnel. Echoes what it receives so tests can observe that
+ * shadowed egress sees secret placeholders RAW (never material).
+ */
+class TestEgressShadow extends RpcTarget {
+  fetch(request: Request) {
+    return Response.json({
+      headers: headersToArrays(request.headers),
+      url: request.url,
     });
   }
+}
 
+export class ProjectDurableObject extends RealProjectDurableObject {
   protected override async cloneWorkerRepo(input: {
     git: TestProjectConfigGit;
     repo: RepoInfo;
@@ -173,7 +176,7 @@ export { ProjectCapability } from "~/domains/projects/entrypoints/project-capabi
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
-export { ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
+export { EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 export {
@@ -234,21 +237,29 @@ export default {
     }
 
     if (url.pathname === "/__test/egress") {
+      // The real explicit door: itx.fetch dispatches the `egress` capability.
       const target = url.searchParams.get("target") ?? "https://os.iterate.localhost/__test/echo";
-      return await env.PROJECT.getByName(
-        getProjectDurableObjectName("proj__local__test"),
-      ).egressFetch(
-        new Request(target, {
-          headers: request.headers,
-        }),
-      );
+      const itx = await resolveItx({
+        env: env as never,
+        exports: ctx.exports as never,
+        props: { context: "proj__local__test" },
+      });
+      return await itx.fetch(target, { headers: request.headers });
+    }
+
+    if (url.pathname === "/__test/revoke-egress-shadow") {
+      const project = env.PROJECT.getByName(getProjectDurableObjectName("proj__local__test"));
+      await project.itxRevoke({ name: "egress" });
+      return Response.json({ ok: true });
     }
 
     if (url.pathname === "/__test/connect-egress-intercept") {
-      const project = env.PROJECT.getByName(
-        getProjectDurableObjectName("proj__local__test"),
-      ) as unknown as ProjectEgressInterceptTestRpc;
-      await project.installTestProjectEgressInterceptTunnel();
+      // Live shadow via the registry — replaces the captun tunnel.
+      const project = env.PROJECT.getByName(getProjectDurableObjectName("proj__local__test"));
+      await project.itxProvide({
+        name: "egress",
+        target: new TestEgressShadow() as never,
+      });
       return Response.json({ ok: true });
     }
 
@@ -384,10 +395,6 @@ export default {
 
 type ProjectStateRpc = {
   processor: { snapshot(): Promise<unknown> };
-};
-
-type ProjectEgressInterceptTestRpc = {
-  installTestProjectEgressInterceptTunnel(): Promise<void>;
 };
 
 async function ensureD1Schema(db: D1Database) {

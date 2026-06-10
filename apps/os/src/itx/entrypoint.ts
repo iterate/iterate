@@ -21,6 +21,8 @@ import { replayPathCall } from "./path-proxy.ts";
 import type { ContextDO } from "./context-do.ts";
 import { parseConfig } from "~/config.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
+import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 
 /**
  * restore(): names → live object graph. A project-context handle's access is
@@ -82,21 +84,92 @@ export type ProjectEgressProps = {
   cap?: string;
 };
 
+/** The context's registry, addressed by id shape (project vs ctx_ child). */
+function registryStubForContext(
+  env: Env,
+  contextId: string,
+): { itxInvoke(input: PathCall & { name: string }): Promise<unknown> } {
+  if (isChildContextId(contextId)) {
+    return env.ITX_CONTEXT.getByName(contextId) as unknown as {
+      itxInvoke(input: PathCall & { name: string }): Promise<unknown>;
+    };
+  }
+  return env.PROJECT.getByName(getProjectDurableObjectName(contextId)) as unknown as {
+    itxInvoke(input: PathCall & { name: string }): Promise<unknown>;
+  };
+}
+
 /**
- * One pipe, two doors (Law 5). This is the implicit door: bound as
- * `globalOutbound` for every isolate the platform loads, so bare fetch() —
- * including fetches made by npm dependencies the loaded code bundles — IS
- * project egress: secret placeholder substitution, the egress intercept
- * tunnel, and (future) human approval all happen inside the Project DO.
- * The explicit door is itx.fetch(), which lands on the same DO method.
+ * EGRESS IS A CAPABILITY. The platform default — this stateless pipe doing
+ * secret placeholder substitution and the real fetch — is defined as the
+ * `egress` cap on platform:project (code-contexts.ts). Anything holding the
+ * context's handle can SHADOW it for the session with a live provider:
+ *
+ *   await itx.caps.provide({ name: "egress", target: myFetchTarget });
+ *
+ * which is the whole egress-intercept story (replaces the captun tunnel):
+ * the provider receives every egress Request — with secret placeholders RAW
+ * and unsubstituted, so an interceptor never sees material — and its
+ * Responses flow back. Disconnecting the session restores the default.
+ * Future policy (allowlists, human-in-the-loop approval) slots in here.
  */
 export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
   async fetch(request: Request): Promise<Response> {
     const props = this.ctx.props;
-    return await this.env.PROJECT.getByName(getProjectDurableObjectName(props.project)).egressFetch(
-      request,
-    );
+    // Dispatch through the context's registry so live providers shadow the
+    // default — the supervisor stays in the path for every egress fetch.
+    const registry = registryStubForContext(this.env, props.context ?? props.project);
+    return (await registry.itxInvoke({
+      args: [request],
+      name: "egress",
+      path: ["fetch"],
+    })) as Response;
   }
+}
+
+export type EgressPipeProps = {
+  /** Injected by the registry at dial time — never definer-supplied. */
+  projectId?: string;
+  cap?: string;
+  context?: string;
+};
+
+/**
+ * The default egress target: substitution + fetch, fully stateless. Secret
+ * placeholders in headers (`getSecret({ key: "X" })`) become material HERE —
+ * outside every loaded isolate — and nowhere else.
+ */
+export class EgressPipe extends WorkerEntrypoint<Env, EgressPipeProps> {
+  async fetch(request: Request): Promise<Response> {
+    const props = this.ctx.props;
+    if (!props.projectId) {
+      throw new Error("EgressPipe needs registry-injected projectId props.");
+    }
+    if (!isHttpRequestUrl(request.url)) {
+      return await fetch(request);
+    }
+
+    const secrets = getSecretsCapability({
+      exports: this.ctx.exports as unknown as Parameters<typeof getSecretsCapability>[0]["exports"],
+      props: { projectId: props.projectId },
+    });
+    const [substitutionError, substitutedHeaders] = await substituteProjectEgressSecretHeaders({
+      headers: request.headers,
+      secrets,
+    });
+    if (substitutionError) return substitutionError;
+
+    const outboundHeaders = new Headers(request.headers);
+    for (const [header, value] of Object.entries(substitutedHeaders)) {
+      outboundHeaders.set(header, value);
+    }
+    return await fetch(new Request(request, { headers: outboundHeaders }));
+  }
+}
+
+function isHttpRequestUrl(urlString: string) {
+  const url = new URL(urlString);
+  return url.protocol === "http:" || url.protocol === "https:";
 }
 
 export type BindingCapabilityProps = {

@@ -23,7 +23,6 @@ export type SubstituteProjectEgressSecretHeadersResult = [
 
 export async function substituteProjectEgressSecretHeaders(input: {
   headers: Headers;
-  projectEgressInterceptActive: boolean;
   secrets: ProjectEgressSecretResolver;
 }): Promise<SubstituteProjectEgressSecretHeadersResult> {
   const substitutedHeaders: Record<string, string> = {};
@@ -37,7 +36,6 @@ export async function substituteProjectEgressSecretHeaders(input: {
     for (const reference of references) {
       const [resolveError, replacement] = await resolveSecretReference({
         header,
-        projectEgressInterceptActive: input.projectEgressInterceptActive,
         reference,
         secrets: input.secrets,
       });
@@ -90,22 +88,9 @@ export function parseSecretReferences(input: {
 
 async function resolveSecretReference(input: {
   header: string;
-  projectEgressInterceptActive: boolean;
   reference: SecretReference;
   secrets: ProjectEgressSecretResolver;
 }): Promise<SecretReferenceResolutionResult> {
-  if (input.projectEgressInterceptActive) {
-    const secret = await input.secrets.getSecretSummaryByKeyOrNull({ key: input.reference.key });
-    if (secret) {
-      return [
-        null,
-        `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested ${JSON.stringify(input.reference.source)}`,
-      ];
-    }
-
-    return secretNotFound(input);
-  }
-
   const secret = await input.secrets.getSecretOrNull({ key: input.reference.key });
   if (secret) return [null, secret.material];
 

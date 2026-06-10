@@ -72,7 +72,6 @@ describe("substituteProjectEgressSecretHeaders", () => {
       headers: new Headers({
         "x-api-key": `prefix getSecret({ key: "openai" }) suffix`,
       }),
-      projectEgressInterceptActive: false,
       secrets: {
         getSecretOrNull: getSecret,
         getSecretSummaryByKeyOrNull: vi.fn(),
@@ -90,7 +89,6 @@ describe("substituteProjectEgressSecretHeaders", () => {
       headers: new Headers({
         "x-api-key": `prefix getSecret({ key: "openai" }) suffix`,
       }),
-      projectEgressInterceptActive: false,
       secrets: {
         getSecretOrNull: vi.fn(async () => ({ material })),
         getSecretSummaryByKeyOrNull: vi.fn(),
@@ -101,35 +99,12 @@ describe("substituteProjectEgressSecretHeaders", () => {
     expect(headers).toEqual({ "x-api-key": `prefix ${material} suffix` });
   });
 
-  it("substitutes descriptive withheld text when a Project Egress Intercept Tunnel is active", async () => {
-    const getSecret = vi.fn();
-    const getSecretSummaryByKeyOrNull = vi.fn(async () => ({ id: "sec_test" }));
-    const [error, headers] = await substituteProjectEgressSecretHeaders({
-      headers: new Headers({
-        "x-api-key": `getSecret({ key: "openai" })`,
-      }),
-      projectEgressInterceptActive: true,
-      secrets: {
-        getSecretOrNull: getSecret,
-        getSecretSummaryByKeyOrNull,
-      },
-    });
-
-    expect(error).toBeNull();
-    expect(headers).toEqual({
-      "x-api-key": `Secret value withheld because this Project Egress Intercept Tunnel is active. Requested "getSecret({ key: \\"openai\\" })"`,
-    });
-    expect(getSecret).not.toHaveBeenCalled();
-    expect(getSecretSummaryByKeyOrNull).toHaveBeenCalledWith({ key: "openai" });
-  });
-
   it("returns successful substitutions alongside a later missing-secret response", async () => {
     const [error, headers] = await substituteProjectEgressSecretHeaders({
       headers: new Headers({
         "x-api-key": `getSecret({ key: "openai" })`,
         "x-missing": `getSecret({ key: "missing" })`,
       }),
-      projectEgressInterceptActive: false,
       secrets: {
         getSecretOrNull: vi.fn(async (input) =>
           input.key === "openai" ? { material: "real-secret-value" } : null,
@@ -155,7 +130,6 @@ describe("substituteProjectEgressSecretHeaders", () => {
       headers: new Headers({
         "x-api-key": `getSecret({ key: "missing" })`,
       }),
-      projectEgressInterceptActive: false,
       secrets: {
         getSecretOrNull: vi.fn(async () => null),
         getSecretSummaryByKeyOrNull: vi.fn(),

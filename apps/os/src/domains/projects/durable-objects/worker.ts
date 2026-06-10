@@ -35,6 +35,7 @@ import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts
 import type { ItxProps } from "~/itx/protocol.ts";
 import type { ProjectEgressProps } from "~/itx/entrypoint.ts";
 import type { StreamsCapabilityProps } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { wireIsolateEnv, type IsolateLoopback } from "~/itx/isolate.ts";
 
 export const WORKER_CONFIG_DIR = "/iterate-config";
 export const WORKER_MAIN_MODULE = "worker.js";
@@ -145,29 +146,34 @@ export function workerCacheKey(input: { commitOid: string; projectId: string }) 
   return `project-ingress:v4:${input.projectId}:${input.commitOid}`;
 }
 
-/** Wire the fixed worker environment (see module header) into worker code. */
+/**
+ * Wire the fixed worker environment into worker code. The trust posture
+ * (ITERATE scoped to the project context, bare fetch = egress) is shared
+ * with every other platform-loaded isolate via itx/isolate.ts; the project
+ * worker additionally gets env.STREAMS.
+ */
 export function withWorkerEnv(input: {
   exports: WorkerLoopbackExports;
   projectId: string;
   workerCode: WorkerCode;
 }): RunnableWorkerCode {
-  return {
-    ...input.workerCode,
-    env: {
-      ITERATE: input.exports.ItxEntrypoint({
-        props: { cap: "worker", context: input.projectId },
-      }),
-      STREAMS: input.exports.StreamsCapability({
-        props: { projectId: input.projectId },
-      }),
-    },
-    globalOutbound: input.exports.ProjectEgress({
-      props: { cap: "worker", context: input.projectId, project: input.projectId },
-    }),
-    modules: {
-      ...input.workerCode.modules,
-    },
+  const loopback: IsolateLoopback = (exportName, options) => {
+    const factory = (input.exports as unknown as Record<string, unknown>)[exportName];
+    if (typeof factory !== "function") {
+      throw new Error(`Loopback export ${exportName} is not available.`);
+    }
+    return factory(options);
   };
+  return wireIsolateEnv({
+    cap: "worker",
+    code: input.workerCode,
+    contextId: input.projectId,
+    extraEnv: {
+      STREAMS: input.exports.StreamsCapability({ props: { projectId: input.projectId } }),
+    },
+    loopback,
+    projectId: input.projectId,
+  }) as RunnableWorkerCode;
 }
 
 type WorkerProject = { id: string; slug: string };

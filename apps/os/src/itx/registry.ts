@@ -32,10 +32,8 @@ import {
   type SerializableCapTarget,
 } from "./protocol.ts";
 import { replayPathCall } from "./path-proxy.ts";
+import { wireIsolateEnv } from "./isolate.ts";
 import type { CodeContext } from "./code-contexts.ts";
-
-const DEFAULT_CAP_COMPATIBILITY_DATE = "2026-04-27";
-const DEFAULT_CAP_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
 /**
  * A live provider's stub as the registry sees it. Structural because the
@@ -221,7 +219,16 @@ export class ContextRegistry {
 
     this.#live.get(input.name)?.[Symbol.dispose]();
     this.#live.set(input.name, connection);
-    target.onRpcBroken?.(() => connection[Symbol.dispose]());
+    try {
+      // Cap'n Web stubs expose onRpcBroken; plain Workers RPC stubs do not
+      // (the access becomes a failing remote call — synchronously or as a
+      // rejected promise). Workers RPC providers simply lack
+      // auto-dispose-on-disconnect.
+      const wired = target.onRpcBroken?.(() => connection[Symbol.dispose]()) as unknown;
+      void Promise.resolve(wired).catch(() => {});
+    } catch {
+      // Not a capnweb stub — fine.
+    }
 
     this.upsertRow({
       invoke,
@@ -491,10 +498,27 @@ export class ContextRegistry {
         const entrypoint = this.loadWorker(name, source).getEntrypoint(source.entrypoint);
         return { target: entrypoint, dispose: () => disposeIfPossible(entrypoint) };
       }
-      case "durable-object":
-        throw new Error(
-          `Capability "${name}": ${worker.type} refs are not implemented yet (itx-next.md §1).`,
-        );
+      case "durable-object": {
+        // Same trust rule as loopbacks: the namespace must be allowlisted,
+        // and the instance NAME defaults to the owning project id — so a
+        // definer can never point a cap at someone else's durable object
+        // unless they could already address it by name within this project.
+        if (!this.dialable().durableObjects.has(worker.binding)) {
+          throw new Error(
+            `Capability "${name}": durable-object namespace "${worker.binding}" is not dialable.`,
+          );
+        }
+        const namespace = this.host.binding?.(worker.binding) as
+          | { getByName(name: string): unknown }
+          | undefined;
+        if (namespace == null || typeof namespace.getByName !== "function") {
+          throw new Error(
+            `Capability "${name}": durable-object namespace "${worker.binding}" is not available on this host.`,
+          );
+        }
+        const stub = namespace.getByName(worker.name ?? this.host.projectId);
+        return { target: stub, dispose: () => disposeIfPossible(stub) };
+      }
     }
   }
 
@@ -502,26 +526,16 @@ export class ContextRegistry {
     const loader = this.host.loader;
     if (!loader) throw new Error("Source capabilities need a LOADER binding.");
 
-    return loader.get(
-      `itx-cap:${this.host.contextId}:${name}:${capSourceCacheKey(source)}`,
-      () => ({
-        compatibilityDate: source.compatibilityDate ?? DEFAULT_CAP_COMPATIBILITY_DATE,
-        compatibilityFlags: DEFAULT_CAP_COMPATIBILITY_FLAGS,
-        env: {
-          // The cap's own itx is scoped to its home context — a cap can never
-          // reach wider than where it is defined (Law 4). `cap` is attribution.
-          ITERATE: this.host.loopback("ItxEntrypoint", {
-            props: { cap: name, context: this.host.contextId },
-          }),
-        },
-        // Bare fetch() inside the cap IS project egress: secret substitution
-        // and (future) policy live in the Project DO, and the cap's isolate
-        // never sees secret material (Law 5).
-        globalOutbound: this.host.loopback("ProjectEgress", {
-          props: { cap: name, context: this.host.contextId, project: this.host.projectId },
-        }),
-        mainModule: source.mainModule,
-        modules: source.modules,
+    // Trust posture (ITERATE scoped to home context — Law 4; bare fetch()
+    // rides project egress — Law 5) is wired in ONE place for every isolate
+    // the platform loads: itx/isolate.ts.
+    return loader.get(`itx-cap:${this.host.contextId}:${name}:${capSourceCacheKey(source)}`, () =>
+      wireIsolateEnv({
+        cap: name,
+        code: source,
+        contextId: this.host.contextId,
+        loopback: this.host.loopback,
+        projectId: this.host.projectId,
       }),
     );
   }

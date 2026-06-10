@@ -243,8 +243,6 @@ interface ItxProjectAdmin {
   callWorkerFunction(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   /** Return the project summary and ingress URL. */
   describe(): Promise<ProjectSummary & { ingressUrl: string }>;
-  /** Fetch through the project's egress path. */
-  egressFetch(request: Request): Promise<Response>;
   /** fetch on the PROJECT is egress (the worker's fetch is the homepage). */
   fetch(request: Request): Promise<Response>;
   /** Return the project's public ingress URL. */

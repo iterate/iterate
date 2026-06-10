@@ -67,10 +67,6 @@ export class ProjectCapability extends WorkerEntrypoint<
     return await this.ingress().fetch(request);
   }
 
-  async egressFetch(request: Request): Promise<Response> {
-    return await this.project().egressFetch(request);
-  }
-
   async fetch(request: Request): Promise<Response> {
     return await this.ingress().fetch(request);
   }

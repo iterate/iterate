@@ -85,7 +85,7 @@ export function capSourceCacheKey(source: CapSource): string {
 export type WorkerRef =
   | { type: "binding"; binding: string }
   | { type: "loopback" }
-  | { type: "durable-object"; binding: string; name: string }
+  | { type: "durable-object"; binding: string; name?: string }
   | { type: "source"; source: CapSource };
 
 /**
@@ -124,6 +124,13 @@ export type SerializableCapTarget =
  */
 export const DIALABLE_BINDINGS: ReadonlySet<string> = new Set(["AI"]);
 /**
+ * Durable Object namespaces dialable via `{ type: "durable-object" }` refs.
+ * Same trust rule as loopbacks: the target class must scope by its own name
+ * (which the registry defaults to the owning project id), never by
+ * definer-supplied props.
+ */
+export const DIALABLE_DURABLE_OBJECTS: ReadonlySet<string> = new Set(["PROJECT"]);
+/**
  * Loopback entrypoints listed here MUST scope strictly by the dial-time
  * props the registry injects ({ cap, context, projectId }) — never by
  * definer-supplied props — because anyone with a handle on a context can
@@ -133,21 +140,26 @@ export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "AgentCapability",
   "AgentToolsCapability",
   "BindingCapability",
+  "EgressPipe",
   "GmailCapability",
   "McpClient",
   "OrpcCapability",
   "ProjectWorker",
+  "ReposCapability",
   "SlackCapability",
+  "WorkspaceCapability",
 ]);
 
 /** The dial allowlists a host resolves once (defaults ∪ deployment config). */
 export type DialableTargets = {
   bindings: ReadonlySet<string>;
+  durableObjects: ReadonlySet<string>;
   loopbacks: ReadonlySet<string>;
 };
 
 export const DEFAULT_DIALABLE_TARGETS: DialableTargets = {
   bindings: DIALABLE_BINDINGS,
+  durableObjects: DIALABLE_DURABLE_OBJECTS,
   loopbacks: DIALABLE_LOOPBACKS,
 };
 
@@ -158,13 +170,22 @@ export const DEFAULT_DIALABLE_TARGETS: DialableTargets = {
  */
 export function resolveDialableTargets(config?: {
   dialableBindings?: readonly string[];
+  dialableDurableObjects?: readonly string[];
   dialableLoopbacks?: readonly string[];
 }): DialableTargets {
-  if (!config?.dialableBindings?.length && !config?.dialableLoopbacks?.length) {
+  if (
+    !config?.dialableBindings?.length &&
+    !config?.dialableDurableObjects?.length &&
+    !config?.dialableLoopbacks?.length
+  ) {
     return DEFAULT_DIALABLE_TARGETS;
   }
   return {
     bindings: new Set([...DIALABLE_BINDINGS, ...(config.dialableBindings ?? [])]),
+    durableObjects: new Set([
+      ...DIALABLE_DURABLE_OBJECTS,
+      ...(config.dialableDurableObjects ?? []),
+    ]),
     loopbacks: new Set([...DIALABLE_LOOPBACKS, ...(config.dialableLoopbacks ?? [])]),
   };
 }
@@ -233,9 +254,12 @@ export function assertDefinableCapTarget(
       capSourceCacheKey(worker.source);
       return;
     case "durable-object":
-      throw new Error(
-        `Capability "${name}": ${worker.type} refs are not implemented yet (itx-next.md §1).`,
-      );
+      if (!dialable.durableObjects.has(worker.binding)) {
+        throw new Error(
+          `Capability "${name}": durable-object namespace "${worker.binding}" is not dialable.`,
+        );
+      }
+      return;
   }
 }
 
@@ -277,17 +301,17 @@ export type CapDescription = {
  *   are capnweb stub controls, `constructor`/`__proto__` are prototype
  *   pollution vectors, `map` is capnweb's magic promise method.
  */
+// The irreducible kernel (§8): everything else — repos, workspace, worker,
+// project, egress, ai — is an ordinary capability on platform:project,
+// SHADOWABLE per context (prototype semantics; that is the point).
 const ITX_BUILTIN_NAMES = [
+  "cap",
   "caps",
   "describe",
   "fetch",
   "fork",
-  "project",
   "projects",
-  "repos",
   "streams",
-  "worker",
-  "workspace",
 ] as const;
 
 /**
