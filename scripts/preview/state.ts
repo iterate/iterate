@@ -229,6 +229,31 @@ function unwrapHiddenStateBlock(contents: string) {
   return contents;
 }
 
+/**
+ * Retry GitHub API calls unconditionally, status codes included: during the
+ * 2026-06-10 GitHub auth outage, valid tokens drew transient 401s and a
+ * single failed PATCH killed whole deploy jobs. A genuinely bad token just
+ * fails again a few seconds later.
+ */
+async function withGithubRetries<T>(operation: () => Promise<T>): Promise<T> {
+  const delaysMs = [2_000, 5_000];
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const delayMs = delaysMs[attempt];
+      if (delayMs === undefined) {
+        throw error;
+      }
+      console.warn(
+        `GitHub API call failed (attempt ${attempt + 1}/${delaysMs.length + 1}), retrying in ${delayMs}ms...`,
+        error instanceof Error ? error.message : error,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 async function readPullRequestBody(params: {
   githubToken: string;
   repositoryFullName: string;
@@ -238,11 +263,13 @@ async function readPullRequestBody(params: {
     auth: params.githubToken,
   });
   const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  const pullRequest = await octokit.rest.pulls.get({
-    owner,
-    repo,
-    pull_number: params.pullRequestNumber,
-  });
+  const pullRequest = await withGithubRetries(() =>
+    octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: params.pullRequestNumber,
+    }),
+  );
 
   return pullRequest.data.body ?? "";
 }
@@ -257,10 +284,12 @@ async function writePullRequestBody(params: {
     auth: params.githubToken,
   });
   const [owner, repo] = splitRepositoryFullName(params.repositoryFullName);
-  await octokit.rest.pulls.update({
-    body: params.body,
-    owner,
-    repo,
-    pull_number: params.pullRequestNumber,
-  });
+  await withGithubRetries(() =>
+    octokit.rest.pulls.update({
+      body: params.body,
+      owner,
+      repo,
+      pull_number: params.pullRequestNumber,
+    }),
+  );
 }
