@@ -78,16 +78,5 @@ test("creates a disposable project and uses project streams through oRPC", async
     ]),
   );
 
-  const listed = await handle.client.project.streams.list({
-    projectSlugOrId: handle.project.slug,
-  });
-
-  expect(listed.streams).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        namespace: handle.project.id,
-        streamPath,
-      }),
-    ]),
-  );
+  expect(read.events.some((event) => event.offset === appended.event.offset)).toBe(true);
 });

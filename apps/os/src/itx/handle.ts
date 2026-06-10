@@ -420,10 +420,6 @@ export class ItxStreams extends RpcTarget {
     return new ItxStreams(this.runtime, StreamNamespace.parse(namespace));
   }
 
-  async list() {
-    return await this.client().list();
-  }
-
   async create(input: { streamPath: string }) {
     return await this.client().create(input);
   }

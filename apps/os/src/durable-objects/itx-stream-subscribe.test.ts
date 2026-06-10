@@ -19,7 +19,7 @@ type HarnessStub = {
     path: string;
     event: { type: string; payload: Record<string, unknown> };
   }): Promise<StreamEvent>;
-  list(): Promise<{ streamPath: string }[]>;
+  getState(input: { path: string }): Promise<{ childPaths: string[] }>;
   read(input: { path: string }): Promise<StreamEvent[]>;
   subscribe(
     input: { afterOffset: StreamCursor; path: string },
@@ -160,8 +160,8 @@ describe("itx stream subscribe against a real Stream Durable Object", () => {
   });
 });
 
-describe("streams list against a real Stream Durable Object", () => {
-  test("list() enumerates every stream (nested included) from the root's reduced state", async () => {
+describe("stream child paths against a real Stream Durable Object", () => {
+  test("child stream creation records immediate child paths", async () => {
     const base = `/list-tests/${crypto.randomUUID()}`;
     for (const path of [`${base}/a`, `${base}/a/b`, `${base}/c`]) {
       await harness.append({ path, event: markerEvent("seed") });
@@ -171,48 +171,81 @@ describe("streams list against a real Stream Durable Object", () => {
     // fire-and-forget background appends, so poll until they all land.
     await vi.waitFor(
       async () => {
-        const paths = (await harness.list()).map((stream) => stream.streamPath);
-        expect(paths).toEqual(
-          expect.arrayContaining(["/", base, `${base}/a`, `${base}/a/b`, `${base}/c`]),
-        );
+        await expect(harness.getState({ path: "/" })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining(["/list-tests"]),
+        });
+        await expect(harness.getState({ path: "/list-tests" })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining([base]),
+        });
+        await expect(harness.getState({ path: base })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining([`${base}/a`, `${base}/c`]),
+        });
+        await expect(harness.getState({ path: `${base}/a` })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining([`${base}/a/b`]),
+        });
       },
       { timeout: 10_000 },
     );
   });
 
-  test("a root persisted before descendantPaths existed is rebuilt by replay on its next wake", async () => {
+  test("a root persisted with obsolete descendantPaths is rebuilt without it", async () => {
     const base = `/migration-tests/${crypto.randomUUID()}`;
     await harness.append({ path: `${base}/a/b`, event: markerEvent("seed") });
     await vi.waitFor(
       async () => {
-        const paths = (await harness.list()).map((stream) => stream.streamPath);
-        expect(paths).toEqual(expect.arrayContaining([base, `${base}/a`, `${base}/a/b`]));
+        await expect(harness.getState({ path: "/" })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining(["/migration-tests"]),
+        });
+        await expect(harness.getState({ path: "/migration-tests" })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining([base]),
+        });
+        await expect(harness.getState({ path: base })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining([`${base}/a`]),
+        });
+        await expect(harness.getState({ path: `${base}/a` })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining([`${base}/a/b`]),
+        });
       },
       { timeout: 10_000 },
     );
 
-    // Rewrite the root stream's persisted state to the pre-descendantPaths
-    // shape (no descendantPaths field, no stateVersion key) — exactly what a
-    // stream last reduced before the schema change has on disk.
     const streamNamespace = (env as unknown as { STREAM: DurableObjectNamespace }).STREAM;
     const rootStub = streamNamespace.getByName(`${PROJECT_ID}:/`);
     await runInDurableObject(rootStub, async (_instance, state) => {
       const stored = state.storage.kv.get<Record<string, unknown>>("state");
       if (stored === undefined) throw new Error("expected persisted root stream state");
-      expect(stored.descendantPaths).toEqual(expect.arrayContaining([`${base}/a/b`]));
-      const { descendantPaths: _dropped, ...preDescendantPathsShape } = stored;
-      state.storage.kv.put("state", preDescendantPathsShape);
-      state.storage.kv.delete("stateVersion");
+      state.storage.kv.put("state", {
+        ...stored,
+        descendantPaths: [base, `${base}/a`, `${base}/a/b`],
+      });
+      state.storage.kv.put("stateVersion", 2);
     });
     // Abort the current incarnation so the next call re-runs the constructor's
-    // read-persisted-state path against the doctored storage. The abort makes
+    // read-persisted-state path against the stale storage. The abort makes
     // the kill() RPC itself reject; that is expected.
     await (rootStub as unknown as { kill(): Promise<void> }).kill().catch(() => {});
 
-    // The rewoken root sees the version mismatch, replays its event log and
-    // serves the full catalog again — list() never walks child streams.
-    const paths = (await harness.list()).map((stream) => stream.streamPath);
-    expect(paths).toEqual(expect.arrayContaining(["/", base, `${base}/a`, `${base}/a/b`]));
+    const rewokenRootStub = streamNamespace.getByName(`${PROJECT_ID}:/`);
+    await vi.waitFor(async () => {
+      const runtimeState = await (
+        rewokenRootStub as unknown as {
+          runtimeState(): Promise<{ coreProcessorState: Record<string, unknown> }>;
+        }
+      ).runtimeState();
+      expect(runtimeState.coreProcessorState).not.toHaveProperty("descendantPaths");
+    });
+
+    // The rewoken root sees the version mismatch, replays its event log, and
+    // keeps only immediate child paths.
+    await expect(harness.getState({ path: "/" })).resolves.toMatchObject({
+      childPaths: expect.arrayContaining(["/migration-tests"]),
+    });
+    await expect(harness.getState({ path: "/migration-tests" })).resolves.toMatchObject({
+      childPaths: expect.arrayContaining([base]),
+    });
+    await expect(harness.getState({ path: base })).resolves.toMatchObject({
+      childPaths: expect.arrayContaining([`${base}/a`]),
+    });
   });
 });
 

@@ -1,9 +1,10 @@
 import { useMemo } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
-import { StreamState, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
 import { useAdminItx } from "~/lib/admin-itx.ts";
+import { parseStreamNavigationState } from "~/lib/stream-navigation-state.ts";
 import { adminStreamRpcPath } from "~/lib/stream-rpc-paths.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 
@@ -28,7 +29,7 @@ function AdminStreamDetailPage() {
     () => ({
       key: ["admin", "streams", namespace] as const,
       getState: async (path: StreamPathType) =>
-        StreamState.parse(await itx.streams.namespace(namespace).get(path).getState()),
+        parseStreamNavigationState(await itx.streams.namespace(namespace).get(path).getState()),
     }),
     [itx, namespace],
   );

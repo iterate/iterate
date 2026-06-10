@@ -75,7 +75,7 @@ stable Project ID:
 os.projects.list()
 os.projects.create(...)
 os.project.get({ projectSlugOrId })
-os.project.streams.list({ projectSlugOrId })
+os.project.streams.read({ projectSlugOrId, streamPath: "/" })
 os.project.codemode.listSessions({ projectSlugOrId })
 os.project.inboundMcpServer.listSessions({ projectSlugOrId })
 ```

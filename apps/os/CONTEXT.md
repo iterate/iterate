@@ -900,8 +900,8 @@ const pet = await ctx.petstore.getPetById({ petId: 123 });
 The OpenAPI case targets an **OpenAPI Client Capability**: `ctx.petstore.listOperations()` is an ordinary Tool Function that explains the spec-derived operation surface, and operation IDs are called through the same provider namespace.
 
 ```ts
-const streams = await ctx.os.streams.list({});
-console.log("Project streams", streams);
+const rootEvents = await ctx.os.streams.read({ streamPath: "/" });
+console.log("Root stream events", rootEvents);
 ```
 
 The oRPC case targets an **oRPC Capability**: the real `os.project.*` router is exposed as project-bound `ctx.os.*`, and the capability supplies the server-side caller context needed to run the handler in-process.

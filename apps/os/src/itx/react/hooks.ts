@@ -2,10 +2,10 @@
 // stream-shaped (lists, settings). The typed handle IS the contract: there is
 // no generated client, queryFn just receives a connected handle.
 //
-//   const streams = useItxQuery({
+//   const rootState = useItxQuery({
 //     project: projectSlug,
-//     queryKey: itxKey.project(projectSlug, "streams", "list"),
-//     queryFn: (itx) => itx.streams.list(),
+//     queryKey: itxKey.project(projectSlug, "streams", "state", "/"),
+//     queryFn: (itx) => itx.streams.get("/").getState(),
 //   });
 //
 //   const create = useItxMutation({

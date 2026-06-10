@@ -342,10 +342,10 @@ describe("CodemodeSession", () => {
     subPath: "bob",
 	  });
 	  const procedures = await ctx.os.listProcedures();
-	  const streams = await ctx.os.streams.list({});
+	  const rootStreamState = await ctx.os.streams.read({ streamPath: "/" });
 	  const sessions = await ctx.os.codemode.listSessions({});
 
-	  return { ai, repos, workspace, agent, procedures, sessions, streams };
+	  return { ai, repos, workspace, agent, procedures, sessions, rootStreamState };
 	}`,
     });
     const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
@@ -358,8 +358,8 @@ describe("CodemodeSession", () => {
           agent: expect.objectContaining({ message: "hi", subPath: "bob" }),
           procedures: expect.stringContaining("interface CodemodeExecutionContext"),
           repos: [],
+          rootStreamState: expect.objectContaining({ events: expect.any(Array) }),
           sessions: expect.objectContaining({ sessions: expect.any(Array) }),
-          streams: expect.objectContaining({ streams: expect.any(Array) }),
           workspace: "workspace from test\n",
         },
       },
@@ -518,7 +518,7 @@ describe("CodemodeSession", () => {
     const created = await session.createSession({
       events: codemodeSessionStartupEvents({ providers: exampleCapabilityProviders(), streamPath }),
       code: `async (ctx) => {
-  return await ctx.os.streams.list({ projectSlugOrId: "proj__other" });
+  return await ctx.os.streams.read({ projectSlugOrId: "proj__other", streamPath: "/" });
 }`,
     });
     const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
@@ -527,7 +527,7 @@ describe("CodemodeSession", () => {
     expect(completed.payload).toMatchObject({
       outcome: {
         status: "returned",
-        value: expect.objectContaining({ streams: expect.any(Array) }),
+        value: expect.objectContaining({ events: expect.any(Array) }),
       },
     });
   });
@@ -1025,7 +1025,7 @@ function exampleCapabilityProviders(): ToolProviderRegistration[] {
     }),
     createExampleRpcProviderRegistration({
       exportName: "OrpcCapability",
-      instructions: "Use ctx.os.listProcedures() and ctx.os.streams.list({}).",
+      instructions: 'Use ctx.os.listProcedures() and ctx.os.streams.read({ streamPath: "/" }).',
       path: ["os"],
       projectId,
     }),

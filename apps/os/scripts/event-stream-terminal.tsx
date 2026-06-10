@@ -223,16 +223,35 @@ function StreamTerminalApp() {
           vars: { streamPath: resolveStreamPath(input.streamPath) },
         }),
       listChildren: async (input = {}) => {
-        const { streams } = await client.project.streams.list({
-          projectSlugOrId: args.projectSlugOrId,
-        });
         const basePath = resolveStreamPath(input.streamPath);
-        return streams
-          .filter((stream) => basePath === "/" || stream.streamPath.startsWith(`${basePath}/`))
-          .map((stream) => ({
-            path: stream.streamPath,
-            createdAt: stream.createdAt,
-          }));
+        const readState = async (streamPath: string) =>
+          (await runItxScript({
+            functionSource:
+              "async ({ itx, vars }) => await itx.streams.get(vars.streamPath).getState()",
+            vars: { streamPath },
+          })) as { childPaths?: string[] };
+
+        const summaries: StreamSummary[] = [];
+        const seen = new Set<string>();
+        const queue = [...((await readState(basePath)).childPaths ?? [])].sort((left, right) =>
+          left.localeCompare(right),
+        );
+
+        for (let index = 0; index < queue.length; index += 1) {
+          const path = queue[index];
+          if (path == null || seen.has(path)) continue;
+          seen.add(path);
+          summaries.push({ path: StreamPath.parse(path), createdAt: new Date(0).toISOString() });
+
+          const state = await readState(path);
+          for (const childPath of [...(state.childPaths ?? [])].sort((left, right) =>
+            left.localeCompare(right),
+          )) {
+            if (!seen.has(childPath)) queue.push(childPath);
+          }
+        }
+
+        return summaries;
       },
       resolvePath: resolveStreamPath,
     }),

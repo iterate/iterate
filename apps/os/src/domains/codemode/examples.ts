@@ -79,11 +79,11 @@ const codemodeExampleSeeds = [
   });
 
   const procedures = await ctx.os.listProcedures();
-  const streams = await ctx.os.streams.list({});
+  const rootEvents = await ctx.os.streams.read({ streamPath: "/" });
 
   console.log("available oRPC procedures", procedures);
-  console.log("project streams", streams);
-  return { ai, repos, workspace, agent, pipelinedAgent, procedures, streams };
+  console.log("root stream events", rootEvents);
+  return { ai, repos, workspace, agent, pipelinedAgent, procedures, rootEvents };
 }`,
     events: [
       {

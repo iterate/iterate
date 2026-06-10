@@ -94,9 +94,6 @@ function toLegacyStreamState(
     path: StreamPath.parse(core.path),
     eventCount: core.eventCount,
     childPaths: core.childPaths.map((childPath: string) => StreamPath.parse(childPath)),
-    descendantPaths: core.descendantPaths.map((descendantPath: string) =>
-      StreamPath.parse(descendantPath),
-    ),
     metadata: core.metadata as StreamState["metadata"],
     processors: {
       "circuit-breaker": {
