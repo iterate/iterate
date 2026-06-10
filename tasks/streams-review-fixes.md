@@ -308,11 +308,12 @@ trap). Same family: `idempotencyKey` is `z.string()` at input (`event.ts:59`)
 but `.trim().min(1)` in `getEventSchema` — a whitespace key passes input
 validation then explodes in reduce.
 
-- [ ] **Fix (decide):** either add `source` to `getEventSchema` /
-      `getEventInputSchema`, **or** delete `StreamEventSource` + `source`
-      entirely (zero callers — favours conciseness). Pick one and make input
-      and reduce schemas agree.
-- [ ] Align `idempotencyKey` validation between input and event schemas.
+- [x] **Fixed (Stage 3):** kept `source` (the migration note shows OS wants it).
+      Extracted a shared `StreamEventSourceSchema` + `streamEventIdempotencyKeySchema`
+      in `event.ts` and used them in both `getEventSchema` and
+      `getEventInputSchema`, so input and reduce schemas agree. `idempotencyKey`
+      is now `trim().min(1)` on input too (a blank key can no longer pass append
+      and then fail in reduce). T4 flipped to `it` and passes.
 
 ### M3 — Circuit-breaker token bucket subtracts on a backwards clock (MAJOR)
 
@@ -325,7 +326,8 @@ delta drains tokens. `createdAt` is per-event wall clock
 it. At the default refill, −1 s = −100,000 tokens → instant false trip → stream
 paused for no reason.
 
-- [ ] **Fix:** clamp with `Math.max(0, createdAtMs - lastRefillAtMs)`.
+- [x] **Fixed (Stage 3):** `spendCircuitBreakerToken` clamps the elapsed time with
+      `Math.max(0, …)`. T5 flipped to `it` and passes.
 
 ### M4 — Circuit-breaker edge-trigger misses sustained floods after replay (MAJOR)
 
@@ -339,9 +341,14 @@ not-tripped→tripped transition lands at an offset `<= sideEffectsAfterOffset`
 breaker is silently disabled. Also no retry if the background `stream/paused`
 append fails (`stream-processor.ts:324-327` only logs).
 
-- [ ] **Fix:** fire the trip side effect when
-      `tripped(state) && event.offset > anchor && !pausedYet`, not only on the
-      transition edge.
+- [x] **Fixed (Stage 3):** the trip is now level-triggered — `processEvent` fires
+      whenever `shouldTripCircuitBreaker(state)` on a live event (the base class
+      only calls `processEvent` for events past the anchor), dropping the
+      `previousState` edge guard. The pause append is idempotency-keyed per offset
+      and self-limits (once paused, ordinary appends are rejected). T6 flipped to
+      `it` and passes. _(The "failed pause append never retried" sub-point is
+      subsumed by the C1 ingest-failure recovery and is not separately handled
+      here — noted for Stage 3 follow-up if it proves necessary.)_
 
 ### M5 — `eventTypes` is silently dropped by the subscribe override (MAJOR / decision)
 

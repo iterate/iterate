@@ -41,9 +41,9 @@ describe("T3 — PublicStreamRpcTarget must not expose protected DO methods (C3)
 });
 
 describe("T4 — events carrying a `source` field must commit (M2)", () => {
-  // FAILS until M2 is fixed (getEventSchema is strict and omits `source`, so the
-  // inline core reduce throws "Unrecognized key: source"). Flip once fixed.
-  it.fails("appends and reads back an event with a source", async () => {
+  // Fixed in Stage 3: getEventSchema / getEventInputSchema now accept `source`
+  // (shared StreamEventSourceSchema), matching the DO append.
+  it("appends and reads back an event with a source", async () => {
     await runInDurableObject(freshStream(), async (stream) => {
       const committed = await stream.append({
         event: {
