@@ -26,6 +26,7 @@ const XDG_CONFIG_PARENT = join(
 );
 
 const CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
+const OAUTH_REFRESH_SKEW_MS = 60_000;
 
 /** Stored session (lives inside a config entry) */
 const Session = z.object({
@@ -265,14 +266,6 @@ const resolveConfig = (workspacePath: string): { name: string; config: Config } 
   return { name, config: parsed.data };
 };
 
-const getLocalConfigDefaults = () => {
-  return {
-    name: "local",
-    osBaseUrl: "http://localhost:5173",
-    authBaseUrl: "http://localhost:7101",
-  };
-};
-
 const resolveAuthBaseUrl = (config: Config) => {
   return config.authBaseUrl || Config.shape.authBaseUrl.def.defaultValue;
 };
@@ -294,18 +287,6 @@ const removeSession = (configName: string): void => {
   }
 };
 
-const setCookiesToCookieHeader = (setCookies: string[] | undefined): string => {
-  const byName = new Map<string, string>();
-  for (const c of setCookies ?? []) {
-    const pair = c.split(";")[0]?.trim();
-    if (!pair) continue;
-    const eq = pair.indexOf("=");
-    if (eq === -1) continue;
-    byName.set(pair.slice(0, eq), pair.slice(eq + 1));
-  }
-  return [...byName.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
-};
-
 /**
  * Get auth headers for OS API calls based on the resolved config's stored session.
  * OAuth sessions are refreshed when possible.
@@ -318,7 +299,7 @@ const getOsAuthHeaders = async (
   if (!session) {
     throw new Error(`Not logged in to ${config.osBaseUrl}. Run \`iterate login\` first.`);
   }
-  if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
+  if (sessionNeedsRefresh(session)) {
     if (session.refreshToken && session.clientId) {
       session = await refreshOAuthSession({ config, configName, session });
     } else {
@@ -334,21 +315,16 @@ const getOsAuthHeaders = async (
   throw new Error(`Stored session for ${config.osBaseUrl} has no token or cookie.`);
 };
 
-/** Get an authenticated better-auth client for whoami/getSession etc. */
-const getAuthenticatedClient = async (config: Config, configName?: string) => {
-  const baseURL = resolveAuthBaseUrl(config);
-  const headers = await getOsAuthHeaders(config, configName);
-  return createAuthClient({
-    baseURL,
-    fetchOptions: {
-      throw: true,
-      onRequest: (ctx: { headers: Headers }) => {
-        ctx.headers.set("origin", baseURL);
-        if (headers.cookie) ctx.headers.set("cookie", headers.cookie);
-        if (headers.authorization) ctx.headers.set("authorization", headers.authorization);
-      },
-    },
-  });
+const sessionNeedsRefresh = (session: StoredSession) => {
+  if (!session.expiresAt) return false;
+  const expiresAt = Date.parse(session.expiresAt);
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now() + OAUTH_REFRESH_SKEW_MS;
+};
+
+const authorizationHeaderToBearerToken = (authorization: string | undefined) => {
+  if (!authorization) return undefined;
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  return match?.[1] || authorization;
 };
 
 const getAuthWorkerHeaders = async (
@@ -944,6 +920,29 @@ const getDaemonProcedures = async (params: { daemonBaseUrl: string }) => {
 };
 
 const launcherProcedures = {
+  ping: os
+    .handler(async () => {
+      const resolved = resolveConfig(process.cwd());
+      if (resolved instanceof Error) throw resolved;
+      const { config } = resolved;
+      const osClient = createORPCClient(
+        new RPCLink({
+          url: `${config.osBaseUrl}/api/orpc/`,
+          fetch: async (request: URL | Request, init?: RequestInit) => {
+            const authHeaders = await getOsAuthHeaders(config, resolved.name);
+            const headers = new Headers(
+              request instanceof Request ? request.headers : init?.headers,
+            );
+            if (authHeaders.authorization) headers.set("authorization", authHeaders.authorization);
+            if (authHeaders.cookie) headers.set("cookie", authHeaders.cookie);
+            return fetch(request, { ...init, headers });
+          },
+        }),
+      );
+      return (osClient as any).ping().catch((e: Error) => {
+        throw new Error(`Failed to ping OS: ${e}`);
+      });
+    }),
   login: os
     .input(z.object({}))
     .meta({
@@ -974,7 +973,9 @@ const launcherProcedures = {
           },
         }),
       );
-      await (osClient as any).ping();
+      await (osClient as any).ping().catch((e: Error) => {
+        throw new Error(`Failed to ping OS: ${e}`);
+      });
       return {
         message: "Logged in successfully",
         expiresAt: oauthResult.expiresAt,
@@ -1036,6 +1037,8 @@ const launcherProcedures = {
       const resolved = resolveConfig(process.cwd());
       if (resolved instanceof Error) throw resolved;
       const osBaseUrl = resolved.config.osBaseUrl;
+      const authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
+      const session = resolved.config.session;
       const command = buildChatCommand({
         osBaseUrl,
         projectSlugOrId: input.project,
@@ -1045,8 +1048,17 @@ const launcherProcedures = {
       await runInheritedProcess({
         ...command,
         env: {
-          OS_E2E_BEARER_TOKEN: resolved.config.session?.token,
-        }
+          OS_E2E_BEARER_TOKEN: authorizationHeaderToBearerToken(authHeaders.authorization),
+          OS_E2E_COOKIE: authHeaders.cookie,
+          ITERATE_CONFIG_NAME: resolved.name,
+          ITERATE_OAUTH_AUTH_BASE_URL: resolveAuthBaseUrl(resolved.config),
+          ITERATE_OAUTH_CLIENT_ID: session?.clientId,
+          ITERATE_OAUTH_EXPIRES_AT: session?.expiresAt,
+          ITERATE_OAUTH_REFRESH_TOKEN: session?.refreshToken,
+          ITERATE_OAUTH_RESOURCE: osBaseUrl,
+          ITERATE_OAUTH_SCOPE: session?.scope,
+          ITERATE_OAUTH_TOKEN_TYPE: session?.tokenType,
+        },
       });
     }),
 

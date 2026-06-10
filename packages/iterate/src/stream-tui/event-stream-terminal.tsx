@@ -8,6 +8,9 @@
  * keyboard routing, and stream-scoped side effects.
  */
 import { Event, StreamPath, type EventInput } from "@iterate-com/shared/streams/types";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type { EventsStreamViewState } from "@iterate-com/ui/components/events/feed-items";
 import {
   reduceStreamViewEvents,
@@ -67,6 +70,38 @@ if (!process.stdin.isTTY || !process.stdout.isTTY) {
 const args = parseArgs(process.argv.slice(2));
 type OrpcClient = ContractRouterClient<typeof osContract>;
 const ROOT_STREAM_PATH = StreamPath.parse("/");
+const OAUTH_REFRESH_SKEW_MS = 60 * 1000;
+const OAUTH_FORCE_REFRESH_THROTTLE_MS = 10 * 1000;
+const XDG_CONFIG_PARENT = join(
+  process.env.XDG_CONFIG_HOME ? process.env.XDG_CONFIG_HOME : join(homedir(), ".config"),
+  "iterate",
+);
+const CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
+
+type AuthHeaders = Record<string, string>;
+type AuthProvider = {
+  getHeaders: () => Promise<AuthHeaders>;
+  refresh: () => Promise<boolean>;
+};
+type OAuthRuntimeSession = {
+  token: string;
+  refreshToken?: string;
+  clientId?: string;
+  scope?: string;
+  tokenType?: string;
+  expiresAt?: string;
+  authBaseUrl?: string;
+  resource: string;
+  configName?: string;
+};
+type OAuthTokenResponse = {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  expires_at?: number;
+  token_type?: string;
+  scope?: string;
+};
 
 const feedModes = {
   raw: { label: "Raw" },
@@ -99,7 +134,8 @@ function applyFeedMode(state: EventsStreamViewState, mode: FeedMode): EventsStre
 
 function StreamTerminalApp() {
   const renderer = useRenderer();
-  const client = useMemo(() => createOsClient(args.baseUrl), []);
+  const osClient = useMemo(() => createOsClient(args.baseUrl), []);
+  const client = osClient.client;
   const [currentStreamPath, setCurrentStreamPath] = useState(args.streamPath ?? ROOT_STREAM_PATH);
   const [currentFeedMode, setCurrentFeedMode] = useState<FeedMode>("mixed");
   const [rawEvents, setRawEvents] = useState<Event[]>([]);
@@ -177,12 +213,25 @@ function StreamTerminalApp() {
         setStatus("stream closed");
       } catch (error) {
         if (abortController.signal.aborted) return;
+        if (isUnauthorizedError(error)) {
+          setStatus("refreshing auth");
+          try {
+            if (await osClient.refreshAuth()) {
+              setStreamRestartNonce((previous) => previous + 1);
+              return;
+            }
+          } catch (refreshError) {
+            if (abortController.signal.aborted) return;
+            setStatus(`stream error: ${formatError(refreshError)}`);
+            return;
+          }
+        }
         setStatus(`stream error: ${formatError(error)}`);
       }
     })();
 
     return () => abortController.abort();
-  }, [client, currentStreamPath, streamRestartNonce]);
+  }, [client, currentStreamPath, osClient, streamRestartNonce]);
 
   const resolveStreamPath = useCallback(
     (streamPath?: string) => resolveStreamPathForCurrent({ currentStreamPath, streamPath }),
@@ -853,40 +902,222 @@ function readFlag(argv: string[], flagName: string) {
   return value;
 }
 
-function createOsClient(baseUrl: string): OrpcClient {
-  const authHeaders = requireAuthHeaders();
-  return createORPCClient(
+function createOsClient(baseUrl: string): { client: OrpcClient; refreshAuth: () => Promise<boolean> } {
+  const authProvider = createAuthProvider(baseUrl);
+  const client = createORPCClient(
     new OpenAPILink(osContract, {
       url: new URL("/api", `${baseUrl}/`).toString(),
-      fetch: (input, init) => {
-        const requestInit: RequestInit = init ?? {};
-        const headers = new Headers(input instanceof Request ? input.headers : undefined);
-        for (const [key, value] of new Headers(requestInit.headers)) headers.set(key, value);
-        for (const [key, value] of Object.entries(authHeaders)) headers.set(key, value);
-        if (input instanceof Request) {
-          return fetch(new Request(input, { ...requestInit, headers }));
-        }
-        return fetch(input, { ...requestInit, headers });
-      },
+      fetch: createAuthenticatedFetch(authProvider),
     }),
   ) as OrpcClient;
+  return { client, refreshAuth: authProvider.refresh };
 }
 
-function requireAuthHeaders() {
-  const bearerToken =
-    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
-    process.env.OS_E2E_BEARER_TOKEN?.trim();
-  const cookie = process.env.OS_E2E_COOKIE?.trim();
-  if (!bearerToken && !cookie) {
+function createAuthenticatedFetch(authProvider: AuthProvider) {
+  return async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const response = await fetchWithAuth(input, init, authProvider);
+    if (response.status !== 401) return response;
+
+    if (await authProvider.refresh()) return fetchWithAuth(input, init, authProvider);
+    return response;
+  };
+}
+
+async function fetchWithAuth(
+  input: Parameters<typeof fetch>[0],
+  init: Parameters<typeof fetch>[1],
+  authProvider: AuthProvider,
+) {
+  const requestInit: RequestInit = init || {};
+  const headers = new Headers(input instanceof Request ? input.headers : undefined);
+  for (const [key, value] of new Headers(requestInit.headers)) headers.set(key, value);
+  for (const [key, value] of Object.entries(await authProvider.getHeaders())) headers.set(key, value);
+  if (input instanceof Request) {
+    return fetch(new Request(input.clone(), { ...requestInit, headers }));
+  }
+  return fetch(input, { ...requestInit, headers });
+}
+
+function createAuthProvider(baseUrl: string): AuthProvider {
+  const adminBearerToken =
+    readEnv("OS_E2E_ADMIN_API_SECRET") ||
+    readEnv("OS_ADMIN_API_SECRET") ||
+    readEnv("APP_CONFIG_ADMIN_API_SECRET");
+  const cookie = readEnv("OS_E2E_COOKIE");
+  if (adminBearerToken) return createStaticAuthProvider(adminBearerToken, cookie);
+
+  const oauthBearerToken = readEnv("OS_E2E_BEARER_TOKEN");
+  if (oauthBearerToken) {
+    const session: OAuthRuntimeSession = {
+      token: oauthBearerToken,
+      refreshToken: readEnv("ITERATE_OAUTH_REFRESH_TOKEN"),
+      clientId: readEnv("ITERATE_OAUTH_CLIENT_ID"),
+      scope: readEnv("ITERATE_OAUTH_SCOPE"),
+      tokenType: readEnv("ITERATE_OAUTH_TOKEN_TYPE"),
+      expiresAt: readEnv("ITERATE_OAUTH_EXPIRES_AT"),
+      authBaseUrl: readEnv("ITERATE_OAUTH_AUTH_BASE_URL"),
+      resource: readEnv("ITERATE_OAUTH_RESOURCE") || baseUrl,
+      configName: readEnv("ITERATE_CONFIG_NAME"),
+    };
+    return createOAuthAuthProvider(session, cookie);
+  }
+
+  if (cookie) return createStaticAuthProvider(undefined, cookie);
+
+  throw new Error(
+    "OS_E2E_ADMIN_API_SECRET, OS_ADMIN_API_SECRET, APP_CONFIG_ADMIN_API_SECRET, OS_E2E_BEARER_TOKEN, or OS_E2E_COOKIE is required.",
+  );
+}
+
+function createStaticAuthProvider(bearerToken: string | undefined, cookie: string | undefined) {
+  return {
+    getHeaders: async () => authHeaders({ bearerToken, cookie }),
+    refresh: async () => false,
+  };
+}
+
+function createOAuthAuthProvider(initialSession: OAuthRuntimeSession, cookie: string | undefined) {
+  let session = initialSession;
+  let refreshPromise: Promise<boolean> | undefined;
+  let lastForcedRefreshAt = 0;
+
+  const refresh = async (force: boolean) => {
+    if (!canRefreshOAuthSession(session)) return false;
+    if (force) {
+      const now = Date.now();
+      if (now - lastForcedRefreshAt < OAUTH_FORCE_REFRESH_THROTTLE_MS) return false;
+      lastForcedRefreshAt = now;
+    }
+    if (!refreshPromise) {
+      refreshPromise = refreshOAuthSession(session)
+        .then((refreshedSession) => {
+          session = refreshedSession;
+          storeOAuthSession(refreshedSession);
+          return true;
+        })
+        .finally(() => {
+          refreshPromise = undefined;
+        });
+    }
+    return refreshPromise;
+  };
+
+  return {
+    getHeaders: async () => {
+      if (sessionNeedsRefresh(session)) await refresh(false);
+      return authHeaders({ bearerToken: session.token, cookie });
+    },
+    refresh: () => refresh(true),
+  };
+}
+
+function authHeaders(input: { bearerToken: string | undefined; cookie: string | undefined }) {
+  return {
+    ...(input.bearerToken ? { Authorization: `Bearer ${input.bearerToken}` } : {}),
+    ...(input.cookie ? { Cookie: input.cookie } : {}),
+  };
+}
+
+function canRefreshOAuthSession(session: OAuthRuntimeSession) {
+  return Boolean(session.refreshToken && session.clientId && session.authBaseUrl);
+}
+
+function sessionNeedsRefresh(session: OAuthRuntimeSession) {
+  if (!session.expiresAt) return false;
+  const expiresAt = Date.parse(session.expiresAt);
+  return Number.isFinite(expiresAt) && expiresAt <= Date.now() + OAUTH_REFRESH_SKEW_MS;
+}
+
+async function refreshOAuthSession(session: OAuthRuntimeSession): Promise<OAuthRuntimeSession> {
+  if (!session.refreshToken || !session.clientId || !session.authBaseUrl) {
     throw new Error(
-      "OS_E2E_ADMIN_API_SECRET, OS_ADMIN_API_SECRET, APP_CONFIG_ADMIN_API_SECRET, OS_E2E_BEARER_TOKEN, or OS_E2E_COOKIE is required.",
+      "OAuth session cannot refresh without a refresh token, client id, and auth base URL.",
     );
   }
 
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: session.clientId,
+    refresh_token: session.refreshToken,
+    resource: session.resource,
+  });
+  if (session.scope) body.set("scope", session.scope);
+
+  const response = await fetch(`${session.authBaseUrl}/api/auth/oauth2/token`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      origin: session.authBaseUrl,
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    throw new Error(`OAuth refresh failed (${response.status}): ${await readErrorBody(response)}`);
+  }
+
+  const token = (await response.json()) as OAuthTokenResponse;
+  if (!token.access_token) throw new Error("OAuth refresh did not return access_token.");
+  return oauthTokenToSession(token, session);
+}
+
+function oauthTokenToSession(
+  token: OAuthTokenResponse,
+  existing: OAuthRuntimeSession,
+): OAuthRuntimeSession {
+  const expiresAtMs =
+    typeof token.expires_at === "number"
+      ? token.expires_at * 1000
+      : typeof token.expires_in === "number"
+        ? Date.now() + token.expires_in * 1000
+        : undefined;
+
   return {
-    ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
-    ...(cookie ? { Cookie: cookie } : {}),
+    token: token.access_token,
+    refreshToken: token.refresh_token || existing.refreshToken,
+    clientId: existing.clientId,
+    scope: token.scope || existing.scope,
+    tokenType: token.token_type || existing.tokenType,
+    expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : existing.expiresAt,
+    authBaseUrl: existing.authBaseUrl,
+    resource: existing.resource,
+    configName: existing.configName,
   };
+}
+
+function storeOAuthSession(session: OAuthRuntimeSession) {
+  if (!session.configName || !existsSync(CONFIG_PATH)) return;
+  const configFile = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as {
+    configs?: Record<string, { session?: Record<string, unknown> }>;
+  };
+  const entry = configFile.configs?.[session.configName];
+  if (!entry) return;
+  entry.session = {
+    ...entry.session,
+    token: session.token,
+    refreshToken: session.refreshToken,
+    clientId: session.clientId,
+    scope: session.scope,
+    tokenType: session.tokenType,
+    expiresAt: session.expiresAt,
+  };
+  mkdirSync(dirname(CONFIG_PATH), { recursive: true });
+  writeFileSync(CONFIG_PATH, `${JSON.stringify(configFile, null, 2)}\n`);
+}
+
+async function readErrorBody(response: Response) {
+  const text = await response.text();
+  return text.length > 300 ? `${text.slice(0, 300)}...` : text;
+}
+
+function readEnv(name: string) {
+  const value = process.env[name];
+  if (value == null) return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isUnauthorizedError(error: unknown) {
+  if (error instanceof ORPCError && error.code === "UNAUTHORIZED") return true;
+  return error instanceof Error && /\b(UNAUTHORIZED|401)\b/i.test(error.message);
 }
