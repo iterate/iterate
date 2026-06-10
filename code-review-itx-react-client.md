@@ -292,4 +292,34 @@ single connection in `runtimeState()`.
 
 Skip: SSR snapshot tests (constants), hooks.ts key-convention tests (thin wrapper).
 
-# Plan (TODO)
+# Plan
+
+Approved: all recommended (a) options, with 11c for tests (full build-out).
+
+**Status: remediated.** B4/B5/B6 + the smoke `waitForReady` had already been fixed on the
+branch (bugbot on #1423 found the overlap); everything else below landed with this pass.
+Full repo typecheck/lint/format/test green; new suites: 15/15 react unit tests, 6/6
+worker-harness integration tests against a real Stream DO. Notable extra: the integration
+test exposed that the capability must `dup()` the callback stub (Workers RPC implicitly
+disposes parameter stubs when the call completes) — fixed and proven by the longevity test.
+
+1. **React client rewrite** (`apps/os/src/itx/react/`): B1 NUL→`\0`; B3 bounded retry in
+   `start()` catch; B4 single status watcher per entry + never-started flag; C5 drop `read()`,
+   subscribe from `lastOffset ?? "start"`; C1 delete `epoch` + fix comment; C4 drop
+   `activate()`, disposal final, delete StrictMode claims; B8 guard stale cache delete;
+   C2 required `project`, delete `itxKey.global` + `invalidates`; C3 trim barrel, delete
+   `useItxStatus`; B7 fix "one socket per tab" overclaim in comments.
+2. **Kernel/capability** (`handle.ts`, `streams-capability.ts`): C6 add callback `subscribe`
+   to StreamsCapability, forward `ItxStream.subscribe` through `this.client()`; B5 dedicated
+   `toSubscribeAfterOffset` + required `afterOffset`; B6 pendingUnsubscribe leak fix; delete
+   `streamMaxOffset` getter (C3).
+3. **Routes/UI**: C7 convert `path-breadcrumbs.tsx` to itx; streams/index.tsx inline
+   invalidation + Spinner (C10); itx-activity-tail.tsx theme colors + renderer lookup (C10);
+   repl.tsx isolation comment (B7).
+4. **Tests (11c)**: P0+P1 unit suite (cursor mapping, stream-tail refcount/linger/retry/
+   watcher/reconnect/dedupe/snapshot-stability, connection backoff/waiters, bridge
+   unsubscribe-once); integration test against a real Stream DO; e2e DO-kill test (B2 doc);
+   e2e project cleanup + shared env helpers (14a); authed smoke assertion (12a); wire
+   `e2e:itx` into CI.
+5. **Docs**: B2 known gap + C8 convergence intent in `apps/os/docs/itx-orpc-replacement-plan.md`.
+6. Full `pnpm typecheck && pnpm lint && pnpm format && pnpm test` at the end.

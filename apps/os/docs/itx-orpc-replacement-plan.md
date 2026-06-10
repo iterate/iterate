@@ -127,3 +127,18 @@ Remaining: see `tasks/os-orpc-teardown.md`.
   wide-event log before prod cutover.
 - **`run` is powerful**: rate limiting / approval policy is explicitly punted
   to the egress/approval work.
+- **Silent stall after Stream DO eviction**: inbound DO subscriptions are
+  runtime-only and not restored on wake. If Cloudflare evicts a Stream DO,
+  its subscriptions die while the browser↔worker socket stays healthy — no
+  status transition fires, the tail keeps saying "live", and events just
+  stop. Needs a liveness signal (heartbeat or periodic `getState` maxOffset
+  comparison) before stream views are load-bearing; the stream-tail layer
+  already resumes from `lastOffset` once told to restart.
+- **Two live-tail stacks**: `~/itx/react` (stream-tail multiplexer over the
+  shared itx socket) and `ProjectStreamView`'s browser SQLite mirror over
+  `/api/project-streams`. The itx stack is the strategic one; port
+  `ProjectStreamView` onto `useStreamEvents` (or give it the itx transport)
+  and delete the second stack as part of the conversion sweep. Similarly,
+  the repl still opens its own isolated itx socket (`createBrowserReplSession`)
+  next to the shared client — converge once repl session resets can be scoped
+  to a sub-session.
