@@ -1,8 +1,8 @@
 import { createAuthContractClient, type AuthContractClient } from "@iterate-com/auth-contract";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 
 export function createAuthWorkerServiceClient(
-  context: Pick<AppContext, "config">,
+  context: Pick<RequestContext, "config">,
   opts: { asUserId?: string } = {},
 ): AuthContractClient {
   const config = context.config.iterateAuth;

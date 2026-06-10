@@ -9,11 +9,10 @@
 // happens HERE and at connect-time auth (fetch.ts) — nowhere else.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { Itx, type ItxRuntime } from "./handle.ts";
 import { GLOBAL_CONTEXT_ID, isChildContextId, type ItxProps } from "./protocol.ts";
 import type { ContextDO } from "./context-do.ts";
-import { AppConfig } from "~/app.ts";
+import { parseConfig } from "~/config.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 /**
@@ -28,11 +27,7 @@ export async function resolveItx(input: {
   exports: ItxRuntime["exports"];
   props: ItxProps;
 }): Promise<Itx> {
-  const config = parseAppConfigFromEnv({
-    configSchema: AppConfig,
-    prefix: "APP_CONFIG_",
-    env: input.env as unknown as Record<string, unknown>,
-  });
+  const config = parseConfig(input.env);
   const contextId = input.props.context;
 
   let projectId: string | null;

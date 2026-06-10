@@ -1,7 +1,6 @@
-import { BaseAppConfig, publicValue, redacted } from "@iterate-com/shared/apps/config";
-import type { AppManifest } from "@iterate-com/shared/apps/types";
+import { parseAppConfigFromEnv, publicValue, redacted } from "@iterate-com/shared/config";
+import { AppLogsConfig } from "@iterate-com/shared/evlog/types";
 import { z } from "zod";
-import packageJson from "../package.json" with { type: "json" };
 
 const SlackScope = z.string().trim().min(1);
 const GoogleScope = z.string().trim().min(1);
@@ -46,8 +45,21 @@ export const DEFAULT_GOOGLE_OAUTH_SCOPES = [
   "https://www.googleapis.com/auth/drive",
 ];
 
-export const AppConfig = BaseAppConfig.extend({
+/**
+ * OS runtime config, parsed from the `APP_CONFIG` JSON blob plus `APP_CONFIG_*`
+ * env overrides that Doppler/alchemy bake into the worker at deploy time
+ * (e.g. `APP_CONFIG_BASE_URL`, `APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET`).
+ *
+ * `publicValue` fields are exposed to the browser via the public-config schema
+ * below; `redacted` fields parse into `Redacted` wrappers that must be
+ * explicitly unwrapped with `.exposeSecret()` and never serialize their value.
+ */
+export const AppConfig = z.object({
   baseUrl: publicValue(z.url().optional()),
+  logs: AppLogsConfig.default({
+    stdoutFormat: "pretty",
+    filtering: { rules: [] },
+  }),
   mcp: z
     .object({
       baseUrl: publicValue(z.url()),
@@ -105,11 +117,15 @@ export const AppConfig = BaseAppConfig.extend({
 
 export type AppConfig = z.output<typeof AppConfig>;
 
-const manifest = {
-  packageName: packageJson.name,
-  version: packageJson.version,
-  slug: "os",
-  description: "Iterate OS — dashboard and project subdomain routing.",
-} as const satisfies AppManifest;
-
-export default manifest;
+/**
+ * Parse OS config from a worker or durable object `env` (the `cloudflare:workers`
+ * import, `this.env`, an `ExecutionContext`'s bindings — all `APP_CONFIG_*`
+ * carriers). Accepts `unknown` so callers don't need a cast at every site.
+ */
+export function parseConfig(env: unknown): AppConfig {
+  return parseAppConfigFromEnv({
+    configSchema: AppConfig,
+    prefix: "APP_CONFIG_",
+    env: env as Record<string, unknown>,
+  });
+}

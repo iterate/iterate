@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { requireRequestContext } from "~/request-context.ts";
 import { handleIntegrationApiRequest } from "~/domains/secrets/integration-api.ts";
 import { orpcOpenApiHandler } from "~/orpc/handler.ts";
 
@@ -6,9 +7,9 @@ export const Route = createFileRoute("/api/$")({
   server: {
     handlers: {
       ANY: async ({ context, request }) => {
-        const requestContext = { ...context, rawRequest: request };
+        const requestContext = { ...requireRequestContext(context), rawRequest: request };
         const integrationResponse = await handleIntegrationApiRequest({
-          auth: context.principal,
+          auth: requestContext.principal,
           context: requestContext,
           request,
         });

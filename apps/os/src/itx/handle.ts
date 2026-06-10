@@ -31,7 +31,7 @@ import {
 import type { ContextDO } from "./context-do.ts";
 import { createShareToken, SHARE_TOKEN_PARAM } from "./http.ts";
 import type { LiveCapTarget } from "./registry.ts";
-import type { AppConfig } from "~/app.ts";
+import type { AppConfig } from "~/config.ts";
 import {
   countAllProjects,
   deleteProject,

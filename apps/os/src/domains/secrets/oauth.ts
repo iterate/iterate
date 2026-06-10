@@ -1,5 +1,5 @@
 import type { Client } from "sqlfu";
-import type { AppConfig } from "~/app.ts";
+import type { AppConfig } from "~/config.ts";
 import {
   createOAuthState,
   deleteProjectConnection,

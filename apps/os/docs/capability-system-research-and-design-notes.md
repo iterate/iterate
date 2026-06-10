@@ -1900,7 +1900,7 @@ error in `.oxlintrc.json`. It forbids raw
 `PROJECT.getByName(...)` / `REPO.getByName(...)` /
 `STREAM.getByName(...)` / `WORKSPACE.getByName(...)` outside allowed capability
 and trusted domain-internal paths. The first allowlist is transitional:
-capability files, entrypoints, Durable Object internals, `entry.workerd.ts`, and
+capability files, entrypoints, Durable Object internals, `worker.ts`, and
 the current `capnweb` compatibility layer.
 
 ## Initial Recommendations / Biases

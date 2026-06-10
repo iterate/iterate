@@ -4,8 +4,7 @@ import {
   createRequestLogger,
   resolveRequestId,
   type SharedRequestLogger,
-} from "../../request-logging.ts";
-import type { AppManifest } from "../types.ts";
+} from "../request-logging.ts";
 import { formatEvlogRequestSummaryMessage } from "./runtime.ts";
 import {
   installEvlogConsoleFilter,
@@ -147,10 +146,16 @@ export function setWithEvlogFlushHandler(handler?: EvlogFlushHandler) {
   flushHandler = handler;
 }
 
+/** Identifies the emitting service in log events; `name` is usually the package name. */
+export interface EvlogApp {
+  name: string;
+  slug: string;
+}
+
 export async function withEvlog<TResponse extends Response>(
   options: {
     request: Request;
-    manifest: AppManifest;
+    app: EvlogApp;
     config: { logs: AppLogsConfig };
     executionCtx?: EvlogExecutionContext;
   },
@@ -166,11 +171,13 @@ export async function withEvlog<TResponse extends Response>(
     requestId,
   });
 
+  // Field names are part of the log-query contract (PostHog/dashboards key on
+  // appName and app.slug) — keep them stable even though the input shape changed.
   log.set({
-    appName: options.manifest.packageName,
+    appName: options.app.name,
     app: {
-      slug: options.manifest.slug,
-      packageName: options.manifest.packageName,
+      slug: options.app.slug,
+      packageName: options.app.name,
     },
     config: options.config,
     ...createRequestContextFields(options.request),

@@ -1,7 +1,7 @@
 import { mapEventIterator } from "@orpc/client";
 import type { StandardHandlerOptions, StandardHandlerPlugin } from "@orpc/server/standard";
 import { isAsyncIteratorObject, overlayProxy } from "@orpc/shared";
-import { resolveRequestId, type SharedRequestLogger } from "../../request-logging.ts";
+import { resolveRequestId, type SharedRequestLogger } from "../request-logging.ts";
 
 export interface EvlogHandlerContext {
   log: SharedRequestLogger;

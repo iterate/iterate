@@ -1,7 +1,8 @@
+import { env } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { createStreamSubscription } from "@iterate-com/streams/subscription";
 import type { StreamRpc } from "@iterate-com/streams/types";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import {
   getStreamsCapability,
   resolveStreamPath,
@@ -94,7 +95,7 @@ export const projectStreamsRouter = {
     }),
 };
 
-function getProjectStreamsCapability(context: AppContext, projectId: string) {
+function getProjectStreamsCapability(context: RequestContext, projectId: string) {
   if (!context.workerExports) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {
       message: "Worker exports are not available.",
@@ -112,12 +113,12 @@ function getProjectStreamsCapability(context: AppContext, projectId: string) {
 
 async function* subscribeProjectStreamEvents(input: {
   afterOffset?: Parameters<typeof toNewAfterOffset>[0];
-  context: AppContext;
+  context: RequestContext;
   projectId: string;
   signal?: AbortSignal;
   streamPath: string;
 }) {
-  const streamNamespace = requireStreamNamespace(input.context);
+  const streamNamespace = env.STREAM as unknown as StreamDurableObjectNamespace;
   const streamPath = resolveStreamPath(input.streamPath);
   const streamStub = streamNamespace.getByName(
     getStreamDurableObjectName({
@@ -151,14 +152,4 @@ async function* subscribeProjectStreamEvents(input: {
   } finally {
     input.signal?.removeEventListener("abort", onAbort);
   }
-}
-
-function requireStreamNamespace(context: AppContext): StreamDurableObjectNamespace {
-  if (!context.stream) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "STREAM Durable Object namespace is not configured.",
-    });
-  }
-
-  return context.stream as unknown as StreamDurableObjectNamespace;
 }

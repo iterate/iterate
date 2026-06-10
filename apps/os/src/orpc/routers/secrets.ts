@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
@@ -44,7 +44,7 @@ export const projectSecretsRouter = {
     }),
 };
 
-function getProjectSecretsCapability(context: AppContext, projectId: string) {
+function getProjectSecretsCapability(context: RequestContext, projectId: string) {
   if (!context.workerExports) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {
       message: "Worker exports are not available.",

@@ -1,6 +1,6 @@
 import type { SimplifyDeep, Tagged } from "type-fest";
 import { z } from "zod";
-import { AppLogsConfig } from "./logging/types.ts";
+import { AppLogsConfig } from "./evlog/types.ts";
 
 const nodeInspectCustom = Symbol.for("nodejs.util.inspect.custom");
 const configVisibilityMetaKey = "iterateConfigVisibility";

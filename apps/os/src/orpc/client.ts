@@ -4,9 +4,10 @@ import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import { createRouterClient, type RouterClient } from "@orpc/server";
-import { createIsomorphicFn, getGlobalStartContext } from "@tanstack/react-start";
+import { createIsomorphicFn } from "@tanstack/react-start";
 import { osContract } from "@iterate-com/os-contract";
 import { appRouter } from "~/orpc/root.ts";
+import { requireRequestContext } from "~/request-context.ts";
 
 export const makeQueryClient = () =>
   new QueryClient({
@@ -54,18 +55,7 @@ const makeOrpcClient = createIsomorphicFn()
   .server(
     (): OrpcClient =>
       createRouterClient(appRouter, {
-        context: async () => {
-          const context = getGlobalStartContext();
-          if (!context) {
-            throw new Error(
-              "No tanstack start context found for the request - your entrypoint is wired up wrong",
-            );
-          }
-
-          return {
-            ...context,
-          };
-        },
+        context: async () => requireRequestContext(),
       }),
   )
   .client((): OrpcClient => {

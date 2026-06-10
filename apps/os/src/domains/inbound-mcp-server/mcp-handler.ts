@@ -7,7 +7,7 @@ import {
 import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
 import { McpAgent } from "agents/mcp";
 import { createD1Client } from "sqlfu";
-import type { AppConfig } from "~/app.ts";
+import type { AppConfig } from "~/config.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
 import { principalFromAccessToken, type Principal } from "~/auth/principal.ts";
 import { listAllProjects } from "~/db/queries/.generated/index.ts";

@@ -34,7 +34,7 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
 
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
-    entry: ["alchemy.run.ts", "vite.config.ts", "scripts/router.ts", "src/entry.workerd.ts!"],
+    entry: ["alchemy.run.ts", "vite.config.ts", "scripts/router.ts", "src/worker.ts!"],
     project: [
       "*.test.ts",
       "e2e/**/*.ts",

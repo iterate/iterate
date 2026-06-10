@@ -20,8 +20,8 @@ import {
 import type { ContextDO } from "./context-do.ts";
 import type { ItxRuntime } from "./handle.ts";
 import { authenticateCapnwebAdmin, handleCapnwebAdminCookieRequest } from "./admin-auth-cookie.ts";
-import type { AppConfig } from "~/app.ts";
-import type { AppContext } from "~/context.ts";
+import type { AppConfig } from "~/config.ts";
+import type { RequestContext } from "~/request-context.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import type { Principal } from "~/auth/principal.ts";
 import { getProjectById, getProjectBySlug } from "~/db/queries/.generated/index.ts";
@@ -31,7 +31,7 @@ export const ITX_PREFIX = "/api/itx";
 
 export async function handleItxFetch(input: {
   config: AppConfig;
-  context: AppContext;
+  context: RequestContext;
   env: Env;
   request: Request;
 }): Promise<Response | null> {
@@ -121,7 +121,7 @@ export async function handleProjectHostItxFetch(input: {
 
 async function authenticateItxRequest(input: {
   config: AppConfig;
-  context: AppContext;
+  context: RequestContext;
   request: Request;
 }): Promise<{ principal: Principal | null; responseHeaders: Headers }> {
   const admin = authenticateCapnwebAdmin({ config: input.config, request: input.request });
@@ -146,7 +146,7 @@ function accessForPrincipal(principal: Principal): ProjectAccess {
  */
 async function resolveAccessibleContextId(input: {
   access: ProjectAccess;
-  context: AppContext;
+  context: RequestContext;
   env: Env;
   idOrSlug: string;
 }): Promise<{ contextId: string; projectId: string } | null> {
@@ -208,7 +208,7 @@ function itxRunWorkerSource(functionSource: string) {
 
 async function handleItxRun(input: {
   access: ProjectAccess;
-  context: AppContext;
+  context: RequestContext;
   env: Env;
   request: Request;
 }): Promise<Response> {
@@ -292,9 +292,9 @@ async function handleItxRun(input: {
   }
 }
 
-function workerExports(context: AppContext): ItxRuntime["exports"] {
+function workerExports(context: RequestContext): ItxRuntime["exports"] {
   if (!context.workerExports) {
-    throw new Error("Worker exports are not available on this AppContext.");
+    throw new Error("Worker exports are not available on this RequestContext.");
   }
   return context.workerExports as unknown as ItxRuntime["exports"];
 }

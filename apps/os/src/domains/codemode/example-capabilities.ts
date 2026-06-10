@@ -14,8 +14,8 @@ import {
 import { createRequestLogger } from "@iterate-com/shared/request-logging";
 import { createD1Client } from "sqlfu";
 import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
-import manifest from "~/app.ts";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
+import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import type { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { StreamDurableObject } from "~/domains/streams/new-stream-runtime.ts";
 import { os } from "~/orpc/orpc.ts";
@@ -29,7 +29,7 @@ type ExampleCapabilityEnv = {
   AI?: {
     run(model: string, input: unknown): Promise<unknown>;
   };
-  CODEMODE_SESSION?: AppContext["codemodeSession"];
+  CODEMODE_SESSION?: DurableObjectNamespace<CodemodeSession>;
   DB?: D1Database;
   DO_CATALOG?: D1Database;
   PROJECT?: DurableObjectNamespace<ProjectDurableObject>;
@@ -231,34 +231,27 @@ function createCodemodeOrpcContext(input: {
   ctx: ExecutionContext & { props: ExampleCapabilityProps };
   env: ExampleCapabilityEnv;
   props: ExampleCapabilityProps | undefined;
-}): AppContext {
+}): RequestContext {
   const env = input.env;
   return {
-    callableEnv: input.env as unknown as Record<string, unknown>,
-    codemodeSession: env.CODEMODE_SESSION,
     // The ORPC capability runs after the original browser request has gone
-    // away, so it reconstructs a project-bound app context from Worker bindings.
-    config: {} as AppContext["config"],
+    // away, so it reconstructs a project-bound request context from scratch.
+    // INVARIANT: only `project.*` procedures are exposed through this context
+    // (see OrpcCapability below), and none of them read `config`. If you expose
+    // a config-reading procedure here, populate config instead of this stub —
+    // e.g. `parseConfig(env)` — or it will throw at runtime.
+    config: {} as RequestContext["config"],
     db: env.DB ? createD1Client(env.DB) : (undefined as never),
-    doCatalog: env.DO_CATALOG ?? env.DB,
     log: createRequestLogger({
       method: "CODEMODE",
       path: "codemode://orpc-capability",
       requestId: crypto.randomUUID(),
     }),
-    manifest,
     projectAccess: {
       projectId: requireProviderProjectId(input.props),
     },
-    projectDurableObjectNamespace: env.PROJECT,
-    projectHostnameBases: [],
-    stream: env.STREAM,
-    workerExports: readWorkerExports(input.ctx),
+    workerExports: input.ctx.exports,
   };
-}
-
-function readWorkerExports(ctx: ExecutionContext) {
-  return ctx.exports;
 }
 
 function requireProviderProjectId(props: ExampleCapabilityProps | undefined) {

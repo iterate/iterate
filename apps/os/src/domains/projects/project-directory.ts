@@ -7,7 +7,7 @@
 import { RpcTarget } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import {
   countAllProjects,
   deleteProject,
@@ -16,10 +16,7 @@ import {
   insertProject,
   listAllProjects,
 } from "~/db/queries/.generated/index.ts";
-import {
-  getProjectDurableObjectName,
-  type ProjectDurableObject,
-} from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { isProjectId, mintProjectId } from "~/domains/projects/project-id.ts";
 
 type ProjectRow = {
@@ -51,7 +48,7 @@ type ProjectWithIngressUrl = ProjectListItem & {
 export class ProjectsCapability extends RpcTarget {
   constructor(
     private readonly props: {
-      context: AppContext;
+      context: RequestContext;
     },
   ) {
     super();
@@ -135,7 +132,7 @@ export class ProjectsCapability extends RpcTarget {
           message: `Project ${id} already exists with slug ${existingById.slug}.`,
         });
       }
-      return await toProjectWithIngressUrl(context, existingById);
+      return await toProjectWithIngressUrl(existingById);
     }
 
     const existing = await getProjectBySlug(context.db, { slug });
@@ -161,7 +158,7 @@ export class ProjectsCapability extends RpcTarget {
     }
 
     try {
-      await projectDurableObject(context, id).createProject({
+      await projectDurableObject(id).createProject({
         projectId: id,
         slug,
       });
@@ -175,7 +172,7 @@ export class ProjectsCapability extends RpcTarget {
       throw error;
     }
 
-    return await toProjectWithIngressUrl(context, project);
+    return await toProjectWithIngressUrl(project);
   }
 
   async find(input: { id: string }) {
@@ -183,7 +180,7 @@ export class ProjectsCapability extends RpcTarget {
       context: this.props.context,
       projectId: input.id,
     });
-    return await toProjectWithIngressUrl(this.props.context, row);
+    return await toProjectWithIngressUrl(row);
   }
 
   async findBySlug(input: { slug: string }) {
@@ -195,7 +192,7 @@ export class ProjectsCapability extends RpcTarget {
       context: this.props.context,
       projectId: row.id,
     });
-    return await toProjectWithIngressUrl(this.props.context, row);
+    return await toProjectWithIngressUrl(row);
   }
 
   async remove(input: { id: string }): Promise<{ ok: true; id: string; deleted: boolean }> {
@@ -231,15 +228,15 @@ export function toProject(row: ProjectRow): ProjectListItem {
   };
 }
 
-export async function toProjectWithIngressUrl(context: AppContext, row: ProjectRow) {
+export async function toProjectWithIngressUrl(row: ProjectRow) {
   return {
     ...toProject(row),
-    ingressUrl: await projectDurableObject(context, row.id).ingressUrl(),
+    ingressUrl: await projectDurableObject(row.id).ingressUrl(),
   };
 }
 
 export async function requireProject(input: {
-  context: AppContext;
+  context: RequestContext;
   projectId?: string;
   projectIdOrSlug?: string;
 }): Promise<ProjectRow> {
@@ -287,15 +284,8 @@ function resolveOperatorProjectId(id: string | undefined): string {
   return id;
 }
 
-function projectDurableObject(context: AppContext, projectId: string) {
-  if (!context.projectDurableObjectNamespace) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "PROJECT binding not available.",
-    });
-  }
-  return (
-    context.projectDurableObjectNamespace as DurableObjectNamespace<ProjectDurableObject>
-  ).getByName(getProjectDurableObjectName(projectId));
+function projectDurableObject(projectId: string) {
+  return getProjectDurableObjectStub(projectId);
 }
 
 function isUniqueConstraintError(error: unknown) {
@@ -323,18 +313,18 @@ function sortAuthProjects<T extends Pick<AuthProject, "slug">>(projects: T[]) {
   return [...projects].sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
-function listSignedProjectClaims(context: Pick<AppContext, "principal">): AuthProject[] {
+function listSignedProjectClaims(context: Pick<RequestContext, "principal">): AuthProject[] {
   return context.principal?.type === "user" ? sortAuthProjects(context.principal.projects) : [];
 }
 
-function getAccessibleSignedProject(input: { context: AppContext; projectId: string }) {
+function getAccessibleSignedProject(input: { context: RequestContext; projectId: string }) {
   return (
     listSignedProjectClaims(input.context).find((project) => project.id === input.projectId) ?? null
   );
 }
 
 function resolveOrganizationSlugForCreate(
-  context: Pick<AppContext, "principal">,
+  context: Pick<RequestContext, "principal">,
   requestedSlug: string | undefined,
 ) {
   const organizations = context.principal?.type === "user" ? context.principal.organizations : [];

@@ -6,52 +6,25 @@ import {
   Scripts,
   createRootRouteWithContext,
 } from "@tanstack/react-router";
-import { createServerFn, getGlobalStartContext } from "@tanstack/react-start";
 import { TanStackDevtools } from "@tanstack/react-devtools";
 import { FormDevtoolsPanel } from "@tanstack/react-form-devtools";
 import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
-import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
-import { AuthClientProvider, type PublicSessionResponse } from "@iterate-com/auth/client";
+import { extractPublicConfigSchema } from "@iterate-com/shared/config";
+import { AuthClientProvider } from "@iterate-com/auth/client";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
 import iterateLogoAsset from "@iterate-com/ui/assets/iterate-logo.svg";
-import { DefaultErrorComponent } from "@iterate-com/ui/components/route-defaults";
-import { AppConfig } from "../app.ts";
+import {
+  DefaultErrorComponent,
+  DefaultNotFoundComponent,
+} from "@iterate-com/ui/components/route-defaults";
+import { AppConfig } from "../config.ts";
 import { orpcClient } from "../orpc/client.ts";
 import appCss from "../styles.css?url";
-import {
-  normalizeRequestHostname,
-  resolveProjectSlugFromHostname,
-} from "~/lib/project-host-routing.ts";
-import type { RouterContext } from "~/router.tsx";
+import { fetchRootAuthSnapshot } from "~/lib/root-auth-snapshot.ts";
+import type { RouterContext } from "~/router-context.ts";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
-
-type RootAuthSnapshot = {
-  authSession: PublicSessionResponse;
-  iterateAuthIssuer: string | undefined;
-  currentProjectHostSlug: string | null;
-};
-
-// Reads the request's authenticated session (resolved by the iterate auth
-// request middleware from signed JWT claims) without any auth-worker
-// roundtrip. During SSR this executes in-process; if a client navigation
-// ever misses the dehydrated cache it fetches from the OS worker instead of
-// treating the user as signed out.
-const fetchRootAuthSnapshot = createServerFn({ method: "GET" }).handler(
-  async (): Promise<RootAuthSnapshot> => {
-    const startContext = getGlobalStartContext();
-    return {
-      authSession: toPublicSession(startContext?.iterateAuthSession),
-      iterateAuthIssuer: startContext?.config.iterateAuth?.issuer,
-      currentProjectHostSlug: resolveCurrentProjectHostSlug({
-        baseUrl: startContext?.config.baseUrl,
-        projectHostnameBases: startContext?.projectHostnameBases ?? [],
-        requestUrl: startContext?.rawRequest?.url,
-      }),
-    };
-  },
-);
 
 const rootAuthSnapshotQueryOptions = {
   queryKey: ["__root-auth-snapshot"] as const,
@@ -89,34 +62,11 @@ export const Route = createRootRouteWithContext<RouterContext>()({
   shellComponent: RootDocument,
   component: RootComponent,
   errorComponent: RootErrorComponent,
+  // defaultNotFoundComponent on the router already covers this, but the
+  // reference implementation sets it explicitly on the root route too:
+  // https://github.com/TanStack/router/blob/main/examples/react/start-basic/src/routes/__root.tsx
+  notFoundComponent: () => <DefaultNotFoundComponent />,
 });
-
-function toPublicSession(
-  session: import("@iterate-com/auth/server").AuthenticatedSession | null | undefined,
-): PublicSessionResponse {
-  if (!session) return { authenticated: false };
-  return {
-    authenticated: true,
-    user: session.user,
-    session: session.session,
-  };
-}
-
-function resolveCurrentProjectHostSlug(input: {
-  baseUrl: string | undefined;
-  projectHostnameBases: string[];
-  requestUrl: string | undefined;
-}) {
-  if (!input.requestUrl) return null;
-
-  const dashboardHostname = input.baseUrl
-    ? normalizeRequestHostname(new URL(input.baseUrl).hostname)
-    : null;
-  const requestHostname = normalizeRequestHostname(new URL(input.requestUrl).hostname);
-  if (dashboardHostname && requestHostname === dashboardHostname) return null;
-
-  return resolveProjectSlugFromHostname(requestHostname, input.projectHostnameBases) ?? null;
-}
 
 function RootDocument({ children }: { children: ReactNode }) {
   return (

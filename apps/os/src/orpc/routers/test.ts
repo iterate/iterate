@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import { authenticatedUserMiddleware, os } from "~/orpc/orpc.ts";
 
 export const testRouter = {
@@ -155,7 +155,7 @@ export const testRouter = {
  * with `never`, so this debug-only route performs the same organization-member
  * gate inline while keeping the public contract precise.
  */
-function requireOrganizationMemberForNeverEndpoint(context: AppContext) {
+function requireOrganizationMemberForNeverEndpoint(context: RequestContext) {
   if (context.principal?.type !== "user") {
     throw new ORPCError("UNAUTHORIZED");
   }

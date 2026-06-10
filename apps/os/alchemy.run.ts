@@ -6,7 +6,7 @@ import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import type { CaptunServerShard } from "captun/worker";
 import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
-import manifest, { AppConfig } from "./src/app.ts";
+import { AppConfig } from "./src/config.ts";
 import type { CodemodeSession } from "./src/domains/codemode/durable-objects/codemode-session.ts";
 import type { ContextDO } from "./src/itx/context-do.ts";
 import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-append-chain-subscriber.ts";
@@ -77,7 +77,7 @@ const env = {
 
 await ensureLocalDevOAuthClient(env);
 
-const ctx = await initAlchemy(manifest, AppConfig, env);
+const ctx = await initAlchemy("os", AppConfig, env);
 const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();
 
 const db = await D1Database("os-db", {
@@ -161,6 +161,7 @@ const debugAppendChainSubscriber = ctx.app.local
   : undefined;
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
+  main: "./src/worker.ts",
   bindings: {
     DB: db,
     DO_CATALOG: db,

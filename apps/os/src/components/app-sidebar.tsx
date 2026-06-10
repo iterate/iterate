@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
-import type { PublicAppConfig } from "@iterate-com/shared/apps/config";
+import type { PublicAppConfig } from "@iterate-com/shared/config";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { useConfig } from "@iterate-com/ui/apps/config";
 import { useQuery } from "@tanstack/react-query";
@@ -65,7 +65,7 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
-import type { AppConfig } from "~/app.ts";
+import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
 import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
@@ -140,7 +140,7 @@ function AppSidebarHeader() {
                   variant="ghost"
                   size="icon-xs"
                   aria-label="New project"
-                  render={<Link to="/projects/new" />}
+                  render={<Link to="/new-project" />}
                 >
                   <Plus />
                 </Button>
@@ -352,57 +352,66 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   }
 
   return (
-    <SidebarGroup>
-      <SidebarGroupContent>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip="Projects"
-              render={<Link to="/projects" />}
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects",
-                  fuzzy: false,
-                }),
-              )}
-            >
-              <ScrollText />
-              <span>Projects</span>
-            </SidebarMenuButton>
-            <SidebarMenuSub>
-              {projects.map((project) => (
-                <SidebarMenuSubItem key={project.id}>
-                  <SidebarMenuSubButton
-                    isActive={Boolean(
-                      matchRoute({
-                        to: "/projects/$projectSlug",
-                        params: { projectSlug: project.slug },
-                        fuzzy: true,
-                      }),
-                    )}
-                    render={
-                      <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} />
-                    }
-                  >
-                    <span>{project.slug}</span>
-                  </SidebarMenuSubButton>
-                </SidebarMenuSubItem>
-              ))}
-            </SidebarMenuSub>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              tooltip="Repl"
-              render={<Link to="/itx-repl" />}
-              isActive={Boolean(matchRoute({ to: "/itx-repl", fuzzy: false }))}
-            >
-              <SquareTerminal />
-              <span>Repl</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarGroupContent>
-    </SidebarGroup>
+    <>
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip="Projects"
+                render={<Link to="/projects" />}
+                isActive={Boolean(
+                  matchRoute({
+                    to: "/projects",
+                    fuzzy: false,
+                  }),
+                )}
+              >
+                <ScrollText />
+                <span>Projects</span>
+              </SidebarMenuButton>
+              <SidebarMenuSub>
+                {projects.map((project) => (
+                  <SidebarMenuSubItem key={project.id}>
+                    <SidebarMenuSubButton
+                      isActive={Boolean(
+                        matchRoute({
+                          to: "/projects/$projectSlug",
+                          params: { projectSlug: project.slug },
+                          fuzzy: true,
+                        }),
+                      )}
+                      render={
+                        <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} />
+                      }
+                    >
+                      <span>{project.slug}</span>
+                    </SidebarMenuSubButton>
+                  </SidebarMenuSubItem>
+                ))}
+              </SidebarMenuSub>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+      <SidebarSeparator />
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip="Repl"
+                render={<Link to="/itx-repl" />}
+                isActive={Boolean(matchRoute({ to: "/itx-repl", fuzzy: false }))}
+              >
+                <SquareTerminal />
+                <span>Repl</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    </>
   );
 }
 

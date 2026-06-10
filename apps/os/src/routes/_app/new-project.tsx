@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { CreateProjectForm } from "~/components/create-project-form.tsx";
 import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
-export const Route = createFileRoute("/_app/projects/_new")({
+export const Route = createFileRoute("/_app/new-project")({
   staticData: breadcrumbStaticData("New project"),
   component: NewProjectPage,
 });

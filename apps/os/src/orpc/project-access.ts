@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import { getProjectById, getProjectBySlug } from "~/db/queries/.generated/index.ts";
 import { isProjectId } from "~/domains/projects/project-id.ts";
 
@@ -10,7 +10,10 @@ import { isProjectId } from "~/domains/projects/project-id.ts";
  * through signed Auth project claims, and admin API callers bypass that for
  * operator work.
  */
-export async function requireAuthorizedProject(input: { context: AppContext; projectId: string }) {
+export async function requireAuthorizedProject(input: {
+  context: RequestContext;
+  projectId: string;
+}) {
   const project = await getProjectById(input.context.db, {
     id: input.projectId,
   });
@@ -31,7 +34,7 @@ export async function requireAuthorizedProject(input: { context: AppContext; pro
 }
 
 export async function requireProjectScopedAccess(input: {
-  context: AppContext;
+  context: RequestContext;
   projectSlugOrId: string;
 }) {
   if (input.context.projectAccess) {
@@ -59,15 +62,15 @@ export async function requireProjectScopedAccess(input: {
   });
 }
 
-export function canReadProject(context: Pick<AppContext, "principal">, projectId: string) {
+export function canReadProject(context: Pick<RequestContext, "principal">, projectId: string) {
   return (
     context.principal?.type === "admin" || context.principal?.can("read", { projectId }) === true
   );
 }
 
 export function requireProjectScope(
-  context: AppContext,
-): NonNullable<AppContext["projectScope"]>["project"] {
+  context: RequestContext,
+): NonNullable<RequestContext["projectScope"]>["project"] {
   if (!context.projectScope) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {
       message: "Project scope middleware did not run.",
@@ -77,7 +80,7 @@ export function requireProjectScope(
   return context.projectScope.project;
 }
 
-async function resolveBoundProject(input: { context: AppContext; projectSlugOrId: string }) {
+async function resolveBoundProject(input: { context: RequestContext; projectSlugOrId: string }) {
   if (input.context.db) {
     const project = await getProjectById(input.context.db, { id: input.projectSlugOrId });
     if (project) return project;
@@ -93,7 +96,10 @@ async function resolveBoundProject(input: { context: AppContext; projectSlugOrId
   };
 }
 
-async function resolveProjectBySlugOrId(input: { context: AppContext; projectSlugOrId: string }) {
+async function resolveProjectBySlugOrId(input: {
+  context: RequestContext;
+  projectSlugOrId: string;
+}) {
   const projectId = input.projectSlugOrId.trim();
   const project = isProjectId(projectId)
     ? await getProjectById(input.context.db, { id: projectId })

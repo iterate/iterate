@@ -1,6 +1,6 @@
 import { initLogger } from "evlog";
 import { initWorkersLogger } from "evlog/workers";
-import type { AppContext } from "../types.ts";
+import type { AppContext } from "../apps/types.ts";
 import {
   createPrettyStdoutDrain,
   createRawStdoutDrain,

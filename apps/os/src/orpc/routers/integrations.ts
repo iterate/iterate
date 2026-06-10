@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import {
   createGoogleAuthorizationUrl,
   createSlackAuthorizationUrl,
@@ -126,7 +126,7 @@ export const projectIntegrationsRouter = {
     }),
 };
 
-async function connectionStatus(context: AppContext, provider: "google" | "slack") {
+async function connectionStatus(context: RequestContext, provider: "google" | "slack") {
   const project = requireProjectScope(context);
   const connection = await getProjectConnection(context.db, {
     projectId: project.id,
@@ -185,7 +185,7 @@ function parseScopes(scopes: string | null, separator: "," | " ") {
     .filter((scope) => scope.length > 0);
 }
 
-function requireUserId(context: AppContext) {
+function requireUserId(context: RequestContext) {
   if (context.principal?.type !== "user") throw new ORPCError("UNAUTHORIZED");
   return context.principal.userId;
 }

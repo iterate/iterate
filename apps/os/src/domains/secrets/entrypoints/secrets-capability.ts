@@ -1,8 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createD1Client } from "sqlfu";
 import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
-import { AppConfig } from "~/app.ts";
+import { parseConfig } from "~/config.ts";
 import {
   deleteProjectSecretById,
   deleteProjectSecret,
@@ -152,11 +151,7 @@ export class SecretsCapability extends WorkerEntrypoint<
   }
 
   private createSecretId() {
-    const config = parseAppConfigFromEnv({
-      configSchema: AppConfig,
-      env: this.env as unknown as Record<string, unknown>,
-      prefix: "APP_CONFIG_",
-    });
+    const config = parseConfig(this.env);
     return projectSecretId({ typeIdPrefix: config.typeIdPrefix });
   }
 }

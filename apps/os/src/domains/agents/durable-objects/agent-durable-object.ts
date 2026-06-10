@@ -2,7 +2,6 @@ import OpenAI from "openai";
 import type { ResponsesClientEvent } from "openai/resources/responses/responses";
 import { ResponsesWSBase } from "openai/resources/responses/ws-base";
 import { z } from "zod";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import {
   getInitializedDoStub,
@@ -41,7 +40,7 @@ import {
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
 } from "~/domains/streams/new-stream-runtime.ts";
-import { AppConfig } from "~/app.ts";
+import { parseConfig } from "~/config.ts";
 import { createCodemodeSession } from "~/domains/codemode/codemode-session-rpc.ts";
 import { createExampleCapabilityProviders } from "~/domains/codemode/example-provider-registrations.ts";
 import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
@@ -645,11 +644,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   private getAppConfig() {
-    return parseAppConfigFromEnv({
-      configSchema: AppConfig,
-      prefix: "APP_CONFIG_",
-      env: this.env as unknown as Record<string, unknown>,
-    });
+    return parseConfig(this.env);
   }
 
   private async appendAssistantResponse(input: {

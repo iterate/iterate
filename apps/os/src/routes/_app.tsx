@@ -1,6 +1,4 @@
 import { Outlet, createFileRoute } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
-import { getRequestHeader } from "@tanstack/react-start/server";
 import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { requireOrganizationMemberForSession } from "../lib/auth.ts";
@@ -8,10 +6,7 @@ import { AppSidebar } from "~/components/app-sidebar.tsx";
 import { PathBreadcrumbs } from "~/components/path-breadcrumbs.tsx";
 import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-
-const getSidebarDefaultOpen = createServerFn({ method: "GET" }).handler(() => ({
-  defaultOpen: !/(?:^|;\s*)sidebar_state=false(?:;|$)/.test(getRequestHeader("cookie") ?? ""),
-}));
+import { getSidebarDefaultOpen } from "~/lib/sidebar-state.ts";
 
 export const Route = createFileRoute("/_app")({
   beforeLoad: ({ context, location }) =>

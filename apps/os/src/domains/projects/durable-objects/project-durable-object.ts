@@ -1,6 +1,6 @@
+import { env } from "cloudflare:workers";
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { acceptCaptunTunnel, type Fetcher } from "captun";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
@@ -19,7 +19,7 @@ import {
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
 } from "~/domains/streams/new-stream-runtime.ts";
-import { AppConfig } from "~/app.ts";
+import { parseConfig } from "~/config.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
 import type { ItxProps } from "~/itx/protocol.ts";
 import type { ProjectEgressProps } from "~/itx/entrypoint.ts";
@@ -79,6 +79,15 @@ export function getProjectDurableObjectName(projectId: string) {
   return deriveDurableObjectNameFromStructuredName({
     structuredName: { projectId },
   });
+}
+
+/**
+ * Mint a Project DO stub. Lives here (a trusted domain DO file) so ingress code
+ * never accesses the raw PROJECT binding — see the
+ * no-raw-durable-object-binding-access lint rule.
+ */
+export function getProjectDurableObjectStub(projectId: string) {
+  return env.PROJECT.getByName(getProjectDurableObjectName(projectId));
 }
 
 export type ProjectSummary = {
@@ -1029,11 +1038,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   }
 
   private getAppConfig() {
-    return parseAppConfigFromEnv({
-      configSchema: AppConfig,
-      prefix: "APP_CONFIG_",
-      env: this.env as unknown as Record<string, unknown>,
-    });
+    return parseConfig(this.env);
   }
 
   private async writeProjectCreatedLifecycleEvent(summary: ProjectSummary) {

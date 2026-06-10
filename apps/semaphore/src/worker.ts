@@ -1,17 +1,16 @@
+/**
+ * Cloudflare Worker entry for semaphore: a TanStack Start app (SSR + oRPC API)
+ * fronting the resource-leasing durable object.
+ */
 import { env as workerEnv } from "cloudflare:workers";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
-import { withEvlog } from "@iterate-com/shared/apps/logging/with-evlog";
 import handler from "@tanstack/react-start/server-entry";
-import manifest, { AppConfig } from "~/app.ts";
-import type { AppContext } from "~/context.ts";
+import { withEvlog } from "@iterate-com/shared/evlog";
+import { parseConfig } from "~/config.ts";
+import type { RequestContext } from "~/request-context.ts";
 import type { Env } from "~/env.ts";
 import { ResourceCoordinator } from "~/durable-objects/resource-coordinator.ts";
 
-const config = parseAppConfigFromEnv({
-  configSchema: AppConfig,
-  prefix: "APP_CONFIG_",
-  env: workerEnv as Record<string, unknown>,
-});
+const config = parseConfig(workerEnv);
 
 export async function handleSemaphoreRequest(
   request: Request,
@@ -19,22 +18,14 @@ export async function handleSemaphoreRequest(
   executionCtx: ExecutionContext,
 ) {
   return withEvlog(
-    {
-      request,
-      manifest,
-      config,
-      executionCtx,
-    },
+    { request, app: { name: "@iterate-com/semaphore", slug: "semaphore" }, config, executionCtx },
     async ({ log }) => {
-      const context: AppContext = {
-        manifest,
+      const context: RequestContext = {
         config,
-        env,
         rawRequest: request,
         db: env.DB,
         log,
       };
-
       return handler.fetch(request, { context });
     },
   );

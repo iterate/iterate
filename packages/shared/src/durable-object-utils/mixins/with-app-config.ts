@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/workers-types" />
 
 import { z } from "zod";
-import { parseAppConfigFromEnv } from "../../apps/config.ts";
+import { parseAppConfigFromEnv } from "../../config.ts";
 import type {
   DurableObjectClass,
   DurableObjectMixinResult,

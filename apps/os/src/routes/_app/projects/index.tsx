@@ -75,7 +75,7 @@ function ProjectsIndexPage() {
           <p className="text-sm text-muted-foreground">Create and manage projects.</p>
         </div>
         {hasProjects ? (
-          <Button type="button" size="sm" render={<Link to="/projects/new" />}>
+          <Button type="button" size="sm" render={<Link to="/new-project" />}>
             New project
           </Button>
         ) : null}
@@ -93,7 +93,7 @@ function ProjectsIndexPage() {
                 Create your first project to start using OS.
               </p>
             </div>
-            <Button type="button" size="sm" render={<Link to="/projects/new" />}>
+            <Button type="button" size="sm" render={<Link to="/new-project" />}>
               Create new project
             </Button>
           </div>

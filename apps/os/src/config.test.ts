@@ -1,7 +1,7 @@
 import { inspect } from "node:util";
 import { describe, expect, it } from "vitest";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
-import { AppConfig } from "./app.ts";
+import { parseAppConfigFromEnv } from "@iterate-com/shared/config";
+import { AppConfig } from "./config.ts";
 
 const baseConfig = {
   openAiApiKey: "openai-api-key",

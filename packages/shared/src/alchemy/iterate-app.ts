@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import alchemy from "alchemy";
 import { Route, TanStackStart, Tunnel, createCloudflareApi } from "alchemy/cloudflare";
 import type { Bindings } from "alchemy/cloudflare";
-import type { BaseAppConfig } from "../apps/config.ts";
+import type { BaseAppConfig } from "../config.ts";
 import { slugify } from "../slugify.ts";
 import type { initAlchemy } from "./init.ts";
 import { startCloudflared } from "./start-cloudflared.ts";
@@ -34,7 +34,7 @@ import { startCloudflared } from "./start-cloudflared.ts";
  * persistent logs and traces. See https://developers.cloudflare.com/workers/observability/
  *
  * ```ts
- * const ctx = await initAlchemy(manifest, AppConfig, process.env);
+ * const ctx = await initAlchemy("my-app", AppConfig, process.env);
  * const db = await D1Database("db", { name: `${ctx.workerName}-db` });
  * const { worker, afterFinalize } = await IterateApp(ctx, {
  *   bindings: { DB: db },
@@ -64,6 +64,8 @@ export async function IterateApp<B extends Bindings>(
      * subdomain routing.
      */
     extraRouteHostnames?: string[];
+    /** Worker entry module (default: `./src/entry.workerd.ts`). */
+    main?: string;
     /** Override build command (default: `pnpm exec vite build --config vite.config.ts`). */
     build?: string;
     /** Override dev command (default: `pnpm exec vite dev --config vite.config.ts`). */
@@ -74,7 +76,7 @@ export async function IterateApp<B extends Bindings>(
     ) => Record<string, unknown> | Promise<Record<string, unknown>>;
   },
 ) {
-  const { app, workerName, rawRuntimeConfig, manifest } = ctx;
+  const { app, workerName, rawRuntimeConfig, slug } = ctx;
   const runtimeConfig = ctx.runtimeConfig as BaseAppConfig;
   const routeHosts = deriveWorkerRouteHosts(runtimeConfig.baseUrl, props.extraRouteHostnames);
   const compatibilityFlags = [...new Set(["nodejs_compat", ...(props.compatibilityFlags ?? [])])];
@@ -83,7 +85,7 @@ export async function IterateApp<B extends Bindings>(
     workerName,
   });
 
-  const worker = await TanStackStart(manifest.slug, {
+  const worker = await TanStackStart(slug, {
     name: workerName,
     // adopt: take ownership of existing resources instead of failing on conflict.
     // Needed because dev/preview workers persist across alchemy runs.
@@ -98,7 +100,7 @@ export async function IterateApp<B extends Bindings>(
         : alchemy.secret(JSON.stringify(rawRuntimeConfig, null, 2)),
     },
     wrangler: {
-      main: "./src/entry.workerd.ts",
+      main: props.main ?? "./src/entry.workerd.ts",
       transform: props.wranglerTransform,
     },
     // Full sampling with persistent logs/traces for all Iterate workers.
@@ -141,7 +143,7 @@ export async function IterateApp<B extends Bindings>(
     );
 
     const tunnel = await Tunnel(`dev-tunnel-${app.stage}`, {
-      name: `dev-${app.stage}-${manifest.slug}`,
+      name: `dev-${app.stage}-${slug}`,
       adopt: true,
       // Don't auto-delete dev tunnels — they persist across sessions so
       // DNS records stay stable and cloudflared reconnects instantly.
@@ -168,7 +170,7 @@ export async function IterateApp<B extends Bindings>(
             zoneId,
             name: hostname,
             target: `${tunnel.tunnelId}.cfargotunnel.com`,
-            comment: `Managed by ${manifest.slug} dev tunnel (${app.stage}).`,
+            comment: `Managed by ${slug} dev tunnel (${app.stage}).`,
           });
         }),
     );
@@ -222,7 +224,7 @@ export async function IterateApp<B extends Bindings>(
           content: "192.0.2.1",
           proxied: true,
           ttl: 1,
-          comment: `Managed by ${manifest.slug} alchemy (${app.stage}).`,
+          comment: `Managed by ${slug} alchemy (${app.stage}).`,
         };
 
         await ensureCloudflareDnsRecord({

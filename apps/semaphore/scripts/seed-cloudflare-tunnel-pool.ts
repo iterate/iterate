@@ -1,5 +1,4 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { z } from "zod";
 import {
   CloudflareTunnelData,
@@ -7,7 +6,7 @@ import {
   createSemaphoreClient,
 } from "@iterate-com/semaphore-contract";
 import { makeFunnySlug } from "../../../packages/shared/src/slug-maker.ts";
-import { AppConfig } from "../src/app.ts";
+import { parseConfig } from "../src/config.ts";
 
 const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4";
 const DEFAULT_SEMAPHORE_BASE_URL = "https://semaphore.iterate.com";
@@ -450,11 +449,7 @@ export async function seedTunnelPool(rawInput: SeedTunnelPoolInput): Promise<See
   const input = resolveSeedTunnelPoolInput(SeedTunnelPoolInput.parse(rawInput));
   const cloudflareApiToken = process.env.CLOUDFLARE_API_TOKEN?.trim();
   const cloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
-  const config = parseAppConfigFromEnv({
-    configSchema: AppConfig,
-    prefix: "APP_CONFIG_",
-    env: process.env as Record<string, unknown>,
-  });
+  const config = parseConfig(process.env);
   const semaphoreApiToken = config.sharedApiSecret.exposeSecret();
 
   if (!cloudflareApiToken) throw new Error("CLOUDFLARE_API_TOKEN is required");

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { type Event } from "@iterate-com/shared/streams/types";
@@ -26,7 +25,7 @@ import {
   repoArtifactName,
   stripArtifactTokenQuery,
 } from "~/domains/repos/artifacts.ts";
-import { AppConfig } from "~/app.ts";
+import { parseConfig } from "~/config.ts";
 import {
   RepoStreamProcessor,
   RepoStreamProcessorContract,
@@ -312,11 +311,7 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
   }
 
   private getAppConfig() {
-    return parseAppConfigFromEnv({
-      configSchema: AppConfig,
-      prefix: "APP_CONFIG_",
-      env: this.env as Record<string, unknown>,
-    });
+    return parseConfig(this.env);
   }
 
   private artifactRemote(artifactName: string) {

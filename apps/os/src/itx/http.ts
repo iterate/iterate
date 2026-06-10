@@ -15,14 +15,13 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
-import { parseAppConfigFromEnv } from "@iterate-com/shared/apps/config";
 import type { CapDescription } from "./protocol.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { normalizeIngressHost } from "~/ingress/host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
-import { AppConfig } from "~/app.ts";
+import { parseConfig } from "~/config.ts";
 
 export const SHARE_TOKEN_PARAM = "itx_share";
 
@@ -96,11 +95,7 @@ export type ItxCapIngressProps = {
 export class ItxCapIngress extends WorkerEntrypoint<Env, ItxCapIngressProps> {
   async fetch(request: Request): Promise<Response> {
     const props = (Reflect.get(this, "ctx") as ExecutionContext<ItxCapIngressProps>).props;
-    const config = parseAppConfigFromEnv({
-      configSchema: AppConfig,
-      prefix: "APP_CONFIG_",
-      env: this.env as unknown as Record<string, unknown>,
-    });
+    const config = parseConfig(this.env);
     const project = this.env.PROJECT.getByName(getProjectDurableObjectName(props.projectId));
 
     // The host label was lowercased by normalizeIngressHost, but cap names
