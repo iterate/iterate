@@ -31,7 +31,8 @@
 
 import { DurableObject, env } from "cloudflare:workers";
 import { acceptCaptunTunnel, type Fetcher } from "captun";
-import { StreamPath } from "@iterate-com/shared/streams/types";
+import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
+import type { StreamEvent } from "@iterate-com/streams/shared/event";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
@@ -52,6 +53,10 @@ import {
   type ProjectFacts,
 } from "~/domains/projects/stream-processors/project/contract.ts";
 import { ProjectProcessor } from "~/domains/projects/stream-processors/project/implementation.ts";
+import {
+  ProjectConfigWorkerProcessor,
+  ProjectConfigWorkerProcessorContract,
+} from "~/domains/projects/stream-processors/project-config-worker/implementation.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import {
   bundleWorkerCode,
@@ -68,6 +73,7 @@ import {
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
+import { readRemoteBranchOid } from "~/domains/repos/repo-git.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
@@ -175,6 +181,18 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
         exports: this.ctx.exports,
         projectId: () => this.projectId,
         workerHost: this.workerHost,
+      }),
+  );
+  // The worker as a stream processor: every root-stream event is forwarded
+  // to its processEvent export, checkpointed (project-config-worker/
+  // contract.ts has the composition story — per-project agent context etc.).
+  workerForwarder = this.host.add(
+    ProjectConfigWorkerProcessorContract.slug,
+    (deps) =>
+      new ProjectConfigWorkerProcessor({
+        ...deps,
+        forwardToConfigWorker: (event) =>
+          this.forwardEventToWorker({ event, streamPath: PROJECT_STREAM_PATH }),
       }),
   );
 
@@ -429,6 +447,71 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     }
   }
 
+  /**
+   * Checkpointed delivery to the worker's processEvent export, dialed by the
+   * project-config-worker processor under blockProcessorWhile. USER failures
+   * (the project's hook throwing) are swallowed — an author's bug must never
+   * wedge root-stream delivery — while PLATFORM failures (entrypoint
+   * resolution, rebuilds) throw so the checkpoint holds and the event is
+   * redelivered rather than silently dropped.
+   */
+  private async forwardEventToWorker(input: { event: StreamEvent; streamPath: string }) {
+    const summary = await this.currentSummary();
+    if (summary === null || !(await this.workerHost.isReady())) return;
+    const entrypoint = await this.getForwardingWorkerEntrypoint(summary);
+    try {
+      await entrypoint.processEvent?.({
+        event: input.event as unknown as Event,
+        streamPath: input.streamPath,
+      });
+    } catch (error) {
+      console.error("Project worker processEvent failed.", error);
+    }
+  }
+
+  /**
+   * Entrypoint resolution for event forwarding. Unlike ingress (time-window
+   * freshness, stale-while-revalidate, latency first), the forwarder prefers
+   * correctness: an event can be the direct consequence of a config push — a
+   * new agent created right after its config landed — and serving the
+   * previous worker would consume the very trigger the new config exists to
+   * handle. Freshness is exact: one ls-remote compares the repo's HEAD to
+   * the cached checkout's commit, and on any mismatch the rebuild is
+   * AWAITED (delivery runs under blockProcessorWhile, so the wait just holds
+   * this subscription's queue); rebuilds only happen when the repo changed.
+   */
+  private async getForwardingWorkerEntrypoint(summary: ProjectSummary) {
+    try {
+      const cached = await this.workerHost.getCachedCheckout();
+      if (cached) {
+        const repo = await ensureIterateConfigInfoForProject({
+          env: this.env,
+          projectId: summary.id,
+          projectSlug: summary.slug,
+        });
+        const headOid = await readRemoteBranchOid({
+          branch: repo.defaultBranch,
+          remote: repo.remote,
+          token: repo.token,
+        });
+        if (headOid !== null && headOid === cached.commitOid) {
+          return this.workerHost.load({ checkout: cached, projectId: summary.id });
+        }
+      }
+    } catch (error) {
+      // The probe is an optimization for exactness, not a gate: on probe
+      // failure fall back to the time-based window rather than blocking
+      // delivery on repo availability.
+      console.error("Worker freshness probe failed; using freshness window.", error);
+      if (await this.workerHost.checkoutIsFresh()) {
+        const cached = await this.workerHost.getCachedCheckout();
+        if (cached) return this.workerHost.load({ checkout: cached, projectId: summary.id });
+      }
+    }
+    const checkout = await (this.workerHost.currentBuild() ?? this.workerHost.buildFresh(summary));
+    return this.workerHost.load({ checkout, projectId: summary.id });
+  }
+
   protected async cloneWorkerRepo(input: WorkerWorkspace & { repo: RepoInfo }) {
     await cloneWorkerRepo(input);
   }
@@ -572,6 +655,18 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
           bindingName: "PROJECT",
           durableObjectName: getProjectDurableObjectName(projectId),
           processorName: ProjectProcessorContract.slug,
+        }),
+      },
+    });
+    await stream.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      idempotencyKey: `project-config-worker-subscription:${projectId}`,
+      payload: {
+        subscriptionKey: `project-config-worker:${projectId}`,
+        subscriber: durableObjectProcessorSubscriber({
+          bindingName: "PROJECT",
+          durableObjectName: getProjectDurableObjectName(projectId),
+          processorName: ProjectConfigWorkerProcessorContract.slug,
         }),
       },
     });

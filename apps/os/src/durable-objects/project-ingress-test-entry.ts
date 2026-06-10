@@ -37,6 +37,21 @@ export default {
 
     return new Response("Bundled project worker");
   },
+
+  // The config worker is a stream processor: every project root-stream event
+  // is forwarded here. Echo pings back as facts so tests can observe the
+  // whole forwarding chain end to end.
+  async processEvent({ event, streamPath }, env) {
+    if (streamPath !== "/") return;
+    if (event.type !== "test.project/ping") return;
+    await env.STREAMS.append({
+      streamPath: "/config-worker-saw",
+      event: {
+        type: "test.project/config-worker-saw",
+        payload: { pingOffset: event.offset, n: event.payload.n },
+      },
+    });
+  },
 };
 `;
 const TEST_APP_ONE_WORKER_SOURCE = `export default {
@@ -242,6 +257,27 @@ export default {
         headers: Object.fromEntries(request.headers),
         url: request.url,
       });
+    }
+
+    if (url.pathname === "/__test/append-project-event") {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
+        namespace: "proj__local__test",
+        path: PROJECT_STREAM_PATH,
+      });
+      const n = Number(url.searchParams.get("n") ?? "0");
+      const appended = await stream.append({ type: "test.project/ping", payload: { n } });
+      return Response.json({ appended });
+    }
+
+    if (url.pathname === "/__test/read-stream") {
+      const path = url.searchParams.get("path") ?? PROJECT_STREAM_PATH;
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
+        namespace: "proj__local__test",
+        path: StreamPath.parse(path),
+      });
+      return Response.json({ events: await stream.history({ before: "end" }) });
     }
 
     if (url.pathname === "/__test/project-stream") {

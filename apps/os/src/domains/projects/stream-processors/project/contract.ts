@@ -105,11 +105,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       }),
     },
   },
-  // "*" makes the stream deliver every event (the worker forwarding in
-  // processEventBatch needs unfiltered batches); the named types are what
-  // reduce projects into state.
   consumes: [
-    "*",
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/config-worker-built",

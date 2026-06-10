@@ -13,13 +13,11 @@
 // create-completed: ingress requests build on demand, so a failed build
 // self-heals on the next request.
 //
-// The processor also forwards live events on the project's root stream to
-// the project worker's optional `processEvent` hook — user code reacting to
-// its project's events. Delivery is best-effort and begins once a worker
-// build exists; events before the first build are not replayed.
+// Forwarding root-stream events to the worker's own processEvent hook is
+// NOT this processor's job: the sibling project-config-worker processor owns
+// that, with checkpointed at-least-once delivery.
 
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
-import type { StreamEvent } from "@iterate-com/streams/shared/event";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { projectFacts, ProjectProcessorContract, type ProjectProcessorState } from "./contract.ts";
@@ -42,11 +40,7 @@ import {
 } from "~/domains/secrets/example-secret.ts";
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-import {
-  readLoopbackExports,
-  type LoadedWorkerEntrypoint,
-  type WorkerHost,
-} from "~/domains/projects/durable-objects/worker.ts";
+import { readLoopbackExports, type WorkerHost } from "~/domains/projects/durable-objects/worker.ts";
 import type { AppConfig } from "~/config.ts";
 
 export { PROJECT_STREAM_PATH, projectFacts, ProjectProcessorContract } from "./contract.ts";
@@ -113,8 +107,6 @@ export class ProjectProcessor extends StreamProcessor<
         if (!this.#ownEvent(event.payload)) return state;
         return { ...state, phase: "ready" };
       default:
-        // Wildcard-delivered events (any other type on the root stream) are
-        // forwarded to the worker in processEventBatch, never reduced.
         return state;
     }
   }
@@ -164,19 +156,6 @@ export class ProjectProcessor extends StreamProcessor<
     args.runInBackground(async () => {
       await this.deps.workerHost.buildFresh({ id: projectId, slug });
     });
-  }
-
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<ProjectProcessorContract>["processEventBatch"]>[0],
-  ): Promise<void> {
-    await super.processEventBatch(args);
-    // Forward EVERY live event (consumed or not) to the project worker.
-    const project = args.state.project;
-    if (!project) return;
-    for (const event of args.events) {
-      if (event.offset <= args.sideEffectsAfterOffset) continue;
-      args.runInBackground(() => this.#forwardEventToWorker(project.projectId, event));
-    }
   }
 
   // ---- creation steps -------------------------------------------------------
@@ -282,29 +261,5 @@ export class ProjectProcessor extends StreamProcessor<
         reactions: [],
       },
     });
-  }
-
-  // ---- worker forwarding ----------------------------------------------------
-
-  /**
-   * Best-effort delivery to the worker's `processEvent` hook, via the cached
-   * checkout (deliberately NOT itx.worker.processEvent — that path builds a
-   * fresh checkout per call, which is right for tool calls but absurd per
-   * event; forwarding wants the warm isolate).
-   */
-  async #forwardEventToWorker(projectId: string, event: StreamEvent) {
-    try {
-      if (!(await this.deps.workerHost.isReady())) return;
-      const checkout = await this.deps.workerHost.getCachedCheckout();
-      if (!checkout) return;
-      const entrypoint = this.deps.workerHost.load({ checkout, projectId });
-      await entrypoint.processEvent?.({
-        event: event as unknown as Parameters<
-          NonNullable<LoadedWorkerEntrypoint["processEvent"]>
-        >[0]["event"],
-      });
-    } catch (error) {
-      console.error("Project worker processEvent failed.", error);
-    }
   }
 }

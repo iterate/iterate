@@ -53,8 +53,12 @@ export type LoadedWorkerEntrypoint = {
   [key: string]: any;
   [Symbol.dispose]?(): void;
   fetch(request: Request): Response | Promise<Response>;
-  /** Optional hook: receives every live event on the project's root stream. */
-  processEvent?(input: { event: Event }): unknown | Promise<unknown>;
+  /**
+   * Optional hook: the worker as a stream processor. Receives every event
+   * committed to the project's root stream, in order, checkpointed (dialed
+   * by the project-config-worker processor).
+   */
+  processEvent?(input: { event: Event; streamPath: string }): unknown | Promise<unknown>;
 };
 
 export type WorkerModule =
@@ -257,6 +261,16 @@ export class WorkerHost {
   /** Whether a built worker is available for event forwarding. */
   async isReady(): Promise<boolean> {
     return (await this.#deps.ctx.storage.get<boolean>(READY_STORAGE_KEY)) === true;
+  }
+
+  /** The in-flight background build, if any (reused by the forwarder). */
+  currentBuild(): Promise<WorkerCheckout> | null {
+    return this.#buildPromise;
+  }
+
+  /** Whether the cached checkout is within the freshness window. */
+  async checkoutIsFresh(): Promise<boolean> {
+    return await this.#checkoutIsFresh();
   }
 
   async clearReady() {
