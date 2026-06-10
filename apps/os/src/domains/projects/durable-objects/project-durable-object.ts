@@ -6,7 +6,8 @@ import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
+import { StreamPath } from "@iterate-com/shared/streams/types";
+import type { StreamEvent } from "@iterate-com/streams/shared/event";
 import { typeid } from "@iterate-com/shared/typeid";
 import {
   createStreamProcessorHost,
@@ -58,6 +59,10 @@ import {
   ProjectLifecycleProcessor,
   ProjectLifecycleProcessorContract,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
+import {
+  ProjectConfigWorkerProcessor,
+  ProjectConfigWorkerProcessorContract,
+} from "~/domains/projects/stream-processors/project-config-worker/implementation.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import {
   type RepoDurableObject,
@@ -65,6 +70,7 @@ import {
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
+import { readRemoteBranchOid } from "~/domains/repos/repo-git.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import type { StreamsCapabilityProps } from "~/domains/streams/entrypoints/streams-capability.ts";
@@ -118,7 +124,6 @@ export type ProjectSummary = {
 
 export type ProjectCapability = Pick<
   ProjectDurableObject,
-  | "afterAppend"
   | "callConfigWorkerFunction"
   | "createProject"
   | "describe"
@@ -174,7 +179,12 @@ export type ProjectDynamicWorkerEntrypoint = {
   [key: string]: any;
   [Symbol.dispose]?(): void;
   fetch(request: Request): Response | Promise<Response>;
-  afterAppend?(input: { event: Event }): unknown | Promise<unknown>;
+  /**
+   * The config worker's stream-processor hook: called with every event
+   * committed to the stream the platform subscribed it to (the project root
+   * stream), in order. Mirrors the StreamProcessor class model's processEvent.
+   */
+  processEvent?(input: { event: StreamEvent; streamPath: string }): unknown | Promise<unknown>;
 };
 
 type ProjectDynamicWorkerModule =
@@ -273,6 +283,21 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     ProjectLifecycleProcessorContract.slug,
     (deps) => new ProjectLifecycleProcessor(deps),
   );
+  // The config worker as a stream processor: every root-stream event is
+  // forwarded to its processEvent export. See the processor's contract for
+  // the composition story (per-project agent context etc.).
+  projectConfigWorker = this.host.add(
+    ProjectConfigWorkerProcessorContract.slug,
+    (deps) =>
+      new ProjectConfigWorkerProcessor({
+        ...deps,
+        forwardToConfigWorker: (event) =>
+          this.forwardEventToConfigWorker({
+            event,
+            streamPath: PROJECT_LIFECYCLE_STREAM_PATH,
+          }),
+      }),
+  );
 
   #dynamicWorkerEntrypoint: {
     commitOid: string;
@@ -312,6 +337,11 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     this.registerOnFirstInitialize(async (params) => {
       await this.ensureProjectLifecycleSubscription(params.projectId);
       await this.ensureAgentsRoot(params.projectId);
+    });
+    // On every wake (not just first initialize) so projects created before
+    // this processor existed get subscribed too; the append is idempotent.
+    this.registerOnInstanceWake(async (params) => {
+      await this.ensureProjectConfigWorkerSubscription(params.projectId);
     });
   }
 
@@ -642,23 +672,85 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     };
   }
 
-  async afterAppend(input: { event: Event }) {
-    await this.ensureStarted();
+  /**
+   * Delivers one event to the config worker's `processEvent` export. No-op
+   * until the config worker has first been built (project provisioning does
+   * that within seconds of creation; earlier events are platform lifecycle
+   * noise).
+   *
+   * Failure handling distinguishes whose fault it is:
+   * - PLATFORM failures (entrypoint resolution, an awaited rebuild) THROW:
+   *   the forwarding processor delivers under blockProcessorWhile, so the
+   *   checkpoint holds and the at-least-once machinery redelivers the event —
+   *   a transient repo/build hiccup must not silently drop it.
+   * - USER-code failures (the project's processEvent throwing) are swallowed
+   *   and logged: the project author's bug must never wedge root-stream
+   *   delivery into the host's poison-batch disconnect.
+   */
+  private async forwardEventToConfigWorker(input: { event: StreamEvent; streamPath: string }) {
     const summary = this.currentSummary();
     const configWorkerIsReady = await this.ctx.storage.get<boolean>(
       PROJECT_CONFIG_READY_STORAGE_KEY,
     );
-    if (summary !== null && configWorkerIsReady === true) {
-      try {
-        const entrypoint =
-          this.#dynamicWorkerEntrypoint?.entrypoint ??
-          (await this.getCachedProjectDynamicWorkerEntrypoint(summary));
-        await entrypoint.afterAppend?.(input);
-      } catch (error) {
-        console.error("Project config worker afterAppend failed.", error);
+    if (summary === null || configWorkerIsReady !== true) return;
+    const entrypoint = await this.getForwardingProjectDynamicWorkerEntrypoint(summary);
+    try {
+      await entrypoint.processEvent?.(input);
+    } catch (error) {
+      console.error("Project config worker processEvent failed.", error);
+    }
+  }
+
+  /**
+   * Entrypoint resolution for event forwarding. Unlike the ingress path
+   * (which trusts a time-based freshness window and serves the stale cached
+   * worker while a rebuild runs in the background, preferring latency), the
+   * forwarder prefers correctness: an event can be the direct consequence of
+   * a config push — a new agent created right after its config landed — and
+   * serving the previous worker would consume the very trigger the new
+   * config exists to handle. So freshness is exact: one ls-remote request
+   * compares the repo's HEAD to the cached checkout's commit, and on any
+   * mismatch the rebuild is AWAITED. The forwarding processor delivers under
+   * blockProcessorWhile, so the wait just holds this subscription's queue;
+   * rebuilds only happen when the repo actually changed.
+   */
+  private async getForwardingProjectDynamicWorkerEntrypoint(
+    summary: ProjectSummary,
+  ): Promise<ProjectDynamicWorkerEntrypoint> {
+    try {
+      const cached = await this.ctx.storage.get<ProjectConfigCheckout>(
+        PROJECT_CONFIG_CHECKOUT_STORAGE_KEY,
+      );
+      if (isProjectConfigCheckout(cached)) {
+        const repo = await this.getOrCreateIterateConfigRepo(summary);
+        const headOid = await readRemoteBranchOid({
+          branch: repo.defaultBranch,
+          remote: repo.remote,
+          token: repo.token,
+        });
+        if (headOid !== null && headOid === cached.commitOid) {
+          return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
+        }
+      }
+    } catch (error) {
+      // The probe is an optimization for exactness, not a gate: on probe
+      // failure fall back to the time-based window rather than blocking
+      // delivery on repo availability.
+      console.error("Project config freshness probe failed; using freshness window.", error);
+      if (await this.projectConfigCheckoutIsFresh()) {
+        try {
+          return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
+        } catch (cacheError) {
+          await this.clearProjectConfigWorkerReady();
+          console.error("Cached project config worker is invalid.", cacheError);
+        }
       }
     }
-    return await this.getProjectLifecycleRunnerState();
+    if (this.#projectConfigWorkerBuildPromise !== null) {
+      return await this.#projectConfigWorkerBuildPromise;
+    }
+    this.startProjectConfigWorkerBuild(summary);
+    return await this.#projectConfigWorkerBuildPromise!;
   }
 
   async ingressFetch(request: Request): Promise<Response> {
@@ -1310,6 +1402,27 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     });
   }
 
+  private async ensureProjectConfigWorkerSubscription(projectId: string) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: projectId,
+      path: PROJECT_LIFECYCLE_STREAM_PATH,
+    });
+
+    await stream.append({
+      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+      idempotencyKey: `project-config-worker-subscription:${projectId}:callable`,
+      payload: {
+        subscriptionKey: projectConfigWorkerSubscriptionKey(projectId),
+        subscriber: durableObjectProcessorSubscriber({
+          bindingName: "PROJECT",
+          durableObjectName: getProjectDurableObjectName(projectId),
+          processorName: ProjectConfigWorkerProcessorContract.slug,
+        }),
+      },
+    });
+  }
+
   private async projectAppSlugFromHost(input: { host: string; summary: ProjectSummary }) {
     const platformHosts = parseProjectPlatformHosts({
       bases: this.getAppConfig().projectHostnameBases,
@@ -1337,6 +1450,10 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     const prefix = host.slice(0, host.length - customHostname.length - 1);
     return prefix !== "" && !prefix.includes(".") ? prefix : null;
   }
+}
+
+function projectConfigWorkerSubscriptionKey(projectId: string) {
+  return `project-config-worker:${projectId}`;
 }
 
 function projectLifecycleSubscriptionKey(projectId: string) {

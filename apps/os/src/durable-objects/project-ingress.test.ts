@@ -327,6 +327,43 @@ describe("Project ingress routing", () => {
   });
 });
 
+test("project config worker receives root-stream events and appends facts back", async () => {
+  await createProject();
+
+  // The config worker must be built before forwarding delivers to it (the
+  // gate is the ready flag set by provisioning).
+  await waitForProjectLifecycleEvents([
+    expect.objectContaining({ type: "events.iterate.com/project/config-worker-built" }),
+  ]);
+
+  // Append a fact to the project root stream. The project-config-worker
+  // processor (subscribed to "/") forwards it to the config worker's
+  // afterAppend export, which echoes it onto /config-worker-saw — proving the
+  // whole chain: subscription wiring, blocking forward, entrypoint
+  // resolution, and the object-export env argument, all in real workerd.
+  const appendResponse = await SELF.fetch(
+    "https://os.iterate.localhost/__test/append-project-event?n=42",
+  );
+  expect(appendResponse.ok).toBe(true);
+
+  const deadline = Date.now() + 10_000;
+  let latest: unknown;
+  while (Date.now() < deadline) {
+    const response = await SELF.fetch(
+      "https://os.iterate.localhost/__test/read-stream?path=/config-worker-saw",
+    );
+    latest = await response.json();
+    const body = latest as { events: Array<{ type: string; payload: Record<string, unknown> }> };
+    const saw = body.events.find((event) => event.type === "test.project/config-worker-saw");
+    if (saw) {
+      expect(saw.payload).toMatchObject({ n: 42 });
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`config worker never saw the ping: ${JSON.stringify(latest)}`);
+});
+
 async function createProject() {
   const response = await SELF.fetch("https://os.iterate.localhost/__test/create-project");
   expect(response.ok).toBe(true);
