@@ -97,6 +97,31 @@ describe("CloudflareAiProcessor", () => {
     expect(eventTypes(appended)).toContain("events.iterate.com/agent/output-added");
   });
 
+  it("recovers a dangling request exactly once when one batch carries several connect facts", async () => {
+    const { stream, appended } = memoryStream();
+    const runs: string[] = [];
+    const processor = newProcessor({
+      stream,
+      runs,
+      snapshot: { offset: 12, state: stateWithRequest(11, "started") },
+      readStreamEvents: async () => [llmRequestRequestedEvent({ offset: 11 })],
+    });
+
+    // An agent host re-handshake appends one connected event per co-hosted
+    // processor subscription, so a single delivered batch routinely carries
+    // several. Their blocking reconciles run concurrently — the dangling
+    // request must still be claimed by exactly one of them.
+    await processor.ingest({
+      events: [subscriberConnectedEvent({ offset: 13 }), subscriberConnectedEvent({ offset: 14 })],
+      streamMaxOffset: 14,
+    });
+
+    await waitFor(() =>
+      eventTypes(appended).includes("events.iterate.com/agent/llm-request-completed"),
+    );
+    expect(runs).toEqual(["test-model"]);
+  });
+
   it("does not run dangling recovery on ordinary domain batches", async () => {
     const { stream, appended } = memoryStream();
     const runs: string[] = [];

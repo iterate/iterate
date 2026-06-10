@@ -273,6 +273,48 @@ describe("OpenAiWsProcessor", () => {
     expect(eventTypes(appended)).toContain("events.iterate.com/agent/output-added");
   });
 
+  it("recovers a dangling request exactly once when one batch carries several connect facts", async () => {
+    const { stream, appended } = memoryStream();
+    const sockets: FakeOpenAiResponsesWebSocket[] = [];
+    const processor = newProcessor({
+      stream,
+      appended,
+      sockets,
+      snapshot: {
+        offset: 34,
+        state: { ...testState(), requests: { "33": { status: "started" } } },
+      },
+      readStreamEvents: async () => [
+        llmRequestRequestedEvent({ content: "recover me", offset: 33 }),
+      ],
+    });
+
+    // An agent host re-handshake appends one connected event per co-hosted
+    // processor subscription, so a single delivered batch routinely carries
+    // several. Their blocking reconciles run concurrently — the dangling
+    // request must still be claimed by exactly one of them.
+    const ingested = processor.ingest({
+      events: [subscriberConnectedEvent({ offset: 35 }), subscriberConnectedEvent({ offset: 36 })],
+      streamMaxOffset: 36,
+    });
+    await waitFor(() => sockets.length === 1);
+    sockets[0]?.open();
+    await waitFor(() => sockets[0]?.sent.length === 1);
+    completeResponse(sockets[0], { delta: "RECOVERED", responseId: "resp_recovered" });
+    await ingested;
+
+    await waitFor(() =>
+      eventTypes(appended).includes("events.iterate.com/agent/llm-request-completed"),
+    );
+    // Exactly one execution: one socket send, one attempt-failed record.
+    expect(sockets[0]?.sent).toHaveLength(1);
+    expect(
+      eventTypes(appended).filter(
+        (type) => type === "events.iterate.com/openai-ws/llm-request-attempt-failed",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("does not run dangling recovery on ordinary domain batches", async () => {
     const { stream, appended } = memoryStream();
     const sockets: FakeOpenAiResponsesWebSocket[] = [];

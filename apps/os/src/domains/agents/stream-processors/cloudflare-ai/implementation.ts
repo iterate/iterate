@@ -198,38 +198,55 @@ export class CloudflareAiProcessor extends StreamProcessor<
       .map(([id]) => Number(id));
     if (danglingIds.length === 0) return;
 
-    const events = await this.deps.readStreamEvents();
-    for (const llmRequestId of danglingIds) {
-      const requestedEvent = events.find(
-        (event) =>
-          event.offset === llmRequestId &&
-          event.type === "events.iterate.com/agent/llm-request-requested",
-      );
-      const reduction =
-        requestedEvent === undefined
-          ? undefined
-          : this.reduceRawEvent({ event: requestedEvent, state: args.state });
-      if (reduction?.event.type !== "events.iterate.com/agent/llm-request-requested") {
-        // The entry cannot be tied back to a requested event, so it is
-        // unrecoverable; claim it so it stops triggering history reads.
-        this.#executedLlmRequestIds.add(llmRequestId);
+    // Claim synchronously, before the first await: one batch routinely
+    // carries several subscriber-connected events (an agent host
+    // re-handshake appends one per co-hosted processor subscription) and
+    // their blocking reconciles run concurrently — without the eager claim
+    // each would observe the same dangling entries and start duplicate LLM
+    // executions. Claims still held by this pass are released on failure so
+    // a later connected event can retry.
+    const heldClaims = new Set(danglingIds);
+    for (const llmRequestId of heldClaims) this.#executedLlmRequestIds.add(llmRequestId);
+
+    try {
+      const events = await this.deps.readStreamEvents();
+      for (const llmRequestId of danglingIds) {
+        const requestedEvent = events.find(
+          (event) =>
+            event.offset === llmRequestId &&
+            event.type === "events.iterate.com/agent/llm-request-requested",
+        );
+        const reduction =
+          requestedEvent === undefined
+            ? undefined
+            : this.reduceRawEvent({ event: requestedEvent, state: args.state });
+        if (reduction?.event.type !== "events.iterate.com/agent/llm-request-requested") {
+          // The entry cannot be tied back to a requested event, so it is
+          // unrecoverable; the claim stays so it stops triggering history reads.
+          heldClaims.delete(llmRequestId);
+          await this.#appendAttemptFailed({
+            llmRequestId,
+            reason: "unrecoverable",
+            sourceEvent: args.sourceEvent,
+          });
+          continue;
+        }
         await this.#appendAttemptFailed({
           llmRequestId,
-          reason: "unrecoverable",
+          reason: "host-restarted",
           sourceEvent: args.sourceEvent,
         });
-        continue;
+        // Handed to the executor: its own failure handling owns the claim now.
+        heldClaims.delete(llmRequestId);
+        this.#startLlmRequest({
+          event: reduction.event,
+          state: args.state,
+          runInBackground: args.runInBackground,
+        });
       }
-      await this.#appendAttemptFailed({
-        llmRequestId,
-        reason: "host-restarted",
-        sourceEvent: args.sourceEvent,
-      });
-      this.#startLlmRequest({
-        event: reduction.event,
-        state: args.state,
-        runInBackground: args.runInBackground,
-      });
+    } catch (error) {
+      for (const llmRequestId of heldClaims) this.#executedLlmRequestIds.delete(llmRequestId);
+      throw error;
     }
   }
 
