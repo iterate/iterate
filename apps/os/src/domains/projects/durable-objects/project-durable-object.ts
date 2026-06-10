@@ -659,8 +659,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
 
     // The captun client sends the token via the Sec-WebSocket-Protocol header
     // (WebSocket clients can't set arbitrary headers, and URLs get logged);
-    // connectTokenFromRequest also reads captun's probe header and legacy
-    // query param.
+    // connectTokenFromRequest also reads captun's diagnostic-probe header.
     const connectToken = connectTokenFromRequest(request);
     if (
       !authenticateAdminBearer({
