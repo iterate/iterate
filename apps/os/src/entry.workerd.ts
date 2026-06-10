@@ -34,8 +34,8 @@ import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
-import { handleRootIterateContextFetch } from "~/capnweb/root-context-fetch.ts";
-import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { handleItxFetch, handleProjectHostItxFetch } from "~/itx/fetch.ts";
+import { getItxCapHostIngressRule } from "~/itx/http.ts";
 import { requireProjectScopedAccess } from "~/orpc/project-access.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
@@ -57,7 +57,9 @@ export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.t
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
-export { IterateContextEntrypoint } from "~/capnweb/iterate-context-capability.ts";
+export { ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
+export { ContextDO } from "~/itx/context-do.ts";
+export { ItxCapIngress } from "~/itx/http.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
@@ -72,8 +74,7 @@ export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 
 const CAPTUN_TUNNEL_ROUTE_PREFIX = "/__iterate/captun";
-const EGRESS_ECHO_PATH = "/api/captnweb/egress-echo";
-const PROJECT_CAPNWEB_PATH = "/__iterate/capnweb";
+const EGRESS_ECHO_PATH = "/api/itx/egress-echo";
 const PROJECT_STREAM_RPC_PREFIX = "/api/project-streams";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
@@ -122,6 +123,15 @@ export default {
             const row = await getIngressRouteByHost(db, { host: normalizeIngressHost(host) });
             if (row) return ingressRouteRowToRule(row);
 
+            // {cap}--{project}.{base}: HTTP-exposed itx capabilities get their
+            // own hostnames (never paths on the project origin — itx spec §8).
+            const capRule = await getItxCapHostIngressRule({
+              bases: projectHostnameBases,
+              db: env.DB,
+              host,
+            });
+            if (capRule) return capRule;
+
             const platformRule = await getProjectPlatformHostIngressRule({
               appHostname,
               bases: projectHostnameBases,
@@ -139,15 +149,17 @@ export default {
         });
 
         if (ingressMatch) {
-          const pathname = new URL(request.url).pathname;
-          if (
-            (pathname === PROJECT_CAPNWEB_PATH ||
-              pathname === `${PROJECT_CAPNWEB_PATH}/admin-cookie`) &&
-            ingressMatch.rule.projectId
-          ) {
-            return await env.PROJECT.getByName(
-              getProjectDurableObjectName(ingressMatch.rule.projectId),
-            ).fetch(request);
+          // Project-host itx sessions terminate HERE in the stateless worker,
+          // never in the Project DO (itx Law 7 — the hibernation-ready seam).
+          if (ingressMatch.rule.projectId) {
+            const projectItxResponse = await handleProjectHostItxFetch({
+              config: requestConfig,
+              env,
+              exports: cfCtx.exports,
+              projectId: ingressMatch.rule.projectId,
+              request,
+            });
+            if (projectItxResponse) return projectItxResponse;
           }
           return await dispatchFetchCallable({
             callable: ingressMatch.rule.callable,
@@ -189,13 +201,8 @@ export default {
         });
         if (projectStreamRpcResponse) return projectStreamRpcResponse;
 
-        const captnwebResponse = await handleRootIterateContextFetch({
-          request,
-          env,
-          context,
-          config,
-        });
-        if (captnwebResponse) return captnwebResponse;
+        const itxResponse = await handleItxFetch({ config, context, env, request });
+        if (itxResponse) return itxResponse;
 
         const durableObjectDebugResponse = await handleDurableObjectDebugFetch({ request, env });
         if (durableObjectDebugResponse) return durableObjectDebugResponse;

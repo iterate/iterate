@@ -37,6 +37,15 @@ The request-local authenticated actor resolved by OS from the admin API secret,
 auth-worker session cookie, or auth-worker OAuth access token.
 _Avoid_: Raw auth payload, token claims, provider-specific auth object
 
+**Admin API Secret**:
+The shared secret that grants OS operator automation full app-level authority.
+_Avoid_: Admin user, admin session, root user
+
+**Capability Scope**:
+The authority boundary derived from a Principal that determines which OS
+capabilities can be reached.
+_Avoid_: Tenant context, organization context, permission bag
+
 **Project**:
 An OS-managed app surface owned by exactly one Organization.
 _Avoid_: App, site, workspace
@@ -152,6 +161,14 @@ _Avoid_: Project app worker, project service
 **Project Egress**:
 Future outbound HTTP/S policy work for Project-owned execution. Current codemode `fetch(...)` is traceable through the default Codemode Fetch Capability; full egress policy and secret injection live in `tasks/project-egress-secrets-mvp.md`.
 _Avoid_: Project Ingress, implemented gateway, implemented secret system
+
+**Project Worker**:
+The Project-owned dynamic Worker loaded from Iterate Config Repo code.
+_Avoid_: OS App Worker, Project Durable Object, Codemode worker
+
+**Project Worker Fetch**:
+A direct `fetch` call against the Project Worker, bypassing public Project Ingress classification.
+_Avoid_: Project Ingress, Project Egress, OS App fetch
 
 **Project Egress Intercept Tunnel**:
 An ephemeral Project-owned tunnel that can intercept outbound Project Egress fetches while connected.
@@ -280,6 +297,14 @@ _Avoid_: Durable Object `ctx.waitUntil`, durable scheduler, alarm-backed task
 **Stream Namespace**:
 The stream runtime's stable owner key for a group of Event Stream Paths. OS uses the stable Project ID as the namespace; future runtime users may use non-project namespaces such as `platform`.
 _Avoid_: Project ID inside shared stream runtime, tenant path prefix
+
+**Repo Namespace**:
+The stable owner key for a group of Repos, such as one Project ID or a global repo owner.
+_Avoid_: Project ID field, repo owner object
+
+**Workspace Namespace**:
+The stable owner key for a group of Workspaces, such as one Project ID or a global workspace owner.
+_Avoid_: Project ID field, workspace owner object
 
 **Project Lifecycle Stream**:
 The Project-owned root Event Stream Path `/` that records durable Project lifecycle facts.

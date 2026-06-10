@@ -2,6 +2,7 @@ import { RpcStub, RpcTarget } from "capnweb";
 import { describe, expect, test, vi } from "vitest";
 import {
   BROWSER_REPL_EXAMPLES,
+  compileBrowserReplFunction,
   DEFAULT_BROWSER_REPL_CODE,
   evalBrowserReplCode,
   evalBrowserReplSessionCode,
@@ -23,9 +24,9 @@ describe("browser Cap'n Web REPL", () => {
       }
     }
 
-    const ctx = new RpcStub(new Context());
+    const itx = new RpcStub(new Context());
 
-    await expect(evalBrowserReplCode({ code: DEFAULT_BROWSER_REPL_CODE, ctx })).resolves.toEqual({
+    await expect(evalBrowserReplCode({ code: DEFAULT_BROWSER_REPL_CODE, itx })).resolves.toEqual({
       items: [{ id: "proj_123" }],
     });
     expect(list).toHaveBeenCalledWith({ limit: 5 });
@@ -51,14 +52,14 @@ describe("browser Cap'n Web REPL", () => {
     await expect(
       evalBrowserReplCode({
         code: DEFAULT_BROWSER_REPL_CODE,
-        ctx: rpcRoot,
+        itx: rpcRoot,
       }),
     ).resolves.toEqual({ projects: [], total: 0, limit: 5 });
     expect(thenReads).toBe(0);
   });
 
   test("route entry runner succeeds for the default project list snippet", async () => {
-    const ctx = {
+    const itx = {
       projects: {
         list(input: { limit: number }) {
           return { projects: [{ id: "proj_123" }], total: 1, limit: input.limit };
@@ -69,7 +70,7 @@ describe("browser Cap'n Web REPL", () => {
     await expect(
       runBrowserReplEntry({
         code: DEFAULT_BROWSER_REPL_CODE,
-        ctx,
+        itx,
         scope: {},
       }),
     ).resolves.toEqual({
@@ -83,14 +84,14 @@ describe("browser Cap'n Web REPL", () => {
 
   test("REPL supports SDK-shaped calls through a server-side path target", async () => {
     const call = vi.fn(async (input: { args: unknown[]; path: string[] }) => input);
-    const ctx = {
+    const itx = {
       slack: new BrowserPathTarget(call),
     };
 
     await expect(
       evalBrowserReplCode({
-        code: `await ctx.slack.chat.postMessage({ channel: "C123", text: "hi" })`,
-        ctx,
+        code: `await itx.slack.chat.postMessage({ channel: "C123", text: "hi" })`,
+        itx,
       }),
     ).resolves.toEqual({
       args: [{ channel: "C123", text: "hi" }],
@@ -105,7 +106,7 @@ describe("browser Cap'n Web REPL", () => {
     await expect(
       evalBrowserReplSessionCode({
         code: "const answer = 41",
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toBe(41);
@@ -113,7 +114,7 @@ describe("browser Cap'n Web REPL", () => {
     await expect(
       evalBrowserReplSessionCode({
         code: "answer + 1",
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toBe(42);
@@ -121,7 +122,7 @@ describe("browser Cap'n Web REPL", () => {
     await expect(
       evalBrowserReplSessionCode({
         code: "const secondAnswer = answer + 1",
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toBe(42);
@@ -129,7 +130,7 @@ describe("browser Cap'n Web REPL", () => {
     await expect(
       evalBrowserReplSessionCode({
         code: "secondAnswer",
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toBe(42);
@@ -141,7 +142,7 @@ describe("browser Cap'n Web REPL", () => {
     await expect(
       evalBrowserReplSessionCode({
         code: "const first = 20\nconst second = 22",
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toBe(22);
@@ -149,7 +150,7 @@ describe("browser Cap'n Web REPL", () => {
     await expect(
       evalBrowserReplSessionCode({
         code: "first + second",
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toBe(42);
@@ -164,7 +165,7 @@ describe("browser Cap'n Web REPL", () => {
 const project = { total: 2 }
 project.total + 40
 `.trim(),
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toBe(42);
@@ -182,7 +183,7 @@ const increment = (value) => value + 1
 increment
 (41)
 `.trim(),
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toBe(42);
@@ -195,7 +196,7 @@ increment
 40
 + 2
 `.trim(),
-        ctx: {},
+        itx: {},
         scope: {},
       }),
     ).resolves.toBe(42);
@@ -207,7 +208,7 @@ const project = { stats: { total: 42 } }
 project.stats
 ?.total
 `.trim(),
-        ctx: {},
+        itx: {},
         scope: {},
       }),
     ).resolves.toBe(42);
@@ -219,7 +220,7 @@ true
 ? 42
 : 0
 `.trim(),
-        ctx: {},
+        itx: {},
         scope: {},
       }),
     ).resolves.toBe(42);
@@ -237,7 +238,7 @@ do {
 } while (false)
 count
 `.trim(),
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toBe(1);
@@ -245,12 +246,25 @@ count
     expect(scope.count).toBe(1);
   });
 
+  test("snippet ending in a line comment still returns its last value", async () => {
+    // Regression: the appended `; return __replLastValue` used to land on the
+    // same line as a trailing comment and get swallowed → "Unexpected end of
+    // input". A trailing comment is natural in our documented examples.
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "const a = 41;\na + 1   // the answer",
+        itx: {},
+        scope: {},
+      }),
+    ).resolves.toBe(42);
+  });
+
   test("session snippets persist function and class declarations", async () => {
     const scope: Record<string, unknown> = {};
 
     const answerResult = await evalBrowserReplSessionCode({
       code: "function answer() { return 42; }",
-      ctx: {},
+      itx: {},
       scope,
     });
     expect(answerResult).toBe(scope.answer);
@@ -259,14 +273,14 @@ count
     await expect(
       evalBrowserReplSessionCode({
         code: "answer()",
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toBe(42);
 
     const boxResult = await evalBrowserReplSessionCode({
       code: "class Box { value() { return answer(); } }",
-      ctx: {},
+      itx: {},
       scope,
     });
     expect(boxResult).toBe(scope.Box);
@@ -275,14 +289,14 @@ count
     await expect(
       evalBrowserReplSessionCode({
         code: "new Box().value()",
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toBe(42);
 
     const asyncAnswerResult = await evalBrowserReplSessionCode({
       code: "async function asyncAnswer() { return answer(); }",
-      ctx: {},
+      itx: {},
       scope,
     });
     expect(asyncAnswerResult).toBe(scope.asyncAnswer);
@@ -291,7 +305,7 @@ count
     await expect(
       evalBrowserReplSessionCode({
         code: "await asyncAnswer()",
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toBe(42);
@@ -310,7 +324,7 @@ function answer() {
 if (answer() !== 42) throw new Error("nested local declaration broke");
 const persisted = answer();
 `.trim(),
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toBe(42);
@@ -320,31 +334,31 @@ const persisted = answer();
     expect(scope).not.toHaveProperty("nested");
   });
 
-  test("session snippets cannot shadow injected ctx or env bindings", async () => {
+  test("session snippets cannot shadow injected itx or env bindings", async () => {
     const scope: Record<string, unknown> = {};
-    const ctx = { marker: "injected ctx" };
+    const itx = { marker: "injected itx" };
 
     await expect(
       evalBrowserReplSessionCode({
-        code: "const ctx = { marker: 'shadowed' }",
-        ctx,
+        code: "const itx = { marker: 'shadowed' }",
+        itx,
         scope,
       }),
-    ).rejects.toThrow('REPL binding "ctx" is reserved.');
+    ).rejects.toThrow('REPL binding "itx" is reserved.');
 
     await expect(
       evalBrowserReplSessionCode({
-        code: "ctx.marker",
-        ctx,
+        code: "itx.marker",
+        itx,
         scope,
       }),
-    ).resolves.toBe("injected ctx");
-    expect(scope).not.toHaveProperty("ctx");
+    ).resolves.toBe("injected itx");
+    expect(scope).not.toHaveProperty("itx");
 
     await expect(
       evalBrowserReplSessionCode({
         code: "function env() {}",
-        ctx,
+        itx,
         scope,
       }),
     ).rejects.toThrow('REPL binding "env" is reserved.');
@@ -357,7 +371,7 @@ const persisted = answer();
     await expect(
       runBrowserReplEntry({
         code: "const answer = 42",
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toMatchObject({
@@ -372,7 +386,7 @@ const persisted = answer();
     await expect(
       runBrowserReplEntry({
         code: "$_ + _",
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toMatchObject({
@@ -390,7 +404,7 @@ const persisted = answer();
     await expect(
       runBrowserReplEntry({
         code: `console.log("project", { id: "proj_123" }); console.warn("careful"); return 42`,
-        ctx: {},
+        itx: {},
         scope,
       }),
     ).resolves.toMatchObject({
@@ -409,7 +423,7 @@ const persisted = answer();
       await expect(
         runBrowserReplEntry({
           code: `console.trace("kept"); return 42`,
-          ctx: {},
+          itx: {},
           scope,
         }),
       ).resolves.toMatchObject({
@@ -424,21 +438,46 @@ const persisted = answer();
     }
   });
 
-  test("provideCapability example registers and calls a browser-owned target", async () => {
-    const providedTargets = new Map<string, unknown>();
+  test("every published example has unique metadata and compiles", () => {
+    expect(BROWSER_REPL_EXAMPLES.length).toBeGreaterThan(1);
+    const ids = new Set<string>();
+    for (const example of BROWSER_REPL_EXAMPLES) {
+      expect(example.id, `duplicate example id ${example.id}`).not.toBe(undefined);
+      expect(ids.has(example.id)).toBe(false);
+      ids.add(example.id);
+      expect(example.title.length).toBeGreaterThan(0);
+      expect(example.description.length).toBeGreaterThan(0);
+      // The statement compiler must accept the snippet — this catches
+      // transform bugs around nested template literals, top-level classes,
+      // and trailing `return` before any of them reaches a user.
+      expect(() => compileBrowserReplFunction(example.code)).not.toThrow();
+    }
+  });
+
+  test("caps.provide example registers and calls a browser-owned target", async () => {
+    // Mirrors the itx handle's shape: caps.provide registers a live target,
+    // and unknown names on the project handle fall through to it.
+    const providedTargets = new Map<string, { run(): unknown }>();
     const alert = vi.fn();
-    const project = {
-      connections: {
-        get(connectionKey: string) {
-          return providedTargets.get(connectionKey);
+    const project = new Proxy(
+      {
+        caps: {
+          provide(input: { name: string; target: { run(): unknown } }) {
+            providedTargets.set(input.name, input.target);
+            return { name: input.name, ok: true };
+          },
         },
       },
-      provideCapability(input: { connectionKey: string; rpcTarget: unknown }) {
-        providedTargets.set(input.connectionKey, input.rpcTarget);
-        return { connectionKey: input.connectionKey, ok: true };
+      {
+        get(target, prop: string | symbol) {
+          if (typeof prop === "string" && providedTargets.has(prop)) {
+            return providedTargets.get(prop);
+          }
+          return Reflect.get(target, prop);
+        },
       },
-    };
-    const ctx = {
+    );
+    const itx = {
       projects: {
         get(projectId: string) {
           if (projectId !== "proj_123") throw new Error(`Unexpected project ${projectId}`);
@@ -451,14 +490,14 @@ const persisted = answer();
     };
 
     const example = BROWSER_REPL_EXAMPLES.find((candidate) => {
-      return candidate.id === "provide-alert-capability";
+      return candidate.id === "provide-live-capability";
     });
-    if (!example) throw new Error("Missing provideCapability browser REPL example.");
+    if (!example) throw new Error("Missing provide-live-capability browser REPL example.");
 
     await expect(
       evalBrowserReplSessionCode({
         code: example.code,
-        ctx,
+        itx,
         scope: { alert, RpcTarget },
       }),
     ).resolves.toBe("alerted");

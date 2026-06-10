@@ -1,8 +1,12 @@
+// Project directory: the org-membership-aware project CRUD used by the oRPC
+// product surface (dashboard flows). This is deliberately SEPARATE from itx:
+// itx narrowing uses the simplified access model (all | named projects),
+// while these flows speak to the auth worker about organizations. When org
+// access moves into itx this file collapses into it.
+
 import { RpcTarget } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { isValidTypeId, typeid } from "@iterate-com/shared/typeid";
-import { ProjectCapability } from "./project-capability.ts";
-import type { IterateContextProps } from "./iterate-context-capability.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { AppContext } from "~/context.ts";
 import {
@@ -15,7 +19,6 @@ import {
 } from "~/db/queries/.generated/index.ts";
 import {
   getProjectDurableObjectName,
-  type ProjectCapabilityApi,
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
@@ -45,31 +48,13 @@ type ProjectWithIngressUrl = ProjectListItem & {
   ingressUrl: string;
 };
 
-type ProjectDurableObjectContextClient = {
-  getCapability(props?: { scopes?: unknown }): ProjectCapabilityApi;
-};
-
 export class ProjectsCapability extends RpcTarget {
   constructor(
     private readonly props: {
       context: AppContext;
-      iterateContextProps?: IterateContextProps;
     },
   ) {
     super();
-  }
-
-  get(projectId: string) {
-    const project = projectDurableObject(
-      this.props.context,
-      projectId,
-    ) as unknown as ProjectDurableObjectContextClient;
-    return new ProjectCapability({
-      context: this.props.context,
-      iterateContextProps: this.props.iterateContextProps,
-      project: project.getCapability({ scopes: { projects: [projectId] } }),
-      projectId,
-    });
   }
 
   async list(input: { limit?: number; offset?: number } = {}): Promise<ProjectListResult> {
@@ -246,25 +231,34 @@ export async function toProjectWithIngressUrl(context: AppContext, row: ProjectR
 
 export async function requireProject(input: {
   context: AppContext;
-  projectId: string;
+  projectId?: string;
+  projectIdOrSlug?: string;
 }): Promise<ProjectRow> {
-  const project = await getProjectById(input.context.db, { id: input.projectId });
+  const projectIdOrSlug = input.projectIdOrSlug ?? input.projectId;
+  if (!projectIdOrSlug) {
+    throw new ORPCError("BAD_REQUEST", { message: "Project ID or slug is required" });
+  }
+
+  const project =
+    projectIdOrSlug.startsWith("proj_") || isValidTypeId(projectIdOrSlug, "proj")
+      ? await getProjectById(input.context.db, { id: projectIdOrSlug })
+      : await getProjectBySlug(input.context.db, { slug: projectIdOrSlug });
 
   if (!project) {
     throw new ORPCError("NOT_FOUND", {
-      message: `Project ${input.projectId} not found`,
+      message: `Project ${projectIdOrSlug} not found`,
     });
   }
 
   if (
     input.context.principal?.type === "admin" ||
-    input.context.principal?.can("read", { projectId: input.projectId })
+    input.context.principal?.can("read", { projectId: project.id })
   ) {
     return project;
   }
 
   throw new ORPCError("FORBIDDEN", {
-    message: `Project ${input.projectId} not found`,
+    message: `Project ${projectIdOrSlug} not found`,
   });
 }
 

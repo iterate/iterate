@@ -1,0 +1,163 @@
+# itx implementation decisions & learnings
+
+Running log of choices made while implementing `apps/os/docs/itx-spec.md`,
+especially where reality diverged from the spec or where the spec left room.
+Newest entries at the bottom. See also `README.md` (the architecture document)
+once it exists.
+
+## D1: SQLite table is the registry state; stream events are the audit record
+
+Spec §4.2 says "registry mutations append events to the context's stream and
+the registry table is the fold." Implemented as: the hosting DO's SQLite table
+is authoritative, mutations append audit events to the context stream
+best-effort (fire-and-forget with error logging). Rebuilding registry state by
+folding the stream on every DO wake would need snapshotting machinery for no
+benefit — the DO's own SQLite _is_ the snapshot, transactional with the
+mutation. The stream keeps the full history for audit/UI/time-travel.
+
+## D2: No merged name index yet — cap misses delegate up the chain per call
+
+Spec §3.3 calls for a merged name index fetched at itx construction. For now
+the fallthrough proxy optimistically returns a path-proxy for any unknown
+name and resolution happens at invoke time inside the hosting DO; a child
+context DO that misses delegates to its parent. This is one extra DO hop on
+parent-owned caps, which is fine at current scale and deletes a whole
+cache-invalidation concern. Add the index only when latency data says so.
+
+## D3: Old `provideCapability`/`getConnection` stay untouched until deleted
+
+The legacy connection table (`#capnwebConnections`) uses keys like
+`slack-sdk` that are not valid JS identifiers and are accessed via
+`project.connections.get(key)`, never via name fallthrough. Migrating them
+onto the registry would mean relaxing name validation for a surface that is
+scheduled for deletion (user: no backwards compatibility needed). They live
+side by side until the old capnweb e2e suite is ported, then both go.
+
+## D4: The supervisor is always in the invoke path
+
+Even for `invoke: "members"` live caps we route calls through the hosting
+DO's `itxInvoke` rather than handing the raw stub to the caller. One extra
+hop buys: a single audit/policy point (per-cap egress rules later), uniform
+offline errors, and no stub-lifetime leakage to remote callers. Exception:
+nothing yet — if a hot path needs raw-stub borrowing we'll add it then.
+
+## D5: `itx.project` returns the Project DO stub directly
+
+Spec §9 wanted ProjectCapability's 16 forwarders gone. Workers RPC lets us
+return the DO stub itself over RPC (auto-proxied by capnweb), so the project
+admin surface is just... the DO's public methods. Zero forwarders, types stay
+honest via `ProjectCapability` (the Pick<> of ProjectDurableObject).
+
+## D6: `itx.projects.get()` returns a narrowed Itx handle, not a project object
+
+Narrowing is construction (Law 4): a global handle narrows by constructing a
+project-context handle. So `itx.projects.get("x").streams` and a directly
+connected project handle's `itx.streams` are literally the same object shape.
+The old ProjectsCapability/ProjectCapability split disappears.
+
+## D7: Simplified access model
+
+Per user direction: access is "all" projects, a list of named projects, or
+none. `ItxProps = { context, access?, cap? }` where `access` only matters on
+global-context handles. Project-context handles imply access to exactly that
+project regardless of what props claim — the restorer overwrites, mirroring
+the old "config worker can't escalate scopes" rule. Org-membership flows stay
+in oRPC for now; `itx.projects.create` is admin-only.
+
+## D8: Worker caps gain network access via ProjectEgress (they had none)
+
+The legacy config worker loads with `globalOutbound: null`. Worker caps (and
+the config worker, once rewired) get `globalOutbound = ProjectEgress` instead:
+bare fetch() routes through the Project DO egress path with secret
+substitution. This is a strict capability upgrade and deletes the
+fetch-monkeypatch in the old /run harness.
+
+## D9: Audit event stream path is `/itx`
+
+Registry events (`itx.cap.defined` etc.) append to the context's stream at
+path `/itx` in the project namespace. Child contexts will use their own
+namespace/path when ContextDO lands.
+
+## D10: Child contexts delegate misses upward per call, depth-recursive
+
+`ContextDO.itxInvoke` checks its own registry, then calls its parent's
+`itxInvoke` (project DO or another ContextDO by id prefix). Arbitrary fork
+depth works with zero index machinery; `itxDescribe` merges the chain with
+child entries shadowing and `owner` carrying provenance. One DO hop per
+chain level per miss — revisit only if latency data complains (see D2).
+
+## D11: The restorer is async
+
+Child contexts cost one descriptor lookup (`ctx_…` → owning project) at
+restore time. `ItxEntrypoint.context` is a getter returning a Promise, which
+`await env.ITERATE.context` already handled — no isolate-side change.
+
+## D12: Facet classes must be NAMED exports
+
+`worker.getDurableObjectClass()` against a default-export DO class produces a
+facet whose every call fails with workerd's opaque "internal error;
+reference = …" (observed locally on miniflare 4.20260424 / workerd ~2026-04;
+Cloudflare's own docs only ever show named exports). `define({ kind: "facet" })`
+therefore requires `source.entrypoint`, turning the footgun into an
+instructive error at definition time.
+
+## D13: Facet names exclude codeId — data survives code upgrades
+
+The facet is `cap:${name}` regardless of source version, so redefining a
+facet cap keeps its private SQLite database (Cloudflare's AppRunner relies
+on the same property). If a cap wants a clean slate it can be revoked and
+redefined under a new name; explicit facet deletion is future work.
+
+## D14: Registry logs invoke failures at the supervisor
+
+Errors crossing the Workers RPC boundary back to remote callers can be
+masked as "internal error; reference = …". `ContextRegistry.invoke` logs the
+real error (cap, kind, path, context) before rethrowing — the supervisor is
+the one place the truth is always visible.
+
+## D15: agents.e2e "slack-agent event-mode codemode" timeout is pre-existing
+
+The e2e test "completes slack-agent event-mode codemode calls without
+blocking the stream callable queue" times out waiting for the slack-agent
+processor chain to emit tool-provider-registered on the routed agent stream.
+Verified by running the IDENTICAL test from origin/main (3cc317ad8) against a
+main-code dev server: it times out there too. Not caused by the itx branch;
+also failed on the itx preview deployment, consistent with an upstream
+slack-agent/stream-subscription regression that predates this work.
+
+## D16: Security hardening from adversarial review (round 1)
+
+- **Global context is admin-only.** `accessForPrincipal` hands non-admins
+  their named projects; the global ("all") handle — and global `/api/itx/run`,
+  which inherits the platform's own egress with no per-project
+  `globalOutbound` — are gated to `access === "all"`. Non-admins must narrow
+  to a named project. (Closes ambient-SSRF for authenticated non-admins.)
+- **`replayPathCall` filters reserved segments server-side.** `itxInvoke` is a
+  public DO method reachable with a hand-built `path`; the reserved-name gate
+  can't live only in the consumer proxy. `RESERVED_PATH_SEGMENTS` is now one
+  exported set (protocol.ts) used by both the proxy and the replay, and also
+  feeds `RESERVED_CAP_NAMES`, so a cap can never be named a prototype-pollution
+  vector or `Function.prototype` member.
+- **The path proxy never falls through to `Function.prototype`.** String keys
+  always extend the path (unless reserved), so SDK methods named
+  `name`/`call`/`bind`/`length` traverse correctly.
+- **`itx.project` is a narrow facade** (`ItxProject`: describe/ingressUrl/
+  getSummary), not the raw Project DO stub — internal lifecycle methods
+  (afterAppend, createProject, getConfigWorker, the itx\* verbs) are no longer
+  reachable from a project-scoped handle.
+- **Worker/facet entrypoint stubs are disposed after each invoke** (live
+  targets are not — the provider owns them).
+- **Cap HTTP routing matches names case-insensitively** and dispatches with
+  the registry's exact name.
+
+## D17: itx.project is the full Project DO surface (reverses D16's facade)
+
+Owner decision: within a project you get its whole surface — `itx.project`
+returns the Project DO stub directly, so Workers RPC auto-proxies every
+public method/getter and a newly-added DO method is instantly callable as
+`itx.project.foo()` with zero forwarder code. The round-1 review narrowed
+this to a facade for safety; the owner explicitly prefers the full surface
+under the project-level access model ("you have the project or you don't").
+The genuinely dangerous direction — a hand-built `path` into
+reserved/prototype names via `itxInvoke` — stays gated in `replayPathCall`
+(D16), which is exactly why that server-side filter is load-bearing now.

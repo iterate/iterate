@@ -17,8 +17,8 @@ import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
 import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppLogStreamRouteImport } from './routes/_app/log-stream'
+import { Route as AppItxReplRouteImport } from './routes/_app/itx-repl'
 import { Route as AppDebugRouteImport } from './routes/_app/debug'
-import { Route as AppCapnwebReplRouteImport } from './routes/_app/capnweb-repl'
 import { Route as AppProjectsRouteRouteImport } from './routes/_app/projects/route'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
@@ -84,14 +84,14 @@ const AppLogStreamRoute = AppLogStreamRouteImport.update({
   path: '/log-stream',
   getParentRoute: () => AppRoute,
 } as any)
+const AppItxReplRoute = AppItxReplRouteImport.update({
+  id: '/itx-repl',
+  path: '/itx-repl',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppDebugRoute = AppDebugRouteImport.update({
   id: '/debug',
   path: '/debug',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppCapnwebReplRoute = AppCapnwebReplRouteImport.update({
-  id: '/capnweb-repl',
-  path: '/capnweb-repl',
   getParentRoute: () => AppRoute,
 } as any)
 const AppProjectsRouteRoute = AppProjectsRouteRouteImport.update({
@@ -244,8 +244,8 @@ const AppProjectsProjectSlugAgentsStreamsSplatRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/projects': typeof AppProjectsRouteRouteWithChildren
-  '/capnweb-repl': typeof AppCapnwebReplRoute
   '/debug': typeof AppDebugRoute
+  '/itx-repl': typeof AppItxReplRoute
   '/log-stream': typeof AppLogStreamRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
@@ -279,8 +279,8 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/capnweb-repl': typeof AppCapnwebReplRoute
   '/debug': typeof AppDebugRoute
+  '/itx-repl': typeof AppItxReplRoute
   '/log-stream': typeof AppLogStreamRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
@@ -314,8 +314,8 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_app': typeof AppRouteWithChildren
   '/_app/projects': typeof AppProjectsRouteRouteWithChildren
-  '/_app/capnweb-repl': typeof AppCapnwebReplRoute
   '/_app/debug': typeof AppDebugRoute
+  '/_app/itx-repl': typeof AppItxReplRoute
   '/_app/log-stream': typeof AppLogStreamRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
@@ -352,8 +352,8 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/projects'
-    | '/capnweb-repl'
     | '/debug'
+    | '/itx-repl'
     | '/log-stream'
     | '/api/$'
     | '/api/orpc-ws'
@@ -387,8 +387,8 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/capnweb-repl'
     | '/debug'
+    | '/itx-repl'
     | '/log-stream'
     | '/api/$'
     | '/api/orpc-ws'
@@ -421,8 +421,8 @@ export interface FileRouteTypes {
     | '/'
     | '/_app'
     | '/_app/projects'
-    | '/_app/capnweb-repl'
     | '/_app/debug'
+    | '/_app/itx-repl'
     | '/_app/log-stream'
     | '/api/$'
     | '/api/orpc-ws'
@@ -524,18 +524,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppLogStreamRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/itx-repl': {
+      id: '/_app/itx-repl'
+      path: '/itx-repl'
+      fullPath: '/itx-repl'
+      preLoaderRoute: typeof AppItxReplRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/debug': {
       id: '/_app/debug'
       path: '/debug'
       fullPath: '/debug'
       preLoaderRoute: typeof AppDebugRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/capnweb-repl': {
-      id: '/_app/capnweb-repl'
-      path: '/capnweb-repl'
-      fullPath: '/capnweb-repl'
-      preLoaderRoute: typeof AppCapnwebReplRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/projects': {
@@ -825,15 +825,15 @@ const AppProjectsRouteRouteWithChildren =
 
 interface AppRouteChildren {
   AppProjectsRouteRoute: typeof AppProjectsRouteRouteWithChildren
-  AppCapnwebReplRoute: typeof AppCapnwebReplRoute
   AppDebugRoute: typeof AppDebugRoute
+  AppItxReplRoute: typeof AppItxReplRoute
   AppLogStreamRoute: typeof AppLogStreamRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppProjectsRouteRoute: AppProjectsRouteRouteWithChildren,
-  AppCapnwebReplRoute: AppCapnwebReplRoute,
   AppDebugRoute: AppDebugRoute,
+  AppItxReplRoute: AppItxReplRoute,
   AppLogStreamRoute: AppLogStreamRoute,
 }
 
