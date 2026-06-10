@@ -4,18 +4,16 @@ import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
 import * as prompts from "@clack/prompts";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
 import { os } from "@orpc/server";
-import { createAuthClient } from "better-auth/client";
 import { createCli, parseRouter, type AnyRouter, yamlTableConsoleLogger } from "trpc-cli";
 import { z } from "zod/v4";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 import type { AuthContractClient } from "../../../apps/auth-contract/src/index.ts";
-import { resourceLimits } from "node:worker_threads";
 import {
   CONFIG_PATH,
   Config,
@@ -133,7 +131,7 @@ const runInheritedProcess = async (input: {
 }): Promise<void> => {
   const child = spawn(input.command, input.args, {
     stdio: "inherit",
-    env: {...process.env, ...input.env},
+    env: { ...process.env, ...input.env },
   });
 
   const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
@@ -261,9 +259,7 @@ const getAuthWorkerHeaders = async (
     throw new Error(`Not logged in to ${config.authBaseUrl}. Run \`iterate login\` first.`);
   }
   if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
-    throw new Error(
-      `Session expired for ${config.authBaseUrl}. Run \`iterate login\` again.`,
-    );
+    throw new Error(`Session expired for ${config.authBaseUrl}. Run \`iterate login\` again.`);
   }
   if (session.token) {
     return { authorization: `Bearer ${session.token}` };
@@ -291,9 +287,6 @@ const getAuthWorkerClient = async (config: Config): Promise<AuthContractClient> 
     }),
   );
 };
-
-// Device flow login (RFC 8628 via better-auth deviceAuthorization plugin)
-const DEVICE_CLIENT_ID = "iterate-cli";
 
 const OAUTH_SCOPE = "openid profile email offline_access project";
 const LOOPBACK_HOST = "localhost";
@@ -603,107 +596,6 @@ const oauthLogin = async (config: Config): Promise<StoredSession> => {
   return session;
 };
 
-const deviceFlowLogin = async (
-  config: Config,
-): Promise<{ token?: string; cookie?: string; expiresAt?: string }> => {
-  const authBaseUrl = config.authBaseUrl;
-  // Step 1: Request device code (RFC 8628 — all fields are snake_case)
-  const codeRes = await fetch(`${authBaseUrl}/api/auth/device/code`, {
-    method: "POST",
-    headers: { "content-type": "application/json", origin: authBaseUrl },
-    body: JSON.stringify({ client_id: DEVICE_CLIENT_ID }),
-  });
-  if (!codeRes.ok) {
-    const text = await codeRes.text();
-    throw new Error(`Device code request failed (${codeRes.status}): ${text.slice(0, 200)}`);
-  }
-  const code = (await codeRes.json()) as {
-    device_code: string;
-    user_code: string;
-    verification_uri: string;
-    verification_uri_complete: string;
-    expires_in: number;
-    interval: number;
-  };
-
-  // Step 2: Show user code and open browser
-  const verifyUrl =
-    code.verification_uri_complete ||
-    `${authBaseUrl}${code.verification_uri}?user_code=${code.user_code}`;
-  console.error(`\nOpen this URL in your browser to authenticate:\n`);
-  console.error(`  ${verifyUrl}\n`);
-  console.error(`Your code: ${code.user_code}\n`);
-
-  // Try to open browser automatically (execFile avoids shell injection from server-controlled URL)
-  try {
-    const { execFile } = await import("node:child_process");
-    const cmd =
-      process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-    execFile(cmd, [verifyUrl]);
-  } catch {
-    // Ignore — user can open manually
-  }
-
-  // Step 3: Poll for approval (RFC 8628 §3.5: slow_down permanently increases interval by 5s)
-  let pollInterval = (code.interval || 5) * 1000;
-  const expiresAt = Date.now() + (code.expires_in || 900) * 1000;
-  console.error("Waiting for approval...");
-
-  while (Date.now() < expiresAt) {
-    await new Promise((resolve) => setTimeout(resolve, pollInterval));
-
-    const tokenUrl = `${authBaseUrl}/api/auth/device/token`;
-    const tokenRes = await fetch(tokenUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: authBaseUrl },
-      body: JSON.stringify({
-        grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-        device_code: code.device_code,
-        client_id: DEVICE_CLIENT_ID,
-      }),
-    });
-
-    const tokenBody = (await tokenRes.json()) as Record<string, unknown>;
-
-    // Check for polling errors (400 responses while pending)
-    if (!tokenRes.ok) {
-      const errorCode = tokenBody.error as string | undefined;
-      if (errorCode === "authorization_pending") continue;
-      if (errorCode === "slow_down") {
-        pollInterval += 5000;
-        continue;
-      }
-      if (errorCode === "expired_token") {
-        throw new Error("Device code expired. Please try again.");
-      }
-      if (errorCode === "access_denied") {
-        throw new Error("Authorization denied by user.");
-      }
-      if (errorCode) {
-        throw new Error(`Device auth error: ${errorCode}`);
-      }
-      throw new Error(`Device token request failed: ${tokenRes.status}`);
-    }
-
-    // Success — the JSON body has { access_token, token_type, expires_in, scope }
-    // access_token is the raw session token. We use the bearer() plugin server-side
-    // to send it as Authorization: Bearer <token>.
-    if (tokenBody.access_token) {
-      const expiresAtMs = tokenBody.expires_in
-        ? Date.now() + (tokenBody.expires_in as number) * 1000
-        : undefined;
-      return {
-        token: tokenBody.access_token as string,
-        expiresAt: expiresAtMs ? new Date(expiresAtMs).toISOString() : undefined,
-      };
-    }
-
-    throw new Error("Unexpected response from device token endpoint");
-  }
-
-  throw new Error("Device code expired (timeout). Please try again.");
-};
-
 const loadRemoteProcedures = async (params: {
   baseUrl: string;
 }): Promise<{ procedures: ParsedRouter }> => {
@@ -779,95 +671,26 @@ const getOsProcedures = async (params: {
   return proxiedRouter;
 };
 
-/**
- * Creates a fetch wrapper that calls /api/orpc-stream/* instead of /api/orpc/*.
- * The streaming endpoint returns SSE: log lines as `event: log` and the final
- * oRPC response as `event: response`, which we reassemble into a normal Response.
- */
-const streamingFetch = (daemonBaseUrl: string): typeof globalThis.fetch => {
-  return async (input: any, init: any) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const rewritten = url.replace(
-      `${daemonBaseUrl}/api/orpc/`,
-      `${daemonBaseUrl}/api/orpc-stream/`,
-    );
-    if (rewritten === url) return fetch(input, init);
-    const fetchInput = input instanceof Request ? new Request(rewritten, input) : rewritten;
-    const res = await fetch(fetchInput, init);
-
-    const contentType = res.headers.get("content-type") || "";
-    if (!contentType.includes("text/event-stream")) return res;
-    const reader = res.body?.getReader();
-    if (!reader) return res;
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let responseBody: string | null = null;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split("\n\n");
-      buffer = parts.pop() || "";
-      for (const part of parts) {
-        const lines = part.split("\n");
-        const event = lines[0].split(": ")[1];
-        const data = lines[1].split(": ").slice(1).join(": ");
-        if (event === "log") {
-          const detail = JSON.parse(data) as {
-            level: "debug" | "info" | "warn" | "error";
-            args: unknown[];
-          };
-          console[detail.level](...detail.args);
-        } else if (event === "response") {
-          responseBody = data;
-        }
-      }
-    }
-    return new Response(responseBody, {
-      status: res.status,
-      headers: { "content-type": "application/json" },
-    });
-  };
-};
-
-const getDaemonProcedures = async (params: { daemonBaseUrl: string }) => {
-  const daemonRouter = await loadRemoteProcedures({ baseUrl: params.daemonBaseUrl });
-  const proxiedRouter = proxifyOrpc(daemonRouter.procedures, async () => {
-    const client = createORPCClient(
+const launcherProcedures = {
+  ping: os.handler(async () => {
+    const resolved = resolveConfig(process.cwd(), { throw: true });
+    const { config } = resolved;
+    const osClient = createORPCClient(
       new RPCLink({
-        url: `${params.daemonBaseUrl}/api/orpc/`,
-        fetch: streamingFetch(params.daemonBaseUrl),
+        url: `${config.osBaseUrl}/api/orpc/`,
+        fetch: async (request: URL | Request, init?: RequestInit) => {
+          const authHeaders = await getOsAuthHeaders(config, resolved.name);
+          const headers = new Headers(request instanceof Request ? request.headers : init?.headers);
+          if (authHeaders.authorization) headers.set("authorization", authHeaders.authorization);
+          if (authHeaders.cookie) headers.set("cookie", authHeaders.cookie);
+          return fetch(request, { ...init, headers });
+        },
       }),
     );
-    return orpcToTrpcStyleClient(client);
-  });
-
-  return proxiedRouter;
-};
-
-const launcherProcedures = {
-  ping: os
-    .handler(async () => {
-      const resolved = resolveConfig(process.cwd(), { throw: true });
-      const { config } = resolved;
-      const osClient = createORPCClient(
-        new RPCLink({
-          url: `${config.osBaseUrl}/api/orpc/`,
-          fetch: async (request: URL | Request, init?: RequestInit) => {
-            const authHeaders = await getOsAuthHeaders(config, resolved.name);
-            const headers = new Headers(
-              request instanceof Request ? request.headers : init?.headers,
-            );
-            if (authHeaders.authorization) headers.set("authorization", authHeaders.authorization);
-            if (authHeaders.cookie) headers.set("cookie", authHeaders.cookie);
-            return fetch(request, { ...init, headers });
-          },
-        }),
-      );
-      return (osClient as any).ping().catch((e: Error) => {
-        throw new Error(`Failed to ping OS: ${e}`);
-      });
-    }),
+    return (osClient as any).ping().catch((e: Error) => {
+      throw new Error(`Failed to ping OS: ${e}`);
+    });
+  }),
   login: os
     .input(z.object({}))
     .meta({
@@ -914,19 +737,6 @@ const launcherProcedures = {
       removeConfigSession(resolved.name);
       return { message: `Logged out from ${resolved.name} (${resolved.config.osBaseUrl})` };
     }),
-
-  whoami: os.meta({ description: "Show current authenticated user" }).handler(async () => {
-    const resolved = resolveConfig(process.cwd(), { throw: true });
-    const session = resolved.config.session;
-    if (!session?.token) {
-      throw new Error(`Not logged in to ${resolved.config.osBaseUrl}. Run \`iterate login\` first.`);
-    }
-    await getOsAuthHeaders(resolved.config, resolved.name);
-    const token = resolved.config.session?.token ?? session.token;
-    const [, payload] = token.split(".");
-    if (!payload) return { tokenType: session.tokenType, expiresAt: session.expiresAt };
-    return JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-  }),
 
   chat: os
     .input(
@@ -982,40 +792,41 @@ const launcherProcedures = {
   },
 
   config: {
-    get: os.meta({ default: true, description: "Show config, resolved target, and session status" })
-    .handler(async () => {
-      const configFile = readConfigFile();
-      let resolved = resolveConfig(process.cwd());
-      
-      const configs = configFile.configs || {};
-      const sessions = Object.fromEntries(
-        Object.entries(configs).map(([name, cfg]) => {
-          if (!cfg.session) return [name, null]
-          return [
-            name,
-            {
-              hasToken: Boolean(cfg.session?.token),
-              hasCookie: Boolean(cfg.session?.cookie),
-              expiresAt: cfg.session?.expiresAt,
-              expired: cfg.session?.expiresAt
-                ? new Date(cfg.session.expiresAt) < new Date()
-                : false,
-            },
-          ]
-        }),
-      )
+    get: os
+      .meta({ default: true, description: "Show config, resolved target, and session status" })
+      .handler(async () => {
+        const configFile = readConfigFile();
+        const resolved = resolveConfig(process.cwd());
 
-      if (resolved instanceof Error) {
-        return {configPath: CONFIG_PATH, error: resolved.message }
-      }
+        const configs = configFile.configs || {};
+        const sessions = Object.fromEntries(
+          Object.entries(configs).map(([name, cfg]) => {
+            if (!cfg.session) return [name, null];
+            return [
+              name,
+              {
+                hasToken: Boolean(cfg.session?.token),
+                hasCookie: Boolean(cfg.session?.cookie),
+                expiresAt: cfg.session?.expiresAt,
+                expired: cfg.session?.expiresAt
+                  ? new Date(cfg.session.expiresAt) < new Date()
+                  : false,
+              },
+            ];
+          }),
+        );
 
-      return {
-        configPath: CONFIG_PATH,
-        config: resolved.name,
-        ...resolved.config,
-        session: sessions[resolved.name],
-      };
-    }),
+        if (resolved instanceof Error) {
+          return { configPath: CONFIG_PATH, error: resolved.message };
+        }
+
+        return {
+          configPath: CONFIG_PATH,
+          config: resolved.name,
+          ...resolved.config,
+          session: sessions[resolved.name],
+        };
+      }),
     list: os.meta({ description: "List all named configs" }).handler(async () => {
       const configFile = readConfigFile();
       const currentName = resolveConfigName(process.cwd());
@@ -1038,7 +849,10 @@ const launcherProcedures = {
       .input(
         z.object({
           name: z.string().describe("Config name (e.g. dev, prd, preview)"),
-          osBaseUrl: z.string().optional().describe("Base URL for OS API (e.g. https://os.iterate.com)"),
+          osBaseUrl: z
+            .string()
+            .optional()
+            .describe("Base URL for OS API (e.g. https://os.iterate.com)"),
           authBaseUrl: z
             .string()
             .optional()

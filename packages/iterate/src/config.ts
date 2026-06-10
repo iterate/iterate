@@ -11,7 +11,7 @@ const XDG_CONFIG_PARENT = join(
 export const CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
 
 /** Stored session (lives inside a config entry) */
-export const Session = z.object({
+export const StoredSession = z.object({
   token: z.string().optional(),
   refreshToken: z.string().optional(),
   clientId: z.string().optional(),
@@ -21,14 +21,14 @@ export const Session = z.object({
   expiresAt: z.string().optional(),
 });
 
-export type StoredSession = z.infer<typeof Session>;
+export type StoredSession = z.infer<typeof StoredSession>;
 
 /** A named config — describes which server to talk to and how to authenticate. */
 export const Config = z.object({
   defaultProject: z.string().optional(),
   osBaseUrl: z.string().optional().default("https://os.iterate.com"),
   authBaseUrl: z.string().optional().default("https://auth.iterate.com"),
-  session: Session.optional(),
+  session: StoredSession.optional(),
 });
 
 export type Config = z.infer<typeof Config>;

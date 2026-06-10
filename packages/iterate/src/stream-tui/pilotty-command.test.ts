@@ -19,7 +19,7 @@ describe("buildStreamTuiPilottySpawnArgs", () => {
       "node",
       "packages/iterate/bin/iterate.js",
       "chat",
-      "--project-slug-or-id",
+      "--project",
       "public",
       "--stream-path",
       "/demo",

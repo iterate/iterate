@@ -15,7 +15,7 @@ export function buildStreamTuiPilottySpawnArgs(args: StreamTuiPilottySpawnArgs) 
     "node",
     "packages/iterate/bin/iterate.js",
     "chat",
-    "--project-slug-or-id",
+    "--project",
     args.projectSlugOrId,
     "--stream-path",
     args.streamPath,

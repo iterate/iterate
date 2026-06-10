@@ -9,7 +9,6 @@
  */
 import { Event, StreamPath, type EventInput } from "@iterate-com/shared/streams/types";
 import type { EventsStreamViewState } from "@iterate-com/ui/components/events/feed-items";
-import { readConfig, updateConfigSession } from "../config.ts";
 import {
   reduceStreamViewEvents,
   StreamViewProcessorContract,
@@ -23,6 +22,7 @@ import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { ORPCError } from "@orpc/server";
 import { osContract } from "@iterate-com/os-contract";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { readConfig, updateConfigSession } from "../config.ts";
 import {
   acceptedSlashInput,
   findSlashCommand as findDiscoveredSlashCommand,
@@ -895,7 +895,10 @@ function readFlag(argv: string[], flagName: string) {
   return value;
 }
 
-function createOsClient(baseUrl: string): { client: OrpcClient; refreshAuth: () => Promise<boolean> } {
+function createOsClient(baseUrl: string): {
+  client: OrpcClient;
+  refreshAuth: () => Promise<boolean>;
+} {
   const authProvider = createAuthProvider(baseUrl);
   const client = createORPCClient(
     new OpenAPILink(osContract, {
@@ -924,7 +927,8 @@ async function fetchWithAuth(
   const requestInit: RequestInit = init || {};
   const headers = new Headers(input instanceof Request ? input.headers : undefined);
   for (const [key, value] of new Headers(requestInit.headers)) headers.set(key, value);
-  for (const [key, value] of Object.entries(await authProvider.getHeaders())) headers.set(key, value);
+  for (const [key, value] of Object.entries(await authProvider.getHeaders()))
+    headers.set(key, value);
   if (input instanceof Request) {
     return fetch(new Request(input.clone(), { ...requestInit, headers }));
   }
