@@ -52,8 +52,10 @@ export class SlackAgentProcessor extends StreamProcessor<
         const target = slackTargetFromPayload(event.payload);
         if (target == null) return state;
         const botUserId = state.botUserId ?? botUserIdFromPayload(event.payload);
+        const botBotId = state.botBotId ?? botBotIdFromPayload(event.payload);
         return {
           ...state,
+          ...(botBotId == null ? {} : { botBotId }),
           ...(botUserId == null ? {} : { botUserId }),
           channel: target.channel,
           ...(target.messageTs == null ? {} : { latestMessageTs: target.messageTs }),
@@ -126,7 +128,8 @@ export class SlackAgentProcessor extends StreamProcessor<
 
         const slackEvent = parsed.data.event;
         const target = slackAgentTargetFromWebhookPayload(event.payload);
-        if (isBotMessage(slackEvent)) return;
+        const botBotId = state.botBotId ?? botBotIdFromPayload(event.payload);
+        if (isOwnBotMessage(slackEvent, botBotId)) return;
         if (isBotAction(slackEvent, state.botUserId)) return;
 
         const channel = target?.channel ?? state.channel ?? readStringField(slackEvent, "channel");
@@ -300,6 +303,18 @@ function isBotMessage(slackEvent: Record<string, unknown>): boolean {
   return false;
 }
 
+// Returns true only when the message came from our own bot (same bot_id as the
+// authorized app). Falls back to blocking all bots when our bot_id is unknown.
+function isOwnBotMessage(
+  slackEvent: Record<string, unknown>,
+  botBotId: string | undefined,
+): boolean {
+  if (botBotId == null) return isBotMessage(slackEvent);
+  const msgBotId = readStringField(slackEvent, "bot_id");
+  if (msgBotId == null) return false;
+  return msgBotId === botBotId;
+}
+
 /**
  * Returns true when the Slack event was performed by our own bot user (e.g.
  * our bot adding a reaction).
@@ -405,6 +420,16 @@ function botUserIdFromPayload(payload: unknown): string | undefined {
     (auth) => readRecord(auth)?.is_bot === true && typeof readRecord(auth)?.user_id === "string",
   );
   return botAuth == null ? undefined : readString(readRecord(botAuth)?.user_id);
+}
+
+function botBotIdFromPayload(payload: unknown): string | undefined {
+  const body = readRecord(readRecord(payload)?.body);
+  const authorizations = body?.authorizations;
+  if (!Array.isArray(authorizations)) return undefined;
+  const botAuth = authorizations.find(
+    (auth) => readRecord(auth)?.is_bot === true && typeof readRecord(auth)?.bot_id === "string",
+  );
+  return botAuth == null ? undefined : readString(readRecord(botAuth)?.bot_id);
 }
 
 function slackAgentTargetFromWebhookPayload(payload: unknown): SlackAgentTarget | null {

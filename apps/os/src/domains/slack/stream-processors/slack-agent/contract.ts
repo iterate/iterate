@@ -29,6 +29,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
   version: "0.1.0",
   description: "Handles Slack-specific behavior for one routed Slack agent stream.",
   stateSchema: z.object({
+    botBotId: z.string().optional(),
     botUserId: z.string().optional(),
     channel: z.string().optional(),
     latestMessageTs: z.string().optional(),
