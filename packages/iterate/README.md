@@ -2,78 +2,47 @@
 
 ⚠️⚠️⚠️ Coming soon! `npx iterate` is a work-in-progress CLI for managing [iterate.com](https://iterate.com) agents ⚠️⚠️⚠️
 
-CLI for Iterate.
+CLI for Iterate. It discovers the OS server's oRPC procedures at runtime and
+mounts them as commands under `iterate os ...`, alongside built-in commands for
+auth and config management.
 
-Runs as a thin bootstrapper that:
-
-1. Resolves an `iterate/iterate` checkout.
-2. Clones/install deps when needed.
-3. Loads `apps/os/src/orpc/root.ts` from that checkout.
-4. Exposes commands like `iterate os ...` and `iterate whoami`.
+When run inside an `iterate/iterate` checkout (or a project with a local
+`node_modules` install of `iterate`), the bin delegates to that local copy
+instead of the published one.
 
 ## Requirements
 
 - Node `>=22`
-- `git`
-- `pnpm` or `corepack`
 
 ## Quick start
-
-Run without installing globally:
 
 ```bash
 npx iterate --help
 ```
 
-Initial setup (writes auth + launcher config):
+Create a config pointing at a server, then log in:
 
 ```bash
-npx iterate setup \
-  --os-base-url https://dev-yourname-os.dev.iterate.com \
-  --auth-base-url https://auth.iterate.com \
-  --daemon-base-url http://localhost:3001 \
-  --admin-password-env-var-name SERVICE_AUTH_TOKEN \
-  --user-email dev-yourname@iterate.com \
-  --scope global
-```
-
-Then run commands:
-
-```bash
-npx iterate config local
+npx iterate config set --name prod --os-base-url https://os.iterate.com --set-default
 npx iterate login
 npx iterate whoami
-npx iterate orgs list
-npx iterate os project list
+npx iterate os --help
 ```
 
 ## Commands
 
-- `iterate setup` - configure auth + launcher defaults
-- `iterate doctor` - print resolved config/runtime info
-- `iterate install` - force clone/install for resolved checkout
-- `iterate whoami`
-- `iterate orgs list`
-- `iterate os ...`
-- `iterate daemon ...`
+- `iterate doctor` — show config file, resolved target, and session status
+- `iterate login [--superadmin]` — authenticate (browser device flow, or superadmin impersonation for CI)
+- `iterate logout` — remove the stored session for the current config
+- `iterate whoami` — show the current authenticated user
+- `iterate orgs list` — list organizations from the auth worker
+- `iterate config list | set | use | current | local` — manage named configs
+- `iterate os ...` — procedures discovered from the configured OS server
 
-`setup --scope global` writes auth + launcher values into `global`; `setup --scope workspace` writes them into `workspaces[process.cwd()]`.
+Global flags (consumed before command parsing):
 
-For local auth development, set `authBaseUrl` to `http://localhost:7101`. If you omit it and
-your `osBaseUrl` is `http://localhost:*` or `*.iterate-dev.com`, the CLI defaults to
-`http://localhost:7101`.
-
-To bootstrap a local repo config quickly, run:
-
-```bash
-npx iterate config local
-```
-
-That creates a `local` config with:
-
-- `osBaseUrl = https://<your-username>.iterate-dev.com`
-- `authBaseUrl = http://localhost:7101`
-- `daemonBaseUrl = http://localhost:3001`
+- `--config <name>` — use a specific named config
+- `--local-router <path>` — mount a local module exporting a named `router` under `local-router`
 
 ## Config file
 
@@ -86,28 +55,22 @@ Config shape:
 ```json
 {
   "configs": {
-    "default": {
+    "prod": {
       "osBaseUrl": "https://os.iterate.com",
-      "authBaseUrl": "https://auth.iterate.com",
-      "daemonBaseUrl": "http://localhost:3000",
-      "auth": {
-        "strategy": "device"
-      }
+      "auth": { "strategy": "device" }
     },
-    "dev": {
-      "osBaseUrl": "https://dev-yourname-os.dev.iterate.com",
-      "authBaseUrl": "https://auth-dev-yourname.iterate.com",
-      "daemonBaseUrl": "http://localhost:3001",
+    "ci": {
+      "osBaseUrl": "https://os.iterate.com",
       "auth": {
         "strategy": "superadmin",
         "adminPasswordEnvVarName": "SERVICE_AUTH_TOKEN",
-        "userEmail": "dev-yourname@iterate.com"
+        "userEmail": "someone@example.com"
       }
     }
   },
-  "default": "default",
+  "default": "prod",
   "workspaces": {
-    "/absolute/workspace/path": "dev"
+    "/absolute/workspace/path": "ci"
   }
 }
 ```
@@ -119,28 +82,32 @@ Auth strategies:
 - `device` — interactive browser-based login (RFC 8628 device flow). Run `iterate login`.
 - `superadmin` — CI/automation impersonation via admin password env var.
 
+`authBaseUrl` is optional. If omitted, the CLI derives it from `osBaseUrl`:
+
+- `os.iterate.com` → `https://auth.iterate.com`
+- `localhost` / `127.0.0.1` / `*.iterate-dev.com` → `http://localhost:7101`
+
 ## Local iterate dev
 
-If you run inside an `iterate/iterate` clone, the CLI auto-detects it. In that mode, default `autoInstall` is `false`.
-
-You can pin explicitly:
+To bootstrap a config for local development, run:
 
 ```bash
-npx iterate setup \
-  --os-base-url https://dev-yourname-os.dev.iterate.com \
-  --daemon-base-url http://localhost:3001 \
-  --admin-password-env-var-name SERVICE_AUTH_TOKEN \
-  --user-email dev-yourname@iterate.com \
-  --scope workspace
+npx iterate config local
 ```
+
+That creates a `local` config (and sets it as the default and the workspace
+config for the current directory) with:
+
+- `osBaseUrl = https://<your-username>.iterate-dev.com`
+- `authBaseUrl = http://localhost:7101`
 
 ## Publishing (maintainers)
 
-From repo root:
+From `packages/iterate`:
 
 ```bash
-pnpm --filter ./packages/iterate typecheck
-pnpm oxlint packages/iterate/bin/iterate.js
-pnpm oxfmt --check packages/iterate
-pnpm --filter ./packages/iterate publish --access public
+node pubme.js publish --version <version>
 ```
+
+This bumps the version, checks for a clean git status, and runs `npm publish`
+(prompts for your npm OTP).

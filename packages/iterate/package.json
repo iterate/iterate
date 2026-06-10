@@ -2,7 +2,7 @@
   "name": "iterate",
   "version": "0.2.5",
   "description": "CLI for iterate",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "repository": {
     "type": "git",

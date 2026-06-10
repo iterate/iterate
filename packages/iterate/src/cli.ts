@@ -612,7 +612,8 @@ const deviceFlowLogin = async (
 const loadRemoteProcedures = async (params: {
   baseUrl: string;
 }): Promise<{ procedures: ParsedRouter }> => {
-  const url = `${params.baseUrl}/api/trpc-cli-procedures`;
+  // Matches the shared internal router contract (packages/shared/src/apps/internal-router-contract.ts)
+  const url = `${params.baseUrl}/api/__internal/trpc-cli-procedures`;
   const response = await fetch(url);
   if (!response.ok) {
     let text = await response.text();
