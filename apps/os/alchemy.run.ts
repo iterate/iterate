@@ -17,7 +17,6 @@ import type { RepoDurableObject } from "./src/domains/repos/durable-objects/repo
 import type { SlackAgentDurableObject } from "./src/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
-import type { OutboundMcpFromOurClientCapability } from "./src/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 import { eventDocsHostnameForAppBaseUrl } from "./src/lib/event-docs-host.ts";
 
 const resolvedAuthIssuer =
@@ -100,13 +99,6 @@ const artifactsNamespace = `${ctx.workerName}-repos`;
 // Stream namespace for worker-global (non-project-scoped) streams, such as the
 // raw Cloudflare event capture stream at /cloudflare/events.
 const globalStreamNamespace = `${ctx.workerName}-global`;
-const outboundMcpFromOurClientCapability =
-  DurableObjectNamespace<OutboundMcpFromOurClientCapability>(
-    "outbound-mcp-from-our-client-capability",
-    {
-      className: "OutboundMcpFromOurClientCapability",
-    },
-  );
 const captunServerShard = DurableObjectNamespace<CaptunServerShard>("captun-server-shard", {
   className: "CaptunServerShard",
   sqlite: true,
@@ -191,7 +183,6 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     REPO: repo,
     CaptunServerShard: captunServerShard,
     PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
-    OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY: outboundMcpFromOurClientCapability,
     STREAM: stream,
     WORKSPACE: workspace,
     ...(debugAppendChainSubscriber == null

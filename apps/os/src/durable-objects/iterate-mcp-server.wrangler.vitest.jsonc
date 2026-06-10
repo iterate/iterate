@@ -15,10 +15,6 @@
         "class_name": "ProjectMcpServerConnection",
       },
       {
-        "name": "OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY",
-        "class_name": "OutboundMcpFromOurClientCapability",
-      },
-      {
         "name": "REPO",
         "class_name": "RepoDurableObject",
       },
@@ -52,11 +48,7 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": [
-        "CodemodeSession",
-        "ProjectMcpServerConnection",
-        "OutboundMcpFromOurClientCapability",
-      ],
+      "new_sqlite_classes": ["CodemodeSession", "ProjectMcpServerConnection"],
     },
     {
       "tag": "v2",

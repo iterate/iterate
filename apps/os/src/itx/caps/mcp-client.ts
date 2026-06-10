@@ -27,21 +27,15 @@
 // cap's own itx handle (Law 5): secret placeholders in `headers` are
 // substituted inside the Project DO and never exist in this isolate.
 //
-// Deliberately stateless: connect → call → close, per invocation. The old
-// OutboundMcpFromOurClientCapability cached the connection in a Durable
-// Object; when per-call handshake latency matters, the same class becomes a
-// `durable-object` ref (or a stored-source DO cap) without changing callers.
+// MCP's streamable HTTP transport is STATELESS — it is fetch with metadata.
+// Connect → call → close, per invocation; there is no session state worth
+// keeping, and deliberately no Durable Object anywhere in this path.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { resolveItx } from "../entrypoint.ts";
 import type { ItxRuntime } from "../handle.ts";
 import type { PathCall } from "../protocol.ts";
-import {
-  describeOutboundMcpFromOurClientTools,
-  executeOutboundMcpFromOurClientToolFunction,
-} from "~/domains/outbound-mcp-client/utils/outbound-mcp-from-our-client-capability-core.ts";
+import { connectMcp, executeMcpToolCall, listMcpTools } from "./mcp-client-core.ts";
 
 export type McpClientProps = {
   /** The remote MCP server (streamable HTTP). Definer-supplied. */
@@ -71,7 +65,7 @@ export class McpClient extends WorkerEntrypoint<Env, McpClientProps> {
       props: { cap: props.cap, context: props.context },
     });
 
-    const transport = new StreamableHTTPClientTransport(new URL(props.serverUrl), {
+    const client = await connectMcp({
       // ALL transport HTTP rides the project egress pipe — this is where
       // getSecret() placeholders in headers become real credentials. Build a
       // real Request first: the SDK may pass a URL (which itx.fetch would not
@@ -83,25 +77,15 @@ export class McpClient extends WorkerEntrypoint<Env, McpClientProps> {
             ? new Request(fetchInput, init)
             : new Request(String(fetchInput), init),
         ),
-      requestInit: props.headers ? { headers: props.headers } : undefined,
+      headers: props.headers,
+      serverUrl: props.serverUrl,
     });
-    const client = new Client({ name: "itx-mcp-client", version: "1.0.0" });
 
     try {
-      // Inside the try so a failed connect still runs close() — a partial
-      // handshake can otherwise leave server-side session state dangling.
-      await client.connect(transport);
       if (input.path.join(".") === "listTools") {
-        const listed = await client.listTools();
-        return describeOutboundMcpFromOurClientTools(
-          listed.tools.map((tool) => ({
-            name: tool.name,
-            description: tool.description,
-            inputSchema: tool.inputSchema as Record<string, unknown> | undefined,
-          })),
-        );
+        return await listMcpTools(client);
       }
-      return await executeOutboundMcpFromOurClientToolFunction({
+      return await executeMcpToolCall({
         args: input.args,
         client,
         path: input.path,
