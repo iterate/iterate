@@ -461,13 +461,106 @@ second step, taken only after the shared layer proves itself.
   (`callConfigWorkerFunction`, the base iterate-config artifact naming,
   docs, UI copy). Design docs and `types.ts` already use the new name.
 - `handle.ts` sheds its direct domain imports (repos/workspace/streams) —
-  becomes addresses or injected stubs; kernel approaches the ~500-line goal.
+  they become default caps; mechanism in §8. Kernel approaches the
+  ~500-line goal.
 - Document the share token as a sealed SturdyRef (§1).
 - Per-cap/per-call usage events at the supervisor (billing + audit hook,
   feeds §2 and §4).
 - Global-context implementation: make the node real, wire namespace
   currying through the built-ins. (Polishing its shape beyond that is
   explicitly LATER.)
+
+## 8. Default capabilities are the context's prototype (flavors)
+
+The idea (born as "what if ProjectItx / GlobalItx / CodemodeSessionItx
+subclasses just called `this.caps.define()` a few times in their
+constructor, the way you would in a codemode snippet"): now that
+`caps.define` exists, the built-ins hardwired into the handle should be
+ordinary capability definitions. The instinct is right; the only question
+is **which lifecycle the "constructor" runs at**. There are three
+candidates and they are not equal:
+
+1. **Per-handle (the literal reading)** — wrong. Handles are ephemeral
+   views constructed on every connect/restore/narrowing; defines are writes
+   to the durable node. A handle constructor that defines would re-write
+   rows constantly.
+2. **Per-node, as stored rows** (the DO's init seeds the registry) — works
+   mechanically, but: every project duplicates identical rows, re-seeding
+   churns `updated_at` and spams the audit stream, and shipping a new
+   platform default means migrating thousands of stored rows.
+3. **Per-flavor, at module init** — right. A _flavor_ is a named, code-level
+   defaults set, and the resolution chain gets one more link at the root:
+   own caps → parent chain → **flavor defaults (code)**. No rows, no
+   migrations (a deploy updates every context instantly), no audit spam,
+   and shadowing falls out of the chain: a stored `repos` cap overrides the
+   default exactly like a child cap shadows a parent's. Law 1 said this all
+   along: _code holds composition_ — defaults are composition; only
+   overrides are data.
+
+The authoring surface keeps the snippet feel — a flavor is written with the
+SAME verbs a user types in the REPL, just executed against a code-level
+registry once per isolate instead of against a node:
+
+```ts
+export const projectFlavor = defineFlavor("project", (caps) => {
+  caps.define({
+    name: "repos",
+    target: { type: "rpc", worker: { type: "loopback" }, entrypoint: "ReposCapability" },
+  });
+  caps.define({
+    name: "workspace",
+    target: { type: "rpc", worker: { type: "loopback" }, entrypoint: "WorkspaceCapability" },
+  });
+  caps.define({
+    name: "ai",
+    target: {
+      type: "rpc",
+      worker: { type: "loopback" },
+      entrypoint: "BindingCapability",
+      props: { binding: "AI" },
+    },
+  });
+  // worker → { type: "project-worker" }; project → { type: "durable-object" } — once those refs land
+});
+```
+
+(The registry already injects `{ context, cap }` attribution at dial time,
+so flavor definitions stay fully static — entrypoints derive the project
+from context.)
+
+What this dissolves:
+
+- **"Cap #0" disappears.** Every hardwired built-in maps onto an
+  already-designed target kind — repos/workspace/streams → loopback,
+  ai → binding/loopback, worker → project-worker, project →
+  durable-object — which is strong validation of CapTarget. The
+  irreducible kernel shrinks to `caps`, `fork`, `describe`, `fetch`
+  (Law 5 infrastructure), plus `projects` on global handles.
+- **The reserved-name list shrinks to the true kernel** — defaults become
+  shadowable (prototype semantics), which is the point.
+- **The GlobalItx/ProjectItx typing question (§5) gets its answer**: the
+  class names live on as _types_, one per flavor — `ProjectItx =
+ItxBuiltins & ProjectFlavorCaps & KnownCaps` — derived from the same
+  flavor definition that drives runtime resolution.
+- **Forking takes a flavor**: `itx.fork({ flavor: "codemode" })`. The node
+  stores the flavor NAME (a sturdy ref to a code-defined set — Law 2
+  clean); resolution consults that flavor's map. The codemode-session
+  replacement (§4) becomes literally this.
+
+And the dynamic half of the user's instinct is ALSO right, as a separate
+thing: per-context setup that genuinely varies (e.g. seeding a session with
+request-specific MCP servers) is a real itx snippet run against the fresh
+context after fork — actual `caps.define` calls, actual stored rows, actual
+audit events. Static defaults = flavor (code); dynamic setup = snippet
+(data). Same verb, two lifecycles, and the platform uses the same public
+API users do.
+
+Sequencing: repos/workspace/streams are movable today (loopback refs
+shipped); worker/project wait on the project-worker and durable-object
+refs; the flavor-name-on-fork plumbing rides with the codemode drop.
+
+Open: can a context _revoke_ (not just shadow) a flavor default —
+tombstone rows? Defer until someone needs it.
 
 ## Resolved (was open, now decided)
 
