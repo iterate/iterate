@@ -2,7 +2,7 @@
 //
 // This processor owns the token-bucket rate limiter. When tokens go negative it
 // appends `events.iterate.com/stream/paused` so the core processor can shut
-// the door via its beforeAppend gate. More elaborate breakers — per-tenant
+// the door via its validateAppend gate. More elaborate breakers — per-tenant
 // budgets, ML anomaly detectors, upstream coordination — could run as separate
 // processors and use the same paused/resumed contract with the inline core
 // processor.
@@ -49,17 +49,9 @@ export const CircuitBreakerContract = defineProcessorContract({
   consumes: [
     "*",
     "events.iterate.com/circuit-breaker/configured",
-    "events.iterate.com/stream/created",
-    "events.iterate.com/stream/woken",
-    "events.iterate.com/stream/configured",
-    "events.iterate.com/stream/metadata-updated",
-    "events.iterate.com/stream/child-stream-created",
-    "events.iterate.com/stream/subscription-configured",
-    "events.iterate.com/stream/subscriber-connected",
-    "events.iterate.com/stream/subscriber-disconnected",
-    "events.iterate.com/stream/error-occurred",
     "events.iterate.com/stream/paused",
     "events.iterate.com/stream/resumed",
+    "events.iterate.com/stream/woken",
   ],
   emits: ["events.iterate.com/stream/paused"],
 });

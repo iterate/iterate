@@ -59,7 +59,6 @@ export class CircuitBreakerProcessor extends StreamProcessor<CircuitBreakerContr
     // idempotency-keyed per offset and self-limits: once the stream is paused,
     // ordinary appends are rejected, so the breaker stops being fed.
     if (!shouldTripCircuitBreaker(args.state)) return;
-    if (args.event.type === "events.iterate.com/stream/paused") return;
     args.runInBackground(async () => {
       await this.ctx.stream.append({
         event: {
