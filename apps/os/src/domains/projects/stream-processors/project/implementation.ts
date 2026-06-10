@@ -26,7 +26,7 @@ import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 import {
   AGENTS_STREAM_PATH,
   type AgentDurableObject,
