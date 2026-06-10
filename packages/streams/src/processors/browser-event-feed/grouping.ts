@@ -7,7 +7,7 @@
 // A new type always starts a fresh group row.
 //
 // This is deliberately a pure function of (state, events): the reducer uses it to
-// advance state, and afterAppendBatch re-folds it over the same batch to derive the
+// advance state, and processEventBatch re-folds it over the same batch to derive the
 // exact SQLite ops. Same input => same ops => idempotent replay.
 
 import type { StreamEvent } from "../../shared/event.ts";
@@ -87,7 +87,7 @@ export type FeedOp =
 
 /**
  * Fold a batch of events into feed ops + the resulting state, starting from `start`.
- * The reducer calls this one event at a time (and uses only `endState`); afterAppendBatch
+ * The reducer calls this one event at a time (and uses only `endState`); processEventBatch
  * calls it with the whole delivered batch to produce one transaction.
  *
  * Ops are coalesced per `local_index`: a run of same-type events that all land in the
