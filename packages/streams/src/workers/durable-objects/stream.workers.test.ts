@@ -175,3 +175,51 @@ describe("T8 — Stream DO smoke (coverage)", () => {
     });
   });
 });
+
+describe("stale-version KV snapshots rebuild from the event log", () => {
+  // The persisted core state's shape changed in v4 (subscriber presence:
+  // connectionsByKey roster, reshaped processorsBySlug). A snapshot written by
+  // an older deploy must be discarded by the version gate and rebuilt by
+  // replaying SQL — parsing it against the current schema would throw and
+  // brick the stream on boot.
+  it("boots over a v3-shaped snapshot without throwing", async () => {
+    await runInDurableObject(freshStream(), async (stream, state) => {
+      const before = await stream.runtimeState();
+
+      // Plant what an old deploy would have left behind: a snapshot with the
+      // pre-presence processorsBySlug shape and no connectionsByKey, marked
+      // with the previous state version.
+      state.storage.kv.put("state", {
+        ...before.coreProcessorState,
+        connectionsByKey: undefined,
+        processorsBySlug: {
+          echo: {
+            latestRegisteredEvent: {
+              offset: 3,
+              type: "events.iterate.com/stream/processor-registered",
+              payload: {
+                slug: "echo",
+                version: "0.1.0",
+                description: "",
+                consumes: [],
+                emits: [],
+                ownedEvents: [],
+              },
+              createdAt: new Date().toISOString(),
+            },
+          },
+        },
+      });
+      state.storage.kv.put("stateVersion", 3);
+
+      const rebuilt = (
+        stream as unknown as { readCoreProcessorState(): { namespace: string; maxOffset: number } }
+      ).readCoreProcessorState();
+
+      // Rebuilt from the log, not parsed from the stale snapshot.
+      expect(rebuilt.namespace).toBe(before.coreProcessorState.namespace);
+      expect(rebuilt.maxOffset).toBe(before.coreProcessorState.maxOffset);
+      expect(state.storage.kv.get("stateVersion")).toBe(4);
+    });
+  });
+});

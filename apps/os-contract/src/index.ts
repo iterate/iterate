@@ -351,6 +351,16 @@ export const osContract = oc.router({
         })
         .input(ProjectScopedInput.extend({ agentPath: StreamPath }))
         .output(z.unknown()),
+      kill: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/agents/kill/{+agentPath}",
+          description:
+            "Abort the agent's host Durable Object incarnation so crash recovery can be observed (testing/debugging)",
+          tags: ["/project", "/agents"],
+        })
+        .input(ProjectScopedInput.extend({ agentPath: StreamPath }))
+        .output(z.object({ killed: z.boolean() })),
     },
     repos: {
       list: oc

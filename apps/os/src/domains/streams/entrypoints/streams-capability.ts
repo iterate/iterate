@@ -486,6 +486,7 @@ async function* liveNamespaceStreamEvents(args: {
   handle = await streamStub.subscribe({
     processEventBatch: subscription.processEventBatch,
     replayAfterOffset: toAfterOffset(args.afterOffset),
+    subscriber: { description: "streams-capability" },
   });
 
   for await (const batch of subscription) {
