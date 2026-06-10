@@ -121,7 +121,18 @@ export type SerializableCapTarget =
  * (fail fast) and again at dial time (authoritative).
  */
 export const DIALABLE_BINDINGS: ReadonlySet<string> = new Set(["AI"]);
-export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set(["BindingCapability", "McpClient"]);
+/**
+ * Loopback entrypoints listed here MUST scope strictly by the dial-time
+ * props the registry injects ({ cap, context, projectId }) — never by
+ * definer-supplied props — because anyone with a handle on a context can
+ * define a cap dialing them.
+ */
+export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
+  "BindingCapability",
+  "GmailCapability",
+  "McpClient",
+  "OrpcCapability",
+]);
 
 /**
  * Normalize a define() input to a serializable target. Legacy callers pass
@@ -323,6 +334,15 @@ export const ITX_EVENT_TYPES = {
   capRevoked: "events.iterate.com/itx/cap-revoked",
   capDisconnected: "events.iterate.com/itx/cap-disconnected",
   contextForked: "events.iterate.com/itx/context-forked",
+  /**
+   * Script execution record (itx-next.md §4, record-only mode): the runner
+   * appends `executionRequested` before the script starts and
+   * `executionCompleted` when it settles. The events are the durable record,
+   * not the transport — everything between them is invisible to the stream.
+   * These two events replace codemode's six-event execution protocol.
+   */
+  executionRequested: "events.iterate.com/itx/execution-requested",
+  executionCompleted: "events.iterate.com/itx/execution-completed",
 } as const;
 
 /** Child context ids: `ctx_…` TypeIDs; project contexts use the project id. */

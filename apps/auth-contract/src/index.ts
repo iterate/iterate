@@ -385,23 +385,23 @@ export const authContract = oc.router({
       .input(ProjectInput)
       .output(z.object({ success: z.literal(true) })),
   },
-  superadmin: {
+  admin: {
     oauth: {
       createClient: oc
         .route({
           method: "POST",
-          path: "/superadmin/oauth/create-client",
+          path: "/admin/oauth/create-client",
           summary: "Create a new OAuth client",
-          tags: ["superadmin", "oauth"],
+          tags: ["admin", "oauth"],
         })
         .input(CreateClientInput)
         .output(OAuthClientRecord),
       listClients: oc
         .route({
           method: "GET",
-          path: "/superadmin/oauth/list-clients",
+          path: "/admin/oauth/list-clients",
           summary: "List all OAuth clients",
-          tags: ["superadmin", "oauth"],
+          tags: ["admin", "oauth"],
         })
         .output(z.array(OAuthClientRecord.omit({ clientSecret: true }))),
     },
@@ -517,7 +517,10 @@ export function createAuthContractClient(options: AuthContractClientOptions): Au
   ) as AuthContractClient;
 }
 
-function mergeRequestHeaders(request: URL | Request, initHeaders: HeadersInit | undefined) {
+function mergeRequestHeaders(
+  request: URL | Request,
+  initHeaders: ConstructorParameters<typeof Headers>[0] | undefined,
+) {
   const headers = new Headers(request instanceof Request ? request.headers : undefined);
   if (initHeaders) {
     for (const [key, value] of new Headers(initHeaders)) {

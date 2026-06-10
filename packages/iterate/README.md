@@ -99,7 +99,7 @@ Config shape:
       "authBaseUrl": "https://auth-dev-yourname.iterate.com",
       "daemonBaseUrl": "http://localhost:3001",
       "auth": {
-        "strategy": "superadmin",
+        "strategy": "admin",
         "adminPasswordEnvVarName": "SERVICE_AUTH_TOKEN",
         "userEmail": "dev-yourname@iterate.com"
       }
@@ -117,7 +117,7 @@ Config resolution priority: `--config` flag > workspace match (walk up from cwd)
 Auth strategies:
 
 - `device` — interactive browser-based login (RFC 8628 device flow). Run `iterate login`.
-- `superadmin` — CI/automation impersonation via admin password env var.
+- `admin` — CI/automation impersonation via admin password env var.
 
 ## Local iterate dev
 

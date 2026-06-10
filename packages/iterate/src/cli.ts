@@ -24,9 +24,9 @@ const XDG_CONFIG_PARENT = join(
 
 const CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
 
-/** Superadmin impersonation strategy — for CI/automation. Requires admin password env var. */
-const SuperadminStrategy = z.object({
-  strategy: z.literal("superadmin"),
+/** Admin impersonation strategy — for CI/automation. Requires admin password env var. */
+const AdminStrategy = z.object({
+  strategy: z.literal("admin"),
   adminPasswordEnvVarName: z.string().describe("Env var name containing admin password"),
   userEmail: z.string().describe("User email to impersonate for OS calls"),
 });
@@ -36,7 +36,7 @@ const DeviceStrategy = z.object({
   strategy: z.literal("device"),
 });
 
-const AuthStrategy = z.discriminatedUnion("strategy", [SuperadminStrategy, DeviceStrategy]);
+const AuthStrategy = z.discriminatedUnion("strategy", [AdminStrategy, DeviceStrategy]);
 
 /** Stored session (lives inside a config entry) */
 const Session = z.object({
@@ -277,11 +277,11 @@ const setCookiesToCookieHeader = (setCookies: string[] | undefined): string => {
 const impersonationUserIdCache = new Map<string, string>();
 
 const resolveImpersonationUserId = async ({
-  superadminAuthClient,
+  adminAuthClient,
   userEmail,
   baseUrl,
 }: {
-  superadminAuthClient: any;
+  adminAuthClient: any;
   userEmail: string;
   baseUrl: string;
 }): Promise<string> => {
@@ -295,7 +295,7 @@ const resolveImpersonationUserId = async ({
   let users: any[] = [];
 
   try {
-    const result = await superadminAuthClient.admin.listUsers({
+    const result = await adminAuthClient.admin.listUsers({
       query: {
         filterField: "email",
         filterOperator: "eq",
@@ -308,7 +308,7 @@ const resolveImpersonationUserId = async ({
     });
     users = Array.isArray(result?.users) ? result.users : [];
   } catch {
-    const result = await superadminAuthClient.admin.listUsers({
+    const result = await adminAuthClient.admin.listUsers({
       query: {
         searchField: "email",
         searchOperator: "contains",
@@ -345,8 +345,8 @@ const resolveImpersonationUserId = async ({
   return resolvedUserId;
 };
 
-const superadminAuthDance = async (config: Config & { auth: { strategy: "superadmin" } }) => {
-  let superadminSetCookie: string[] | undefined;
+const adminAuthDance = async (config: Config & { auth: { strategy: "admin" } }) => {
+  let adminSetCookie: string[] | undefined;
   const authClient = createAuthClient({
     baseURL: config.osBaseUrl,
     fetchOptions: {
@@ -359,36 +359,36 @@ const superadminAuthDance = async (config: Config & { auth: { strategy: "superad
   }
 
   await authClient.signIn.email({
-    email: "superadmin@nustom.com",
+    email: "admin@nustom.com",
     password,
     fetchOptions: {
       throw: true,
       onResponse: (ctx: { response: Response }) => {
-        superadminSetCookie = ctx.response.headers.getSetCookie();
+        adminSetCookie = ctx.response.headers.getSetCookie();
       },
     },
   });
 
-  const superadminAuthClient = createAuthClient({
+  const adminAuthClient = createAuthClient({
     baseURL: config.osBaseUrl,
     fetchOptions: {
       throw: true,
       onRequest: (ctx: { headers: Headers }) => {
         ctx.headers.set("origin", config.osBaseUrl);
-        ctx.headers.set("cookie", setCookiesToCookieHeader(superadminSetCookie));
+        ctx.headers.set("cookie", setCookiesToCookieHeader(adminSetCookie));
       },
     },
     plugins: [adminClient()],
   });
 
   const userId = await resolveImpersonationUserId({
-    superadminAuthClient,
+    adminAuthClient,
     userEmail: config.auth.userEmail,
     baseUrl: config.osBaseUrl,
   });
 
   let impersonateSetCookie: string[] | undefined;
-  await superadminAuthClient.admin.impersonateUser({
+  await adminAuthClient.admin.impersonateUser({
     userId,
     fetchOptions: {
       throw: true,
@@ -416,14 +416,14 @@ const superadminAuthDance = async (config: Config & { auth: { strategy: "superad
 
 /**
  * Get auth headers for OS API calls based on the resolved config's auth strategy.
- * Returns either a cookie header (superadmin) or Authorization: Bearer header (device flow).
+ * Returns either a cookie header (admin) or Authorization: Bearer header (device flow).
  */
 const getOsAuthHeaders = async (
   config: Config,
 ): Promise<{ cookie?: string; authorization?: string }> => {
-  if (config.auth.strategy === "superadmin") {
-    const { userCookies } = await superadminAuthDance(
-      config as Config & { auth: { strategy: "superadmin" } },
+  if (config.auth.strategy === "admin") {
+    const { userCookies } = await adminAuthDance(
+      config as Config & { auth: { strategy: "admin" } },
     );
     return { cookie: userCookies };
   }
@@ -778,10 +778,10 @@ const launcherProcedures = {
     .input(
       z
         .object({
-          superadmin: z
+          admin: z
             .boolean()
             .optional()
-            .describe("Use superadmin impersonation instead of device flow (for CI/automation)"),
+            .describe("Use admin impersonation instead of device flow (for CI/automation)"),
         })
         .partial(),
     )
@@ -793,20 +793,20 @@ const launcherProcedures = {
       if (resolved instanceof Error) throw resolved;
       const { config } = resolved;
 
-      if (input.superadmin || config.auth.strategy === "superadmin") {
-        if (config.auth.strategy !== "superadmin") {
+      if (input.admin || config.auth.strategy === "admin") {
+        if (config.auth.strategy !== "admin") {
           throw new Error(
-            "Config is not using superadmin strategy. Remove --superadmin or change config.",
+            "Config is not using admin strategy. Remove --admin or change config.",
           );
         }
         const typedConfig = config as Config & {
-          auth: { strategy: "superadmin" };
+          auth: { strategy: "admin" };
         };
-        const { userCookies, userClient } = await superadminAuthDance(typedConfig);
+        const { userCookies, userClient } = await adminAuthDance(typedConfig);
         storeSession(resolved.name, { cookie: userCookies });
         const session = await userClient.getSession();
         return {
-          message: "Logged in via superadmin impersonation",
+          message: "Logged in via admin impersonation",
           user: (session as any)?.data?.user ?? (session as any)?.user,
         };
       }
@@ -888,15 +888,15 @@ const launcherProcedures = {
             .string()
             .optional()
             .describe("Base URL for daemon API (e.g. http://localhost:3001)"),
-          strategy: z.enum(["device", "superadmin"]).default("device").describe("Auth strategy"),
+          strategy: z.enum(["device", "admin"]).default("device").describe("Auth strategy"),
           adminPasswordEnvVarName: z
             .string()
             .optional()
-            .describe("Env var name for admin password (superadmin strategy only)"),
+            .describe("Env var name for admin password (admin strategy only)"),
           userEmail: z
             .string()
             .optional()
-            .describe("User email to impersonate (superadmin strategy only)"),
+            .describe("User email to impersonate (admin strategy only)"),
           setDefault: z.boolean().optional().describe("Set as the default config"),
           setWorkspace: z.boolean().optional().describe("Map current directory to this config"),
         }),
@@ -907,9 +907,9 @@ const launcherProcedures = {
         configFile.configs ||= {};
 
         const auth: z.infer<typeof AuthStrategy> =
-          input.strategy === "superadmin"
+          input.strategy === "admin"
             ? {
-                strategy: "superadmin" as const,
+                strategy: "admin" as const,
                 adminPasswordEnvVarName: input.adminPasswordEnvVarName || "",
                 userEmail: input.userEmail || "",
               }

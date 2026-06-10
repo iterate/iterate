@@ -8,6 +8,7 @@ import {
   StreamPath,
 } from "@iterate-com/shared/streams/types";
 import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
+import { ItxError } from "~/itx/errors.ts";
 import {
   getStreamDurableObjectName,
   getInitializedStreamStub,
@@ -299,7 +300,13 @@ export class StreamsCapability extends WorkerEntrypoint<
       return;
     }
 
-    throw new Error(`Stream append policy rejected append to ${path}.`);
+    // FORBIDDEN, not NOT_FOUND: the caller already holds this capability, so
+    // the stream's existence is not a secret — only the append right is.
+    throw new ItxError({
+      code: "FORBIDDEN",
+      details: { path, policyMode: policy.mode },
+      message: `Stream append policy rejected append to ${path}.`,
+    });
   }
 }
 
@@ -328,7 +335,7 @@ export function getStreamsCapability(input: {
 export function resolveStreamPath(pathInput: string): StreamPath {
   const trimmedPath = pathInput.trim();
   if (!trimmedPath) {
-    throw new Error("Stream path is required.");
+    throw new ItxError({ code: "BAD_REQUEST", message: "Stream path is required." });
   }
 
   const path = trimmedPath.startsWith("/") ? trimmedPath : `/${trimmedPath}`;
@@ -338,7 +345,7 @@ export function resolveStreamPath(pathInput: string): StreamPath {
 function resolveCapabilityStreamPath(input: { basePath?: string; pathInput?: string }): StreamPath {
   if (input.pathInput == null) {
     if (input.basePath == null) {
-      throw new Error("Stream path is required.");
+      throw new ItxError({ code: "BAD_REQUEST", message: "Stream path is required." });
     }
 
     return resolveStreamPath(input.basePath);
@@ -346,7 +353,7 @@ function resolveCapabilityStreamPath(input: { basePath?: string; pathInput?: str
 
   const trimmedPath = input.pathInput.trim();
   if (!trimmedPath) {
-    throw new Error("Stream path is required.");
+    throw new ItxError({ code: "BAD_REQUEST", message: "Stream path is required." });
   }
 
   if (trimmedPath.startsWith("/")) {

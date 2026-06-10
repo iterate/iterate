@@ -573,9 +573,8 @@ export type ContextRef = "global" | `prj_${string}` | `proj_${string}` | `ctx_${
  * seam rather than an invented parallel access model. Only fields itx
  * actually uses appear here.
  *
- * - `admin`: the admin API secret, or a token carrying the server-granted
- *   `superadmin` scope (granted via the `admin` role only; client-requested
- *   scope is always stripped). Sees everything.
+ * - `admin`: the admin API secret, or a user token carrying Better Auth's
+ *   admin-plugin role claim. Sees everything.
  * - `user`: organization memberships and project grants exactly as the auth
  *   worker issued them. May do project-scoped things iff the project is in
  *   `projects`. Nothing finer-grained exists (the seam does; the

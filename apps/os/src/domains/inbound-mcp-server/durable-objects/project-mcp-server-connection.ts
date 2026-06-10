@@ -2,24 +2,19 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import type { Connection } from "agents";
 import { z } from "zod";
-import { StreamPath, type Event, type EventInput } from "@iterate-com/shared/streams/types";
+import { StreamPath, type EventInput } from "@iterate-com/shared/streams/types";
 import { upsertD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { typeid } from "@iterate-com/shared/typeid";
 import packageJson from "../../../../package.json" with { type: "json" };
-import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
-import { createExampleCapabilityProviders } from "~/domains/codemode/example-provider-registrations.ts";
-import { createGmailProviderRegistration } from "~/domains/google/gmail-provider-registration.ts";
-import {
-  type CodemodeSessionNamespace,
-  startCodemodeScriptOnSession,
-} from "~/domains/codemode/codemode-session-rpc.ts";
 import {
   getStreamsCapability,
   type StreamsCapabilityProps,
 } from "~/domains/streams/entrypoints/streams-capability.ts";
-import { createDefaultOutboundMcpProviderRegistrations } from "~/domains/codemode/default-provider-registrations.ts";
-import { readEventPayload, stringifyPayloadError } from "~/lib/codemode-event-payload.ts";
-import { createOpenApiProviderRegistration } from "~/rpc-targets/openapi-provider-registration.ts";
-import { createOutboundMcpFromOurClientToolProviderRegistration } from "~/domains/outbound-mcp-client/utils/outbound-mcp-provider-registration.ts";
+import { parseConfig } from "~/config.ts";
+import type { ContextDO } from "~/itx/context-do.ts";
+import type { ItxRuntime } from "~/itx/handle.ts";
+import type { CapInvoke, SerializableCapTarget } from "~/itx/protocol.ts";
+import { runItxScript } from "~/itx/run.ts";
 
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 
@@ -39,8 +34,8 @@ export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capabil
  */
 
 interface McpServerEnv {
-  CODEMODE_SESSION: CodemodeSessionNamespace;
   DO_CATALOG: D1Database;
+  ITX_CONTEXT: DurableObjectNamespace<ContextDO>;
   MOCK_PROVIDER_BASE_URL?: string;
   PROJECT_MCP_SERVER_CONNECTION: DurableObjectNamespace;
 }
@@ -94,6 +89,37 @@ const sessionSlugStorageKey = "mcpServerSessionSlug";
 const eventTypePrefix = "events.iterate.com/mcp-server";
 const requiredToolScope = "profile";
 
+/** Capabilities every MCP session context starts with (instructions feed the
+ * exec_js tool description AND itx describe()). */
+const SEEDED_CAPS: Array<{
+  name: string;
+  instructions: string;
+  invoke: CapInvoke;
+  target: SerializableCapTarget;
+}> = [
+  {
+    instructions:
+      "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
+    invoke: "members",
+    name: "ai",
+    target: { type: "rpc", worker: { binding: "AI", type: "binding" } },
+  },
+  {
+    instructions:
+      "Project-bound OS API. Call itx.os.listProcedures() for the TypeScript surface, then itx.os.<path.to.procedure>({ …input }).",
+    invoke: "path-call",
+    name: "os",
+    target: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
+  },
+  {
+    instructions:
+      "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }) against the Gmail REST API.",
+    invoke: "members",
+    name: "gmail",
+    target: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
+  },
+];
+
 export class ProjectMcpServerConnection extends McpAgent<
   McpServerEnv,
   unknown,
@@ -108,11 +134,11 @@ export class ProjectMcpServerConnection extends McpAgent<
       instructions: [
         "This is an Iterate OS project MCP server. You have one tool: exec_js.",
         "",
-        "exec_js runs JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async (ctx) => { ... }`.",
+        "exec_js runs JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async ({ itx }) => { ... }`.",
         "",
-        "The `ctx` object provides registered tool providers. Call them as `ctx.<path>.<method>(args)`. Available providers are listed in the exec_js tool description.",
+        "The `itx` object is a handle on this session's iterate context: built-ins (itx.fetch, itx.streams, itx.caps) plus every capability on the context, called as `itx.<cap>.<method>(args)`. Available capabilities are listed in the exec_js tool description.",
         "",
-        "Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP requests. The return value is sent back as the result. Do NOT write bare statements — always wrap in `async (ctx) => { ... }`.",
+        "Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP requests (it rides project egress with secret substitution). The return value is sent back as the result. Do NOT write bare statements — always wrap in `async ({ itx }) => { ... }`.",
       ].join("\n"),
     },
   );
@@ -171,27 +197,24 @@ export class ProjectMcpServerConnection extends McpAgent<
     const requireProjectInput =
       auth.authType === "admin_api_secret" || availableProjects.length > 1;
     const schema = this.createExecJsInputSchema(availableProjects, { requireProjectInput });
-    const providerDocs = [
-      ...createDefaultOutboundMcpProviderRegistrations(),
-      ...this.createStaticCodemodeToolProviders(this.authForProject(auth, availableProjects[0])),
-    ]
-      .map((p) => `- ctx.${p.path.join(".")}: ${p.instructions}`)
-      .join("\n");
+    const providerDocs = SEEDED_CAPS.map((cap) => `- itx.${cap.name}: ${cap.instructions}`).join(
+      "\n",
+    );
 
     this.server.registerTool(
       "exec_js",
       {
         title: "Run code",
         description: [
-          "Execute JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async (ctx) => { ... }`.",
+          "Execute JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async ({ itx }) => { ... }`.",
           "",
-          "The function receives a `ctx` object with registered tool providers. Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP. The return value (or thrown error) is sent back as the tool result.",
-          "If you're not sure about the shape of the result of a function call, just return it from a codemode block and you'll be shown it on your next turn.",
+          "The function receives `{ itx }`, a handle on this session's iterate context. Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP (project egress, secret substitution). The return value (or thrown error) is sent back as the tool result.",
+          "If you're not sure about the shape of the result of a call, just return it and you'll be shown it on your next turn.",
           "",
-          "Available tool providers on ctx:",
+          "Available capabilities on itx:",
           providerDocs,
           "",
-          'Example: async (ctx) => { const msgs = await ctx.gmail.request({ path: "/gmail/v1/users/me/messages", query: { maxResults: 5 } }); return msgs.data; }',
+          'Example: async ({ itx }) => { const msgs = await itx.gmail.request({ path: "/gmail/v1/users/me/messages", query: { maxResults: 5 } }); return msgs.data; }',
         ].join("\n"),
         inputSchema: schema,
       },
@@ -204,8 +227,6 @@ export class ProjectMcpServerConnection extends McpAgent<
           this.resolveToolProject(availableProjects, project, { requireProjectInput }),
         );
         this.requireScope(auth, requiredToolScope);
-        const providers = this.createStaticCodemodeToolProviders(auth);
-        const staticProviders = providers.slice(0, readDebugProviderLimit(code));
 
         const invocationId = `mcp_tool_${crypto.randomUUID()}`;
         const startedAt = Date.now();
@@ -213,7 +234,7 @@ export class ProjectMcpServerConnection extends McpAgent<
 
         await this.emitLifecycleEvent("tool-invocation-started", {
           auth: summarizeAuthProps(auth),
-          input: { code, providerCount: staticProviders.length },
+          input: { code },
           invocationId,
           projectId: auth.projectId,
           projectSlug: auth.projectSlug,
@@ -222,51 +243,38 @@ export class ProjectMcpServerConnection extends McpAgent<
         });
 
         try {
-          const started = await startCodemodeScriptOnSession({
-            code,
-            events: [],
-            namespace: this.env.CODEMODE_SESSION,
+          const itxContextId = await this.ensureItxContext(auth.projectId);
+          const outcome = await runItxScript({
+            env: this.env as unknown as Env,
+            exports: this.workerExports() as unknown as ItxRuntime["exports"],
+            functionSource: code,
             projectId: auth.projectId,
-            providers: staticProviders,
-            streamPath,
-          });
-          const output = await waitForScriptExecutionFinished({
-            afterOffset: started.event.offset,
-            exports: this.workerExports(),
-            projectId: auth.projectId,
-            scriptExecutionId: String(
-              (started.event.payload as { scriptExecutionId?: unknown }).scriptExecutionId,
-            ),
-            streamPath,
+            props: { context: itxContextId },
+            record: { namespace: auth.projectId, path: streamPath },
           });
 
           const parts: string[] = [];
-          if (output.logs.length > 0) parts.push(`Console:\n${output.logs.join("\n")}`);
-          if (output.error) {
-            parts.push(`Error: ${output.error}`);
+          if (outcome.logs.length > 0) parts.push(`Console:\n${outcome.logs.join("\n")}`);
+          if (outcome.ok) {
+            parts.push(`Result: ${JSON.stringify(outcome.result, null, 2)}`);
           } else {
-            parts.push(`Result: ${JSON.stringify(output.result, null, 2)}`);
+            parts.push(`Error: ${outcome.error}`);
           }
 
           const response = {
             content: [{ type: "text" as const, text: parts.join("\n\n") }],
-            isError: !!output.error,
+            isError: !outcome.ok,
           };
 
           await this.emitLifecycleEvent("tool-invocation-finished", {
             auth: summarizeAuthProps(auth),
             durationMs: Date.now() - startedAt,
-            input: {
-              code,
-              providerCount: staticProviders.length,
-            },
+            executionId: outcome.executionId,
+            input: { code },
             invocationId,
             output: response,
             projectId: auth.projectId,
             projectSlug: auth.projectSlug,
-            result: output,
-            scriptExecutionId: (started.event.payload as { scriptExecutionId?: unknown })
-              .scriptExecutionId,
             streamPath,
             toolName: "exec_js",
           });
@@ -277,10 +285,7 @@ export class ProjectMcpServerConnection extends McpAgent<
             auth: summarizeAuthProps(auth),
             durationMs: Date.now() - startedAt,
             error: serializeError(error),
-            input: {
-              code,
-              providerCount: staticProviders.length,
-            },
+            input: { code },
             invocationId,
             isError: true,
             projectId: auth.projectId,
@@ -295,51 +300,38 @@ export class ProjectMcpServerConnection extends McpAgent<
     );
   }
 
-  private createStaticCodemodeToolProviders(
-    auth: ProjectMcpServerConnectionProps & { orgId: string; projectId: string },
-  ): ToolProviderRegistration[] {
-    const providers = createExampleCapabilityProviders({
-      projectId: auth.projectId,
+  /**
+   * One child context per (MCP session, project): the session's capabilities
+   * live on it, scripts run against it, and anything it doesn't define
+   * delegates up to the project context (the itx prototype chain).
+   */
+  private async ensureItxContext(projectId: string): Promise<string> {
+    const storageKey = `itxContextId:${projectId}`;
+    const existing = await this.ctx.storage.get<string>(storageKey);
+    if (existing) return existing;
+
+    const config = parseConfig(this.env as unknown as Env);
+    const contextId = typeid({
+      env: { TYPEID_PREFIX: config.typeIdPrefix },
+      prefix: "ctx",
     });
-
-    providers.push(createGmailProviderRegistration({ projectId: auth.projectId }));
-
-    const providerMatrixBaseUrl = this.env.MOCK_PROVIDER_BASE_URL?.replace(/\/+$/, "");
-    providers.push(
-      createOpenApiProviderRegistration({
-        baseUrl: providerMatrixBaseUrl ?? "https://petstore.swagger.io/v2",
-        instructions:
-          "Use ctx.integrations.http.catalog for the static inbound MCP OpenAPI example. Call listOperations() before operation calls.",
-        path: ["integrations", "http", "catalog"],
-        specUrl: providerMatrixBaseUrl
-          ? `${providerMatrixBaseUrl}/openapi.json`
-          : "https://petstore.swagger.io/v2/swagger.json",
-      }),
-    );
-
-    if (providerMatrixBaseUrl) {
-      providers.push(
-        createOutboundMcpFromOurClientToolProviderRegistration({
-          instructions:
-            "Use ctx.mcp.cloudflareDocs for the static inbound MCP outbound-MCP example. Call listTools() first.",
-          path: ["mcp", "cloudflareDocs"],
-          serverUrl: `${providerMatrixBaseUrl}/mcp`,
-        }),
-        createLoopbackServiceProviderRegistration({
-          exportName: "TestBuiltinMatrixProvider",
-          instructions:
-            "Test-only provider that composes OpenAPI, outbound MCP, and a unary leaf provider through codemode context calls.",
-          path: ["integrations", "builtinMatrix"],
-        }),
-        createLoopbackServiceProviderRegistration({
-          exportName: "TestLeafProvider",
-          instructions: "Test-only unary provider for inbound MCP provider composition proofs.",
-          path: ["leaf"],
-        }),
-      );
+    const contextStub = this.env.ITX_CONTEXT.getByName(contextId);
+    await contextStub.initialize({
+      id: contextId,
+      name: `mcp:${await this.getSessionSlug()}`,
+      parent: projectId,
+      projectId,
+    });
+    for (const cap of SEEDED_CAPS) {
+      await contextStub.itxDefine({
+        invoke: cap.invoke,
+        meta: { instructions: cap.instructions },
+        name: cap.name,
+        target: cap.target,
+      });
     }
-
-    return providers;
+    await this.ctx.storage.put(storageKey, contextId);
+    return contextId;
   }
 
   private async emitLifecycleEvent(slug: string, payload: Record<string, unknown>) {
@@ -569,11 +561,6 @@ export class ProjectMcpServerConnection extends McpAgent<
   }
 }
 
-function readDebugProviderLimit(code: string) {
-  const match = code.match(/providerLimit:(\d+)/);
-  return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
-}
-
 function summarizeRequest(request: Request) {
   const url = new URL(request.url);
   return {
@@ -617,120 +604,6 @@ function streamCapabilityProps(input: {
     projectId: input.projectId,
     streamPath: input.streamPath,
   };
-}
-
-function createLoopbackServiceProviderRegistration(input: {
-  exportName: string;
-  instructions: string;
-  path: string[];
-}): ToolProviderRegistration {
-  return {
-    instructions: input.instructions,
-    invocation: {
-      kind: "rpc",
-      callable: {
-        type: "workers-rpc",
-        via: {
-          type: "loopback-binding",
-          bindingType: "service",
-          exportName: input.exportName,
-          props: {},
-        },
-        rpcMethod: "executeCodemodeFunctionCall",
-        argsMode: "object",
-      },
-    },
-    path: input.path,
-  };
-}
-
-async function* decodeStreamEventLines(stream: ReadableStream<Uint8Array>, signal?: AbortSignal) {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  const onAbort = () => {
-    void reader.cancel();
-  };
-
-  try {
-    if (signal?.aborted) return;
-    signal?.addEventListener("abort", onAbort, { once: true });
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      while (true) {
-        const newlineIndex = buffer.indexOf("\n");
-        if (newlineIndex === -1) break;
-        const line = buffer.slice(0, newlineIndex);
-        buffer = buffer.slice(newlineIndex + 1);
-        if (line.trim()) yield JSON.parse(line) as Event;
-      }
-    }
-
-    buffer += decoder.decode();
-    if (buffer.trim()) yield JSON.parse(buffer) as Event;
-  } finally {
-    signal?.removeEventListener("abort", onAbort);
-    reader.releaseLock();
-  }
-}
-
-/**
- * Bridges the request/response shape expected by MCP tools onto CodemodeSession's
- * event stream. Codemode execution is asynchronous and durable; the MCP tool
- * waits for the matching `script-execution-completed` event instead of calling a
- * separate in-memory executor, so web UI code mode and inbound MCP share one
- * execution path.
- */
-async function waitForScriptExecutionFinished(input: {
-  afterOffset: number;
-  exports: Cloudflare.Exports | undefined;
-  projectId: string;
-  scriptExecutionId: string;
-  streamPath: StreamPath;
-}) {
-  const logs: string[] = [];
-  const response = await getStreamsCapability({
-    exports: input.exports,
-    props: streamCapabilityProps({
-      projectId: input.projectId,
-      streamPath: input.streamPath,
-    }),
-  }).stream({
-    afterOffset: input.afterOffset,
-  });
-
-  if (!response.body) {
-    throw new Error("Codemode Script Execution stream response did not include a body.");
-  }
-
-  for await (const event of decodeStreamEventLines(response.body, AbortSignal.timeout(60_000))) {
-    const payload = readEventPayload(event);
-    if (
-      event.type === "events.iterate.com/codemode/log-emitted" &&
-      payload.scriptExecutionId === input.scriptExecutionId
-    ) {
-      const level = typeof payload.level === "string" ? payload.level : "log";
-      const message = typeof payload.message === "string" ? payload.message : "";
-      logs.push(`[${level}] ${message}`);
-    }
-
-    if (
-      event.type === "events.iterate.com/codemode/script-execution-completed" &&
-      payload.scriptExecutionId === input.scriptExecutionId
-    ) {
-      const outcome = isRecord(payload.outcome) ? payload.outcome : {};
-      return {
-        error: outcome.status === "threw" ? stringifyPayloadError(outcome.error) : undefined,
-        logs,
-        result: outcome.status === "returned" ? outcome.value : undefined,
-      };
-    }
-  }
-
-  throw new Error("Codemode Script Execution stream ended before a result event was appended.");
 }
 
 function slugifySegment(value: string) {

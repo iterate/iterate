@@ -21,7 +21,7 @@ import {
   updateOAuthClientReferenceByClientId,
   updateVerifiedUserById,
 } from "../../db/queries/index.ts";
-import { BOOTSTRAP_SUPERADMIN_EMAIL } from "../../bootstrap-superadmin.ts";
+import { BOOTSTRAP_ADMIN_EMAIL } from "../../bootstrap-admin.ts";
 import {
   generateId,
   toMembershipRole,
@@ -37,13 +37,13 @@ function extractCookieHeader(setCookieHeader: string | null): string | null {
   return firstCookie.split(";")[0] ?? null;
 }
 
-async function getBootstrapSuperadminAuthHeaders(params: {
+async function getBootstrapAdminAuthHeaders(params: {
   serviceAuthToken: string;
 }): Promise<Headers> {
   const signInResult = await auth.api.signInEmail({
     returnHeaders: true,
     body: {
-      email: BOOTSTRAP_SUPERADMIN_EMAIL,
+      email: BOOTSTRAP_ADMIN_EMAIL,
       password: params.serviceAuthToken,
     },
   });
@@ -51,7 +51,7 @@ async function getBootstrapSuperadminAuthHeaders(params: {
   const cookie = extractCookieHeader(signInResult.headers.get("set-cookie"));
   if (!cookie) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "Failed to establish bootstrap superadmin auth session",
+      message: "Failed to establish bootstrap admin auth session",
     });
   }
 
@@ -371,7 +371,7 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
       });
     }
 
-    const headers = await getBootstrapSuperadminAuthHeaders({
+    const headers = await getBootstrapAdminAuthHeaders({
       serviceAuthToken,
     });
     const created = await auth.api.adminCreateOAuthClient({
