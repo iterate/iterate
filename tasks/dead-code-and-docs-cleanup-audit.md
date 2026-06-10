@@ -1,5 +1,5 @@
 ---
-state: open
+state: todo
 priority: medium
 size: large
 dependsOn: []

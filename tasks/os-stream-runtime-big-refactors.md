@@ -1,5 +1,5 @@
 ---
-state: open
+state: backlog
 priority: medium
 size: large
 dependsOn: []

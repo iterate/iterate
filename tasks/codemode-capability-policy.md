@@ -1,5 +1,5 @@
 ---
-state: pending
+state: draft
 priority: medium
 size: medium
 dependsOn: []
