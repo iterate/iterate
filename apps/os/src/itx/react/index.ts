@@ -5,3 +5,4 @@
 export { ItxProvider } from "./provider.tsx";
 export { itxKey, useItxQuery, useItxMutation } from "./hooks.ts";
 export { useStreamEvents } from "./use-stream-events.ts";
+export { isItxAccessError } from "./errors.ts";

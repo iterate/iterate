@@ -25,7 +25,7 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
 import { projectStreamsListKey, useProjectStreamsList } from "~/lib/itx-queries.ts";
 import { streamPathFromInput } from "~/lib/stream-links.ts";
-import { useItxMutation } from "~/itx/react/index.ts";
+import { isItxAccessError, useItxMutation } from "~/itx/react/index.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
   loader: ({ context }) => ({
@@ -150,7 +150,17 @@ function ProjectStreamsIndexPage() {
         </div>
       </form>
 
-      {error ? (
+      {error && isItxAccessError(error) ? (
+        <Empty className="rounded-lg border">
+          <EmptyHeader>
+            <EmptyTitle>No access to this project's streams</EmptyTitle>
+            <EmptyDescription>
+              Your session can't read this project. Sign in with an account that has access — the
+              account menu shows who you're signed in as.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
+      ) : error ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>Could not load streams</EmptyTitle>
