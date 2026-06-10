@@ -7,7 +7,7 @@ size: small
 
 ## Status summary
 
-Implemented and dry-run tested locally; PR open at https://github.com/iterate/iterate/pull/1448. Remaining: confirm the e2e test run (push-triggered, posts to `#misha-test`) succeeds in CI, then mark ready for review.
+Done, pending review: PR at https://github.com/iterate/iterate/pull/1448. Implemented, dry-run tested locally, and e2e tested in CI against `#misha-test` — both the create path (post + store ts) and the update-in-place path were exercised by real workflow runs. Nothing known missing.
 
 ## Problem
 
@@ -57,7 +57,7 @@ Old: #991, #993, #1010
 - [x] verify Slack bot scopes / dry-run the script locally against `#misha-test` _(dry run via `node cli.ts github-script pr-dashboard.update_dashboard.update_pr_dashboard --github-token ...`; full message rendered correctly. Slack-scope concern dissolved by switching state store to a repo Actions variable)_
 - [x] typecheck/lint/format _(ts-workflows `tsc`, root `oxlint` + `oxfmt` all clean)_
 - [x] open draft PR _(https://github.com/iterate/iterate/pull/1448)_
-- [ ] confirm push-triggered e2e run posts/updates the dashboard in `#misha-test`
+- [x] confirm push-triggered e2e run posts/updates the dashboard in `#misha-test` _(run 27280068182 posted + created `SLACK_PR_DASHBOARD_STATE_TEST`; a later run logged "Updated existing dashboard message", confirming update-in-place)_
 
 ## Implementation log
 
@@ -65,3 +65,5 @@ Old: #991, #993, #1010
 - The search API needs `advanced_search: "true"` to avoid the legacy-endpoint deprecation.
 - Search results don't carry `merge_commit_sha` or base branch, so merged PRs get an extra `pulls.get` each (bounded by per-day merge count).
 - First dry run on a busy day (~25 merges) showed every same-day-merged PR duplicated under "Opened … (already closed)" — narrowed Opened to `is:open`.
+- First CI run failed as a malformed workflow file: the dry-run check `slackToken.includes("$" + "{{")` put a literal unclosed expression-opener in the yaml. Detect the unexpanded secret by name instead.
+- Second CI run exposed a Slack API asymmetry on busy days: `chat.postMessage` silently truncates long text but `chat.update` rejects it with `msg_too_long`, and the fallback then posted a second message — the exact noise problem this task removes. Fixed by chunking lines into 2900-char mrkdwn section blocks (3000-char/50-block limits give ~35x more headroom), with the heading as notification fallback text.
