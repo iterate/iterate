@@ -5,9 +5,9 @@
 // subscribed LLM request processor owes the stream `agent/output-added` plus a
 // terminal `agent/llm-request-completed`.
 //
-// Migrated from packages/shared/src/stream-processors/agent/implementation.ts.
-// All appended events keep their legacy types, payload shapes, and
-// idempotency-key derivations (`agent/<key>@<sourceOffset>`).
+// Appended event types, payload shapes, and idempotency-key derivations
+// (`agent/<key>@<sourceOffset>`) are stable wire formats — changing them
+// breaks dedup against events already committed to streams.
 
 import {
   assertNever,

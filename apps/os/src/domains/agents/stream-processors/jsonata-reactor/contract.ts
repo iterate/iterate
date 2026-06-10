@@ -1,10 +1,7 @@
-// Defines the "jsonata-reactor" processor contract on the class-based stream model.
+// Defines the "jsonata-reactor" processor contract.
 //
-// Migrated from packages/shared/src/stream-processors/jsonata-reactor/contract.ts.
-// Wire formats (event types and payload schemas) are unchanged. The legacy
-// `consumesAllEvents: true` escape hatch becomes an explicit `"*"` entry in
-// `consumes`, which also drives the host's subscription event-type filter
-// (unfiltered delivery).
+// The `"*"` entry in `consumes` drives the host's subscription event-type
+// filter (unfiltered delivery).
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";

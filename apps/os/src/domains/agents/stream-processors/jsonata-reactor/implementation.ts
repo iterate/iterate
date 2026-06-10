@@ -1,6 +1,5 @@
-// Implements the "jsonata-reactor" processor as a class-based StreamProcessor.
+// Implements the "jsonata-reactor" processor.
 //
-// Migrated from packages/shared/src/stream-processors/jsonata-reactor/implementation.ts.
 // Reaction events are appended exactly as the rule's JSONata expression produces
 // them (including any rule-provided idempotency keys); reaction evaluation and
 // appends run under `blockProcessorWhile` because rules may produce reactions

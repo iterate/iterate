@@ -1,7 +1,6 @@
-// Ported from packages/shared/src/stream-processors/agent/implementation.test.ts
-// onto the class-based StreamProcessor model: events are driven through
-// `ingest` and state is seeded through `readState` snapshots. Idempotency-key
-// assertions are wire-format regression checks — they must not change.
+// Events are driven through `ingest` and state is seeded through `readState`
+// snapshots. Idempotency-key assertions are wire-format regression checks —
+// they must not change.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getInitialProcessorState } from "@iterate-com/streams/shared/stream-processors";

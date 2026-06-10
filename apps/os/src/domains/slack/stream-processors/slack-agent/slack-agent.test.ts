@@ -1,7 +1,5 @@
-// Ported from packages/shared/src/stream-processors/slack-agent/slack-agent.test.ts
-// onto the class-based StreamProcessor model: state is built by ingesting
-// events instead of being passed into afterAppend, and the first-attach
-// lookback test became a sideEffectsAfterOffset anchor test.
+// State is built by ingesting events; first-attach lookback is covered by the
+// sideEffectsAfterOffset anchor test.
 
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/streams/shared/event";

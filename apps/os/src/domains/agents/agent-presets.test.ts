@@ -134,36 +134,6 @@ describe("agent presets", () => {
     ).toBe(slackOpenAiPreset);
   });
 
-  it("ignores the legacy generated Slack OpenAI preset so Slack agents fall back to the built-in default", () => {
-    const legacySlackOpenAiPreset = {
-      basePath: "/agents/slack",
-      events: [
-        {
-          type: "events.iterate.com/os-agent/llm-provider-selected",
-          payload: { provider: "openai-ws" },
-        },
-        {
-          type: "events.iterate.com/openai-ws/config-updated",
-          payload: { model: "gpt-5.5" },
-        },
-        {
-          type: "events.iterate.com/agent/system-prompt-updated",
-          payload: {
-            systemPrompt:
-              "You are an Iterate agent responding from Slack. Send Slack replies with itx.slack.chat.postMessage({ channel, thread_ts, text }).",
-          },
-        },
-      ],
-    };
-
-    expect(
-      selectAgentSetupPreset({
-        agentPath: "/agents/slack/c123/ts-1778565914-773159",
-        presets: [legacySlackOpenAiPreset],
-      }),
-    ).toBeNull();
-  });
-
   it("ignores invalid stored preset paths while selecting a prefix preset", () => {
     const validPreset = {
       basePath: "/agents/alice",

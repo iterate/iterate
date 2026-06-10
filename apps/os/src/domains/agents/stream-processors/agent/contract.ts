@@ -6,11 +6,8 @@
 // module to project stream events into display state without constructing the
 // backend processor class.
 //
-// Migrated from packages/shared/src/stream-processors/agent/contract.ts.
-// Wire formats (event types and payload schemas) are unchanged. The
-// standardProcessorBehavior registration slice (`hasRegisteredCurrentVersion`
-// state + core stream-processor-registered consumption) is gone: contract
-// announcements now ride the host's `stream/subscriber-connected` fact.
+// Contract announcements ride the host's `stream/subscriber-connected` fact;
+// there is no per-processor registration slice.
 
 import { z } from "zod";
 import {
