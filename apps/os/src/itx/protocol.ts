@@ -45,23 +45,16 @@ export type PathCall = { path: string[]; args: unknown[] };
 /** The full shape a "path-call" capability provider implements. */
 export type PathCallTarget = { call(input: PathCall): unknown };
 
-/**
- * A capability's kind is its target's type (design of record: types.ts).
- * Stored rows may still carry the legacy kinds "worker"/"facet"; they
- * normalize to "rpc" on read.
- */
+/** A capability's kind is its target's type (design of record: types.ts). */
 export type CapKind = "live" | "rpc" | "url";
 
 /**
  * Source for a `{ type: "source" }` worker ref. `cacheKey` MUST change
  * whenever the module contents change — the Worker Loader caches the
- * materialized isolate by it (a content hash is the ideal value). `codeId`
- * is the legacy spelling, still accepted.
+ * materialized isolate by it (a content hash is the ideal value).
  */
 export type CapSource = {
   cacheKey?: string;
-  /** @deprecated legacy spelling of `cacheKey`. */
-  codeId?: string;
   mainModule: string;
   modules: Record<string, string>;
   /** Named export to use; defaults to the default export. */
@@ -77,7 +70,7 @@ export type CapSource = {
 };
 
 export function capSourceCacheKey(source: CapSource): string {
-  const key = source.cacheKey ?? source.codeId;
+  const key = source.cacheKey;
   if (!key) {
     throw new Error(
       "CapSource needs a cacheKey (rotate it whenever modules change; a content hash is ideal).",
@@ -174,31 +167,6 @@ export function resolveDialableTargets(config?: {
     bindings: new Set([...DIALABLE_BINDINGS, ...(config.dialableBindings ?? [])]),
     loopbacks: new Set([...DIALABLE_LOOPBACKS, ...(config.dialableLoopbacks ?? [])]),
   };
-}
-
-/**
- * Normalize a define() input to a serializable target. Legacy callers pass
- * `source` (+ optional `kind: "worker" | "facet"`); they normalize to an
- * rpc/source target, with "facet" becoming `exportType: "durable-object"`.
- */
-export function normalizeCapTarget(input: {
-  target?: SerializableCapTarget;
-  source?: CapSource;
-  kind?: "worker" | "facet";
-}): SerializableCapTarget {
-  if (input.target) {
-    if (input.source || input.kind) {
-      throw new Error("caps.define takes either target or legacy source/kind, not both.");
-    }
-    return input.target;
-  }
-  if (!input.source) throw new Error("caps.define needs a target.");
-  const source: CapSource = {
-    ...input.source,
-    exportType:
-      input.source.exportType ?? (input.kind === "facet" ? "durable-object" : "worker-entrypoint"),
-  };
-  return { type: "rpc", worker: { source, type: "source" } };
 }
 
 /**

@@ -23,7 +23,7 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   await projectItx.caps.define({
     invoke: "path-call",
     name: "shared",
-    source: pathCallSource("project-level"),
+    target: pathCallTarget("project-level"),
   });
 
   using child = await projectItx.fork({ name: "e2e-session" });
@@ -42,7 +42,7 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   await child.caps.define({
     invoke: "path-call",
     name: "shared",
-    source: pathCallSource("child-level"),
+    target: pathCallTarget("child-level"),
   });
   const viaShadow = (await (child as never as Record<string, any>).shared.chat.post({
     text: "hi",
@@ -103,23 +103,29 @@ test("fork: child worker caps run with the owning project's authority", async ()
   // The child-scoped cap's own itx writes to the project's streams.
   await child.caps.define({
     name: "noter",
-    source: {
-      codeId: crypto.randomUUID(),
-      mainModule: "cap.js",
-      modules: {
-        "cap.js": `
-          import { WorkerEntrypoint } from "cloudflare:workers";
-          export default class extends WorkerEntrypoint {
-            async note({ text }) {
-              const itx = await this.env.ITERATE.context;
-              const appended = await itx.streams.get("/itx-e2e/notes").append({
-                payload: { text },
-                type: "events.iterate.test/itx/note",
-              });
-              return { context: (await itx.describe()).context, offset: appended.offset };
-            }
-          }
-        `,
+    target: {
+      type: "rpc",
+      worker: {
+        type: "source",
+        source: {
+          cacheKey: crypto.randomUUID(),
+          mainModule: "cap.js",
+          modules: {
+            "cap.js": `
+              import { WorkerEntrypoint } from "cloudflare:workers";
+              export default class extends WorkerEntrypoint {
+                async note({ text }) {
+                  const itx = await this.env.ITERATE.context;
+                  const appended = await itx.streams.get("/itx-e2e/notes").append({
+                    payload: { text },
+                    type: "events.iterate.test/itx/note",
+                  });
+                  return { context: (await itx.describe()).context, offset: appended.offset };
+                }
+              }
+            `,
+          },
+        },
       },
     },
   });
@@ -142,19 +148,25 @@ test("fork: child worker caps run with the owning project's authority", async ()
 
 // ---- helpers ----------------------------------------------------------------
 
-function pathCallSource(marker: string) {
+function pathCallTarget(marker: string) {
   return {
-    codeId: crypto.randomUUID(),
-    mainModule: "cap.js",
-    modules: {
-      "cap.js": `
-        import { WorkerEntrypoint } from "cloudflare:workers";
-        export default class extends WorkerEntrypoint {
-          async call({ path, args }) {
-            return { args, marker: ${JSON.stringify(marker)}, method: path.join(".") };
-          }
-        }
-      `,
+    type: "rpc" as const,
+    worker: {
+      type: "source" as const,
+      source: {
+        cacheKey: crypto.randomUUID(),
+        mainModule: "cap.js",
+        modules: {
+          "cap.js": `
+            import { WorkerEntrypoint } from "cloudflare:workers";
+            export default class extends WorkerEntrypoint {
+              async call({ path, args }) {
+                return { args, marker: ${JSON.stringify(marker)}, method: path.join(".") };
+              }
+            }
+          `,
+        },
+      },
     },
   };
 }

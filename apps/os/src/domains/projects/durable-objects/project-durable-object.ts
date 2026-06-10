@@ -65,7 +65,6 @@ import { ITX_AUDIT_STREAM_PATH, resolveDialableTargets } from "~/itx/protocol.ts
 import type {
   CapInvoke,
   CapMeta,
-  CapSource,
   PathCall,
   PathCallTarget,
   SerializableCapTarget,
@@ -413,9 +412,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
 
   async itxDefine(input: {
     name: string;
-    target?: SerializableCapTarget;
-    source?: CapSource;
-    kind?: "worker" | "facet";
+    target: SerializableCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {

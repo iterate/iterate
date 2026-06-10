@@ -18,28 +18,34 @@ test("facet caps keep private durable state across invocations", async () => {
   using projectItx = await itx.projects.get(project.id);
 
   await projectItx.caps.define({
-    kind: "facet",
     name: "counter",
-    source: {
-      codeId: crypto.randomUUID(),
-      // Facet classes must be NAMED exports (default exports trip an opaque
-      // workerd error — registry validates this at define time).
-      entrypoint: "Counter",
-      mainModule: "cap.js",
-      modules: {
-        "cap.js": `
-          import { DurableObject } from "cloudflare:workers";
-          export class Counter extends DurableObject {
-            async increment() {
-              const count = ((await this.ctx.storage.get("count")) ?? 0) + 1;
-              await this.ctx.storage.put("count", count);
-              return count;
-            }
-            async current() {
-              return (await this.ctx.storage.get("count")) ?? 0;
-            }
-          }
-        `,
+    target: {
+      type: "rpc",
+      worker: {
+        type: "source",
+        source: {
+          cacheKey: crypto.randomUUID(),
+          // Facet classes must be NAMED exports (default exports trip an opaque
+          // workerd error — registry validates this at define time).
+          entrypoint: "Counter",
+          exportType: "durable-object",
+          mainModule: "cap.js",
+          modules: {
+            "cap.js": `
+              import { DurableObject } from "cloudflare:workers";
+              export class Counter extends DurableObject {
+                async increment() {
+                  const count = ((await this.ctx.storage.get("count")) ?? 0) + 1;
+                  await this.ctx.storage.put("count", count);
+                  return count;
+                }
+                async current() {
+                  return (await this.ctx.storage.get("count")) ?? 0;
+                }
+              }
+            `,
+          },
+        },
       },
     },
   });
@@ -60,21 +66,27 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
   await projectItx.caps.define({
     meta: { http: { expose: true } },
     name: "hello",
-    source: {
-      codeId: crypto.randomUUID(),
-      mainModule: "cap.js",
-      modules: {
-        "cap.js": `
-          import { WorkerEntrypoint } from "cloudflare:workers";
-          export default class extends WorkerEntrypoint {
-            async fetch(request) {
-              const url = new URL(request.url);
-              return new Response("hello from a routable cap at " + url.pathname, {
-                headers: { "content-type": "text/plain" },
-              });
-            }
-          }
-        `,
+    target: {
+      type: "rpc",
+      worker: {
+        type: "source",
+        source: {
+          cacheKey: crypto.randomUUID(),
+          mainModule: "cap.js",
+          modules: {
+            "cap.js": `
+              import { WorkerEntrypoint } from "cloudflare:workers";
+              export default class extends WorkerEntrypoint {
+                async fetch(request) {
+                  const url = new URL(request.url);
+                  return new Response("hello from a routable cap at " + url.pathname, {
+                    headers: { "content-type": "text/plain" },
+                  });
+                }
+              }
+            `,
+          },
+        },
       },
     },
   });
@@ -114,18 +126,24 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
   await projectItx.caps.define({
     meta: { http: { expose: true, public: true } },
     name: "hello",
-    source: {
-      codeId: crypto.randomUUID(),
-      mainModule: "cap.js",
-      modules: {
-        "cap.js": `
-          import { WorkerEntrypoint } from "cloudflare:workers";
-          export default class extends WorkerEntrypoint {
-            async fetch() {
-              return new Response("hello, public internet");
-            }
-          }
-        `,
+    target: {
+      type: "rpc",
+      worker: {
+        type: "source",
+        source: {
+          cacheKey: crypto.randomUUID(),
+          mainModule: "cap.js",
+          modules: {
+            "cap.js": `
+              import { WorkerEntrypoint } from "cloudflare:workers";
+              export default class extends WorkerEntrypoint {
+                async fetch() {
+                  return new Response("hello, public internet");
+                }
+              }
+            `,
+          },
+        },
       },
     },
   });
@@ -136,16 +154,22 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
   // (6) Unexposed caps do not exist as hostnames, even with admin auth.
   await projectItx.caps.define({
     name: "internal",
-    source: {
-      codeId: crypto.randomUUID(),
-      mainModule: "cap.js",
-      modules: {
-        "cap.js": `
-          import { WorkerEntrypoint } from "cloudflare:workers";
-          export default class extends WorkerEntrypoint {
-            async fetch() { return new Response("should never be reachable"); }
-          }
-        `,
+    target: {
+      type: "rpc",
+      worker: {
+        type: "source",
+        source: {
+          cacheKey: crypto.randomUUID(),
+          mainModule: "cap.js",
+          modules: {
+            "cap.js": `
+              import { WorkerEntrypoint } from "cloudflare:workers";
+              export default class extends WorkerEntrypoint {
+                async fetch() { return new Response("should never be reachable"); }
+              }
+            `,
+          },
+        },
       },
     },
   });

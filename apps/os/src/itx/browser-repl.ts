@@ -160,21 +160,27 @@ ${RESOLVE_PROJECT}
 
 // The source exports a WorkerEntrypoint. Its env.ITERATE is a project-scoped
 // itx, so the cap can use streams/fetch/other caps — but never reach beyond
-// its project. codeId must change whenever the source changes (loader caches
-// by id), so we use a fresh uuid here.
+// its project. cacheKey must change whenever the source changes (loader
+// caches by it), so we use a fresh uuid here.
 await project.caps.define({
   name: "greeter",
-  source: {
-    codeId: crypto.randomUUID(),
-    mainModule: "cap.js",
-    modules: {
-      "cap.js": \`
-        import { WorkerEntrypoint } from "cloudflare:workers";
-        export default class extends WorkerEntrypoint {
-          hello({ name }) { return "hello, " + name; }
-          add({ a, b }) { return a + b; }
-        }
-      \`,
+  target: {
+    type: "rpc",
+    worker: {
+      type: "source",
+      source: {
+        cacheKey: crypto.randomUUID(),
+        mainModule: "cap.js",
+        modules: {
+          "cap.js": \`
+            import { WorkerEntrypoint } from "cloudflare:workers";
+            export default class extends WorkerEntrypoint {
+              hello({ name }) { return "hello, " + name; }
+              add({ a, b }) { return a + b; }
+            }
+          \`,
+        },
+      },
     },
   },
 });
@@ -196,27 +202,33 @@ ${RESOLVE_PROJECT}
 
 await project.caps.define({
   name: "todo",
-  source: {
-    codeId: crypto.randomUUID(),
-    mainModule: "cap.js",
-    modules: {
-      "cap.js": \`
-        import { WorkerEntrypoint } from "cloudflare:workers";
-        const STREAM = "/repl/todos";
-        const TYPE = "events.iterate.repl/todo";
-        export default class extends WorkerEntrypoint {
-          async add({ text }) {
-            const itx = await this.env.ITERATE.context;     // the cap's own handle
-            const e = await itx.streams.get(STREAM).append({ type: TYPE, payload: { text } });
-            return { offset: e.offset, text };
-          }
-          async list() {
-            const itx = await this.env.ITERATE.context;
-            const events = await itx.streams.get(STREAM).read();
-            return events.filter((e) => e.type === TYPE).map((e) => e.payload.text);
-          }
-        }
-      \`,
+  target: {
+    type: "rpc",
+    worker: {
+      type: "source",
+      source: {
+        cacheKey: crypto.randomUUID(),
+        mainModule: "cap.js",
+        modules: {
+          "cap.js": \`
+            import { WorkerEntrypoint } from "cloudflare:workers";
+            const STREAM = "/repl/todos";
+            const TYPE = "events.iterate.repl/todo";
+            export default class extends WorkerEntrypoint {
+              async add({ text }) {
+                const itx = await this.env.ITERATE.context;     // the cap's own handle
+                const e = await itx.streams.get(STREAM).append({ type: TYPE, payload: { text } });
+                return { offset: e.offset, text };
+              }
+              async list() {
+                const itx = await this.env.ITERATE.context;
+                const events = await itx.streams.get(STREAM).read();
+                return events.filter((e) => e.type === TYPE).map((e) => e.payload.text);
+              }
+            }
+          \`,
+        },
+      },
     },
   },
 });
@@ -236,18 +248,24 @@ ${RESOLVE_PROJECT}
 
 await project.caps.define({
   name: "kit",
-  source: {
-    codeId: crypto.randomUUID(),
-    mainModule: "cap.js",
-    modules: {
-      "cap.js": \`
-        import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-        class Math extends RpcTarget { add({ a, b }) { return a + b; } }
-        export default class extends WorkerEntrypoint {
-          echo(input) { return { echoed: input }; }
-          get math() { return new Math(); }   // nested surface, also proxied
-        }
-      \`,
+  target: {
+    type: "rpc",
+    worker: {
+      type: "source",
+      source: {
+        cacheKey: crypto.randomUUID(),
+        mainModule: "cap.js",
+        modules: {
+          "cap.js": \`
+            import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+            class Math extends RpcTarget { add({ a, b }) { return a + b; } }
+            export default class extends WorkerEntrypoint {
+              echo(input) { return { echoed: input }; }
+              get math() { return new Math(); }   // nested surface, also proxied
+            }
+          \`,
+        },
+      },
     },
   },
 });
@@ -270,18 +288,24 @@ ${RESOLVE_PROJECT}
 // Provider cap.
 await project.caps.define({
   name: "inventory",
-  source: {
-    codeId: crypto.randomUUID(),
-    mainModule: "cap.js",
-    modules: {
-      "cap.js": \`
-        import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-        class Skus extends RpcTarget { priceOf({ sku }) { return sku === "ABC" ? 42 : 0; } }
-        export default class extends WorkerEntrypoint {
-          count() { return 7; }
-          get skus() { return new Skus(); }
-        }
-      \`,
+  target: {
+    type: "rpc",
+    worker: {
+      type: "source",
+      source: {
+        cacheKey: crypto.randomUUID(),
+        mainModule: "cap.js",
+        modules: {
+          "cap.js": \`
+            import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+            class Skus extends RpcTarget { priceOf({ sku }) { return sku === "ABC" ? 42 : 0; } }
+            export default class extends WorkerEntrypoint {
+              count() { return 7; }
+              get skus() { return new Skus(); }
+            }
+          \`,
+        },
+      },
     },
   },
 });
@@ -289,21 +313,27 @@ await project.caps.define({
 // Consumer cap — a different dynamic worker that calls the first via itx.
 await project.caps.define({
   name: "report",
-  source: {
-    codeId: crypto.randomUUID(),
-    mainModule: "cap.js",
-    modules: {
-      "cap.js": \`
-        import { WorkerEntrypoint } from "cloudflare:workers";
-        export default class extends WorkerEntrypoint {
-          async build({ sku }) {
-            const itx = await this.env.ITERATE.context;
-            const count = await itx.inventory.count();
-            const price = await itx.inventory.skus.priceOf({ sku });
-            return { count, price, total: count * price };
-          }
-        }
-      \`,
+  target: {
+    type: "rpc",
+    worker: {
+      type: "source",
+      source: {
+        cacheKey: crypto.randomUUID(),
+        mainModule: "cap.js",
+        modules: {
+          "cap.js": \`
+            import { WorkerEntrypoint } from "cloudflare:workers";
+            export default class extends WorkerEntrypoint {
+              async build({ sku }) {
+                const itx = await this.env.ITERATE.context;
+                const count = await itx.inventory.count();
+                const price = await itx.inventory.skus.priceOf({ sku });
+                return { count, price, total: count * price };
+              }
+            }
+          \`,
+        },
+      },
     },
   },
 });
@@ -315,29 +345,35 @@ return await project.report.build({ sku: "ABC" });
     id: "stateful-facet-cap",
     title: "A stateful capability with its own database (facet)",
     description:
-      "kind: 'facet' instantiates a Durable Object as a child of the project — its own private SQLite, zero provisioning. State persists across calls and survives code upgrades. The class MUST be a named export.",
+      "exportType: 'durable-object' instantiates a Durable Object as a child of the project — its own private SQLite, zero provisioning. State persists across calls and survives code upgrades. The class MUST be a named export.",
     code: `
 ${RESOLVE_PROJECT}
 
 await project.caps.define({
   name: "counter",
-  kind: "facet",
-  source: {
-    codeId: crypto.randomUUID(),
-    entrypoint: "Counter",   // named export required for facets
-    mainModule: "cap.js",
-    modules: {
-      "cap.js": \`
-        import { DurableObject } from "cloudflare:workers";
-        export class Counter extends DurableObject {
-          async increment() {
-            const n = ((await this.ctx.storage.get("n")) ?? 0) + 1;
-            await this.ctx.storage.put("n", n);   // this.ctx.storage is YOURS alone
-            return n;
-          }
-          async current() { return (await this.ctx.storage.get("n")) ?? 0; }
-        }
-      \`,
+  target: {
+    type: "rpc",
+    worker: {
+      type: "source",
+      source: {
+        cacheKey: crypto.randomUUID(),
+        entrypoint: "Counter",   // named export required for facets
+        exportType: "durable-object",
+        mainModule: "cap.js",
+        modules: {
+          "cap.js": \`
+            import { DurableObject } from "cloudflare:workers";
+            export class Counter extends DurableObject {
+              async increment() {
+                const n = ((await this.ctx.storage.get("n")) ?? 0) + 1;
+                await this.ctx.storage.put("n", n);   // this.ctx.storage is YOURS alone
+                return n;
+              }
+              async current() { return (await this.ctx.storage.get("n")) ?? 0; }
+            }
+          \`,
+        },
+      },
     },
   },
 });
@@ -412,19 +448,25 @@ ${RESOLVE_PROJECT}
 await project.caps.define({
   name: "hello",
   meta: { http: { expose: true } },   // routable; still admin-gated
-  source: {
-    codeId: crypto.randomUUID(),
-    mainModule: "cap.js",
-    modules: {
-      "cap.js": \`
-        import { WorkerEntrypoint } from "cloudflare:workers";
-        export default class extends WorkerEntrypoint {
-          async fetch(request) {
-            const url = new URL(request.url);
-            return new Response("hello from a routable cap at " + url.pathname);
-          }
-        }
-      \`,
+  target: {
+    type: "rpc",
+    worker: {
+      type: "source",
+      source: {
+        cacheKey: crypto.randomUUID(),
+        mainModule: "cap.js",
+        modules: {
+          "cap.js": \`
+            import { WorkerEntrypoint } from "cloudflare:workers";
+            export default class extends WorkerEntrypoint {
+              async fetch(request) {
+                const url = new URL(request.url);
+                return new Response("hello from a routable cap at " + url.pathname);
+              }
+            }
+          \`,
+        },
+      },
     },
   },
 });

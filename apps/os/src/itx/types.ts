@@ -116,8 +116,9 @@ export interface ItxBuiltins {
    * rather than a hardwired built-in; surface unchanged.) */
   readonly repos: unknown;
 
-  /** The project's workspace: readFile/writeFile and a nested git surface.
-   * (Same direction as `repos`.) */
+  /** The project's workspace: readFile/writeFile and the flat git methods
+   * (gitClone/gitAdd/gitCommit/gitPush/gitStatus — nested RpcTargets do not
+   * survive RPC boundaries). (Same direction as `repos`.) */
   readonly workspace: unknown;
 
   /** The project worker. Every public method/getter is reachable at any

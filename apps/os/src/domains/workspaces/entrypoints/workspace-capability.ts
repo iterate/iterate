@@ -1,4 +1,4 @@
-import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import {
   type CloudflareShellState,
@@ -24,14 +24,6 @@ export class WorkspaceCapability extends WorkerEntrypoint<
   WorkspaceCapabilityEnv,
   WorkspaceCapabilityProps
 > {
-  #git?: WorkspaceGitCapability;
-
-  get git() {
-    return (this.#git ??= new WorkspaceGitCapability({
-      getGit: async () => await (await this.workspace()).cloudflareShellGit(),
-    }));
-  }
-
   async gitAdd(input: Record<string, unknown>) {
     return await this.#callGit("add", input);
   }
@@ -104,46 +96,6 @@ export class WorkspaceCapability extends WorkerEntrypoint<
       method,
       namespace: "ctx.workspace.git",
       target: git,
-    });
-  }
-}
-
-class WorkspaceGitCapability extends RpcTarget {
-  readonly #getGit: () => Promise<Record<string, (...args: unknown[]) => Promise<unknown>>>;
-
-  constructor(input: {
-    getGit: () => Promise<Record<string, (...args: unknown[]) => Promise<unknown>>>;
-  }) {
-    super();
-    this.#getGit = input.getGit;
-  }
-
-  async add(input: Record<string, unknown>) {
-    return await this.#call("add", [input]);
-  }
-
-  async clone(input: Record<string, unknown>) {
-    return await this.#call("clone", [input]);
-  }
-
-  async commit(input: Record<string, unknown>) {
-    return await this.#call("commit", [input]);
-  }
-
-  async push(input: Record<string, unknown>) {
-    return await this.#call("push", [input]);
-  }
-
-  async status(input: Record<string, unknown>) {
-    return await this.#call("status", [input]);
-  }
-
-  async #call(method: string, args: unknown[]) {
-    return await callMethod({
-      args,
-      method,
-      namespace: "ctx.workspace.git",
-      target: await this.#getGit(),
     });
   }
 }

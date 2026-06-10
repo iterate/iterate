@@ -48,22 +48,35 @@ interface ItxProjects {
 
 interface CapDescription {
   name: string;
-  kind: "live" | "worker" | "facet";
+  kind: "live" | "rpc" | "url";
   invoke: "members" | "path-call";
   owner: string;
   connected?: boolean;
 }
 
 interface CapSource {
-  codeId: string;
+  cacheKey: string;
   mainModule: string;
   modules: Record<string, string>;
   entrypoint?: string;
+  exportType?: "worker-entrypoint" | "durable-object";
 }
+
+type CapTarget =
+  | {
+      type: "rpc";
+      worker:
+        | { type: "binding"; binding: string }
+        | { type: "loopback" }
+        | { type: "source"; source: CapSource };
+      entrypoint?: string;
+      props?: JsonRecord;
+    }
+  | { type: "url"; url: string; headers?: Record<string, string> };
 
 interface ItxCaps {
   provide(input: { name: string; target: RpcTarget | Function | JsonRecord; invoke?: "members" | "path-call" }): Promise<{ name: string; ok: true }>;
-  define(input: { name: string; source: CapSource; invoke?: "members" | "path-call" }): Promise<{ name: string; ok: true }>;
+  define(input: { name: string; target: CapTarget; invoke?: "members" | "path-call"; meta?: JsonRecord }): Promise<{ name: string; ok: true }>;
   revoke(input: { name: string }): Promise<{ name: string; ok: true }>;
   describe(): Promise<CapDescription[]>;
 }

@@ -76,7 +76,7 @@ export function defaultAgentSystemPrompt(agentPath?: string) {
     "",
     "## Iterate config workspace",
     "The project iterate-config repo is already cloned at `/iterate-config` in `itx.workspace`; do not clone it yourself.",
-    "To change iterate-config, use `itx.workspace.writeFile('/iterate-config/path', contents)`, `itx.workspace.git.add({ dir: '/iterate-config', filepath: 'path' })`, `itx.workspace.git.commit({ dir: '/iterate-config', message, author: { name: 'Agent', email: 'agent@iterate.com' } })`, then `itx.workspace.git.push({ dir: '/iterate-config', remote: 'origin', ref: 'main' })`.",
+    "To change iterate-config, use `itx.workspace.writeFile('/iterate-config/path', contents)`, `itx.workspace.gitAdd({ dir: '/iterate-config', filepath: 'path' })`, `itx.workspace.gitCommit({ dir: '/iterate-config', message, author: { name: 'Agent', email: 'agent@iterate.com' } })`, then `itx.workspace.gitPush({ dir: '/iterate-config', remote: 'origin', ref: 'main' })`.",
   ];
   return lines.join("\n");
 }
