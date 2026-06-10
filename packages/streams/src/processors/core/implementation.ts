@@ -128,9 +128,17 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     });
   }
 
-  // The exit parse validates every state transition and applies schema
-  // transforms (e.g. dropping unsupported subscription transports).
-  override reduce(args: Parameters<StreamProcessor<CoreProcessorContract>["reduce"]>[0]) {
+  // Reduce is on the synchronous DO append hot path and runs per event, so it
+  // does NOT re-parse the whole state on the way out: `state` was already
+  // validated at the trust boundary (the KV read in stream.ts and the
+  // event-log recovery path both parse), and `args.event` is validated
+  // upstream, so `next` is constructed entirely from already-typed values.
+  // Re-validating the growing connectionsByKey/processorsBySlug/
+  // subscriptionsByKey records on every appended event was quadratic work for
+  // no added safety.
+  override reduce(
+    args: Parameters<StreamProcessor<CoreProcessorContract>["reduce"]>[0],
+  ): CoreProcessorState {
     const state = args.state;
     let next: CoreProcessorState = {
       ...state,
@@ -282,7 +290,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
       default:
         break;
     }
-    return this.contract.stateSchema.parse(next);
+    return next;
   }
 
   /**
