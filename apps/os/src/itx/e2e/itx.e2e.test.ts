@@ -177,10 +177,22 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
       target: { entrypoint: "ItxEntrypoint", type: "rpc", worker: { type: "loopback" } },
     }),
   ).rejects.toThrow(/not dialable/);
+  // Durable Object refs name arbitrary instances across ALL projects, so the
+  // namespace allowlist defaults to empty — config has to opt in.
+  await expect(
+    projectItx.caps.define({
+      name: "sneakyDo",
+      target: {
+        type: "rpc",
+        worker: { binding: "PROJECT", name: "someone-elses-project", type: "durable-object" },
+      },
+    }),
+  ).rejects.toThrow(/not dialable/);
 
-  // describe() reports the new kinds and lifts instructions.
-  const caps = await projectItx.caps.describe();
-  expect(caps).toMatchObject([
+  // describe() reports the new kinds and lifts instructions (own rows only —
+  // inherited platform defaults carry their code context as owner).
+  const caps = (await projectItx.caps.describe()) as Array<{ owner: string }>;
+  expect(caps.filter((cap) => cap.owner === project.id)).toMatchObject([
     { instructions: "Workers AI. Use like the env.AI binding.", kind: "rpc", name: "ai" },
     { invoke: "path-call", kind: "rpc", name: "aiWrapped" },
   ]);
@@ -410,6 +422,12 @@ test("platform defaults arrive from the platform:project code context, and own r
     kind: "rpc",
     owner: "platform:project",
   });
+  // The whole migrated kernel arrives the same way (§8: cap #0 disappears).
+  for (const name of ["repos", "workspace", "worker"]) {
+    expect(before.caps.find((cap) => cap.name === name)).toMatchObject({
+      owner: "platform:project",
+    });
+  }
 
   // Defaults cannot be revoked — succeeding would lie (the default keeps
   // serving). Shadowing is the override mechanism.
@@ -725,33 +743,23 @@ test("revoked and offline caps fail with instructive errors", async () => {
     }),
   ).rejects.toThrow(/reserved/);
 
-  // itx.project IS the full Project DO surface (D17): any public method is
-  // callable, so a method added to the DO is instantly reachable here. But a
-  // hand-built reserved path through itxInvoke is still gated server-side, so
-  // the full surface can never be abused to reach prototype internals.
-  await projectItx.caps.define({
-    name: "probe",
-    target: {
-      type: "rpc",
-      worker: {
-        type: "source",
-        source: {
-          cacheKey: crypto.randomUUID(),
-          mainModule: "cap.js",
-          modules: {
-            "cap.js":
-              "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { ok() { return 1; } }",
-          },
-        },
-      },
-    },
-  });
+  // itx.project IS the full Project DO surface (D17) — except the itx*
+  // registry verbs, which are node-to-node plumbing: itxInvoke carries the
+  // trusted chain-delegation `origin`, so exposing it would let any handle
+  // holder spoof another context's identity (a sibling fork's workspace).
+  // The proxy masks them; the registry's reserved-segment gate stays as
+  // defense in depth for paths arriving over the real chain.
   const projectDo = (projectItx as { project: unknown }).project as {
-    itxInvoke(input: { args: unknown[]; name: string; path: string[] }): Promise<unknown>;
+    itxInvoke(input: {
+      args: unknown[];
+      name: string;
+      origin?: string;
+      path: string[];
+    }): Promise<unknown>;
   };
   await expect(
-    projectDo.itxInvoke({ args: [], name: "probe", path: ["constructor"] }),
-  ).rejects.toThrow(/reserved/);
+    projectDo.itxInvoke({ args: [], name: "workspace", origin: "ctx_spoofed", path: ["readFile"] }),
+  ).rejects.toThrow(/internal registry plumbing/);
 });
 
 // ---- execution modes --------------------------------------------------------

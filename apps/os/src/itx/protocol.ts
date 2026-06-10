@@ -137,17 +137,31 @@ export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "McpClient",
   "OrpcCapability",
   "ProjectWorker",
+  "ReposCapability",
   "SlackCapability",
+  "WorkspaceCapability",
 ]);
+
+/**
+ * Durable Object namespace bindings dialable via `{ type: "durable-object" }`
+ * refs. Empty on purpose: a DO ref names an arbitrary instance
+ * (`binding` + `name`), and every platform namespace (PROJECT, STREAM, …) is
+ * keyed across ALL projects — allowlisting one would let any project handle
+ * dial any other project's objects. Deployments opt namespaces in via config
+ * once they have a namespace whose instances are safe to reach by name.
+ */
+export const DIALABLE_DURABLE_OBJECTS: ReadonlySet<string> = new Set();
 
 /** The dial allowlists a host resolves once (defaults ∪ deployment config). */
 export type DialableTargets = {
   bindings: ReadonlySet<string>;
+  durableObjects: ReadonlySet<string>;
   loopbacks: ReadonlySet<string>;
 };
 
 export const DEFAULT_DIALABLE_TARGETS: DialableTargets = {
   bindings: DIALABLE_BINDINGS,
+  durableObjects: DIALABLE_DURABLE_OBJECTS,
   loopbacks: DIALABLE_LOOPBACKS,
 };
 
@@ -158,13 +172,22 @@ export const DEFAULT_DIALABLE_TARGETS: DialableTargets = {
  */
 export function resolveDialableTargets(config?: {
   dialableBindings?: readonly string[];
+  dialableDurableObjects?: readonly string[];
   dialableLoopbacks?: readonly string[];
 }): DialableTargets {
-  if (!config?.dialableBindings?.length && !config?.dialableLoopbacks?.length) {
+  if (
+    !config?.dialableBindings?.length &&
+    !config?.dialableDurableObjects?.length &&
+    !config?.dialableLoopbacks?.length
+  ) {
     return DEFAULT_DIALABLE_TARGETS;
   }
   return {
     bindings: new Set([...DIALABLE_BINDINGS, ...(config.dialableBindings ?? [])]),
+    durableObjects: new Set([
+      ...DIALABLE_DURABLE_OBJECTS,
+      ...(config.dialableDurableObjects ?? []),
+    ]),
     loopbacks: new Set([...DIALABLE_LOOPBACKS, ...(config.dialableLoopbacks ?? [])]),
   };
 }
@@ -233,9 +256,16 @@ export function assertDefinableCapTarget(
       capSourceCacheKey(worker.source);
       return;
     case "durable-object":
-      throw new Error(
-        `Capability "${name}": ${worker.type} refs are not implemented yet (itx-next.md §1).`,
-      );
+      if (!dialable.durableObjects.has(worker.binding)) {
+        throw new Error(
+          `Capability "${name}": Durable Object namespace "${worker.binding}" is not dialable. ` +
+            `Dialable namespaces: ${[...dialable.durableObjects].join(", ") || "(none — opt in via APP_CONFIG_ITX)"}.`,
+        );
+      }
+      if (!worker.name) {
+        throw new Error(`Capability "${name}": durable-object refs need a non-empty name.`);
+      }
+      return;
   }
 }
 
@@ -284,10 +314,7 @@ const ITX_BUILTIN_NAMES = [
   "fork",
   "project",
   "projects",
-  "repos",
   "streams",
-  "worker",
-  "workspace",
 ] as const;
 
 /**

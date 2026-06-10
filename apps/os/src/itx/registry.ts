@@ -333,8 +333,14 @@ export class ContextRegistry {
     return this.row(name) !== null || (this.host.defaults?.caps.has(name) ?? false);
   }
 
-  /** The only dispatch in the system (spec §4.4). */
-  async invoke(name: string, call: PathCall): Promise<unknown> {
+  /**
+   * The only dispatch in the system (spec §4.4). `origin` is the context the
+   * call STARTED at when it arrived via chain delegation (child → parent
+   * lookup misses) — context-scoped caps like the workspace must resolve
+   * against the caller's context, not the node the definition lives on.
+   * Absent means the call originated here.
+   */
+  async invoke(name: string, call: PathCall, origin?: string): Promise<unknown> {
     const row = this.row(name) ?? this.defaultRow(name);
     if (!row) {
       throw new Error(`No capability named "${name}" in context ${this.host.contextId}.`);
@@ -349,7 +355,7 @@ export class ContextRegistry {
     //  - facet  → the per-call facet stub.
     // project-worker refs return a custom dispatch instead of a target: the
     // call crosses to the Project DO as data and is replayed there.
-    const { dispatch, target, dispose } = this.borrowTarget(row);
+    const { dispatch, target, dispose } = this.borrowTarget(row, origin ?? this.host.contextId);
     try {
       if (dispatch) return await dispatch(call);
       if (row.invoke === "path-call") {
@@ -377,7 +383,10 @@ export class ContextRegistry {
    * The two-case shape (types.ts): a capability is either held up by a live
    * connection, or its serializable target is resolved at invoke time.
    */
-  private borrowTarget(row: CapRow): {
+  private borrowTarget(
+    row: CapRow,
+    originContext: string,
+  ): {
     target?: unknown;
     dispose: () => void;
     dispatch?: (call: PathCall) => Promise<unknown>;
@@ -392,13 +401,14 @@ export class ContextRegistry {
       const target = connection.target.dup ? connection.target.dup() : connection.target;
       return { target, dispose: () => disposeIfPossible(target) };
     }
-    return this.resolveTarget(row.name, targetOf(row), row.invoke);
+    return this.resolveTarget(row.name, targetOf(row), row.invoke, originContext);
   }
 
   private resolveTarget(
     name: string,
     target: SerializableCapTarget,
     invoke: CapInvoke,
+    originContext: string,
   ): {
     target?: unknown;
     dispose: () => void;
@@ -417,7 +427,7 @@ export class ContextRegistry {
           url: target.url,
           // Attribution + secret scope; same spoof-proofing as loopback refs.
           cap: name,
-          context: this.host.contextId,
+          context: originContext,
           projectId: this.host.projectId,
         },
       }) as { call(call: PathCall): Promise<unknown> };
@@ -453,8 +463,11 @@ export class ContextRegistry {
           props: {
             ...target.props,
             // Attribution wins over definer-supplied props, by spread order.
+            // `context` is the ORIGINATING context (chain delegation carries
+            // it), so context-scoped first-party caps — the workspace — bind
+            // to the caller's context even when the definition is inherited.
             cap: name,
-            context: this.host.contextId,
+            context: originContext,
             // Spoof-proofing: first-party entrypoints that scope by project
             // read props.projectId; the registry forces it to the owning
             // project so a definer can never point a dialable loopback at
@@ -491,10 +504,24 @@ export class ContextRegistry {
         const entrypoint = this.loadWorker(name, source).getEntrypoint(source.entrypoint);
         return { target: entrypoint, dispose: () => disposeIfPossible(entrypoint) };
       }
-      case "durable-object":
-        throw new Error(
-          `Capability "${name}": ${worker.type} refs are not implemented yet (itx-next.md §1).`,
-        );
+      case "durable-object": {
+        // Authoritative allowlist gate (define-time check is fail-fast only).
+        if (!this.dialable().durableObjects.has(worker.binding)) {
+          throw new Error(
+            `Capability "${name}": Durable Object namespace "${worker.binding}" is not dialable.`,
+          );
+        }
+        const namespace = this.host.binding?.(worker.binding) as
+          | { getByName(name: string): unknown }
+          | undefined;
+        if (typeof namespace?.getByName !== "function") {
+          throw new Error(
+            `Capability "${name}": "${worker.binding}" is not a Durable Object namespace on this host.`,
+          );
+        }
+        const stub = namespace.getByName(worker.name);
+        return { target: stub, dispose: () => disposeIfPossible(stub) };
+      }
     }
   }
 

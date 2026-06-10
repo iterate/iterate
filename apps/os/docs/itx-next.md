@@ -80,6 +80,17 @@ worker", and collapsed into `rpc` × `WorkerRef`. The full per-kind
 docstrings live in `apps/os/src/itx/types.ts`, which is the design of
 record.)
 
+`durable-object` refs SHIPPED, config-gated: the registry resolves
+`{ type: "durable-object", binding, name }` via `env[binding].getByName(name)`
+with members/path-call dispatch like any rpc target. The namespace
+allowlist (`DIALABLE_DURABLE_OBJECTS`) is EMPTY by default — every
+platform namespace is keyed across all projects, so allowlisting one
+would let any project handle dial any other project's objects by name.
+Deployments opt namespaces in via `APP_CONFIG_ITX.dialableDurableObjects`
+once they have a namespace whose instances are safe to reach by name;
+per-project name scoping is the open design before any platform
+namespace can join the defaults.
+
 `url` refs SHIPPED: the registry hands the call as data to the `UrlDial`
 loopback entrypoint (`src/itx/caps/url-dial.ts`), which opens ONE
 WebSocket Cap'n Web session per call in the stateless worker (Law 7 —
@@ -621,10 +632,24 @@ as the first hardwired built-in to become an ordinary definition; child
 contexts inherit it through the existing per-call parent delegation, no
 extra wiring.
 
-Sequencing: repos/workspace/streams are movable today (loopback refs
-shipped); worker/project wait on the durable-object ref (worker could go
-through the ProjectWorker forwarder now); fork-with-ancestry rides with
-the codemode drop.
+The migration SHIPPED: `repos`, `workspace`, and `worker` are now
+ordinary `platform:project` definitions (ReposCapability /
+WorkspaceCapability loopbacks; the ProjectWorker forwarder with a
+members inner replay) — their handle getters, the reserved names, and
+`callWorkerFunction` are deleted. The enabling change: **chain
+delegation carries the ORIGINATING context** (`itxInvoke` gains
+`origin`; the registry injects it as the `context` attribution prop), so
+the context-SCOPED workspace still resolves per caller — a forked child
+gets `itx:ctx_…`, the project gets `itx` — even though the definition
+lives two links up. One behavioral change: `itx.worker.fetch` no longer
+special-cases to project ingress (it replays `fetch` on the worker's
+default export like any other member); use the ingress URL for the
+homepage.
+
+Still kernel, deliberately: `streams` (the access model and global-
+namespace gating live there — resolution checks access, which a cap
+definition cannot express), `caps`, `fetch` (Law 5), `fork`, `project`,
+`projects`, `describe`.
 
 Open: the splice API shape on fork; ref naming for code contexts
 (`platform:` prefix?); can a context _revoke_ (not just shadow) a code
@@ -709,6 +734,13 @@ on the hot path?
   the SecretsCapability loopback inside UrlDial, not by routing the
   handshake through the Project DO (which would put the DO in the socket's
   data path for the session's lifetime — Law 7 in spirit).
+- ~~How can a context-scoped cap (workspace) live on a parent context?~~ →
+  Chain delegation carries the ORIGINATING context: `itxInvoke({ …,
+origin })`, set by the first delegating hop, preserved upward; the
+  registry's dial-time `context` injection uses it. Without this, a
+  workspace cap inherited from platform:project would bind every child
+  context to the project's shared workspace — agent-session isolation
+  requires the origin (no-backcompat protocol change, 2026-06-10).
 - ~~Where do §8 defaults hook in?~~ → `ContextRegistryHost.defaults`: a
   `CodeContext` (name + validated cap map from `defineCodeContext`) the
   registry falls through to on lookup miss. Own rows shadow; describe()
@@ -786,7 +818,14 @@ on the hot path?
   delete once nothing dials them; `packages/shared/src/codemode/*` rename.
 - The egress intercept tunnel never sees UrlDial's WebSocket handshakes
   (it cannot carry upgrades); url-cap traffic is invisible to a connected
-  intercept session.
+  intercept session. The capnweb fork (#1474) makes WS-bearing Responses
+  cross CAPNWEB hops (the captun tunnel itself), but the UrlDial → Project
+  DO hop is Workers jsrpc, which still cannot carry one — routing url dials
+  through `egressFetch` stays blocked on that, not on the tunnel.
+- §5's REPL-consumes-types.ts is still open: the editor's ambient typings
+  (`itx-repl-types.ts`) are maintained by hand next to a "keep in sync"
+  note; deriving them from `src/itx/types.ts` is a tooling exercise nobody
+  has needed badly enough yet.
 
 ## Open questions (rolled up)
 

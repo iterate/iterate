@@ -319,8 +319,12 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     return this.itxRegistry().describe();
   }
 
-  async itxInvoke(input: PathCall & { name: string }) {
-    return await this.itxRegistry().invoke(input.name, { args: input.args, path: input.path });
+  async itxInvoke(input: PathCall & { name: string; origin?: string }) {
+    return await this.itxRegistry().invoke(
+      input.name,
+      { args: input.args, path: input.path },
+      input.origin,
+    );
   }
 
   private itxRegistry(): ContextRegistry {
@@ -402,20 +406,6 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     return (
       (await this.workerHost.getCachedCheckout()) ?? (await this.workerHost.buildFresh(summary))
     );
-  }
-
-  /**
-   * `itx.worker.foo(...)`: replay a path call against the worker entrypoint.
-   * The entrypoint itself can never cross an RPC boundary (workerd forbids
-   * transferring loader entrypoints), so the call replays HERE — every public
-   * method/getter on the worker's default export is reachable with no wiring.
-   * Builds fresh so tool calls always see the latest pushed config.
-   */
-  async callWorkerFunction(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
-    const summary = await this.requireSummary();
-    const checkout = await this.workerHost.buildFresh(summary);
-    const entrypoint = this.workerHost.load({ checkout, projectId: summary.id });
-    return await replayPathCall(entrypoint, { args: input.args ?? [], path: input.path });
   }
 
   /**
