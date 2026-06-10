@@ -239,10 +239,13 @@ export async function requireProject(input: {
     throw new ORPCError("BAD_REQUEST", { message: "Project ID or slug is required" });
   }
 
-  const project =
-    projectIdOrSlug.startsWith("proj_") || isValidTypeId(projectIdOrSlug, "proj")
-      ? await getProjectById(input.context.db, { id: projectIdOrSlug })
-      : await getProjectBySlug(input.context.db, { slug: projectIdOrSlug });
+  // A project id may carry either prefix depending on who minted it: `proj_…`
+  // (OS typeid) OR `prj_…` (auth worker's generateId("prj"), adopted by OS's
+  // "create from auth scope" recovery flow). The old `startsWith("proj_")`-only
+  // check misclassified `prj_…` ids as slugs → "Project prj_… not found".
+  const project = isProjectId(projectIdOrSlug)
+    ? await getProjectById(input.context.db, { id: projectIdOrSlug })
+    : await getProjectBySlug(input.context.db, { slug: projectIdOrSlug });
 
   if (!project) {
     throw new ORPCError("NOT_FOUND", {
@@ -260,6 +263,13 @@ export async function requireProject(input: {
   throw new ORPCError("FORBIDDEN", {
     message: `Project ${projectIdOrSlug} not found`,
   });
+}
+
+// `proj_…` = OS typeid; `prj_…` = auth worker's generateId("prj"). Both are
+// real ids; anything else is a slug. (Duplicated from project-access.ts — the
+// follow-up PR moves id minting to auth and consolidates this into one helper.)
+function isProjectId(value: string) {
+  return value.startsWith("proj_") || value.startsWith("prj_");
 }
 
 function resolveProjectId(input: { id?: string; context: Pick<AppContext, "config"> }) {
