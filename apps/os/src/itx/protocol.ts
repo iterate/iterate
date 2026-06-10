@@ -323,6 +323,15 @@ export const ITX_EVENT_TYPES = {
   capRevoked: "events.iterate.com/itx/cap-revoked",
   capDisconnected: "events.iterate.com/itx/cap-disconnected",
   contextForked: "events.iterate.com/itx/context-forked",
+  /**
+   * Script execution record (itx-next.md §4, record-only mode): the runner
+   * appends `executionRequested` before the script starts and
+   * `executionCompleted` when it settles. The events are the durable record,
+   * not the transport — everything between them is invisible to the stream.
+   * These two events replace codemode's six-event execution protocol.
+   */
+  executionRequested: "events.iterate.com/itx/execution-requested",
+  executionCompleted: "events.iterate.com/itx/execution-completed",
 } as const;
 
 /** Child context ids: `ctx_…` TypeIDs; project contexts use the project id. */

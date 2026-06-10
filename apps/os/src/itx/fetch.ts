@@ -11,6 +11,7 @@
 
 import { newWorkersRpcResponse } from "capnweb";
 import { resolveItx } from "./entrypoint.ts";
+import { runItxScript } from "./run.ts";
 import {
   GLOBAL_CONTEXT_ID,
   isChildContextId,
@@ -177,34 +178,10 @@ async function resolveAccessibleContextId(input: {
 
 // ---- /api/itx/run ----------------------------------------------------------
 //
-// The dumb harness: load a one-off isolate whose env.ITERATE is an
-// ItxEntrypoint, call the provided function with { itx, vars }, JSON the
-// result. No fetch monkeypatching — when the script runs against a project
-// context, bare fetch() IS project egress via globalOutbound (Law 5).
-
-function itxRunWorkerSource(functionSource: string) {
-  return /* js */ `
-    import { WorkerEntrypoint } from "cloudflare:workers";
-
-    const script = (${functionSource});
-
-    export default class extends WorkerEntrypoint {
-      async run(vars) {
-        try {
-          const itx = await this.env.ITERATE.context;
-          const result = await script({ itx, vars });
-          return JSON.stringify({ ok: true, result });
-        } catch (error) {
-          return JSON.stringify({
-            error: error instanceof Error ? error.message : String(error),
-            ok: false,
-            stack: error instanceof Error ? error.stack : undefined,
-          });
-        }
-      }
-    }
-  `;
-}
+// Thin HTTP shim over the shared runner (run.ts): resolve + access-check the
+// target context here (Law 3 — this is the auth boundary), then delegate.
+// The runner leaves the two-event execution record on the project's /itx
+// stream; the HTTP response carries the executionId so callers can correlate.
 
 async function handleItxRun(input: {
   access: ProjectAccess;
@@ -239,57 +216,27 @@ async function handleItxRun(input: {
     scriptProjectId = resolved.projectId;
   } else {
     // A global-context script inherits the platform's own egress (no
-    // per-project globalOutbound below), so it is admin-only — same rule as
-    // the global connect handle.
+    // per-project globalOutbound), so it is admin-only — same rule as the
+    // global connect handle.
     if (input.access !== "all") return Response.json({ error: "Forbidden" }, { status: 403 });
     props = { access: input.access, context: GLOBAL_CONTEXT_ID };
   }
 
-  const exports = workerExports(input.context) as Record<
-    string,
-    (options: { props: Record<string, unknown> }) => unknown
-  >;
-  const worker = input.env.LOADER.load({
-    compatibilityDate: "2026-04-27",
-    env: {
-      ITERATE: exports.ItxEntrypoint!({ props }),
-    },
-    // Project scripts get the egress pipe as their global fetch; global
-    // scripts inherit the parent's network (they are admin-held by
-    // construction — only connect-time auth mints global handles).
-    ...(scriptProjectId !== null
-      ? {
-          globalOutbound: exports.ProjectEgress!({
-            props: { context: props.context, project: scriptProjectId },
-          }) as Fetcher,
-        }
-      : {}),
-    mainModule: "itx-script.js",
-    modules: { "itx-script.js": itxRunWorkerSource(body.functionSource) },
+  const outcome = await runItxScript({
+    env: input.env,
+    exports: workerExports(input.context),
+    functionSource: body.functionSource,
+    projectId: scriptProjectId,
+    props,
+    vars: body.vars,
   });
-
-  const entrypoint = worker.getEntrypoint() as unknown as {
-    run(vars: Record<string, unknown>): Promise<string>;
-  } & Partial<Disposable>;
-  try {
-    const outcome = JSON.parse(await entrypoint.run(body.vars ?? {})) as
-      | { ok: true; result: unknown }
-      | { error: string; ok: false; stack?: string };
-    if (!outcome.ok) {
-      return Response.json({ error: outcome.error, stack: outcome.stack }, { status: 500 });
-    }
-    return Response.json({ result: outcome.result ?? null });
-  } catch (error) {
+  if (!outcome.ok) {
     return Response.json(
-      {
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      },
+      { error: outcome.error, executionId: outcome.executionId, stack: outcome.stack },
       { status: 500 },
     );
-  } finally {
-    entrypoint[Symbol.dispose]?.();
   }
+  return Response.json({ executionId: outcome.executionId, result: outcome.result ?? null });
 }
 
 function workerExports(context: RequestContext): ItxRuntime["exports"] {
