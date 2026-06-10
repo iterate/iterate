@@ -8,7 +8,7 @@ the underlying span events and counts them by span name.
 
 ```ts
 mcp__cloudflare_api__.execute({
-  account_id: "cc7f6f461fbe823c199da2b27f9e0ff3",
+  account_id: "376ef7ed81b0573f93524de763666c15",
   code: `async () => {
     const traceId = "250178b64271952ffb1ed1711133cf78";
     const timeframe = {

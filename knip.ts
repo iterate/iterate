@@ -6,12 +6,17 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   const base = makeCloudflareTanStackAppWorkspace(workerEnvShim);
   return {
     ...base,
+    // Handwritten design-of-record types for the itx protocol; intentionally unreferenced.
+    ignore: ["src/itx/types.ts"],
     entry: [
       ...(base.entry ?? []).filter((entry) => entry !== "scripts/router.ts"),
       "e2e/vitest.config.ts",
       "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",
-      "scripts/sync-clerk-apps.ts",
+      // Mounted into the CLI by packages/iterate/src/os/router.ts, which knip
+      // doesn't traverse (the iterate package isn't a knip workspace).
+      "scripts/seed-iterate-config-base-repo.ts",
+      "scripts/setup-artifact-event-subscriptions.ts",
       "sqlfu.config.ts",
       "src/durable-objects/codemode-session.vitest.config.ts",
       "src/durable-objects/codemode-session-test-entry.ts",
@@ -19,6 +24,8 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "src/durable-objects/iterate-mcp-server-test-entry.ts",
       "src/durable-objects/project-ingress.vitest.config.ts",
       "src/durable-objects/project-ingress-test-entry.ts",
+      "src/durable-objects/itx-stream-subscribe.vitest.config.ts",
+      "src/durable-objects/itx-stream-subscribe-test-entry.ts",
     ],
     ignoreDependencies: [
       ...(base.ignoreDependencies ?? []),
@@ -80,7 +87,6 @@ function makeSharedWorkspace(): WorkspaceConfig {
       "bin/iterate-app-cli.js",
       "src/apps/cli-entry.ts",
       "src/durable-object-utils/e2e/alchemy.run.ts",
-      "src/streams/sqlfu.config.ts",
       "src/**/*.test.ts",
     ],
     project: ["src/**/*.ts"],
@@ -104,25 +110,18 @@ const config: KnipConfig = {
     "!packages/shared",
   ],
   ignoreIssues: {
-    // TanStack Start resolves these router factories by convention from the
-    // entrypoint, so there is no direct import Knip can follow.
-    "apps/os/src/router.tsx": ["exports"],
     "apps/os-contract/src/index.ts": ["exports", "types"],
     "apps/os/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
     "apps/os/src/db/queries/.generated/index.ts": ["files", "exports", "types"],
     "apps/os/src/db/queries/.generated/tables.ts": ["files", "types"],
-    "apps/os/src/durable-objects/mock-artifacts-binding.ts": ["exports"],
     "apps/os/src/durable-objects/test-stream-durable-object.ts": ["files", "exports"],
-    "apps/os/src/domains/codemode/examples.ts": ["exports"],
     "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
-    "apps/os/e2e/test-support/create-local-dev-server.ts": ["files", "exports"],
-    "apps/os/e2e/test-support/create-mock-internet.ts": ["files", "exports"],
     "apps/os/src/**": ["exports", "types"],
     "apps/os/e2e/test-support/**": ["exports", "types"],
+    // TanStack Start resolves the router factory by convention from the
+    // entrypoint, so there is no direct import Knip can follow.
     "apps/semaphore/src/router.tsx": ["exports"],
     "apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts": ["exports"],
-    "packages/shared/src/streams/db/migrations/.generated/migrations.ts": ["exports", "types"],
-    "packages/shared/src/streams/db/queries/.generated/tables.ts": ["types"],
     "packages/shared/src/callable/entry.workerd.vitest.ts": ["exports"],
     "packages/shared/src/durable-object-utils/test-harness/initialize-fronting-worker.ts": [
       "exports",

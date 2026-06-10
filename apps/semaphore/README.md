@@ -15,7 +15,8 @@ Cloudflare-only: TanStack Start + oRPC + sqlfu/D1 inventory storage, with a Dura
 - `alchemy.run.ts` — Alchemy app + D1 + Durable Object + TanStackStart
 - `vite.config.ts` — Alchemy Cloudflare TanStack Start plugin; optional `PORT` for dev
 - `src/worker.ts` — Worker fetch + `withEvlog`
-- `src/request-context.ts` — request config, D1, raw request, and logger
+- `src/config.ts` — `AppConfig` schema + `parseConfig`
+- `src/request-context.ts` — per-request `RequestContext` (`config`, `db`, `log`, `rawRequest`)
 - `src/durable-objects/resource-coordinator.ts` — lease orchestration, alarms, and waiter dispatch
 - `src/lib/resource-store.ts` — D1-backed resource reads/writes and lease-state mirroring
 - `definitions.sql`, `migrations/`, `sql/queries.sql`, `sqlfu.config.ts` — sqlfu schema, migration history, query sources, and config

@@ -40,7 +40,7 @@ Filter on error level or distinctive message fragments from the alert.
 
 Map failures to handlers under:
 
-- `apps/os/src/entry.workerd.ts`
+- `apps/os/src/worker.ts`
 - `apps/os/src/orpc/`
 - `apps/os/src/domains/`
 

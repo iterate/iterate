@@ -3,9 +3,8 @@ import { getPublicConfig } from "@iterate-com/shared/config";
 import { parseRouter, type AnyRouter } from "trpc-cli";
 import packageJson from "../../package.json" with { type: "json" };
 import { AppConfig } from "~/config.ts";
-import { authenticatedUserMiddleware, os } from "~/orpc/orpc.ts";
+import { os } from "~/orpc/orpc.ts";
 import { projectsRouter } from "~/orpc/routers/projects.ts";
-import { testRouter } from "~/orpc/routers/test.ts";
 
 /**
  * The `__internal.*` subtree (served at `/api/__internal/*`) is the operator
@@ -39,13 +38,8 @@ const internalRouter = os.__internal.router({
 });
 
 export const appRouter = os.router({
-  ...testRouter,
   ...projectsRouter,
   __internal: internalRouter,
-  ping: os.ping.use(authenticatedUserMiddleware).handler(async () => ({
-    message: "pong",
-    serverTime: new Date().toISOString(),
-  })),
 });
 
 // Hoisted and cast so the handler above can list the finished router without

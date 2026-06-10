@@ -85,14 +85,6 @@ export const projectStreamsRouter = {
         yield event;
       }
     }),
-  getState: os.project.streams.getState
-    .use(projectScopeMiddleware)
-    .handler(async ({ context, input }) => {
-      const project = requireProjectScope(context);
-      return await getProjectStreamsCapability(context, project.id).getState({
-        streamPath: input.streamPath,
-      });
-    }),
 };
 
 function getProjectStreamsCapability(context: RequestContext, projectId: string) {

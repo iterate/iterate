@@ -3,11 +3,20 @@
 // This is the container an agent session or REPL scratchpad lives in.
 
 import { expect, test } from "vitest";
-import { connectItx, type ItxClient } from "../client.ts";
+import { connectItx } from "../client.ts";
+import {
+  adminApiSecret,
+  baseUrl,
+  connectGlobal,
+  registerCreatedProjectCleanup,
+} from "./e2e-env.ts";
+
+const createdProjectIds = registerCreatedProjectCleanup();
 
 test("fork: child caps shadow the parent, misses delegate up the chain", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `itx-fork-${suffix()}` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   // A project-level cap every child should see through the chain.
@@ -70,6 +79,7 @@ test("fork narrows access: a session cannot reach sibling projects", async () =>
   // Two projects under an admin (access "all") handle.
   const a = (await itx.projects.create({ slug: `itx-fork-a-${suffix()}` })) as { id: string };
   const b = (await itx.projects.create({ slug: `itx-fork-b-${suffix()}` })) as { id: string };
+  createdProjectIds.push(a.id, b.id);
 
   using projectA = await itx.projects.get(a.id);
   using session = await projectA.fork({ name: "agent-session" });
@@ -86,6 +96,7 @@ test("fork: child worker caps run with the owning project's authority", async ()
   const project = (await itx.projects.create({ slug: `itx-fork-itx-${suffix()}` })) as {
     id: string;
   };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
   using child = await projectItx.fork();
 
@@ -150,27 +161,4 @@ function pathCallSource(marker: string) {
 
 function suffix() {
   return crypto.randomUUID().slice(0, 8);
-}
-
-function connectGlobal(): ItxClient {
-  return connectItx({ baseUrl: baseUrl(), token: adminApiSecret() });
-}
-
-function adminApiSecret() {
-  const secret =
-    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
-    "";
-  if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required for itx e2e tests.");
-  return secret;
-}
-
-function baseUrl() {
-  const url =
-    process.env.OS_ITX_E2E_BASE_URL?.trim().replace(/\/+$/, "") ||
-    process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "") ||
-    "";
-  if (!url) throw new Error("APP_CONFIG_BASE_URL is required for itx e2e tests.");
-  return url;
 }

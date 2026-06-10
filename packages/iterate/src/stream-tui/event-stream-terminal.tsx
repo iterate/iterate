@@ -258,9 +258,11 @@ function StreamTerminalApp() {
         return result.event;
       },
       getState: async (input = {}) =>
-        client.project.streams.getState({
-          projectSlugOrId: args.projectSlugOrId,
-          streamPath: resolveStreamPath(input.streamPath),
+        runItxScript({
+          authedFetch: osClient.authedFetch,
+          functionSource:
+            "async ({ itx, vars }) => await itx.streams.get(vars.streamPath).getState()",
+          vars: { streamPath: resolveStreamPath(input.streamPath) },
         }),
       listChildren: async (input = {}) => {
         const { streams } = await client.project.streams.list({
@@ -276,7 +278,7 @@ function StreamTerminalApp() {
       },
       resolvePath: resolveStreamPath,
     }),
-    [client, resolveStreamPath],
+    [client, osClient.authedFetch, resolveStreamPath],
   );
 
   useEffect(() => {
@@ -895,18 +897,45 @@ function readFlag(argv: string[], flagName: string) {
   return value;
 }
 
+/**
+ * One-shot itx script against the project context via POST /api/itx/run —
+ * the stream's reduced state has no oRPC procedure anymore; itx is the way.
+ */
+async function runItxScript(input: {
+  authedFetch: ReturnType<typeof createAuthenticatedFetch>;
+  functionSource: string;
+  vars: Record<string, unknown>;
+}): Promise<unknown> {
+  const response = await input.authedFetch(new URL("/api/itx/run", `${args.baseUrl}/`), {
+    body: JSON.stringify({
+      context: args.projectSlugOrId,
+      functionSource: input.functionSource,
+      vars: input.vars,
+    }),
+    headers: { "content-type": "application/json" },
+    method: "POST",
+  });
+  const body = (await response.json()) as { result?: unknown; error?: string };
+  if (!response.ok) {
+    throw new Error(`itx run failed (${response.status}): ${body.error ?? "unknown error"}`);
+  }
+  return body.result;
+}
+
 function createOsClient(baseUrl: string): {
   client: OrpcClient;
   refreshAuth: () => Promise<boolean>;
+  authedFetch: ReturnType<typeof createAuthenticatedFetch>;
 } {
   const authProvider = createAuthProvider(baseUrl);
+  const authedFetch = createAuthenticatedFetch(authProvider);
   const client = createORPCClient(
     new OpenAPILink(osContract, {
       url: new URL("/api", `${baseUrl}/`).toString(),
-      fetch: createAuthenticatedFetch(authProvider),
+      fetch: authedFetch,
     }),
   ) as OrpcClient;
-  return { client, refreshAuth: authProvider.refresh };
+  return { client, refreshAuth: authProvider.refresh, authedFetch };
 }
 
 function createAuthenticatedFetch(authProvider: AuthProvider) {

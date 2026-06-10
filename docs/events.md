@@ -8,7 +8,7 @@ An **event** is the whole object, payload included:
 
 ```typescript
 {
-  type: "https://events.iterate.com/os/machine/archive-requested",
+  type: "events.iterate.com/os/machine/archive-requested",
   payload: { machineId: "m123", reason: "user-requested" }
 }
 ```
@@ -19,12 +19,12 @@ An **event type** is the `type` property on the event — the URL that identifie
 
 An event must always be past tense — a statement of what occurred. Commands (imperative instructions to do something) belong to a different concept entirely.
 
-| Bad (command)        | Good (fact)                                                       |
-| -------------------- | ----------------------------------------------------------------- |
-| `verify-readiness`   | `https://events.iterate.com/os/machine/readiness-check-requested` |
-| `archive`            | `https://events.iterate.com/os/machine/archive-requested`         |
-| `send-welcome-email` | `https://events.iterate.com/os/user/signed-up`                    |
-| `deploy`             | `https://events.iterate.com/os/deployment/initiated`              |
+| Bad (command)        | Good (fact)                                               |
+| -------------------- | --------------------------------------------------------- |
+| `verify-readiness`   | `events.iterate.com/os/machine/readiness-check-requested` |
+| `archive`            | `events.iterate.com/os/machine/archive-requested`         |
+| `send-welcome-email` | `events.iterate.com/os/user/signed-up`                    |
+| `deploy`             | `events.iterate.com/os/deployment/initiated`              |
 
 The distinction matters because:
 
@@ -45,15 +45,15 @@ The `-requested` suffix is the bridge between events and commands. Use it when t
 
 ## Event type URIs
 
-Every event type is a URL under `https://events.iterate.com`. The URL is the canonical identifier — it should resolve to documentation describing the event's purpose, schema, and example payloads.
+Every event type is a scheme-less path under `events.iterate.com` (the convention in code is the bare string, e.g. `"events.iterate.com/agent/input-added"`, not a full `https://` URL). The path is the canonical identifier — prefixed with `https://` it should resolve to documentation describing the event's purpose, schema, and example payloads.
 
 ### First-party events
 
 ```
-https://events.iterate.com/os/machine/activated
-https://events.iterate.com/os/machine/archive-requested
-https://events.iterate.com/codemode/tool-registered
-https://events.iterate.com/codemode/prompt-added
+events.iterate.com/os/machine/activated
+events.iterate.com/os/machine/archive-requested
+events.iterate.com/codemode/tool-registered
+events.iterate.com/codemode/prompt-added
 ```
 
 The path structure is `/{app}/{entity}/{past-tense-verb}`.
@@ -65,12 +65,12 @@ External vendor events (GitHub webhooks, Slack events, Stripe webhooks) also liv
 > **Note on namespace collisions:** Third-party vendors share the top-level namespace with first-party apps (e.g. `/github/...` alongside `/os/...`). This is intentional — we control which vendors we integrate with, so collisions are unlikely. If this becomes a concern, we could introduce an `/external/` prefix, but for now the flat structure keeps paths short and readable.
 
 ```
-https://events.iterate.com/github/pull-request/opened
-https://events.iterate.com/github/push/received
-https://events.iterate.com/github/issue/commented
-https://events.iterate.com/slack/message/posted
-https://events.iterate.com/stripe/invoice/paid
-https://events.iterate.com/stripe/subscription/cancelled
+events.iterate.com/github/pull-request/opened
+events.iterate.com/github/push/received
+events.iterate.com/github/issue/commented
+events.iterate.com/slack/message/posted
+events.iterate.com/stripe/invoice/paid
+events.iterate.com/stripe/subscription/cancelled
 ```
 
 The webhook handler that receives an external event is responsible for:
@@ -81,8 +81,8 @@ The webhook handler that receives an external event is responsible for:
 A GitHub webhook arriving with `X-GitHub-Event: pull_request` and `action: opened` should produce both:
 
 ```
-https://events.iterate.com/github/webhook-received     ← raw payload, for audit/replay
-https://events.iterate.com/github/pull-request/opened  ← normalized, for consumers
+events.iterate.com/github/webhook-received     ← raw payload, for audit/replay
+events.iterate.com/github/pull-request/opened  ← normalized, for consumers
 ```
 
 ### The two-tier approach
@@ -117,7 +117,7 @@ We don't fabricate URLs on domains we don't own (e.g. `https://github.com/webhoo
 - **Self-documenting** — navigate to the URL in a browser, get the schema and example payloads.
 - **Familiar** — this draws on patterns from [CloudEvents](https://github.com/cloudevents/spec) (namespaced `type` attribute), [FHIR/HL7](https://build.fhir.org/terminologies-systems.html) (URIs as code system identifiers, with a [philosophy that URIs should ideally resolve to docs](https://infocentral.infoway-inforoute.ca/en/forum/266-fhir-implementations/3392-fhir-local-uri-naming-conventions)), and [EventSourcingDB](https://docs.eventsourcingdb.io/fundamentals/event-types/) (forward-domain namespaces).
 
-We prefer forward URLs over reverse-DNS because they're human-readable and actually resolvable. `https://events.iterate.com/os/machine/activated` beats `com.iterate.os.machine-activated`.
+We prefer forward URLs over reverse-DNS because they're human-readable and actually resolvable. `events.iterate.com/os/machine/activated` beats `com.iterate.os.machine-activated`.
 
 ### Ergonomics in code
 
@@ -127,31 +127,14 @@ Full URLs are verbose at callsites. We may eventually provide a typed helper, so
 import { events } from "../events.ts";
 
 bus.publish(events.os.machine.archiveRequested({ machineId: "m123" }));
-// → publishes event with type "https://events.iterate.com/os/machine/archive-requested"
+// → publishes event with type "events.iterate.com/os/machine/archive-requested"
 ```
 
-This is not a priority right now. For now, use the full URL string as the event type. A helper can be added later without changing the wire format.
-
-### Migration from current format
-
-The codebase currently uses colon-separated short strings (`machine:activated`, `machine:verify-readiness`) as event types. These should be migrated to full URLs when next touching the relevant code. No urgency — the mapping is straightforward.
+This is not a priority right now. For now, use the full `events.iterate.com/...` string as the event type. A helper can be added later without changing the wire format.
 
 ## Consumers
 
-A **consumer** is a function that handles events, along with configuration for when and how it should run. In the OS outbox system, a consumer conforms to `ConsumerDefinition<Payload>`:
-
-```typescript
-{
-  name: string;                    // e.g. "deleteProviderSandbox"
-  when: WhenFn<Payload>;           // which events to handle
-  delay: DelayFn<Payload>;         // delay before processing
-  retry: RetryFn;                  // retry configuration
-  visibilityTimeout?: TimePeriod;  // for long-running handlers
-  handler: (params) => Promise<void | string>;
-}
-```
-
-This definition is intentionally narrow — it describes consumers in the OS outbox system specifically. Other contexts (SSE listeners, webhook subscribers, unit tests polling an event bus) may consume events but aren't "consumers" in this formal sense. We can broaden the definition later if useful.
+In OS, events are handled by **stream processors**: contracts declared with `defineProcessorContract` (event schemas + reducer) and implementations hosted inside domain Durable Objects via `createStreamProcessorHost` (see `apps/os/src/domains/*/stream-processors/` and `packages/streams`). Other contexts (SSE listeners, webhook subscribers, unit tests polling an event bus) may consume events too.
 
 ### Consumer naming
 
@@ -168,22 +151,22 @@ Why: a single event can have many consumers. `handleMachineActivated` tells you 
 
 ## Casing conventions
 
-| Context               | Convention | Example                                                   |
-| --------------------- | ---------- | --------------------------------------------------------- |
-| Event type (URL path) | kebab-case | `https://events.iterate.com/os/machine/archive-requested` |
-| Consumer name         | camelCase  | `deleteProviderSandbox`                                   |
-| Event payload keys    | camelCase  | `{ machineId, projectId }`                                |
+| Context               | Convention | Example                                           |
+| --------------------- | ---------- | ------------------------------------------------- |
+| Event type (URL path) | kebab-case | `events.iterate.com/os/machine/archive-requested` |
+| Consumer name         | camelCase  | `deleteProviderSandbox`                           |
+| Event payload keys    | camelCase  | `{ machineId, projectId }`                        |
 
 Kebab-case for event names because they're URL path segments. CamelCase in a URL looks wrong (`/machineActivated`). Consumer names and payload keys are camelCase because they're JavaScript identifiers.
 
 Third-party vendor events use different conventions (GitHub uses `snake_case` with dot-separated actions, Stripe uses dot-separated hierarchies). We normalize to our `/{entity}/{verb}` path convention with kebab-case segments at the ingestion boundary:
 
-| Vendor format                | Our event type                                          |
-| ---------------------------- | ------------------------------------------------------- |
-| GitHub `pull_request.opened` | `https://events.iterate.com/github/pull-request/opened` |
-| GitHub `push`                | `https://events.iterate.com/github/push/received`       |
-| Stripe `invoice.paid`        | `https://events.iterate.com/stripe/invoice/paid`        |
-| Slack `message` (Events API) | `https://events.iterate.com/slack/message/posted`       |
+| Vendor format                | Our event type                                  |
+| ---------------------------- | ----------------------------------------------- |
+| GitHub `pull_request.opened` | `events.iterate.com/github/pull-request/opened` |
+| GitHub `push`                | `events.iterate.com/github/push/received`       |
+| Stripe `invoice.paid`        | `events.iterate.com/stripe/invoice/paid`        |
+| Slack `message` (Events API) | `events.iterate.com/slack/message/posted`       |
 
 The vendor's event name maps to `{entity}/{verb}`. When the vendor name is already past-tense or a bare noun (like GitHub's `push`), use `received` as the verb.
 
@@ -203,7 +186,7 @@ If a domain concept changes so fundamentally that the old event type no longer a
 ## Summary
 
 1. Events are past-tense facts: `machine/activated`, not `machine/activate`
-2. Every event type is a URL: `https://events.iterate.com/{app}/{entity}/{verb}`
+2. Every event type is a URL: `events.iterate.com/{app}/{entity}/{verb}`
 3. Third-party webhooks emit two events: raw `webhook-received` (for audit/replay) AND specific typed events (for consumers)
 4. Consumer names describe the side effect: `deleteProviderSandbox`, not `handleMachineArchived`
 5. Kebab-case for event URLs, camelCase for consumers and payloads
