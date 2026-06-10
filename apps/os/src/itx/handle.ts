@@ -18,6 +18,7 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import { typeid } from "@iterate-com/shared/typeid";
+import type { StreamCursor, Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
 import { createD1Client } from "sqlfu";
 import { PathProxyRpcTarget } from "./path-proxy.ts";
 import {
@@ -461,6 +462,31 @@ export class ItxStream extends RpcTarget {
     return await this.client().listChildren({} as never);
   }
 
+  /**
+   * Live tail: catch-up from `afterOffset` ("start" replays everything,
+   * "end" is live-only), then every committed batch, pushed to `onEventBatch`
+   * until unsubscribed. The callback crosses whatever boundary the caller
+   * came in over (capnweb from a browser/Node session, Workers RPC from a cap
+   * isolate); the streams capability holds the actual DO subscription, so the
+   * same append-policy props gate it. If the callback's far end goes away,
+   * the subscription is torn down on the next failed delivery — offline means
+   * offline; durability is the stream itself, re-subscribe from the last
+   * offset you saw.
+   */
+  async subscribe(
+    onEventBatch: (batch: { events: StreamLegacyEvent[]; streamMaxOffset: number }) => unknown,
+    opts: { afterOffset: StreamCursor },
+  ): Promise<ItxStreamSubscription> {
+    // Callback retention lives in StreamsCapability.subscribe: RPC layers
+    // implicitly dispose stubs received as parameters when the call
+    // completes, so the capability dup()s the callback its wrapper outlives
+    // — without that, replay (delivered in-call) works but the first LIVE
+    // batch hits a disposed stub. Verified both ways by
+    // itx-subscribe.e2e.test.ts against a live deployment.
+    const handle = await this.client().subscribe({ afterOffset: opts.afterOffset }, onEventBatch);
+    return new ItxStreamSubscription(handle);
+  }
+
   private client(): StreamsClient {
     return getStreamsCapability({
       exports: this.runtime.exports as unknown as Parameters<
@@ -472,6 +498,17 @@ export class ItxStream extends RpcTarget {
         streamPath: this.path,
       },
     });
+  }
+}
+
+/** Disposer for ItxStream.subscribe — callable from any execution mode. */
+export class ItxStreamSubscription extends RpcTarget {
+  constructor(private readonly handle: { unsubscribe(): void }) {
+    super();
+  }
+
+  unsubscribe() {
+    this.handle.unsubscribe();
   }
 }
 

@@ -29,7 +29,14 @@ export type BrowserReplSession = {
 
 export type BrowserReplSessionFactory = () => BrowserReplSession | Promise<BrowserReplSession>;
 
-/** Connect to a context: the global one by default, or a project's. */
+/**
+ * Connect to a context: the global one by default, or a project's.
+ *
+ * Deliberately NOT the app's shared itx client (~/itx/react): the repl
+ * disposes and recreates its session on its own schedule, which must never
+ * tear down app-level queries and stream subscriptions. The cost is a second
+ * itx socket on pages that show both — converging them is follow-up work.
+ */
 export function createBrowserReplSession(context?: string): BrowserReplSession {
   const wsUrl = new URL(
     context ? `/api/itx/${encodeURIComponent(context)}` : "/api/itx",

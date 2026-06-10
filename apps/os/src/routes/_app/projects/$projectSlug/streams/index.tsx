@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { Button } from "@iterate-com/ui/components/button";
@@ -21,21 +21,17 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { Spinner } from "@iterate-com/ui/components/spinner";
 import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
-import { projectStreamsListQueryOptions } from "~/lib/project-route-query.ts";
+import { projectStreamsListKey, useProjectStreamsList } from "~/lib/itx-queries.ts";
 import { streamPathFromInput } from "~/lib/stream-links.ts";
-import { orpc } from "~/orpc/client.ts";
+import { useItxMutation } from "~/itx/react/index.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
-  loader: async ({ context }) => {
-    const { project } = context;
-    await context.queryClient.ensureQueryData(projectStreamsListQueryOptions(project.id));
-
-    return {
-      breadcrumb: "All",
-      project,
-    };
-  },
+  loader: ({ context }) => ({
+    breadcrumb: "All",
+    project: context.project,
+  }),
   component: ProjectStreamsIndexPage,
 });
 
@@ -52,29 +48,29 @@ function ProjectStreamsIndexPage() {
     key: "lastWokenAt",
     direction: "desc",
   });
-  const streamsQueryOptions = projectStreamsListQueryOptions(project.id);
-  const { data } = useQuery(streamsQueryOptions);
-  const createStream = useMutation(
-    orpc.project.streams.create.mutationOptions({
-      onSuccess: async (_state, input) => {
-        await queryClient.invalidateQueries({ queryKey: streamsQueryOptions.queryKey });
-        setFilter("");
-        void navigate({
-          to: "/projects/$projectSlug/streams/$",
-          params: {
-            projectSlug: params.projectSlug,
-            // The route's params.stringify converts StreamPath -> splat; passing
-            // a pre-splatted string here would get sliced a second time.
-            _splat: input.streamPath,
-          },
-        });
-      },
-      onError: (error) => {
-        toast.error(error instanceof Error ? error.message : "Could not create stream.");
-      },
-    }),
-  );
-  const streams = useMemo(() => data?.streams ?? [], [data?.streams]);
+  const { data, isPending, error, refetch } = useProjectStreamsList(project.id);
+  const createStream = useItxMutation({
+    project: project.id,
+    mutationFn: (itx, input: { streamPath: string }) => itx.streams.create(input),
+    onSuccess: async (_state, input) => {
+      // Breadcrumbs share this cache entry, so one invalidation reaches both.
+      await queryClient.invalidateQueries({ queryKey: projectStreamsListKey(project.id) });
+      setFilter("");
+      void navigate({
+        to: "/projects/$projectSlug/streams/$",
+        params: {
+          projectSlug: params.projectSlug,
+          // The route's params.stringify converts StreamPath -> splat; passing
+          // a pre-splatted string here would get sliced a second time.
+          _splat: input.streamPath,
+        },
+      });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Could not create stream.");
+    },
+  });
+  const streams = useMemo(() => data ?? [], [data]);
   const streamPaths = useMemo(() => streams.map((stream) => stream.streamPath), [streams]);
   const visibleStreams = useMemo(() => {
     const query = filter.trim().toLowerCase();
@@ -95,7 +91,6 @@ function ProjectStreamsIndexPage() {
   function submitCreateStream() {
     try {
       createStream.mutate({
-        projectSlugOrId: project.id,
         streamPath: streamPathFromInput(filter),
       });
     } catch (error) {
@@ -155,7 +150,21 @@ function ProjectStreamsIndexPage() {
         </div>
       </form>
 
-      {streams.length === 0 ? (
+      {error ? (
+        <Empty className="rounded-lg border">
+          <EmptyHeader>
+            <EmptyTitle>Could not load streams</EmptyTitle>
+            <EmptyDescription>{error.message}</EmptyDescription>
+          </EmptyHeader>
+          <Button type="button" variant="outline" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </Empty>
+      ) : isPending ? (
+        <div className="flex h-24 items-center justify-center rounded-lg border">
+          <Spinner />
+        </div>
+      ) : streams.length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>No streams</EmptyTitle>
