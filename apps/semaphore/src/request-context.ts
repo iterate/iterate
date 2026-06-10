@@ -1,18 +1,16 @@
 import type { SharedRequestLogger } from "@iterate-com/shared/request-logging";
 import type { AppConfig } from "~/config.ts";
-import type { Env } from "~/env.ts";
 
 /**
  * Per-request server context, passed to TanStack Start's server handler in
  * `worker.ts` and from there into server routes and oRPC procedures.
  *
- * `env` is carried here because semaphore's resource procedures address the
- * `RESOURCE_COORDINATOR` durable object and `DB` per request; everything else
- * is request-scoped state.
+ * Request-scoped state only. Worker bindings (RESOURCE_COORDINATOR, DB, ...)
+ * are read via `import { env } from "cloudflare:workers"` at point of use, the
+ * same as apps/os. `db` stays here because SSR route loaders use it directly.
  */
 export interface RequestContext {
   config: AppConfig;
-  env: Env;
   db: D1Database;
   log: SharedRequestLogger;
   rawRequest?: Request;

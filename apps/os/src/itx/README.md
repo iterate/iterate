@@ -91,7 +91,7 @@ HTTP routing to capabilities (spec §8):
 
 ```text
 https://{cap}--{project}.{base}/…
-   └─► entry.workerd lookupRule → getItxCapHostIngressRule
+   └─► worker.ts lookupRule → getItxCapHostIngressRule
          └─► ItxCapIngress.fetch: 404 unless meta.http.expose
                gate: admin bearer │ signed share URL │ meta.http.public
                └─► ProjectDO.itxInvoke({name, path:["fetch"], args:[request]})

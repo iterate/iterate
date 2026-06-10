@@ -22,7 +22,6 @@ export async function handleSemaphoreRequest(
     async ({ log }) => {
       const context: RequestContext = {
         config,
-        env,
         rawRequest: request,
         db: env.DB,
         log,

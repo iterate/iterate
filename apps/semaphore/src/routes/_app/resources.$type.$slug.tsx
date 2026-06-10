@@ -1,6 +1,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { env } from "cloudflare:workers";
 import {
   FindResourceInput,
   type SemaphoreLeaseRecord,
@@ -83,7 +84,7 @@ const mutateResourceLease = createServerFn({ method: "POST" })
       throw new Error("Missing or invalid operator token.");
     }
 
-    const coordinator = context.env.RESOURCE_COORDINATOR.getByName(data.type);
+    const coordinator = env.RESOURCE_COORDINATOR.getByName(data.type);
     const currentLease = await coordinator.getLease({
       type: data.type,
       slug: data.slug,

@@ -1,4 +1,5 @@
 import { ORPCError } from "@orpc/server";
+import { env } from "cloudflare:workers";
 import { getPublicConfig } from "@iterate-com/shared/config";
 import { parseRouter, type AnyRouter } from "trpc-cli";
 import { z } from "zod";
@@ -75,87 +76,81 @@ function mapResourceError(error: unknown): never {
   throw error;
 }
 
-function getCoordinator(env: RequestContext["env"], type: string) {
+function getCoordinator(type: string) {
   return env.RESOURCE_COORDINATOR.getByName(type);
 }
 
-const addResourceProcedure = os.resources.add
-  .use(authProcedure)
-  .handler(async ({ context, input }) => {
-    try {
-      const { type, slug, data } = input;
-      const coordinator = getCoordinator(context.env, type);
-      const hasActiveLease = await coordinator.hasActiveLease({ type, slug });
-      if (hasActiveLease) {
-        throw new ORPCError("CONFLICT", {
-          message: "Cannot add a resource while an older lease is still active for this slug.",
-        });
-      }
-
-      const created = await insertResource(context.env.DB, {
-        type,
-        slug,
-        data,
+const addResourceProcedure = os.resources.add.use(authProcedure).handler(async ({ input }) => {
+  try {
+    const { type, slug, data } = input;
+    const coordinator = getCoordinator(type);
+    const hasActiveLease = await coordinator.hasActiveLease({ type, slug });
+    if (hasActiveLease) {
+      throw new ORPCError("CONFLICT", {
+        message: "Cannot add a resource while an older lease is still active for this slug.",
       });
-      await coordinator.inventoryChanged({ type });
-      return created;
-    } catch (error) {
-      return mapResourceError(error);
     }
-  });
+
+    const created = await insertResource(env.DB, {
+      type,
+      slug,
+      data,
+    });
+    await coordinator.inventoryChanged({ type });
+    return created;
+  } catch (error) {
+    return mapResourceError(error);
+  }
+});
 
 const deleteResourceProcedure = os.resources.delete
   .use(authProcedure)
-  .handler(async ({ context, input }) => {
+  .handler(async ({ input }) => {
     try {
       const { type, slug } = input;
-      const deleted = await deleteResourceFromDb(context.env.DB, { type, slug });
+      const deleted = await deleteResourceFromDb(env.DB, { type, slug });
       return { deleted };
     } catch (error) {
       return mapResourceError(error);
     }
   });
 
-const listResourcesProcedure = os.resources.list
-  .use(authProcedure)
-  .handler(async ({ context, input }) => {
-    try {
-      return await listResourcesFromDb(context.env.DB, { type: input.type });
-    } catch (error) {
-      return mapResourceError(error);
-    }
-  });
+const listResourcesProcedure = os.resources.list.use(authProcedure).handler(async ({ input }) => {
+  try {
+    return await listResourcesFromDb(env.DB, { type: input.type });
+  } catch (error) {
+    return mapResourceError(error);
+  }
+});
 
-const findResourceProcedure = os.resources.find
-  .use(authProcedure)
-  .handler(async ({ context, input }) => {
-    try {
-      const resource = await findResourceByKey(context.env.DB, input);
-      if (!resource) {
-        throw new ORPCError("NOT_FOUND", {
-          message: `No resource exists for ${input.type}/${input.slug}.`,
-        });
-      }
-
-      return resource;
-    } catch (error) {
-      return mapResourceError(error);
+const findResourceProcedure = os.resources.find.use(authProcedure).handler(async ({ input }) => {
+  try {
+    const resource = await findResourceByKey(env.DB, input);
+    if (!resource) {
+      throw new ORPCError("NOT_FOUND", {
+        message: `No resource exists for ${input.type}/${input.slug}.`,
+      });
     }
-  });
+
+    return resource;
+  } catch (error) {
+    return mapResourceError(error);
+  }
+});
 
 const acquireResourceProcedure = os.resources.acquire
   .use(authProcedure)
-  .handler(async ({ context, input }) => {
+  .handler(async ({ input }) => {
     try {
       const { type, leaseMs, waitMs = 0 } = input;
-      const hasInventory = await hasInventoryForType(context.env.DB, type);
+      const hasInventory = await hasInventoryForType(env.DB, type);
       if (!hasInventory) {
         throw new ORPCError("NOT_FOUND", {
           message: "No resources are configured for this type.",
         });
       }
 
-      const coordinator = getCoordinator(context.env, type);
+      const coordinator = getCoordinator(type);
       const lease = await coordinator.acquire({
         type,
         leaseMs,
@@ -179,17 +174,17 @@ const acquireResourceProcedure = os.resources.acquire
 
 const acquireSpecificResourceProcedure = os.resources.acquireSpecific
   .use(authProcedure)
-  .handler(async ({ context, input }) => {
+  .handler(async ({ input }) => {
     try {
       const { type, slug, leaseMs } = input;
-      const hasInventory = await hasInventoryForType(context.env.DB, type);
+      const hasInventory = await hasInventoryForType(env.DB, type);
       if (!hasInventory) {
         throw new ORPCError("NOT_FOUND", {
           message: "No resources are configured for this type.",
         });
       }
 
-      const coordinator = getCoordinator(context.env, type);
+      const coordinator = getCoordinator(type);
       return await coordinator.acquireSpecific({
         type,
         slug,
@@ -202,10 +197,10 @@ const acquireSpecificResourceProcedure = os.resources.acquireSpecific
 
 const renewResourceLeaseProcedure = os.resources.renew
   .use(authProcedure)
-  .handler(async ({ context, input }) => {
+  .handler(async ({ input }) => {
     try {
       const { type, slug, leaseId, leaseMs } = input;
-      const coordinator = getCoordinator(context.env, type);
+      const coordinator = getCoordinator(type);
       return await coordinator.renew({
         type,
         slug,
@@ -219,10 +214,10 @@ const renewResourceLeaseProcedure = os.resources.renew
 
 const releaseResourceProcedure = os.resources.release
   .use(authProcedure)
-  .handler(async ({ context, input }) => {
+  .handler(async ({ input }) => {
     try {
       const { type, slug, leaseId } = input;
-      const coordinator = getCoordinator(context.env, type);
+      const coordinator = getCoordinator(type);
       const released = await coordinator.release({
         type,
         slug,
