@@ -11,8 +11,6 @@ export const DEFAULT_CLOUDFLARE_AGENT_MODEL = DEFAULT_WORKERS_AI_AGENT_MODEL;
 export const DEFAULT_OPENAI_AGENT_MODEL = "gpt-5.5";
 export const DEFAULT_AGENT_LLM_PROVIDER = "openai-ws";
 export const DEFAULT_AGENT_DEBOUNCE_MS = 200;
-const LEGACY_GENERATED_SLACK_OPENAI_PROMPT_MARKER =
-  "You are an Iterate agent responding from Slack.";
 
 export const AgentLlmProvider = z.enum(["openai-ws", "cloudflare-ai"]);
 export type AgentLlmProvider = z.infer<typeof AgentLlmProvider>;
@@ -222,9 +220,7 @@ export function selectAgentSetupPreset(input: {
 
   return selectAgentPathPrefixPreset({
     agentPath: input.agentPath,
-    presets: input.presets
-      .filter((preset) => isSlackAgentPath(preset.basePath))
-      .filter((preset) => !isLegacyGeneratedSlackOpenAiPreset(preset)),
+    presets: input.presets.filter((preset) => isSlackAgentPath(preset.basePath)),
   });
 }
 
@@ -253,23 +249,6 @@ function tryNormalizeAgentPresetBasePath(input: string): StreamPath | null {
 
 export function isSlackAgentPath(agentPath: string) {
   return agentPath === "/agents/slack" || agentPath.startsWith("/agents/slack/");
-}
-
-function isLegacyGeneratedSlackOpenAiPreset(preset: AgentPathPrefixPreset) {
-  if (preset.basePath !== "/agents/slack") return false;
-  const provider = preset.events
-    .map((event) => (event.payload as { provider?: unknown }).provider)
-    .find((value) => value === "openai-ws" || value === "cloudflare-ai");
-  if (provider !== "openai-ws") return false;
-
-  return preset.events.some((event) => {
-    if (event.type !== "events.iterate.com/agent/system-prompt-updated") return false;
-    const systemPrompt = (event.payload as { systemPrompt?: unknown }).systemPrompt;
-    return (
-      typeof systemPrompt === "string" &&
-      systemPrompt.includes(LEGACY_GENERATED_SLACK_OPENAI_PROMPT_MARKER)
-    );
-  });
 }
 
 function parseAgentEventsYaml(value: string) {

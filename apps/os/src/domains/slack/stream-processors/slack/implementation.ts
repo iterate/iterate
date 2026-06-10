@@ -1,7 +1,7 @@
-// Implements the "slack" webhook-router processor on the class-based
-// StreamProcessor model. Migrated from
-// `packages/shared/src/stream-processors/slack/implementation.ts`; routing
-// logic, emitted event types/payloads, and idempotency keys are unchanged.
+// Implements the "slack" webhook-router processor.
+//
+// Emitted event types, payloads, and idempotency keys are stable wire formats
+// — changing them breaks dedup against events already committed to streams.
 
 import { z } from "zod";
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";

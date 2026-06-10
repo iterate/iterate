@@ -1,8 +1,6 @@
-// Ported from packages/shared/src/stream-processors/openai-ws/implementation.test.ts
-// onto the class-based StreamProcessor model. The WebSocket connection is an
-// instance field on the processor class (the hosting DO is the connection
-// scope), so connection-reuse and wake semantics are exercised by reusing or
-// recreating processor instances.
+// The WebSocket connection is an instance field on the processor class (the
+// hosting DO is the connection scope), so connection-reuse and wake semantics
+// are exercised by reusing or recreating processor instances.
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";

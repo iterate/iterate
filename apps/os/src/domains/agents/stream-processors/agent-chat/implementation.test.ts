@@ -1,6 +1,5 @@
-// Ported from packages/shared/src/stream-processors/agent-chat/implementation.test.ts
-// onto the class-based StreamProcessor model. Idempotency-key assertions are
-// wire-format regression checks — they must not change.
+// Idempotency-key assertions are wire-format regression checks — they must
+// not change.
 
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/streams/shared/event";

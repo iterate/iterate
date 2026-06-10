@@ -1,7 +1,4 @@
-// Defines the "cloudflare-ai" processor contract on the class-based stream model.
-//
-// Migrated from packages/shared/src/stream-processors/cloudflare-ai/contract.ts.
-// Wire formats (event types and payload schemas) are unchanged.
+// Defines the "cloudflare-ai" processor contract.
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
