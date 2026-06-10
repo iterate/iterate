@@ -42,8 +42,11 @@ export class ServerItxHarness extends WorkerEntrypoint<Env> {
   }): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
     try {
       const itx = await this.#serverItx(input);
-      const streams = await itx.streams.list();
-      return { ok: true, paths: streams.map((stream) => stream.streamPath) };
+      // The kernel's flat list() is gone (the explorer walks per-path state,
+      // childPaths level by level); the root's reduced state still proves the
+      // same thing — the handle can reach the project's streams capability.
+      const state = await itx.streams.get("/").getState();
+      return { ok: true, paths: [state.path, ...state.childPaths] };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }

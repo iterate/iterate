@@ -32,7 +32,9 @@ function pathsOf(result: ListResult): string[] {
 
 describe("getServerItx against real capabilities", () => {
   test("a project member's handle reaches streams.list() in-process", async () => {
-    const path = `/itx-server-tests/${crypto.randomUUID()}`;
+    // A single-segment path: the harness reads the ROOT's childPaths (the
+    // flat list()/descendantPaths catalog is gone — explorers walk levels).
+    const path = `/itx-server-tests-${crypto.randomUUID()}`;
     await harness.appendMarker({ marker: "seed", path });
 
     // Ancestor announcements that feed the root's catalog are fire-and-forget

@@ -5,27 +5,13 @@
 // and one invalidation reaches every consumer.
 
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
-import { itxKey, useItxQuery, type ItxHandle } from "~/itx/react/index.ts";
+import { itxKey, useItxQuery } from "~/itx/react/index.ts";
 import type { ItxQueryDefinition } from "~/itx/loader.ts";
 import { PROJECT_CHILD_ROUTE_STALE_TIME } from "~/lib/project-route-query.ts";
 import { StreamNavigationState } from "~/lib/stream-navigation-state.ts";
 
 export function projectStreamStateKey(projectId: string, streamPath: StreamPathType) {
   return itxKey.project(projectId, "streams", "state", streamPath);
-}
-
-/** The project's stream list (flat catalog from the root's reduced state). */
-export function projectStreamsListQuery(projectId: string) {
-  return {
-    project: projectId,
-    queryKey: projectStreamsListKey(projectId),
-    queryFn: (itx: ItxHandle) => itx.streams.list(),
-    staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
-  };
-}
-
-export function useProjectStreamsList(projectId: string) {
-  return useItxQuery(projectStreamsListQuery(projectId));
 }
 
 /**
