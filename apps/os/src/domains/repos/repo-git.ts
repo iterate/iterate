@@ -27,13 +27,15 @@ const RepoPath = z
     return normalized;
   });
 
+// strictObject: an entry carrying both `content` and `delete: true` must fail
+// validation rather than silently match the write variant.
 export const RepoFileChange = z.union([
-  z.object({
+  z.strictObject({
     path: RepoPath,
     content: z.string(),
     encoding: z.enum(["utf8", "base64"]).optional(),
   }),
-  z.object({
+  z.strictObject({
     path: RepoPath,
     delete: z.literal(true),
   }),
@@ -276,42 +278,65 @@ async function checkoutRepoBranch(input: {
   remote: string;
   token: string;
 }) {
-  const filesystem = new InMemoryFs();
-  const git = createGit(filesystem, REPO_DIR);
   const credentials = {
     username: "x",
     password: stripArtifactTokenQuery(input.token),
   };
 
-  let createdBranch = false;
   try {
-    await git.clone({
+    const clone = await cloneRepoBranch({
       branch: input.branch,
+      credentials,
       depth: input.depth,
-      singleBranch: true,
-      url: input.remote,
-      ...credentials,
+      remote: input.remote,
     });
+    return { createdBranch: false, credentials, ...clone };
   } catch (error) {
-    if (input.createMissingBranchFrom === null || !isMissingRemoteRefError(error)) {
+    if (input.createMissingBranchFrom === null || !isMissingRemoteRefError(error, input.branch)) {
       throw error;
     }
-    await git.clone({
-      branch: input.createMissingBranchFrom,
-      depth: input.depth,
-      singleBranch: true,
-      url: input.remote,
-      ...credentials,
-    });
-    await git.checkout({ branch: input.branch });
-    createdBranch = true;
   }
 
-  return { createdBranch, credentials, filesystem, git };
+  const clone = await cloneRepoBranch({
+    branch: input.createMissingBranchFrom,
+    credentials,
+    depth: input.depth,
+    remote: input.remote,
+  });
+  await clone.git.checkout({ branch: input.branch });
+  return { createdBranch: true, credentials, ...clone };
 }
 
-function isMissingRemoteRefError(error: unknown) {
-  return error instanceof Error && /could not find/i.test(error.message);
+/** Fresh filesystem per attempt so a failed clone never leaves a dirty tree behind. */
+async function cloneRepoBranch(input: {
+  branch: string;
+  credentials: { username: string; password: string };
+  depth?: number;
+  remote: string;
+}) {
+  const filesystem = new InMemoryFs();
+  const git = createGit(filesystem, REPO_DIR);
+  await git.clone({
+    branch: input.branch,
+    depth: input.depth,
+    singleBranch: true,
+    url: input.remote,
+    ...input.credentials,
+  });
+  return { filesystem, git };
+}
+
+/**
+ * isomorphic-git resolves the requested ref against the remote's ref map and
+ * throws NotFoundError(ref) when it is absent — match that shape (code plus
+ * the branch in the message) so unrelated clone failures still surface.
+ */
+export function isMissingRemoteRefError(error: unknown, branch: string) {
+  return (
+    error instanceof Error &&
+    (error as { code?: unknown }).code === "NotFoundError" &&
+    error.message.includes(branch)
+  );
 }
 
 /**

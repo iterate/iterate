@@ -6,6 +6,7 @@ import {
   REPO_COMMIT_AUTHOR,
   RepoFileChange,
   applyRepoFileChanges,
+  isMissingRemoteRefError,
 } from "./repo-git.ts";
 
 const REPO_DIR = "/repo";
@@ -109,6 +110,35 @@ describe("RepoFileChange", () => {
 
   test.each(["../escape.txt", ".git/config", "a/../b", ".", "//", ""])("rejects %j", (path) => {
     expect(() => RepoFileChange.parse({ content: "x", path })).toThrow();
+  });
+
+  test("rejects an entry carrying both content and delete", () => {
+    expect(() => RepoFileChange.parse({ content: "x", delete: true, path: "a.txt" })).toThrow();
+  });
+});
+
+describe("isMissingRemoteRefError", () => {
+  test("matches isomorphic-git NotFoundError for the requested branch", () => {
+    const error = Object.assign(new Error("Could not find feature-x."), {
+      code: "NotFoundError",
+    });
+    expect(isMissingRemoteRefError(error, "feature-x")).toBe(true);
+  });
+
+  test("ignores NotFoundError about something other than the branch", () => {
+    const error = Object.assign(new Error("Could not find deadbeef."), {
+      code: "NotFoundError",
+    });
+    expect(isMissingRemoteRefError(error, "feature-x")).toBe(false);
+  });
+
+  test("ignores unrelated errors that happen to mention the branch", () => {
+    expect(isMissingRemoteRefError(new Error("Could not find feature-x."), "feature-x")).toBe(
+      false,
+    );
+    expect(isMissingRemoteRefError(new Error("HTTP Error: 500 on feature-x"), "feature-x")).toBe(
+      false,
+    );
   });
 });
 
