@@ -2,9 +2,11 @@ import path from "node:path";
 import type { EventInput } from "@iterate-com/shared/streams/types";
 import type { Project } from "@iterate-com/os-contract";
 import { createCaptunTunnel } from "captun";
+import { RpcTarget } from "capnweb";
 import { expect } from "vitest";
 import { slugify } from "@iterate-com/shared/slug";
 import type { ProcessorContractShape } from "@iterate-com/streams/shared/stream-processors";
+import { connectItx } from "../../src/itx/client.ts";
 import {
   createAdminOsClient,
   requireBaseUrl,
@@ -131,16 +133,41 @@ export async function createTestProject(opts: { slugPrefix: string }) {
   };
 }
 
-/** creates a captun tunnel to the project's worker to capture its egress */
+/**
+ * Shadow the project's egress with a live `egress` capability — the
+ * capability-model replacement for the old captun intercept tunnel. The
+ * provider receives every egress Request with secret placeholders RAW
+ * (never material); disposing the session restores the default pipe.
+ */
 export async function createProjectEgressInterceptTunnel(input: {
   project: Project & { ingressUrl: string };
   fetch: Fetch;
 }) {
-  return createCaptunTunnel({
-    url: `${input.project.ingressUrl}/__iterate/intercept-project-egress`,
-    headers: { Authorization: `Bearer ${requireAdminBearerToken()}` },
-    fetch: input.fetch,
+  class EgressShadow extends RpcTarget {
+    fetch(request: Request) {
+      return input.fetch(request);
+    }
+  }
+  const itx = connectItx({
+    baseUrl: requireBaseUrl(),
+    context: input.project.id,
+    token: requireAdminBearerToken(),
   });
+  try {
+    await (
+      itx as unknown as {
+        caps: { provide(i: { name: string; target: unknown }): Promise<unknown> };
+      }
+    ).caps.provide({ name: "egress", target: new EgressShadow() });
+  } catch (error) {
+    itx[Symbol.dispose]();
+    throw error;
+  }
+  return {
+    [Symbol.dispose]() {
+      itx[Symbol.dispose]();
+    },
+  };
 }
 
 /** creates a public OS-hosted captun tunnel for test-defined HTTP servers */

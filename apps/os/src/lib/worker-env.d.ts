@@ -11,6 +11,7 @@ type WorkerMainModule = Pick<
     | "AiCapability"
     | "GmailCapability"
     | "ItxEntrypoint"
+    | "EgressPipe"
     | "ProjectEgress"
     | "OpenApiBridge"
     | "OrpcCapability"

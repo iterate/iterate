@@ -52,7 +52,6 @@ import {
 import {
   bundleWorkerCode,
   cloneWorkerRepo,
-  readLoopbackExports,
   WorkerHost,
   type WorkerCheckout,
   type WorkerCode,
