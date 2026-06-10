@@ -10,7 +10,14 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { Itx, type ItxRuntime } from "./handle.ts";
-import { GLOBAL_CONTEXT_ID, isChildContextId, type ItxProps } from "./protocol.ts";
+import {
+  DIALABLE_BINDINGS,
+  GLOBAL_CONTEXT_ID,
+  isChildContextId,
+  type ItxProps,
+  type PathCall,
+} from "./protocol.ts";
+import { replayPathCall } from "./path-proxy.ts";
 import type { ContextDO } from "./context-do.ts";
 import { parseConfig } from "~/config.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
@@ -90,5 +97,39 @@ export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
     return await this.env.PROJECT.getByName(getProjectDurableObjectName(props.project)).egressFetch(
       request,
     );
+  }
+}
+
+export type BindingCapabilityProps = {
+  /** Which env binding this instance wraps. Definer-supplied. */
+  binding: string;
+  /** Attribution, injected by the registry at dial time. */
+  cap?: string;
+  context?: string;
+};
+
+/**
+ * The thin policy wrapper for platform bindings (itx-next.md §2): a
+ * loopback-dialable, path-call capability that applies the dotted path to
+ * `env[props.binding]`, receiver-preserving. Today the only policy is the
+ * DIALABLE_BINDINGS allowlist — props.binding is definer-controlled, so the
+ * check HERE is the authoritative gate for which binding gets wrapped.
+ * Gateway selection / attribution headers / quotas slot in here later.
+ *
+ * Registered via:
+ *   target: { type: "rpc", worker: { type: "loopback" },
+ *             entrypoint: "BindingCapability", props: { binding: "AI" } }
+ */
+export class BindingCapability extends WorkerEntrypoint<Env, BindingCapabilityProps> {
+  async call(input: PathCall): Promise<unknown> {
+    const props = (Reflect.get(this, "ctx") as ExecutionContext<BindingCapabilityProps>).props;
+    if (!DIALABLE_BINDINGS.has(props.binding)) {
+      throw new Error(`Binding "${props.binding}" is not dialable as a capability.`);
+    }
+    const binding = (this.env as unknown as Record<string, unknown>)[props.binding];
+    if (binding == null) {
+      throw new Error(`Binding "${props.binding}" is not available in this environment.`);
+    }
+    return await replayPathCall(binding, input);
   }
 }

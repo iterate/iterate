@@ -45,26 +45,179 @@ export type PathCall = { path: string[]; args: unknown[] };
 /** The full shape a "path-call" capability provider implements. */
 export type PathCallTarget = { call(input: PathCall): unknown };
 
-export type CapKind = "live" | "worker" | "facet";
+/**
+ * A capability's kind is its target's type (design of record: types.ts).
+ * Stored rows may still carry the legacy kinds "worker"/"facet"; they
+ * normalize to "rpc" on read.
+ */
+export type CapKind = "live" | "rpc" | "url";
 
 /**
- * Source for durable (worker/facet) caps. `codeId` MUST change whenever the
- * module contents change — the Worker Loader caches by id (same discipline
- * as the AppRunner example in Cloudflare's Facets announcement).
+ * Source for a `{ type: "source" }` worker ref. `cacheKey` MUST change
+ * whenever the module contents change — the Worker Loader caches the
+ * materialized isolate by it (a content hash is the ideal value). `codeId`
+ * is the legacy spelling, still accepted.
  */
 export type CapSource = {
-  codeId: string;
+  cacheKey?: string;
+  /** @deprecated legacy spelling of `cacheKey`. */
+  codeId?: string;
   mainModule: string;
   modules: Record<string, string>;
   /** Named export to use; defaults to the default export. */
   entrypoint?: string;
+  /**
+   * What the entrypoint export IS: "worker-entrypoint" (default; stateless,
+   * fresh isolate per call) or "durable-object" (stateful; a NAMED export
+   * extending DurableObject, instantiated as a facet of the hosting context
+   * node with its own private SQLite).
+   */
+  exportType?: "worker-entrypoint" | "durable-object";
   compatibilityDate?: string;
 };
 
+export function capSourceCacheKey(source: CapSource): string {
+  const key = source.cacheKey ?? source.codeId;
+  if (!key) {
+    throw new Error(
+      "CapSource needs a cacheKey (rotate it whenever modules change; a content hash is ideal).",
+    );
+  }
+  return key;
+}
+
+/** Where an rpc target's worker lives (design of record: types.ts). */
+export type WorkerRef =
+  | { type: "binding"; binding: string }
+  | { type: "loopback" }
+  | { type: "project-worker" }
+  | { type: "durable-object"; binding: string; name: string }
+  | { type: "source"; source: CapSource };
+
+/**
+ * The serializable capability targets — this realm's sturdy refs. The
+ * non-serializable `live` kind never appears here: live stubs exist only in
+ * the registry's in-memory connection table.
+ */
+export type SerializableCapTarget =
+  | {
+      type: "rpc";
+      worker: WorkerRef;
+      /** Named export to instantiate (loopback refs require it). For
+       * `source` refs the export is named by `source.entrypoint` instead. */
+      entrypoint?: string;
+      /** Instantiation props (the ProjectEgress pattern). The registry adds
+       * `{ cap, context }` attribution at dial time. */
+      props?: Record<string, unknown>;
+    }
+  | { type: "url"; url: string; headers?: Record<string, string> };
+
+/**
+ * Which env bindings / loopback exports an rpc target may dial. Deliberately
+ * hardcoded constants for now (config-driven later — itx-next.md §2):
+ * binding and loopback refs reach PLATFORM resources, so an open list would
+ * let any project handle reach e.g. the deployment D1, or mint itx handles
+ * on arbitrary projects via ItxEntrypoint props. Checked at define time
+ * (fail fast) and again at dial time (authoritative).
+ */
+export const DIALABLE_BINDINGS: ReadonlySet<string> = new Set(["AI"]);
+export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set(["BindingCapability"]);
+
+/**
+ * Normalize a define() input to a serializable target. Legacy callers pass
+ * `source` (+ optional `kind: "worker" | "facet"`); they normalize to an
+ * rpc/source target, with "facet" becoming `exportType: "durable-object"`.
+ */
+export function normalizeCapTarget(input: {
+  target?: SerializableCapTarget;
+  source?: CapSource;
+  kind?: "worker" | "facet";
+}): SerializableCapTarget {
+  if (input.target) {
+    if (input.source || input.kind) {
+      throw new Error("caps.define takes either target or legacy source/kind, not both.");
+    }
+    return input.target;
+  }
+  if (!input.source) throw new Error("caps.define needs a target.");
+  const source: CapSource = {
+    ...input.source,
+    exportType:
+      input.source.exportType ?? (input.kind === "facet" ? "durable-object" : "worker-entrypoint"),
+  };
+  return { type: "rpc", worker: { source, type: "source" } };
+}
+
+/**
+ * Define-time validation of a serializable target. The same checks run
+ * again at dial time inside the registry; this exists so misconfigured
+ * targets fail at define() with a useful error instead of at first call.
+ */
+export function assertDefinableCapTarget(name: string, target: SerializableCapTarget): void {
+  if (target.type === "url") {
+    throw new Error(
+      `Capability "${name}": url targets are not implemented yet (Law 7: Cap'n Web must terminate ` +
+        `in a stateless worker, never a DO — the dial path for url refs is a follow-up).`,
+    );
+  }
+  const worker = target.worker;
+  switch (worker.type) {
+    case "binding":
+      if (!DIALABLE_BINDINGS.has(worker.binding)) {
+        throw new Error(
+          `Capability "${name}": binding "${worker.binding}" is not dialable. ` +
+            `Dialable bindings: ${[...DIALABLE_BINDINGS].join(", ") || "(none)"}.`,
+        );
+      }
+      if (target.entrypoint) {
+        throw new Error(
+          `Capability "${name}": binding refs take no entrypoint — the binding object itself is the target.`,
+        );
+      }
+      return;
+    case "loopback":
+      if (!target.entrypoint) {
+        throw new Error(
+          `Capability "${name}": loopback refs need an entrypoint (the export name).`,
+        );
+      }
+      if (!DIALABLE_LOOPBACKS.has(target.entrypoint)) {
+        throw new Error(
+          `Capability "${name}": loopback export "${target.entrypoint}" is not dialable. ` +
+            `Dialable exports: ${[...DIALABLE_LOOPBACKS].join(", ") || "(none)"}.`,
+        );
+      }
+      return;
+    case "source":
+      if (worker.source.exportType === "durable-object" && !worker.source.entrypoint) {
+        // Default-export DO classes make workerd's facet instantiation fail
+        // with an opaque internal error; a NAMED export works (DECISIONS D12).
+        throw new Error(
+          `Capability "${name}" needs source.entrypoint naming an exported ` +
+            `"class X extends DurableObject" (default exports do not work as facet classes).`,
+        );
+      }
+      capSourceCacheKey(worker.source);
+      return;
+    case "durable-object":
+    case "project-worker":
+      throw new Error(
+        `Capability "${name}": ${worker.type} refs are not implemented yet (itx-next.md §1).`,
+      );
+  }
+}
+
+/**
+ * Arbitrary metadata, stored verbatim and surfaced by describe(). There is
+ * no schema — the named fields below are conventions:
+ * - `instructions`: a sentence for the human/agent who finds this cap.
+ * - `http`: HTTP routing flags (spec §8).
+ */
 export type CapMeta = {
+  instructions?: string;
   definedBy?: { type: "user" | "agent" | "system"; id: string };
-  /** HTTP routing flags (spec §8); consumed when cap routing lands. */
   http?: { expose: boolean; public?: boolean };
+  [key: string]: unknown;
 };
 
 /** A registry entry as reported by describe(); never contains live stubs. */
@@ -76,6 +229,8 @@ export type CapDescription = {
   owner: string;
   /** Live caps only: is the provider currently connected? */
   connected?: boolean;
+  /** Lifted from meta for convenience: the one thing to read first. */
+  instructions?: string;
   meta: CapMeta;
   updatedAtMs: number;
 };

@@ -28,6 +28,7 @@ import {
   type CapMeta,
   type CapSource,
   type ProjectAccess,
+  type SerializableCapTarget,
 } from "./protocol.ts";
 import type { ContextDO } from "./context-do.ts";
 import { createShareToken, SHARE_TOKEN_PARAM } from "./http.ts";
@@ -343,7 +344,12 @@ export class ItxCaps extends RpcTarget {
 
   async define(input: {
     name: string;
-    source: CapSource;
+    /** The capability's target (types.ts). Serializable kinds only — for a
+     * live stub use provide(). */
+    target?: SerializableCapTarget;
+    /** Legacy: sugar for target { type: "rpc", worker: { type: "source" } }. */
+    source?: CapSource;
+    /** Legacy: "facet" maps to source.exportType "durable-object". */
     kind?: "worker" | "facet";
     invoke?: CapInvoke;
     meta?: CapMeta;
