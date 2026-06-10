@@ -85,6 +85,13 @@ catalog indexes on both fields, and hosts the `repo` processor via
   created.
 - `refreshWriteToken()` — mints a fresh write token, stores it (and its
   expiry) in DO storage, returns updated `RepoInfo`.
+- `commitFiles({ branch?, message, changes, author? })` — commits an array of
+  file writes/deletes to a branch (default branch unless specified) and
+  pushes. See "Workspace-free git operations" below.
+- `readFiles({ branch?, paths, encoding? })` — reads files from a branch;
+  missing paths come back with `content: null`.
+- `listFiles({ branch? })` — lists all file paths on a branch.
+- `readLog({ branch?, depth? })` — commit log, newest first.
 - `getArtifact()` — returns the raw Cloudflare Artifacts repo handle.
 - `requestStreamSubscription(args)` / `afterAppend(input)` — stream
   subscription plumbing for the hosted processor.
@@ -115,6 +122,35 @@ type RepoInfo = {
 embedded in the remote URL. `credentials` is the username/password form of the
 same token (`username: "x"`).
 
+## Workspace-free git operations
+
+`commitFiles`, `readFiles`, `listFiles`, and `readLog` operate directly on the
+backing git remote without a Workspace. Each call clones into a throwaway
+in-memory filesystem (`@cloudflare/shell` `InMemoryFs` + isomorphic-git), does
+its work, and for commits pushes back. The plumbing lives in
+`apps/os/src/domains/repos/repo-git.ts`.
+
+The most common operation is committing an array of files to a branch (the
+default branch unless specified):
+
+```ts
+await repo.commitFiles({
+  message: "Update config",
+  changes: [
+    { path: "iterate.config.jsonc", content: "{...}" },
+    { path: "assets/logo.png", content: "<base64>", encoding: "base64" },
+    { path: "old-file.txt", delete: true },
+  ],
+});
+```
+
+Deletes are serialized as `{ path, delete: true }`; writes as `{ path, content,
+encoding? }`. Writing identical content or deleting an absent path is a no-op —
+when nothing actually changes, no commit is created and the result has
+`noChanges: true`. Committing to a branch that does not exist yet creates it
+off the default branch. The Durable Object serializes commits per repo, and the
+write token is refreshed once automatically on an auth failure.
+
 ## Capability
 
 `ReposCapability` (`WorkerEntrypoint`, props `{ projectId: string }`) is the
@@ -122,9 +158,9 @@ shared surface for oRPC and codemode. It is also exported under the alias
 `RepoCapability`. Methods:
 
 - `create({ slug, projectSlug? })` / `get({ slug })` — return a `RepoHandle`
-  RpcTarget exposing `getInfo`, `refreshWriteToken`, and `getArtifact`.
-  `create` throws if the Repo already exists; `get` never implicitly
-  initializes a Repo DO.
+  RpcTarget exposing `getInfo`, `refreshWriteToken`, `commitFiles`,
+  `readFiles`, `listFiles`, `readLog`, and `getArtifact`. `create` throws if
+  the Repo already exists; `get` never implicitly initializes a Repo DO.
 - `createInfo` / `getInfo` — same, but return serialized `RepoInfo`.
 - `ensureIterateConfigInfo({ projectSlug })` — create-or-read the project's
   `iterate-config` Repo.
