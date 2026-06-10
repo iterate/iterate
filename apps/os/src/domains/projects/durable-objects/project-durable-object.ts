@@ -38,14 +38,11 @@ import {
 import { parseProjectPlatformHosts } from "~/ingress/project-platform-host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import {
-  PROJECT_CNAME_RECORD_CREATED_EVENT_TYPE,
-  PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE,
   PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE,
   PROJECT_LIFECYCLE_STREAM_PATH,
   ProjectLifecycleProcessor,
   ProjectLifecycleProcessorContract,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
-import { createProjectWildcardCNAMERecord as createCloudflareProjectWildcardCNAMERecord } from "~/domains/projects/cloudflare-dns.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import {
   type RepoDurableObject,
@@ -336,12 +333,6 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     await this.writeIngressRoutes({ hosts, projectId: input.projectId });
     const summary = this.requireSummary();
     await this.writeProjectCreatedLifecycleEvent(summary);
-    void this.createProjectWildcardCNAMERecord(summary).catch((error) => {
-      console.error(
-        `[ProjectDNS] Wildcard DNS record fire-and-forget task failed for ${summary.id}:`,
-        error,
-      );
-    });
 
     // Defer heavy setup (config worker build, agents root) so the create call returns fast.
     this.ctx.waitUntil(this.finishProjectSetup(summary));
@@ -1082,82 +1073,6 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     });
   }
 
-  private async createProjectWildcardCNAMERecord(summary: ProjectSummary) {
-    const config = this.getAppConfig();
-    const base = config.projectHostnameBases[0];
-    try {
-      const result = await createCloudflareProjectWildcardCNAMERecord({
-        apiToken: config.cloudflare.apiToken?.exposeSecret(),
-        projectHostnameBase: base,
-        projectId: summary.id,
-        projectSlug: summary.slug,
-      });
-      if (result === null) return;
-      await this.writeProjectCNAMERecordCreatedLifecycleEvent({
-        result,
-        summary,
-      });
-    } catch (error) {
-      console.error(`[ProjectDNS] Wildcard DNS record creation failed for ${summary.id}:`, error);
-      await this.writeProjectCNAMERecordCreationFailedLifecycleEvent({
-        base,
-        error,
-        summary,
-      });
-    }
-  }
-
-  private async writeProjectCNAMERecordCreatedLifecycleEvent(input: {
-    result: Awaited<ReturnType<typeof createCloudflareProjectWildcardCNAMERecord>>;
-    summary: ProjectSummary;
-  }) {
-    if (input.result === null) return;
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: input.summary.id,
-      path: PROJECT_LIFECYCLE_STREAM_PATH,
-    });
-
-    await stream.append({
-      type: PROJECT_CNAME_RECORD_CREATED_EVENT_TYPE,
-      idempotencyKey: `project-cname-record-created:${input.summary.id}:${input.result.name}`,
-      payload: {
-        base: input.result.base,
-        cloudflareRecord: input.result.record,
-        name: input.result.name,
-        projectId: input.summary.id,
-        projectSlug: input.summary.slug,
-        target: input.result.target,
-        zoneId: input.result.zoneId,
-        zoneName: input.result.zoneName,
-      },
-    });
-  }
-
-  private async writeProjectCNAMERecordCreationFailedLifecycleEvent(input: {
-    base: string | undefined;
-    error: unknown;
-    summary: ProjectSummary;
-  }) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: input.summary.id,
-      path: PROJECT_LIFECYCLE_STREAM_PATH,
-    });
-    const base = input.base?.trim();
-
-    await stream.append({
-      type: PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE,
-      idempotencyKey: `project-cname-record-creation-failed:${input.summary.id}:${Date.now()}`,
-      payload: {
-        ...(base ? { base, name: `*.${input.summary.slug}.${base}` } : {}),
-        message: errorMessage(input.error),
-        projectId: input.summary.id,
-        projectSlug: input.summary.slug,
-      },
-    });
-  }
-
   private async getOrCreateIterateConfigRepo(summary: ProjectSummary) {
     return await ensureIterateConfigInfoForProject({
       env: this.env,
@@ -1325,10 +1240,6 @@ function projectDynamicWorkerCodeWithBindings(input: {
       ...input.workerCode.modules,
     },
   };
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 async function bundledProjectDynamicWorkerCode(
