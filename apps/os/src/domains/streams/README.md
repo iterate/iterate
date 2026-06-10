@@ -7,5 +7,5 @@ OS uses the stable Project ID as the stream namespace for project streams, but
 stream paths remain project-local and must not encode `/projects/{projectId}`.
 
 The stream Durable Object itself comes from `@iterate-com/streams` (bound as
-`STREAM`); this folder holds the OS adapters (`new-stream-runtime.ts`, the
+`STREAM`); this folder holds the OS adapters (`stream-runtime.ts`, the
 streams capability, project stream RPC).

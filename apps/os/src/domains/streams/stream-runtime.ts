@@ -1,8 +1,5 @@
 import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
-import type {
-  StreamEvent as NewStreamEvent,
-  StreamEventInput as NewStreamEventInput,
-} from "@iterate-com/streams/shared/event";
+import type { StreamEvent, StreamEventInput } from "@iterate-com/streams/shared/event";
 import type { StreamRpc } from "@iterate-com/streams/types";
 import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { StreamPath, StreamState } from "@iterate-com/shared/streams/types";
@@ -42,9 +39,9 @@ export async function getInitializedStreamStub(input: {
 
   return {
     async append(event) {
-      return toLegacyEvent(
+      return withStreamPath(
         await stub.append({
-          event: toNewEventInput(event),
+          event: toStreamEventInput(event),
         }),
         path,
       );
@@ -52,26 +49,26 @@ export async function getInitializedStreamStub(input: {
     async appendBatch(events) {
       return (
         await stub.appendBatch({
-          events: events.map((event) => toNewEventInput(event)),
+          events: events.map((event) => toStreamEventInput(event)),
         })
-      ).map((event) => toLegacyEvent(event, path));
+      ).map((event) => withStreamPath(event, path));
     },
     async getState() {
       return toStreamState(await stub.runtimeState());
     },
     async history(query = {}) {
       const events = await stub.getEvents({
-        afterOffset: toNewAfterOffset(query.after),
-        beforeOffset: toNewBeforeOffset(query.before),
+        afterOffset: toAfterOffset(query.after),
+        beforeOffset: toBeforeOffset(query.before),
       });
-      return events.map((event) => toLegacyEvent(event, path));
+      return events.map((event) => withStreamPath(event, path));
     },
     async stream(query = {}) {
       const events = await stub.getEvents({
-        afterOffset: toNewAfterOffset(query.after),
-        beforeOffset: toNewBeforeOffset(query.before),
+        afterOffset: toAfterOffset(query.after),
+        beforeOffset: toBeforeOffset(query.before),
       });
-      return eventsToNdjsonStream(events.map((event) => toLegacyEvent(event, path)));
+      return eventsToNdjsonStream(events.map((event) => withStreamPath(event, path)));
     },
   };
 }
@@ -96,28 +93,28 @@ export function toStreamState(
   });
 }
 
-export function toLegacyEvent(event: NewStreamEvent, streamPath: StreamPath): Event {
+export function withStreamPath(event: StreamEvent, streamPath: StreamPath): Event {
   return {
     ...event,
     streamPath,
   } as Event;
 }
 
-export function toNewEventInput(event: EventInput): NewStreamEventInput {
+export function toStreamEventInput(event: EventInput): StreamEventInput {
   const { offset, ...rest } = event as EventInput & { offset?: number };
   return {
     ...rest,
     ...(offset == null ? {} : { offset }),
-  } as NewStreamEventInput;
+  } as StreamEventInput;
 }
 
-export function toNewAfterOffset(cursor: StreamCursor | undefined): number | undefined {
+export function toAfterOffset(cursor: StreamCursor | undefined): number | undefined {
   if (cursor == null || cursor === "start") return 0;
   if (cursor === "end") return Number.MAX_SAFE_INTEGER;
   return cursor;
 }
 
-function toNewBeforeOffset(cursor: StreamCursor | undefined): number | null | undefined {
+function toBeforeOffset(cursor: StreamCursor | undefined): number | null | undefined {
   if (cursor == null || cursor === "end") return null;
   if (cursor === "start") return 1;
   return cursor;

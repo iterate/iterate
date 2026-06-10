@@ -159,7 +159,7 @@ export type Event = GenericEvent;
 /**
  * The externally visible state of one stream, served by `getState()`. This is
  * a projection of the Stream Durable Object's core reduced state (see
- * `toStreamState` in apps/os new-stream-runtime.ts, the only producer) —
+ * `toStreamState` in apps/os stream-runtime.ts, the only producer) —
  * deliberately just the tree shape that navigation UIs and scripts consume.
  * Processor internals (circuit breaker counters, subscriber records) are DO
  * implementation detail and are not part of this contract.

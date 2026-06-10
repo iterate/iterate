@@ -4,7 +4,7 @@ import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 
 export const DEBUG_APPEND_CHAIN_EVENT_TYPE = "events.iterate.com/debug/append-chain-tick";
 

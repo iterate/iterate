@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { toStreamState } from "./new-stream-runtime.ts";
+import { toStreamState } from "./stream-runtime.ts";
 
 describe("toStreamState", () => {
   test("projects real core state onto the StreamState contract, dropping processor internals", () => {

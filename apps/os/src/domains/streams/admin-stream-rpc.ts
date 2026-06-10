@@ -2,7 +2,7 @@ import { newWorkersRpcResponse } from "capnweb";
 import { PublicStreamRpcTarget } from "@iterate-com/streams/workers/durable-objects/stream";
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { authenticateCapnwebAdmin } from "~/itx/admin-auth-cookie.ts";
-import { getStreamDurableObjectName } from "~/domains/streams/new-stream-runtime.ts";
+import { getStreamDurableObjectName } from "~/domains/streams/stream-runtime.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import type { AppConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";

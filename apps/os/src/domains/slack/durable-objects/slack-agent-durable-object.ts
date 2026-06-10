@@ -18,7 +18,7 @@ import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
 import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
 import {
