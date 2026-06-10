@@ -54,8 +54,6 @@ export const orpcOpenApiHandler = new OpenAPIHandler(appRouter, {
         },
         servers: [{ url: "/api" }],
         tags: [
-          "/debug",
-          "/test",
           "/projects",
           "/streams",
           "/codemode",

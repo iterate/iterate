@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { claudeMcpScript } from "./claude-mcp.ts";
 import { seedIterateConfigBaseRepoScript } from "./seed-iterate-config-base-repo.ts";
+import { setupArtifactEventSubscriptionsScript } from "./setup-artifact-event-subscriptions.ts";
 
 const DEFAULT_APP_CONFIG_BASE_URL = "https://os.iterate.com";
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -29,6 +30,7 @@ const StreamTuiInput = z.object({
 export const router = os.router({
   artifacts: {
     "seed-config-base": seedIterateConfigBaseRepoScript,
+    "setup-event-subscriptions": setupArtifactEventSubscriptionsScript,
   },
   "claude-mcp": claudeMcpScript,
   "stream-tui": os

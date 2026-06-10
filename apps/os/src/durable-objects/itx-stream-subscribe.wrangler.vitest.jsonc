@@ -1,0 +1,23 @@
+{
+  "name": "os-itx-stream-subscribe-vitest",
+  "main": "itx-stream-subscribe-test-entry.ts",
+  "compatibility_date": "2026-04-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "APP_CONFIG": "{\"adminApiSecret\":\"itx-stream-subscribe-admin-secret\",\"openAiApiKey\":\"openai-test-key\",\"projectHostnameBases\":[\"iterate.localhost\"],\"typeIdPrefix\":\"os\"}",
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "STREAM",
+        "class_name": "StreamDurableObject",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["StreamDurableObject"],
+    },
+  ],
+}

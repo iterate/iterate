@@ -78,7 +78,7 @@ AB() { AGENT_BROWSER_AUTO_CONNECT=0 agent-browser --cdp 9444 "$@"; }
 The hosted login UI (`auth.iterate.com/login`) **only offers "Continue with
 Google"** — there is no email/password form to fill, and sign-up is disabled
 (`apps/auth/src/server/auth.ts`). So you cannot log in by filling a form. Instead
-authenticate the bootstrap superadmin against better-auth's **API**, inject the
+authenticate the bootstrap admin against better-auth's **API**, inject the
 resulting session cookies, then let the OAuth flow complete:
 
 1. **Sign in via the better-auth API** (email/password IS enabled at the API
@@ -89,10 +89,10 @@ resulting session cookies, then let the OAuth flow complete:
    export SECRET=$(doppler secrets get SERVICE_AUTH_TOKEN --project auth --config prd --plain)
    curl -s -c /tmp/auth.txt -X POST https://auth.iterate.com/api/auth/sign-in/email \
      -H 'content-type: application/json' \
-     --data "$(python3 -c 'import json,os;print(json.dumps({"email":"superadmin@nustom.com","password":os.environ["SECRET"]}))')"
+     --data "$(python3 -c 'import json,os;print(json.dumps({"email":"admin@nustom.com","password":os.environ["SECRET"]}))')"
    ```
 
-   - email: `superadmin@nustom.com` (`BOOTSTRAP_SUPERADMIN_EMAIL`)
+   - email: `admin@nustom.com` (`BOOTSTRAP_ADMIN_EMAIL`)
    - password: the auth worker's `SERVICE_AUTH_TOKEN` (Doppler `auth/prd`)
 
 2. **Inject the `__Secure-better-auth.session_{token,data}` cookies** into the
@@ -111,7 +111,7 @@ resulting session cookies, then let the OAuth flow complete:
 5. `AB state save /tmp/os-auth.json` immediately.
 
 Previews authenticate against **production** auth (`auth.iterate.com`), so this
-works against preview hosts too. For a fresh non-superadmin user, provision it
+works against preview hosts too. For a fresh non-admin user, provision it
 via the auth worker's service-token-gated internal oRPC API
 (`internal.user.upsertVerifiedEmail` + `internal.organization.createForUser`).
 

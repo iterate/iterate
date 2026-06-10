@@ -18,8 +18,11 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import { typeid } from "@iterate-com/shared/typeid";
+import type { StreamCursor, Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
 import { createD1Client } from "sqlfu";
+import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { PathProxyRpcTarget } from "./path-proxy.ts";
+import { ItxError } from "./errors.ts";
 import {
   GLOBAL_CONTEXT_ID,
   isChildContextId,
@@ -115,9 +118,11 @@ export class Itx extends RpcTarget {
       return new ItxStreams(this.#runtime, projectId);
     }
     if (this.#runtime.access !== "all") {
-      throw new Error(
-        "Global streams need admin access. Narrow to a project first: itx.projects.get(idOrSlug).",
-      );
+      throw new ItxError({
+        code: "FORBIDDEN",
+        message:
+          "Global streams need admin access. Narrow to a project first: itx.projects.get(idOrSlug).",
+      });
     }
     return new ItxStreams(this.#runtime, GLOBAL_CONTEXT_ID);
   }
@@ -269,9 +274,11 @@ export class Itx extends RpcTarget {
   #requireProjectId(): string {
     const projectId = this.#projectId();
     if (projectId === null) {
-      throw new Error(
-        "This itx handle is on the global context. Narrow to a project first: itx.projects.get(idOrSlug).",
-      );
+      throw new ItxError({
+        code: "BAD_REQUEST",
+        message:
+          "This itx handle is on the global context. Narrow to a project first: itx.projects.get(idOrSlug).",
+      });
     }
     return projectId;
   }
@@ -289,9 +296,10 @@ export type ItxFn<V = Record<string, unknown>, R = unknown> = (input: {
 
 /**
  * Map an SDK's type surface onto its itx stub: every function becomes async,
- * everything else recurses. With this, `declare module` augmentation gives
- * `itx.slack` the real @slack/web-api types while the runtime stays a
- * ten-line path-call forwarder.
+ * everything else recurses. Cap lookups are untyped at runtime (the Proxy
+ * fallthrough), so callers cast: `itx.cap("slack") as
+ * Stubify<import("@slack/web-api").WebClient>` gives the real SDK types while
+ * the runtime stays a ten-line path-call forwarder.
  */
 export type Stubify<T> = T extends (...args: infer A) => infer R
   ? (...args: A) => Promise<Awaited<R>>
@@ -374,7 +382,12 @@ export class ItxCaps extends RpcTarget {
     const secret = this.runtime.config.adminApiSecret?.exposeSecret();
     if (!secret) throw new Error("Share URLs need an admin API secret configured.");
     const projectId = this.runtime.projectId;
-    if (!projectId) throw new Error("Share URLs are project-scoped; narrow to a project first.");
+    if (!projectId) {
+      throw new ItxError({
+        code: "BAD_REQUEST",
+        message: "Share URLs are project-scoped; narrow to a project first.",
+      });
+    }
 
     const ingress = new URL(await this.project().ingressUrl());
     const expiresAtMs = Date.now() + (input.ttlSeconds ?? 3600) * 1000;
@@ -410,8 +423,14 @@ export class ItxStreams extends RpcTarget {
     return new ItxStream(this.runtime, this.projectId, path);
   }
 
-  async list() {
-    return await this.client().list();
+  namespace(namespace: string): ItxStreams {
+    if (this.runtime.access !== "all") {
+      throw new ItxError({
+        code: "FORBIDDEN",
+        message: "Selecting an arbitrary stream namespace requires admin access.",
+      });
+    }
+    return new ItxStreams(this.runtime, StreamNamespace.parse(namespace));
   }
 
   async create(input: { streamPath: string }) {
@@ -461,6 +480,31 @@ export class ItxStream extends RpcTarget {
     return await this.client().listChildren({} as never);
   }
 
+  /**
+   * Live tail: catch-up from `afterOffset` ("start" replays everything,
+   * "end" is live-only), then every committed batch, pushed to `onEventBatch`
+   * until unsubscribed. The callback crosses whatever boundary the caller
+   * came in over (capnweb from a browser/Node session, Workers RPC from a cap
+   * isolate); the streams capability holds the actual DO subscription, so the
+   * same append-policy props gate it. If the callback's far end goes away,
+   * the subscription is torn down on the next failed delivery — offline means
+   * offline; durability is the stream itself, re-subscribe from the last
+   * offset you saw.
+   */
+  async subscribe(
+    onEventBatch: (batch: { events: StreamLegacyEvent[]; streamMaxOffset: number }) => unknown,
+    opts: { afterOffset: StreamCursor },
+  ): Promise<ItxStreamSubscription> {
+    // Callback retention lives in StreamsCapability.subscribe: RPC layers
+    // implicitly dispose stubs received as parameters when the call
+    // completes, so the capability dup()s the callback its wrapper outlives
+    // — without that, replay (delivered in-call) works but the first LIVE
+    // batch hits a disposed stub. Verified both ways by
+    // itx-subscribe.e2e.test.ts against a live deployment.
+    const handle = await this.client().subscribe({ afterOffset: opts.afterOffset }, onEventBatch);
+    return new ItxStreamSubscription(handle);
+  }
+
   private client(): StreamsClient {
     return getStreamsCapability({
       exports: this.runtime.exports as unknown as Parameters<
@@ -472,6 +516,17 @@ export class ItxStream extends RpcTarget {
         streamPath: this.path,
       },
     });
+  }
+}
+
+/** Disposer for ItxStream.subscribe — callable from any execution mode. */
+export class ItxStreamSubscription extends RpcTarget {
+  constructor(private readonly handle: { unsubscribe(): void }) {
+    super();
+  }
+
+  unsubscribe() {
+    this.handle.unsubscribe();
   }
 }
 
@@ -529,19 +584,31 @@ export class ItxProjects extends RpcTarget {
     // auth org to own the project. A supplied id must already be a project id
     // (legacy "proj_" still accepted), never a slug.
     if (input.id !== undefined && !isProjectId(input.id)) {
-      throw new Error("Project ID must start with prj_ (or legacy proj_).");
+      throw new ItxError({
+        code: "BAD_REQUEST",
+        details: { id: input.id },
+        message: "Project ID must start with prj_ (or legacy proj_).",
+      });
     }
     const id = input.id ?? mintProjectId();
 
     const existingById = await getProjectById(db, { id });
     if (existingById) {
       if (existingById.slug !== input.slug) {
-        throw new Error(`Project ${id} already exists with slug ${existingById.slug}.`);
+        throw new ItxError({
+          code: "CONFLICT",
+          details: { existingSlug: existingById.slug, id },
+          message: `Project ${id} already exists with slug ${existingById.slug}.`,
+        });
       }
       return toProjectSummary(existingById);
     }
     if (await getProjectBySlug(db, { slug: input.slug })) {
-      throw new Error(`A project with slug ${input.slug} already exists.`);
+      throw new ItxError({
+        code: "CONFLICT",
+        details: { slug: input.slug },
+        message: `A project with slug ${input.slug} already exists.`,
+      });
     }
 
     await insertProject(db, { id, slug: input.slug });
@@ -571,17 +638,27 @@ export class ItxProjects extends RpcTarget {
     const row = isProjectId(projectIdOrSlug)
       ? await getProjectById(db, { id: projectIdOrSlug })
       : await getProjectBySlug(db, { slug: projectIdOrSlug });
-    if (!row) throw new Error(`Project ${projectIdOrSlug} not found.`);
+    // Existence masking (errors.ts): missing and forbidden are byte-identical
+    // NOT_FOUND errors, so access probing cannot reveal which ids/slugs exist.
+    const notFound = () =>
+      new ItxError({
+        code: "NOT_FOUND",
+        details: { projectIdOrSlug },
+        message: `Project ${projectIdOrSlug} not found.`,
+      });
+    if (!row) throw notFound();
     if (this.runtime.access !== "all" && !this.runtime.access.includes(row.id)) {
-      // Same message as not-found: access probing should not reveal existence.
-      throw new Error(`Project ${projectIdOrSlug} not found.`);
+      throw notFound();
     }
     return row;
   }
 
   private requireAllAccess(action: string) {
     if (this.runtime.access !== "all") {
-      throw new Error(`This itx handle may not ${action}; it has access to named projects only.`);
+      throw new ItxError({
+        code: "FORBIDDEN",
+        message: `This itx handle may not ${action}; it has access to named projects only.`,
+      });
     }
   }
 

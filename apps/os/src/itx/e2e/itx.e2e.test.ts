@@ -7,7 +7,13 @@
 
 import { expect, test } from "vitest";
 import { RpcTarget } from "capnweb";
-import { connectItx, type ItxClient } from "../client.ts";
+import type { ItxClient } from "../client.ts";
+import {
+  adminApiSecret,
+  baseUrl,
+  connectGlobal,
+  registerCreatedProjectCleanup,
+} from "./e2e-env.ts";
 import {
   appendAndReadStream,
   callPathCapability,
@@ -20,12 +26,15 @@ import {
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const PROJECT_SLUG = `itx-e2e-${RUN_SUFFIX}`;
 
+const createdProjectIds = registerCreatedProjectCleanup();
+
 test("itx scripts run identically over Cap'n Web and /api/itx/run", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: PROJECT_SLUG })) as {
     id: string;
     slug: string;
   };
+  createdProjectIds.push(project.id);
   expect(project.slug).toBe(PROJECT_SLUG);
 
   for (const mode of executionModes(itx)) {
@@ -54,6 +63,7 @@ test("itx scripts run identically over Cap'n Web and /api/itx/run", async () => 
 test("the five-step capability flow: provide live, call, promote durable, call from a script", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-caps` })) as { id: string };
+  createdProjectIds.push(project.id);
 
   // (1) A provider written in this Node process: ONE call({ path, args })
   // method is the whole implementation of an SDK-shaped surface.
@@ -113,6 +123,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
 test("platform bindings are dialable capabilities (raw + wrapped)", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-ai` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   // (1) Raw binding ref: env.AI itself is the target; members replay applies
@@ -166,9 +177,89 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   ]);
 });
 
+// A remote MCP server to test against: explicit env wins; otherwise the mock
+// provider worker (same source the inbound-MCP e2e suite uses), if deployed.
+const MCP_TEST_SERVER_URL =
+  process.env.OS_E2E_MCP_SERVER_URL?.trim() ||
+  (process.env.MOCK_PROVIDER_BASE_URL
+    ? `${process.env.MOCK_PROVIDER_BASE_URL.replace(/\/+$/, "")}/mcp`
+    : "");
+
+test.skipIf(!MCP_TEST_SERVER_URL)(
+  "the first-party McpClient cap bridges a remote MCP server",
+  async () => {
+    using itx = connectGlobal();
+    const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-mcp` })) as { id: string };
+    createdProjectIds.push(project.id);
+    using projectItx = await itx.projects.get(project.id);
+
+    await projectItx.caps.define({
+      invoke: "path-call",
+      meta: { instructions: "Test MCP server. Call listTools() first." },
+      name: "mcptest",
+      target: {
+        entrypoint: "McpClient",
+        props: { serverUrl: MCP_TEST_SERVER_URL },
+        type: "rpc",
+        worker: { type: "loopback" },
+      },
+    });
+
+    const handle = projectItx as never as Record<string, any>;
+    const listed = (await handle.mcptest.listTools()) as { tools: { name: string }[] };
+    expect(Array.isArray(listed.tools)).toBe(true);
+    expect(listed.tools.length).toBeGreaterThan(0);
+
+    // Call the first listed tool with empty args — the mock provider's tools
+    // are unary echoes; any structured result proves the bridge end to end.
+    const firstTool = listed.tools[0]!.name;
+    const result = await handle.mcptest[firstTool]({});
+    expect(result).toBeDefined();
+  },
+);
+
+test("script executions leave a two-event record on the /itx stream", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-rec` })) as { id: string };
+  createdProjectIds.push(project.id);
+
+  const response = await fetch(new URL("/api/itx/run", baseUrl()), {
+    body: JSON.stringify({
+      context: project.id,
+      functionSource: "async ({ vars }) => vars.a + vars.b",
+      vars: { a: 40, b: 2 },
+    }),
+    headers: authHeaders(),
+    method: "POST",
+  });
+  const body = (await response.json()) as { executionId: string; result: unknown };
+  expect(response.ok).toBe(true);
+  expect(body.result).toBe(42);
+  expect(typeof body.executionId).toBe("string");
+
+  using projectItx = await itx.projects.get(project.id);
+  const events = (await projectItx.streams.get("/itx").read()) as Array<{
+    payload: Record<string, unknown>;
+    type: string;
+  }>;
+  const requested = events.find(
+    (event) =>
+      event.type === "events.iterate.com/itx/execution-requested" &&
+      event.payload.executionId === body.executionId,
+  );
+  const completed = events.find(
+    (event) =>
+      event.type === "events.iterate.com/itx/execution-completed" &&
+      event.payload.executionId === body.executionId,
+  );
+  expect(requested?.payload).toMatchObject({ context: project.id });
+  expect(completed?.payload).toMatchObject({ ok: true, result: 42 });
+});
+
 test("worker caps hold a correctly scoped itx of their own", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-todo` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   await projectItx.caps.define({
@@ -202,6 +293,7 @@ test("worker caps hold a correctly scoped itx of their own", async () => {
 test("members caps auto-proxy every public method/getter at any depth", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-proxy` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   // No method list anywhere: the WorkerEntrypoint just exports methods (and a
@@ -235,6 +327,7 @@ test("members caps auto-proxy every public method/getter at any depth", async ()
 test("one dynamic worker cap calls another's methods through its own itx", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-w2w` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   // Provider cap: a plain WorkerEntrypoint exporting a method + a nested
@@ -289,9 +382,27 @@ test("one dynamic worker cap calls another's methods through its own itx", async
   });
 });
 
+test("kernel errors cross capnweb as ItxError-shaped errors with codes", async () => {
+  using itx = connectGlobal();
+
+  // The REAL wire crossing: capnweb reconstructs a plain Error and reattaches
+  // the kernel ItxError's own enumerable props (code, details). NOT_FOUND
+  // also covers forbidden projects (existence masking), so this is the shape
+  // every access failure takes.
+  const error = await itx.projects.get("definitely-not-a-project").then(
+    () => null,
+    (thrown: unknown) => thrown as Error & { code?: unknown; details?: unknown },
+  );
+  expect(error).not.toBeNull();
+  expect(error!.name).toBe("ItxError");
+  expect(error!.code).toBe("NOT_FOUND");
+  expect(error!.details).toEqual({ projectIdOrSlug: "definitely-not-a-project" });
+});
+
 test("revoked and offline caps fail with instructive errors", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-err` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   await expect((projectItx as never as Record<string, any>).nothingHere.run()).rejects.toThrow(
@@ -359,32 +470,9 @@ function executionModes(itx: ItxClient): ExecutionMode[] {
   ];
 }
 
-function connectGlobal(): ItxClient {
-  return connectItx({ baseUrl: baseUrl(), token: adminApiSecret() });
-}
-
 function authHeaders() {
   return {
     authorization: `Bearer ${adminApiSecret()}`,
     "content-type": "application/json",
   };
-}
-
-function adminApiSecret() {
-  const secret =
-    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
-    "";
-  if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required for itx e2e tests.");
-  return secret;
-}
-
-function baseUrl() {
-  const url =
-    process.env.OS_ITX_E2E_BASE_URL?.trim().replace(/\/+$/, "") ||
-    process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "") ||
-    "";
-  if (!url) throw new Error("APP_CONFIG_BASE_URL is required for itx e2e tests.");
-  return url;
 }

@@ -55,7 +55,7 @@ export function createExampleCapabilityProviders(input: {
     createExampleRpcProviderRegistration({
       exportName: "OrpcCapability",
       instructions:
-        "Use ctx.os.listProcedures() and project-scoped OS APIs such as ctx.os.streams.list({}).",
+        'Use ctx.os.listProcedures() and project-scoped OS APIs such as ctx.os.streams.read({ streamPath: "/" }).',
       path: ["os"],
       projectId: input.projectId,
     }),

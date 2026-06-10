@@ -73,13 +73,16 @@ export function spendCircuitBreakerToken(args: {
   event: { createdAt: string };
 }): CircuitBreakerProcessorState {
   const createdAtMs = Date.parse(args.event.createdAt);
+  // Clamp the elapsed time to >= 0. createdAt is per-event wall clock, so DO
+  // migration or clock skew can make it regress; without the clamp a negative
+  // delta would *subtract* refill and instantly drain the bucket into a false trip.
+  const elapsedMs = Math.max(0, createdAtMs - (args.state.lastRefillAtMs ?? createdAtMs));
   const refilled =
     args.state.lastRefillAtMs === null
       ? args.state.burstCapacity
       : Math.min(
           args.state.burstCapacity,
-          args.state.availableTokens +
-            (createdAtMs - args.state.lastRefillAtMs) * (args.state.refillRatePerMinute / 60_000),
+          args.state.availableTokens + elapsedMs * (args.state.refillRatePerMinute / 60_000),
         );
 
   return {

@@ -20,6 +20,12 @@ import {
   ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
   ITERATE_CONFIG_REPO_SLUG,
 } from "~/domains/repos/iterate-config-repo.ts";
+import type {
+  CommitRepoFilesInput,
+  ListRepoFilesInput,
+  ReadRepoFilesInput,
+  ReadRepoLogInput,
+} from "~/domains/repos/repo-git.ts";
 
 export type ReposCapabilityEnv = {
   DO_CATALOG?: D1Database;
@@ -59,6 +65,22 @@ export class RepoHandle extends RpcTarget {
 
   async refreshWriteToken(): Promise<RepoInfo> {
     return await this.#repo.refreshWriteToken();
+  }
+
+  async commitFiles(input: CommitRepoFilesInput) {
+    return await this.#repo.commitFiles(input);
+  }
+
+  async readFiles(input: ReadRepoFilesInput) {
+    return await this.#repo.readFiles(input);
+  }
+
+  async listFiles(input: ListRepoFilesInput = {}) {
+    return await this.#repo.listFiles(input);
+  }
+
+  async readLog(input: ReadRepoLogInput = {}) {
+    return await this.#repo.readLog(input);
   }
 
   getArtifact() {

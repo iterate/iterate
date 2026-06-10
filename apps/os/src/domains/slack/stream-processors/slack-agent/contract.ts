@@ -12,7 +12,6 @@ import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
 import { SlackProcessorContract } from "../slack/contract.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
-import { CodemodeProcessorContract } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 
 /**
  * Processor for one Slack-backed agent stream.
@@ -37,21 +36,44 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     threadTs: z.string().optional(),
   }),
   initialState: {},
-  processorDeps: [AgentProcessorContract, CodemodeProcessorContract, SlackProcessorContract],
-  events: {},
+  processorDeps: [AgentProcessorContract, SlackProcessorContract],
+  events: {
+    "events.iterate.com/itx/execution-requested": {
+      description:
+        "An itx script execution record/queue entry on this stream. With `enqueued: true` the agent-host processor runs it; otherwise it is the runner's own record (itx-next.md §4).",
+      payloadSchema: z.object({
+        code: z.string(),
+        context: z.string().optional(),
+        enqueued: z.boolean().optional(),
+        executionId: z.string(),
+        vars: z.record(z.string(), z.unknown()).optional(),
+      }),
+    },
+    "events.iterate.com/itx/execution-completed": {
+      description: "The settled outcome of an itx script execution on this stream.",
+      payloadSchema: z.object({
+        context: z.string().optional(),
+        durationMs: z.number().optional(),
+        error: z.unknown().optional(),
+        executionId: z.string(),
+        logs: z.array(z.string()).optional(),
+        ok: z.boolean(),
+        result: z.unknown().optional(),
+        stack: z.string().optional(),
+      }),
+    },
+  },
   consumes: [
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
     "events.iterate.com/agent/status-updated",
-    "events.iterate.com/codemode/script-execution-requested",
-    "events.iterate.com/codemode/script-execution-completed",
-    "events.iterate.com/codemode/function-call-requested",
+    "events.iterate.com/itx/execution-requested",
+    "events.iterate.com/itx/execution-completed",
   ],
   emits: [
     "events.iterate.com/agent/input-added",
-    "events.iterate.com/codemode/tool-provider-registered",
-    "events.iterate.com/codemode/script-execution-requested",
-    "events.iterate.com/codemode/function-call-completed",
+    "events.iterate.com/agent/capability-noted",
+    "events.iterate.com/itx/execution-requested",
   ],
 });
 

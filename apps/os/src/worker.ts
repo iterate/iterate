@@ -27,7 +27,9 @@ import { handleDebugRoutes, handleDurableObjectDebugFetch } from "~/debug-routes
 import { dispatchFetchCallable, matchIngressRequest } from "~/ingress/host-routing.ts";
 import { lookupIngressRule } from "~/ingress/lookup.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
+import { handleArtifactEventsBatch } from "~/domains/repos/artifact-events-queue-handler.ts";
 import { handleItxFetch, handleProjectHostItxFetch } from "~/itx/fetch.ts";
+import { handleAdminStreamRpcFetch } from "~/domains/streams/admin-stream-rpc.ts";
 import { handleProjectStreamRpcFetch } from "~/domains/streams/project-stream-rpc.ts";
 import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
 
@@ -47,10 +49,12 @@ export { CaptunServerShard };
 export { PackageStream as StreamDurableObject };
 
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
+export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-capability.ts";
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { BindingCapability, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
+export { McpClient } from "~/itx/caps/mcp-client.ts";
 export { ContextDO } from "~/itx/context-do.ts";
 export { ItxCapIngress } from "~/itx/http.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
@@ -149,6 +153,14 @@ export default {
         const streamRpcResponse = await handleProjectStreamRpcFetch({ context, env, request });
         if (streamRpcResponse) return streamRpcResponse;
 
+        const adminStreamRpcResponse = await handleAdminStreamRpcFetch({
+          config: requestConfig,
+          context,
+          env,
+          request,
+        });
+        if (adminStreamRpcResponse) return adminStreamRpcResponse;
+
         const itxResponse = await handleItxFetch({ config, context, env, request });
         if (itxResponse) return itxResponse;
 
@@ -171,7 +183,11 @@ export default {
     );
   },
 
-  async queue(batch: { messages: readonly unknown[]; queue: string }) {
+  async queue(batch: MessageBatch, env: Env) {
+    if (batch.queue.endsWith("-artifact-events")) {
+      await handleArtifactEventsBatch(batch, env);
+      return;
+    }
     console.warn("[os] received unhandled queue batch", {
       messageCount: batch.messages.length,
       queue: batch.queue,

@@ -1,6 +1,5 @@
 import { Fragment, useMemo, useState } from "react";
 import { Link, useMatches, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import {
@@ -16,7 +15,7 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { projectStreamsListQueryOptions } from "~/lib/project-route-query.ts";
+import { useProjectStreamState } from "~/lib/itx-queries.ts";
 import type {
   RouteBreadcrumbLoaderData,
   RouteBreadcrumbStaticData,
@@ -180,15 +179,16 @@ function StreamSegmentNavigator({
 }) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
-  const streamsQuery = useQuery(projectStreamsListQueryOptions(streamBreadcrumb.projectId));
+  const parentPath = streamPathParent(segmentPath);
+  const parentStateQuery = useProjectStreamState({
+    projectId: streamBreadcrumb.projectId,
+    streamPath: parentPath,
+  });
   const siblingPaths = useMemo(() => {
-    const parentPath = streamPathParent(segmentPath);
-    const paths = (streamsQuery.data?.streams ?? [])
-      .map((stream) => stream.streamPath)
-      .filter((path) => isImmediateChild({ childPath: path, parentPath }));
+    const paths = [...(parentStateQuery.data?.childPaths ?? [])];
     if (!paths.includes(segmentPath)) paths.push(segmentPath);
     return paths.toSorted((left, right) => left.localeCompare(right));
-  }, [segmentPath, streamsQuery.data?.streams]);
+  }, [parentStateQuery.data?.childPaths, segmentPath]);
 
   function navigateToSibling(path: StreamPathType) {
     setOpen(false);
@@ -241,16 +241,16 @@ function StreamChildrenBreadcrumb({
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [newChildSegment, setNewChildSegment] = useState("");
-  const streamsQuery = useQuery(projectStreamsListQueryOptions(streamBreadcrumb.projectId));
+  const streamStateQuery = useProjectStreamState({
+    projectId: streamBreadcrumb.projectId,
+    streamPath: streamBreadcrumb.streamPath,
+  });
   const children = useMemo(
     () =>
-      (streamsQuery.data?.streams ?? []).filter((stream) =>
-        isImmediateChild({
-          childPath: stream.streamPath,
-          parentPath: streamBreadcrumb.streamPath,
-        }),
+      [...(streamStateQuery.data?.childPaths ?? [])].toSorted((left, right) =>
+        left.localeCompare(right),
       ),
-    [streamsQuery.data?.streams, streamBreadcrumb.streamPath],
+    [streamStateQuery.data?.childPaths],
   );
 
   function navigateToChild(childPath: StreamPathType) {
@@ -316,14 +316,14 @@ function StreamChildrenBreadcrumb({
                   No children yet
                 </p>
               ) : (
-                children.map((child) => (
+                children.map((childPath) => (
                   <button
-                    key={child.name}
+                    key={childPath}
                     type="button"
                     className="flex w-full items-center rounded-md px-2 py-1.5 text-left font-mono text-xs outline-hidden select-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
-                    onClick={() => navigateToChild(child.streamPath)}
+                    onClick={() => navigateToChild(childPath)}
                   >
-                    /{getStreamSegmentLabel(child.streamPath)}
+                    /{getStreamSegmentLabel(childPath)}
                   </button>
                 ))
               )}
@@ -337,15 +337,4 @@ function StreamChildrenBreadcrumb({
 
 function getStreamSegmentLabel(path: StreamPathType) {
   return path === "/" ? "/" : (path.split("/").at(-1) ?? path);
-}
-
-function isImmediateChild(input: { parentPath: StreamPathType; childPath: StreamPathType }) {
-  if (input.childPath === input.parentPath) return false;
-  if (input.parentPath === "/") {
-    return input.childPath.split("/").filter(Boolean).length === 1;
-  }
-
-  const prefix = `${input.parentPath}/`;
-  if (!input.childPath.startsWith(prefix)) return false;
-  return input.childPath.slice(prefix.length).split("/").filter(Boolean).length === 1;
 }

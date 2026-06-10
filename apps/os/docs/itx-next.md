@@ -311,15 +311,15 @@ by crippling the node. Naming: keep `global`, not `root` — it's already the
 literal namespace name in the streams domain.
 
 **The access model is deliberately two-tier, and it shipped (PR #1418):**
-the only scopes that exist are `superadmin` (server-granted via the `admin`
-role only — client-requested scope is always stripped; auto-granted to
-`@nustom.com` accounts) and `project:<id>` strings. Superadmin resolves to
-access `"all"`; everyone else may do project-scoped things iff the project
-id is literally in their scopes. There is no separate "global namespace
-grant" — global authority IS superadmin. The code keeps ONE seam where
-finer-grained permissions would slot in later; we deliberately build none
-of it now. #1418 also already ships the first slice of this section: the
-`/admin` UI connects to the global itx over Cap'n Web, and `itx.streams`
+admin is the Better Auth admin-plugin role (`user.role === "admin"`,
+surfaced to OS as `role` / `is_admin` token claims), while OAuth project
+selection remains `project:<id>` scope strings. Admin resolves to access
+`"all"`; everyone else may do project-scoped things iff the project id is
+literally in their scopes. There is no separate "global namespace grant" —
+global authority IS admin. The code keeps ONE seam where finer-grained
+permissions would slot in later; we deliberately build none of it now.
+#1418 also already ships the first slice of this section: the `/admin` UI
+connects to the global itx over Cap'n Web, and `itx.streams`
 on a global handle targets the deployment-wide `global` namespace, gated
 on access `"all"`.
 
@@ -461,13 +461,118 @@ second step, taken only after the shared layer proves itself.
   (`callConfigWorkerFunction`, the base iterate-config artifact naming,
   docs, UI copy). Design docs and `types.ts` already use the new name.
 - `handle.ts` sheds its direct domain imports (repos/workspace/streams) —
-  becomes addresses or injected stubs; kernel approaches the ~500-line goal.
+  they become default caps; mechanism in §8. Kernel approaches the
+  ~500-line goal.
 - Document the share token as a sealed SturdyRef (§1).
 - Per-cap/per-call usage events at the supervisor (billing + audit hook,
   feeds §2 and §4).
 - Global-context implementation: make the node real, wire namespace
   currying through the built-ins. (Polishing its shape beyond that is
   explicitly LATER.)
+
+## 8. Default capabilities are parent contexts written in code
+
+The idea (born as "what if ProjectItx / GlobalItx / CodemodeSessionItx
+subclasses just called `this.caps.define()` a few times in their
+constructor, the way you would in a codemode snippet"): now that
+`caps.define` exists, the built-ins hardwired into the handle should be
+ordinary capability definitions. The instinct is right; the question is
+where those definitions live. Per-handle is wrong (handles are ephemeral
+views; defines are node writes). Per-node-as-rows works but churns: every
+project duplicates identical rows, and shipping a new platform default
+means migrating thousands of registries.
+
+The answer needs NO new concept — not "flavors", and not an ItxProps
+builder either. A named, addressable, shadowable collection of caps that
+lookup falls through to **is what a context is**. The defaults are simply a
+parent context that happens to be implemented in code instead of SQLite
+rows:
+
+```text
+ctx_session → prj_123 → platform:project (code) → global
+```
+
+Chain delegation already exists; a hop to a code-defined context resolves
+in-process (no DO hop). `describe()` merges it with
+`owner: "platform:project"` provenance like any ancestor. Shadowing works
+because shadowing already works. Law 1 said it all along: code holds
+composition — defaults are composition; only overrides are data.
+
+Why not props (the builder framing): Law 2 — props carry identity, never
+composition. "Here are the caps you have" riding in props is
+composition-as-data, the exact thing the mounts/scopes deletion killed. And
+defaults must resolve server-side at the node anyway: a worker cap calling
+`itx.ai` dispatches through its home context's chain regardless of how any
+handle was constructed. The builder intuition survives as the _authoring_
+surface: what you build is a code context, with the same verbs as a REPL
+snippet, executed once per isolate against an in-memory registry:
+
+```ts
+export const projectContext = defineCodeContext("platform:project", (caps) => {
+  caps.define({
+    name: "repos",
+    target: { type: "rpc", worker: { type: "loopback" }, entrypoint: "ReposCapability" },
+  });
+  caps.define({
+    name: "workspace",
+    target: { type: "rpc", worker: { type: "loopback" }, entrypoint: "WorkspaceCapability" },
+  });
+  caps.define({
+    name: "ai",
+    target: {
+      type: "rpc",
+      worker: { type: "loopback" },
+      entrypoint: "BindingCapability",
+      props: { binding: "AI" },
+    },
+  });
+  // worker → { type: "project-worker" }; project → { type: "durable-object" } — once those refs land
+});
+```
+
+(The registry injects `{ context, cap }` attribution at dial time, so code
+contexts stay fully static — entrypoints derive the project from context.)
+
+What this dissolves:
+
+- **"Cap #0" disappears.** Every hardwired built-in maps onto an
+  already-designed target kind — repos/workspace/streams → loopback,
+  ai → binding/loopback, worker → project-worker, project →
+  durable-object — strong validation of CapTarget. The irreducible kernel
+  shrinks to `caps`, `fork`, `describe`, `fetch` (Law 5 infrastructure),
+  plus `projects` on global handles. Reserved names shrink to match;
+  defaults become shadowable (prototype semantics — the point).
+- **The global context gets born for free.** The cheap first step to §3:
+  `global` starts as a code-defined context (its accessors are platform
+  composition anyway); a data node appears only when someone needs to
+  define on it at runtime.
+- **The GlobalItx/ProjectItx typing question (§5) gets its answer**: one
+  typed caps interface per code context, declared next to its definitions;
+  `ProjectItx` = builtins & the chain's caps. Types compose the way the
+  runtime resolves.
+- **Forking picks ancestry**: `itx.fork({ extend: "platform:codemode" })`
+  splices a code context above the project — the node stores parent NAMES
+  (sturdy refs into the code realm — Law 2 clean); resolution walks the
+  list. The codemode-session replacement (§4) becomes literally this.
+- **Versioning falls out**: code contexts version with deploys; describe()
+  can report which deploy's defaults you see, and stored overrides shadow
+  across deploys — exactly the semantics you want.
+
+The dynamic half of the original instinct is ALSO right, as a separate
+thing: per-context setup that genuinely varies (seeding a session with
+request-specific MCP servers) is a real itx snippet run against the fresh
+context after fork — actual `caps.define` calls, actual rows, actual audit
+events. Static defaults = code context; dynamic setup = snippet (data).
+Same verb, two lifecycles, and the platform uses the same public API users
+do.
+
+Sequencing: repos/workspace/streams are movable today (loopback refs
+shipped); worker/project wait on the project-worker and durable-object
+refs; fork-with-ancestry rides with the codemode drop.
+
+Open: the splice API shape on fork; ref naming for code contexts
+(`platform:` prefix?); can a context _revoke_ (not just shadow) a code
+default — tombstone rows? Defer until someone needs them.
 
 ## Resolved (was open, now decided)
 
@@ -508,10 +613,9 @@ second step, taken only after the shared layer proves itself.
   Not a `source` worker either — its code lives in the project's build
   artifact (the registry points, never pins). Kept as a spelling so
   `entrypoint` always names the export you call (§1).
-- ~~Access model granularity?~~ → Shipped in #1418: `superadmin`
-  (role-granted) + `project:<id>` scopes, nothing else. One seam in the
-  code for finer-grained later; no implementation now. Global authority =
-  superadmin (§3).
+- ~~Access model granularity?~~ → Shipped in #1418: Better Auth admin role +
+  `project:<id>` scopes, nothing else. One seam in the code for finer-grained
+  later; no implementation now. Global authority = admin (§3).
 - ~~`global` vs `root`?~~ → `global` (leaning; it's the existing literal
   namespace name, e.g. Slack webhook receiving streams).
 

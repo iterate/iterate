@@ -177,7 +177,7 @@ export const CoreProcessorContract = defineProcessorContract({
       }),
     },
     "events.iterate.com/stream/child-stream-created": {
-      description: "Records an immediate child stream under this stream.",
+      description: "Records the immediate child stream segment under this stream.",
       payloadSchema: z.object({
         childPath: z.string().trim().min(1),
       }),

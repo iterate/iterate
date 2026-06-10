@@ -63,9 +63,8 @@ export class SlackAgentProcessor extends StreamProcessor<
         };
       }
       case "events.iterate.com/agent/status-updated":
-      case "events.iterate.com/codemode/script-execution-requested":
-      case "events.iterate.com/codemode/script-execution-completed":
-      case "events.iterate.com/codemode/function-call-requested":
+      case "events.iterate.com/itx/execution-requested":
+      case "events.iterate.com/itx/execution-completed":
         return state;
       default:
         return assertNever(event);
@@ -81,17 +80,16 @@ export class SlackAgentProcessor extends StreamProcessor<
         args.runInBackground(async () => {
           await this.ctx.stream.append({
             event: {
-              type: "events.iterate.com/codemode/tool-provider-registered",
+              type: "events.iterate.com/agent/capability-noted",
               idempotencyKey: buildProcessorIdempotencyKey({
                 processor: this.contract,
                 key: "register-slack-agent-tool-provider",
                 sourceEvent: event,
               }),
               payload: {
-                path: ["slack", "agent"],
-                invocation: { kind: "event" },
+                name: "slack",
                 instructions:
-                  "Use ctx.slack.agent.threadInfo() only when you need route context that is not already in the Slack webhook payload. Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. Normal Slack replies can use channel/thread_ts from the webhook event directly.",
+                  "Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. Normal Slack replies use channel/thread_ts from the webhook event directly.",
               },
             },
           });
@@ -150,7 +148,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           args.blockProcessorWhile(async () => {
             await this.ctx.stream.append({
               event: {
-                type: "events.iterate.com/codemode/script-execution-requested",
+                type: "events.iterate.com/itx/execution-requested",
                 idempotencyKey: buildProcessorIdempotencyKey({
                   processor: this.contract,
                   key: "slack-bang-command-to-codemode-script",
@@ -158,7 +156,11 @@ export class SlackAgentProcessor extends StreamProcessor<
                 }),
                 payload: {
                   code: bangCommand.code,
-                  scriptExecutionId: `slack-bang-command-${event.offset}`,
+                  // The agent-host processor runs enqueued executions; this
+                  // flag distinguishes a queue entry from the records the
+                  // runner appends about its own runs.
+                  enqueued: true,
+                  executionId: `slack-bang-command-${event.offset}`,
                 },
               },
             });
@@ -175,50 +177,9 @@ export class SlackAgentProcessor extends StreamProcessor<
         });
         return;
       }
-      case "events.iterate.com/codemode/function-call-requested":
-        if (!isSlackAgentThreadInfoCall(event.payload)) return;
-        args.runInBackground(async () => {
-          await this.ctx.stream.append({
-            event: {
-              type: "events.iterate.com/codemode/function-call-completed",
-              idempotencyKey: buildProcessorIdempotencyKey({
-                processor: this.contract,
-                key: "slack-agent-thread-info-function-call-completed",
-                sourceEvent: event,
-              }),
-              payload: {
-                durationMs: 0,
-                functionCallId: event.payload.functionCallId,
-                functionPath: event.payload.functionPath,
-                invocationKind: event.payload.invocationKind,
-                outcome:
-                  state.channel == null || state.threadTs == null
-                    ? {
-                        status: "threw" as const,
-                        error:
-                          "ctx.slack.agent.threadInfo() is only available after Slack route context is configured.",
-                      }
-                    : {
-                        status: "returned" as const,
-                        value: {
-                          channel: state.channel,
-                          thread_ts: state.threadTs,
-                          ...(state.streamPath == null ? {} : { streamPath: state.streamPath }),
-                        },
-                      },
-                path: event.payload.path,
-                providerPath: event.payload.providerPath,
-                ...(event.payload.scriptExecutionId == null
-                  ? {}
-                  : { scriptExecutionId: event.payload.scriptExecutionId }),
-              },
-            },
-          });
-        });
-        return;
       case "events.iterate.com/agent/status-updated":
-      case "events.iterate.com/codemode/script-execution-requested":
-      case "events.iterate.com/codemode/script-execution-completed": {
+      case "events.iterate.com/itx/execution-requested":
+      case "events.iterate.com/itx/execution-completed": {
         const update = slackAgentStatusForEvent(event);
         if (update == null || state.channel == null || state.threadTs == null) return;
         const { channel, latestMessageTs, threadTs } = state;
@@ -282,18 +243,6 @@ function slackWebhookAgentInput(payload: unknown) {
     stringifyYaml(payload).trimEnd(),
     "```",
   ].join("\n");
-}
-
-function isSlackAgentThreadInfoCall(payload: {
-  functionPath: readonly string[];
-  invocationKind: string;
-  providerPath: readonly string[];
-}) {
-  return (
-    payload.invocationKind === "event" &&
-    payload.providerPath.join(".") === "slack.agent" &&
-    payload.functionPath.join(".") === "threadInfo"
-  );
 }
 
 function isBotMessage(slackEvent: Record<string, unknown>): boolean {
@@ -480,13 +429,13 @@ function slackAgentStatusForEvent(event: { payload: unknown; type: string }): {
     }
   }
 
-  if (event.type === "events.iterate.com/codemode/script-execution-requested") {
+  if (event.type === "events.iterate.com/itx/execution-requested") {
     return {
       clear: false,
       status: { status: "is using tools...", loading_messages: ["Using tools..."] },
     };
   }
-  if (event.type === "events.iterate.com/codemode/script-execution-completed") {
+  if (event.type === "events.iterate.com/itx/execution-completed") {
     return { clear: true, status: { status: "" } };
   }
 

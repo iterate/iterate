@@ -29,6 +29,19 @@ import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecyc
 const EVENT_CHUNK_SIZE = 512 * 1024;
 const textEncoder = new TextEncoder();
 
+// Version of the persisted core reduced state ("state" in KV). Bump this when
+// the core reducer starts deriving NEW state from already-reduced events
+// (already-committed events are never re-reduced on the incremental catch-up
+// path). On wake, a stored version that differs from this constant discards
+// the persisted state and rebuilds it by replaying the full event log from the
+// DO's own SQLite — the same path used when KV state is missing entirely.
+//
+// History:
+// - 1 (implicit; no "stateVersion" key in KV): pre-descendantPaths state.
+// - 2: childPaths gained a sibling descendantPaths (full announced paths).
+// - 3: descendantPaths removed; callers should walk immediate childPaths.
+const CORE_STATE_VERSION = 3;
+
 export class Stream extends DurableObject<Env> implements StreamRpc {
   #coreProcessorState: StreamCoreProcessorState;
   // The core processor owns the live delivery connections and reconciles them
@@ -118,15 +131,19 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   protected readCoreProcessorState(): StreamCoreProcessorState {
     const stored = this.ctx.storage.kv.get<unknown>("state");
-    const storedState =
-      stored === undefined
-        ? this.#recoverCoreProcessorStateFromEventLog()
-        : CoreProcessorContract.stateSchema.parse(stored);
+    const storedVersion = this.ctx.storage.kv.get<unknown>("stateVersion") ?? 1;
+    // State persisted by a reducer of a different version is incomplete (it
+    // was reduced before newer derived fields existed), so it is discarded and
+    // rebuilt from the event log rather than trusted.
+    const storedStateIsCurrent = stored !== undefined && storedVersion === CORE_STATE_VERSION;
+    const storedState = storedStateIsCurrent
+      ? CoreProcessorContract.stateSchema.parse(stored)
+      : this.#recoverCoreProcessorStateFromEventLog();
     if (storedState === undefined) return getInitialProcessorState(CoreProcessorContract);
 
     const state = this.#catchUpCoreProcessorState(storedState);
 
-    if (state.maxOffset !== storedState.maxOffset) {
+    if (!storedStateIsCurrent || state.maxOffset !== storedState.maxOffset) {
       this.writeCoreProcessorState(state);
     }
     return state;
@@ -134,6 +151,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   protected writeCoreProcessorState(state: StreamCoreProcessorState): void {
     this.ctx.storage.kv.put("state", state);
+    this.ctx.storage.kv.put("stateVersion", CORE_STATE_VERSION);
   }
 
   #catchUpCoreProcessorState(state: StreamCoreProcessorState): StreamCoreProcessorState {
@@ -588,15 +606,32 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 }
 
+// Allowlist the RPC surface explicitly. The Stream DO has `protected` helpers
+// (readCoreProcessorState/writeCoreProcessorState) that are public at runtime;
+// a denylist would leak them onto the unauthenticated PublicStreamRpcTarget,
+// where writeCoreProcessorState could inject an attacker-chosen subscription
+// callable. `subscribe` is intentionally absent: installSubscribeRpcTargetOverride
+// adds its own forwarding implementation below.
+const STREAM_RPC_METHODS = [
+  "append",
+  "appendBatch",
+  "getEvent",
+  "getEvents",
+  "runtimeState",
+  "reduce",
+  "kill",
+  "reset",
+] as const satisfies readonly (keyof StreamRpc)[];
+
 export const StreamRpcTarget = makeRpcTargetClass<StreamRpc, StreamRpc>(
   Stream as { prototype: StreamRpc },
-  { exclude: ["subscribe"] },
+  { include: [...STREAM_RPC_METHODS, "subscribeOutbound"] },
 );
 installSubscribeRpcTargetOverride(StreamRpcTarget);
 
 export const PublicStreamRpcTarget = makeRpcTargetClass<StreamRpc, StreamRpc>(
   Stream as { prototype: StreamRpc },
-  { exclude: ["subscribe", "subscribeOutbound"] },
+  { include: STREAM_RPC_METHODS },
 );
 installSubscribeRpcTargetOverride(PublicStreamRpcTarget);
 

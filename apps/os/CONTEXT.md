@@ -900,8 +900,8 @@ const pet = await ctx.petstore.getPetById({ petId: 123 });
 The OpenAPI case targets an **OpenAPI Client Capability**: `ctx.petstore.listOperations()` is an ordinary Tool Function that explains the spec-derived operation surface, and operation IDs are called through the same provider namespace.
 
 ```ts
-const streams = await ctx.os.streams.list({});
-console.log("Project streams", streams);
+const rootEvents = await ctx.os.streams.read({ streamPath: "/" });
+console.log("Root stream events", rootEvents);
 ```
 
 The oRPC case targets an **oRPC Capability**: the real `os.project.*` router is exposed as project-bound `ctx.os.*`, and the capability supplies the server-side caller context needed to run the handler in-process.
@@ -1076,7 +1076,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Domain expert:** "No. OS only lets an **Organization** own **Projects**."
 
 > **Dev:** "Can a project page be addressed without the organization slug?"
-> **Domain expert:** "Yes. A **Project Route** is `/projects/:projectSlug`; organization-level UI lives under `/org/:organizationSlug`."
+> **Domain expert:** "Yes. A **Project Route** is `/projects/:projectSlug`; OS URLs have no organization segment — organization membership and selection live in the auth worker."
 
 > **Dev:** "What should OS show after sign-in if auth worker has no **Active Organization**?"
 > **Domain expert:** "Redirect through the auth worker's organization selection or creation flow before rendering the **OS App**."

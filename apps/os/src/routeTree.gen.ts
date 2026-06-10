@@ -22,17 +22,20 @@ import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
 import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppNewProjectRouteImport } from './routes/_app/new-project'
-import { Route as AppLogStreamRouteImport } from './routes/_app/log-stream'
 import { Route as AppItxReplRouteImport } from './routes/_app/itx-repl'
-import { Route as AppDebugRouteImport } from './routes/_app/debug'
 import { Route as EventDocsProcessorSlugSplatRouteImport } from './routes/$eventDocsProcessorSlug.$'
+import { Route as AdminStreamsRouteRouteImport } from './routes/admin/streams/route'
 import { Route as AppProjectsRouteRouteImport } from './routes/_app/projects/route'
+import { Route as AdminStreamsIndexRouteImport } from './routes/admin/streams/index'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
+import { Route as AdminStreamsNamespaceRouteRouteImport } from './routes/admin/streams/$namespace/route'
 import { Route as AppProjectsProjectSlugRouteRouteImport } from './routes/_app/projects/$projectSlug/route'
 import { Route as DocsStreamsProcessorsIndexRouteImport } from './routes/docs.streams.processors.index'
+import { Route as AdminStreamsNamespaceIndexRouteImport } from './routes/admin/streams/$namespace/index'
 import { Route as AppProjectsProjectSlugIndexRouteImport } from './routes/_app/projects/$projectSlug/index'
 import { Route as DocsStreamsProcessorsProcessorSlugRouteImport } from './routes/docs.streams.processors.$processorSlug'
+import { Route as AdminStreamsNamespaceSplatRouteImport } from './routes/admin/streams/$namespace/$'
 import { Route as AppProjectsProjectSlugSettingsRouteImport } from './routes/_app/projects/$projectSlug/settings'
 import { Route as AppProjectsProjectSlugReplRouteImport } from './routes/_app/projects/$projectSlug/repl'
 import { Route as AppProjectsProjectSlugMcpRouteImport } from './routes/_app/projects/$projectSlug/mcp'
@@ -118,19 +121,9 @@ const AppNewProjectRoute = AppNewProjectRouteImport.update({
   path: '/new-project',
   getParentRoute: () => AppRoute,
 } as any)
-const AppLogStreamRoute = AppLogStreamRouteImport.update({
-  id: '/log-stream',
-  path: '/log-stream',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppItxReplRoute = AppItxReplRouteImport.update({
   id: '/itx-repl',
   path: '/itx-repl',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppDebugRoute = AppDebugRouteImport.update({
-  id: '/debug',
-  path: '/debug',
   getParentRoute: () => AppRoute,
 } as any)
 const EventDocsProcessorSlugSplatRoute =
@@ -139,10 +132,20 @@ const EventDocsProcessorSlugSplatRoute =
     path: '/$',
     getParentRoute: () => EventDocsProcessorSlugRoute,
   } as any)
+const AdminStreamsRouteRoute = AdminStreamsRouteRouteImport.update({
+  id: '/streams',
+  path: '/streams',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AppProjectsRouteRoute = AppProjectsRouteRouteImport.update({
   id: '/projects',
   path: '/projects',
   getParentRoute: () => AppRoute,
+} as any)
+const AdminStreamsIndexRoute = AdminStreamsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminStreamsRouteRoute,
 } as any)
 const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
   id: '/',
@@ -154,6 +157,12 @@ const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
   path: '/api/orpc/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminStreamsNamespaceRouteRoute =
+  AdminStreamsNamespaceRouteRouteImport.update({
+    id: '/$namespace',
+    path: '/$namespace',
+    getParentRoute: () => AdminStreamsRouteRoute,
+  } as any)
 const AppProjectsProjectSlugRouteRoute =
   AppProjectsProjectSlugRouteRouteImport.update({
     id: '/$projectSlug',
@@ -166,6 +175,12 @@ const DocsStreamsProcessorsIndexRoute =
     path: '/streams/processors/',
     getParentRoute: () => DocsRoute,
   } as any)
+const AdminStreamsNamespaceIndexRoute =
+  AdminStreamsNamespaceIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AdminStreamsNamespaceRouteRoute,
+  } as any)
 const AppProjectsProjectSlugIndexRoute =
   AppProjectsProjectSlugIndexRouteImport.update({
     id: '/',
@@ -177,6 +192,12 @@ const DocsStreamsProcessorsProcessorSlugRoute =
     id: '/streams/processors/$processorSlug',
     path: '/streams/processors/$processorSlug',
     getParentRoute: () => DocsRoute,
+  } as any)
+const AdminStreamsNamespaceSplatRoute =
+  AdminStreamsNamespaceSplatRouteImport.update({
+    id: '/$',
+    path: '/$',
+    getParentRoute: () => AdminStreamsNamespaceRouteRoute,
   } as any)
 const AppProjectsProjectSlugSettingsRoute =
   AppProjectsProjectSlugSettingsRouteImport.update({
@@ -305,10 +326,9 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AdminRouteWithChildren
   '/docs': typeof DocsRouteWithChildren
   '/projects': typeof AppProjectsRouteRouteWithChildren
+  '/admin/streams': typeof AdminStreamsRouteRouteWithChildren
   '/$eventDocsProcessorSlug/$': typeof EventDocsProcessorSlugSplatRoute
-  '/debug': typeof AppDebugRoute
   '/itx-repl': typeof AppItxReplRoute
-  '/log-stream': typeof AppLogStreamRoute
   '/new-project': typeof AppNewProjectRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
@@ -318,16 +338,20 @@ export interface FileRoutesByFullPath {
   '/admin/': typeof AdminIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
+  '/admin/streams/$namespace': typeof AdminStreamsNamespaceRouteRouteWithChildren
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/projects/': typeof AppProjectsIndexRoute
+  '/admin/streams/': typeof AdminStreamsIndexRoute
   '/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
   '/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/mcp': typeof AppProjectsProjectSlugMcpRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
+  '/admin/streams/$namespace/$': typeof AdminStreamsNamespaceSplatRoute
   '/docs/streams/processors/$processorSlug': typeof DocsStreamsProcessorsProcessorSlugRouteWithChildren
   '/projects/$projectSlug/': typeof AppProjectsProjectSlugIndexRoute
+  '/admin/streams/$namespace/': typeof AdminStreamsNamespaceIndexRoute
   '/docs/streams/processors/': typeof DocsStreamsProcessorsIndexRoute
   '/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
@@ -348,9 +372,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$eventDocsProcessorSlug': typeof EventDocsProcessorSlugRouteWithChildren
   '/$eventDocsProcessorSlug/$': typeof EventDocsProcessorSlugSplatRoute
-  '/debug': typeof AppDebugRoute
   '/itx-repl': typeof AppItxReplRoute
-  '/log-stream': typeof AppLogStreamRoute
   '/new-project': typeof AppNewProjectRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
@@ -361,12 +383,15 @@ export interface FileRoutesByTo {
   '/docs': typeof DocsIndexRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/projects': typeof AppProjectsIndexRoute
+  '/admin/streams': typeof AdminStreamsIndexRoute
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/mcp': typeof AppProjectsProjectSlugMcpRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
+  '/admin/streams/$namespace/$': typeof AdminStreamsNamespaceSplatRoute
   '/docs/streams/processors/$processorSlug': typeof DocsStreamsProcessorsProcessorSlugRouteWithChildren
   '/projects/$projectSlug': typeof AppProjectsProjectSlugIndexRoute
+  '/admin/streams/$namespace': typeof AdminStreamsNamespaceIndexRoute
   '/docs/streams/processors': typeof DocsStreamsProcessorsIndexRoute
   '/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
@@ -391,10 +416,9 @@ export interface FileRoutesById {
   '/admin': typeof AdminRouteWithChildren
   '/docs': typeof DocsRouteWithChildren
   '/_app/projects': typeof AppProjectsRouteRouteWithChildren
+  '/admin/streams': typeof AdminStreamsRouteRouteWithChildren
   '/$eventDocsProcessorSlug/$': typeof EventDocsProcessorSlugSplatRoute
-  '/_app/debug': typeof AppDebugRoute
   '/_app/itx-repl': typeof AppItxReplRoute
-  '/_app/log-stream': typeof AppLogStreamRoute
   '/_app/new-project': typeof AppNewProjectRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
@@ -404,16 +428,20 @@ export interface FileRoutesById {
   '/admin/': typeof AdminIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/_app/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
+  '/admin/streams/$namespace': typeof AdminStreamsNamespaceRouteRouteWithChildren
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/projects/': typeof AppProjectsIndexRoute
+  '/admin/streams/': typeof AdminStreamsIndexRoute
   '/_app/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
   '/_app/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
   '/_app/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/_app/projects/$projectSlug/mcp': typeof AppProjectsProjectSlugMcpRoute
   '/_app/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/_app/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
+  '/admin/streams/$namespace/$': typeof AdminStreamsNamespaceSplatRoute
   '/docs/streams/processors/$processorSlug': typeof DocsStreamsProcessorsProcessorSlugRouteWithChildren
   '/_app/projects/$projectSlug/': typeof AppProjectsProjectSlugIndexRoute
+  '/admin/streams/$namespace/': typeof AdminStreamsNamespaceIndexRoute
   '/docs/streams/processors/': typeof DocsStreamsProcessorsIndexRoute
   '/_app/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/_app/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
@@ -438,10 +466,9 @@ export interface FileRouteTypes {
     | '/admin'
     | '/docs'
     | '/projects'
+    | '/admin/streams'
     | '/$eventDocsProcessorSlug/$'
-    | '/debug'
     | '/itx-repl'
-    | '/log-stream'
     | '/new-project'
     | '/api/$'
     | '/api/orpc-ws'
@@ -451,16 +478,20 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/docs/'
     | '/projects/$projectSlug'
+    | '/admin/streams/$namespace'
     | '/api/orpc/$'
     | '/projects/'
+    | '/admin/streams/'
     | '/projects/$projectSlug/agents'
     | '/projects/$projectSlug/streams'
     | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/mcp'
     | '/projects/$projectSlug/repl'
     | '/projects/$projectSlug/settings'
+    | '/admin/streams/$namespace/$'
     | '/docs/streams/processors/$processorSlug'
     | '/projects/$projectSlug/'
+    | '/admin/streams/$namespace/'
     | '/docs/streams/processors/'
     | '/projects/$projectSlug/agents/new'
     | '/projects/$projectSlug/agents/new-preset'
@@ -481,9 +512,7 @@ export interface FileRouteTypes {
     | '/'
     | '/$eventDocsProcessorSlug'
     | '/$eventDocsProcessorSlug/$'
-    | '/debug'
     | '/itx-repl'
-    | '/log-stream'
     | '/new-project'
     | '/api/$'
     | '/api/orpc-ws'
@@ -494,12 +523,15 @@ export interface FileRouteTypes {
     | '/docs'
     | '/api/orpc/$'
     | '/projects'
+    | '/admin/streams'
     | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/mcp'
     | '/projects/$projectSlug/repl'
     | '/projects/$projectSlug/settings'
+    | '/admin/streams/$namespace/$'
     | '/docs/streams/processors/$processorSlug'
     | '/projects/$projectSlug'
+    | '/admin/streams/$namespace'
     | '/docs/streams/processors'
     | '/projects/$projectSlug/agents/new'
     | '/projects/$projectSlug/agents/new-preset'
@@ -523,10 +555,9 @@ export interface FileRouteTypes {
     | '/admin'
     | '/docs'
     | '/_app/projects'
+    | '/admin/streams'
     | '/$eventDocsProcessorSlug/$'
-    | '/_app/debug'
     | '/_app/itx-repl'
-    | '/_app/log-stream'
     | '/_app/new-project'
     | '/api/$'
     | '/api/orpc-ws'
@@ -536,16 +567,20 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/docs/'
     | '/_app/projects/$projectSlug'
+    | '/admin/streams/$namespace'
     | '/api/orpc/$'
     | '/_app/projects/'
+    | '/admin/streams/'
     | '/_app/projects/$projectSlug/agents'
     | '/_app/projects/$projectSlug/streams'
     | '/_app/projects/$projectSlug/integrations'
     | '/_app/projects/$projectSlug/mcp'
     | '/_app/projects/$projectSlug/repl'
     | '/_app/projects/$projectSlug/settings'
+    | '/admin/streams/$namespace/$'
     | '/docs/streams/processors/$processorSlug'
     | '/_app/projects/$projectSlug/'
+    | '/admin/streams/$namespace/'
     | '/docs/streams/processors/'
     | '/_app/projects/$projectSlug/agents/new'
     | '/_app/projects/$projectSlug/agents/new-preset'
@@ -670,25 +705,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppNewProjectRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/log-stream': {
-      id: '/_app/log-stream'
-      path: '/log-stream'
-      fullPath: '/log-stream'
-      preLoaderRoute: typeof AppLogStreamRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/itx-repl': {
       id: '/_app/itx-repl'
       path: '/itx-repl'
       fullPath: '/itx-repl'
       preLoaderRoute: typeof AppItxReplRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/debug': {
-      id: '/_app/debug'
-      path: '/debug'
-      fullPath: '/debug'
-      preLoaderRoute: typeof AppDebugRouteImport
       parentRoute: typeof AppRoute
     }
     '/$eventDocsProcessorSlug/$': {
@@ -698,12 +719,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EventDocsProcessorSlugSplatRouteImport
       parentRoute: typeof EventDocsProcessorSlugRoute
     }
+    '/admin/streams': {
+      id: '/admin/streams'
+      path: '/streams'
+      fullPath: '/admin/streams'
+      preLoaderRoute: typeof AdminStreamsRouteRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/_app/projects': {
       id: '/_app/projects'
       path: '/projects'
       fullPath: '/projects'
       preLoaderRoute: typeof AppProjectsRouteRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/admin/streams/': {
+      id: '/admin/streams/'
+      path: '/'
+      fullPath: '/admin/streams/'
+      preLoaderRoute: typeof AdminStreamsIndexRouteImport
+      parentRoute: typeof AdminStreamsRouteRoute
     }
     '/_app/projects/': {
       id: '/_app/projects/'
@@ -719,6 +754,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiOrpcSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/streams/$namespace': {
+      id: '/admin/streams/$namespace'
+      path: '/$namespace'
+      fullPath: '/admin/streams/$namespace'
+      preLoaderRoute: typeof AdminStreamsNamespaceRouteRouteImport
+      parentRoute: typeof AdminStreamsRouteRoute
+    }
     '/_app/projects/$projectSlug': {
       id: '/_app/projects/$projectSlug'
       path: '/$projectSlug'
@@ -733,6 +775,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsStreamsProcessorsIndexRouteImport
       parentRoute: typeof DocsRoute
     }
+    '/admin/streams/$namespace/': {
+      id: '/admin/streams/$namespace/'
+      path: '/'
+      fullPath: '/admin/streams/$namespace/'
+      preLoaderRoute: typeof AdminStreamsNamespaceIndexRouteImport
+      parentRoute: typeof AdminStreamsNamespaceRouteRoute
+    }
     '/_app/projects/$projectSlug/': {
       id: '/_app/projects/$projectSlug/'
       path: '/'
@@ -746,6 +795,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/docs/streams/processors/$processorSlug'
       preLoaderRoute: typeof DocsStreamsProcessorsProcessorSlugRouteImport
       parentRoute: typeof DocsRoute
+    }
+    '/admin/streams/$namespace/$': {
+      id: '/admin/streams/$namespace/$'
+      path: '/$'
+      fullPath: '/admin/streams/$namespace/$'
+      preLoaderRoute: typeof AdminStreamsNamespaceSplatRouteImport
+      parentRoute: typeof AdminStreamsNamespaceRouteRoute
     }
     '/_app/projects/$projectSlug/settings': {
       id: '/_app/projects/$projectSlug/settings'
@@ -1011,27 +1067,54 @@ const AppProjectsRouteRouteWithChildren =
 
 interface AppRouteChildren {
   AppProjectsRouteRoute: typeof AppProjectsRouteRouteWithChildren
-  AppDebugRoute: typeof AppDebugRoute
   AppItxReplRoute: typeof AppItxReplRoute
-  AppLogStreamRoute: typeof AppLogStreamRoute
   AppNewProjectRoute: typeof AppNewProjectRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppProjectsRouteRoute: AppProjectsRouteRouteWithChildren,
-  AppDebugRoute: AppDebugRoute,
   AppItxReplRoute: AppItxReplRoute,
-  AppLogStreamRoute: AppLogStreamRoute,
   AppNewProjectRoute: AppNewProjectRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
+interface AdminStreamsNamespaceRouteRouteChildren {
+  AdminStreamsNamespaceSplatRoute: typeof AdminStreamsNamespaceSplatRoute
+  AdminStreamsNamespaceIndexRoute: typeof AdminStreamsNamespaceIndexRoute
+}
+
+const AdminStreamsNamespaceRouteRouteChildren: AdminStreamsNamespaceRouteRouteChildren =
+  {
+    AdminStreamsNamespaceSplatRoute: AdminStreamsNamespaceSplatRoute,
+    AdminStreamsNamespaceIndexRoute: AdminStreamsNamespaceIndexRoute,
+  }
+
+const AdminStreamsNamespaceRouteRouteWithChildren =
+  AdminStreamsNamespaceRouteRoute._addFileChildren(
+    AdminStreamsNamespaceRouteRouteChildren,
+  )
+
+interface AdminStreamsRouteRouteChildren {
+  AdminStreamsNamespaceRouteRoute: typeof AdminStreamsNamespaceRouteRouteWithChildren
+  AdminStreamsIndexRoute: typeof AdminStreamsIndexRoute
+}
+
+const AdminStreamsRouteRouteChildren: AdminStreamsRouteRouteChildren = {
+  AdminStreamsNamespaceRouteRoute: AdminStreamsNamespaceRouteRouteWithChildren,
+  AdminStreamsIndexRoute: AdminStreamsIndexRoute,
+}
+
+const AdminStreamsRouteRouteWithChildren =
+  AdminStreamsRouteRoute._addFileChildren(AdminStreamsRouteRouteChildren)
+
 interface AdminRouteChildren {
+  AdminStreamsRouteRoute: typeof AdminStreamsRouteRouteWithChildren
   AdminIndexRoute: typeof AdminIndexRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
+  AdminStreamsRouteRoute: AdminStreamsRouteRouteWithChildren,
   AdminIndexRoute: AdminIndexRoute,
 }
 

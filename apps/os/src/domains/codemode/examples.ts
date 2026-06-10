@@ -79,11 +79,11 @@ const codemodeExampleSeeds = [
   });
 
   const procedures = await ctx.os.listProcedures();
-  const streams = await ctx.os.streams.list({});
+  const rootEvents = await ctx.os.streams.read({ streamPath: "/" });
 
   console.log("available oRPC procedures", procedures);
-  console.log("project streams", streams);
-  return { ai, repos, workspace, agent, pipelinedAgent, procedures, streams };
+  console.log("root stream events", rootEvents);
+  return { ai, repos, workspace, agent, pipelinedAgent, procedures, rootEvents };
 }`,
     events: [
       {
@@ -340,6 +340,57 @@ const codemodeExampleSeeds = [
         payload: {
           message:
             "Uses ctx.workspace.git.clone/add/commit/push and ctx.workspace.writeFile against the project iterate-config Repo.",
+        },
+      },
+    ],
+  },
+  {
+    slug: "iterate-config-commit-files-direct",
+    name: "Commit files directly, no workspace",
+    description:
+      "Commit, read back, and delete a file on the project iterate-config Repo through the repo handle's commitFiles/readFiles — no workspace, clone, or token handling.",
+    providers: [{ type: "example-capabilities" }],
+    code: `async (ctx) => {
+  const fileName = \`commit-files-demo-\${Date.now()}.md\`;
+
+  const committed = await ctx.repos.get({ slug: "iterate-config" }).commitFiles({
+    message: "Verify workspace-free commitFiles",
+    changes: [
+      {
+        path: fileName,
+        content: \`# Direct commit proof\\n\\nCreated: \${new Date().toISOString()}\\n\`,
+      },
+    ],
+  });
+
+  const readBack = await ctx.repos.get({ slug: "iterate-config" }).readFiles({
+    paths: [fileName],
+  });
+
+  const removed = await ctx.repos.get({ slug: "iterate-config" }).commitFiles({
+    message: "Remove commitFiles demo file",
+    changes: [{ path: fileName, delete: true }],
+  });
+
+  return {
+    committed: {
+      branch: committed.branch,
+      changedPaths: committed.changedPaths,
+      commitOid: committed.commitOid,
+    },
+    readBack: readBack.files[0],
+    removed: {
+      changedPaths: removed.changedPaths,
+      commitOid: removed.commitOid,
+    },
+  };
+}`,
+    events: [
+      {
+        type: "events.iterate.com/codemode/example-note",
+        payload: {
+          message:
+            "Uses the repo handle's commitFiles ({ path, content } writes and { path, delete: true } deletes) and readFiles against the project iterate-config Repo — the workspace-free sibling of iterate-config-workspace-clone-edit-push.",
         },
       },
     ],

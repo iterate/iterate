@@ -23,7 +23,6 @@ import {
   type StreamEvent,
 } from "@iterate-com/streams/shared/stream-processors";
 import { StreamPresenceEvents } from "@iterate-com/streams/shared/presence-events";
-import { CodemodeProcessorContract } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 
 export const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.6";
 
@@ -70,13 +69,18 @@ export const AgentProcessorContract = defineProcessorContract({
     pendingTriggerCount: z.number().int().nonnegative().default(0),
   }),
   initialState: {},
-  // The codemode contract owns `codemode/tool-provider-registered`, which this
-  // processor renders into model-visible context. Still the legacy shared
-  // contract module until the codemode domain migrates onto the class model.
   // The presence catalog owns `stream/subscriber-connected`, the scheduler's
   // reconcile trigger.
-  processorDeps: [CodemodeProcessorContract, StreamPresenceEvents],
+  processorDeps: [StreamPresenceEvents],
   events: {
+    "events.iterate.com/agent/capability-noted": {
+      description:
+        "Notes an itx capability available to this agent's scripts; rendered into model-visible context so the LLM learns its tools from stream history.",
+      payloadSchema: z.object({
+        instructions: z.string(),
+        name: z.string(),
+      }),
+    },
     "events.iterate.com/agent/system-prompt-updated": {
       description: "Updates the system prompt used for future LLM requests.",
       examples: [
@@ -221,7 +225,7 @@ export const AgentProcessorContract = defineProcessorContract({
     },
   },
   consumes: [
-    "events.iterate.com/codemode/tool-provider-registered",
+    "events.iterate.com/agent/capability-noted",
     "events.iterate.com/stream/subscriber-connected",
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
@@ -256,9 +260,9 @@ export type AgentConsumedEvent = ConsumedEvent<typeof AgentProcessorContract>;
 export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumedEvent }) {
   const { state, event } = args;
   // subscriber-connected is consumed for side effects only (the scheduler's
-  // reconcile trigger); like tool-provider-registered it leaves state alone.
+  // reconcile trigger); like capability-noted it leaves state alone.
   switch (event.type) {
-    case "events.iterate.com/codemode/tool-provider-registered":
+    case "events.iterate.com/agent/capability-noted":
     case "events.iterate.com/stream/subscriber-connected":
       return state;
     case "events.iterate.com/agent/system-prompt-updated":

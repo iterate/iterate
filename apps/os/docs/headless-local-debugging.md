@@ -118,7 +118,7 @@ EOF
 - **Org**: the post-login `/project-access` page has a "Create organization"
   form; fill it and submit. Or call the auth contract
   (`internal.organization.createForUser`) with a service token.
-- **Project**: the OS UI route is `/projects/new`, but you can create directly
+- **Project**: the OS UI route is `/new-project`, but you can create directly
   against the OS oRPC REST surface from the authenticated page:
 
 ```bash

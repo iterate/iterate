@@ -392,6 +392,49 @@ describe("core processor contract", () => {
     expect(state.maxOffset).toBe(3);
   });
 
+  it("accumulates immediate child paths from child-stream-created announcements", () => {
+    const announcement = (offset: number, childPath: string): StreamEvent => ({
+      offset,
+      createdAt: `2026-06-01T12:00:0${offset}.000Z`,
+      type: "events.iterate.com/stream/child-stream-created",
+      idempotencyKey: `child-stream-created:${offset}:${childPath}`,
+      payload: { childPath },
+    });
+
+    // The root hears every announcement in the namespace, but only keeps the
+    // immediate child paths. Callers that need a tree walk each child stream.
+    const rootState = reduceEvents({
+      state: CoreProcessorContract.stateSchema.parse({
+        ...CoreProcessorContract.initialState,
+        path: "/",
+      }),
+      events: [
+        announcement(1, "/a"),
+        announcement(2, "/a/b"),
+        announcement(3, "/c"),
+        announcement(4, "/a/b"), // duplicate announcement is ignored
+      ],
+    });
+    expect(rootState.childPaths).toEqual(["/a", "/c"]);
+
+    // An intermediate ancestor keeps only its immediate child paths: not
+    // itself, not siblings, and not a path that merely shares a prefix.
+    const intermediateState = reduceEvents({
+      state: CoreProcessorContract.stateSchema.parse({
+        ...CoreProcessorContract.initialState,
+        path: "/a",
+      }),
+      events: [
+        announcement(1, "/a"),
+        announcement(2, "/a/b"),
+        announcement(3, "/a/b/c"),
+        announcement(4, "/c"),
+        announcement(5, "/ab"),
+      ],
+    });
+    expect(intermediateState.childPaths).toEqual(["/a/b"]);
+  });
+
   it("rebuilds state by replaying committed events", () => {
     const state = reduceEvents({
       events: [

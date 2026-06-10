@@ -116,13 +116,6 @@ export function projectSecretQueryOptions(input: { projectId: string; secretId: 
   };
 }
 
-export function projectStreamsListQueryOptions(projectId: string) {
-  return {
-    ...orpc.project.streams.list.queryOptions({ input: { projectSlugOrId: projectId } }),
-    staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
-  };
-}
-
 export function projectSlackConnectionQueryOptions(projectId: string) {
   return orpc.project.integrations.getSlackConnection.queryOptions({
     input: { projectSlugOrId: projectId },
