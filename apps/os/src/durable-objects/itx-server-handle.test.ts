@@ -21,6 +21,7 @@ type HarnessStub = {
     principal: "admin" | "member" | "stranger" | "anonymous";
     slugOrId: string;
   }): Promise<ListResult>;
+  projectProcessorPhase(): Promise<string>;
 };
 
 const harness = (env as unknown as { HARNESS: HarnessStub }).HARNESS;
@@ -31,6 +32,14 @@ function pathsOf(result: ListResult): string[] {
 }
 
 describe("getServerItx against real capabilities", () => {
+  test("itx.project deep-traverses in one expression (path proxy, no bind)", async () => {
+    // itx.project.processor.snapshot() — through the handle's fallthrough
+    // Proxy AND the project path proxy. Regression for "value.bind is not a
+    // function" (binding getter results read the proxy's reserved "bind").
+    const phase = await harness.projectProcessorPhase();
+    expect(["none", "creating", "ready"]).toContain(phase);
+  });
+
   test("a project member's handle reaches streams.list() in-process", async () => {
     // A single-segment path: the harness reads the ROOT's childPaths (the
     // flat list()/descendantPaths catalog is gone — explorers walk levels).

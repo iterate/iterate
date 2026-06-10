@@ -74,6 +74,15 @@ export type ItxRuntime = {
   exports: Record<string, (options: { props: Record<string, unknown> }) => unknown>;
 };
 
+/** Whether `prop` resolves through a getter anywhere on the prototype chain. */
+function isAccessor(target: object, prop: PropertyKey): boolean {
+  for (let node: object | null = target; node; node = Object.getPrototypeOf(node)) {
+    const descriptor = Object.getOwnPropertyDescriptor(node, prop);
+    if (descriptor) return descriptor.get !== undefined;
+  }
+  return false;
+}
+
 /**
  * Project contexts share one workspace ("itx"); child contexts each get
  * their own, derived from the context id — an agent session's repo clones
@@ -100,7 +109,14 @@ export class Itx extends RpcTarget {
         // we deliberately do NOT forward the proxy as receiver.
         if (typeof prop === "symbol" || prop in target) {
           const value = Reflect.get(target, prop, target);
-          return typeof value === "function" ? value.bind(target) : value;
+          // Bind prototype METHODS so detached calls keep their receiver.
+          // Getter results pass through untouched even when callable: the
+          // path proxies returned by `project`/`worker` reserve "bind" as a
+          // path segment (it reads as undefined), so binding them throws.
+          if (typeof value === "function" && !isAccessor(target, prop)) {
+            return value.bind(target);
+          }
+          return value;
         }
         if (RESERVED_CAP_NAMES.has(prop)) return undefined;
         return target.cap(prop);

@@ -20,12 +20,20 @@
         "name": "STREAM",
         "class_name": "StreamDurableObject",
       },
+      {
+        "name": "PROJECT",
+        "class_name": "ProjectDurableObject",
+      },
     ],
   },
   "migrations": [
     {
       "tag": "v1",
       "new_sqlite_classes": ["StreamDurableObject"],
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["ProjectDurableObject"],
     },
   ],
 }

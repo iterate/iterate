@@ -8,6 +8,7 @@ import type { RequestContext } from "~/request-context.ts";
 
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
+export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 // Must match the assertions in itx-server-handle.test.ts.
 export const PROJECT_ID = "proj__test__itxserver";
@@ -22,6 +23,21 @@ export type HarnessPrincipal = "admin" | "member" | "stranger" | "anonymous";
  * out, real StreamsCapability → Stream Durable Object underneath.
  */
 export class ServerItxHarness extends WorkerEntrypoint<Env> {
+  /**
+   * Regression: itx.project is a path proxy, so deep property traversal works
+   * in ONE expression — including through the handle's fallthrough Proxy,
+   * which must NOT bind getter results (the path proxy reserves "bind" as a
+   * path segment; binding it produced "value.bind is not a function").
+   */
+  async projectProcessorPhase(): Promise<string> {
+    const itx = await this.#serverItx({ principal: "member", slugOrId: PROJECT_SLUG });
+    const project = itx.project as unknown as {
+      processor: { snapshot(): Promise<{ state: { phase: string } }> };
+    };
+    const snapshot = await project.processor.snapshot();
+    return snapshot.state.phase;
+  }
+
   async appendMarker(input: { marker: string; path: string }): Promise<void> {
     const itx = await this.#serverItx({ principal: "member", slugOrId: PROJECT_SLUG });
     await itx.streams.get(input.path).append({
