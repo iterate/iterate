@@ -6,6 +6,8 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   const base = makeCloudflareTanStackAppWorkspace(workerEnvShim);
   return {
     ...base,
+    // Handwritten design-of-record types for the itx protocol; intentionally unreferenced.
+    ignore: ["src/itx/types.ts"],
     entry: [
       ...(base.entry ?? []),
       "e2e/vitest.config.ts",
