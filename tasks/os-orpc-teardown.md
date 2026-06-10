@@ -29,10 +29,11 @@ rollback plan.
 - [ ] `ItxError { code, message, details? }` serialized across capnweb and
       rehydrated in the client core (codes: NOT_FOUND, FORBIDDEN, CONFLICT,
       BAD_REQUEST). UI conversion of mutating pages waits on this.
-- [ ] `getServerItx(requestContext, target?)` — in-process handle for SSR
-      loaders (resolveItx + accessForPrincipal); project-narrowed handle in
-      route context under `$projectSlug`; seed QueryClient with the same
-      itxKey keys the browser uses.
+- [x] `getServerItx` — in-process handle for SSR loaders (resolveItx +
+      accessForPrincipal via the shared access.ts boundary); isomorphic
+      `getLoaderItx` + best-effort `prefetchItxQuery` seed the QueryClient
+      with the same itxKey keys the browser uses (streams index wired; itx
+      DECISIONS D18, PR #itx-server-handle).
 - [ ] Org-membership `itx.projects.create` (org claims on the handle runtime;
       replaces the admin-only path for the dashboard create flow).
 

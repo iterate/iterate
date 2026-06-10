@@ -12,21 +12,14 @@
 import { newWorkersRpcResponse } from "capnweb";
 import { resolveItx } from "./entrypoint.ts";
 import { runItxScript } from "./run.ts";
-import {
-  GLOBAL_CONTEXT_ID,
-  isChildContextId,
-  type ItxProps,
-  type ProjectAccess,
-} from "./protocol.ts";
-import type { ContextDO } from "./context-do.ts";
+import { GLOBAL_CONTEXT_ID, type ItxProps, type ProjectAccess } from "./protocol.ts";
 import type { ItxRuntime } from "./handle.ts";
 import { authenticateCapnwebAdmin, handleCapnwebAdminCookieRequest } from "./admin-auth-cookie.ts";
+import { accessForPrincipal, requireWorkerExports, resolveAccessibleContextId } from "./access.ts";
 import type { AppConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import type { Principal } from "~/auth/principal.ts";
-import { getProjectById, getProjectBySlug } from "~/db/queries/.generated/index.ts";
-import { isProjectId } from "~/domains/projects/project-id.ts";
 
 export const ITX_PREFIX = "/api/itx";
 
@@ -68,7 +61,7 @@ export async function handleItxFetch(input: {
   } else {
     const resolved = await resolveAccessibleContextId({
       access,
-      context: input.context,
+      db: input.context.db,
       env: input.env,
       idOrSlug: decodeURIComponent(subpath),
     });
@@ -78,7 +71,7 @@ export async function handleItxFetch(input: {
 
   const response = await newWorkersRpcResponse(
     input.request,
-    await resolveItx({ env: input.env, exports: workerExports(input.context), props }),
+    await resolveItx({ env: input.env, exports: requireWorkerExports(input.context), props }),
   );
   const setCookie = auth.responseHeaders.get("set-cookie");
   if (setCookie) response.headers.append("set-cookie", setCookie);
@@ -135,47 +128,6 @@ async function authenticateItxRequest(input: {
   return { principal: resolved.principal, responseHeaders: resolved.responseHeaders };
 }
 
-/** The simplified access model: admin sees all, users see their projects. */
-function accessForPrincipal(principal: Principal): ProjectAccess {
-  return principal.type === "admin" ? "all" : principal.projects.map((project) => project.id);
-}
-
-/**
- * Resolve a connect/run target to a context id the caller may hold. The
- * access check happens HERE (auth boundary) and nowhere deeper: a child
- * context is accessible iff its owning project is.
- */
-async function resolveAccessibleContextId(input: {
-  access: ProjectAccess;
-  context: RequestContext;
-  env: Env;
-  idOrSlug: string;
-}): Promise<{ contextId: string; projectId: string } | null> {
-  if (isChildContextId(input.idOrSlug)) {
-    const contextDo = input.env.ITX_CONTEXT.getByName(
-      input.idOrSlug,
-    ) as unknown as DurableObjectStub<ContextDO>;
-    try {
-      const descriptor = await contextDo.descriptor();
-      if (input.access !== "all" && !input.access.includes(descriptor.projectId)) return null;
-      return { contextId: descriptor.id, projectId: descriptor.projectId };
-    } catch {
-      return null;
-    }
-  }
-
-  // Classify by prefix: auth mints the canonical "prj_" id, "proj_" is the
-  // legacy OS typeid prefix, anything else is a slug. Treating a "prj_" id as a
-  // slug is what 404'd the project REPL connect — the global REPL hits the
-  // bare-prefix branch above and so was never affected.
-  const row = isProjectId(input.idOrSlug)
-    ? await getProjectById(input.context.db, { id: input.idOrSlug })
-    : await getProjectBySlug(input.context.db, { slug: input.idOrSlug });
-  if (!row) return null;
-  if (input.access !== "all" && !input.access.includes(row.id)) return null;
-  return { contextId: row.id, projectId: row.id };
-}
-
 // ---- /api/itx/run ----------------------------------------------------------
 //
 // Thin HTTP shim over the shared runner (run.ts): resolve + access-check the
@@ -207,7 +159,7 @@ async function handleItxRun(input: {
   if (body.context && body.context !== GLOBAL_CONTEXT_ID) {
     const resolved = await resolveAccessibleContextId({
       access: input.access,
-      context: input.context,
+      db: input.context.db,
       env: input.env,
       idOrSlug: body.context,
     });
@@ -224,7 +176,7 @@ async function handleItxRun(input: {
 
   const outcome = await runItxScript({
     env: input.env,
-    exports: workerExports(input.context),
+    exports: requireWorkerExports(input.context),
     functionSource: body.functionSource,
     projectId: scriptProjectId,
     props,
@@ -237,11 +189,4 @@ async function handleItxRun(input: {
     );
   }
   return Response.json({ executionId: outcome.executionId, result: outcome.result ?? null });
-}
-
-function workerExports(context: RequestContext): ItxRuntime["exports"] {
-  if (!context.workerExports) {
-    throw new Error("Worker exports are not available on this RequestContext.");
-  }
-  return context.workerExports as unknown as ItxRuntime["exports"];
 }
