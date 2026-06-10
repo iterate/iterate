@@ -7,7 +7,7 @@ size: small
 
 ## Status summary
 
-Done, pending review: PR at https://github.com/iterate/iterate/pull/1448. Implemented, dry-run tested locally, and e2e tested in CI against `#misha-test` — both the create path (post + store ts) and the update-in-place path were exercised by real workflow runs. Nothing known missing.
+Done, pending review: PR at https://github.com/iterate/iterate/pull/1448. Implemented, dry-run tested locally, and e2e tested in CI against `#misha-test` — create, update-in-place, and threaded-details paths all exercised by real workflow runs. After feedback that the full message was huge on busy days, the channel message is now a one-line count summary with the per-PR breakdown in a threaded reply; the channel moved to `#ci` (adopting #1452). Nothing known missing.
 
 ## Problem
 
@@ -35,7 +35,8 @@ Old: #991, #993, #1010
 
 ## Decisions (assumptions made while fleshing out — flagged where guessed)
 
-- **Channel**: `#building`, same as the old workflow.
+- **Channel**: ~~`#building`, same as the old workflow~~ `#ci` — while this branch was in flight, #1452 rerouted the per-merge announcements to `#ci`; the dashboard adopts that decision.
+- **Compactness**: the channel message is a one-line summary (`*PR dashboard 10th June* — 51 merged · 9 closed without merging · 4 opened · 2 older still open (details in thread)`); the full per-PR breakdown is a single threaded reply under it, also updated in place. _(feedback: the original flat message was huge on busy days)_
 - **Day boundary**: UTC date. Simple and unambiguous; the team is distributed anyway. _(guess)_
 - **Trigger**: `pull_request: [opened, closed, reopened, ready_for_review]` — no branch filter, so PRs targeting non-main branches (stacked PRs) show up too. No cron: quiet day → no message at all, which is the point. _(guess: original only watched merges to main)_
 - **Finding today's message**: the message `ts` is stored in a repo Actions variable (`SLACK_PR_DASHBOARD_STATE`, JSON `{date, channel, ts}`), written with `ITERATE_BOT_GITHUB_TOKEN` (same PAT `nag.ts` uses). ~~Read the channel's recent history via `conversations.history`~~ _(rejected: would require a `channels:history` scope the bot may not have, and the token isn't accessible locally to verify; the repo-variable approach was verified working with a live create/read/delete test and needs no new Slack scopes — `chat.update` uses the same `chat:write` the bot already exercises)_
@@ -67,3 +68,6 @@ Old: #991, #993, #1010
 - First dry run on a busy day (~25 merges) showed every same-day-merged PR duplicated under "Opened … (already closed)" — narrowed Opened to `is:open`.
 - First CI run failed as a malformed workflow file: the dry-run check `slackToken.includes("$" + "{{")` put a literal unclosed expression-opener in the yaml. Detect the unexpanded secret by name instead.
 - Second CI run exposed a Slack API asymmetry on busy days: `chat.postMessage` silently truncates long text but `chat.update` rejects it with `msg_too_long`, and the fallback then posted a second message — the exact noise problem this task removes. Fixed by chunking lines into 2900-char mrkdwn section blocks (3000-char/50-block limits give ~35x more headroom), with the heading as notification fallback text.
+- Feedback round: full message was huge in-channel → split into summary parent + threaded details (state gained `details_ts`; old state without it migrates gracefully by posting the thread reply). Gotcha: `chat.update` retains a message's existing blocks unless explicitly passed `blocks: []`, which the parent update needs since day-one parents (and the pre-thread test message) carried blocks.
+- #1452 merged mid-flight, editing the workflow this branch deletes (rerouting it to `#ci`). Resolved the modify/delete conflict by keeping the deletion and pointing the dashboard at `#ci`.
+- Threading e2e verified on run 27288814028: parent collapsed to the summary in place (same ts), details posted into its thread, state variable now `{date, channel, ts, details_ts}`.
