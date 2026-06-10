@@ -7,7 +7,7 @@ import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent
 import { CloudflareAiProcessorContract } from "~/domains/agents/stream-processors/cloudflare-ai/contract.ts";
 import { JsonataReactorProcessorContract } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
 import { OpenAiWsProcessorContract } from "~/domains/agents/stream-processors/openai-ws/contract.ts";
-import { ProjectLifecycleProcessorContract } from "~/domains/projects/stream-processors/project-lifecycle.ts";
+import { ProjectProcessorContract } from "~/domains/projects/stream-processors/project/contract.ts";
 import { RepoStreamProcessorContract } from "~/domains/repos/stream-processors/repo-stream-processor.ts";
 import { SlackAgentProcessorContract } from "~/domains/slack/stream-processors/slack-agent/contract.ts";
 import { SlackProcessorContract } from "~/domains/slack/stream-processors/slack/contract.ts";
@@ -34,7 +34,7 @@ type ProcessorContractForDocs = {
 const processorContracts = [
   CoreProcessorContract,
   CircuitBreakerContract,
-  ProjectLifecycleProcessorContract,
+  ProjectProcessorContract,
   RepoStreamProcessorContract,
   AgentProcessorContract,
   AgentChatProcessorContract,

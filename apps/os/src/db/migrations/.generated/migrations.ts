@@ -21,6 +21,7 @@ export const migrations = {
   "src/db/migrations/0012_add_project_external_egress_proxy_url.sql": "alter table projects add column external_egress_proxy_url text;\n",
   "src/db/migrations/0013_drop_project_external_egress_proxy_url.sql": "alter table projects drop column external_egress_proxy_url;\n",
   "src/db/migrations/0014_drop_project_permissions.sql": "drop table project_permissions;\n",
+  "src/db/migrations/0015_drop_ingress_routes.sql": "-- Project platform hosts resolve dynamically from the projects table\n-- (src/ingress/lookup.ts); the materialized route rows duplicated that with\n-- stale copies and nothing else wrote to the table.\ndrop table ingress_routes;\n",
 };
 
 export function migrate(client: SyncClient): void;

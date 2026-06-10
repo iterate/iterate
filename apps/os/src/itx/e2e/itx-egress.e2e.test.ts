@@ -31,6 +31,7 @@ test("itx.fetch substitutes secrets through project egress (explicit door)", asy
   const project = (await itx.projects.create({ slug: `itx-egress-${suffix()}` })) as { id: string };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
+  await waitForProjectReady(projectItx);
 
   const response = await projectItx.fetch(echoUrl(), {
     headers: {
@@ -48,6 +49,10 @@ test("bare fetch() in a project itx script goes through egress (implicit door)",
     id: string;
   };
   createdProjectIds.push(project.id);
+  {
+    using projectItx = await itx.projects.get(project.id);
+    await waitForProjectReady(projectItx);
+  }
 
   // The script calls PLAIN fetch — no itx involvement. globalOutbound does
   // the rest because the run harness loaded it that way.
@@ -83,6 +88,7 @@ test("bare fetch() inside a worker cap goes through egress (implicit door)", asy
   };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
+  await waitForProjectReady(projectItx);
 
   await projectItx.caps.define({
     name: "egressProbe",
@@ -122,6 +128,29 @@ test("bare fetch() inside a worker cap goes through egress (implicit door)", asy
 });
 
 // ---- helpers ----------------------------------------------------------------
+
+/**
+ * createProject returns immediately; the creation steps (including the
+ * example secret these tests rely on) run in ProjectProcessor and leave a
+ * trail of events. Poll the processor snapshot until phase "ready" — in ONE
+ * expression: itx.project is a path proxy over the Project DO, so deep
+ * property traversal pipelines (`itx.project.processor.snapshot()`).
+ */
+async function waitForProjectReady(projectItx: unknown) {
+  const project = (
+    projectItx as {
+      project: { processor: { snapshot(): Promise<{ state: { phase: string } }> } };
+    }
+  ).project;
+  const deadline = Date.now() + 30_000;
+  let snapshot: { state: { phase: string } } | undefined;
+  while (Date.now() < deadline) {
+    snapshot = await project.processor.snapshot();
+    if (snapshot.state.phase === "ready") return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Timed out waiting for create-completed: ${JSON.stringify(snapshot)}`);
+}
 
 function secretReference() {
   return `Bearer getSecret({ key: ${JSON.stringify(SECRET_KEY)} })`;

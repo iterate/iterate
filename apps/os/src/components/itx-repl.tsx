@@ -21,6 +21,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
+import { itxReplAutocompleteWorker } from "./itx-repl-autocomplete.ts";
 import type { BrowserReplEntry } from "~/itx/browser-repl.ts";
 import type { ItxExample } from "~/itx/examples.ts";
 
@@ -230,7 +231,7 @@ function useReplTypeScriptExtensions(input: { code: string; path: string }) {
         return;
       }
 
-      const { tsAutocompleteWorker, tsFacetWorker, tsHoverWorker, tsLinterWorker, tsSyncWorker } =
+      const { tsFacetWorker, tsHoverWorker, tsLinterWorker, tsSyncWorker } =
         typeScriptExtensionsModule;
 
       setExtensions([
@@ -240,7 +241,7 @@ function useReplTypeScriptExtensions(input: { code: string; path: string }) {
         autocompleteModule.autocompletion({
           activateOnTyping: true,
           activateOnTypingDelay: 0,
-          override: [tsAutocompleteWorker()],
+          override: [itxReplAutocompleteWorker(tsFacetWorker)],
         }),
         tsHoverWorker(),
       ]);

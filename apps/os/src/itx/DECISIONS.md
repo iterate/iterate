@@ -291,3 +291,43 @@ the plan's "one global-context WebSocket per tab" decision are superseded.
 `errors.ts` (`getItxErrorCode`/`isItxAccessError`) stays: catch blocks and
 error boundaries still read codes; there is just no retry-predicate layer to
 feed them to.
+
+## D22: fetch on the project IS egress; ingress is stateless; creation is events
+
+The Project DO cleanup (PR #1466) landed three postures the spec/notes had
+been circling:
+
+- **`project.fetch` = egress.** In itx vocabulary `itx.fetch` is project
+  egress (Law 5), so the DO's bare `fetch` now routes to `egressFetch` — the
+  worker's `fetch` is the project's homepage. The one exception on the DO
+  fetch path is the captun intercept tunnel's WebSocket handshake (upgrades
+  cannot cross RPC methods). Endgame, not built: egress as a stateless
+  capability with policy cached outside the DO, and the tunnel replaced by a
+  live egress-shadowing capability `provide`d over capnweb-with-WebSockets.
+- **Ingress never touches the DO.** `ProjectIngressEntrypoint` (stateless)
+  asks the DO `getWorkerVersion()` (freshness + deduped rebuild semantics),
+  loads the worker itself via `env.LOADER` with the shared cache key, and
+  dispatches; the code payload only crosses RPC inside the loader's
+  cold-isolate miss callback. The DO is where the worker's source of truth
+  lives, nothing more.
+- **Project creation is event-sourced, fire-and-return.** `createProject`
+  appends `project/create-requested` and returns the (purely computed)
+  summary immediately — no waiting. The ProjectProcessor — slug `project`,
+  hosted on the DO — runs the idempotent steps (D1 projection, iterate-config
+  repo, example secret, agents root) and leaves the trail: `created`,
+  `repo-initialized`, `create-completed`, plus a cross-post of
+  create-requested to the global namespace's `/projects` stream. Callers
+  redirect to the project page right away and watch
+  `itx.project.processor.snapshot()` (phase: creating → ready) for
+  progress — the processor is a public RpcTarget getter on the DO, and
+  `itx.project` is a path proxy (replayPathCall awaits intermediate
+  segments), so deep traversal works in one expression even though workerd
+  itself does not pipeline calls through property accesses on raw stubs
+  (capnweb's RpcTarget IS cloudflare:workers' inside workerd). Callers that need routing before the processor catches up
+  (dashboard, itx.projects.create) insert the D1 projects row themselves
+  first, as they always did. The worker build never gates creation (ingress
+  self-heals builds); `config-worker-built` remains the historical event
+  string. The DO keeps NO bespoke tables: the processor snapshot is the
+  project's durable state (with a pure `projectFacts()` + D1-slug fallback
+  for cold snapshots), and "config worker" is now just **the worker**
+  (`durable-objects/worker.ts`, `callWorkerFunction`, `itx.worker`).

@@ -1,5 +1,5 @@
 // The itx handle: the ONE thing user code ever touches, identical in the
-// browser, Node, the REPL, the iterate-config worker, itx scripts, and caps
+// browser, Node, the REPL, the project worker, itx scripts, and caps
 // themselves (spec §5).
 //
 // A handle is a cheap, ephemeral VIEW over a durable context node. Authority
@@ -25,7 +25,7 @@ import type {
 } from "@iterate-com/shared/streams/types";
 import { createD1Client } from "sqlfu";
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
-import { PathProxyRpcTarget } from "./path-proxy.ts";
+import { PathProxyRpcTarget, replayPathCall } from "./path-proxy.ts";
 import { ItxError } from "./errors.ts";
 import {
   GLOBAL_CONTEXT_ID,
@@ -77,6 +77,15 @@ export type ItxRuntime = {
   exports: Record<string, (options: { props: Record<string, unknown> }) => unknown>;
 };
 
+/** Whether `prop` resolves through a getter anywhere on the prototype chain. */
+function isAccessor(target: object, prop: PropertyKey): boolean {
+  for (let node: object | null = target; node; node = Object.getPrototypeOf(node)) {
+    const descriptor = Object.getOwnPropertyDescriptor(node, prop);
+    if (descriptor) return descriptor.get !== undefined;
+  }
+  return false;
+}
+
 /**
  * Project contexts share one workspace ("itx"); child contexts each get
  * their own, derived from the context id — an agent session's repo clones
@@ -103,7 +112,14 @@ export class Itx extends RpcTarget {
         // we deliberately do NOT forward the proxy as receiver.
         if (typeof prop === "symbol" || prop in target) {
           const value = Reflect.get(target, prop, target);
-          return typeof value === "function" ? value.bind(target) : value;
+          // Bind prototype METHODS so detached calls keep their receiver.
+          // Getter results pass through untouched even when callable: the
+          // path proxies returned by `project`/`worker` reserve "bind" as a
+          // path segment (it reads as undefined), so binding them throws.
+          if (typeof value === "function" && !isAccessor(target, prop)) {
+            return value.bind(target);
+          }
+          return value;
         }
         if (RESERVED_CAP_NAMES.has(prop)) return undefined;
         return target.cap(prop);
@@ -167,37 +183,43 @@ export class Itx extends RpcTarget {
   }
 
   /**
-   * The project's iterate-config worker. The dynamic worker entrypoint itself
-   * can never cross an RPC boundary (workerd forbids transferring loader
-   * entrypoints), so the path is replayed against it INSIDE the Project DO —
-   * every public method/getter is proxied automatically, at any depth:
+   * The project's worker. The loaded worker entrypoint itself can never cross
+   * an RPC boundary (workerd forbids transferring loader entrypoints), so the
+   * path is replayed against it INSIDE the Project DO — every public
+   * method/getter is proxied automatically, at any depth:
    * itx.worker.someTool(args), itx.worker.group.tool(args). `fetch` is the
-   * one special case (the project's ingress fetch).
+   * one special case: the worker's fetch is the project's homepage, served by
+   * the stateless ingress entrypoint (fetch on the PROJECT is egress).
    */
   get worker(): unknown {
     const project = this.#projectStub();
     return new PathProxyRpcTarget(async ({ path, args }) => {
       if (path.length === 1 && path[0] === "fetch") {
-        return await project.fetch(args[0] as Request);
+        const ingress = this.#runtime.exports.ProjectIngressEntrypoint({
+          props: { projectId: this.#requireProjectId() },
+        }) as { fetch(request: Request): Promise<Response> };
+        return await ingress.fetch(args[0] as Request);
       }
-      return await project.callConfigWorkerFunction({ args, path });
+      return await project.callWorkerFunction({ args, path });
     });
   }
 
   /**
-   * The project's own (cap #0) surface IS the Project Durable Object stub.
-   * Workers RPC proxies every public method/getter automatically, so adding a
-   * method to ProjectDurableObject makes it instantly callable as
-   * itx.project.newMethod() — zero forwarder code, nothing to keep in sync.
+   * The project's own (cap #0) surface IS the Project Durable Object —
+   * adding a method/getter to ProjectDurableObject makes it instantly
+   * reachable as itx.project.newMethod() — zero forwarder code, nothing to
+   * keep in sync (the owner-chosen whole-surface posture, DECISIONS D17).
    *
-   * This is a deliberate, owner-chosen posture (reverses the round-1 facade,
-   * DECISIONS D17): the access model is project-level — if your handle is on
-   * this project's context at all, you get its whole surface. The dangerous
-   * direction (a hand-built `path` into reserved/prototype names via
-   * itxInvoke) is still gated server-side in replayPathCall.
+   * Wrapped in a path proxy rather than handing out the raw stub: workerd
+   * does not pipeline calls through property accesses, so on a raw stub
+   * `stub.processor.snapshot()` throws. The proxy accumulates the path and
+   * replayPathCall awaits each intermediate segment, so deep traversal works
+   * in one expression: `await itx.project.processor.snapshot()`. Reserved/
+   * prototype path segments stay gated inside replayPathCall.
    */
   get project(): ProjectStub {
-    return this.#projectStub();
+    const stub = this.#projectStub();
+    return new PathProxyRpcTarget((call) => replayPathCall(stub, call)) as unknown as ProjectStub;
   }
 
   get projects(): ItxProjects {
