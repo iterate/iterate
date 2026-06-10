@@ -17,7 +17,7 @@
     "lint": "oxlint . --threads 1 --deny-warnings",
     "lint:check": "pnpm lint",
     "lint:fix": "oxlint . --fix",
-    "knip": "knip --workspace apps/os --workspace apps/os-contract --workspace apps/semaphore --workspace apps/semaphore-contract --workspace packages/shared",
+    "knip": "knip --workspace apps/os --workspace apps/os-contract --workspace apps/semaphore --workspace packages/shared",
     "prepare": "is-ci || husky",
     "vitest": "pnpm --dir apps/os test",
     "test": "pnpm -r --parallel --filter '!iterate' test",

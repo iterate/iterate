@@ -29,6 +29,7 @@ import { lookupIngressRule } from "~/ingress/lookup.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
 import { handleItxFetch, handleProjectHostItxFetch } from "~/itx/fetch.ts";
 import { handleProjectStreamRpcFetch } from "~/domains/streams/project-stream-rpc.ts";
+import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
 
 // Durable objects and RPC entrypoints must be exported from the worker's main
 // module so the runtime can find the classes the bindings refer to:
@@ -129,6 +130,12 @@ export default {
             request,
           });
         }
+
+        const docsMarkdownResponse = handleDocsMarkdownFetch({
+          appBaseUrl: requestConfig.baseUrl,
+          request,
+        });
+        if (docsMarkdownResponse) return docsMarkdownResponse;
 
         const context: RequestContext = {
           config: requestConfig,

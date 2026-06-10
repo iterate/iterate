@@ -30,6 +30,15 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   };
 }
 
+function makeSemaphoreCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
+  const base = makeCloudflareTanStackAppWorkspace(workerEnvShim);
+  return {
+    ...base,
+    entry: [...(base.entry ?? []), "sqlfu.config.ts"],
+    ignoreDependencies: [...(base.ignoreDependencies ?? []), "miniflare"],
+  };
+}
+
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
     entry: ["alchemy.run.ts", "vite.config.ts", "scripts/router.ts", "src/worker.ts!"],
@@ -91,7 +100,6 @@ const config: KnipConfig = {
     "!apps/os",
     "!apps/os-contract",
     "!apps/semaphore",
-    "!apps/semaphore-contract",
     "packages/*",
     "!packages/shared",
   ],
@@ -108,9 +116,9 @@ const config: KnipConfig = {
     "apps/os/src/domains/codemode/examples.ts": ["exports"],
     "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
     "apps/os/e2e/test-support/create-local-dev-server.ts": ["files", "exports"],
+    "apps/os/e2e/test-support/create-mock-internet.ts": ["files", "exports"],
     "apps/os/src/**": ["exports", "types"],
     "apps/os/e2e/test-support/**": ["exports", "types"],
-    "apps/semaphore-contract/src/client.ts": ["types"],
     "apps/semaphore/src/router.tsx": ["exports"],
     "apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts": ["exports"],
     "packages/shared/src/streams/db/migrations/.generated/migrations.ts": ["exports", "types"],
@@ -123,8 +131,7 @@ const config: KnipConfig = {
     "packages/shared/src/durable-object-utils/mixins/fetch-mixin-utils.ts": ["types"],
   },
   workspaces: {
-    "apps/semaphore": makeCloudflareTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
-    "apps/semaphore-contract": makePrivateContractWorkspace(),
+    "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os-contract": makePrivateContractWorkspace(),
     "packages/shared": makeSharedWorkspace(),

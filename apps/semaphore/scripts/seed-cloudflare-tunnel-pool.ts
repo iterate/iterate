@@ -4,7 +4,7 @@ import {
   CloudflareTunnelData,
   cloudflareTunnelType,
   createSemaphoreClient,
-} from "@iterate-com/semaphore-contract";
+} from "../src/contract.ts";
 import { makeFunnySlug } from "../../../packages/shared/src/slug-maker.ts";
 import { parseConfig } from "../src/config.ts";
 

@@ -9,7 +9,9 @@ export const ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM = "organizations";
 export const ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM = "projects";
 export const ITERATE_PROJECT_SELECTION_SCOPE = "project";
 export const ITERATE_PROJECT_SCOPE_PREFIX = `${ITERATE_PROJECT_SELECTION_SCOPE}:` as const;
-const ITERATE_PROJECT_WILDCARD_SCOPE = `${ITERATE_PROJECT_SCOPE_PREFIX}*` as const;
+// Server-granted only: the auth worker strips this scope from tokens unless the
+// user's role is "admin", and OS grants it to admin-API-secret callers.
+export const ITERATE_SUPERADMIN_SCOPE = "superadmin";
 
 export const IterateAuthOrganizationClaim = z.object({
   id: z.string(),
@@ -42,7 +44,7 @@ export function listProjectScopeIds(scopes: Iterable<string>) {
     }
 
     const projectId = scope.slice(ITERATE_PROJECT_SCOPE_PREFIX.length).trim();
-    if (projectId.length === 0 || projectId === "*") {
+    if (projectId.length === 0) {
       continue;
     }
 
@@ -52,9 +54,9 @@ export function listProjectScopeIds(scopes: Iterable<string>) {
   return Array.from(projectIds);
 }
 
-export function hasWildcardProjectScope(scopes: Iterable<string>) {
+export function hasSuperadminScope(scopes: Iterable<string>) {
   for (const scope of scopes) {
-    if (scope === ITERATE_PROJECT_WILDCARD_SCOPE) return true;
+    if (scope === ITERATE_SUPERADMIN_SCOPE) return true;
   }
   return false;
 }

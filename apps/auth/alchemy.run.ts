@@ -47,6 +47,7 @@ const AlchemyEnv = z.object({
   RESEND_BOT_DOMAIN: z.string(),
   RESEND_BOT_API_KEY: z.string(),
   SIGNUP_ALLOWLIST: z.string(),
+  SUPERADMIN_ALLOWLIST: z.string().default("*@nustom.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string(),
   GOOGLE_CLIENT_SECRET: z.string(),
@@ -77,6 +78,7 @@ await Exec("render-superadmin-seed", {
   command: `tsx ./scripts/render-superadmin-seed.ts ${SUPERADMIN_SEED_SQL_PATH}`,
   env: {
     SERVICE_AUTH_TOKEN: alchemy.secret(alchemyEnv.SERVICE_AUTH_TOKEN),
+    SUPERADMIN_ALLOWLIST: alchemyEnv.SUPERADMIN_ALLOWLIST,
   },
   cwd: import.meta.dirname,
 });
@@ -98,6 +100,7 @@ const worker = await TanStackStart(APP_NAME, {
     RESEND_BOT_DOMAIN: alchemy.secret(alchemyEnv.RESEND_BOT_DOMAIN),
     RESEND_BOT_API_KEY: alchemy.secret(alchemyEnv.RESEND_BOT_API_KEY),
     SIGNUP_ALLOWLIST: alchemy.secret(alchemyEnv.SIGNUP_ALLOWLIST),
+    SUPERADMIN_ALLOWLIST: alchemy.secret(alchemyEnv.SUPERADMIN_ALLOWLIST),
     VITE_ENABLE_EMAIL_OTP_SIGNIN: alchemy.secret(emailOtpEnabled),
     GOOGLE_CLIENT_ID: alchemy.secret(alchemyEnv.GOOGLE_CLIENT_ID),
     GOOGLE_CLIENT_SECRET: alchemy.secret(alchemyEnv.GOOGLE_CLIENT_SECRET),

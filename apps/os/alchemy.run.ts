@@ -18,6 +18,7 @@ import type { SlackAgentDurableObject } from "./src/domains/slack/durable-object
 import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import type { OutboundMcpFromOurClientCapability } from "./src/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
+import { eventDocsHostnameForAppBaseUrl } from "./src/lib/event-docs-host.ts";
 
 const resolvedAuthIssuer =
   process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER;
@@ -93,6 +94,7 @@ const db = await D1Database("os-db", {
 // can own the iterate-preview-N.app zone cleanly.
 const projectHostnameBases = ctx.runtimeConfig.projectHostnameBases ?? [];
 const mcpRouteHostname = routeHostnameForUrl(ctx.runtimeConfig.mcp?.baseUrl);
+const eventDocsRouteHostname = eventDocsHostnameForAppBaseUrl(ctx.runtimeConfig.baseUrl);
 const artifactsAccountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
 const artifactsNamespace = `${ctx.workerName}-repos`;
 const outboundMcpFromOurClientCapability =
@@ -194,6 +196,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
   // hostnames.
   compatibilityFlags: ["global_fetch_strictly_public"],
   extraRouteHostnames: [
+    ...(eventDocsRouteHostname ? [eventDocsRouteHostname] : []),
     ...(mcpRouteHostname ? [mcpRouteHostname] : []),
     ...projectHostnameBases.flatMap(projectRouteHostnamesForBase),
   ],

@@ -18,7 +18,6 @@ import {
   projectAgentPresetsQueryOptions,
   projectAgentsListQueryOptions,
 } from "~/lib/project-route-query.ts";
-import { streamPathToSplat } from "~/lib/stream-links.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
   loader: async ({ context }) => {
@@ -196,7 +195,9 @@ function ProjectAgentsIndexPage() {
                         to="/projects/$projectSlug/agents/streams/$"
                         params={{
                           projectSlug: params.projectSlug,
-                          _splat: streamPathToSplat(agent.agentPath),
+                          // params.stringify on the route converts StreamPath ->
+                          // splat; passing a pre-splatted string would double-encode.
+                          _splat: agent.agentPath,
                         }}
                       >
                         <EventsStreamPathLabel path={agent.agentPath} className="min-w-0" />

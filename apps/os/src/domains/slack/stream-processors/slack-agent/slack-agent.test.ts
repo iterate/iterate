@@ -378,6 +378,92 @@ describe("SlackAgentProcessor", () => {
 
     expect(appended).toEqual([]);
   });
+
+  it("ignores messages posted by our own bot", async () => {
+    const { appended, processor } = createProcessor();
+
+    await processor.ingest({
+      events: [
+        committedEvent({
+          offset: 51,
+          type: "events.iterate.com/slack/webhook-received",
+          payload: {
+            body: {
+              type: "event_callback",
+              event: {
+                type: "message",
+                subtype: "bot_message",
+                bot_id: "B_OUR_BOT",
+                channel: "C123",
+                ts: "1772136259.000000",
+                thread_ts: "1772136258.963519",
+                text: "I am the bot replying",
+              },
+              authorizations: [
+                {
+                  team_id: "T123",
+                  user_id: "U_BOT",
+                  bot_id: "B_OUR_BOT",
+                  is_bot: true,
+                  is_enterprise_install: false,
+                },
+              ],
+            },
+          },
+        }),
+      ],
+      streamMaxOffset: 51,
+    });
+    await flushBackgroundWork();
+
+    expect(appended).toEqual([]);
+  });
+
+  it("forwards messages posted by other bots to the agent", async () => {
+    const { appended, processor } = createProcessor();
+
+    await processor.ingest({
+      events: [
+        committedEvent({
+          offset: 52,
+          type: "events.iterate.com/slack/webhook-received",
+          payload: {
+            body: {
+              type: "event_callback",
+              event: {
+                type: "message",
+                subtype: "bot_message",
+                bot_id: "B_OTHER_BOT",
+                channel: "C123",
+                ts: "1772136259.000000",
+                thread_ts: "1772136258.963519",
+                text: "I am another bot mentioning @iterate",
+              },
+              authorizations: [
+                {
+                  team_id: "T123",
+                  user_id: "U_BOT",
+                  bot_id: "B_OUR_BOT",
+                  is_bot: true,
+                  is_enterprise_install: false,
+                },
+              ],
+            },
+          },
+        }),
+      ],
+      streamMaxOffset: 52,
+    });
+    await flushBackgroundWork();
+
+    expect(appended).toEqual([
+      expect.objectContaining({
+        event: expect.objectContaining({
+          type: "events.iterate.com/agent/input-added",
+        }),
+      }),
+    ]);
+  });
 });
 
 function createProcessor(

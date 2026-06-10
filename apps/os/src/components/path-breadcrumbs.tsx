@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { Link, useMatches, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import {
   Breadcrumb,
@@ -20,7 +21,7 @@ import type {
   RouteBreadcrumbLoaderData,
   RouteBreadcrumbStaticData,
 } from "~/lib/route-breadcrumbs.ts";
-import { streamPathAncestors, streamPathChild } from "~/lib/stream-links.ts";
+import { streamPathAncestors, streamPathChild, streamPathParent } from "~/lib/stream-links.ts";
 
 const CHILD_STREAM_SEGMENT_PATTERN = /^[a-z0-9_-]+$/;
 
@@ -87,9 +88,17 @@ export function PathBreadcrumbs() {
         {parentCrumbs.map((crumb) => (
           <Fragment key={crumb.id}>
             <BreadcrumbItem className="hidden md:inline-flex">
-              <BreadcrumbLink render={renderCrumbLink({ crumb, streamBreadcrumb })}>
-                <BreadcrumbLabel crumb={crumb} />
-              </BreadcrumbLink>
+              {crumb.streamPath != null && crumb.streamPath !== "/" && streamBreadcrumb ? (
+                <StreamSegmentNavigator
+                  label={crumb.label}
+                  segmentPath={crumb.streamPath}
+                  streamBreadcrumb={streamBreadcrumb}
+                />
+              ) : (
+                <BreadcrumbLink render={renderCrumbLink({ crumb, streamBreadcrumb })}>
+                  <BreadcrumbLabel crumb={crumb} />
+                </BreadcrumbLink>
+              )}
             </BreadcrumbItem>
             <BreadcrumbSeparator className="hidden md:block" />
           </Fragment>
@@ -105,9 +114,20 @@ export function PathBreadcrumbs() {
         )}
 
         <BreadcrumbItem>
-          <BreadcrumbPage className="max-w-[16rem] truncate">
-            <BreadcrumbLabel crumb={lastCrumb} />
-          </BreadcrumbPage>
+          {lastCrumb.streamPath != null && lastCrumb.streamPath !== "/" && streamBreadcrumb ? (
+            <BreadcrumbPage className="max-w-[16rem]">
+              <StreamSegmentNavigator
+                isCurrent
+                label={lastCrumb.label}
+                segmentPath={lastCrumb.streamPath}
+                streamBreadcrumb={streamBreadcrumb}
+              />
+            </BreadcrumbPage>
+          ) : (
+            <BreadcrumbPage className="max-w-[16rem] truncate">
+              <BreadcrumbLabel crumb={lastCrumb} />
+            </BreadcrumbPage>
+          )}
         </BreadcrumbItem>
         {streamBreadcrumb ? <StreamChildrenBreadcrumb streamBreadcrumb={streamBreadcrumb} /> : null}
       </BreadcrumbList>
@@ -140,6 +160,77 @@ function renderCrumbLink({
   }
 
   return <Link to={crumb.to ?? "/"} />;
+}
+
+/**
+ * Breadcrumb segment for one level of a stream path. Opens a popover listing
+ * the sibling streams at that depth, so any segment can be swapped without
+ * walking back up through the streams index.
+ */
+function StreamSegmentNavigator({
+  isCurrent = false,
+  label,
+  segmentPath,
+  streamBreadcrumb,
+}: {
+  isCurrent?: boolean;
+  label: string;
+  segmentPath: StreamPathType;
+  streamBreadcrumb: NonNullable<RouteBreadcrumbLoaderData["streamBreadcrumb"]>;
+}) {
+  const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const streamsQuery = useQuery(projectStreamsListQueryOptions(streamBreadcrumb.projectId));
+  const siblingPaths = useMemo(() => {
+    const parentPath = streamPathParent(segmentPath);
+    const paths = (streamsQuery.data?.streams ?? [])
+      .map((stream) => stream.streamPath)
+      .filter((path) => isImmediateChild({ childPath: path, parentPath }));
+    if (!paths.includes(segmentPath)) paths.push(segmentPath);
+    return paths.toSorted((left, right) => left.localeCompare(right));
+  }, [segmentPath, streamsQuery.data?.streams]);
+
+  function navigateToSibling(path: StreamPathType) {
+    setOpen(false);
+    if (path === segmentPath && isCurrent) return;
+    void navigate({
+      to: "/projects/$projectSlug/streams/$",
+      params: {
+        projectSlug: streamBreadcrumb.projectSlug,
+        _splat: path,
+      },
+    });
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        className={`flex min-w-0 items-center gap-0.5 rounded-sm font-mono text-sm transition-colors ${
+          isCurrent ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+        }`}
+      >
+        <span className="min-w-0 truncate">{label}</span>
+        <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-50" />
+      </PopoverTrigger>
+      <PopoverContent align="start" sideOffset={8} className="w-64 gap-0 p-0">
+        <div className="max-h-64 overflow-y-auto p-1">
+          {siblingPaths.map((path) => (
+            <button
+              key={path}
+              type="button"
+              className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left font-mono text-xs outline-hidden select-none hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground"
+              onClick={() => navigateToSibling(path)}
+            >
+              <span className="min-w-0 truncate">/{getStreamSegmentLabel(path)}</span>
+              {path === segmentPath ? (
+                <CheckIcon aria-hidden="true" className="size-3.5 shrink-0" />
+              ) : null}
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 function StreamChildrenBreadcrumb({

@@ -5,12 +5,14 @@ import {
   normalizeRequestHostname,
   resolveProjectSlugFromHostname,
 } from "~/lib/project-host-routing.ts";
+import { isEventDocsHostname } from "~/lib/event-docs-host.ts";
 import { requireRequestContext } from "~/request-context.ts";
 
 export type RootAuthSnapshot = {
   authSession: PublicSessionResponse;
   iterateAuthIssuer: string | undefined;
   currentProjectHostSlug: string | null;
+  isEventDocsHost: boolean;
 };
 
 /**
@@ -35,6 +37,10 @@ export const fetchRootAuthSnapshot: () => Promise<RootAuthSnapshot> = createServ
     currentProjectHostSlug: resolveCurrentProjectHostSlug({
       baseUrl: startContext.config.baseUrl,
       projectHostnameBases: startContext.config.projectHostnameBases ?? [],
+      requestUrl: startContext.rawRequest?.url,
+    }),
+    isEventDocsHost: isEventDocsHostname({
+      appBaseUrl: startContext.config.baseUrl,
       requestUrl: startContext.rawRequest?.url,
     }),
   };

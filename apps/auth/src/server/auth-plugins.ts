@@ -10,6 +10,7 @@ import {
   ITERATE_IS_ADMIN_CLAIM,
   ITERATE_ORGANIZATIONS_CLAIM,
   ITERATE_ROLE_CLAIM,
+  ITERATE_SUPERADMIN_SCOPE,
   type IterateAuthAccessTokenOrganizationClaim,
   type IterateAuthOrganizationClaim,
   type IterateAuthProjectClaim,
@@ -29,16 +30,25 @@ import {
   resolveStoredProjectSelection,
 } from "./oauth-project-selection.ts";
 import { getOsMcpResourceBases, getOsResourceBases } from "./oauth-resources.ts";
+import { isSuperadminUser } from "./superadmin.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
 const isProduction = ["prd", "production", "prod"].includes(import.meta.env?.VITE_APP_STAGE);
 const isNonProd = !isProduction;
 
+// Custom claims go out on three surfaces, configured further down in
+// oauthProvider():
+// - access tokens (customAccessTokenClaims): what resource servers like OS
+//   authorize against — org/project claims plus the server-granted `scopes`
+//   claim (project:<id> entries, superadmin).
+// - ID tokens (customIdTokenClaims) and userinfo (customUserInfoClaims):
+//   login-time identity for the relying party — the namespaced
+//   https://iterate.com/claims/* values built here.
 function buildIterateTokenClaims(user: Record<string, unknown> | null | undefined) {
   const role = typeof user?.role === "string" ? user.role : null;
   return {
-    [ITERATE_IS_ADMIN_CLAIM]: role === "admin",
+    [ITERATE_IS_ADMIN_CLAIM]: isSuperadminUser({ role }),
     [ITERATE_ROLE_CLAIM]: role,
   };
 }
@@ -188,7 +198,14 @@ export function getAuthPlugins(env: Record<string, unknown>) {
       // rotated-token reuse as theft) is rare, short enough that org/project
       // claim changes propagate within half an hour.
       accessTokenExpiresIn: 30 * 60,
-      scopes: ["openid", "profile", "email", "offline_access", ITERATE_PROJECT_SELECTION_SCOPE],
+      scopes: [
+        "openid",
+        "profile",
+        "email",
+        "offline_access",
+        ITERATE_PROJECT_SELECTION_SCOPE,
+        ITERATE_SUPERADMIN_SCOPE,
+      ],
       validAudiences,
       allowDynamicClientRegistration: true,
       allowUnauthenticatedClientRegistration: true,
@@ -209,6 +226,7 @@ export function getAuthPlugins(env: Record<string, unknown>) {
           scopes: buildAugmentedScopeClaims({
             requestedScopes: scopes,
             projectIds: isProjectScopedToken ? projects.map((project) => project.id) : [],
+            superadmin: isSuperadminUser(user),
           }),
           [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: organizations,
           [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: projects,

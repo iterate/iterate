@@ -42,15 +42,15 @@ export async function handleCapnwebAdminCookieRequest(input: {
     secret: input.config.adminApiSecret!.exposeSecret(),
   });
   const url = new URL(input.request.url);
+  // SameSite=None is only valid together with Secure — browsers silently drop
+  // the cookie otherwise. On plain-http origins (local dev) fall back to Lax,
+  // which still covers same-origin fetches and WebSocket handshakes.
   const cookie = [
     `${CAPNWEB_ADMIN_AUTH_COOKIE}=${payload}`,
     "Path=/",
     "HttpOnly",
-    "SameSite=None",
-    url.protocol === "https:" ? "Secure" : "",
-  ]
-    .filter(Boolean)
-    .join("; ");
+    ...(url.protocol === "https:" ? ["SameSite=None", "Secure"] : ["SameSite=Lax"]),
+  ].join("; ");
   const headers = new Headers(corsHeaders);
   headers.set("set-cookie", cookie);
   return Response.json({ ok: true }, { headers });

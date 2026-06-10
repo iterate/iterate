@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { newStyleCloudflareApps } from "../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 import { cloudflarePreviewApps } from "./apps.ts";
 import {
@@ -96,7 +95,7 @@ const previewManagedDopplerProjects = [
   ...new Set(Object.values(cloudflarePreviewApps).map((app) => app.dopplerProject)),
 ].sort();
 
-const previewCloudflareCredentialsProject = newStyleCloudflareApps.os.dopplerProject;
+const previewCloudflareCredentialsProject = cloudflarePreviewApps.os.dopplerProject;
 
 export async function reconcileEnvironmentConfigLeaseResources(input: {
   checkCloudflareZone?: (input: {
