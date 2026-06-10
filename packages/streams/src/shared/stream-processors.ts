@@ -566,7 +566,7 @@ export function getEventInputSchema<
  *
  * The cast is local to this helper because Zod's object inference cannot keep
  * the generic literal `Type` and generic `PayloadSchema` relationship through
- * `z.strictObject(...)`. The runtime schema still exactly matches
+ * `z.looseObject(...)`. The runtime schema still exactly matches
  * `StreamEvent<Type, z.output<PayloadSchema>>`.
  */
 export function getEventSchema<
@@ -579,7 +579,10 @@ export function getEventSchema<
   StreamEvent<Type, z.output<PayloadSchema>>,
   StreamEvent<Type, z.input<PayloadSchema>>
 > {
-  return z.strictObject({
+  // Loose: served events may carry transport-added envelope keys (e.g. the OS
+  // API tags events with `streamPath`). Append input validation is a separate,
+  // strict schema, so nothing writes unknown keys into a stream.
+  return z.looseObject({
     type: z.literal(args.type),
     payload: args.payloadSchema,
     metadata: StreamEventMetadata.optional(),
