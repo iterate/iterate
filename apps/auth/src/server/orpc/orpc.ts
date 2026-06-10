@@ -10,11 +10,11 @@ import {
 } from "../db/queries/index.ts";
 import type { Variables } from "../utils/hono.ts";
 import type { CloudflareEnv } from "../env.ts";
-import { isSuperadminUser } from "../superadmin.ts";
+import { isPlatformAdminUser } from "../platform-admin.ts";
 
 // Two role namespaces appear below; don't mix them up:
 // - `session.user.role` is the system-wide better-auth admin-plugin role.
-//   "admin" there means superadmin (see superadmin.ts) and bypasses every
+//   "admin" there means platform admin and bypasses every
 //   membership check.
 // - `membership.role` is scoped to one organization and is one of
 //   "owner" | "admin" | "member".
@@ -37,9 +37,9 @@ export const protectedMiddleware = os.middleware(async ({ context, next }) => {
   });
 });
 
-export const superadminOnlyMiddleware = os.middleware(async ({ context, next }) => {
+export const platformAdminOnlyMiddleware = os.middleware(async ({ context, next }) => {
   const { session } = context;
-  if (!session || !isSuperadminUser(session.user)) {
+  if (!session || !isPlatformAdminUser(session.user)) {
     throw new ORPCError("UNAUTHORIZED", { message: "Not authorized" });
   }
   return next({
@@ -79,7 +79,7 @@ async function loadOrganization(params: {
     organizationId: organization.id,
     userId: params.user.id,
   });
-  if (!membership && !isSuperadminUser(params.user)) {
+  if (!membership && !isPlatformAdminUser(params.user)) {
     throw new ORPCError("FORBIDDEN", { message: "You do not have access to this organization" });
   }
 
@@ -91,7 +91,7 @@ function assertOrganizationAdmin(params: {
   membership: { role: string } | null;
 }) {
   const role = params.membership?.role;
-  if (!isSuperadminUser(params.user) && role !== "owner" && role !== "admin") {
+  if (!isPlatformAdminUser(params.user) && role !== "owner" && role !== "admin") {
     throw new ORPCError("FORBIDDEN", { message: "Admin role required" });
   }
 }
@@ -176,7 +176,7 @@ async function loadProject(params: {
     organizationId: organization.id,
     userId: params.user.id,
   });
-  if (!membership && !isSuperadminUser(params.user)) {
+  if (!membership && !isPlatformAdminUser(params.user)) {
     throw new ORPCError("FORBIDDEN", { message: "You do not have access to this project" });
   }
 

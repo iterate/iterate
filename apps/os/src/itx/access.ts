@@ -21,7 +21,8 @@ import { isProjectId } from "~/domains/projects/project-id.ts";
 
 /** The simplified access model: admin sees all, users see their projects. */
 export function accessForPrincipal(principal: Principal): ProjectAccess {
-  return principal.type === "admin" ? "all" : principal.projects.map((project) => project.id);
+  if (principal.type === "admin" || principal.isAdmin) return "all";
+  return principal.projects.map((project) => project.id);
 }
 
 /**

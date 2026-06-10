@@ -55,27 +55,32 @@ export async function runItxScript(input: {
    * /itx stream; callers whose loop lives on another stream (e.g. an agent
    * reading completions off its own stream) point this there. */
   record?: { namespace: string; path: string };
+  /** Use a caller-minted id (e.g. when the requested event already exists). */
+  executionId?: string;
+  /** Skip the execution-requested append (the caller already recorded one). */
+  recordRequested?: boolean;
   functionSource: string;
   vars?: Record<string, unknown>;
 }): Promise<ItxScriptOutcome> {
   const loader = input.env.LOADER;
   if (!loader) throw new Error("LOADER binding not available");
 
-  const executionId = crypto.randomUUID();
+  const executionId = input.executionId ?? crypto.randomUUID();
   const startedAtMs = Date.now();
   const record =
     input.record ??
     (input.projectId === null ? null : { namespace: input.projectId, path: ITX_AUDIT_STREAM_PATH });
 
-  await recordExecutionEvent(input.env, record, {
-    type: ITX_EVENT_TYPES.executionRequested,
-    payload: {
-      code: input.functionSource,
-      context: input.props.context,
-      executionId,
-      vars: input.vars ?? {},
-    },
-  });
+  if (input.recordRequested !== false)
+    await recordExecutionEvent(input.env, record, {
+      type: ITX_EVENT_TYPES.executionRequested,
+      payload: {
+        code: input.functionSource,
+        context: input.props.context,
+        executionId,
+        vars: input.vars ?? {},
+      },
+    });
 
   const exports = input.exports as unknown as Record<
     string,
