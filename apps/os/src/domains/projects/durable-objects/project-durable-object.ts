@@ -194,6 +194,14 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   }
 
   async createProject(input: CreateProjectInput): Promise<ProjectSummary> {
+    // The DO's name IS the project id; a mismatched input would wire the
+    // subscription and creation events to another project's stream.
+    if (input.projectId !== this.projectId) {
+      throw new Error(
+        `createProject(${input.projectId}) dialed on the DO for "${this.projectId}".`,
+      );
+    }
+
     // Both appends are idempotent, as is every downstream creation step —
     // calling createProject again is a no-op that returns the summary.
     await this.ensureProjectSubscription(input.projectId);
