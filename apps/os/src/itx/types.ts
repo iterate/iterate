@@ -519,10 +519,16 @@ export interface ItxStreams {
  * a NEW project-scoped handle. */
 export interface ItxProjects {
   get(projectIdOrSlug: string): Promise<Itx>;
-  list(input?: {
-    limit?: number;
-    offset?: number;
-  }): Promise<{ projects: { id: string; slug: string }[]; total: number }>;
+  list(input?: { limit?: number; offset?: number }): Promise<{
+    projects: {
+      id: string;
+      slug: string;
+      customHostname: string | null;
+      createdAt: string | null;
+      updatedAt: string | null;
+    }[];
+    total: number;
+  }>;
   /** Admin principals only. */
   create(input: { id?: string; slug: string }): Promise<{ id: string; slug: string }>;
   /** Admin principals only. */

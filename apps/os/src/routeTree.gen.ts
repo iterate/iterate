@@ -21,6 +21,7 @@ import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
 import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
+import { Route as AdminProjectsRouteImport } from './routes/admin/projects'
 import { Route as AppNewProjectRouteImport } from './routes/_app/new-project'
 import { Route as AppItxReplRouteImport } from './routes/_app/itx-repl'
 import { Route as EventDocsProcessorSlugSplatRouteImport } from './routes/$eventDocsProcessorSlug.$'
@@ -112,6 +113,11 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   id: '/api/$',
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminProjectsRoute = AdminProjectsRouteImport.update({
+  id: '/projects',
+  path: '/projects',
+  getParentRoute: () => AdminRoute,
 } as any)
 const AppNewProjectRoute = AppNewProjectRouteImport.update({
   id: '/new-project',
@@ -309,6 +315,7 @@ export interface FileRoutesByFullPath {
   '/$eventDocsProcessorSlug/$': typeof EventDocsProcessorSlugSplatRoute
   '/itx-repl': typeof AppItxReplRoute
   '/new-project': typeof AppNewProjectRoute
+  '/admin/projects': typeof AdminProjectsRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
@@ -350,6 +357,7 @@ export interface FileRoutesByTo {
   '/$eventDocsProcessorSlug/$': typeof EventDocsProcessorSlugSplatRoute
   '/itx-repl': typeof AppItxReplRoute
   '/new-project': typeof AppNewProjectRoute
+  '/admin/projects': typeof AdminProjectsRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
@@ -393,6 +401,7 @@ export interface FileRoutesById {
   '/$eventDocsProcessorSlug/$': typeof EventDocsProcessorSlugSplatRoute
   '/_app/itx-repl': typeof AppItxReplRoute
   '/_app/new-project': typeof AppNewProjectRoute
+  '/admin/projects': typeof AdminProjectsRoute
   '/api/$': typeof ApiSplatRoute
   '/api/orpc-ws': typeof ApiOrpcWsRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
@@ -440,6 +449,7 @@ export interface FileRouteTypes {
     | '/$eventDocsProcessorSlug/$'
     | '/itx-repl'
     | '/new-project'
+    | '/admin/projects'
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
@@ -481,6 +491,7 @@ export interface FileRouteTypes {
     | '/$eventDocsProcessorSlug/$'
     | '/itx-repl'
     | '/new-project'
+    | '/admin/projects'
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
@@ -523,6 +534,7 @@ export interface FileRouteTypes {
     | '/$eventDocsProcessorSlug/$'
     | '/_app/itx-repl'
     | '/_app/new-project'
+    | '/admin/projects'
     | '/api/$'
     | '/api/orpc-ws'
     | '/posthog-proxy/$'
@@ -658,6 +670,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/$'
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/admin/projects': {
+      id: '/admin/projects'
+      path: '/projects'
+      fullPath: '/admin/projects'
+      preLoaderRoute: typeof AdminProjectsRouteImport
+      parentRoute: typeof AdminRoute
     }
     '/_app/new-project': {
       id: '/_app/new-project'
@@ -1041,11 +1060,13 @@ const AdminStreamsRouteRouteWithChildren =
 
 interface AdminRouteChildren {
   AdminStreamsRouteRoute: typeof AdminStreamsRouteRouteWithChildren
+  AdminProjectsRoute: typeof AdminProjectsRoute
   AdminIndexRoute: typeof AdminIndexRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminStreamsRouteRoute: AdminStreamsRouteRouteWithChildren,
+  AdminProjectsRoute: AdminProjectsRoute,
   AdminIndexRoute: AdminIndexRoute,
 }
 
