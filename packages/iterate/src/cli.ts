@@ -1075,30 +1075,35 @@ const launcherProcedures = {
     get: os.meta({ default: true, description: "Show config, resolved target, and session status" })
     .handler(async () => {
       const configFile = readConfigFile();
-      const resolved = resolveConfig(process.cwd());
+      let resolved = resolveConfig(process.cwd());
+      
       const configs = configFile.configs || {};
+      const sessions = Object.fromEntries(
+        Object.entries(configs).map(([name, cfg]) => {
+          if (!cfg.session) return [name, null]
+          return [
+            name,
+            {
+              hasToken: Boolean(cfg.session?.token),
+              hasCookie: Boolean(cfg.session?.cookie),
+              expiresAt: cfg.session?.expiresAt,
+              expired: cfg.session?.expiresAt
+                ? new Date(cfg.session.expiresAt) < new Date()
+                : false,
+            },
+          ]
+        }),
+      )
+
+      if (resolved instanceof Error) {
+        return {configPath: CONFIG_PATH, error: resolved.message }
+      }
+
       return {
         configPath: CONFIG_PATH,
-        configFile,
-        resolved: resolved instanceof Error ? { error: resolved.message } : resolved,
-        resolvedAuthBaseUrl:
-          resolved instanceof Error ? undefined : resolveAuthBaseUrl(resolved.config),
-        sessions: Object.fromEntries(
-          Object.entries(configs).map(([name, cfg]) => {
-            if (!cfg.session) return [name, null]
-            return [
-              name,
-              {
-                hasToken: Boolean(cfg.session?.token),
-                hasCookie: Boolean(cfg.session?.cookie),
-                expiresAt: cfg.session?.expiresAt,
-                expired: cfg.session?.expiresAt
-                  ? new Date(cfg.session.expiresAt) < new Date()
-                  : false,
-              },
-            ]
-          }),
-        ),
+        config: resolved.name,
+        ...resolved.config,
+        session: sessions[resolved.name],
       };
     }),
     list: os.meta({ description: "List all named configs" }).handler(async () => {
