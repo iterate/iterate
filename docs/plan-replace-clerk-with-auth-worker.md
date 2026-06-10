@@ -291,7 +291,7 @@ fields. Fill from Principal instead.
 
 **Files:**
 
-- `apps/os/scripts/claude-mcp.ts` — update URL to the canonical MCP endpoint
+- `packages/iterate/src/os/claude-mcp.ts` — update URL to the canonical MCP endpoint
 - MCP settings page — update instructions and endpoint URL display
 
 ---

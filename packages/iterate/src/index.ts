@@ -1,1 +1,4 @@
-export { getCli, runCli } from "./cli.ts";
+export async function runCli() {
+  const cli = await import("./cli.ts");
+  await cli.runCli();
+}

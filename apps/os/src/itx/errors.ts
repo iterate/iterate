@@ -79,12 +79,11 @@ export class ItxError extends Error {
 
 /**
  * Duck-typed detection (works on both ends of any RPC boundary): an ItxError
- * is anything carrying one of the five codes as `code`. Deliberately NOT
- * gated on `error.name` — capnweb's receiver rebuilds a plain `Error` and a
- * custom name does not survive the wire (verified against capnweb 0.8.0's
- * deserializer and a live deployment; a name gate rejects every real
- * crossing). Foreign `code` strings (ENOENT, SQLITE_*) are outside the
- * five-code set, so collisions don't arise. Returns the code, or undefined
+ * is any object carrying one of the five codes. `name` is deliberately NOT
+ * consulted — capnweb drops it in transit (see {@link ItxError}), so a name
+ * check would reject every error that crossed a capnweb session. The closed
+ * five-code set is what keeps this from false-positiving on other `code`-
+ * bearing errors (Node's ECONNREFUSED etc). Returns the code, or undefined
  * for everything else — including socket/connection failures, which is what
  * makes "retry only when code-less or INTERNAL" predicates work.
  */

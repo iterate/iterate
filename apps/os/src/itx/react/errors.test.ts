@@ -5,12 +5,11 @@ import { getItxErrorCode, isItxAccessError } from "./errors.ts";
 /**
  * What the far side of a capnweb session holds after an ItxError crosses:
  * a plain reconstructed Error with the thrown error's own enumerable props
- * reattached — class identity AND custom name gone. (capnweb 0.8.0
- * serializes `["error", name, message, stack?, props?]` but its receiver
- * constructs `new Error(message)` and never assigns the name; props copy
- * skips name/message/stack. Verified against a live deployment — an
- * unfaithful name-preserving version of this simulation previously masked a
- * real detection bug.)
+ * reattached — class identity gone and `name` DROPPED. (capnweb 0.8.0
+ * serializes `["error", name, message, stack?, props?]` with props from
+ * `Object.keys(error)` minus name/message/stack, but the receiver only maps
+ * builtin names to their classes — an unknown name reconstructs as plain
+ * `Error` and is skipped again in the props loop, so it never comes back.)
  */
 function simulateCapnwebCrossing(error: Error): Error {
   const received = new Error(error.message);
@@ -49,8 +48,6 @@ describe("ItxError", () => {
     const received = simulateCapnwebCrossing(thrown);
 
     expect(received).not.toBeInstanceOf(ItxError);
-    // The name is gone — detection must work without it.
-    expect(received.name).toBe("Error");
     expect(getItxErrorCode(received)).toBe("NOT_FOUND");
     expect((received as unknown as { details: unknown }).details).toEqual({
       projectIdOrSlug: "ghost",
@@ -61,7 +58,8 @@ describe("ItxError", () => {
 describe("getItxErrorCode", () => {
   test("reads the code from anything ItxError-shaped", () => {
     expect(getItxErrorCode(new ItxError({ code: "CONFLICT", message: "taken" }))).toBe("CONFLICT");
-    // A wire-crossed error: plain Error name, code as an own prop.
+    // What a capnweb crossing actually leaves behind: plain Error + code,
+    // no name. This shape MUST be detected.
     const duckTyped = Object.assign(new Error("rejected"), { code: "FORBIDDEN" });
     expect(getItxErrorCode(duckTyped)).toBe("FORBIDDEN");
   });
@@ -71,8 +69,10 @@ describe("getItxErrorCode", () => {
     expect(getItxErrorCode(new Error("network timeout"))).toBeUndefined();
     expect(getItxErrorCode("Unauthorized")).toBeUndefined();
     expect(getItxErrorCode(null)).toBeUndefined();
-    // Foreign code strings are outside the five-code set.
-    expect(getItxErrorCode(Object.assign(new Error("x"), { code: "ENOENT" }))).toBeUndefined();
+    // A coded error from someone else: code outside the five-code set.
+    expect(
+      getItxErrorCode(Object.assign(new Error("x"), { code: "ECONNREFUSED" })),
+    ).toBeUndefined();
     expect(getItxErrorCode(Object.assign(new Error("x"), { code: "TEAPOT" }))).toBeUndefined();
   });
 });

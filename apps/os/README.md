@@ -95,7 +95,8 @@ when the flow needs public callback URLs, project hostnames, browser cookies on
 the tunnel origin, or other tunnel-backed behavior.
 
 `pnpm cli` uses `scripts/cli.ts`: if already inside `doppler run`, it preserves
-that config; otherwise it enters Doppler using the local `apps/os` setup. Use
+that config; otherwise it enters Doppler using the local `apps/os` setup. Local
+CLI commands are loaded from `packages/iterate/src/os/router.ts`. Use
 `doppler run --config <config> -- <command>` when you want preview/prd app
 config explicitly.
 

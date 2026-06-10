@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTestProject } from "../test-support/create-test-project.ts";
@@ -11,6 +13,22 @@ const project = await createTestProject({
   slugPrefix: "tui-test",
 });
 
+// `iterate chat` reads the OS base URL from the iterate config file, so point
+// XDG_CONFIG_HOME at a throwaway config naming the disposable project's URL.
+const xdgConfigHome = mkdtempSync(join(tmpdir(), "iterate-tui-test-xdg-"));
+mkdirSync(join(xdgConfigHome, "iterate"), { recursive: true });
+writeFileSync(
+  join(xdgConfigHome, "iterate", "config.json"),
+  `${JSON.stringify(
+    {
+      configs: { "tui-test": { osBaseUrl: project.baseUrl } },
+      default: "tui-test",
+    },
+    null,
+    2,
+  )}\n`,
+);
+
 try {
   console.info(`[tui-test] Created disposable project ${project.project.id}`);
   await runTuiTest({
@@ -18,9 +36,11 @@ try {
       ...process.env,
       APP_CONFIG_BASE_URL: project.baseUrl,
       OS_TUI_TEST_PROJECT_SLUG_OR_ID: project.project.id,
+      XDG_CONFIG_HOME: xdgConfigHome,
     },
   });
 } finally {
+  rmSync(xdgConfigHome, { recursive: true, force: true });
   await project[Symbol.asyncDispose]();
   console.info(`[tui-test] Deleted disposable project ${project.project.id}`);
 }
