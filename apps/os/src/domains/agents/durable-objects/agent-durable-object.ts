@@ -16,8 +16,10 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
-import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
+import { typeid } from "@iterate-com/shared/typeid";
 import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
+import type { ContextDO } from "~/itx/context-do.ts";
+import type { CapInvoke, SerializableCapTarget } from "~/itx/protocol.ts";
 import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
 import { AgentChatProcessor } from "~/domains/agents/stream-processors/agent-chat/implementation.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
@@ -41,15 +43,11 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/new-stream-runtime.ts";
 import { parseConfig } from "~/config.ts";
-import { createCodemodeSession } from "~/domains/codemode/codemode-session-rpc.ts";
-import { createExampleCapabilityProviders } from "~/domains/codemode/example-provider-registrations.ts";
-import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import {
   type RepoDurableObject,
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
-import { createGmailProviderRegistration } from "~/domains/google/gmail-provider-registration.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
 import {
   type WorkspaceDurableObject,
@@ -89,7 +87,7 @@ export type AgentDurableObjectEnv = {
   AGENT: DurableObjectNamespace<AgentDurableObject>;
   AI: CloudflareAiBinding;
   APP_CONFIG: string;
-  CODEMODE_SESSION: DurableObjectNamespace<CodemodeSession>;
+  ITX_CONTEXT: DurableObjectNamespace<ContextDO>;
   DO_CATALOG: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
@@ -183,8 +181,13 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       new AgentHostProcessor({
         ...deps,
         agentNamespace: this.env.AGENT,
-        codemodeSessionNamespace: this.env.CODEMODE_SESSION,
+        getItxContextId: async () => {
+          const params = await this.ensureStartedOrInitializeFromRuntimeName();
+          return await this.ensureItxContext(params);
+        },
         getStreamContext: () => this.subscribedStreamContext(AGENT_HOST_PROCESSOR_SLUG),
+        runnerEnv: this.env as unknown as Env,
+        workerExports: this.ctx.exports,
       }),
   );
 
@@ -211,7 +214,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
           agentLlmProcessorSlug(llmProvider),
           AGENT_HOST_PROCESSOR_SLUG,
         ]);
-        await this.ensureCodemodeSession(params);
+        await this.ensureItxContext(params);
       }
       // Deliberately no catch-up wait here: wake hooks run inside
       // `blockConcurrencyWhile`, and the processors are co-hosted on this DO,
@@ -457,14 +460,41 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     }
   }
 
-  private async ensureCodemodeSession(params: AgentDurableObjectStructuredName) {
-    await createCodemodeSession({
-      events: [],
-      namespace: this.env.CODEMODE_SESSION,
+  /** The agent's itx child context: its tools live on it as caps, scripts
+   * run against it, misses delegate up to the project context. */
+  async ensureItxContext(params: AgentDurableObjectStructuredName): Promise<string> {
+    const existing = await this.ctx.storage.get<string>("itxContextId");
+    if (existing) return existing;
+
+    const config = this.getAppConfig();
+    const contextId = typeid({ env: { TYPEID_PREFIX: config.typeIdPrefix }, prefix: "ctx" });
+    const contextStub = this.env.ITX_CONTEXT.getByName(contextId);
+    await contextStub.initialize({
+      id: contextId,
+      name: `agent:${params.agentPath}`,
+      parent: params.projectId,
       projectId: params.projectId,
-      providers: this.createCodemodeToolProviders(params),
-      streamPath: params.agentPath,
     });
+    const caps = this.agentContextCaps(params);
+    for (const cap of caps) {
+      await contextStub.itxDefine({
+        invoke: cap.invoke,
+        meta: { instructions: cap.instructions },
+        name: cap.name,
+        target: cap.target,
+      });
+    }
+    // The LLM learns its tools from stream history: one rendered event per
+    // cap (the agent processor rewrites these into the visible context).
+    await this.streamsEntrypoint(params.agentPath).appendBatch({
+      events: caps.map((cap) => ({
+        type: "events.iterate.com/agent/capability-noted",
+        idempotencyKey: `agent-capability-noted:${cap.name}`,
+        payload: { instructions: cap.instructions, name: cap.name },
+      })),
+    });
+    await this.ctx.storage.put("itxContextId", contextId);
+    return contextId;
   }
 
   private async ensureAgentWorkspace(params: AgentDurableObjectStructuredName) {
@@ -664,62 +694,58 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     });
   }
 
-  private createAgentChatToolProvider(): ToolProviderRegistration {
-    return {
-      path: ["chat"],
-      instructions:
-        "Use ctx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
-      invocation: {
-        kind: "rpc",
-        callable: {
-          type: "workers-rpc",
-          via: {
-            type: "env-binding",
-            bindingType: "durable-object-namespace",
-            bindingName: "AGENT",
-            durableObject: {
-              name: this.name,
-            },
-          },
-          rpcMethod: "executeCodemodeFunctionCall",
-          argsMode: "object",
-        },
-      },
-    };
-  }
-
-  private createAgentDebugToolProvider(): ToolProviderRegistration {
-    return {
-      path: ["debug"],
-      instructions:
-        "Use ctx.debug() to return OS debug information about the current agent stream.",
-      invocation: {
-        kind: "rpc",
-        callable: {
-          type: "workers-rpc",
-          via: {
-            type: "env-binding",
-            bindingType: "durable-object-namespace",
-            bindingName: "AGENT",
-            durableObject: {
-              name: this.name,
-            },
-          },
-          rpcMethod: "executeCodemodeFunctionCall",
-          argsMode: "object",
-        },
-      },
-    };
-  }
-
-  private createCodemodeToolProviders(
-    params: AgentDurableObjectStructuredName,
-  ): ToolProviderRegistration[] {
+  private agentContextCaps(params: AgentDurableObjectStructuredName): Array<{
+    name: string;
+    instructions: string;
+    invoke: CapInvoke;
+    target: SerializableCapTarget;
+  }> {
+    const agentTool = (tool: "chat" | "debug"): SerializableCapTarget => ({
+      entrypoint: "AgentToolsCapability",
+      props: { agentPath: params.agentPath, tool },
+      type: "rpc",
+      worker: { type: "loopback" },
+    });
     return [
-      ...(isSlackAgentPath(params.agentPath) ? [] : [this.createAgentChatToolProvider()]),
-      this.createAgentDebugToolProvider(),
-      ...createExampleCapabilityProviders({ projectId: params.projectId }),
-      createGmailProviderRegistration({ projectId: params.projectId }),
+      ...(isSlackAgentPath(params.agentPath)
+        ? []
+        : [
+            {
+              instructions:
+                "Use ctx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
+              invoke: "path-call" as const,
+              name: "chat",
+              target: agentTool("chat"),
+            },
+          ]),
+      {
+        instructions:
+          "Use ctx.debug() to return OS debug information about the current agent stream.",
+        invoke: "path-call" as const,
+        name: "debug",
+        target: agentTool("debug"),
+      },
+      {
+        instructions:
+          "Workers AI. ctx.ai.run(model, input) — e.g. ctx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
+        invoke: "members" as const,
+        name: "ai",
+        target: { type: "rpc", worker: { binding: "AI", type: "binding" } },
+      },
+      {
+        instructions:
+          "Project-bound OS API. Call ctx.os.listProcedures() for the TypeScript surface, then ctx.os.<path.to.procedure>({ …input }).",
+        invoke: "path-call" as const,
+        name: "os",
+        target: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
+      },
+      {
+        instructions:
+          "Gmail for this project's connected Google account. ctx.gmail.request({ path, method?, query?, body? }).",
+        invoke: "members" as const,
+        name: "gmail",
+        target: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
+      },
     ];
   }
 
