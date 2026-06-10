@@ -225,7 +225,7 @@ export class WorkerHost {
   /**
    * Clone, build, validate-load, and persist a fresh checkout. Builds are
    * SERIALIZED: every caller (background rebuilds, the creation step,
-   * callWorkerFunction) shares one checkout directory in the workspace, so
+   * itxProjectWorkerCall) shares one checkout directory in the workspace, so
    * overlapping clone/read cycles would corrupt each other.
    */
   buildFresh(project: WorkerProject): Promise<WorkerCheckout> {

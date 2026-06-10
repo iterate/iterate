@@ -5,6 +5,7 @@ import {
   type WorkspaceDurableObject,
   type WorkspaceStructuredName,
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
+import { isChildContextId } from "~/itx/protocol.ts";
 
 type WorkspaceCapabilityEnv = {
   WORKSPACE?: DurableObjectNamespace<WorkspaceDurableObject>;
@@ -12,8 +13,22 @@ type WorkspaceCapabilityEnv = {
 
 export type WorkspaceCapabilityProps = {
   projectId: string;
-  workspaceId: string;
+  /** Explicit workspace; absent means derive from `context` (see below). */
+  workspaceId?: string;
+  /** Attribution, injected by the registry at dial time — and the workspace
+   * scope: project contexts share one workspace ("itx"), child contexts each
+   * get their own (`itx:ctx_…`), so an agent session's repo clones and files
+   * are isolated per context. Chain delegation carries the ORIGINATING
+   * context, which is what makes this derivation correct for caps inherited
+   * from platform:project. */
+  context?: string;
+  cap?: string;
 };
+
+/** Project contexts share one workspace; child contexts are isolated. */
+export function itxWorkspaceId(contextId: string): string {
+  return isChildContextId(contextId) ? `itx:${contextId}` : "itx";
+}
 
 type WorkspaceRpcStub = {
   cloudflareShellGit(): Promise<Record<string, (...args: unknown[]) => Promise<unknown>>>;
@@ -75,9 +90,14 @@ export class WorkspaceCapability extends WorkerEntrypoint<
   }
 
   private workspaceName(): WorkspaceStructuredName {
+    const props = this.ctx.props;
+    const workspaceId = props.workspaceId ?? (props.context ? itxWorkspaceId(props.context) : null);
+    if (!workspaceId) {
+      throw new Error("WorkspaceCapability needs props.workspaceId or props.context.");
+    }
     return {
-      projectId: this.ctx.props.projectId,
-      workspaceId: this.ctx.props.workspaceId,
+      projectId: props.projectId,
+      workspaceId,
     };
   }
 

@@ -177,10 +177,22 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
       target: { entrypoint: "ItxEntrypoint", type: "rpc", worker: { type: "loopback" } },
     }),
   ).rejects.toThrow(/not dialable/);
+  // Durable Object refs name arbitrary instances across ALL projects, so the
+  // namespace allowlist defaults to empty — config has to opt in.
+  await expect(
+    projectItx.caps.define({
+      name: "sneakyDo",
+      target: {
+        type: "rpc",
+        worker: { binding: "PROJECT", name: "someone-elses-project", type: "durable-object" },
+      },
+    }),
+  ).rejects.toThrow(/not dialable/);
 
-  // describe() reports the new kinds and lifts instructions.
-  const caps = await projectItx.caps.describe();
-  expect(caps).toMatchObject([
+  // describe() reports the new kinds and lifts instructions (own rows only —
+  // inherited platform defaults carry their code context as owner).
+  const caps = (await projectItx.caps.describe()) as Array<{ owner: string }>;
+  expect(caps.filter((cap) => cap.owner === project.id)).toMatchObject([
     { instructions: "Workers AI. Use like the env.AI binding.", kind: "rpc", name: "ai" },
     { invoke: "path-call", kind: "rpc", name: "aiWrapped" },
   ]);
@@ -410,6 +422,12 @@ test("platform defaults arrive from the platform:project code context, and own r
     kind: "rpc",
     owner: "platform:project",
   });
+  // The whole migrated kernel arrives the same way (§8: cap #0 disappears).
+  for (const name of ["repos", "workspace", "worker"]) {
+    expect(before.caps.find((cap) => cap.name === name)).toMatchObject({
+      owner: "platform:project",
+    });
+  }
 
   // Defaults cannot be revoked — succeeding would lie (the default keeps
   // serving). Shadowing is the override mechanism.
