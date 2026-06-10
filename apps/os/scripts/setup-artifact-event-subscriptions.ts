@@ -203,9 +203,9 @@ function resolveOptions(input: z.infer<typeof SetupArtifactEventSubscriptionsInp
 }
 
 function inferWorkerName() {
+  // Mirrors initAlchemy's `workerName = slugify(`${slug}-${stage}`)`, e.g.
+  // prd -> os-prd, preview_3 -> os-preview-3, dev_jonas -> os-dev-jonas.
   const stage = process.env.ALCHEMY_STAGE?.trim();
-  if (stage === "prd") return "os-prd";
-  if (stage === "preview") return "os-preview-1";
   if (stage) return slugify(`os-${stage}`);
 
   const baseUrl = process.env.APP_CONFIG_BASE_URL?.trim();
