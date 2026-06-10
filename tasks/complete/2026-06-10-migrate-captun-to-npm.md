@@ -1,0 +1,21 @@
+---
+status: done
+size: small
+---
+
+# Migrate captun to the published npm package
+
+apps/os pinned `captun` to `https://pkg.pr.new/captun@14` — a pre-merge snapshot of iterate/captun#14 from May 22. That PR merged and captun 0.0.3 was published to npm, with API renames in between. Move to the published package so future captun work (reconnect-on-drop, WebSocket passthrough for the dev-tunnel plan in `tasks/switch-dev-tunnels-to-captun.md`) diffs against a real release instead of a stale PR build.
+
+- [x] Replace `pkg.pr.new/captun@14` with `captun@^0.0.3` _in apps/os/package.json_
+- [x] `acceptCaptunTunnel` → `acceptFetcherCapability`, returns `{response, fetcher}` instead of `{response, tunnel}` _one callsite in project-durable-object.ts_
+- [x] `CAPTUN_SECRET` → `CAPTUN_TOKEN` worker env key _in worker.ts handleCaptunTunnelFetch; 0.0.3 throws a descriptive error on the old key_
+- [x] Client options: `url`/`headers` → `gateway`/`name`/`token` (browser WebSockets can't set headers, so captun moved auth to a `captun-token` query param) _e2e create-test-project.ts helpers + benchmark script_
+- [x] Project DO egress-intercept endpoint accepts the `captun-token` query param as a bearer fallback _project-durable-object.ts acceptProjectEgressInterceptTunnel_
+- [x] Send the `ready({url})` RPC after accepting a tunnel — 0.0.3 clients block on it with a 5s timeout _project-durable-object.ts; the captun gateway worker does this itself, but our custom DO accept path didn't_
+
+## Implementation notes
+
+- Verified: apps/os typecheck, repo lint, and `pnpm test:project-ingress` (6/6, covers the egress-intercept tunnel including the 401 auth case).
+- Not verified locally: the e2e helpers (`createPublicTunnel`, `createProjectEgressInterceptTunnel`) need a deployed environment — CI e2e or a benchmark-script run against a dev/preview env is the remaining check.
+- `CONNECT_TOKEN_QUERY_PARAM` exists in 0.0.3 internals but isn't re-exported from the package root (current captun main exports it), so `"captun-token"` is inlined with a comment — a 0.0.4 release would let us import the constant.
