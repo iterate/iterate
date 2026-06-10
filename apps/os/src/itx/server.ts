@@ -22,6 +22,7 @@ import { env } from "cloudflare:workers";
 import { resolveItx } from "./entrypoint.ts";
 import type { Itx } from "./handle.ts";
 import { accessForPrincipal, requireWorkerExports, resolveAccessibleContextId } from "./access.ts";
+import { ItxError } from "./errors.ts";
 import { requireRequestContext, type RequestContext } from "~/request-context.ts";
 
 /**
@@ -43,7 +44,14 @@ export async function getServerItx(
 ): Promise<Itx> {
   const context = requireRequestContext(requestContext);
   if (!context.principal) {
-    throw new Error(`Project ${projectSlugOrId} not found. (Unauthenticated request.)`);
+    // Byte-identical to the missing/forbidden message below: an
+    // unauthenticated render must not be distinguishable from a denied one
+    // (no probing), matching the kernel's masking posture (DECISIONS D18).
+    throw new ItxError({
+      code: "NOT_FOUND",
+      details: { projectIdOrSlug: projectSlugOrId },
+      message: `Project ${projectSlugOrId} not found.`,
+    });
   }
 
   const resolved = await resolveAccessibleContextId({
@@ -53,7 +61,11 @@ export async function getServerItx(
     idOrSlug: projectSlugOrId,
   });
   if (!resolved) {
-    throw new Error(`Project ${projectSlugOrId} not found.`);
+    throw new ItxError({
+      code: "NOT_FOUND",
+      details: { projectIdOrSlug: projectSlugOrId },
+      message: `Project ${projectSlugOrId} not found.`,
+    });
   }
 
   return await resolveItx({
