@@ -162,7 +162,7 @@ it is not itself a codemode Tool Provider.
 Inbound MCP requests authenticate two ways, tried in order:
 
 1. The platform admin API secret — full access to every project in the
-   deployment (`superadmin` scope).
+   deployment (`authType: "admin_api_secret"`).
 2. An Iterate Auth OAuth bearer token — project access is the intersection of
    the token's `projects` claim and its `project:<id>` scope entries.
 

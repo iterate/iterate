@@ -141,7 +141,7 @@ semaphore now implements the same static debug response in its local router.
 Verified the deployed PR preview (`os.iterate-preview-3.com`) with a fully
 headless browser, no human in the loop (procedure: `preview-agent-browser-smoke.md`):
 
-- Signed in as the bootstrap superadmin, created a project via **`/new-project`**
+- Signed in as the bootstrap admin, created a project via **`/new-project`**
   (the renamed route — the original bug), and drove an agent conversation
   through the browser UI: typed a question into the agent's message box, and the
   agent (DO + OpenAI) replied correctly. Confirmed both via the UI send and via

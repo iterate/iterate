@@ -1,11 +1,11 @@
 import { ORPCError } from "@orpc/server";
-import { os, superadminOnlyMiddleware } from "../orpc.ts";
+import { os, platformAdminOnlyMiddleware } from "../orpc.ts";
 import { parseStringArray } from "../../db/helpers.ts";
 import { listSystemOAuthClients } from "../../db/queries/index.ts";
 import { auth } from "../../auth.ts";
 
-const superadminCreateOAuthClient = os.superadmin.oauth.createClient
-  .use(superadminOnlyMiddleware)
+const adminCreateOAuthClient = os.admin.oauth.createClient
+  .use(platformAdminOnlyMiddleware)
   .handler(async ({ input }) => {
     const client = await auth.api.adminCreateOAuthClient({
       body: {
@@ -27,8 +27,8 @@ const superadminCreateOAuthClient = os.superadmin.oauth.createClient
     };
   });
 
-const superadminListOAuthClients = os.superadmin.oauth.listClients
-  .use(superadminOnlyMiddleware)
+const adminListOAuthClients = os.admin.oauth.listClients
+  .use(platformAdminOnlyMiddleware)
   .handler(async ({ context }) => {
     const clients = await listSystemOAuthClients(context.db);
 
@@ -39,9 +39,9 @@ const superadminListOAuthClients = os.superadmin.oauth.listClients
     }));
   });
 
-export const superadmin = os.superadmin.router({
+export const admin = os.admin.router({
   oauth: {
-    createClient: superadminCreateOAuthClient,
-    listClients: superadminListOAuthClients,
+    createClient: adminCreateOAuthClient,
+    listClients: adminListOAuthClients,
   },
 });

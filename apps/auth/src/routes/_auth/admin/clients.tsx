@@ -11,12 +11,12 @@ import type { OAuthClientRecord } from "@iterate-com/auth-contract";
 import { orpc } from "../../../utils/query.tsx";
 import { InfoRow } from "../../../utils/info-row.tsx";
 
-export const Route = createFileRoute("/_auth/superadmin/clients")({
+export const Route = createFileRoute("/_auth/admin/clients")({
   component: ClientsPage,
 });
 
 function ClientsPage() {
-  const listClientsQuery = useQuery(orpc.superadmin.oauth.listClients.queryOptions());
+  const listClientsQuery = useQuery(orpc.admin.oauth.listClients.queryOptions());
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
@@ -53,12 +53,12 @@ function CreateClientForm() {
   const [redirectURIs, setRedirectURIs] = useState("");
 
   const createClientMutation = useMutation(
-    orpc.superadmin.oauth.createClient.mutationOptions({
+    orpc.admin.oauth.createClient.mutationOptions({
       onSuccess: () => {
         toast.success("OAuth client created");
         setClientName("");
         setRedirectURIs("");
-        queryClient.invalidateQueries({ queryKey: orpc.superadmin.oauth.listClients.key() });
+        queryClient.invalidateQueries({ queryKey: orpc.admin.oauth.listClients.key() });
       },
     }),
   );

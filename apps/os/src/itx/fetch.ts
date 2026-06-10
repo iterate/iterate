@@ -136,7 +136,8 @@ async function authenticateItxRequest(input: {
 
 /** The simplified access model: admin sees all, users see their projects. */
 function accessForPrincipal(principal: Principal): ProjectAccess {
-  return principal.type === "admin" ? "all" : principal.projects.map((project) => project.id);
+  if (principal.type === "admin" || principal.isAdmin) return "all";
+  return principal.projects.map((project) => project.id);
 }
 
 /**
