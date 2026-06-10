@@ -1,8 +1,10 @@
-// Implements the "cloudflare-ai" processor as a class-based StreamProcessor.
+// Implements the "cloudflare-ai" processor.
 //
-// Migrated from packages/shared/src/stream-processors/cloudflare-ai/implementation.ts.
-// All appended events keep their legacy types, payload shapes, and
-// idempotency-key derivations (`cloudflare-ai/<key>@<sourceOffset>`).
+// This file is a deliberate SIBLING of ../openai-ws/implementation.ts: same
+// method names, same control flow, same comments where the logic matches —
+// the two differ only in transport (one AI.run call vs a Responses WebSocket).
+// Stateless logic they share lives in ../llm-request-helpers.ts. When you fix
+// something here, check whether the sibling needs the same fix.
 //
 // The LLM request runs as keep-alive-backed background work
 // (`runInBackground`): the serialized batch queue stays free while the
@@ -21,7 +23,12 @@ import {
   type StreamEvent,
 } from "@iterate-com/streams/shared/stream-processors";
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
-import { reduceAgentEvents } from "../agent/contract.ts";
+import {
+  buildAgentLlmRequestBody,
+  findDanglingLlmRequestIds,
+  isAgentLlmRequestStillCurrent,
+  parseLlmRequestRequestedEventAt,
+} from "../llm-request-helpers.ts";
 import { CloudflareAiProcessorContract, type CloudflareAiState } from "./contract.ts";
 
 export { CloudflareAiProcessorContract } from "./contract.ts";
@@ -81,11 +88,11 @@ export class CloudflareAiProcessor extends StreamProcessor<
    * Requests this instance has taken responsibility for executing. The DO
    * instance is the execution scope: a fresh instance after a crash/wake
    * starts empty, which is what lets `#reconcileDanglingStartedRequests`
-   * recognize requests a previous incarnation abandoned. Ids stay in the set
-   * after a request reaches its terminal appends (re-execution is never
-   * needed then, even while the completed event is still being delivered
-   * back); they are removed only when execution fails before the terminal
-   * appends landed, so a later batch's reconciliation can retry.
+   * recognize requests a previous incarnation abandoned. Entries are removed
+   * when execution fails before the terminal appends landed (so a later
+   * connected event can retry) and once the request's completed fact has been
+   * reduced back (re-execution is impossible then — the completed-skip is
+   * durable), which keeps the set bounded on long-lived instances.
    */
   #executedLlmRequestIds = new Set<number>();
 
@@ -124,7 +131,12 @@ export class CloudflareAiProcessor extends StreamProcessor<
     const { event, state } = args;
     switch (event.type) {
       case "events.iterate.com/cloudflare-ai/llm-request-started":
+        return;
       case "events.iterate.com/cloudflare-ai/llm-request-completed":
+        // The completed fact is durable; this instance can never need to
+        // (re-)execute this request again, so drop the claim — this is what
+        // keeps the executed set bounded.
+        this.#executedLlmRequestIds.delete(event.payload.llmRequestId);
         return;
       case "events.iterate.com/agent/llm-request-requested":
         this.#startLlmRequest({ event, state, runInBackground: args.runInBackground });
@@ -190,12 +202,10 @@ export class CloudflareAiProcessor extends StreamProcessor<
     sourceEvent: { offset: number };
     runInBackground: (work: () => Promise<unknown>) => void;
   }) {
-    const danglingIds = Object.entries(args.state.requests)
-      .filter(
-        ([id, request]) =>
-          request.status === "started" && !this.#executedLlmRequestIds.has(Number(id)),
-      )
-      .map(([id]) => Number(id));
+    const danglingIds = findDanglingLlmRequestIds({
+      requests: args.state.requests,
+      executedLlmRequestIds: this.#executedLlmRequestIds,
+    });
     if (danglingIds.length === 0) return;
 
     // Claim synchronously, before the first await: one batch routinely
@@ -211,16 +221,8 @@ export class CloudflareAiProcessor extends StreamProcessor<
     try {
       const events = await this.deps.readStreamEvents();
       for (const llmRequestId of danglingIds) {
-        const requestedEvent = events.find(
-          (event) =>
-            event.offset === llmRequestId &&
-            event.type === "events.iterate.com/agent/llm-request-requested",
-        );
-        const reduction =
-          requestedEvent === undefined
-            ? undefined
-            : this.reduceRawEvent({ event: requestedEvent, state: args.state });
-        if (reduction?.event.type !== "events.iterate.com/agent/llm-request-requested") {
+        const requestedEvent = parseLlmRequestRequestedEventAt({ events, llmRequestId });
+        if (requestedEvent === null) {
           // The entry cannot be tied back to a requested event, so it is
           // unrecoverable; the claim stays so it stops triggering history reads.
           heldClaims.delete(llmRequestId);
@@ -239,7 +241,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
         // Handed to the executor: its own failure handling owns the claim now.
         heldClaims.delete(llmRequestId);
         this.#startLlmRequest({
-          event: reduction.event,
+          event: requestedEvent,
           state: args.state,
           runInBackground: args.runInBackground,
         });
@@ -301,18 +303,20 @@ export class CloudflareAiProcessor extends StreamProcessor<
       payload: {
         llmRequestId,
         model: args.event.payload.model,
-        body: args.event.payload.body,
         runOpts: args.event.payload.runOpts,
       },
     });
 
+    // Request-by-reference: the requested event carries no body; rebuild the
+    // chat request from committed history up to the request's own offset.
+    const body = buildAgentLlmRequestBody({
+      events: await this.deps.readStreamEvents(),
+      llmRequestId,
+    });
+
     let raw: unknown;
     try {
-      raw = await ai.run(
-        args.event.payload.model,
-        args.event.payload.body,
-        args.event.payload.runOpts,
-      );
+      raw = await ai.run(args.event.payload.model, body, args.event.payload.runOpts);
     } catch (error) {
       const durationMs = Date.now() - startedAt;
       const failure = {
@@ -485,12 +489,10 @@ export class CloudflareAiProcessor extends StreamProcessor<
   }
 
   async #isAgentLlmRequestStillCurrent(args: { llmRequestId: number }) {
-    const events = await this.deps.readStreamEvents();
-    const state = reduceAgentEvents({ events });
-    return (
-      state.currentRequest?.phase === "requested" &&
-      state.currentRequest.llmRequestId === args.llmRequestId
-    );
+    return isAgentLlmRequestStillCurrent({
+      events: await this.deps.readStreamEvents(),
+      llmRequestId: args.llmRequestId,
+    });
   }
 
   async #append(event: { type: string; idempotencyKey: string; payload: unknown }) {

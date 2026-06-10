@@ -153,22 +153,9 @@ export const AgentProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/agent/llm-request-requested": {
       description:
-        "The agent has prepared an LLM request. A subscribed LLM request processor must execute it and respond with agent output and a terminal llm-request-completed event. The llmRequestId used by response events is this event's stream offset.",
+        "The agent has prepared an LLM request. A subscribed LLM request processor must execute it and respond with agent output and a terminal llm-request-completed event. The llmRequestId used by response events is this event's stream offset. REQUEST-BY-REFERENCE: the event carries no conversation body — embedding it would store a full copy of the growing history in every request (O(N²) stream growth). Providers rebuild the chat request by reducing committed history up to this event's offset (buildLlmChatRequest), which reproduces the exact model-visible context from the stream forever.",
       payloadSchema: z.object({
         model: z.string().min(1),
-        body: z.object({
-          messages: z
-            .array(
-              z.object({
-                role: z.enum(["system", "user", "assistant"]),
-                content: z.string(),
-              }),
-            )
-            .min(1),
-          max_tokens: z.number().int().positive().optional(),
-          temperature: z.number().optional(),
-          top_p: z.number().optional(),
-        }),
         runOpts: z.json().default({}),
       }),
     },

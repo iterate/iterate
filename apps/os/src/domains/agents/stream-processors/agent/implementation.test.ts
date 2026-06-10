@@ -539,7 +539,7 @@ describe("AgentProcessor", () => {
     ]);
   });
 
-  it("re-reads stream history before handing a scheduled LLM request to providers", async () => {
+  it("hands a scheduled LLM request to providers by reference, without a body", async () => {
     vi.useFakeTimers();
     const { stream, appended } = memoryStream();
     const triggeringInput = agentEvent({
@@ -575,18 +575,14 @@ describe("AgentProcessor", () => {
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(appended).toHaveLength(2);
+    // Request-by-reference: the handoff records which model to run and how,
+    // but never embeds the conversation — providers rebuild it from history
+    // up to this event's own offset (see llm-request-helpers.ts).
     expect(appended[1]).toMatchObject({
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: {
-        body: {
-          messages: [
-            { role: "system", content: "You are a helpful assistant. You can trust your user." },
-            { role: "user", content: "codemode primer" },
-            { role: "user", content: "hi" },
-          ],
-        },
-      },
+      payload: { model: expect.any(String), runOpts: {} },
     });
+    expect(appended[1]!.payload).not.toHaveProperty("body");
   });
 });
 
