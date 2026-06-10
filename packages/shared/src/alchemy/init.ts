@@ -2,7 +2,6 @@ import alchemy, { type Scope } from "alchemy";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { z } from "zod";
 import { compileRawAppConfigFromEnv } from "../config.ts";
-import type { AppManifest } from "../apps/types.ts";
 import { slugify } from "../slugify.ts";
 
 const AlchemyEnv = z.object({
@@ -39,13 +38,11 @@ const AlchemyEnv = z.object({
  * @see https://alchemy.run/getting-started/
  */
 export async function initAlchemy<TSchema extends z.ZodTypeAny>(
-  // The slug names the alchemy scope and prefixes the worker name. Passing a
-  // full AppManifest still works for apps that keep one; only `slug` is used.
-  slugOrManifest: string | AppManifest,
+  // The slug names the alchemy scope and prefixes the worker name.
+  slug: string,
   configSchema: TSchema,
   env: Record<string, string | undefined>,
 ) {
-  const slug = typeof slugOrManifest === "string" ? slugOrManifest : slugOrManifest.slug;
   const alchemyEnv = AlchemyEnv.parse(env);
   if (alchemyEnv.ALCHEMY_LOCAL) delete env.CI;
 

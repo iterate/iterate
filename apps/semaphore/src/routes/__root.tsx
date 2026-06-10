@@ -4,11 +4,11 @@ import { HeadContent, Outlet, Scripts, createRootRouteWithContext } from "@tanst
 import { TanStackDevtools } from "@tanstack/react-devtools";
 import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
-import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
+import { extractPublicConfigSchema } from "@iterate-com/shared/config";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
 import iterateLogoAsset from "@iterate-com/ui/assets/iterate-logo.svg";
 import { DefaultErrorComponent } from "@iterate-com/ui/components/route-defaults";
-import { AppConfig } from "~/app.ts";
+import { AppConfig } from "~/config.ts";
 import { orpcClient } from "~/orpc/client.ts";
 import appCss from "~/styles.css?url";
 import type { RouterContext } from "~/router.tsx";

@@ -1,10 +1,10 @@
 import { D1Database, DurableObjectNamespace } from "alchemy/cloudflare";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
-import manifest, { AppConfig } from "./src/app.ts";
+import { AppConfig } from "./src/config.ts";
 import type { ResourceCoordinator } from "~/durable-objects/resource-coordinator.ts";
 
-const ctx = await initAlchemy(manifest, AppConfig, process.env);
+const ctx = await initAlchemy("semaphore", AppConfig, process.env);
 
 const db = await D1Database("resources-db", {
   name: `${ctx.workerName}-resources`,
@@ -18,6 +18,7 @@ const coordinator = DurableObjectNamespace<ResourceCoordinator>("resource-coordi
 });
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
+  main: "./src/worker.ts",
   bindings: { DB: db, RESOURCE_COORDINATOR: coordinator },
 });
 
