@@ -74,15 +74,24 @@ export class McpClient extends WorkerEntrypoint<Env, McpClientProps> {
 
     const transport = new StreamableHTTPClientTransport(new URL(props.serverUrl), {
       // ALL transport HTTP rides the project egress pipe — this is where
-      // getSecret() placeholders in headers become real credentials.
+      // getSecret() placeholders in headers become real credentials. Build a
+      // real Request first: the SDK may pass a URL (which itx.fetch would not
+      // stringify) or a Request plus separate init (whose headers must merge
+      // before egress sees them).
       fetch: (fetchInput: Request | string | URL, init?: RequestInit) =>
-        itx.fetch(fetchInput as Request | string, init),
+        itx.fetch(
+          fetchInput instanceof Request
+            ? new Request(fetchInput, init)
+            : new Request(String(fetchInput), init),
+        ),
       requestInit: props.headers ? { headers: props.headers } : undefined,
     });
     const client = new Client({ name: "itx-mcp-client", version: "1.0.0" });
-    await client.connect(transport);
 
     try {
+      // Inside the try so a failed connect still runs close() — a partial
+      // handshake can otherwise leave server-side session state dangling.
+      await client.connect(transport);
       if (input.path.join(".") === "listTools") {
         const listed = await client.listTools();
         return describeOutboundMcpFromOurClientTools(
