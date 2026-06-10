@@ -57,7 +57,6 @@ export { McpClient } from "~/itx/caps/mcp-client.ts";
 export { ContextDO } from "~/itx/context-do.ts";
 export { ItxCapIngress } from "~/itx/http.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
-export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";

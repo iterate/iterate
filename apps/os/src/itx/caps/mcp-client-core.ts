@@ -1,25 +1,36 @@
+// Pure MCP streamable-HTTP client helpers — connect, list, call. MCP is a
+// stateless protocol (fetch with metadata): every helper here works on a
+// per-invocation client; there is no session state worth keeping anywhere.
+
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
-export interface CachedMcpTool {
-  name: string;
-  description?: string;
-  inputSchema?: Record<string, unknown>;
-}
+export type McpFetch = (input: Request | string | URL, init?: RequestInit) => Promise<Response>;
 
-export async function connectOutboundMcpFromOurClient(input: {
+export async function connectMcp(input: {
+  /** All transport HTTP goes through this (e.g. the project egress pipe). */
+  fetch?: McpFetch;
   headers?: Record<string, string>;
   serverUrl: string;
-}) {
+}): Promise<Client> {
   const transport = new StreamableHTTPClientTransport(new URL(input.serverUrl), {
-    requestInit: input.headers == null ? undefined : { headers: input.headers },
+    ...(input.fetch ? { fetch: input.fetch } : {}),
+    requestInit: input.headers ? { headers: input.headers } : undefined,
   });
-  const client = new Client({ name: "os-outbound-mcp-capability", version: "1.0.0" });
-  await client.connect(transport);
-  const response = await client.listTools();
+  const client = new Client({ name: "itx-mcp-client", version: "1.0.0" });
+  try {
+    await client.connect(transport);
+  } catch (error) {
+    // A partial handshake can leave server-side session state dangling.
+    await client.close().catch(() => {});
+    throw error;
+  }
+  return client;
+}
 
+export async function listMcpTools(client: Client) {
+  const response = await client.listTools();
   return {
-    client,
     tools: response.tools.map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -28,16 +39,15 @@ export async function connectOutboundMcpFromOurClient(input: {
   };
 }
 
-export async function executeOutboundMcpFromOurClientToolFunction(input: {
+export async function executeMcpToolCall(input: {
   args: unknown[];
   client: Client;
   path: string[];
 }) {
   const toolName = input.path[0];
-  if (!toolName)
-    throw new Error(
-      "executeCodemodeFunctionCall requires path with at least one segment (tool name)",
-    );
+  if (!toolName) {
+    throw new Error("MCP tool calls need a path with at least one segment (the tool name).");
+  }
 
   const [firstArg] = input.args;
   const args =
@@ -50,8 +60,7 @@ export async function executeOutboundMcpFromOurClientToolFunction(input: {
   if (result.structuredContent != null) return result.structuredContent;
 
   if (result.isError) {
-    const message =
-      extractTextContent(result.content).join("\n") || "MCP tool function call failed";
+    const message = extractTextContent(result.content).join("\n") || "MCP tool call failed";
     throw new Error(message);
   }
 
@@ -66,13 +75,6 @@ export async function executeOutboundMcpFromOurClientToolFunction(input: {
   }
 
   return result;
-}
-
-export function describeOutboundMcpFromOurClientTools(tools: CachedMcpTool[]) {
-  if (tools.length === 0) {
-    return { tools: [] };
-  }
-  return { tools };
 }
 
 function extractTextContent(content: unknown) {

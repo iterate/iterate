@@ -21,7 +21,6 @@ export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capabil
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
-export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 
 const mcpHandler = McpAgent.serve("/mcp", { binding: "PROJECT_MCP_SERVER_CONNECTION" });

@@ -1,12 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { HttpResponse, http, useMockHttpServer } from "@iterate-com/mock-http-proxy";
-import {
-  connectOutboundMcpFromOurClient,
-  describeOutboundMcpFromOurClientTools,
-  executeOutboundMcpFromOurClientToolFunction,
-} from "./outbound-mcp-from-our-client-capability-core.ts";
+import { connectMcp, executeMcpToolCall, listMcpTools } from "./mcp-client-core.ts";
 
-describe("outbound MCP from our client capability core", () => {
+describe("mcp client core", () => {
   test("lists and executes tools against a mocked streamable HTTP MCP server", async () => {
     await using server = await useMockHttpServer({ transformRequest: false });
     server.use(
@@ -76,32 +72,30 @@ describe("outbound MCP from our client capability core", () => {
       }),
     );
 
-    const connection = await connectOutboundMcpFromOurClient({
+    const client = await connectMcp({
       headers: { authorization: "Bearer mcp-token" },
       serverUrl: `${server.url}/mcp`,
     });
     try {
-      expect(connection.tools).toEqual([
-        {
-          description: "Echo text",
-          inputSchema: { properties: { text: { type: "string" } }, type: "object" },
-          name: "echo.text",
-        },
-      ]);
+      await expect(listMcpTools(client)).resolves.toEqual({
+        tools: [
+          {
+            description: "Echo text",
+            inputSchema: { properties: { text: { type: "string" } }, type: "object" },
+            name: "echo.text",
+          },
+        ],
+      });
 
       await expect(
-        executeOutboundMcpFromOurClientToolFunction({
+        executeMcpToolCall({
           args: [{ text: "hello" }],
-          client: connection.client,
+          client,
           path: ["echo.text"],
         }),
       ).resolves.toEqual({ echoed: "hello" });
-
-      expect(describeOutboundMcpFromOurClientTools(connection.tools)).toEqual({
-        tools: connection.tools,
-      });
     } finally {
-      await connection.client.close();
+      await client.close();
     }
   });
 });
