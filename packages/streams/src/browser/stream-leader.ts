@@ -31,11 +31,30 @@ export function acquireWriterRole(args: { lockName: string }): WriterRole {
   const whenWriter = new Promise<void>((resolve) => {
     signalWriter = resolve;
   });
-  void navigator.locks.request(args.lockName, { mode: "exclusive" }, async () => {
-    signalWriter();
-    await held;
-  });
-  return { whenWriter, release: () => release() };
+  // An AbortSignal lets `release()` actually relinquish the request even before the lock
+  // is granted (a pending request would otherwise keep us queued forever). Aborting a
+  // not-yet-granted request rejects `locks.request` with an AbortError; aborting after the
+  // callback ran is a no-op. Either way release() also resolves `held`, so the callback's
+  // `await held` returns and the held lock is freed.
+  const abortController = new AbortController();
+  navigator.locks
+    .request(args.lockName, { mode: "exclusive", signal: abortController.signal }, async () => {
+      signalWriter();
+      await held;
+    })
+    .catch((error: unknown) => {
+      // AbortError is the expected outcome of release()-before-grant; anything else is a
+      // genuine failure to acquire the lock and must not be swallowed silently.
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      console.error(`[stream-leader] writer lock request failed for ${args.lockName}`, error);
+    });
+  return {
+    whenWriter,
+    release: () => {
+      abortController.abort();
+      release();
+    },
+  };
 }
 
 /**
