@@ -27,6 +27,18 @@ import {
 } from "~/domains/repos/artifacts.ts";
 import { parseConfig } from "~/config.ts";
 import {
+  CommitRepoFilesInput,
+  ListRepoFilesInput,
+  ReadRepoFilesInput,
+  ReadRepoLogInput,
+  commitRepoFiles,
+  isGitAuthError,
+  listRepoFiles,
+  readRepoFiles,
+  readRepoLog,
+  type CommitRepoFilesResult,
+} from "~/domains/repos/repo-git.ts";
+import {
   RepoStreamProcessor,
   RepoStreamProcessorContract,
   repoStreamPath,
@@ -201,6 +213,86 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
     await this.ctx.storage.put(REPO_WRITE_TOKEN_EXPIRES_AT_STORAGE_KEY, token.expiresAt);
 
     return await this.requireInfo();
+  }
+
+  /**
+   * Commit an array of file writes/deletes to a branch (the default branch
+   * unless specified) and push — no workspace involved. The clone lives in a
+   * throwaway in-memory filesystem for the duration of the call.
+   */
+  async commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
+    const parsed = CommitRepoFilesInput.parse(input);
+    return await this.withRepoGitCredentials((info) =>
+      commitRepoFiles({
+        author: parsed.author,
+        branch: parsed.branch ?? info.defaultBranch,
+        changes: parsed.changes,
+        defaultBranch: info.defaultBranch,
+        message: parsed.message,
+        remote: info.remote,
+        token: info.token,
+      }),
+    );
+  }
+
+  /** Read files from a branch. Missing paths come back with `content: null`. */
+  async readFiles(input: ReadRepoFilesInput) {
+    const parsed = ReadRepoFilesInput.parse(input);
+    return await this.withRepoGitCredentials(async (info) => {
+      const branch = parsed.branch ?? info.defaultBranch;
+      return {
+        branch,
+        files: await readRepoFiles({
+          branch,
+          encoding: parsed.encoding,
+          paths: parsed.paths,
+          remote: info.remote,
+          token: info.token,
+        }),
+      };
+    });
+  }
+
+  /** List all file paths on a branch. */
+  async listFiles(input: ListRepoFilesInput = {}) {
+    const parsed = ListRepoFilesInput.parse(input);
+    return await this.withRepoGitCredentials(async (info) => {
+      const branch = parsed.branch ?? info.defaultBranch;
+      return {
+        branch,
+        paths: await listRepoFiles({ branch, remote: info.remote, token: info.token }),
+      };
+    });
+  }
+
+  /** Read the commit log of a branch (newest first). */
+  async readLog(input: ReadRepoLogInput = {}) {
+    const parsed = ReadRepoLogInput.parse(input);
+    return await this.withRepoGitCredentials(async (info) => {
+      const branch = parsed.branch ?? info.defaultBranch;
+      return {
+        branch,
+        commits: await readRepoLog({
+          branch,
+          depth: parsed.depth,
+          remote: info.remote,
+          token: info.token,
+        }),
+      };
+    });
+  }
+
+  /** Runs a git operation with the stored write token, refreshing it once on auth failure. */
+  private async withRepoGitCredentials<T>(operation: (info: RepoInfo) => Promise<T>): Promise<T> {
+    await this.ensureStarted();
+    await this.waitForRepoProcessorCatchUp();
+    const info = await this.requireInfo();
+    try {
+      return await operation(info);
+    } catch (error) {
+      if (!isGitAuthError(error)) throw error;
+      return await operation(await this.refreshWriteToken());
+    }
   }
 
   async getArtifact(): Promise<CloudflareArtifactRepo> {

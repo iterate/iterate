@@ -163,16 +163,48 @@ new Repo Durable Object.
 That means public methods on `RepoDurableObject` are the codemode Repo handle
 API. Keep that method surface intentionally small.
 
-V1 handle methods:
+Handle methods:
 
 ```ts
 getInfo(): Promise<RepoInfo>
+commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult>
+readFiles(input: ReadRepoFilesInput): Promise<{ branch, files }>
+listFiles(input?: ListRepoFilesInput): Promise<{ branch, paths }>
+readLog(input?: ReadRepoLogInput): Promise<{ branch, commits }>
 ```
 
-Do not add separate public token, clone, or command methods in v1. `getInfo()`
-is the only public Repo handle method and should return everything needed by the
-UI or codemode caller. Internal lifecycle helpers should not be public methods
-on `RepoDurableObject`.
+Do not add separate public token, clone, or command methods. `getInfo()` should
+return everything needed by the UI or codemode caller. Internal lifecycle
+helpers should not be public methods on `RepoDurableObject`.
+
+## Workspace-free git operations
+
+`commitFiles`, `readFiles`, `listFiles`, and `readLog` operate directly on the
+backing git remote without a Workspace. Each call clones into a throwaway
+in-memory filesystem (`@cloudflare/shell` `InMemoryFs` + isomorphic-git), does
+its work, and for commits pushes back. The plumbing lives in
+`apps/os/src/domains/repos/repo-git.ts`.
+
+The most common operation is committing an array of files to a branch (the
+default branch unless specified):
+
+```ts
+await repo.commitFiles({
+  message: "Update config",
+  changes: [
+    { path: "iterate.config.jsonc", content: "{...}" },
+    { path: "assets/logo.png", content: "<base64>", encoding: "base64" },
+    { path: "old-file.txt", delete: true },
+  ],
+});
+```
+
+Deletes are serialized as `{ path, delete: true }`; writes as `{ path, content,
+encoding? }`. Writing identical content or deleting an absent path is a no-op —
+when nothing actually changes, no commit is created and the result has
+`noChanges: true`. Committing to a branch that does not exist yet creates it
+off the default branch. The Durable Object serializes commits per repo, and the
+write token is refreshed once automatically on an auth failure.
 
 ## oRPC adapter
 
