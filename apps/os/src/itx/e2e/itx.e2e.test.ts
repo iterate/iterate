@@ -112,8 +112,10 @@ test("the five-step capability flow: provide live, call, promote durable, call f
     expect(viaDurable).toMatchObject({ marker, method: "chat.postMessage" });
   }
 
-  const description = await projectItx.caps.describe();
-  expect(description).toMatchObject([
+  // Own rows only — platform defaults (e.g. `ai` from platform:project)
+  // also appear in describe() with their code context as owner.
+  const description = (await projectItx.caps.describe()) as Array<{ owner: string }>;
+  expect(description.filter((cap) => cap.owner === project.id)).toMatchObject([
     { connected: true, invoke: "path-call", kind: "live", name: "slack" },
     // Legacy `source:` input normalizes to an rpc/source target.
     { invoke: "path-call", kind: "rpc", name: "slackDurable" },
@@ -230,7 +232,7 @@ test("user-space caps: a named export of the project worker is a first-class cap
   // (1) Ship user code: replace worker.js in the project's iterate-config
   // repo with one that ALSO exports a capability class. This is the §1
   // litmus test's user-space half — same shape as the first-party McpClient,
-  // reached via { type: "project-worker" } instead of { type: "loopback" }.
+  // reached via the ProjectWorker loopback forwarder.
   const marker = `litmus-${RUN_SUFFIX}`;
   const userWorker = `import { WorkerEntrypoint } from "cloudflare:workers";
 
@@ -299,16 +301,22 @@ export class PetstoreClient extends WorkerEntrypoint {
   if (!pushResponse.ok) throw new Error(`push script failed: ${pushBody.error}`);
   expect(pushBody.result).toEqual({ pushed: true });
 
-  // (2) Point a cap at the user's export — entrypoint names THEIR class.
+  // (2) Point a cap at the user's export via the ProjectWorker forwarder —
+  // props.export names THEIR class, props.invoke how to call it.
   await projectItx.caps.define({
     invoke: "path-call",
     meta: { instructions: "Petstore API. Call listOperations() first." },
     name: "petstore",
     target: {
-      entrypoint: "PetstoreClient",
-      props: { marker, specUrl: "https://petstore.example.com/openapi.json" },
+      entrypoint: "ProjectWorker",
+      props: {
+        export: "PetstoreClient",
+        invoke: "path-call",
+        marker,
+        specUrl: "https://petstore.example.com/openapi.json",
+      },
       type: "rpc",
-      worker: { type: "project-worker" },
+      worker: { type: "loopback" },
     },
   });
 
@@ -341,6 +349,126 @@ export class PetstoreClient extends WorkerEntrypoint {
     marker,
     specUrl: "https://petstore.example.com/openapi.json",
   });
+});
+
+test("url caps dial a remote Cap'n Web server over a WebSocket session", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-url` })) as { id: string };
+  createdProjectIds.push(project.id);
+  using projectItx = await itx.projects.get(project.id);
+
+  // The remote server is THIS deployment's own /api/itx endpoint — the one
+  // Cap'n Web server every e2e target is guaranteed to have. Auth rides the
+  // WebSocket handshake headers, which is exactly what url-ref headers are
+  // for. (In production these would be getSecret() placeholders, substituted
+  // by the same egress path McpClient headers use.)
+  await projectItx.caps.define({
+    meta: { instructions: "This deployment's own itx, dialed back over the network." },
+    name: "remoteItx",
+    target: {
+      headers: { authorization: `Bearer ${adminApiSecret()}` },
+      type: "url",
+      url: new URL(`/api/itx/${project.id}`, baseUrl()).toString(),
+    },
+  });
+
+  // Members mode against the remote main: the path pipelines over the dial's
+  // own capnweb session and resolves on the remote handle. The remote handle
+  // describing a registry that contains the very cap being dialed is the
+  // round trip working end to end.
+  const handle = projectItx as never as Record<string, any>;
+  const described = (await handle.remoteItx.describe()) as {
+    caps: Array<{ name: string }>;
+    context: string;
+    project: { id: string };
+  };
+  expect(described.context).toBe(project.id);
+  expect(described.project.id).toBe(project.id);
+  expect(described.caps.map((cap) => cap.name)).toContain("remoteItx");
+});
+
+test("platform defaults arrive from the platform:project code context, and own rows shadow them", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-def` })) as { id: string };
+  createdProjectIds.push(project.id);
+  using projectItx = await itx.projects.get(project.id);
+
+  // A fresh project has zero rows of its own, but `ai` is already there —
+  // inherited from the code-defined parent context, with that context's
+  // name as owner (itx-next.md §8).
+  type DescribedCaps = { caps: Array<{ name: string; owner: string }> };
+  const before = (await projectItx.describe()) as DescribedCaps;
+  expect(before.caps.find((cap) => cap.name === "ai")).toMatchObject({
+    invoke: "path-call",
+    kind: "rpc",
+    owner: "platform:project",
+  });
+
+  // Shadowing is prototype semantics: a row of this context's own wins, and
+  // describe() shows exactly one `ai` with the project as owner.
+  class ShadowAi extends RpcTarget {
+    async call({ path }: { path: string[]; args: unknown[] }) {
+      return { method: path.join("."), provider: "shadow" };
+    }
+  }
+  await projectItx.caps.provide({
+    invoke: "path-call",
+    name: "ai",
+    target: new ShadowAi() as never,
+  });
+  const after = (await projectItx.describe()) as DescribedCaps;
+  const aiCaps = after.caps.filter((cap) => cap.name === "ai");
+  expect(aiCaps).toHaveLength(1);
+  expect(aiCaps[0]!.owner).toBe(project.id);
+
+  const handle = projectItx as never as Record<string, any>;
+  expect(await handle.ai.run("model", { prompt: "hi" })).toEqual({
+    method: "run",
+    provider: "shadow",
+  });
+});
+
+test("absolute stream refs are sugar through the one access check", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-ref` })) as { id: string };
+  createdProjectIds.push(project.id);
+  using projectItx = await itx.projects.get(project.id);
+
+  // Absolute string ref from the admin global handle (access "all") writes
+  // into the project's namespace…
+  const marker = crypto.randomUUID().slice(0, 8);
+  await itx.streams.get(`${project.id}:/itx-e2e/refs`).append({
+    payload: { marker },
+    type: "events.iterate.test/itx/e2e",
+  });
+
+  // …and the structured form on the project handle reads it back.
+  const events = (await projectItx.streams
+    .get({ namespace: project.id, path: "/itx-e2e/refs" })
+    .read()) as Array<{ payload: { marker?: string } }>;
+  expect(events.map((event) => event.payload.marker)).toContain(marker);
+
+  // A project handle cannot fully-qualify its way out of its access set —
+  // masked as NOT_FOUND, indistinguishable from a namespace that exists.
+  // Probed in-isolate (a script on the project context) where the throw is
+  // synchronous: capnweb pipelining onto a rejected intermediate stub would
+  // replace the real error with a local follow-up one.
+  const probe = async ({ itx: scriptItx }: { itx: Record<string, any> }) => {
+    try {
+      await scriptItx.streams.get("global:/anything").describe();
+      return { threw: false };
+    } catch (error) {
+      return { code: (error as { code?: string }).code ?? null, threw: true };
+    }
+  };
+  const probeResponse = await fetch(new URL("/api/itx/run", baseUrl()), {
+    body: JSON.stringify({ context: project.id, functionSource: probe.toString() }),
+    headers: authHeaders(),
+    method: "POST",
+  });
+  const probeBody = (await probeResponse.json()) as { result?: unknown };
+  expect(probeResponse.ok).toBe(true);
+  expect(probeBody.result).toEqual({ code: "NOT_FOUND", threw: true });
 });
 
 test("script executions leave a two-event record on the /itx stream", async () => {

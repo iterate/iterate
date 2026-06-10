@@ -428,18 +428,33 @@ export class ItxStreams extends RpcTarget {
     super();
   }
 
-  get(path: string): ItxStream {
-    return new ItxStream(this.runtime, this.projectId, path);
+  /**
+   * Relative or absolute (itx-next.md §3). `"/path"` resolves in this
+   * handle's namespace; `"ns:/path"` and `{ namespace, path }` are absolute
+   * refs. Sugar rule: absolute forms construct the narrowed collection and
+   * call through — ONE code path, so the access check never forks.
+   */
+  get(ref: string | { namespace?: string; path: string }): ItxStream {
+    const { namespace, path } = parseStreamRef(ref);
+    if (namespace === undefined || namespace === this.projectId) {
+      return new ItxStream(this.runtime, this.projectId, path);
+    }
+    return this.namespace(namespace).get(path);
   }
 
   namespace(namespace: string): ItxStreams {
-    if (this.runtime.access !== "all") {
+    const parsed = StreamNamespace.parse(namespace);
+    // Resolution checks access (§3 rule 2): refs are pure names, restoring
+    // them is the capability. Masked as NOT_FOUND like projects.get — a
+    // caller can never probe which namespaces exist. A project handle
+    // cannot fully-qualify its way out of its access set.
+    if (this.runtime.access !== "all" && !this.runtime.access.includes(parsed)) {
       throw new ItxError({
-        code: "FORBIDDEN",
-        message: "Selecting an arbitrary stream namespace requires admin access.",
+        code: "NOT_FOUND",
+        message: `No stream namespace ${JSON.stringify(parsed)} for this handle.`,
       });
     }
-    return new ItxStreams(this.runtime, StreamNamespace.parse(namespace));
+    return new ItxStreams(this.runtime, parsed);
   }
 
   async create(input: { streamPath: string }) {
@@ -454,6 +469,30 @@ export class ItxStreams extends RpcTarget {
       props: { appendPolicy: { mode: "any" }, projectId: this.projectId },
     });
   }
+}
+
+/**
+ * The two absolute StreamRef spellings, plus the relative one:
+ * `"/path"` (relative), `"ns:/path"` (absolute string), and
+ * `{ namespace?, path }` (absolute structured). Refs are unauthenticated
+ * names — authority comes from who restores them, never from their content.
+ */
+function parseStreamRef(ref: string | { namespace?: string; path: string }): {
+  namespace?: string;
+  path: string;
+} {
+  if (typeof ref !== "string") {
+    return { namespace: ref.namespace, path: ref.path };
+  }
+  if (ref.startsWith("/")) return { path: ref };
+  const colon = ref.indexOf(":");
+  if (colon > 0 && ref[colon + 1] === "/") {
+    return { namespace: ref.slice(0, colon), path: ref.slice(colon + 1) };
+  }
+  throw new ItxError({
+    code: "BAD_REQUEST",
+    message: `Stream ref ${JSON.stringify(ref)} must be "/path", "namespace:/path", or { namespace?, path }.`,
+  });
 }
 
 export class ItxStream extends RpcTarget {

@@ -11,9 +11,9 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { Itx, type ItxRuntime } from "./handle.ts";
 import {
-  DIALABLE_BINDINGS,
   GLOBAL_CONTEXT_ID,
   isChildContextId,
+  resolveDialableTargets,
   type ItxProps,
   type PathCall,
 } from "./protocol.ts";
@@ -122,7 +122,8 @@ export type BindingCapabilityProps = {
 export class BindingCapability extends WorkerEntrypoint<Env, BindingCapabilityProps> {
   async call(input: PathCall): Promise<unknown> {
     const props = this.ctx.props;
-    if (!DIALABLE_BINDINGS.has(props.binding)) {
+    const dialable = resolveDialableTargets(parseConfig(this.env).itx);
+    if (!dialable.bindings.has(props.binding)) {
       throw new Error(`Binding "${props.binding}" is not dialable as a capability.`);
     }
     const binding = (this.env as unknown as Record<string, unknown>)[props.binding];

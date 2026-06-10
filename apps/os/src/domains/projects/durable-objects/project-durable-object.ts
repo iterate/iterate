@@ -59,8 +59,9 @@ import {
   EXAMPLE_EGRESS_SECRET_METADATA,
 } from "~/domains/secrets/example-secret.ts";
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
+import { platformProjectContext } from "~/itx/code-contexts.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
-import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
+import { ITX_AUDIT_STREAM_PATH, resolveDialableTargets } from "~/itx/protocol.ts";
 import type {
   CapInvoke,
   CapMeta,
@@ -459,8 +460,11 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       },
       // Gated on DIALABLE_BINDINGS inside the registry before this is called.
       binding: (name) => (this.env as unknown as Record<string, unknown>)[name],
-      projectWorker: (input) => this.itxProjectWorkerCall(input),
       contextId: projectId,
+      // The code-defined parent context: platform defaults every project
+      // falls through to, shadowable by this project's own rows (§8).
+      defaults: platformProjectContext,
+      dialable: resolveDialableTargets(parseConfig(this.env).itx),
       facets: durableObjectFacetsHook(this.ctx),
       loader: projectRuntimeEnv(this.env).LOADER as unknown as ConstructorParameters<
         typeof ContextRegistry

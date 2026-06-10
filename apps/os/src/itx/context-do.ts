@@ -13,7 +13,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "./registry.ts";
-import { ITX_AUDIT_STREAM_PATH, ITX_EVENT_TYPES } from "./protocol.ts";
+import { ITX_AUDIT_STREAM_PATH, ITX_EVENT_TYPES, resolveDialableTargets } from "./protocol.ts";
 import type {
   CapDescription,
   CapInvoke,
@@ -27,6 +27,7 @@ import {
   type StreamDurableObjectNamespace,
 } from "~/domains/streams/new-stream-runtime.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { parseConfig } from "~/config.ts";
 
 export type ContextDescriptor = {
   id: string;
@@ -140,22 +141,8 @@ export class ContextDO extends DurableObject<Env> {
       audit: (event) => this.audit(event.type, event.payload),
       // Gated on DIALABLE_BINDINGS inside the registry before this is called.
       binding: (name) => (this.env as unknown as Record<string, unknown>)[name],
-      // Child contexts reach the project worker through the owning project's
-      // DO — the call crosses as data (loader entrypoints can't cross RPC).
-      projectWorker: (input) =>
-        (
-          this.env.PROJECT.getByName(
-            getProjectDurableObjectName(descriptor.projectId),
-          ) as unknown as {
-            itxProjectWorkerCall(input: {
-              call: PathCall;
-              entrypoint?: string;
-              invoke: CapInvoke;
-              props: Record<string, unknown>;
-            }): Promise<unknown>;
-          }
-        ).itxProjectWorkerCall(input),
       contextId: descriptor.id,
+      dialable: resolveDialableTargets(parseConfig(this.env).itx),
       facets: durableObjectFacetsHook(this.ctx),
       loader: this.env.LOADER as unknown as ConstructorParameters<
         typeof ContextRegistry

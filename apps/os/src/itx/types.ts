@@ -290,15 +290,17 @@ export interface ItxCaps {
  *   worker, a Durable Object, or a dynamic worker materialized from stored
  *   source — see {@link WorkerRef}.
  * - `url` — outbound, across the internet: a Cap'n Web server somewhere.
- *   Headers travel through project egress, so they may carry
- *   `getSecret(...)` placeholders.
+ *   The dial is ONE WebSocket session per call, terminating in the
+ *   stateless `UrlDial` worker (Law 7; HTTP batch sessions are banned
+ *   repo-wide). Headers ride the handshake and pass through egress secret
+ *   substitution, so they may carry `getSecret(...)` placeholders.
  *
  * Deliberately NOT here: MCP and OpenAPI. Those are not transports — they
  * are client implementations, i.e. ordinary RPC targets. The platform ships
  * `McpClient` / `OpenApiClient` entrypoints (reach them via
  * `worker: { type: "loopback" }`, parameterized by `props`), and nothing
  * stops you from shipping your own version as an export of your project
- * worker (`worker: { type: "project-worker" }`). If a first-party client
+ * worker (the `ProjectWorker` loopback forwarder). If a first-party client
  * needs to be special, the design has failed.
  *
  * (Possible later kind, deliberately absent until needed: a re-export of a
@@ -337,15 +339,12 @@ export type WorkerRef =
    * is the target (`itx.ai.run(...)` replays straight onto `env.AI`). */
   | { type: "binding"; binding: string }
   /** The platform worker's own exports (ctx.exports) — first-party code:
-   * `McpClient`, `OpenApiClient`, thin policy wrappers around bindings. */
+   * `McpClient`, thin policy wrappers around bindings, and `ProjectWorker`,
+   * the forwarder that makes YOUR repo's worker exports dialable (user
+   * space: `entrypoint: "ProjectWorker", props: { export: "MyClass" }` —
+   * the call replays inside the Project DO because loader entrypoints
+   * cannot cross an RPC boundary). */
   | { type: "loopback" }
-  /** The project worker — user space: export a class from your repo's
-   * worker entry (`worker.js`) and point a cap at it; `entrypoint` names
-   * YOUR export. Already runs behind the egress pipe; no new trust surface.
-   * Mechanically the call crosses to the Project DO as data and is replayed
-   * there (loader entrypoints cannot cross an RPC boundary); the entrypoint
-   * is instantiated per call with definer props + injected attribution. */
-  | { type: "project-worker" }
   /** A Durable Object, addressed by namespace binding + instance name. */
   | { type: "durable-object"; binding: string; name: string }
   /** A dynamic worker materialized on demand from stored source — code that

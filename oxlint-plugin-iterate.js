@@ -284,6 +284,28 @@ const plugin = {
     name: "iterate",
   },
   rules: {
+    "no-capnweb-http-batch": {
+      meta: {
+        docs: {
+          description:
+            "Forbid capnweb's newHttpBatchRpcSession - always use a WebSocket session instead",
+        },
+        type: "problem",
+      },
+      create: (context) => {
+        return {
+          Identifier: (node) => {
+            if (node.name === "newHttpBatchRpcSession") {
+              context.report({
+                node,
+                message:
+                  "Never use newHttpBatchRpcSession. Stateless workers can hold a WebSocket session for the duration of a request - use newWebSocketRpcSession and dispose it when the call completes.",
+              });
+            }
+          },
+        };
+      },
+    },
     "no-public-procedure": {
       meta: {
         docs: {

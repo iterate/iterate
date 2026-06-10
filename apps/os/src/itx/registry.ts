@@ -19,8 +19,7 @@ import {
   assertDefinableCapTarget,
   assertValidCapName,
   capSourceCacheKey,
-  DIALABLE_BINDINGS,
-  DIALABLE_LOOPBACKS,
+  DEFAULT_DIALABLE_TARGETS,
   ITX_EVENT_TYPES,
   normalizeCapTarget,
   type CapDescription,
@@ -28,11 +27,13 @@ import {
   type CapKind,
   type CapMeta,
   type CapSource,
+  type DialableTargets,
   type PathCall,
   type PathCallTarget,
   type SerializableCapTarget,
 } from "./protocol.ts";
 import { replayPathCall } from "./path-proxy.ts";
+import type { CodeContext } from "./code-contexts.ts";
 
 const DEFAULT_CAP_COMPATIBILITY_DATE = "2026-04-27";
 const DEFAULT_CAP_COMPATIBILITY_FLAGS = ["nodejs_compat"];
@@ -79,18 +80,6 @@ export type ContextRegistryHost = {
    */
   binding?: (name: string) => unknown;
   /**
-   * Dispatch a call against the project worker (the worker built from the
-   * project's own repo) for `{ type: "project-worker" }` refs. The whole
-   * call crosses as data because loader entrypoints cannot cross an RPC
-   * boundary — the Project DO loads the worker and replays in place.
-   */
-  projectWorker?: (input: {
-    call: PathCall;
-    entrypoint?: string;
-    invoke: CapInvoke;
-    props: Record<string, unknown>;
-  }) => Promise<unknown>;
-  /**
    * Create a loopback service-binding stub for a named export of the parent
    * worker, parameterized by props. Used to hand worker caps their
    * env.ITERATE (an ItxEntrypoint scoped to THIS context — a cap can never
@@ -112,6 +101,18 @@ export type ContextRegistryHost = {
     name: string,
     getClass: () => { class: unknown } | Promise<{ class: unknown }>,
   ) => unknown;
+  /**
+   * A code-defined parent context (itx-next.md §8): the final fallthrough
+   * link of cap lookup, resolved in-process. Own SQLite rows shadow it;
+   * describe() reports its caps with the code context's name as owner.
+   */
+  defaults?: CodeContext;
+  /**
+   * The dial allowlists for binding/loopback refs — hardcoded defaults plus
+   * the deployment's config additions (resolveDialableTargets). Absent means
+   * defaults only.
+   */
+  dialable?: DialableTargets;
 };
 
 /**
@@ -266,7 +267,7 @@ export class ContextRegistry {
   }): { name: string; ok: true } {
     assertValidCapName(input.name);
     const target = normalizeCapTarget(input);
-    assertDefinableCapTarget(input.name, target);
+    assertDefinableCapTarget(input.name, target, this.dialable());
     const invoke = input.invoke ?? "members";
 
     this.upsertRow({
@@ -299,7 +300,7 @@ export class ContextRegistry {
   }
 
   describe(): CapDescription[] {
-    return this.rows().map((row) => {
+    const own = this.rows().map((row): CapDescription => {
       const meta = JSON.parse(row.meta_json) as CapMeta;
       return {
         connected: row.kind === "live" ? this.#live.has(row.name) : undefined,
@@ -312,15 +313,36 @@ export class ContextRegistry {
         updatedAtMs: row.updated_at_ms,
       };
     });
+    const defaults = this.host.defaults;
+    if (!defaults) return own;
+    // Code-context defaults appear with their context's name as owner, own
+    // rows shadow by name — the same merged-chain semantics itxDescribe()
+    // gives parent DOs, one link earlier and without the hop.
+    const shadowed = new Set(own.map((description) => description.name));
+    const inherited = [...defaults.caps]
+      .filter(([name]) => !shadowed.has(name))
+      .map(
+        ([name, cap]): CapDescription => ({
+          instructions:
+            typeof cap.meta.instructions === "string" ? cap.meta.instructions : undefined,
+          invoke: cap.invoke,
+          kind: cap.target.type,
+          meta: cap.meta,
+          name,
+          owner: defaults.name,
+          updatedAtMs: 0,
+        }),
+      );
+    return [...own, ...inherited];
   }
 
   has(name: string): boolean {
-    return this.row(name) !== null;
+    return this.row(name) !== null || (this.host.defaults?.caps.has(name) ?? false);
   }
 
   /** The only dispatch in the system (spec §4.4). */
   async invoke(name: string, call: PathCall): Promise<unknown> {
-    const row = this.row(name);
+    const row = this.row(name) ?? this.defaultRow(name);
     if (!row) {
       throw new Error(`No capability named "${name}" in context ${this.host.contextId}.`);
     }
@@ -390,16 +412,32 @@ export class ContextRegistry {
     dispatch?: (call: PathCall) => Promise<unknown>;
   } {
     if (target.type === "url") {
-      throw new Error(
-        `Capability "${name}": url targets are not implemented yet (Law 7 — the dial must ` +
-          `terminate in a stateless worker, never this DO).`,
-      );
+      // Law 7: the Cap'n Web session must terminate in a stateless worker,
+      // never this DO — so the call crosses to the UrlDial entrypoint as
+      // data (a custom dispatch, like ProjectWorker), and UrlDial applies
+      // the cap's invoke mode against the REMOTE main. `invoke` here would
+      // otherwise be interpreted against the UrlDial stub itself.
+      const stub = this.host.loopback("UrlDial", {
+        props: {
+          headers: target.headers,
+          invoke,
+          url: target.url,
+          // Attribution + secret scope; same spoof-proofing as loopback refs.
+          cap: name,
+          context: this.host.contextId,
+          projectId: this.host.projectId,
+        },
+      }) as { call(call: PathCall): Promise<unknown> };
+      return {
+        dispatch: async (call) => await stub.call(call),
+        dispose: () => disposeIfPossible(stub),
+      };
     }
     const worker = target.worker;
     switch (worker.type) {
       case "binding": {
         // Authoritative allowlist gate (define-time check is fail-fast only).
-        if (!DIALABLE_BINDINGS.has(worker.binding)) {
+        if (!this.dialable().bindings.has(worker.binding)) {
           throw new Error(`Capability "${name}": binding "${worker.binding}" is not dialable.`);
         }
         const binding = this.host.binding?.(worker.binding);
@@ -413,7 +451,7 @@ export class ContextRegistry {
         return { target: binding, dispose: () => {} };
       }
       case "loopback": {
-        if (!target.entrypoint || !DIALABLE_LOOPBACKS.has(target.entrypoint)) {
+        if (!target.entrypoint || !this.dialable().loopbacks.has(target.entrypoint)) {
           throw new Error(
             `Capability "${name}": loopback export "${target.entrypoint}" is not dialable.`,
           );
@@ -459,29 +497,6 @@ export class ContextRegistry {
         }
         const entrypoint = this.loadWorker(name, source).getEntrypoint(source.entrypoint);
         return { target: entrypoint, dispose: () => disposeIfPossible(entrypoint) };
-      }
-      case "project-worker": {
-        const projectWorker = this.host.projectWorker;
-        if (!projectWorker) {
-          throw new Error(`Capability "${name}": this host cannot reach the project worker.`);
-        }
-        return {
-          dispatch: (call) =>
-            projectWorker({
-              call,
-              entrypoint: target.entrypoint,
-              invoke,
-              props: {
-                ...target.props,
-                // Attribution + spoof-proof project scoping, exactly like
-                // loopback refs.
-                cap: name,
-                context: this.host.contextId,
-                projectId: this.host.projectId,
-              },
-            }),
-          dispose: () => {},
-        };
       }
       case "durable-object":
         throw new Error(
@@ -555,6 +570,25 @@ export class ContextRegistry {
         `SELECT name, kind, invoke, source_json, target_json, meta_json, updated_at_ms FROM itx_caps ORDER BY name`,
       )
       .toArray();
+  }
+
+  private dialable(): DialableTargets {
+    return this.host.dialable ?? DEFAULT_DIALABLE_TARGETS;
+  }
+
+  /** A code-context default, shaped as the row it would be if it were data. */
+  private defaultRow(name: string): CapRow | null {
+    const cap = this.host.defaults?.caps.get(name);
+    if (!cap) return null;
+    return {
+      invoke: cap.invoke,
+      kind: cap.target.type,
+      meta_json: JSON.stringify(cap.meta),
+      name,
+      source_json: null,
+      target_json: JSON.stringify(cap.target),
+      updated_at_ms: 0,
+    };
   }
 
   private row(name: string): CapRow | null {

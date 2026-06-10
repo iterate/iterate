@@ -57,22 +57,21 @@ type CapTarget =
 
 type WorkerRef = // where an rpc target's worker lives — ONE shape for everything Workers-RPC-reachable
   | { type: "binding"; binding: string } // anything on env: a service binding, env.AI, a queue
-  | { type: "loopback" } // the platform worker's own exports (first-party code)
-  | { type: "project-worker" } // the project worker (user space) — sugar, see below
+  | { type: "loopback" } // the platform worker's own exports (first-party code, incl. the ProjectWorker forwarder)
   | { type: "durable-object"; binding: string; name: string }
   | { type: "source"; source: CapSource }; // a dynamic worker materialized from stored source
 ```
 
-`project-worker` SHIPPED (this section's litmus test below is a live e2e):
-the call crosses to the Project DO as data and is replayed there against
-`getEntrypoint(entrypoint, { props })` on the project's freshly-built
-worker — loader entrypoints cannot cross an RPC boundary, which is why
-this is a dispatch hook rather than the loopback-forwarder normalization
-an earlier draft described. It is not a `source` worker: its code lives in
-the project's repo (worker.js / bundled package) and rebuilds on push, so
-the registry only points at it, never pins it. `entrypoint` names the
-export YOU call; props = definer parameterization + injected
-`{ cap, context, projectId }` attribution, same as loopback refs.
+The project worker SHIPPED as the `ProjectWorker` loopback forwarder (no
+dedicated union kind — review concluded the earlier sketch was right):
+`entrypoint: "ProjectWorker", props: { export: "YourClass", invoke?,
+…params }`. The forwarder hands the call to the Project DO, which replays
+it against `getEntrypoint(props.export, { props })` on the freshly-built
+worker — loader entrypoints cannot cross an RPC boundary, so the call
+crosses as data and a push is live on the next invocation. The price of
+no-new-kind: the USER's export name and inner invoke mode ride in props,
+because the cap's own entrypoint/invoke describe the forwarder hop. The
+litmus test below is a live e2e.
 
 (Revised on review from a flat nine-kind union: the Workers-RPC-reachable
 kinds — binding, loopback, entrypoint, durable-object, config-worker,
@@ -80,6 +79,20 @@ dynamic-worker — were all secretly the same thing, "an RPC target in some
 worker", and collapsed into `rpc` × `WorkerRef`. The full per-kind
 docstrings live in `apps/os/src/itx/types.ts`, which is the design of
 record.)
+
+`url` refs SHIPPED: the registry hands the call as data to the `UrlDial`
+loopback entrypoint (`src/itx/caps/url-dial.ts`), which opens ONE
+WebSocket Cap'n Web session per call in the stateless worker (Law 7 —
+never a DO), replays the cap's invoke mode against the remote main
+(members = property pipelining, still one round trip), and disposes.
+Handshake headers pass through the same `getSecret()` substitution as
+project egress, resolved via the SecretsCapability loopback — so remote
+credentials never appear in registry rows. Always a WebSocket session,
+never an HTTP batch: `newHttpBatchRpcSession` is banned repo-wide by the
+`iterate/no-capnweb-http-batch` lint rule (batch would silently break
+pipelining across awaits; stateless workers hold sockets for a request's
+duration just fine). Known gap: url dials bypass the egress intercept
+tunnel (it cannot carry WebSocket upgrades).
 
 **Inbound vs. outbound is a derived direction, not API surface.** `live` is
 inbound (something holds a connection to me; the cap exists because the
@@ -94,8 +107,8 @@ transports — they are client _implementations_, i.e. ordinary RPC targets.
 The litmus test for the whole design: a user must be able to implement an
 OpenAPI (or MCP) client as a WorkerEntrypoint exported from their own
 project worker and register it as a first-class cap — and the
-first-party `McpClient` must be the SAME shape, just reached via
-`{ type: "loopback" }` instead of `{ type: "project-worker" }`:
+first-party `McpClient` must be the SAME shape — both are loopback
+entrypoints; the user-space one goes through the `ProjectWorker` forwarder:
 
 ```ts
 // First-party MCP client, parameterized per server. Headers carry
@@ -113,12 +126,17 @@ await itx.caps.define({
 
 // User-space OpenAPI client: a class YOU export from your project worker.
 await itx.caps.define({
+  invoke: "path-call",
   name: "petstore",
   target: {
     type: "rpc",
-    worker: { type: "project-worker" },
-    entrypoint: "OpenApiClient",
-    props: { specUrl: "https://petstore.example.com/openapi.json" },
+    worker: { type: "loopback" },
+    entrypoint: "ProjectWorker",
+    props: {
+      export: "OpenApiClient",
+      invoke: "path-call",
+      specUrl: "https://petstore.example.com/openapi.json",
+    },
   },
 });
 ```
@@ -254,6 +272,13 @@ may call it. Open: do wrappers stay one generic `BindingCapability`
 entrypoint in practice, or do AI/browser/queues each want a small bespoke
 wrapper (gateway logic differs per binding)?
 
+Config-driven allowlists SHIPPED: `APP_CONFIG_ITX`
+(`dialableBindings`/`dialableLoopbacks`) merges with the hardcoded
+defaults via `resolveDialableTargets` — config can only WIDEN, so a
+misconfigured deployment never loses first-party caps. The registry hosts
+resolve the merged set once and use it at both define and dial time;
+`BindingCapability` applies the same merge as its authoritative gate.
+
 ## 3. A real global context (and the addressing model)
 
 Today `global` is fake: `resolveItx("global")` builds a handle with
@@ -333,13 +358,24 @@ format and that's fine; write the direction down so the dotted API is
 understood as sugar, and build the universal form only when something needs
 it.
 
+The addressing slice SHIPPED: `itx.streams.get` takes `"/path"`
+(relative), `"ns:/path"`, and `{ namespace?, path }` (absolute). Absolute
+forms are sugar — they construct the narrowed collection and call through
+(rule 1), so the access check lives in exactly one place
+(`ItxStreams.namespace`), now masked as NOT_FOUND like `projects.get`
+(rule 2): a project handle cannot fully-qualify its way out, and named
+access sets work, not just admin. The global REGISTRY node stays
+descoped: `global` still resolves with no registry; nothing needs to
+define caps on it yet, and §8 already gives `global` its cheap birth as a
+code context when something does.
+
 Remaining questions:
 
 - Is the global context's stream the audit surface for project lifecycle
   (created/deleted), the way project `/itx` streams audit cap lifecycle?
   (Symmetry says yes.)
 - Confirm the uncurried `{ namespace, … }` accessor pattern uniformly
-  across repos/streams/workspaces.
+  across repos/streams/workspaces (streams done; repos/workspaces open).
 
 ## 4. Drop codemode — SHIPPED 2026-06-10 (#1445/#1446/#1447, stateless MCP #1464)
 
@@ -569,9 +605,21 @@ events. Static defaults = code context; dynamic setup = snippet (data).
 Same verb, two lifecycles, and the platform uses the same public API users
 do.
 
+The first slice SHIPPED: `defineCodeContext`
+(`src/itx/code-contexts.ts`) is the authoring surface — same verbs as a
+REPL snippet, validated at module init so a bad platform default fails
+the deploy. `ContextRegistryHost.defaults` is the chain link: the
+registry falls through to it on lookup miss, own rows shadow by name,
+and describe() reports inherited caps with the code context's name as
+owner. `platform:project` ships with `ai` (a BindingCapability loopback)
+as the first hardwired built-in to become an ordinary definition; child
+contexts inherit it through the existing per-call parent delegation, no
+extra wiring.
+
 Sequencing: repos/workspace/streams are movable today (loopback refs
-shipped); worker/project wait on the project-worker and durable-object
-refs; fork-with-ancestry rides with the codemode drop.
+shipped); worker/project wait on the durable-object ref (worker could go
+through the ProjectWorker forwarder now); fork-with-ancestry rides with
+the codemode drop.
 
 Open: the splice API shape on fork; ref naming for code contexts
 (`platform:` prefix?); can a context _revoke_ (not just shadow) a code
@@ -585,12 +633,26 @@ default — tombstone rows? Defer until someone needs them.
   All ctx-era vocabulary swept; `extractCodemodeScript` tolerates the
   legacy `async (ctx)` prefix from old histories (param name is the
   author's business).
-- ~~project-worker ref mechanism?~~ → SHIPPED. Not loopback-forwarder
-  normalization: the call crosses to the Project DO as data (loader
-  entrypoints can't cross RPC) and replays against
-  `getEntrypoint(name, { props })` on the freshly built worker. The §1
-  litmus test is a live e2e: first-party McpClient (loopback) and a
-  user-space class pushed to the project repo (project-worker), same shape.
+- ~~project-worker ref mechanism?~~ → SHIPPED, then the union kind DELETED
+  on review ("just have a ProjectWorker named entrypoint on the loopback
+  type"). The one spelling: `worker: { type: "loopback" }, entrypoint:
+"ProjectWorker", props: { export, invoke?, …params }`. The forwarder
+  crosses to the Project DO as data (loader entrypoints can't cross RPC)
+  and replays against `getEntrypoint(props.export, { props })` on the
+  freshly built worker. The §1 litmus test is a live e2e: first-party
+  McpClient and a user-space class pushed to the project repo, same shape.
+- ~~url-ref dial: HTTP batch or WebSocket?~~ → WebSocket, always — a
+  stateless worker holds a socket for a request's duration just fine, and
+  a real session keeps pipelining. `newHttpBatchRpcSession` is banned
+  repo-wide (`iterate/no-capnweb-http-batch`). Header secrets resolve via
+  the SecretsCapability loopback inside UrlDial, not by routing the
+  handshake through the Project DO (which would put the DO in the socket's
+  data path for the session's lifetime — Law 7 in spirit).
+- ~~Where do §8 defaults hook in?~~ → `ContextRegistryHost.defaults`: a
+  `CodeContext` (name + validated cap map from `defineCodeContext`) the
+  registry falls through to on lookup miss. Own rows shadow; describe()
+  merges with the code context's name as owner; child contexts inherit
+  through the existing parent delegation.
 - ~~Does alchemy handle DO class deletion?~~ → Yes (#1464,
   OutboundMcpFromOurClientCapability): removing the namespace emits the
   deleted_classes migration. Tombstone only needed when durable stream
@@ -630,12 +692,11 @@ default — tombstone rows? Defer until someone needs them.
   from `~/auth/principal.ts` so drift is a type error (§5).
 - ~~`CapMeta` with an `http` schema?~~ → Too leaky. Arbitrary metadata with
   one convention: `instructions`, surfaced by `describe()` (§5).
-- ~~Is `config-worker` a primitive WorkerRef kind?~~ → No. Renamed
-  `project-worker` and documented as strict sugar: it normalizes to the
-  first-party `ProjectWorker` loopback forwarder with this project's id.
-  Not a `source` worker either — its code lives in the project's build
-  artifact (the registry points, never pins). Kept as a spelling so
-  `entrypoint` always names the export you call (§1).
+- ~~Is `config-worker` a primitive WorkerRef kind?~~ → No — and neither is
+  `project-worker`; the kind is gone entirely. The `ProjectWorker`
+  loopback forwarder is the whole mechanism (user export + inner invoke
+  mode ride in props). Not a `source` worker either — its code lives in
+  the project's build artifact (the registry points, never pins) (§1).
 - ~~Access model granularity?~~ → Shipped in #1418: Better Auth admin role +
   `project:<id>` scopes, nothing else. One seam in the code for finer-grained
   later; no implementation now. Global authority = admin (§3).
@@ -656,6 +717,9 @@ default — tombstone rows? Defer until someone needs them.
   subscriber events, then namespace deletion (mechanically proven safe).
 - Legacy `executeCodemodeFunctionCall` methods on capability entrypoints —
   delete once nothing dials them; `packages/shared/src/codemode/*` rename.
+- The egress intercept tunnel never sees UrlDial's WebSocket handshakes
+  (it cannot carry upgrades); url-cap traffic is invisible to a connected
+  intercept session.
 
 ## Open questions (rolled up)
 
