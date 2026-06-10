@@ -21,7 +21,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
-import type { BrowserReplEntry, BrowserReplExample } from "~/itx/browser-repl.ts";
+import type { BrowserReplEntry } from "~/itx/browser-repl.ts";
+import type { ItxExample } from "~/itx/examples.ts";
 
 const REPL_SOURCE_PATH = "/repl.ts";
 const replCodeBlockClassName =
@@ -31,7 +32,7 @@ export interface ItxReplProps {
   canRun: boolean;
   code: string;
   entries: BrowserReplEntry[];
-  examples: BrowserReplExample[];
+  examples: ItxExample[];
   examplesOpen: boolean;
   onChangeCode: (code: string) => void;
   onRun: () => void;
@@ -162,6 +163,11 @@ export function ItxRepl({
                   <div className="flex flex-col gap-1">
                     <h3 className="text-sm font-medium">{example.title}</h3>
                     <p className="text-sm text-muted-foreground">{example.description}</p>
+                    <p className="font-mono text-xs text-muted-foreground">
+                      {example.context === "project" ? "project context" : "global context"}
+                      {" · runs in: "}
+                      {example.runtimes.join(", ")}
+                    </p>
                   </div>
                   <SourceCodeBlock
                     code={example.code}

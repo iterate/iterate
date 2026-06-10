@@ -79,6 +79,7 @@ interface ItxCaps {
   define(input: { name: string; target: CapTarget; invoke?: "members" | "path-call"; meta?: JsonRecord }): Promise<{ name: string; ok: true }>;
   revoke(input: { name: string }): Promise<{ name: string; ok: true }>;
   describe(): Promise<CapDescription[]>;
+  shareUrl(input: { name: string; path?: string; ttlSeconds?: number }): Promise<string>;
 }
 
 interface ItxStream {
@@ -127,15 +128,32 @@ interface Itx {
   readonly workspace: ItxWorkspace;
   describe(): Promise<JsonRecord>;
   fetch(input: string | Request, init?: RequestInit): Promise<Response>;
+  fork(opts?: { name?: string }): Promise<Itx>;
   /** Capabilities by name: itx.slack.chat.postMessage(...), itx.todo.add(...) */
   [capName: string]: CapSurface;
 }
 
 declare const itx: Itx;
 declare const env: JsonRecord;
+/** Script parameters — always in scope so catalogue examples run unchanged. */
+declare const vars: Record<string, any>;
+/** Set in a project REPL; undefined in the global one. */
+declare const projectId: string | undefined;
 declare let $_: unknown;
 declare let _: unknown;
+
+/** REPL imports resolve at runtime (bare specifiers via esm.sh); the editor
+ * cannot typecheck them, so every module is \`any\`. */
+declare module "*";
 `;
+
+// REPL snippets are function BODIES at runtime (every runner wraps them in an
+// async function, so a trailing `return` is the documented way to produce a
+// result), but the language service sees them as a module — where TS1108
+// ("A 'return' statement can only be used within a function body.") fires.
+// Filter that one diagnostic instead of wrapping the file: wrapping would
+// shift every position the sync/lint/hover/completion extensions exchange.
+const IGNORED_DIAGNOSTIC_CODES = new Set([1108]);
 
 Comlink.expose(
   createWorker(async () => {
@@ -143,11 +161,23 @@ Comlink.expose(
     fsMap.set(REPL_TYPES_PATH, itxDeclaration);
     fsMap.set(REPL_SOURCE_PATH, "\n");
     const system = createSystem(fsMap);
-    return createVirtualTypeScriptEnvironment(
+    const env = createVirtualTypeScriptEnvironment(
       system,
       [REPL_TYPES_PATH, REPL_SOURCE_PATH],
       ts,
       compilerOptions,
     );
+
+    const languageService = env.languageService;
+    const keepDiagnostic = (diagnostic: ts.Diagnostic) =>
+      !IGNORED_DIAGNOSTIC_CODES.has(diagnostic.code);
+    const getSemanticDiagnostics = languageService.getSemanticDiagnostics.bind(languageService);
+    languageService.getSemanticDiagnostics = (fileName) =>
+      getSemanticDiagnostics(fileName).filter(keepDiagnostic);
+    const getSyntacticDiagnostics = languageService.getSyntacticDiagnostics.bind(languageService);
+    languageService.getSyntacticDiagnostics = (fileName) =>
+      getSyntacticDiagnostics(fileName).filter(keepDiagnostic);
+
+    return env;
   }),
 );

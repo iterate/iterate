@@ -8,12 +8,12 @@ import { createFileRoute } from "@tanstack/react-router";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import {
   browserReplExternalScopesEqual,
-  BROWSER_REPL_EXAMPLES,
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
   runBrowserReplEntry,
   type BrowserReplEntry,
 } from "~/itx/browser-repl.ts";
+import { ITX_EXAMPLES } from "~/itx/examples.ts";
 import type { Itx } from "~/itx/handle.ts";
 import { ItxRepl } from "~/components/itx-repl.tsx";
 
@@ -147,7 +147,7 @@ export function ItxReplPage({
       canRun={Boolean(itx) && status !== "Running..." && code.trim() !== ""}
       code={code}
       entries={entries}
-      examples={BROWSER_REPL_EXAMPLES}
+      examples={ITX_EXAMPLES}
       examplesOpen={examplesOpen}
       onChangeCode={setCode}
       onRun={() => void run()}
