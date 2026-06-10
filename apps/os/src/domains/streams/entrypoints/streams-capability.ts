@@ -7,8 +7,8 @@ import {
   type StreamCursor,
   StreamPath,
 } from "@iterate-com/shared/streams/types";
-import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
 import { ItxError } from "~/itx/errors.ts";
+import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import {
   getStreamDurableObjectName,
   getInitializedStreamStub,
@@ -70,7 +70,6 @@ type StreamsCapabilityClient = Pick<
   | "appendBatch"
   | "create"
   | "getState"
-  | "list"
   | "listChildren"
   | "read"
   | "stream"
@@ -103,8 +102,6 @@ export class StreamsCapability extends WorkerEntrypoint<
         return await this.appendBatch(options as StreamAppendBatchInput);
       case "create":
         return await this.create(options as StreamPathInput);
-      case "list":
-        return await this.list();
       case "read":
         return await this.read(options as StreamReadInput);
       case "getState":
@@ -161,27 +158,6 @@ export class StreamsCapability extends WorkerEntrypoint<
       path: this.resolveNamespacePath(input),
       namespace: this.ctx.props.projectId,
     });
-  }
-
-  async list() {
-    // One Durable Object call: every stream/created is announced to all of its
-    // ancestor streams, and the root stream's reduced state accumulates the
-    // full announced paths in descendantPaths. Streams persisted before that
-    // field existed are rebuilt by CORE_STATE_VERSION replay on their next
-    // wake, so the root state is authoritative — no per-stream DO walk.
-    const rootState = await getNamespaceStreamState({
-      durableObjectNamespace: this.env.STREAM,
-      namespace: this.ctx.props.projectId,
-      path: StreamPath.parse("/"),
-    });
-    const paths = ["/", ...rootState.descendantPaths];
-    return paths.map((path) => ({
-      name: `${this.ctx.props.projectId}:${path}`,
-      namespace: this.ctx.props.projectId,
-      streamPath: StreamPath.parse(path),
-      createdAt: new Date(0).toISOString(),
-      lastWokenAt: new Date(0).toISOString(),
-    }));
   }
 
   async read(input: StreamReadInput = {}): Promise<Event[]> {

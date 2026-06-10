@@ -305,9 +305,9 @@ function compileBangCommand(input: {
     if (input.channel == null || input.threadTs == null) return null;
     return {
       code: [
-        "async (ctx) => {",
-        "  const debug = await ctx.debug();",
-        "  await ctx.slack.chat.postMessage({",
+        "async (itx) => {",
+        "  const debug = await itx.debug();",
+        "  await itx.slack.chat.postMessage({",
         `    channel: ${JSON.stringify(input.channel)},`,
         `    thread_ts: ${JSON.stringify(input.threadTs)},`,
         "    text: `Debug info:\\n${debug}`,",
@@ -317,10 +317,14 @@ function compileBangCommand(input: {
     };
   }
 
-  let expression = rawCommand.startsWith("ctx.") ? rawCommand : `ctx.${rawCommand}`;
+  let expression = rawCommand.startsWith("itx.")
+    ? rawCommand
+    : rawCommand.startsWith("ctx.")
+      ? `itx.${rawCommand.slice(4)}`
+      : `itx.${rawCommand}`;
   if (!expression.includes("(")) expression = `${expression}()`;
 
-  const lines = ["async (ctx) => {", `  await ${expression};`, "}"];
+  const lines = ["async (itx) => {", `  await ${expression};`, "}"];
   return { code: lines.join("\n") };
 }
 

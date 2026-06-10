@@ -57,24 +57,6 @@ export function projectAgentRuntimeStateQueryOptions(input: {
   };
 }
 
-export function projectCodemodeSessionsQueryOptions(projectId: string) {
-  return {
-    ...orpc.project.codemode.listSessions.queryOptions({
-      input: { projectSlugOrId: projectId },
-    }),
-    staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
-  };
-}
-
-export function projectCodemodeSessionQueryOptions(input: { name: string; projectId: string }) {
-  return {
-    ...orpc.project.codemode.findSession.queryOptions({
-      input: { name: input.name, projectSlugOrId: input.projectId },
-    }),
-    staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
-  };
-}
-
 export function projectInboundMcpSessionsQueryOptions(projectId: string) {
   return {
     ...orpc.project.inboundMcpServer.listSessions.queryOptions({

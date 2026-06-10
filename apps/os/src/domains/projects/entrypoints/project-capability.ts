@@ -25,10 +25,6 @@ export class ProjectCapability extends WorkerEntrypoint<
     return this.ctx.exports.AiCapability({ props: this.projectProps });
   }
 
-  fetchCapability() {
-    return this.ctx.exports.FetchCapability({ props: this.projectProps });
-  }
-
   gmail() {
     return this.ctx.exports.GmailCapability({ props: this.projectProps });
   }

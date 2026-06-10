@@ -400,9 +400,13 @@ test("kernel errors cross capnweb as ItxError-shaped errors with codes", async (
     (thrown: unknown) => thrown as Error & { code?: unknown; details?: unknown },
   );
   expect(error).not.toBeNull();
-  // Deliberately NOT asserting error.name: capnweb's receiver rebuilds a
-  // plain Error (custom names and class identity do not survive the wire —
-  // DECISIONS D18); the duck-typed code/details props are the whole contract.
+  // capnweb 0.8.0 reconstructs unknown error names as plain Error and drops
+  // the name (ERROR_TYPES[name] || Error; the props loop skips "name"), so
+  // class/name identity is untransmittable — detection is duck-typed via the
+  // own enumerable code/details props, which DO cross (DECISIONS D18).
+  expect(error!.name).toBe("Error");
+  expect(error!.code).toBe("NOT_FOUND");
+  // And the helper the whole client layer uses must agree:
   expect(getItxErrorCode(error)).toBe("NOT_FOUND");
   expect(error!.details).toEqual({ projectIdOrSlug: "definitely-not-a-project" });
 });

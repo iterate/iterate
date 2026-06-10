@@ -21,7 +21,7 @@ import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent
  * route context, transcribing Slack messages into agent input, generating
  * bang-command codemode scripts, handling Slack-facing status side effects
  * through host-provided dependencies, and serving event-based
- * `ctx.slack.agent.*` codemode functions.
+ * `itx.slack.*` capability calls.
  */
 export const SlackAgentProcessorContract = defineProcessorContract({
   slug: "slack-agent",

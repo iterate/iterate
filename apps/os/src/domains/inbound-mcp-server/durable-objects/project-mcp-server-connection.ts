@@ -89,6 +89,9 @@ const sessionSlugStorageKey = "mcpServerSessionSlug";
 const eventTypePrefix = "events.iterate.com/mcp-server";
 const requiredToolScope = "profile";
 
+/** Bump when SEEDED_CAPS changes; existing sessions re-seed on next call. */
+const MCP_CONTEXT_CAPS_VERSION = "1";
+
 /** Capabilities every MCP session context starts with (instructions feed the
  * exec_js tool description AND itx describe()). */
 const SEEDED_CAPS: Array<{
@@ -134,11 +137,11 @@ export class ProjectMcpServerConnection extends McpAgent<
       instructions: [
         "This is an Iterate OS project MCP server. You have one tool: exec_js.",
         "",
-        "exec_js runs JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async ({ itx }) => { ... }`.",
+        "exec_js runs JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async (itx) => { ... }` — the one argument is your iterate context handle.",
         "",
         "The `itx` object is a handle on this session's iterate context: built-ins (itx.fetch, itx.streams, itx.caps) plus every capability on the context, called as `itx.<cap>.<method>(args)`. Available capabilities are listed in the exec_js tool description.",
         "",
-        "Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP requests (it rides project egress with secret substitution). The return value is sent back as the result. Do NOT write bare statements — always wrap in `async ({ itx }) => { ... }`.",
+        "Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP requests (it rides project egress with secret substitution). The return value is sent back as the result. Do NOT write bare statements — always wrap in `async (itx) => { ... }`.",
       ].join("\n"),
     },
   );
@@ -206,15 +209,15 @@ export class ProjectMcpServerConnection extends McpAgent<
       {
         title: "Run code",
         description: [
-          "Execute JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async ({ itx }) => { ... }`.",
+          "Execute JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async (itx) => { ... }`.",
           "",
-          "The function receives `{ itx }`, a handle on this session's iterate context. Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP (project egress, secret substitution). The return value (or thrown error) is sent back as the tool result.",
+          "The function receives `itx`, a handle on this session's iterate context. Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP (project egress, secret substitution). The return value (or thrown error) is sent back as the tool result.",
           "If you're not sure about the shape of the result of a call, just return it and you'll be shown it on your next turn.",
           "",
           "Available capabilities on itx:",
           providerDocs,
           "",
-          'Example: async ({ itx }) => { const msgs = await itx.gmail.request({ path: "/gmail/v1/users/me/messages", query: { maxResults: 5 } }); return msgs.data; }',
+          'Example: async (itx) => { const msgs = await itx.gmail.request({ path: "/gmail/v1/users/me/messages", query: { maxResults: 5 } }); return msgs.data; }',
         ].join("\n"),
         inputSchema: schema,
       },
@@ -306,15 +309,33 @@ export class ProjectMcpServerConnection extends McpAgent<
    * delegates up to the project context (the itx prototype chain).
    */
   private async ensureItxContext(projectId: string): Promise<string> {
+    // Single-flight per project: concurrent exec_js calls must not race the
+    // storage get/put into minting two context ids.
+    const inflight = this.#ensureItxContextPromises.get(projectId);
+    if (inflight) return await inflight;
+    const promise = this.#ensureItxContextOnce(projectId).finally(() => {
+      this.#ensureItxContextPromises.delete(projectId);
+    });
+    this.#ensureItxContextPromises.set(projectId, promise);
+    return await promise;
+  }
+
+  readonly #ensureItxContextPromises = new Map<string, Promise<string>>();
+
+  async #ensureItxContextOnce(projectId: string): Promise<string> {
     const storageKey = `itxContextId:${projectId}`;
+    const versionKey = `itxContextCapsVersion:${projectId}`;
     const existing = await this.ctx.storage.get<string>(storageKey);
-    if (existing) return existing;
+    const seededVersion = await this.ctx.storage.get<string>(versionKey);
+    if (existing && seededVersion === MCP_CONTEXT_CAPS_VERSION) return existing;
 
     const config = parseConfig(this.env as unknown as Env);
-    const contextId = typeid({
-      env: { TYPEID_PREFIX: config.typeIdPrefix },
-      prefix: "ctx",
-    });
+    const contextId =
+      existing ??
+      typeid({
+        env: { TYPEID_PREFIX: config.typeIdPrefix },
+        prefix: "ctx",
+      });
     const contextStub = this.env.ITX_CONTEXT.getByName(contextId);
     await contextStub.initialize({
       id: contextId,
@@ -331,6 +352,7 @@ export class ProjectMcpServerConnection extends McpAgent<
       });
     }
     await this.ctx.storage.put(storageKey, contextId);
+    await this.ctx.storage.put(versionKey, MCP_CONTEXT_CAPS_VERSION);
     return contextId;
   }
 
@@ -511,7 +533,7 @@ export class ProjectMcpServerConnection extends McpAgent<
       code: z
         .string()
         .describe(
-          "JavaScript async arrow function to execute, e.g. `async (ctx) => { return await ctx.os.listProcedures(); }`",
+          "JavaScript async arrow function to execute, e.g. `async (itx) => { return await itx.os.listProcedures(); }`",
         ),
       ...(options.requireProjectInput
         ? {

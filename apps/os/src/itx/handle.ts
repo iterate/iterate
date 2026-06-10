@@ -74,7 +74,14 @@ export type ItxRuntime = {
   exports: Record<string, (options: { props: Record<string, unknown> }) => unknown>;
 };
 
-const ITX_WORKSPACE_ID = "itx";
+/**
+ * Project contexts share one workspace ("itx"); child contexts each get
+ * their own, derived from the context id — an agent session's repo clones
+ * and files are isolated per context.
+ */
+function itxWorkspaceId(contextId: string): string {
+  return isChildContextId(contextId) ? `itx:${contextId}` : "itx";
+}
 
 export class Itx extends RpcTarget {
   readonly #runtime: ItxRuntime;
@@ -149,7 +156,10 @@ export class Itx extends RpcTarget {
       throw new Error("WorkspaceCapability export is not available.");
     }
     return factory({
-      props: { projectId: this.#requireProjectId(), workspaceId: ITX_WORKSPACE_ID },
+      props: {
+        projectId: this.#requireProjectId(),
+        workspaceId: itxWorkspaceId(this.#runtime.contextId),
+      },
     });
   }
 
@@ -288,11 +298,10 @@ export class Itx extends RpcTarget {
   }
 }
 
-/** Itx scripts are plain functions of ({ itx, vars }) — spec §2. */
-export type ItxFn<V = Record<string, unknown>, R = unknown> = (input: {
-  itx: Itx;
-  vars: V;
-}) => Promise<R> | R;
+/** Itx scripts are plain functions of the handle: `async (itx) => …`.
+ * Parameterization is the caller's concern — bake values into the source
+ * (the /api/itx/run endpoint does this for its `vars` API). */
+export type ItxFn<R = unknown> = (itx: Itx) => Promise<R> | R;
 
 /**
  * Map an SDK's type surface onto its itx stub: every function becomes async,
@@ -431,10 +440,6 @@ export class ItxStreams extends RpcTarget {
       });
     }
     return new ItxStreams(this.runtime, StreamNamespace.parse(namespace));
-  }
-
-  async list() {
-    return await this.client().list();
   }
 
   async create(input: { streamPath: string }) {

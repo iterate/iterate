@@ -4,14 +4,11 @@
 // loader can never seed a different cache entry than the component reads,
 // and one invalidation reaches every consumer.
 
-import { StreamState, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { itxKey, useItxQuery, type ItxHandle } from "~/itx/react/index.ts";
 import type { ItxQueryDefinition } from "~/itx/loader.ts";
 import { PROJECT_CHILD_ROUTE_STALE_TIME } from "~/lib/project-route-query.ts";
-
-export function projectStreamsListKey(projectId: string) {
-  return itxKey.project(projectId, "streams", "list");
-}
+import { StreamNavigationState } from "~/lib/stream-navigation-state.ts";
 
 export function projectStreamStateKey(projectId: string, streamPath: StreamPathType) {
   return itxKey.project(projectId, "streams", "state", streamPath);
@@ -32,18 +29,20 @@ export function useProjectStreamsList(projectId: string) {
 }
 
 /**
- * One stream's reduced state. Shared by the streams index tree (which seeds
- * the root path from its route loader), the breadcrumb navigators, and any
- * future view of the same stream — all on the same cache entry per path.
+ * One stream's reduced state, parsed to the navigation shape. Shared by the
+ * streams index tree (which seeds the root path from its route loader), the
+ * breadcrumb navigators, and any future view of the same stream — all on the
+ * same cache entry per path.
  */
 export function projectStreamStateQuery(input: {
   projectId: string;
   streamPath: StreamPathType;
-}): ItxQueryDefinition<StreamState> {
+}): ItxQueryDefinition<StreamNavigationState> {
   return {
     project: input.projectId,
     queryKey: projectStreamStateKey(input.projectId, input.streamPath),
-    queryFn: async (itx) => StreamState.parse(await itx.streams.get(input.streamPath).getState()),
+    queryFn: async (itx) =>
+      StreamNavigationState.parse(await itx.streams.get(input.streamPath).getState()),
     staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
   };
 }

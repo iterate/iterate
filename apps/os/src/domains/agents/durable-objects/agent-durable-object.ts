@@ -17,7 +17,7 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
 import { typeid } from "@iterate-com/shared/typeid";
-import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
+import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import type { ContextDO } from "~/itx/context-do.ts";
 import type { CapInvoke, SerializableCapTarget } from "~/itx/protocol.ts";
 import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
@@ -53,7 +53,6 @@ import {
   type WorkspaceDurableObject,
   type WorkspaceStructuredName,
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
-import { defaultWorkspaceIdForCodemodeSession } from "~/domains/workspaces/entrypoints/workspace-provider-registration.ts";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import {
   DEFAULT_AGENT_LLM_PROVIDER,
@@ -469,6 +468,18 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
    * changes so existing agents re-define caps (defines upsert; the
    * capability-noted idempotency keys dedupe re-appends per cap name). */
   async ensureItxContext(params: AgentDurableObjectStructuredName): Promise<string> {
+    // Single-flight: the wake hook's workspace prep (waitUntil) and script
+    // runs can call this concurrently; without memoization the interleaved
+    // storage get/put could mint two different context ids.
+    this.#ensureItxContextPromise ??= this.#ensureItxContextOnce(params).finally(() => {
+      this.#ensureItxContextPromise = undefined;
+    });
+    return await this.#ensureItxContextPromise;
+  }
+
+  #ensureItxContextPromise: Promise<string> | undefined;
+
+  async #ensureItxContextOnce(params: AgentDurableObjectStructuredName): Promise<string> {
     const existing = await this.ctx.storage.get<string>("itxContextId");
     const seededVersion = await this.ctx.storage.get<string>("itxContextCapsVersion");
     if (existing && seededVersion === AGENT_CONTEXT_CAPS_VERSION) return existing;
@@ -567,10 +578,11 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   private async getAgentWorkspace(params: AgentDurableObjectStructuredName) {
+    const contextId = await this.ensureItxContext(params);
     return await getInitializedDoStub({
       allowCreate: true,
       namespace: this.env.WORKSPACE,
-      name: agentWorkspaceName(params),
+      name: agentWorkspaceName({ contextId, params }),
     });
   }
 
@@ -721,7 +733,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         : [
             {
               instructions:
-                "Use ctx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
+                "Use itx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
               invoke: "path-call" as const,
               name: "chat",
               target: agentTool("chat"),
@@ -729,42 +741,42 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
           ]),
       {
         instructions:
-          "Use ctx.debug() to return OS debug information about the current agent stream.",
+          "Use itx.debug() to return OS debug information about the current agent stream.",
         invoke: "path-call" as const,
         name: "debug",
         target: agentTool("debug"),
       },
       {
         instructions:
-          "Workers AI. ctx.ai.run(model, input) — e.g. ctx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
+          "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
         invoke: "members" as const,
         name: "ai",
         target: { type: "rpc", worker: { binding: "AI", type: "binding" } },
       },
       {
         instructions:
-          "Project-bound OS API. Call ctx.os.listProcedures() for the TypeScript surface, then ctx.os.<path.to.procedure>({ …input }).",
+          "Project-bound OS API. Call itx.os.listProcedures() for the TypeScript surface, then itx.os.<path.to.procedure>({ …input }).",
         invoke: "path-call" as const,
         name: "os",
         target: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
-          "Gmail for this project's connected Google account. ctx.gmail.request({ path, method?, query?, body? }).",
+          "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }).",
         invoke: "members" as const,
         name: "gmail",
         target: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
-          "Use ctx.slack.<Slack Web API method path>(args), e.g. ctx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If no reply is needed, do not call chat.postMessage. For legitimate long-running Slack replies, use Promise.all to send an immediate acknowledgment while doing the real work in parallel, then send the actual result afterwards.",
+          "Use itx.slack.<Slack Web API method path>(args), e.g. itx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If no reply is needed, do not call chat.postMessage. For legitimate long-running Slack replies, use Promise.all to send an immediate acknowledgment while doing the real work in parallel, then send the actual result afterwards.",
         invoke: "path-call" as const,
         name: "slack",
         target: { entrypoint: "SlackCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
-          "Use ctx.agents.create() to get a promise-pipelineable subagent handle, e.g. await ctx.agents.create().doThing(args).",
+          "Use itx.agents.create() to get a promise-pipelineable subagent handle, e.g. await itx.agents.create().doThing(args).",
         invoke: "members" as const,
         name: "agents",
         target: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },
@@ -911,10 +923,15 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
   );
 }
 
-function agentWorkspaceName(params: AgentDurableObjectStructuredName): WorkspaceStructuredName {
+function agentWorkspaceName(input: {
+  contextId: string;
+  params: AgentDurableObjectStructuredName;
+}): WorkspaceStructuredName {
   return {
-    projectId: params.projectId,
-    workspaceId: defaultWorkspaceIdForCodemodeSession({ streamPath: params.agentPath }),
+    projectId: input.params.projectId,
+    // Must match the itx handle's workspace derivation (handle.ts): agent
+    // scripts reach this workspace as ctx.workspace.
+    workspaceId: `itx:${input.contextId}`,
   };
 }
 

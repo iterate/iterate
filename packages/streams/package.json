@@ -32,7 +32,9 @@
     "build": "pnpm --dir example-app build",
     "preview": "pnpm --dir example-app preview",
     "deploy": "pnpm --dir example-app run deploy",
-    "test": "vitest run",
+    "test": "vitest run && vitest run --config vitest.workers.config.ts",
+    "test:node": "vitest run",
+    "test:workers": "vitest run --config vitest.workers.config.ts",
     "test:e2e": "pnpm --dir example-app test:e2e",
     "typecheck": "tsc --noEmit"
   },
@@ -44,6 +46,7 @@
     "zod": "~4.3.6"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
     "@cloudflare/workers-types": "catalog:cloudflare",
     "@types/node": "^24.12.4",
     "@types/react": "^19.2.15",

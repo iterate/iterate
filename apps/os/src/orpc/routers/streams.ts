@@ -17,11 +17,6 @@ import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
 
 export const projectStreamsRouter = {
-  list: os.project.streams.list.use(projectScopeMiddleware).handler(async ({ context }) => {
-    const project = requireProjectScope(context);
-    const streams = await getProjectStreamsCapability(context, project.id).list();
-    return { streams };
-  }),
   create: os.project.streams.create
     .use(projectScopeMiddleware)
     .handler(async ({ context, input }) => {

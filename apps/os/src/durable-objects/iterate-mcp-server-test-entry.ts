@@ -1,18 +1,17 @@
 import { McpAgent } from "agents/mcp";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
-import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
+import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import type { ProjectMcpServerConnectionProps } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 
-export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
+export { CodemodeSession } from "~/durable-objects/codemode-session-tombstone.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export {
   MockArtifactAgentDurableObject as AgentDurableObject,
   MockArtifactsBinding,
 } from "./mock-artifacts-binding.ts";
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
-export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
-export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
+export { AiCapability, OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";

@@ -99,14 +99,6 @@ export const CoreProcessorContract = defineProcessorContract({
     eventCount: z.number().int().min(0),
     maxOffset: z.number().int().min(0),
     childPaths: z.array(z.string().trim().min(1)),
-    // Full paths of every descendant stream announced to this stream (insertion
-    // order, deduped) — not just immediate children like `childPaths`. The root
-    // stream's copy is the namespace's stream catalog: one getState("/") call
-    // enumerates every stream without walking child DOs. The `.default([])`
-    // only keeps state persisted by an older reducer parseable; actually
-    // backfilling the field is the job of CORE_STATE_VERSION in the Stream
-    // Durable Object, which replays the event log when the version changes.
-    descendantPaths: z.array(z.string().trim().min(1)).default([]),
     paused: z.boolean(),
     pauseReason: z.string().nullable(),
     processorsBySlug: z.record(
@@ -147,7 +139,6 @@ export const CoreProcessorContract = defineProcessorContract({
     eventCount: 0,
     maxOffset: 0,
     childPaths: [],
-    descendantPaths: [],
     paused: false,
     pauseReason: null,
     processorsBySlug: {},
@@ -182,8 +173,7 @@ export const CoreProcessorContract = defineProcessorContract({
       }),
     },
     "events.iterate.com/stream/child-stream-created": {
-      description:
-        "Records a descendant stream under this stream: the immediate child segment in childPaths and the full announced path in descendantPaths.",
+      description: "Records the immediate child stream segment under this stream.",
       payloadSchema: z.object({
         childPath: z.string().trim().min(1),
       }),

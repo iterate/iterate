@@ -93,13 +93,13 @@ describe("SlackAgentProcessor", () => {
       },
     });
     const code = (appended[0]!.event.payload as { code: string }).code;
-    expect(code).toContain("const debug = await ctx.debug();");
-    expect(code).toContain("await ctx.slack.chat.postMessage({");
+    expect(code).toContain("const debug = await itx.debug();");
+    expect(code).toContain("await itx.slack.chat.postMessage({");
     expect(code).toContain('channel: "C123"');
     expect(code).toContain('thread_ts: "1772136258.963519"');
     expect(code).toContain("text: `Debug info:\\n${debug}`");
-    expect(code).not.toContain("ctx.slack.agent.threadInfo");
-    expect(code).not.toContain("ctx.slack.threadInfo");
+    expect(code).not.toContain("slack.agent.threadInfo()");
+    expect(code).not.toContain("slack.threadInfo");
   });
 
   it("emits direct codemode scripts for non-debug bang commands", async () => {
@@ -113,8 +113,8 @@ describe("SlackAgentProcessor", () => {
 
     expect(appended).toHaveLength(1);
     const code = (appended[0]!.event.payload as { code: string }).code;
-    expect(code).toContain("await ctx.slack.agent.threadInfo();");
-    expect(code).not.toContain("ctx.slack.chat.postMessage");
+    expect(code).toContain("await itx.slack.agent.threadInfo();");
+    expect(code).not.toContain("slack.chat.postMessage");
     expect(code).not.toContain("const debug = await");
   });
 

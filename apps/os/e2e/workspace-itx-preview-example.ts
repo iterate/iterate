@@ -56,7 +56,7 @@ function readProjectSlug() {
   const explicit = process.env.OS_WORKSPACE_CODEMODE_PROJECT_SLUG?.trim();
   if (explicit) return explicit;
 
-  return `workspace-codemode-example-${Date.now()}`;
+  return `workspace-itx-example-${Date.now()}`;
 }
 
 async function createProject(input: { adminApiSecret: string; baseUrl: URL; slug: string }) {
@@ -124,7 +124,7 @@ async function runWorkspaceCodemodeProof(input: { bearerToken: string; mcpUrl: U
     },
   });
   const client = new Client({
-    name: "os-workspace-codemode-preview-example",
+    name: "os-workspace-itx-preview-example",
     version: "1.0.0",
   });
 
@@ -154,8 +154,8 @@ async function runWorkspaceCodemodeProof(input: { bearerToken: string; mcpUrl: U
 }
 
 function workspaceCodemodeScript() {
-  return `async (ctx) => {
-  const repo = await ctx.repos.get({ slug: "iterate-config" }).getInfo();
+  return `async (itx) => {
+  const repo = await itx.repos.get({ slug: "iterate-config" }).getInfo();
   const dir = \`/workspace-preview-example-\${Date.now()}\`;
   const fileName = \`workspace-preview-example-\${Date.now()}.md\`;
   const password = repo.token.includes("?expires=")
@@ -163,7 +163,7 @@ function workspaceCodemodeScript() {
     : repo.token;
   const auth = { username: "x", password };
 
-  await ctx.workspace.git.clone({
+  await itx.workspace.git.clone({
     url: repo.remote,
     dir,
     branch: repo.defaultBranch,
@@ -172,18 +172,18 @@ function workspaceCodemodeScript() {
   });
 
   const filePath = \`\${dir}/\${fileName}\`;
-  await ctx.workspace.writeFile(
+  await itx.workspace.writeFile(
     filePath,
-    \`# Workspace codemode preview example\\n\\nCreated: \${new Date().toISOString()}\\n\`,
+    \`# Workspace itx preview example\\n\\nCreated: \${new Date().toISOString()}\\n\`,
   );
-  const readBack = await ctx.workspace.readFile(filePath);
-  await ctx.workspace.git.add({ dir, filepath: fileName });
-  const commit = await ctx.workspace.git.commit({
+  const readBack = await itx.workspace.readFile(filePath);
+  await itx.workspace.git.add({ dir, filepath: fileName });
+  const commit = await itx.workspace.git.commit({
     dir,
     message: "Verify workspace codemode preview example",
     author: { name: "Codemode", email: "codemode@iterate.com" },
   });
-  const pushed = await ctx.workspace.git.push({
+  const pushed = await itx.workspace.git.push({
     dir,
     remote: "origin",
     ref: repo.defaultBranch,
@@ -200,7 +200,7 @@ function workspaceCodemodeScript() {
       remote: repo.remote,
       defaultBranch: repo.defaultBranch,
     },
-    status: await ctx.workspace.git.status({ dir }),
+    status: await itx.workspace.git.status({ dir }),
   };
 }`;
 }
