@@ -68,6 +68,7 @@ import {
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
+import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
 import { platformProjectContext } from "~/itx/code-contexts.ts";
@@ -141,6 +142,28 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
       }),
     cloneRepo: (input) => this.cloneWorkerRepo(input),
     bundle: (files) => this.bundleWorkerCode(files),
+    // Every successful build leaves its fact on the stream — creation AND
+    // later rebuilds — so processor state tracks what dispatch serves. The
+    // per-commit idempotency key dedupes same-commit rebuilds.
+    onBuilt: (checkout) => {
+      this.ctx.waitUntil(
+        (async () => {
+          const stream = await this.projectStream(this.projectId);
+          await stream.append({
+            type: "events.iterate.com/project/config-worker-built",
+            idempotencyKey: `project-config-worker-built:${this.projectId}:${checkout.commitOid}`,
+            payload: {
+              commitOid: checkout.commitOid,
+              mainModule: checkout.workerCode.mainModule,
+              projectId: this.projectId,
+              repoSlug: ITERATE_CONFIG_REPO_SLUG,
+            },
+          });
+        })().catch((error) => {
+          console.error(`[ProjectDO] config-worker-built append failed:`, error);
+        }),
+      );
+    },
   });
   #projectProcessor = this.host.add(
     ProjectProcessorContract.slug,

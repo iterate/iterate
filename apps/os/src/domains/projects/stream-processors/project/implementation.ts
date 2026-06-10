@@ -40,7 +40,6 @@ import {
   EXAMPLE_EGRESS_SECRET_MATERIAL,
   EXAMPLE_EGRESS_SECRET_METADATA,
 } from "~/domains/secrets/example-secret.ts";
-import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import {
@@ -158,22 +157,12 @@ export class ProjectProcessor extends StreamProcessor<
       });
     });
 
-    // The build is observable (worker-built event) but never gates creation:
-    // ingress builds on demand, so a failure here self-heals on next request.
+    // The build never gates creation: ingress builds on demand, so a failure
+    // here self-heals on the next request. WorkerHost appends the
+    // config-worker-built fact on EVERY successful build (creation and later
+    // rebuilds alike — its onBuilt hook), so nothing is appended here.
     args.runInBackground(async () => {
-      const checkout = await this.deps.workerHost.buildFresh({ id: projectId, slug });
-      await this.ctx.stream.append({
-        event: {
-          type: "events.iterate.com/project/config-worker-built",
-          idempotencyKey: `project-config-worker-built:${projectId}:${checkout.commitOid}`,
-          payload: {
-            commitOid: checkout.commitOid,
-            mainModule: checkout.workerCode.mainModule,
-            projectId,
-            repoSlug: ITERATE_CONFIG_REPO_SLUG,
-          },
-        },
-      });
+      await this.deps.workerHost.buildFresh({ id: projectId, slug });
     });
   }
 

@@ -176,6 +176,12 @@ export type WorkerHostDeps = {
   getRepo: (project: WorkerProject) => Promise<RepoInfo>;
   /** Clone the repo into the workspace. Overridable seam for tests. */
   cloneRepo: (input: WorkerWorkspace & { repo: RepoInfo }) => Promise<unknown>;
+  /**
+   * Fires after EVERY successful build (creation and later rebuilds alike) —
+   * the hosting DO appends the config-worker-built fact here, so the stream
+   * tracks worker versions uniformly.
+   */
+  onBuilt: (checkout: WorkerCheckout) => void;
   /** Bundle a multi-file checkout (package.json present) into worker code. */
   bundle: (files: Record<string, string>) => Promise<WorkerCode>;
 };
@@ -233,6 +239,7 @@ export class WorkerHost {
     await this.#deps.ctx.storage.put(CHECKOUT_STORAGE_KEY, checkout);
     await this.#deps.ctx.storage.put(READY_STORAGE_KEY, true);
     await this.#deps.ctx.storage.put(REFRESHED_AT_STORAGE_KEY, Date.now());
+    this.#deps.onBuilt(checkout);
     return checkout;
   }
 
