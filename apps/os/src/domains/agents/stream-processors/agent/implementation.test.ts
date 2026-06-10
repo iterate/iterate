@@ -369,6 +369,116 @@ describe("AgentProcessor", () => {
     expect(appended).toEqual([]);
   });
 
+  it("recovers a triggering input whose scheduling side effect was skipped by the side-effect anchor", async () => {
+    // Production regression (2026-06-10): on a freshly bootstrapped Slack
+    // thread stream, the slack-agent processor rendered the webhook into a
+    // triggering input-added before this processor's subscription was
+    // configured. The host anchored side effects at the subscription-configured
+    // offset, so the input was reduced as historical and no llm-request was
+    // ever scheduled — the agent never replied. The subscriber-connected fact
+    // (always above the anchor) must recover the skipped trigger.
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream, sideEffectsAfterOffset: 15 });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agent/input-added",
+          payload: { content: "<@bot> yo" },
+          offset: 9,
+        }),
+        subscriberConnectedEvent({ offset: 25 }),
+      ],
+      streamMaxOffset: 25,
+    });
+
+    expect(appended).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        // Keyed off the trigger input, identical to the live path's key, so a
+        // raced live append dedups in the stream instead of double-scheduling.
+        idempotencyKey: "agent/llm-request-scheduled@9",
+      }),
+    ]);
+  });
+
+  it("does not recover a non-triggering input below the side-effect anchor", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream, sideEffectsAfterOffset: 15 });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agent/input-added",
+          payload: {
+            content: "context row",
+            llmRequestPolicy: { behaviour: "dont-trigger-request" },
+          },
+          offset: 9,
+        }),
+        subscriberConnectedEvent({ offset: 25 }),
+      ],
+      streamMaxOffset: 25,
+    });
+
+    expect(appended).toEqual([]);
+  });
+
+  it("queues an anchor-skipped trigger when a request is already in flight", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({
+      stream,
+      sideEffectsAfterOffset: 20,
+      snapshot: {
+        offset: 12,
+        state: {
+          ...initialState(),
+          currentRequest: { phase: "requested", llmRequestId: 12 },
+        },
+      },
+    });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agent/input-added",
+          payload: { content: "follow up" },
+          offset: 18,
+        }),
+        subscriberConnectedEvent({ offset: 25 }),
+      ],
+      streamMaxOffset: 25,
+    });
+
+    expect(appended).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-queued",
+        idempotencyKey: "agent/llm-request-queued@18",
+      }),
+    ]);
+  });
+
+  it("leaves live triggers to the input-added handler instead of double-scheduling on subscriber-connected", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agent/input-added",
+          payload: { content: "hello" },
+          offset: 42,
+        }),
+        subscriberConnectedEvent({ offset: 43 }),
+      ],
+      streamMaxOffset: 43,
+    });
+
+    expect(
+      appended.filter((event) => event.type === "events.iterate.com/agent/llm-request-scheduled"),
+    ).toHaveLength(1);
+  });
+
   it("re-arms the debounce from durable state when input arrives after a restart", async () => {
     vi.useFakeTimers();
     const { stream, appended } = memoryStream();
@@ -598,11 +708,15 @@ function newAgentProcessor(args: {
   stream: StreamProcessorIterateContext["stream"];
   snapshot?: StreamProcessorSnapshot<AgentState>;
   readStreamEvents?: () => Promise<StreamEvent[]>;
+  sideEffectsAfterOffset?: number;
 }) {
   return new AgentProcessor({
     iterateContext: { stream: args.stream },
     readState: () => args.snapshot,
     readStreamEvents: args.readStreamEvents ?? (async () => []),
+    ...(args.sideEffectsAfterOffset === undefined
+      ? {}
+      : { sideEffectsAfterOffset: () => args.sideEffectsAfterOffset! }),
   });
 }
 
