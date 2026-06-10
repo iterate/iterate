@@ -121,7 +121,18 @@ export type SerializableCapTarget =
  * (fail fast) and again at dial time (authoritative).
  */
 export const DIALABLE_BINDINGS: ReadonlySet<string> = new Set(["AI"]);
-export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set(["BindingCapability", "McpClient"]);
+/**
+ * Loopback entrypoints listed here MUST scope strictly by the dial-time
+ * props the registry injects ({ cap, context, projectId }) — never by
+ * definer-supplied props — because anyone with a handle on a context can
+ * define a cap dialing them.
+ */
+export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
+  "BindingCapability",
+  "GmailCapability",
+  "McpClient",
+  "OrpcCapability",
+]);
 
 /**
  * Normalize a define() input to a serializable target. Legacy callers pass

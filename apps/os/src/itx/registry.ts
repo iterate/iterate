@@ -400,6 +400,11 @@ export class ContextRegistry {
             // Attribution wins over definer-supplied props, by spread order.
             cap: name,
             context: this.host.contextId,
+            // Spoof-proofing: first-party entrypoints that scope by project
+            // read props.projectId; the registry forces it to the owning
+            // project so a definer can never point a dialable loopback at
+            // someone else's project.
+            projectId: this.host.projectId,
           },
         });
         return { target: stub, dispose: () => disposeIfPossible(stub) };

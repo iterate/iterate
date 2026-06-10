@@ -66,14 +66,20 @@ export class AiCapability extends WorkerEntrypoint<ExampleCapabilityEnv, Example
 }
 
 export class OrpcCapability extends WorkerEntrypoint<ExampleCapabilityEnv, ExampleCapabilityProps> {
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    const path = input.functionPath.join(".");
+  /**
+   * itx path-call surface (`invoke: "path-call"` caps dial this):
+   * `itx.os.listProcedures()` for the typed surface, then
+   * `itx.os.some.procedure({ ...input })`. props.projectId is injected by
+   * the registry at dial time (spoof-proof), never definer-supplied.
+   */
+  async call(input: { args: unknown[]; path: string[] }): Promise<unknown> {
+    const path = input.path.join(".");
     if (path === "listProcedures") {
-      return createOrpcProcedureListing(input.path.slice(0, input.path.length - 1));
+      return createOrpcProcedureListing([]);
     }
-    if (input.functionPath.length > 0) {
+    if (input.path.length > 0) {
       const procedure = resolveOrpcProcedure({
-        path: ["project", ...input.functionPath],
+        path: ["project", ...input.path],
         router: os.router({ project: projectsRouter.project } as never) as unknown as AnyRouter,
       });
       return await call(
@@ -85,12 +91,17 @@ export class OrpcCapability extends WorkerEntrypoint<ExampleCapabilityEnv, Examp
             env: this.env,
             props: this.ctx.props,
           }),
-          path: input.functionPath,
+          path: input.path,
         } as never,
       );
     }
 
     throw new Error(`OrpcCapability does not implement ${path}`);
+  }
+
+  /** Legacy codemode dispatch shape; delegates to the itx path-call. */
+  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
+    return await this.call({ args: input.args, path: input.functionPath });
   }
 
   async listProcedures() {
@@ -210,7 +221,7 @@ function resolveOrpcProcedure(input: { path: string[]; router: AnyRouter }): Any
   return target;
 }
 
-function readUnaryOrpcInput(input: ExecuteCodemodeFunctionCallInput, projectId: string) {
+function readUnaryOrpcInput(input: { args: unknown[]; path: string[] }, projectId: string) {
   if (input.args.length > 1) {
     throw new Error(
       `ORPC codemode calls are unary; ${input.path.join(".")} received ${input.args.length} args.`,
