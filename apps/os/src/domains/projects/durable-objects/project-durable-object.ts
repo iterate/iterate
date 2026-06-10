@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
-import { acceptCaptunTunnel, type Fetcher } from "captun";
+import { acceptFetcherCapability, type Fetcher } from "captun";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -657,9 +657,14 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       );
     }
 
+    // WebSocket clients can't set headers, so the captun client sends the
+    // admin token via its connect-token query param instead.
+    // captun's CONNECT_TOKEN_QUERY_PARAM; not re-exported from the package root in 0.0.3.
+    const connectToken = new URL(request.url).searchParams.get("captun-token");
     if (
       !authenticateAdminBearer({
-        authorizationHeader: request.headers.get("authorization"),
+        authorizationHeader:
+          request.headers.get("authorization") || (connectToken ? `Bearer ${connectToken}` : null),
         config: this.getAppConfig(),
       })
     ) {
@@ -673,7 +678,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       );
     }
 
-    const { response, tunnel } = acceptCaptunTunnel({
+    const { response, fetcher: tunnel } = acceptFetcherCapability({
       onDisconnect: () => {
         if (this.#projectEgressInterceptTunnel === tunnel) {
           this.#projectEgressInterceptTunnel = null;
@@ -682,6 +687,10 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     });
 
     this.replaceProjectEgressInterceptTunnel(tunnel);
+    // createCaptunTunnel waits for this before resolving on the client side.
+    const tunnelUrl = new URL(request.url);
+    tunnelUrl.search = "";
+    void tunnel.ready({ url: tunnelUrl.toString() });
     return response;
   }
 
