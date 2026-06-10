@@ -61,7 +61,6 @@ import {
   EXAMPLE_EGRESS_SECRET_MATERIAL,
   EXAMPLE_EGRESS_SECRET_METADATA,
 } from "~/domains/secrets/example-secret.ts";
-import type { StreamProcessorRunner } from "~/domains/streams/durable-objects/stream-processor-runner.ts";
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
 import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
