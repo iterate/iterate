@@ -1,13 +1,6 @@
-// capnweb flattens kernel throws to bare message strings (no codes — the
-// structured ItxError is still on the plan), so until that lands, access
-// failures are recognised by message shape. The kernel deliberately answers
-// missing AND forbidden with the same "not found" wording (no existence
-// probing), which is exactly the class of error retrying can never fix.
+// The browser face of the kernel's error module. ItxError codes cross
+// capnweb as own enumerable props on a reconstructed Error (class identity
+// does not survive), so detection is duck-typed — see ~/itx/errors.ts for
+// the wire mechanics, code taxonomy, and masking policy.
 
-const ACCESS_ERROR_PATTERN = /\b(not found|not accessible|forbidden|unauthorized|admin access)\b/i;
-
-/** True when retrying cannot help: authorization/existence failures. */
-export function isItxAccessError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return ACCESS_ERROR_PATTERN.test(message);
-}
+export { getItxErrorCode, isItxAccessError, type ItxErrorCode } from "../errors.ts";

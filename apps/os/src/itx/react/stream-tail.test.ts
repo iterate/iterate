@@ -44,7 +44,7 @@ type RecordedSubscribe = {
 
 function createFakeClient() {
   let status: ItxConnectionStatus = "connected";
-  let failSubscribes: string | false = false;
+  let failSubscribes: Error | false = false;
   let serverEventCount = 0;
   let getStateImpl: (() => Promise<{ eventCount: number }>) | null = null;
   const statusListeners = new Set<() => void>();
@@ -58,7 +58,7 @@ function createFakeClient() {
         unsubscribe: vi.fn(),
       };
       subscribeCalls.push(call);
-      if (failSubscribes !== false) throw new Error(failSubscribes);
+      if (failSubscribes !== false) throw failSubscribes;
       return { unsubscribe: call.unsubscribe };
     },
   );
@@ -83,8 +83,8 @@ function createFakeClient() {
     subscribeCalls,
     subscribeStatus,
     getState,
-    setSubscribeFailing(fail: boolean, message = "subscribe exploded") {
-      failSubscribes = fail ? message : false;
+    setSubscribeFailing(fail: boolean, error?: Error) {
+      failSubscribes = fail ? (error ?? new Error("subscribe exploded")) : false;
     },
     /** What the server reports as eventCount when the liveness probe asks. */
     setServerEventCount(count: number) {
@@ -295,7 +295,15 @@ describe("acquireStreamTailStore", () => {
 
   test("access errors surface immediately and are never retried", async () => {
     const fake = createFakeClient();
-    fake.setSubscribeFailing(true, "Project prj_nope not found.");
+    // What an ItxError looks like after crossing capnweb: a plain Error with
+    // name and code reattached as own props (class identity is lost).
+    fake.setSubscribeFailing(
+      true,
+      Object.assign(new Error("Project prj_nope not found."), {
+        code: "NOT_FOUND",
+        name: "ItxError",
+      }),
+    );
     const store = acquireStreamTailStore(fake.client, "proj", "/itx");
 
     store.retain();

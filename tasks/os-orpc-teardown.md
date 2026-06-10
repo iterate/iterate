@@ -26,9 +26,11 @@ rollback plan.
 
 ### Kernel hardening
 
-- [ ] `ItxError { code, message, details? }` serialized across capnweb and
-      rehydrated in the client core (codes: NOT_FOUND, FORBIDDEN, CONFLICT,
-      BAD_REQUEST). UI conversion of mutating pages waits on this.
+- [x] `ItxError { code, message, details? }` serialized across capnweb and
+      read back duck-typed in the client core (codes: NOT_FOUND, FORBIDDEN,
+      CONFLICT, BAD_REQUEST, INTERNAL; `onSendError` tags everything else
+      INTERNAL) — **PR #1456**, see `apps/os/src/itx/errors.ts` and
+      DECISIONS.md D18. UI conversion of mutating pages is unblocked.
 - [ ] `getServerItx(requestContext, target?)` — in-process handle for SSR
       loaders (resolveItx + accessForPrincipal); project-narrowed handle in
       route context under `$projectSlug`; seed QueryClient with the same

@@ -107,6 +107,10 @@ Done (PR #1423):
   `useStreamEvents`, and `ItxActivityTail` (live `/itx` audit tail on the
   project repl page).
 - First route conversion: project streams index reads through the handle.
+- `ItxError { code, message, details? }` (`src/itx/errors.ts`): five codes
+  riding capnweb as own enumerable props, duck-typed client detection
+  (`getItxErrorCode`/`isItxAccessError`), and `onSendError` tagging every
+  other outbound error INTERNAL with its stack — see DECISIONS.md D18.
 
 Happening separately: codemode is deleted and replaced by the **itx
 processor** (`events.iterate.com/itx/execution-requested` /
@@ -116,9 +120,6 @@ Remaining: see `tasks/os-orpc-teardown.md`.
 
 ## Known risks
 
-- **Error opacity**: capnweb flattens server throws to strings. A structured
-  `ItxError { code, message }` rehydrated client-side must land before the
-  bulk of the UI converts.
 - **OAuth redirect-URI derivation** currently uses the incoming request URL;
   over itx the call arrives on a long-lived socket — derive from project/app
   config instead, verify on a preview.

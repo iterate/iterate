@@ -382,6 +382,23 @@ test("one dynamic worker cap calls another's methods through its own itx", async
   });
 });
 
+test("kernel errors cross capnweb as ItxError-shaped errors with codes", async () => {
+  using itx = connectGlobal();
+
+  // The REAL wire crossing: capnweb reconstructs a plain Error and reattaches
+  // the kernel ItxError's own enumerable props (code, details). NOT_FOUND
+  // also covers forbidden projects (existence masking), so this is the shape
+  // every access failure takes.
+  const error = await itx.projects.get("definitely-not-a-project").then(
+    () => null,
+    (thrown: unknown) => thrown as Error & { code?: unknown; details?: unknown },
+  );
+  expect(error).not.toBeNull();
+  expect(error!.name).toBe("ItxError");
+  expect(error!.code).toBe("NOT_FOUND");
+  expect(error!.details).toEqual({ projectIdOrSlug: "definitely-not-a-project" });
+});
+
 test("revoked and offline caps fail with instructive errors", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-err` })) as { id: string };
