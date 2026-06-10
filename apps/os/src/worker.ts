@@ -29,6 +29,7 @@ import { lookupIngressRule } from "~/ingress/lookup.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
 import { handleArtifactEventsBatch } from "~/domains/repos/artifact-events-queue-handler.ts";
 import { handleItxFetch, handleProjectHostItxFetch } from "~/itx/fetch.ts";
+import { handleAdminStreamRpcFetch } from "~/domains/streams/admin-stream-rpc.ts";
 import { handleProjectStreamRpcFetch } from "~/domains/streams/project-stream-rpc.ts";
 import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
 
@@ -149,6 +150,14 @@ export default {
 
         const streamRpcResponse = await handleProjectStreamRpcFetch({ context, env, request });
         if (streamRpcResponse) return streamRpcResponse;
+
+        const adminStreamRpcResponse = await handleAdminStreamRpcFetch({
+          config: requestConfig,
+          context,
+          env,
+          request,
+        });
+        if (adminStreamRpcResponse) return adminStreamRpcResponse;
 
         const itxResponse = await handleItxFetch({ config, context, env, request });
         if (itxResponse) return itxResponse;
