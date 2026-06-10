@@ -230,6 +230,14 @@ back `maxOffset` also bricks future appends (PK conflicts).
 
 ## Stage 2 — Lazy initialization (owner-requested) + the `woken` event
 
+**Status (2026-06-10): ABANDONED.** Lazy init was prototyped (PR #1467) but
+backed out: #1460's subscriber-presence model appends a `subscriber-connected`
+fact on every `subscribe()`, which fundamentally conflicts with "don't
+initialize storage until the first `append()`" (connecting would now have to
+initialize). The owner chose to drop the lazy-init goal entirely rather than
+unwind the presence model. `created` and `woken` are kept as eager appends. The
+analysis below is retained for history only.
+
 Currently the constructor (`stream.ts:49-82`), on **every** incarnation:
 
 1. `#ensureStorageSchema()` — two `CREATE TABLE` execs.
@@ -380,6 +388,18 @@ echo processor re-filters in `ingest`. The hosted **outbound** path uses
 
 ## Stage 4 — Browser-runtime correctness (lower blast radius than C1, but real)
 
+**Status (2026-06-10): COMPLETE (branch `streams-review-stages-4-7`).** All seven
+findings fixed: C1-browser (self-heal — `ingestWithSelfHeal` resubscribes from
+the persisted checkpoint with bounded backoff on ingest failure), B1 (connection
+epoch guard on the status callback), B2 (`whenStreamReady` — `appendBatch`/
+`runtimeState` await readiness instead of throwing during reconnect), B3
+(rollback in its own try/catch so `withBusyRetry` sees the real error), B4
+(incarnation guard via server `createdAt` + `mirror_meta` table — rebuild on
+incarnation change instead of trusting offsets), B5 (`AbortSignal` on the web
+lock + surfaced rejection), B6 (arm query GC at creation, skip listenerless
+queries, equality-check before notify). Verified against current main (#1460 only
+touched the server core, not these browser paths).
+
 ### B1 — Stale `close` event tears down the replacement connection (MAJOR)
 
 `stream-browser-store.ts:314-321`: each `connect()` installs a status callback
@@ -455,29 +475,46 @@ A GC'd-then-resubscribed handle goes permanently stale (m2 in the review).
 
 ## Stage 5 — Performance
 
-- [ ] **P1 — `browser-event-feed` O(n²) write amplification.**
+**Status (2026-06-10): COMPLETE (branch `streams-review-stages-4-7`).** P1
+coalesced (one op per `local_index`, O(n²)→O(n)), P2 bounded (`MAX_GROUP_EVENTS
+= 200`), P3 dropped the per-event `stateSchema.parse` (state is validated only at
+the KV/recovery trust boundary now). **P4 was already fixed by #1460** — the
+subscribe override forwards `eventTypes`, so inbound subscribers get server-side
+filtering. Note: #1460 reduced P3's original cost (the per-subscription
+`safeParse` transform is gone) but the structural per-event full-state parse
+remained until this change.
+
+- [x] **P1 — `browser-event-feed` O(n²) write amplification.**
       `grouping.ts:112-128` pushes a _cumulative_ `update` op per event extending
       an open group (copying the whole accumulated array), and
       `implementation.ts:50` executes all of them, each `JSON.stringify`ing the
       full list. A 1,000-event same-type batch serializes ~500k events.
       **Fix:** coalesce to the last op per `localIndex` before SQL.
-- [ ] **P2 — `browser-event-feed` unbounded group rows.** Groups only close on
+- [x] **P2 — `browser-event-feed` unbounded group rows.** Groups only close on
       event-type change (`grouping.ts:112-119`), so one dominant event type grows
       a single `feed_items.data` blob forever. **Fix:** add a max-group-size
       boundary.
-- [ ] **P3 — Core `reduce` exit-parses the whole `stateSchema` per event.**
-      `core/implementation.ts:226` re-runs the `SubscriptionsByKey` transform
-      (`contract.ts:63-84`, a `safeParse` per subscription) in the synchronous
-      append hot path — O(subscriptions) zod work per appended event. **Fix:**
-      validate only the changed slice, or skip the transform on the hot path.
-- [ ] **P4 — Inbound firehose** — see M5; threading `eventTypes` server-side
-      removes the bandwidth waste.
+- [x] **P3 — Core `reduce` exit-parses the whole `stateSchema` per event.**
+      The expensive `SubscriptionsByKey` transform is gone post-#1460; dropped the
+      remaining blanket `stateSchema.parse(next)` on the per-event reduce return.
+- [x] **P4 — Inbound firehose** — already fixed by #1460 (subscribe override
+      forwards `eventTypes`; filtering is server-side).
 
 ---
 
 ## Stage 6 — Elegance / conciseness (owner wants the package as short as possible)
 
-- [ ] **E1 — Delete ~130 lines of verified-dead exports** in
+**Status (2026-06-10): COMPLETE (branch `streams-review-stages-4-7`), minus the
+obsolete/declined items.** E1, E2, E3, E5, E6 done (~247 lines deleted). **E4 is
+obsolete** — #1460 removed the `processor-registered` event and its duplicate
+payload; the `packages/shared/src/streams/circuit-breaker-types.ts` duplication
+is a separate, live type hierarchy (69 importers), not dead code, so it was left
+alone. **E7 declined** — post-#1460 the subscribe override genuinely needs to
+retain the client callback / wire `onRpcBroken`, so folding it into the generic
+`makeRpcTargetClass` would pollute a shared util for no real gain (and Stage 2,
+the bigger `stream.ts` win, was abandoned).
+
+- [x] **E1 — Delete ~130 lines of verified-dead exports** in
       `shared/stream-processors.ts` (zero usages repo-wide): `createEvent`
       (506-526; its comment falsely claims test usage), `getEventInputSchema`
       (536-556), `validateProcessorContract` (700-746) + now-orphaned privates
@@ -486,24 +523,27 @@ A GC'd-then-resubscribed handle goes permanently stale (m2 in the review).
       (748-753), `ProcessorStreamApiProps` (466-474). Run `pnpm knip` to confirm.
 - [ ] **E2 — Delete `waitForOpen`** (`connection.ts:51`) — zero callers; the node
       connect comment explains why awaiting open is unnecessary.
-- [ ] **E3 — Delete unreachable branch** `circuit-breaker/implementation.ts:56`
+- [x] **E3 — Delete unreachable branch** `circuit-breaker/implementation.ts:56`
       (`if (event.type === ".../stream/paused") return;`) — the line-54 guard
       already returned because reducing `paused` resets `availableTokens` > 0.
-- [ ] **E4 — Collapse schema duplication:**
+- [~] **E4 — OBSOLETE** (processor-registered removed by #1460; shared
+      circuit-breaker-types is live, not dead). **Collapse schema duplication:**
   - `core/contract.ts` declares the `processor-registered` payload twice
     (110-123 vs 190-204) — extract one const.
   - `SupportedSubscriptionConfiguredEvent` / `HistoricalSubscriptionConfiguredEvent`
     (43-61) differ only in subscriber schema.
   - `packages/shared/src/streams/circuit-breaker-types.ts` re-declares the
     breaker payloads verbatim from the contract (cross-package drift hazard).
-- [ ] **E5 — `messageInbox.error()`** (`subscription.ts:114-117`) is never called;
+- [x] **E5 — `messageInbox.error()`** (`subscription.ts:114-117`) is never called;
       disposal looks like normal completion to consumers. Either wire it on
       abnormal teardown or delete it (and the `waiters` machinery if `waitForEvent`
       stays unused — confirm with owner whether it's a public surface).
-- [ ] **E6 — Trim circuit-breaker `consumes`** (`contract.ts:49-62`): names all
+- [x] **E6 — Trim circuit-breaker `consumes`** (`contract.ts:49-62`): names all
       10 core events plus `"*"`; reduce only branches on
       configured/paused/resumed/woken. The 7 extra named entries buy nothing.
-- [ ] **E7 — `stream.ts` conciseness** (the owner's specific target). Biggest wins:
+- [~] **E7 — DECLINED** (override must retain the client callback / wire
+      `onRpcBroken` post-#1460; folding into the generic helper isn't worth it,
+      and Stage 2's bigger `stream.ts` win was abandoned). **`stream.ts` conciseness** (the owner's specific target). Biggest wins:
       Stage 2 lazy-init (collapses constructor + offset-1 branch); the C3
       allowlist letting `installSubscribeRpcTargetOverride` fold into
       `makeRpcTargetClass`; and the M5 `eventTypes` decision. The chunking
@@ -518,7 +558,15 @@ A GC'd-then-resubscribed handle goes permanently stale (m2 in the review).
 
 ## Stage 7 — Documentation
 
-- [ ] **D1 — `design.md` is ~half fossil.** Rewrite or clearly mark
+**Status (2026-06-10): COMPLETE (branch `streams-review-stages-4-7`).** D1 (design.md
+status banner + corrected offsets/subscriber/storage/replay/OPFS + superseded
+banners on the never-shipped sections), D2 (README import/disposability/route map),
+D3 (ADR 0001 superseded with the shipped singleton model), D4 (the two still-wrong
+comments — `beforeAppend`→`validateAppend`, `afterAppendBatch`→`processEventBatch`;
+the others were already fixed in earlier stages), D5 (README "Append & subscription
+semantics" section).
+
+- [x] **D1 — `design.md` is ~half fossil.** Rewrite or clearly mark
       design-of-record vs abandoned. Concrete divergences from code:
   - offsets are **1-based** (`stream.ts:398`, `core/implementation.ts:109-112`),
     design.md claims 0-based.
@@ -533,20 +581,20 @@ A GC'd-then-resubscribed handle goes permanently stale (m2 in the review).
     decisions" section describes a never-built `implementProcessor` /
     `afterAppend` split.
   - tech is `@journeyapps/wa-sqlite` + OPFS + `BroadcastChannel`, not "SQLocal".
-- [ ] **D2 — `README.md` code snippet is broken:** imports `connectStream`
+- [x] **D2 — `README.md` code snippet is broken:** imports `connectStream`
       (doesn't exist) — the real export is `withStreamConnectionFromBrowser`
       (`browser/connect.ts:10`), and the connection is sync-`Disposable`, not
       `AsyncDisposable`. Fix the snippet and the stale route map (`/streams` uses
       a `?path=` search param; there is no `/streams/$splat`).
-- [ ] **D3 — ADR 0001 contradicts the code** (claims per-view runtimes; code uses
+- [x] **D3 — ADR 0001 contradicts the code** (claims per-view runtimes; code uses
       module-level per-(path,slug) singletons in `stream-browser-store.ts:94-139`).
       Supersede or update. _(ADR 0002 is accurate — leave it.)_
-- [ ] **D4 — Comment drift:** `stream-processor.ts:369` ("batch retries" — see
+- [x] **D4 — Comment drift:** `stream-processor.ts:369` ("batch retries" — see
       C1/C2); `circuit-breaker/contract.ts:5` says `beforeAppend` (it's
       `validateAppend`); `grouping.ts:9,86` say `afterAppendBatch` (it's
       `processEventBatch`); `types.ts:46-48` denies the `eventTypes` filter that
       exists; `event.ts:17-26` documents `source` as supported (see M2).
-- [ ] **D5 — Document currently-undocumented behaviour:** idempotency-key
+- [x] **D5 — Document currently-undocumented behaviour:** idempotency-key
       semantics + `offset` precondition, the auto-appended `created`/`woken`
       events (post-Stage-2), the `eventTypes` filter (if kept), relative
       `streamPath` resolution + child-stream announcements, `reset()`, the
