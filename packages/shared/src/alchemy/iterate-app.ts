@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import alchemy from "alchemy";
 import { Route, TanStackStart, Tunnel, createCloudflareApi } from "alchemy/cloudflare";
-import type { Bindings } from "alchemy/cloudflare";
+import type { Bindings, WorkerProps } from "alchemy/cloudflare";
 import type { BaseAppConfig } from "../config.ts";
 import { slugify } from "../slugify.ts";
 import type { initAlchemy } from "./init.ts";
@@ -70,6 +70,11 @@ export async function IterateApp<B extends Bindings>(
     build?: string;
     /** Override dev command (default: `pnpm exec vite dev --config vite.config.ts`). */
     dev?: { command: string };
+    /**
+     * Event sources this worker consumes, e.g. queues. Passed through to
+     * alchemy's Worker. https://alchemy.run/providers/cloudflare/queue/
+     */
+    eventSources?: WorkerProps<B>["eventSources"];
     /** Hook to modify the generated wrangler config for bindings Alchemy does not model yet. */
     wranglerTransform?: (
       spec: Record<string, unknown>,
@@ -93,6 +98,7 @@ export async function IterateApp<B extends Bindings>(
     adopt: true,
     compatibilityDate: props.compatibilityDate,
     compatibilityFlags,
+    eventSources: props.eventSources,
     bindings: {
       ...props.bindings,
       APP_CONFIG: app.local
