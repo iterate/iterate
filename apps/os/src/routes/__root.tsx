@@ -18,13 +18,26 @@ import {
   DefaultErrorComponent,
   DefaultNotFoundComponent,
 } from "@iterate-com/ui/components/route-defaults";
+import { createServerFn } from "@tanstack/react-start";
+import { getPublicConfig } from "@iterate-com/shared/config";
 import { AppConfig } from "../config.ts";
-import { orpcClient } from "../orpc/client.ts";
 import appCss from "../styles.css?url";
 import { fetchRootAuthSnapshot } from "~/lib/root-auth-snapshot.ts";
+import { requireRequestContext } from "~/request-context.ts";
 import type { RouterContext } from "~/router-context.ts";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
+
+// The public (non-redacted) slice of app config the browser boots from —
+// the same data the oRPC __internal.publicConfig endpoint serves. Typed as
+// plain JSON (getPublicConfig strips every redacted field, what remains is
+// JSON data); the loader re-parses with PublicConfigSchema for real types.
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+const getPublicAppConfig = createServerFn({ method: "GET" }).handler(
+  (): Record<string, JsonValue> =>
+    getPublicConfig(requireRequestContext().config, AppConfig) as Record<string, JsonValue>,
+);
 
 const rootAuthSnapshotQueryOptions = {
   queryKey: ["__root-auth-snapshot"] as const,
@@ -41,7 +54,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     return await context.queryClient.ensureQueryData(rootAuthSnapshotQueryOptions);
   },
   loader: async ({ context }) => {
-    const config = PublicConfigSchema.parse(await orpcClient.__internal.publicConfig({}));
+    const config = PublicConfigSchema.parse(await getPublicAppConfig());
     return {
       config,
       authSession: context.authSession ?? { authenticated: false },

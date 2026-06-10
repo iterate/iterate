@@ -1,5 +1,4 @@
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { Button } from "@iterate-com/ui/components/button";
@@ -20,8 +19,8 @@ import {
 } from "@iterate-com/ui/components/select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
-import { cacheCreatedProjectQueries } from "~/lib/cache-created-project-queries.ts";
-import { orpc } from "~/orpc/client.ts";
+import { getItxErrorCode } from "~/itx/errors.ts";
+import { getBrowserItx } from "~/itx/use-itx.ts";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -36,25 +35,8 @@ const CreateProjectInput = z.object({
 
 export function CreateProjectForm() {
   const router = useRouter();
-  const queryClient = useQueryClient();
   const { session } = useAuthClient();
   const organizations = session?.authenticated ? session.session.organizations : [];
-  const createProject = useMutation(
-    orpc.projects.create.mutationOptions({
-      onSuccess: async (project) => {
-        cacheCreatedProjectQueries({ project, queryClient });
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
-        await router.invalidate({ sync: true });
-        await router.navigate({
-          to: "/projects/$projectSlug",
-          params: {
-            projectSlug: project.slug,
-          },
-        });
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
 
   const form = useForm({
     defaultValues: { slug: "", organizationSlug: organizations[0]?.slug ?? "" },
@@ -64,11 +46,28 @@ export function CreateProjectForm() {
     },
     onSubmit: async ({ value }) => {
       const parsed = CreateProjectInput.parse(value);
-      await createProject.mutateAsync({
-        slug: parsed.slug,
-        organizationSlug: parsed.organizationSlug || undefined,
-      });
-      form.reset();
+      try {
+        const itx = await getBrowserItx();
+        const project = await itx.projects.create({
+          slug: parsed.slug,
+          organizationSlug: parsed.organizationSlug || undefined,
+        });
+        form.reset();
+        await router.navigate({
+          to: "/projects/$projectSlug",
+          params: {
+            projectSlug: project.slug,
+          },
+        });
+      } catch (error) {
+        toast.error(
+          getItxErrorCode(error) === "FORBIDDEN"
+            ? "You can only create projects in an organization you are a member of."
+            : error instanceof Error
+              ? error.message
+              : "Could not create the project.",
+        );
+      }
     },
   });
 
@@ -132,8 +131,8 @@ export function CreateProjectForm() {
       </FieldGroup>
       <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting] as const}>
         {([canSubmit, isSubmitting]) => (
-          <Button type="submit" disabled={!canSubmit || isSubmitting || createProject.isPending}>
-            {isSubmitting || createProject.isPending ? "Creating..." : "Create project"}
+          <Button type="submit" disabled={!canSubmit || isSubmitting}>
+            {isSubmitting ? "Creating..." : "Create project"}
           </Button>
         )}
       </form.Subscribe>

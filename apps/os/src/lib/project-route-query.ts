@@ -1,21 +1,9 @@
-import type { QueryClient } from "@tanstack/react-query";
 import { orpc } from "~/orpc/client.ts";
 
 export const PROJECT_ROUTE_STALE_TIME = 30_000;
 export const PROJECT_CHILD_ROUTE_STALE_TIME = 10_000;
 export const PROJECT_AGENT_RUNTIME_STALE_TIME = 5_000;
 export const PROJECT_LIFECYCLE_STALE_TIME = 1_000;
-
-export function projectBySlugQueryOptions(projectSlug: string) {
-  return {
-    ...orpc.projects.findBySlug.queryOptions({ input: { slug: projectSlug } }),
-    staleTime: PROJECT_ROUTE_STALE_TIME,
-  };
-}
-
-export function ensureProjectBySlug(input: { queryClient: QueryClient; projectSlug: string }) {
-  return input.queryClient.ensureQueryData(projectBySlugQueryOptions(input.projectSlug));
-}
 
 export function projectsListQueryOptions(input: { limit: number; offset: number }) {
   return {

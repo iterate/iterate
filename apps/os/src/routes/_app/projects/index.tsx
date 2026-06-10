@@ -1,24 +1,21 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { Link, createFileRoute } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
-import type { Project } from "@iterate-com/os-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { cacheCreatedProjectQueries } from "~/lib/cache-created-project-queries.ts";
+import type { ItxProjects } from "~/itx/handle.ts";
+import { useItx } from "~/itx/use-itx.ts";
+import { getItxErrorCode } from "~/itx/errors.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
-import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { orpc } from "~/orpc/client.ts";
+
+type ProjectListItem = Awaited<ReturnType<ItxProjects["list"]>>["projects"][number];
 
 export const Route = createFileRoute("/_app/projects/")({
-  loader: async ({ context }) => {
-    await context.queryClient.ensureQueryData(projectsListQueryOptions({ limit: 20, offset: 0 }));
-
-    return {
-      routeConfig: await getPublicRouteConfig(),
-    };
-  },
+  // The list paints from the itx socket (useItx), which never SSRs.
+  ssr: false,
+  loader: async () => ({ routeConfig: await getPublicRouteConfig() }),
   component: ProjectsIndexPage,
 });
 
@@ -34,38 +31,55 @@ function buildProjectHostname(input: {
 }
 
 function ProjectsIndexPage() {
-  const router = useRouter();
-  const queryClient = useQueryClient();
+  return (
+    <Suspense
+      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
+    >
+      <ProjectsIndexContent />
+    </Suspense>
+  );
+}
+
+function ProjectsIndexContent() {
   const { routeConfig } = Route.useLoaderData();
-  const { data: projectsData } = useQuery(projectsListQueryOptions({ limit: 20, offset: 0 }));
+  const itx = useItx();
+  const [projects, setProjects] = useState<ProjectListItem[]>();
+  const [deletingId, setDeletingId] = useState<string>();
 
-  const createProject = useMutation(
-    orpc.projects.create.mutationOptions({
-      onSuccess: async (project) => {
-        cacheCreatedProjectQueries({ project, queryClient });
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
-        await router.invalidate({ sync: true });
-        await router.navigate({
-          to: "/projects/$projectSlug",
-          params: {
-            projectSlug: project.slug,
-          },
-        });
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
+  const loadProjects = useCallback(async () => {
+    const result = await itx.projects.list({ limit: 20, offset: 0 });
+    setProjects(result.projects);
+  }, [itx]);
 
-  const deleteProject = useMutation(
-    orpc.projects.remove.mutationOptions({
-      onSuccess: () => {
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
+  useEffect(() => {
+    loadProjects().catch((error) =>
+      toast.error(error instanceof Error ? error.message : "Could not load projects."),
+    );
+  }, [loadProjects]);
 
-  const hasProjects = (projectsData?.projects.length ?? 0) > 0;
+  async function deleteProject(id: string) {
+    setDeletingId(id);
+    try {
+      await itx.projects.remove({ id });
+      await loadProjects();
+    } catch (error) {
+      toast.error(
+        getItxErrorCode(error) === "FORBIDDEN"
+          ? "Only operators can delete projects."
+          : error instanceof Error
+            ? error.message
+            : "Could not delete the project.",
+      );
+    } finally {
+      setDeletingId(undefined);
+    }
+  }
+
+  if (projects === undefined) {
+    return <div className="p-4 text-sm text-muted-foreground">Loading projects...</div>;
+  }
+
+  const hasProjects = projects.length > 0;
 
   return (
     <section className="space-y-4 p-4">
@@ -108,7 +122,7 @@ function ProjectsIndexPage() {
             <div>Created</div>
             <div />
           </div>
-          {projectsData?.projects.map((project) => {
+          {projects.map((project) => {
             const hostname = buildProjectHostname({
               slug: project.slug,
               customHostname: project.customHostname,
@@ -121,14 +135,20 @@ function ProjectsIndexPage() {
                 className="grid min-w-[900px] grid-cols-[220px_160px_220px_minmax(220px,1fr)_190px_96px] items-start gap-3 border-b px-3 py-3 text-sm last:border-b-0"
               >
                 <Identifier value={project.id} textClassName="text-xs text-muted-foreground" />
-                <ProjectSlugCell project={project} />
+                <Link
+                  to="/projects/$projectSlug"
+                  params={{
+                    projectSlug: project.slug,
+                  }}
+                  className="truncate font-medium hover:underline"
+                >
+                  {project.slug}
+                </Link>
                 <div className="truncate text-xs text-muted-foreground">
-                  {project.isOrphanedProjectFromAuthService
-                    ? "Not created in OS"
-                    : (project.customHostname ?? "None")}
+                  {project.customHostname ?? "None"}
                 </div>
                 <div className="truncate text-xs">
-                  {!project.isOrphanedProjectFromAuthService && hostname ? (
+                  {hostname ? (
                     <a
                       href={`https://${hostname}`}
                       target="_blank"
@@ -142,56 +162,19 @@ function ProjectsIndexPage() {
                   )}
                 </div>
                 <div className="text-xs text-muted-foreground">{project.createdAt ?? "-"}</div>
-                {project.isOrphanedProjectFromAuthService ? (
-                  <Button
-                    size="sm"
-                    onClick={() => createProject.mutate({ id: project.id, slug: project.slug })}
-                    disabled={createProject.isPending && createProject.variables?.id === project.id}
-                  >
-                    {createProject.isPending && createProject.variables?.id === project.id
-                      ? "Creating..."
-                      : "Create"}
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => deleteProject.mutate({ id: project.id })}
-                    disabled={deleteProject.isPending && deleteProject.variables?.id === project.id}
-                  >
-                    {deleteProject.isPending && deleteProject.variables?.id === project.id
-                      ? "Deleting..."
-                      : "Delete"}
-                  </Button>
-                )}
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => void deleteProject(project.id)}
+                  disabled={deletingId === project.id}
+                >
+                  {deletingId === project.id ? "Deleting..." : "Delete"}
+                </Button>
               </div>
             );
           })}
         </div>
       )}
     </section>
-  );
-}
-
-function ProjectSlugCell({ project }: { project: Project }) {
-  if (project.isOrphanedProjectFromAuthService) {
-    return (
-      <div className="min-w-0">
-        <div className="truncate font-medium">{project.slug}</div>
-        <div className="text-xs text-muted-foreground">Available from Auth</div>
-      </div>
-    );
-  }
-
-  return (
-    <Link
-      to="/projects/$projectSlug"
-      params={{
-        projectSlug: project.slug,
-      }}
-      className="truncate font-medium hover:underline"
-    >
-      {project.slug}
-    </Link>
   );
 }
