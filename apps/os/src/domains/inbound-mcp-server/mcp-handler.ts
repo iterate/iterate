@@ -1,7 +1,8 @@
 import { createIterateAuth } from "@iterate-com/auth/server";
 import {
   ITERATE_PROJECT_SELECTION_SCOPE,
-  hasWildcardProjectScope,
+  ITERATE_SUPERADMIN_SCOPE,
+  hasSuperadminScope,
   listProjectScopeIds,
 } from "@iterate-com/shared/auth-claims";
 import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
@@ -44,6 +45,15 @@ export const mcpCorsHeaders = {
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
 };
 
+// Two ways to authenticate an MCP request, tried in order:
+// 1. The platform admin API secret (authenticateAdminMcpRequest): full access
+//    to every project in this deployment, props carry the `superadmin` scope.
+// 2. An Iterate Auth OAuth bearer token: project access is the intersection of
+//    two independent gates — the token's `projects` claim (which projects the
+//    user belongs to / selected during the OAuth flow) and its `project:<id>`
+//    scope entries. The `superadmin` scope (server-granted to role-admin
+//    users by apps/auth) skips the scope gate but not the claim gate, so even
+//    a superadmin's token only reaches projects listed in its claims.
 export async function handleMcpFetch(input: McpHandlerInput): Promise<Response | null> {
   const routeMatch = matchConfiguredMcpBaseUrl(input);
   if (!routeMatch) return null;
@@ -94,9 +104,9 @@ export async function handleMcpFetch(input: McpHandlerInput): Promise<Response |
   const scopes = readAccessTokenScopes(accessToken);
   const principal = principalFromAccessToken(accessToken);
   const grantedProjectIds = new Set(listProjectScopeIds(scopes));
-  const hasWildcardProjects = hasWildcardProjectScope(scopes);
+  const isSuperadmin = hasSuperadminScope(scopes);
   const projects = principal.projects.flatMap((project) => {
-    if (!hasWildcardProjects && !grantedProjectIds.has(project.id)) return [];
+    if (!isSuperadmin && !grantedProjectIds.has(project.id)) return [];
 
     const organization = principal.organizations.find((org) => org.id === project.organizationId);
     return [
@@ -167,7 +177,7 @@ async function authenticateAdminMcpRequest(input: McpHandlerInput) {
       organizationRole: "admin",
       organizationSlug: null,
     })),
-    scopes: ["profile"],
+    scopes: [ITERATE_SUPERADMIN_SCOPE],
     userId: "admin-api-secret",
   } satisfies ProjectMcpServerConnectionProps;
 }

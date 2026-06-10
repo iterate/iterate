@@ -23,6 +23,7 @@ import type { StreamRpc, StreamSubscriptionHandle } from "@iterate-com/streams/t
 import { createD1Client } from "sqlfu";
 import { PathProxyRpcTarget } from "./path-proxy.ts";
 import {
+  GLOBAL_CONTEXT_ID,
   isChildContextId,
   RESERVED_CAP_NAMES,
   type CapInvoke,
@@ -114,7 +115,21 @@ export class Itx extends RpcTarget {
   }
 
   get streams(): ItxStreams {
-    return new ItxStreams(this.#runtime, this.#requireProjectId());
+    // Project handles read/write their project's namespace. A GLOBAL handle
+    // gets the deployment-wide "global" namespace instead — but only with
+    // access "all" (the admin API secret / admin cookie); a user's global
+    // handle must narrow to a project first, otherwise any logged-in user
+    // could read platform-level streams through /api/itx.
+    const projectId = this.#projectId();
+    if (projectId !== null) {
+      return new ItxStreams(this.#runtime, projectId);
+    }
+    if (this.#runtime.access !== "all") {
+      throw new Error(
+        "Global streams need admin access. Narrow to a project first: itx.projects.get(idOrSlug).",
+      );
+    }
+    return new ItxStreams(this.#runtime, GLOBAL_CONTEXT_ID);
   }
 
   get repos() {

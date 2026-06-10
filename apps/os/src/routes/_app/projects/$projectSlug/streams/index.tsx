@@ -21,7 +21,7 @@ import {
 } from "@iterate-com/ui/components/table";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
-import { streamPathFromInput, streamPathToSplat } from "~/lib/stream-links.ts";
+import { streamPathFromInput } from "~/lib/stream-links.ts";
 import { itxKey, useItxMutation, useItxQuery } from "~/itx/react/index.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
@@ -59,7 +59,9 @@ function ProjectStreamsIndexPage() {
         to: "/projects/$projectSlug/streams/$",
         params: {
           projectSlug: params.projectSlug,
-          _splat: streamPathToSplat(input.streamPath),
+          // The route's params.stringify converts StreamPath -> splat; passing
+          // a pre-splatted string here would get sliced a second time.
+          _splat: input.streamPath,
         },
       });
     },
@@ -212,7 +214,7 @@ function ProjectStreamsIndexPage() {
                         to="/projects/$projectSlug/streams/$"
                         params={{
                           projectSlug: params.projectSlug,
-                          _splat: streamPathToSplat(stream.streamPath),
+                          _splat: stream.streamPath,
                         }}
                       >
                         <EventsStreamPathLabel path={stream.streamPath} className="min-w-0" />

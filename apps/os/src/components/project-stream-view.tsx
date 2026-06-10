@@ -1,20 +1,24 @@
 import {
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
-  type RefObject,
   type ReactNode,
+  type RefObject,
 } from "react";
+import { Link } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Spinner } from "@iterate-com/ui/components/spinner";
 import {
   acquireStreamRuntime,
   type StreamBrowserSnapshot,
+  type StreamBrowserStore,
+  type StreamRuntimeState,
 } from "@iterate-com/streams/browser/stream-browser-store";
 import { useStreamQuery } from "@iterate-com/streams/browser/hooks/use-stream-query";
 import type {
+  SqliteQueryStatus,
   StreamBrowserDatabase,
   StreamEventRow,
 } from "@iterate-com/streams/browser/stream-browser-db";
@@ -26,7 +30,33 @@ import {
   type BrowserRawEventsState,
 } from "@iterate-com/streams/processors/browser-raw-events/implementation";
 import { StreamEventInput } from "@iterate-com/streams/shared/event";
-import type { StreamPath } from "@iterate-com/shared/streams/types";
+import {
+  getInitialProcessorState,
+  runProcessorReduce,
+  type StreamEvent,
+} from "@iterate-com/streams/shared/stream-processors";
+import type { Event, StreamPath } from "@iterate-com/shared/streams/types";
+import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@iterate-com/ui/components/select";
+import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
+import type { EventsStreamViewState } from "@iterate-com/ui/components/events/feed-items";
+import {
+  EventsStreamComposer,
+  type EventsStreamComposerMode,
+} from "@iterate-com/ui/components/events/stream-composer";
+import {
+  EventsStreamView,
+  type EventsStreamElementType,
+  type EventsStreamRendererMode,
+} from "@iterate-com/ui/components/events/stream-feed";
+import { EventsStreamLayoutMessageInput } from "@iterate-com/ui/components/events/stream-layout";
+import { StreamViewProcessorContract } from "@iterate-com/ui/components/events/stream-view-processor/contract";
 import { parse as parseYaml } from "yaml";
 
 type ProjectStreamMessageComposer = {
@@ -34,11 +64,17 @@ type ProjectStreamMessageComposer = {
   onSubmit: (message: string) => Promise<void>;
 };
 
+type ProjectStreamViewTab = "feed" | "raw" | "state";
+
+const DEFAULT_RAW_EVENT_YAML =
+  "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
+
 export function ProjectStreamView({
   defaultComposerMode,
   emptyLabel = "No events in this stream yet.",
   headerAccessory,
   messageComposer,
+  projectSlug,
   projectSlugOrId,
   streamPath,
 }: {
@@ -83,75 +119,396 @@ export function ProjectStreamView({
   );
   const countResult = useStreamQuery(store.streamDatabase, `SELECT COUNT(*) AS count FROM events`);
   const eventCount = Number(countResult.data[0]?.count ?? 0);
-  const composerMode = defaultComposerMode ?? (messageComposer ? "message" : "raw");
-  const [composerText, setComposerText] = useState(
-    composerMode === "raw"
-      ? "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n"
-      : "",
+
+  const [activeTab, setActiveTab] = useState<ProjectStreamViewTab>("feed");
+  const [composerMode, setComposerMode] = useState<EventsStreamComposerMode>(
+    defaultComposerMode ?? (messageComposer ? "message" : "raw"),
   );
+  const [messageText, setMessageText] = useState("");
+  const [rawText, setRawText] = useState(DEFAULT_RAW_EVENT_YAML);
   const [submitError, setSubmitError] = useState<string | undefined>();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  // Only auto-scroll to the bottom when the viewport is already pinned there.
-  // Yanking a scrolled-up reader back to the bottom on every append shifts the
-  // virtualized window far enough that the whole visible range re-queries and
-  // flashes grey skeletons before SQLite returns the new rows.
-  const stickToBottomRef = useRef(true);
+  // Only auto-scroll the raw view to the bottom when the viewport is already
+  // pinned there. Yanking a scrolled-up reader back to the bottom on every
+  // append shifts the virtualized window far enough that the whole visible
+  // range re-queries and flashes grey skeletons before SQLite returns the new
+  // rows. Lives here (not in the raw view) so the composer can re-pin it.
+  const rawStickToBottomRef = useRef(true);
 
-  async function submit() {
-    const trimmed = composerText.trim();
-    if (!trimmed) return;
+  async function runSubmit(action: () => Promise<void>) {
     setIsSubmitting(true);
     setSubmitError(undefined);
     // The user just appended from the composer at the bottom, so follow the
     // new event down even if they had scrolled up earlier.
-    stickToBottomRef.current = true;
+    rawStickToBottomRef.current = true;
     try {
-      if (composerMode === "message" && messageComposer) {
-        await messageComposer.onSubmit(trimmed);
-      } else {
-        const parsed = parseYaml(trimmed) as unknown;
-        const events = (Array.isArray(parsed) ? parsed : [parsed]).map((event) =>
-          StreamEventInput.parse(event),
-        );
-        await store.appendBatch({ events });
-      }
-      setComposerText(composerMode === "raw" ? composerText : "");
+      await action();
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : String(error));
     } finally {
       setIsSubmitting(false);
-      window.requestAnimationFrame(() => {
-        inputRef.current?.focus();
-      });
     }
   }
+
+  async function submitMessage() {
+    const trimmed = messageText.trim();
+    if (!trimmed || messageComposer == null) return;
+    await runSubmit(async () => {
+      await messageComposer.onSubmit(trimmed);
+      setMessageText("");
+    });
+  }
+
+  async function submitRawEvents() {
+    const trimmed = rawText.trim();
+    if (!trimmed) return;
+    await runSubmit(async () => {
+      const parsed = parseYaml(trimmed) as unknown;
+      const events = (Array.isArray(parsed) ? parsed : [parsed]).map((event) =>
+        StreamEventInput.parse(event),
+      );
+      await store.appendBatch({ events });
+    });
+  }
+
+  const connectionLabel =
+    snapshot.connectionError ??
+    (snapshot.connectionStatus === "subscribed" ? emptyLabel : snapshot.connectionStatus);
+
+  return (
+    <section className="flex min-h-0 flex-1 flex-col bg-background">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-4 py-2">
+        <div className="min-w-0">
+          <h1 className="truncate font-mono text-sm font-semibold">{streamPathText}</h1>
+          <StreamStatus count={eventCount} snapshot={snapshot} />
+        </div>
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => setActiveTab(value as ProjectStreamViewTab)}
+        >
+          <TabsList className="h-8">
+            <TabsTrigger value="feed" className="px-3 text-xs">
+              Feed
+            </TabsTrigger>
+            <TabsTrigger value="raw" className="px-3 text-xs">
+              Raw
+            </TabsTrigger>
+            <TabsTrigger value="state" className="px-3 text-xs">
+              State
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </header>
+      {headerAccessory == null ? null : <div className="shrink-0 border-b">{headerAccessory}</div>}
+      {activeTab === "feed" ? (
+        <ProjectStreamFeedView
+          database={store.streamDatabase}
+          emptyLabel={connectionLabel}
+          projectSlug={projectSlug}
+          reductionKey={`${projectSlugOrId}:${streamPathText}`}
+        />
+      ) : activeTab === "raw" ? (
+        <ProjectStreamRawView
+          database={store.streamDatabase}
+          emptyLabel={connectionLabel}
+          stickToBottomRef={rawStickToBottomRef}
+        />
+      ) : (
+        <ProjectStreamStateView store={store} />
+      )}
+      {activeTab === "state" ? null : (
+        <EventsStreamLayoutMessageInput className="px-3 py-3">
+          {submitError == null ? null : (
+            <p className="mb-2 truncate font-mono text-xs text-destructive" role="alert">
+              {submitError}
+            </p>
+          )}
+          <EventsStreamComposer
+            mode={composerMode}
+            onModeChange={setComposerMode}
+            {...(messageComposer == null
+              ? {}
+              : {
+                  message: {
+                    value: messageText,
+                    onValueChange: setMessageText,
+                    onSubmit: submitMessage,
+                    ...(messageComposer.placeholder == null
+                      ? {}
+                      : { placeholder: messageComposer.placeholder }),
+                  },
+                })}
+            raw={{
+              value: rawText,
+              onValueChange: setRawText,
+              onSubmit: submitRawEvents,
+            }}
+            isSubmitting={isSubmitting}
+          />
+        </EventsStreamLayoutMessageInput>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Feed view: semantic chat-style elements reduced from raw events
+// ---------------------------------------------------------------------------
+
+function ProjectStreamFeedView({
+  database,
+  emptyLabel,
+  projectSlug,
+  reductionKey,
+}: {
+  database: StreamBrowserDatabase;
+  emptyLabel: string;
+  projectSlug: string;
+  reductionKey: string;
+}) {
+  const feed = useStreamFeedState({ database, reductionKey });
+  const [rendererMode, setRendererMode] = useState<EventsStreamRendererMode>("raw-pretty");
+  const [hiddenElementTypes, setHiddenElementTypes] = useState<EventsStreamElementType[]>([]);
+  const [openEventOffset, setOpenEventOffset] = useState<number | undefined>(undefined);
+
+  const displayState = useMemo(
+    () => applyRendererMode({ viewState: feed.viewState, events: feed.events, rendererMode }),
+    [feed.viewState, feed.events, rendererMode],
+  );
+
+  return (
+    <EventsStreamView
+      className="min-h-0 flex-1"
+      viewState={displayState}
+      events={feed.events}
+      emptyLabel={emptyLabel}
+      isPending={feed.status === "pending" && feed.events.length === 0}
+      {...(feed.error == null ? {} : { errorLabel: feed.error })}
+      {...(openEventOffset == null ? {} : { openEventOffset })}
+      onOpenEventOffsetChange={setOpenEventOffset}
+      hiddenElementTypes={hiddenElementTypes}
+      onHiddenElementTypesChange={setHiddenElementTypes}
+      rendererMode={rendererMode}
+      onRendererModeChange={setRendererMode}
+      renderStreamPathLink={({ path, children, className }) => (
+        <Link
+          to="/projects/$projectSlug/streams/$"
+          params={{ projectSlug, _splat: path }}
+          {...(className == null ? {} : { className })}
+        >
+          {children}
+        </Link>
+      )}
+    />
+  );
+}
+
+type StreamFeedReduction = {
+  status: SqliteQueryStatus;
+  error?: string;
+  viewState: EventsStreamViewState;
+  events: Event[];
+};
+
+type StreamFeedReductionCache = {
+  key: string;
+  rowCount: number;
+  lastOffset: number;
+  viewState: EventsStreamViewState;
+  events: Event[];
+};
+
+/**
+ * Reduce the SQLite raw-event mirror into renderable stream view state.
+ *
+ * The reduction is incremental: appends only reduce the new tail rows on top
+ * of the cached state, so live streams don't replay the whole history on every
+ * event. Any non-append change (clear, reset, truncation) recomputes from
+ * scratch.
+ */
+function useStreamFeedState(args: {
+  database: StreamBrowserDatabase;
+  reductionKey: string;
+}): StreamFeedReduction {
+  const rowsResult = useStreamQuery(
+    args.database,
+    `SELECT offset, json(raw_jsonb) AS raw_json FROM events ORDER BY local_index ASC`,
+  );
+  const cacheRef = useRef<StreamFeedReductionCache | null>(null);
+
+  return useMemo(() => {
+    const cached = cacheRef.current?.key === args.reductionKey ? cacheRef.current : null;
+
+    if (rowsResult.status !== "ok") {
+      return {
+        status: rowsResult.status,
+        ...(rowsResult.error == null ? {} : { error: rowsResult.error.message }),
+        viewState: cached?.viewState ?? initialStreamViewState(),
+        events: cached?.events ?? [],
+      };
+    }
+
+    const rows = rowsResult.data;
+    const canExtend =
+      cached != null &&
+      rows.length >= cached.rowCount &&
+      (cached.rowCount === 0 || Number(rows[cached.rowCount - 1]?.offset) === cached.lastOffset);
+
+    const startIndex = canExtend ? cached.rowCount : 0;
+    let viewState = canExtend ? cached.viewState : initialStreamViewState();
+    const events = canExtend ? [...cached.events] : [];
+
+    for (let index = startIndex; index < rows.length; index++) {
+      const rawJson = rows[index]?.raw_json;
+      if (typeof rawJson !== "string") continue;
+      let event: Event;
+      try {
+        event = JSON.parse(rawJson) as Event;
+      } catch {
+        continue;
+      }
+      events.push(event);
+      const reduction = runProcessorReduce({
+        processor: { contract: StreamViewProcessorContract },
+        event: event as unknown as StreamEvent,
+        state: viewState,
+      });
+      viewState = reduction?.state ?? viewState;
+    }
+
+    cacheRef.current = {
+      key: args.reductionKey,
+      rowCount: rows.length,
+      lastOffset: events.length === 0 ? -1 : events[events.length - 1]!.offset,
+      viewState,
+      events,
+    };
+
+    return { status: "ok", viewState, events };
+  }, [rowsResult, args.reductionKey]);
+}
+
+function initialStreamViewState(): EventsStreamViewState {
+  return getInitialProcessorState(StreamViewProcessorContract);
+}
+
+/**
+ * The reducer always produces both raw groups and semantic elements; renderer
+ * modes are pure view-time filters over that single view state.
+ */
+function applyRendererMode(args: {
+  viewState: EventsStreamViewState;
+  events: readonly Event[];
+  rendererMode: EventsStreamRendererMode;
+}): EventsStreamViewState {
+  if (args.rendererMode === "pretty") {
+    return {
+      ...args.viewState,
+      slots: {
+        ...args.viewState.slots,
+        feed: args.viewState.slots.feed.filter((element) => element.type !== "grouped-raw-event"),
+      },
+    };
+  }
+
+  if (args.rendererMode === "raw-single-json") {
+    return {
+      ...args.viewState,
+      slots: {
+        ...args.viewState.slots,
+        feed: [{ type: "raw-json-dump", id: "raw-json-dump", props: { events: [...args.events] } }],
+      },
+    };
+  }
+
+  return args.viewState;
+}
+
+// ---------------------------------------------------------------------------
+// Raw view: virtualized event rows with an event-type filter
+// ---------------------------------------------------------------------------
+
+const ALL_EVENT_TYPES = "__all__";
+
+function ProjectStreamRawView({
+  database,
+  emptyLabel,
+  stickToBottomRef,
+}: {
+  database: StreamBrowserDatabase;
+  emptyLabel: string;
+  stickToBottomRef: RefObject<boolean>;
+}) {
+  const [eventTypeFilter, setEventTypeFilter] = useState<string>(ALL_EVENT_TYPES);
+  const typeFilter = eventTypeFilter === ALL_EVENT_TYPES ? null : eventTypeFilter;
+  const typesResult = useStreamQuery(
+    database,
+    `SELECT type, COUNT(*) AS count FROM events GROUP BY type ORDER BY type ASC`,
+  );
+  const countResult = useStreamQuery(
+    database,
+    typeFilter == null
+      ? `SELECT COUNT(*) AS count FROM events`
+      : `SELECT COUNT(*) AS count FROM events WHERE type = ?`,
+    typeFilter == null ? [] : [typeFilter],
+  );
+  const eventCount = Number(countResult.data[0]?.count ?? 0);
+  const [expandedOffsets, setExpandedOffsets] = useState<ReadonlySet<number>>(new Set());
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
     if (!stickToBottomRef.current) return;
     const frame = window.requestAnimationFrame(() => {
       const scrollContainer = scrollContainerRef.current;
-      if (scrollContainer == null) {
-        return;
-      }
-
+      if (scrollContainer == null) return;
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
     });
 
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [eventCount]);
+  }, [eventCount, stickToBottomRef]);
+
+  function toggleOffset(offset: number) {
+    setExpandedOffsets((previous) => {
+      const next = new Set(previous);
+      if (next.has(offset)) {
+        next.delete(offset);
+      } else {
+        next.add(offset);
+      }
+      return next;
+    });
+  }
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col bg-white">
-      <header className="shrink-0 border-b px-4 py-3">
-        <h1 className="truncate font-mono text-sm font-semibold">{streamPathText}</h1>
-        <StreamStatus count={eventCount} snapshot={snapshot} />
-      </header>
-      {headerAccessory == null ? null : <div className="shrink-0 border-b">{headerAccessory}</div>}
-      <main
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2">
+        <Select
+          value={eventTypeFilter}
+          onValueChange={(value) => setEventTypeFilter(value ?? ALL_EVENT_TYPES)}
+        >
+          <SelectTrigger size="sm" className="min-w-0 max-w-full font-mono text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL_EVENT_TYPES}>All event types</SelectItem>
+            {typesResult.data.map((row) => (
+              <SelectItem
+                key={String(row.type)}
+                value={String(row.type)}
+                className="font-mono text-xs"
+              >
+                {String(row.type)} ({Number(row.count).toLocaleString()})
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <span className="shrink-0 font-mono text-xs text-muted-foreground">
+          {eventCount.toLocaleString()} events
+        </span>
+      </div>
+      <div
         ref={scrollContainerRef}
         className="min-h-0 flex-1 overflow-y-auto"
         onScroll={(event) => {
@@ -169,44 +526,18 @@ export function ProjectStreamView({
           </Centered>
         ) : (
           <VirtualEventRows
-            database={store.streamDatabase}
-            emptyLabel={emptyLabel}
+            key={eventTypeFilter}
+            database={database}
+            emptyLabel={typeFilter == null ? emptyLabel : "No events match this type."}
             eventCount={eventCount}
+            expandedOffsets={expandedOffsets}
+            onToggleOffset={toggleOffset}
             scrollElementRef={scrollContainerRef}
-            snapshot={snapshot}
+            typeFilter={typeFilter}
           />
         )}
-        {isSubmitting ? <PendingResultRow /> : null}
-        <form
-          className="border-t p-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submit();
-          }}
-        >
-          <textarea
-            ref={inputRef}
-            className="block max-h-48 min-h-20 w-full resize-y rounded-md border px-3 py-2 font-mono text-[13px] outline-none focus:border-slate-400"
-            placeholder={messageComposer?.placeholder ?? "YAML event"}
-            spellCheck={false}
-            value={composerText}
-            onChange={(event) => setComposerText(event.currentTarget.value)}
-          />
-          <div className="mt-2 flex items-center justify-between gap-3">
-            <output className="min-w-0 truncate font-mono text-xs text-red-700">
-              {submitError ?? ""}
-            </output>
-            <button
-              className="rounded-md bg-slate-950 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-              disabled={isSubmitting}
-              type="submit"
-            >
-              {isSubmitting ? "Sending" : composerMode === "message" ? "Send" : "Append"}
-            </button>
-          </div>
-        </form>
-      </main>
-    </section>
+      </div>
+    </div>
   );
 }
 
@@ -214,32 +545,43 @@ function VirtualEventRows({
   database,
   emptyLabel,
   eventCount,
+  expandedOffsets,
+  onToggleOffset,
   scrollElementRef,
-  snapshot,
+  typeFilter,
 }: {
   database: StreamBrowserDatabase;
   emptyLabel: string;
   eventCount: number;
+  expandedOffsets: ReadonlySet<number>;
+  onToggleOffset: (offset: number) => void;
   scrollElementRef: RefObject<HTMLDivElement | null>;
-  snapshot: StreamBrowserSnapshot;
+  typeFilter: string | null;
 }) {
   const virtualizer = useVirtualizer({
     count: eventCount,
     getScrollElement: () => scrollElementRef.current,
-    estimateSize: () => 44,
+    estimateSize: () => 36,
     overscan: 24,
   });
 
   const virtualItems = virtualizer.getVirtualItems();
   const first = virtualItems[0]?.index ?? 0;
   const last = virtualItems.at(-1)?.index ?? -1;
+  const windowSize = Math.max(0, last + 1 - first);
   const rowsResult = useStreamQuery(
     database,
-    `SELECT local_index, offset, type, idempotency_key, created_at, inserted_at, json(raw_jsonb) AS raw_json
-     FROM events
-     WHERE local_index >= ? AND local_index < ?
-     ORDER BY local_index ASC`,
-    [first, last + 1],
+    typeFilter == null
+      ? `SELECT local_index, offset, type, idempotency_key, created_at, inserted_at, json(raw_jsonb) AS raw_json
+         FROM events
+         WHERE local_index >= ? AND local_index < ?
+         ORDER BY local_index ASC`
+      : `SELECT local_index, offset, type, idempotency_key, created_at, inserted_at, json(raw_jsonb) AS raw_json
+         FROM events
+         WHERE type = ?
+         ORDER BY local_index ASC
+         LIMIT ? OFFSET ?`,
+    typeFilter == null ? [first, last + 1] : [typeFilter, windowSize, first],
   );
   // Retain the last committed rows across range re-queries. When the visible
   // window shifts (append grows the list, or a scroll moves it), the range SQL
@@ -251,20 +593,16 @@ function VirtualEventRows({
   const rowsByIndex = useMemo(() => {
     if (rowsResult.status !== "ok") return lastRowsRef.current;
     const rows = new Map<number, StreamEventRow>();
-    for (const row of rowsResult.data) {
-      if (typeof row.local_index === "number") rows.set(row.local_index, row as StreamEventRow);
-    }
+    rowsResult.data.forEach((row, position) => {
+      const index = typeFilter == null ? Number(row.local_index) : first + position;
+      if (Number.isFinite(index)) rows.set(index, row as StreamEventRow);
+    });
     lastRowsRef.current = rows;
     return rows;
-  }, [rowsResult.data, rowsResult.status]);
+  }, [rowsResult.data, rowsResult.status, typeFilter, first]);
 
   if (eventCount === 0) {
-    return (
-      <Centered>
-        {snapshot.connectionError ??
-          (snapshot.connectionStatus === "subscribed" ? emptyLabel : snapshot.connectionStatus)}
-      </Centered>
-    );
+    return <Centered>{emptyLabel}</Centered>;
   }
 
   return (
@@ -274,24 +612,23 @@ function VirtualEventRows({
           const row = rowsByIndex.get(item.index);
           return (
             <article
-              className="absolute left-0 top-0 w-full border-b py-2 font-mono text-xs"
+              className="absolute left-0 top-0 w-full border-b bg-background py-1.5 font-mono text-xs"
+              // measureElement reads data-index to attribute heights to rows;
+              // without it expanded rows keep their estimated size and the
+              // JSON paints over the rows below.
+              data-index={item.index}
               key={item.key}
-              ref={row ? virtualizer.measureElement : undefined}
+              ref={virtualizer.measureElement}
               style={{ transform: `translateY(${item.start}px)` }}
             >
               {row ? (
-                <details>
-                  <summary className="grid cursor-pointer grid-cols-[64px_minmax(0,1fr)_auto] gap-3 text-slate-600">
-                    <span>#{row.offset}</span>
-                    <span className="truncate">{row.type}</span>
-                    <time>{row.created_at}</time>
-                  </summary>
-                  <pre className="mt-2 overflow-auto whitespace-pre-wrap break-words text-slate-800">
-                    {JSON.stringify(JSON.parse(row.raw_json), null, 2)}
-                  </pre>
-                </details>
+                <RawEventRow
+                  expanded={expandedOffsets.has(Number(row.offset))}
+                  onToggle={() => onToggleOffset(Number(row.offset))}
+                  row={row}
+                />
               ) : (
-                <div className="h-6 rounded bg-slate-100" />
+                <div className="h-6 rounded bg-muted" />
               )}
             </article>
           );
@@ -301,18 +638,113 @@ function VirtualEventRows({
   );
 }
 
-function PendingResultRow() {
+function RawEventRow({
+  expanded,
+  onToggle,
+  row,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  row: StreamEventRow;
+}) {
   return (
-    <div className="flex items-center gap-2 border-t px-4 py-3 font-mono text-xs text-slate-500">
-      <Spinner className="size-3.5" />
-      <span>Waiting for result</span>
+    <>
+      <button
+        aria-expanded={expanded}
+        className="grid w-full cursor-pointer grid-cols-[64px_minmax(0,1fr)_auto] items-baseline gap-3 text-left text-muted-foreground hover:text-foreground"
+        onClick={onToggle}
+        type="button"
+      >
+        <span>#{row.offset}</span>
+        <span className="truncate">{row.type}</span>
+        <time>{row.created_at}</time>
+      </button>
+      {expanded ? (
+        <SerializedObjectCodeBlock className="my-2" data={parseRawEventJson(row.raw_json)} />
+      ) : null}
+    </>
+  );
+}
+
+function parseRawEventJson(rawJson: string): unknown {
+  try {
+    return JSON.parse(rawJson);
+  } catch {
+    return rawJson;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// State view: live reduced + runtime processor state via runtimeState() RPC
+// ---------------------------------------------------------------------------
+
+const STATE_POLL_INTERVAL_MS = 1_000;
+
+function ProjectStreamStateView({ store }: { store: StreamBrowserStore }) {
+  const [runtimeState, setRuntimeState] = useState<StreamRuntimeState | null>(null);
+  const [error, setError] = useState<string | undefined>();
+
+  useEffect(() => {
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const state = await store.runtimeState();
+        if (!disposed) {
+          // Keep the previous object identity when nothing changed so the
+          // code block doesn't rebuild (and lose scroll) every poll tick.
+          setRuntimeState((previous) =>
+            previous != null && JSON.stringify(previous) === JSON.stringify(state)
+              ? previous
+              : state,
+          );
+          setError(undefined);
+        }
+      } catch (caught) {
+        if (!disposed) setError(caught instanceof Error ? caught.message : String(caught));
+      }
+      if (!disposed) timer = setTimeout(() => void poll(), STATE_POLL_INTERVAL_MS);
+    };
+    void poll();
+
+    return () => {
+      disposed = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [store]);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2">
+        <span className="text-xs font-semibold text-muted-foreground">Reduced processor state</span>
+        <output className="font-mono text-xs text-muted-foreground">
+          {runtimeState == null ? "loading" : "live"}
+        </output>
+      </div>
+      {error == null ? null : (
+        <p className="border-b px-4 py-2 text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        {runtimeState == null ? (
+          <Centered>Reading runtime state…</Centered>
+        ) : (
+          <SerializedObjectCodeBlock data={runtimeState} />
+        )}
+      </div>
     </div>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Shared bits
+// ---------------------------------------------------------------------------
+
 function StreamStatus({ count, snapshot }: { count: number; snapshot: StreamBrowserSnapshot }) {
   return (
-    <p className="mt-1 flex gap-3 font-mono text-[11px] text-slate-500">
+    <p className="mt-0.5 flex gap-3 font-mono text-[11px] text-muted-foreground">
       <span>{snapshot.connectionStatus}</span>
       <span>{snapshot.subscriptionStatus}</span>
       <span>{count.toLocaleString()} events</span>
@@ -322,7 +754,7 @@ function StreamStatus({ count, snapshot }: { count: number; snapshot: StreamBrow
 
 function Centered({ children }: { children: ReactNode }) {
   return (
-    <div className="grid min-h-0 flex-1 place-items-center p-6 text-sm text-slate-500">
+    <div className="grid min-h-0 flex-1 place-items-center p-6 text-sm text-muted-foreground">
       {children}
     </div>
   );
