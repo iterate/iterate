@@ -17,6 +17,7 @@ import {
   Radio,
   ScrollText,
   Settings2,
+  Shield,
   SquareTerminal,
   UserCircle,
   type LucideIcon,
@@ -181,6 +182,7 @@ function AppSidebarUser() {
   const accountManagementUrl = authWorkerUrl(config, "/");
   const [debugOpen, setDebugOpen] = useState(false);
   const user = session?.authenticated ? session.user : null;
+  const isSuperadmin = user?.isAdmin ?? false;
   const label = nonEmptyLabel(user?.name, user?.email, "Account");
   const email = user?.email?.trim() ?? "";
   const initials = userInitials(label);
@@ -255,6 +257,12 @@ function AppSidebarUser() {
                     </a>
                   }
                 />
+                {isSuperadmin && (
+                  <DropdownMenuItem render={<Link to="/admin" />}>
+                    <Shield />
+                    <span>Admin</span>
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onClick={() => setDebugOpen(true)}>
                   <Bug />
                   <span>View debug info</span>
