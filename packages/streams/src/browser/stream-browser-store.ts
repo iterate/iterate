@@ -305,14 +305,26 @@ function createStreamRuntime(
     throw error;
   }
 
-  function reconnectAfter(connectionError: string) {
-    if (disposed || reconnectTimer !== undefined) return;
+  // Tear down the live connection/subscription and schedule a single reconnect. One timer and
+  // one code path so a socket close and a mirror-ingest self-heal can't deadlock each other
+  // (when they had separate guards, a close during the ingest backoff could leave the runtime
+  // stuck disconnected). Bumping the epoch supersedes the connection we are dropping, so its
+  // late "closed"/"error" callbacks are ignored and can't shorten an in-flight backoff. The
+  // next connect() runs a fresh election that re-reads the persisted checkpoint, so the server
+  // replays after the last applied offset.
+  function scheduleReconnect(connectionError: string, delayMs: number) {
+    if (disposed) return;
+    connectionEpoch += 1;
+    stopSubscriptionElection();
+    stream?.[Symbol.dispose]();
+    stream = undefined;
     snapshot = { ...snapshot, connectionError, connectionStatus: "reconnecting" };
     emitSnapshot();
+    if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       reconnectTimer = undefined;
       connect();
-    }, 1_000);
+    }, delayMs);
   }
 
   function reconnectNow() {
@@ -399,10 +411,7 @@ function createStreamRuntime(
         // clobber the new connection's state (B1).
         if (disposed || epoch !== connectionEpoch) return;
         if (connectionStatus === "closed" || connectionStatus === "error") {
-          stopSubscriptionElection();
-          subscriptionHandle = undefined;
-          stream = undefined;
-          reconnectAfter(connectionError ?? connectionStatus);
+          scheduleReconnect(connectionError ?? connectionStatus, 1_000);
           return;
         }
         snapshot = {
@@ -426,7 +435,7 @@ function createStreamRuntime(
       })
       .catch((error: unknown) => {
         if (disposed || epoch !== connectionEpoch) return;
-        reconnectAfter(`connect failed: ${errorMessage(error)}`);
+        scheduleReconnect(`connect failed: ${errorMessage(error)}`, 1_000);
       });
   }
 
@@ -493,19 +502,18 @@ function createStreamRuntime(
           return;
         }
         subscriptionHandle = handle;
-        // A clean (re)subscribe means we have caught back up; clear the self-heal backoff.
-        ingestFailureCount = 0;
         snapshot = { ...snapshot, connectionError: undefined, connectionStatus: "subscribed" };
         emitSnapshot();
+        // Note: we deliberately do NOT reset ingestFailureCount here. A clean resubscribe does
+        // not mean the batch that failed will now succeed, so resetting would let a poison
+        // batch busy-loop at the floor delay. ingestFailureCount only resets on a successful
+        // ingest (so a transient failure that then applies clears the backoff).
       })
       .catch((error: unknown) => {
         clearTimeout(followerTimeout);
         if (disposed) return;
         console.error(`[stream ${args.streamPath}] subscribe failed`, error);
-        stopSubscriptionElection();
-        stream?.[Symbol.dispose]();
-        stream = undefined;
-        reconnectAfter(`subscribe failed: ${errorMessage(error)}`);
+        scheduleReconnect(`subscribe failed: ${errorMessage(error)}`, 1_000);
       });
   }
 
@@ -516,7 +524,7 @@ function createStreamRuntime(
   // silently desyncs forever. We resubscribe from the last successfully-applied checkpoint
   // (the next election re-reads the processor's persisted offset into `replayAfterOffset`,
   // so the server replays from there), with bounded exponential backoff so repeated failures
-  // don't busy-loop. A disposed runtime stops retrying.
+  // don't busy-loop. A disposed runtime, or a callback from a superseded connection, stops.
   async function ingestWithSelfHeal(
     processor: BrowserHostedProcessor,
     batch: { events: readonly StreamEvent[]; streamMaxOffset: number },
@@ -526,30 +534,19 @@ function createStreamRuntime(
       await processor.ingest(batch);
       ingestFailureCount = 0;
     } catch (error) {
-      if (disposed) return;
+      // Only the connection that is still current self-heals; a stale callback bails.
+      if (disposed || stream !== election.connection) throw error;
       ingestFailureCount += 1;
       console.error(
         `[stream ${args.streamPath}] local mirror ingest failed (attempt ${ingestFailureCount}); resubscribing from last applied offset`,
         error,
       );
-      snapshot = {
-        ...snapshot,
-        connectionError: `mirror ingest failed: ${errorMessage(error)}`,
-      };
-      emitSnapshot();
-      // Backoff capped at 30s; only the connection that is still current resubscribes.
+      // Drop the connection and reconnect with bounded exponential backoff (capped 30s). The
+      // fresh election re-reads the persisted checkpoint, so the server replays after the last
+      // applied offset. Routed through the shared scheduleReconnect so a concurrent socket
+      // close can't race a second reconnect timer.
       const delay = Math.min(30_000, 250 * 2 ** Math.min(ingestFailureCount - 1, 7));
-      if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = undefined;
-        if (disposed || stream !== election.connection) return;
-        // Drop the current subscription/connection and redial: the fresh election re-reads
-        // the persisted checkpoint, so the server replays after the last applied offset.
-        stopSubscriptionElection();
-        stream?.[Symbol.dispose]();
-        stream = undefined;
-        connect();
-      }, delay);
+      scheduleReconnect(`mirror ingest failed: ${errorMessage(error)}`, delay);
       throw error;
     }
   }
@@ -571,10 +568,7 @@ function createStreamRuntime(
       await controlledStream.stream[control]();
     } finally {
       if (stream === controlledStream) {
-        stopSubscriptionElection();
-        controlledStream[Symbol.dispose]();
-        stream = undefined;
-        reconnectAfter(`stream ${control} requested`);
+        scheduleReconnect(`stream ${control} requested`, 1_000);
       }
     }
   }
