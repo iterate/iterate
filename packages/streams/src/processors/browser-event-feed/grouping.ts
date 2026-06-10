@@ -7,7 +7,7 @@
 // A new type always starts a fresh group row.
 //
 // This is deliberately a pure function of (state, events): the reducer uses it to
-// advance state, and afterAppendBatch re-folds it over the same batch to derive the
+// advance state, and processEventBatch re-folds it over the same batch to derive the
 // exact SQLite ops. Same input => same ops => idempotent replay.
 
 import type { StreamEvent } from "../../shared/event.ts";
@@ -28,6 +28,14 @@ export function componentForEventType(type: string): string | null {
 
 /** Component name used for the catch-all group row. */
 export const GROUP_COMPONENT = "group";
+
+/**
+ * Upper bound on events folded into a single group row. When an open group
+ * reaches this many events, the next same-type event starts a fresh group
+ * instead of extending it — bounding both the `feed_items.data` blob size and
+ * the per-batch serialization work for streams dominated by one event type.
+ */
+export const MAX_GROUP_EVENTS = 200;
 
 export type OpenGroup = {
   localIndex: number;
@@ -79,8 +87,15 @@ export type FeedOp =
 
 /**
  * Fold a batch of events into feed ops + the resulting state, starting from `start`.
- * The reducer calls this one event at a time; afterAppendBatch calls it with the whole
- * delivered batch to produce one transaction.
+ * The reducer calls this one event at a time (and uses only `endState`); processEventBatch
+ * calls it with the whole delivered batch to produce one transaction.
+ *
+ * Ops are coalesced per `local_index`: a run of same-type events that all land in the
+ * same group row emits ONE op carrying that row's final `data`/`lastOffset`/`eventCount`,
+ * instead of one cumulative op per event. Since `feedOpToStatement` upserts on
+ * conflict(local_index), a single statement per touched row is correct for both freshly
+ * inserted rows and rows replayed over an existing (previous-batch) row. This keeps the
+ * batch O(events) instead of O(events²) in serialization work.
  */
 export function planFeedOps(
   start: FeedState,
@@ -89,6 +104,14 @@ export function planFeedOps(
   let open = start.open;
   let nextLocalIndex = start.nextLocalIndex;
   const ops: FeedOp[] = [];
+  // The op for the row `open` points at, when that row is being mutated within
+  // this batch — so we update it in place instead of pushing a fresh op per event.
+  let openOp: FeedOp | null = null;
+
+  const closeOpenOp = () => {
+    open = null;
+    openOp = null;
+  };
 
   for (const event of events) {
     const renderer = componentForEventType(event.type);
@@ -105,49 +128,62 @@ export function planFeedOps(
         data: { events: [event] },
       });
       nextLocalIndex += 1;
-      open = null;
+      closeOpenOp();
       continue;
     }
 
-    if (open !== null && open.eventType === event.type) {
-      // Extend the open group for this event type.
-      const events = [...open.events, event];
+    if (open !== null && open.eventType === event.type && open.eventCount < MAX_GROUP_EVENTS) {
+      // Extend the open group for this event type (still under the size bound).
+      const groupEvents = [...open.events, event];
       open = {
         ...open,
         lastOffset: event.offset,
         eventCount: open.eventCount + 1,
-        events,
+        events: groupEvents,
       };
-      ops.push({
-        kind: "update",
-        localIndex: open.localIndex,
-        lastOffset: open.lastOffset,
-        eventCount: open.eventCount,
-        data: groupFeedData(open.eventType, events),
-      });
+      if (openOp === null) {
+        // First touch of a row that already existed before this batch: a single
+        // UPDATE carrying the final state (kept in sync as more events extend it).
+        openOp = {
+          kind: "update",
+          localIndex: open.localIndex,
+          lastOffset: open.lastOffset,
+          eventCount: open.eventCount,
+          data: groupFeedData(open.eventType, groupEvents),
+        };
+        ops.push(openOp);
+      } else {
+        // A row inserted/updated earlier in this batch: fold the new event into
+        // its existing op so the row still produces exactly one statement.
+        openOp.lastOffset = open.lastOffset;
+        openOp.eventCount = open.eventCount;
+        openOp.data = groupFeedData(open.eventType, groupEvents);
+      }
       continue;
     }
 
-    // Start a new group (no open row, or the type changed).
-    const events = [event];
+    // Start a new group: no open row, the type changed, or the open group hit
+    // MAX_GROUP_EVENTS and must roll over into a fresh row.
+    const groupEvents = [event];
     open = {
       localIndex: nextLocalIndex,
       firstOffset: event.offset,
       lastOffset: event.offset,
       eventCount: 1,
       eventType: event.type,
-      events,
+      events: groupEvents,
     };
     nextLocalIndex += 1;
-    ops.push({
+    openOp = {
       kind: "insert",
       localIndex: open.localIndex,
       component: GROUP_COMPONENT,
       firstOffset: open.firstOffset,
       lastOffset: open.lastOffset,
       eventCount: open.eventCount,
-      data: groupFeedData(event.type, events),
-    });
+      data: groupFeedData(event.type, groupEvents),
+    };
+    ops.push(openOp);
   }
 
   return { ops, endState: { open, nextLocalIndex } };
