@@ -6,7 +6,8 @@ import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
+import { StreamPath } from "@iterate-com/shared/streams/types";
+import type { StreamEvent } from "@iterate-com/streams/shared/event";
 import { typeid } from "@iterate-com/shared/typeid";
 import {
   createStreamProcessorHost,
@@ -106,7 +107,6 @@ export type ProjectSummary = {
 
 export type ProjectCapability = Pick<
   ProjectDurableObject,
-  | "afterAppend"
   | "callConfigWorkerFunction"
   | "createProject"
   | "describe"
@@ -162,7 +162,12 @@ export type ProjectDynamicWorkerEntrypoint = {
   [key: string]: any;
   [Symbol.dispose]?(): void;
   fetch(request: Request): Response | Promise<Response>;
-  afterAppend?(input: { event: Event }): unknown | Promise<unknown>;
+  /**
+   * The config worker's stream-processor hook: called with every event
+   * committed to the stream the platform subscribed it to (the project root
+   * stream), in order. Mirrors the StreamProcessor class model's processEvent.
+   */
+  processEvent?(input: { event: StreamEvent; streamPath: string }): unknown | Promise<unknown>;
 };
 
 type ProjectDynamicWorkerModule =
@@ -262,18 +267,17 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     (deps) => new ProjectLifecycleProcessor(deps),
   );
   // The config worker as a stream processor: every root-stream event is
-  // forwarded to its afterAppend export. See the processor's contract for the
-  // composition story (per-project agent context etc.).
+  // forwarded to its processEvent export. See the processor's contract for
+  // the composition story (per-project agent context etc.).
   projectConfigWorker = this.host.add(
     ProjectConfigWorkerProcessorContract.slug,
     (deps) =>
       new ProjectConfigWorkerProcessor({
         ...deps,
-        // This subscription is on the project root stream, so the legacy
-        // Event shape's streamPath is always "/" here.
         forwardToConfigWorker: (event) =>
           this.forwardEventToConfigWorker({
-            event: { streamPath: PROJECT_LIFECYCLE_STREAM_PATH, ...event } as Event,
+            event,
+            streamPath: PROJECT_LIFECYCLE_STREAM_PATH,
           }),
       }),
   );
@@ -536,22 +540,16 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     };
   }
 
-  async afterAppend(input: { event: Event }) {
-    await this.ensureStarted();
-    await this.forwardEventToConfigWorker(input);
-    return await this.getProjectLifecycleRunnerState();
-  }
-
   /**
-   * Delivers one event to the config worker's `afterAppend` export. No-op
+   * Delivers one event to the config worker's `processEvent` export. No-op
    * until the config worker has first been built (project provisioning does
    * that within seconds of creation; earlier events are platform lifecycle
    * noise). User-code failures are swallowed and logged — a throwing
-   * afterAppend is the project author's bug and must never wedge root-stream
+   * processEvent is the project author's bug and must never wedge root-stream
    * delivery (the host would otherwise treat the batch as poison and
    * disconnect the subscription).
    */
-  private async forwardEventToConfigWorker(input: { event: Event }) {
+  private async forwardEventToConfigWorker(input: { event: StreamEvent; streamPath: string }) {
     const summary = this.currentSummary();
     const configWorkerIsReady = await this.ctx.storage.get<boolean>(
       PROJECT_CONFIG_READY_STORAGE_KEY,
@@ -559,9 +557,9 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     if (summary === null || configWorkerIsReady !== true) return;
     try {
       const entrypoint = await this.getForwardingProjectDynamicWorkerEntrypoint(summary);
-      await entrypoint.afterAppend?.(input);
+      await entrypoint.processEvent?.(input);
     } catch (error) {
-      console.error("Project config worker afterAppend failed.", error);
+      console.error("Project config worker processEvent failed.", error);
     }
   }
 

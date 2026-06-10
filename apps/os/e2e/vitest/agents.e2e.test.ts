@@ -380,7 +380,7 @@ test("project config worker customizes fresh agents by appending events", async 
     "  // The config worker is a stream processor: this receives every event on",
     "  // the project root stream. New agent streams announce themselves as",
     "  // child-stream-created; react by appending agent context events.",
-    "  async afterAppend({ event }, env) {",
+    "  async processEvent({ event }, env) {",
     '    if (event.type !== "events.iterate.com/stream/child-stream-created") return;',
     "    const agentPath = event.payload.childPath;",
     `    if (!agentPath.startsWith(${JSON.stringify(`/agents/customized-`)})) return;`,

@@ -45,7 +45,8 @@ export default {
   // The config worker is a stream processor: every project root-stream event
   // is forwarded here. Echo pings back as facts so tests can observe the
   // whole forwarding chain end to end.
-  async afterAppend({ event }, env) {
+  async processEvent({ event, streamPath }, env) {
+    if (streamPath !== "/") return;
     if (event.type !== "test.project/ping") return;
     await env.STREAMS.append({
       streamPath: "/config-worker-saw",

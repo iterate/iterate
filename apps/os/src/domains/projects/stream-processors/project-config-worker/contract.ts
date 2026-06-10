@@ -2,7 +2,7 @@
 //
 // The project's config worker (iterate-config/worker.js) is a stream
 // processor: this contract subscribes it to the project root stream ("/") and
-// every committed event is forwarded to its exported `afterAppend` hook. That
+// every committed event is forwarded to its exported `processEvent` hook. That
 // is the project-code composition surface — config workers react to facts and
 // append facts. The motivating example is per-project agent context: the root
 // stream carries `stream/child-stream-created` for every new stream in the
@@ -19,7 +19,7 @@ export const ProjectConfigWorkerProcessorContract = defineProcessorContract({
   slug: "project-config-worker",
   version: "0.1.0",
   description:
-    "Forwards every project root-stream event to the project config worker's afterAppend hook.",
+    "Forwards every project root-stream event to the project config worker's processEvent hook.",
   // The processor itself is stateless: the config worker owns whatever durable
   // facts it wants by appending them to streams.
   stateSchema: z.object({}),
