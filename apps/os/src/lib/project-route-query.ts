@@ -81,38 +81,3 @@ export function projectRepoQueryOptions(input: { projectId: string; repoSlug: st
     staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
   };
 }
-
-export function projectSecretsListQueryOptions(projectId: string) {
-  return {
-    ...orpc.project.secrets.list.queryOptions({ input: { projectSlugOrId: projectId } }),
-    staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
-  };
-}
-
-export function projectSecretQueryOptions(input: { projectId: string; secretId: string }) {
-  return {
-    ...orpc.project.secrets.get.queryOptions({
-      input: { id: input.secretId, projectSlugOrId: input.projectId },
-    }),
-    staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
-  };
-}
-
-export function projectSlackConnectionQueryOptions(projectId: string) {
-  return orpc.project.integrations.getSlackConnection.queryOptions({
-    input: { projectSlugOrId: projectId },
-  });
-}
-
-export function projectGoogleConnectionQueryOptions(projectId: string) {
-  return orpc.project.integrations.getGoogleConnection.queryOptions({
-    input: { projectSlugOrId: projectId },
-  });
-}
-
-export function projectCustomHostnameStatusQueryOptions(projectId: string) {
-  return {
-    ...orpc.projects.customHostnameStatus.queryOptions({ input: { id: projectId } }),
-    staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
-  };
-}

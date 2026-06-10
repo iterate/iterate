@@ -1,6 +1,5 @@
+import { Suspense, useEffect, useState, type ComponentType } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ProjectIntegrationConnection } from "@iterate-com/os-contract";
 import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -16,11 +15,12 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
-import {
-  projectGoogleConnectionQueryOptions,
-  projectSlackConnectionQueryOptions,
-} from "~/lib/project-route-query.ts";
-import { orpc } from "~/orpc/client.ts";
+import type { ItxIntegrations } from "~/itx/facades.ts";
+import { useItx } from "~/itx/use-itx.ts";
+import { createBrowserOpenApiClient } from "~/orpc/client.ts";
+
+type IntegrationConnection = Awaited<ReturnType<ItxIntegrations["getConnection"]>>;
+type Provider = "google" | "slack";
 
 const Search = z.object({
   error: z.string().optional(),
@@ -28,66 +28,90 @@ const Search = z.object({
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")({
   validateSearch: Search,
-  loader: async ({ context }) => {
-    const { project } = context;
-    await Promise.all([
-      context.queryClient.ensureQueryData(projectSlackConnectionQueryOptions(project.id)),
-      context.queryClient.ensureQueryData(projectGoogleConnectionQueryOptions(project.id)),
-    ]);
-
-    return {
-      breadcrumb: "Integrations",
-      project,
-    };
-  },
+  ssr: false,
+  loader: ({ context }) => ({
+    breadcrumb: "Integrations",
+    project: context.project,
+  }),
   component: ProjectIntegrationsPage,
 });
 
 function ProjectIntegrationsPage() {
+  return (
+    <Suspense
+      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
+    >
+      <ProjectIntegrationsContent />
+    </Suspense>
+  );
+}
+
+function ProjectIntegrationsContent() {
   const search = Route.useSearch();
   const { project } = Route.useLoaderData();
-  const queryClient = useQueryClient();
-  const projectSlugOrId = project.id;
-  const slackQuery = projectSlackConnectionQueryOptions(project.id);
-  const googleQuery = projectGoogleConnectionQueryOptions(project.id);
-  const { data: slackConnection } = useQuery(slackQuery);
-  const { data: googleConnection } = useQuery(googleQuery);
+  const itx = useItx(project.id);
+  const [connections, setConnections] = useState<Partial<Record<Provider, IntegrationConnection>>>(
+    {},
+  );
+  const [busyProvider, setBusyProvider] = useState<Provider>();
   const oauthErrorLabel = search.error ? formatOAuthError(search.error) : null;
 
-  const startSlack = useMutation(
-    orpc.project.integrations.startSlackOAuthFlow.mutationOptions({
-      onSuccess: (result) => {
-        window.location.href = result.authorizationUrl;
-      },
-      onError: (error) => toast.error(`Failed to connect Slack: ${error.message}`),
-    }),
-  );
-  const disconnectSlack = useMutation(
-    orpc.project.integrations.disconnectSlack.mutationOptions({
-      onSuccess: async () => {
-        await queryClient.invalidateQueries({ queryKey: slackQuery.queryKey });
-        toast.success("Slack disconnected");
-      },
-      onError: (error) => toast.error(`Failed to disconnect Slack: ${error.message}`),
-    }),
-  );
-  const startGoogle = useMutation(
-    orpc.project.integrations.startGoogleOAuthFlow.mutationOptions({
-      onSuccess: (result) => {
-        window.location.href = result.authorizationUrl;
-      },
-      onError: (error) => toast.error(`Failed to connect Google: ${error.message}`),
-    }),
-  );
-  const disconnectGoogle = useMutation(
-    orpc.project.integrations.disconnectGoogle.mutationOptions({
-      onSuccess: async () => {
-        await queryClient.invalidateQueries({ queryKey: googleQuery.queryKey });
-        toast.success("Google disconnected");
-      },
-      onError: (error) => toast.error(`Failed to disconnect Google: ${error.message}`),
-    }),
-  );
+  useEffect(() => {
+    let cancelled = false;
+    for (const provider of ["slack", "google"] as const) {
+      itx.integrations
+        .getConnection({ provider })
+        .then(
+          (connection) =>
+            !cancelled && setConnections((previous) => ({ ...previous, [provider]: connection })),
+        )
+        .catch(
+          (error: unknown) =>
+            !cancelled && toast.error(error instanceof Error ? error.message : String(error)),
+        );
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [itx]);
+
+  async function connect(provider: Provider) {
+    setBusyProvider(provider);
+    try {
+      const { authorizationUrl } = await itx.integrations.startOAuthFlow({
+        provider,
+        callbackUrl: window.location.href,
+      });
+      window.location.href = authorizationUrl;
+    } catch (error) {
+      setBusyProvider(undefined);
+      toast.error(
+        `Failed to connect ${providerLabel(provider)}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  // Disconnect still goes over oRPC: itx.integrations has no disconnect yet
+  // (the flow appends provider-disconnected integration-stream events that
+  // live in the oRPC router, not in a shared domain function).
+  async function disconnect(provider: Provider) {
+    setBusyProvider(provider);
+    try {
+      const integrations = createBrowserOpenApiClient().project.integrations;
+      await (provider === "slack"
+        ? integrations.disconnectSlack({ projectSlugOrId: project.id })
+        : integrations.disconnectGoogle({ projectSlugOrId: project.id }));
+      const connection = await itx.integrations.getConnection({ provider });
+      setConnections((previous) => ({ ...previous, [provider]: connection }));
+      toast.success(`${providerLabel(provider)} disconnected`);
+    } catch (error) {
+      toast.error(
+        `Failed to disconnect ${providerLabel(provider)}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setBusyProvider(undefined);
+    }
+  }
 
   return (
     <section className="max-w-md space-y-4 p-4">
@@ -99,100 +123,93 @@ function ProjectIntegrationsPage() {
         </Alert>
       ) : null}
       <ItemGroup className="space-y-3">
-        <Item variant="outline" className="items-start justify-between gap-4 p-4">
-          <ItemMedia variant="icon">
-            <MessageSquare className="size-4" />
-          </ItemMedia>
-          <ItemContent className="min-w-0">
-            <ItemTitle>Slack</ItemTitle>
-            <ItemDescription>
-              {slackConnection?.connected
-                ? `Connected to ${slackConnection.displayName ?? slackConnection.externalId}`
-                : "Connect a Slack workspace to receive project webhooks and use Slack API tools."}
-            </ItemDescription>
-            <IntegrationMetadata connection={slackConnection} provider="slack" />
-          </ItemContent>
-          <ItemActions>
-            {slackConnection?.connected ? (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={disconnectSlack.isPending}
-                onClick={() => disconnectSlack.mutate({ projectSlugOrId })}
-              >
-                {disconnectSlack.isPending ? <Spinner /> : null}
-                Disconnect
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                disabled={startSlack.isPending}
-                onClick={() =>
-                  startSlack.mutate({
-                    projectSlugOrId,
-                    callbackUrl: window.location.href,
-                  })
-                }
-              >
-                {startSlack.isPending ? <Spinner /> : null}
-                Connect Slack
-              </Button>
-            )}
-          </ItemActions>
-        </Item>
-
-        <Item variant="outline" className="items-start justify-between gap-4 p-4">
-          <ItemMedia variant="icon">
-            <Mail className="size-4" />
-          </ItemMedia>
-          <ItemContent className="min-w-0">
-            <ItemTitle>Google</ItemTitle>
-            <ItemDescription>
-              {googleConnection?.connected
-                ? `Connected as ${googleConnection.displayName ?? googleConnection.externalId}`
-                : "Connect Google for Gmail, Calendar, Docs, Sheets, and Drive API tools."}
-            </ItemDescription>
-            <IntegrationMetadata connection={googleConnection} provider="google" />
-          </ItemContent>
-          <ItemActions>
-            {googleConnection?.connected ? (
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={disconnectGoogle.isPending}
-                onClick={() => disconnectGoogle.mutate({ projectSlugOrId })}
-              >
-                {disconnectGoogle.isPending ? <Spinner /> : null}
-                Disconnect
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                disabled={startGoogle.isPending}
-                onClick={() =>
-                  startGoogle.mutate({
-                    projectSlugOrId,
-                    callbackUrl: window.location.href,
-                  })
-                }
-              >
-                {startGoogle.isPending ? <Spinner /> : null}
-                Connect Google
-              </Button>
-            )}
-          </ItemActions>
-        </Item>
+        <IntegrationItem
+          provider="slack"
+          icon={MessageSquare}
+          connection={connections.slack}
+          connectedDescription={(connection) =>
+            `Connected to ${connection.displayName ?? connection.externalId}`
+          }
+          disconnectedDescription="Connect a Slack workspace to receive project webhooks and use Slack API tools."
+          isBusy={busyProvider === "slack"}
+          onConnect={() => void connect("slack")}
+          onDisconnect={() => void disconnect("slack")}
+        />
+        <IntegrationItem
+          provider="google"
+          icon={Mail}
+          connection={connections.google}
+          connectedDescription={(connection) =>
+            `Connected as ${connection.displayName ?? connection.externalId}`
+          }
+          disconnectedDescription="Connect Google for Gmail, Calendar, Docs, Sheets, and Drive API tools."
+          isBusy={busyProvider === "google"}
+          onConnect={() => void connect("google")}
+          onDisconnect={() => void disconnect("google")}
+        />
       </ItemGroup>
     </section>
   );
+}
+
+function IntegrationItem({
+  connectedDescription,
+  connection,
+  disconnectedDescription,
+  icon: Icon,
+  isBusy,
+  onConnect,
+  onDisconnect,
+  provider,
+}: {
+  connectedDescription: (connection: IntegrationConnection) => string;
+  connection: IntegrationConnection | undefined;
+  disconnectedDescription: string;
+  icon: ComponentType<{ className?: string }>;
+  isBusy: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  provider: Provider;
+}) {
+  return (
+    <Item variant="outline" className="items-start justify-between gap-4 p-4">
+      <ItemMedia variant="icon">
+        <Icon className="size-4" />
+      </ItemMedia>
+      <ItemContent className="min-w-0">
+        <ItemTitle>{providerLabel(provider)}</ItemTitle>
+        <ItemDescription>
+          {connection?.connected ? connectedDescription(connection) : disconnectedDescription}
+        </ItemDescription>
+        <IntegrationMetadata connection={connection} provider={provider} />
+      </ItemContent>
+      <ItemActions>
+        {connection?.connected ? (
+          <Button size="sm" variant="outline" disabled={isBusy} onClick={onDisconnect}>
+            {isBusy ? <Spinner /> : null}
+            Disconnect
+          </Button>
+        ) : (
+          <Button size="sm" disabled={isBusy} onClick={onConnect}>
+            {isBusy ? <Spinner /> : null}
+            Connect {providerLabel(provider)}
+          </Button>
+        )}
+      </ItemActions>
+    </Item>
+  );
+}
+
+function providerLabel(provider: Provider) {
+  return provider === "slack" ? "Slack" : "Google";
 }
 
 function IntegrationMetadata({
   connection,
   provider,
 }: {
-  connection?: ProjectIntegrationConnection;
-  provider: "google" | "slack";
+  connection?: IntegrationConnection;
+  provider: Provider;
 }) {
   if (!connection?.connected) return null;
 

@@ -1,100 +1,106 @@
-import { useCallback, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Suspense, useEffect, useState } from "react";
 import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
-import type { Project, ProjectCustomHostnameStatus } from "@iterate-com/os-contract";
+import type { Project } from "@iterate-com/os-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
+import type { ProjectCustomHostnameStatus } from "~/domains/projects/cloudflare-custom-hostnames.ts";
+import { useItx } from "~/itx/use-itx.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
-import { projectCustomHostnameStatusQueryOptions } from "~/lib/project-route-query.ts";
-import { getPublicRouteConfig, type PublicRouteConfig } from "~/lib/public-route-config.ts";
-import { orpc } from "~/orpc/client.ts";
+import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/settings")({
-  loader: async ({ context }) => {
-    const { project } = context;
-    if (project.customHostname) {
-      await context.queryClient.ensureQueryData(
-        projectCustomHostnameStatusQueryOptions(project.id),
-      );
-    }
-
-    return {
-      breadcrumb: "Settings",
-      project,
-      routeConfig: await getPublicRouteConfig(),
-    };
-  },
+  ssr: false,
+  loader: async ({ context }) => ({
+    breadcrumb: "Settings",
+    project: context.project,
+    routeConfig: await getPublicRouteConfig(),
+  }),
   component: ProjectDetailPage,
 });
 
 function ProjectDetailPage() {
-  const { project, routeConfig } = Route.useLoaderData();
-
-  return <ProjectDetailContent project={project} routeConfig={routeConfig} />;
+  return (
+    <Suspense
+      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
+    >
+      <ProjectDetailContent />
+    </Suspense>
+  );
 }
 
-function ProjectDetailContent({
-  project,
-  routeConfig,
-}: {
-  project: Project;
-  routeConfig: PublicRouteConfig;
-}) {
+function ProjectDetailContent() {
+  const { project, routeConfig } = Route.useLoaderData();
   const router = useRouter();
-  const queryClient = useQueryClient();
+  const itx = useItx(project.id);
   const [customHostname, setCustomHostname] = useState(project.customHostname ?? "");
   const [hostnameToActivate, setHostnameToActivate] = useState("");
+  const [hostnameStatus, setHostnameStatus] = useState<ProjectCustomHostnameStatus>();
+  const [isSaving, setIsSaving] = useState(false);
+  const [isActivating, setIsActivating] = useState(false);
   const dnsInstructions = customHostnameDnsInstructions({
     customHostname,
     project,
     projectHostnameBases: routeConfig.projectHostnameBases,
   });
-  const customHostnameStatusQuery = useQuery({
-    ...projectCustomHostnameStatusQueryOptions(project.id),
-    enabled: Boolean(project.customHostname),
-    refetchInterval: (query) =>
-      query.state.data?.hostnames.some((hostname) => hostname.sslStatus !== "active")
-        ? 10_000
-        : false,
-  });
-  const updateConfig = useMutation(
-    orpc.projects.updateConfig.mutationOptions({
-      onSuccess: () => {
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.find.key() });
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.findBySlug.key() });
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.customHostnameStatus.key() });
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
-        void router.invalidate();
-        toast.success("Project config saved.");
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
-  const ensureCustomHostname = useMutation(
-    orpc.projects.ensureCustomHostname.mutationOptions({
-      onSuccess: () => {
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.customHostnameStatus.key() });
-        toast.success("Custom hostname activated.");
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
 
-  const handleUpdateConfig = useCallback(() => {
-    updateConfig.mutate({
-      id: project.id,
-      customHostname: customHostname.trim() === "" ? null : customHostname,
-    });
-  }, [customHostname, project.id, updateConfig]);
-  const handleActivateHostname = useCallback(() => {
-    ensureCustomHostname.mutate({
-      id: project.id,
-      hostname: hostnameToActivate,
-    });
-  }, [ensureCustomHostname, hostnameToActivate, project.id]);
+  // Cloudflare hostname status: one fetch on mount, then a 10s re-poll while
+  // any certificate is still pending (the old refetchInterval behavior).
+  useEffect(() => {
+    if (!project.customHostname) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    async function load() {
+      try {
+        const status = await itx.project.customHostnameStatus();
+        if (cancelled) return;
+        setHostnameStatus(status);
+        if (status.hostnames.some((hostname) => hostname.sslStatus !== "active")) {
+          timer = setTimeout(() => void load(), 10_000);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : String(error));
+        }
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [itx, project.customHostname]);
+
+  async function handleUpdateConfig() {
+    setIsSaving(true);
+    try {
+      await itx.project.updateConfig({
+        customHostname: customHostname.trim() === "" ? null : customHostname,
+      });
+      // Re-runs the route loaders so context.project picks up the new config.
+      void router.invalidate();
+      toast.success("Project config saved.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleActivateHostname() {
+    setIsActivating(true);
+    try {
+      await itx.project.ensureCustomHostname({ hostname: hostnameToActivate });
+      setHostnameStatus(await itx.project.customHostnameStatus());
+      toast.success("Custom hostname activated.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsActivating(false);
+    }
+  }
 
   return (
     <section className="space-y-4 p-4">
@@ -128,38 +134,38 @@ function ProjectDetailContent({
               placeholder="app.example.com"
               value={customHostname}
               onChange={(event) => setCustomHostname(event.target.value)}
-              onKeyDown={(event) => event.key === "Enter" && handleUpdateConfig()}
+              onKeyDown={(event) => event.key === "Enter" && void handleUpdateConfig()}
             />
           </div>
           <CustomHostnameDnsInstructions instructions={dnsInstructions} />
           {project.customHostname ? (
             <div className="space-y-2">
               <CustomHostnameCloudflareStatus
-                status={customHostnameStatusQuery.data}
-                isPending={customHostnameStatusQuery.isPending}
+                status={hostnameStatus}
+                isPending={hostnameStatus === undefined}
               />
               <div className="flex gap-2">
                 <Input
                   placeholder={`app1.${project.customHostname}`}
                   value={hostnameToActivate}
                   onChange={(event) => setHostnameToActivate(event.target.value)}
-                  onKeyDown={(event) => event.key === "Enter" && handleActivateHostname()}
+                  onKeyDown={(event) => event.key === "Enter" && void handleActivateHostname()}
                 />
                 <Button
                   size="sm"
                   variant="outline"
-                  onClick={handleActivateHostname}
-                  disabled={ensureCustomHostname.isPending || hostnameToActivate.trim() === ""}
+                  onClick={() => void handleActivateHostname()}
+                  disabled={isActivating || hostnameToActivate.trim() === ""}
                 >
-                  {ensureCustomHostname.isPending ? "Activating..." : "Activate"}
+                  {isActivating ? "Activating..." : "Activate"}
                 </Button>
               </div>
             </div>
           ) : null}
         </div>
 
-        <Button size="sm" onClick={handleUpdateConfig} disabled={updateConfig.isPending}>
-          {updateConfig.isPending ? "Saving..." : "Save"}
+        <Button size="sm" onClick={() => void handleUpdateConfig()} disabled={isSaving}>
+          {isSaving ? "Saving..." : "Save"}
         </Button>
 
         <div className="space-y-1">
