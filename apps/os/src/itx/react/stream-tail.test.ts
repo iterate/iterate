@@ -15,6 +15,7 @@ const RELEASE_LINGER_MS = 5_000;
 const RETRY_INITIAL_MS = 1_000;
 const RETRY_MAX_MS = 15_000;
 const MAX_BUFFERED_EVENTS = 500;
+const LIVENESS_INTERVAL_MS = 30_000;
 
 function makeEvent(offset: number): StreamLegacyEvent {
   return {
@@ -44,6 +45,8 @@ type RecordedSubscribe = {
 function createFakeClient() {
   let status: ItxConnectionStatus = "connected";
   let failSubscribes = false;
+  let serverEventCount = 0;
+  let getStateImpl: (() => Promise<{ eventCount: number }>) | null = null;
   const statusListeners = new Set<() => void>();
   const subscribeCalls: RecordedSubscribe[] = [];
 
@@ -60,7 +63,11 @@ function createFakeClient() {
     },
   );
 
-  const handle = { streams: { get: vi.fn(() => ({ subscribe })) } };
+  const getState = vi.fn(() =>
+    getStateImpl ? getStateImpl() : Promise.resolve({ eventCount: serverEventCount }),
+  );
+
+  const handle = { streams: { get: vi.fn(() => ({ subscribe, getState })) } };
   const subscribeStatus = vi.fn((listener: () => void) => {
     statusListeners.add(listener);
     return () => statusListeners.delete(listener);
@@ -75,8 +82,17 @@ function createFakeClient() {
     subscribe,
     subscribeCalls,
     subscribeStatus,
+    getState,
     setSubscribeFailing(fail: boolean) {
       failSubscribes = fail;
+    },
+    /** What the server reports as eventCount when the liveness probe asks. */
+    setServerEventCount(count: number) {
+      serverEventCount = count;
+    },
+    /** Replace getState wholesale (deferred resolution, failures). */
+    setGetStateImpl(impl: (() => Promise<{ eventCount: number }>) | null) {
+      getStateImpl = impl;
     },
     /** Change connection status and fire status listeners, like the real client. */
     setStatus(next: ItxConnectionStatus) {
@@ -275,6 +291,101 @@ describe("acquireStreamTailStore", () => {
     // The newest 500 survive.
     expect(events[0]!.offset).toBe(208);
     expect(events[events.length - 1]!.offset).toBe(707);
+  });
+
+  test("the liveness probe restarts a silently dead subscription from the last offset", async () => {
+    const fake = createFakeClient();
+    const store = acquireStreamTailStore(fake.client, "proj", "/itx");
+
+    store.retain();
+    await flush();
+    const first = fake.subscribeCalls[0]!;
+    first.callback({ events: makeEvents(1, 3), streamMaxOffset: 3 });
+    fake.setServerEventCount(3);
+
+    // Healthy probes leave the subscription alone.
+    await vi.advanceTimersByTimeAsync(LIVENESS_INTERVAL_MS);
+    await flush();
+    expect(fake.getState).toHaveBeenCalledTimes(1);
+    expect(fake.subscribe).toHaveBeenCalledTimes(1);
+
+    // The DO dies (eviction): events 4..5 commit server-side, nothing is
+    // delivered, the socket stays "connected", no status transition fires.
+    fake.setServerEventCount(5);
+    await vi.advanceTimersByTimeAsync(LIVENESS_INTERVAL_MS);
+    await flush();
+
+    expect(fake.subscribeCalls).toHaveLength(2);
+    expect(fake.subscribeCalls[1]!.afterOffset).toBe(3);
+    expect(store.getSnapshot().events.map((e) => e.offset)).toEqual([1, 2, 3]);
+
+    // The replacement subscription replays what was missed.
+    fake.subscribeCalls[1]!.callback({ events: makeEvents(4, 5), streamMaxOffset: 5 });
+    expect(store.getSnapshot().events.map((e) => e.offset)).toEqual([1, 2, 3, 4, 5]);
+    expect(store.getSnapshot().status).toBe("live");
+  });
+
+  test("a delivery during the probe roundtrip is not mistaken for a stall", async () => {
+    const fake = createFakeClient();
+    const store = acquireStreamTailStore(fake.client, "proj", "/itx");
+
+    store.retain();
+    await flush();
+    const first = fake.subscribeCalls[0]!;
+    first.callback({ events: makeEvents(1, 3), streamMaxOffset: 3 });
+
+    // getState resolves only when we say so; event 4 lands mid-roundtrip.
+    let resolveState!: (state: { eventCount: number }) => void;
+    fake.setGetStateImpl(() => new Promise((resolve) => (resolveState = resolve)));
+    await vi.advanceTimersByTimeAsync(LIVENESS_INTERVAL_MS);
+    first.callback({ events: [makeEvent(4)], streamMaxOffset: 4 });
+    resolveState({ eventCount: 4 });
+    await flush();
+
+    // The server was ahead of the pre-probe offset, but progress arrived:
+    // healthy busy stream, no restart.
+    expect(fake.subscribe).toHaveBeenCalledTimes(1);
+    expect(store.getSnapshot().events.map((e) => e.offset)).toEqual([1, 2, 3, 4]);
+  });
+
+  test("probe failures keep probing without disturbing a live tail", async () => {
+    const fake = createFakeClient();
+    const store = acquireStreamTailStore(fake.client, "proj", "/itx");
+
+    store.retain();
+    await flush();
+    fake.subscribeCalls[0]!.callback({ events: [makeEvent(1)], streamMaxOffset: 1 });
+
+    fake.setGetStateImpl(() => Promise.reject(new Error("probe network blip")));
+    await vi.advanceTimersByTimeAsync(LIVENESS_INTERVAL_MS);
+    await flush();
+    await vi.advanceTimersByTimeAsync(LIVENESS_INTERVAL_MS);
+    await flush();
+
+    expect(fake.getState).toHaveBeenCalledTimes(2);
+    expect(fake.subscribe).toHaveBeenCalledTimes(1);
+    expect(store.getSnapshot().status).toBe("live");
+
+    // Once getState recovers and reports a stall, the probe still acts on it.
+    fake.setGetStateImpl(null);
+    fake.setServerEventCount(9);
+    await vi.advanceTimersByTimeAsync(LIVENESS_INTERVAL_MS);
+    await flush();
+    expect(fake.subscribeCalls).toHaveLength(2);
+    expect(fake.subscribeCalls[1]!.afterOffset).toBe(1);
+  });
+
+  test("the probe stops with the subscription at teardown", async () => {
+    const fake = createFakeClient();
+    const store = acquireStreamTailStore(fake.client, "proj", "/itx");
+
+    const release = store.retain();
+    await flush();
+    release();
+    await vi.advanceTimersByTimeAsync(RELEASE_LINGER_MS);
+
+    await vi.advanceTimersByTimeAsync(LIVENESS_INTERVAL_MS * 3);
+    expect(fake.getState).not.toHaveBeenCalled();
   });
 
   test("getSnapshot returns the same reference until something appends", async () => {

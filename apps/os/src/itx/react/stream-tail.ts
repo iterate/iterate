@@ -32,6 +32,7 @@ const MAX_BUFFERED_EVENTS = 500;
 const RELEASE_LINGER_MS = 5_000;
 const RETRY_INITIAL_MS = 1_000;
 const RETRY_MAX_MS = 15_000;
+const LIVENESS_INTERVAL_MS = 30_000;
 
 const EMPTY_SNAPSHOT: StreamTailSnapshot = { events: [], status: "connecting" };
 
@@ -46,6 +47,7 @@ type TailEntry = {
   releaseTimer: ReturnType<typeof setTimeout> | null;
   retryTimer: ReturnType<typeof setTimeout> | null;
   retryDelayMs: number;
+  livenessTimer: ReturnType<typeof setTimeout> | null;
   stopStatusWatch: (() => void) | null;
   needsRestart: boolean;
 };
@@ -74,6 +76,7 @@ export function acquireStreamTailStore(
         releaseTimer: null,
         retryTimer: null,
         retryDelayMs: RETRY_INITIAL_MS,
+        livenessTimer: null,
         stopStatusWatch: null,
         needsRestart: false,
       };
@@ -115,12 +118,16 @@ export function acquireStreamTailStore(
         { afterOffset: current.lastOffset ?? "start" },
       );
       if (generation !== current.generation) {
-        void subscription.unsubscribe();
+        void Promise.resolve(subscription.unsubscribe()).catch(() => {});
         return;
       }
-      current.unsubscribeRemote = () => void subscription.unsubscribe();
+      // The remote may already be dead when we tear down (DO eviction killed
+      // it) — a rejected unsubscribe is expected there, never unhandled.
+      current.unsubscribeRemote = () =>
+        void Promise.resolve(subscription.unsubscribe()).catch(() => {});
       current.retryDelayMs = RETRY_INITIAL_MS;
       emit(current, { status: "live" });
+      scheduleLivenessProbe(current);
     } catch (error) {
       if (generation !== current.generation) return;
       current.needsRestart = true;
@@ -153,8 +160,52 @@ export function acquireStreamTailStore(
       clearTimeout(current.retryTimer);
       current.retryTimer = null;
     }
+    if (current.livenessTimer !== null) {
+      clearTimeout(current.livenessTimer);
+      current.livenessTimer = null;
+    }
     current.unsubscribeRemote?.();
     current.unsubscribeRemote = null;
+  }
+
+  /**
+   * The blind spot this covers: the Stream DO can die (eviction is routine on
+   * Cloudflare) or tear the subscription down server-side while the tab's
+   * socket stays healthy — no status transition fires, so without a probe the
+   * tail reports "live" forever while events silently stop. Every interval,
+   * compare the server's event count against the last offset we received
+   * (offsets are dense: the DO appends at maxOffset + 1, so eventCount IS the
+   * highest offset). Restart only if the server is ahead AND nothing arrived
+   * during the probe roundtrip — on a busy stream deliveries advance
+   * lastOffset constantly, so in-flight batches never read as a stall.
+   */
+  function scheduleLivenessProbe(current: TailEntry) {
+    if (current.livenessTimer !== null) return;
+    const generation = current.generation;
+    current.livenessTimer = setTimeout(() => {
+      current.livenessTimer = null;
+      if (generation !== current.generation || current.unsubscribeRemote === null) return;
+      const seenBeforeProbe = current.lastOffset ?? 0;
+      void (async () => {
+        const itx = await client.project(project);
+        const state = await itx.streams.get(streamPath).getState();
+        if (generation !== current.generation || current.unsubscribeRemote === null) return;
+        const stalled =
+          state.eventCount > seenBeforeProbe && (current.lastOffset ?? 0) === seenBeforeProbe;
+        if (stalled) {
+          stop(current);
+          void start(current);
+          return;
+        }
+        scheduleLivenessProbe(current);
+      })().catch(() => {
+        // Probe failures are connectivity noise — the status watcher owns
+        // socket health. Keep probing as long as the tail is live.
+        if (generation === current.generation && current.unsubscribeRemote !== null) {
+          scheduleLivenessProbe(current);
+        }
+      });
+    }, LIVENESS_INTERVAL_MS);
   }
 
   function watchReconnect(current: TailEntry) {
