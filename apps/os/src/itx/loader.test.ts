@@ -65,10 +65,28 @@ describe("prefetchItxQuery", () => {
 
     await expect(prefetchItxQuery({ query, queryClient })).resolves.toBeUndefined();
 
-    // The cache holds no data; the component's own query re-runs the fetch
-    // and surfaces the failure in its inline error states.
+    // The cache holds NOTHING — not even the error: a data-less errored entry
+    // would make the consuming component flash its error state on mount
+    // before retryOnMount recovers. The component's own query fetches fresh
+    // and surfaces any failure in its inline error states.
     expect(queryClient.getQueryData(query.queryKey)).toBeUndefined();
-    expect(queryClient.getQueryState(query.queryKey)?.status).toBe("error");
+    expect(queryClient.getQueryState(query.queryKey)).toBeUndefined();
+  });
+
+  test("a failed revalidation keeps existing data (stale beats empty)", async () => {
+    serverItx.mockResolvedValue(fakeHandle);
+    const queryClient = makeQueryClient();
+    const query = streamsListQuery();
+    queryClient.setQueryData(query.queryKey, ["/", "/agents"]);
+    // Make the entry stale so ensureQueryData revalidates — and fail that.
+    queryClient.getQueryCache().find({ queryKey: query.queryKey })!.setState({
+      dataUpdatedAt: 0,
+    });
+    serverItx.mockRejectedValue(new Error("kaboom"));
+
+    await expect(prefetchItxQuery({ query, queryClient })).resolves.toBeUndefined();
+
+    expect(queryClient.getQueryData(query.queryKey)).toEqual(["/", "/agents"]);
   });
 
   test("swallows queryFn failures from the kernel", async () => {
@@ -83,5 +101,6 @@ describe("prefetchItxQuery", () => {
 
     await expect(prefetchItxQuery({ query, queryClient })).resolves.toBeUndefined();
     expect(queryClient.getQueryData(query.queryKey)).toBeUndefined();
+    expect(queryClient.getQueryState(query.queryKey)).toBeUndefined();
   });
 });
