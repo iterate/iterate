@@ -579,6 +579,62 @@ Open: the splice API shape on fork; ref naming for code contexts
 (`platform:` prefix?); can a context _revoke_ (not just shadow) a code
 default — tombstone rows? Defer until someone needs them.
 
+## 9. Egress is a capability; the intercept tunnel is a live cap (position)
+
+Where PR #1466 left it (DECISIONS D20): `project.fetch` IS egress, ingress
+never touches the Project DO, but `egressFetch` itself still lives on the DO
+because two things live in its memory — the captun intercept tunnel and the
+per-request "is a tunnel active?" decision that gates secret substitution.
+
+The claim: **egress is just another capability**, and once you say that, the
+captun machinery dissolves.
+
+- **The egress pipe is a stateless entrypoint.** `ProjectEgress` already
+  fronts it; the work is moving substitution OUT of the DO: a stateless
+  worker can read secrets through the secrets capability and apply policy
+  from a cache (KV) — it only needs the DO when something genuinely
+  durable/exclusive happens (minting an approval, answering "is there an
+  interceptor right now?"). Human-in-the-loop approval slots in HERE, as a
+  policy verdict (`allow | deny | hold-for-approval`), not as DO plumbing —
+  the hold parks the request and appends an approval-requested event; a
+  human (or rule) appends the verdict; the pipe resumes. Egress policy
+  becomes data the same way cap definitions are.
+
+- **The intercept tunnel is `provide`, not a protocol.** Today: a bespoke
+  WebSocket endpoint on the DO's fetch path + the captun library + tunnel
+  lifecycle code. With capnweb-over-WebSocket (github.com/iterate/capnweb
+  fork), a connected client just provides a live cap that shadows egress:
+
+  ```ts
+  using itx = await connectItx({ context: projectId });
+  await itx.caps.provide({
+    name: "egress", // shadows the default egress cap
+    target: { type: "live", stub: (request) => myLocalFetch(request) },
+  });
+  ```
+
+  Session-bound semantics come free (live caps die with the connection —
+  exactly the tunnel's disconnect behavior, no `onDisconnect` bookkeeping).
+  The secret-withholding rule ("an active interceptor never sees real
+  material") stops being a special case in `substituteProjectEgressSecretHeaders`
+  and becomes a property of the egress cap's policy: requests routed to a
+  live `egress` provider get placeholders withheld, period.
+
+- **Sequencing.** (1) Land the capnweb WS transport. (2) Reframe egress as a
+  defined cap on the project context (default target: the stateless
+  `ProjectEgress` pipe) so `live` shadowing works with zero new concepts —
+  this is also a §8 code-context default. (3) Delete captun + the DO's
+  tunnel accept + the `fetch` WS exception; at that point the Project DO has
+  NO fetch surface at all ("maybe there's a scenario where the project DO
+  has neither fetch nor ingressFetch nor egressFetch — that might be nice,
+  just nothing").
+
+Open: where does a held request park while awaiting approval (DO alarm?
+queue? the egress stream itself)? Does the live `egress` provider shadow for
+ALL callers on the context or only for the session that provided it
+(current tunnel: all callers — keep)? Latency budget for policy-cache reads
+on the hot path?
+
 ## Resolved (was open, now decided)
 
 - ~~Root registry from day one?~~ → Global context gets the same anatomy as
@@ -634,3 +690,6 @@ default — tombstone rows? Defer until someone needs them.
 4. Global context's stream as the project-lifecycle audit surface — confirm.
 5. Uncurried `{ namespace, … }` accessor pattern uniformly across
    repos/streams/workspaces — confirm shape.
+6. Egress-as-capability (§9): where held-for-approval requests park; whether
+   a live `egress` provider shadows for all callers or per-session; policy
+   cache latency on the hot path.
