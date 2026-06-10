@@ -187,15 +187,23 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
         // *between* batches: a batch queued on a now-dead connection must be
         // dropped, not ingested. ingest serializes internally too, but that
         // can't drop a batch that was already accepted.
-        entry.ingestChain = entry.ingestChain.then(async () => {
-          if (generation !== entry.generation) return; // superseded connection; replay covers it
-          try {
-            await entry.processor.ingest(batch);
-            entry.consecutiveIngestFailures = 0;
-          } catch (error) {
-            await recoverFromIngestFailure(name, error);
-          }
-        });
+        entry.ingestChain = entry.ingestChain
+          .then(async () => {
+            if (generation !== entry.generation) return; // superseded connection; replay covers it
+            try {
+              await entry.processor.ingest(batch);
+              entry.consecutiveIngestFailures = 0;
+            } catch (error) {
+              await recoverFromIngestFailure(name, error);
+            }
+          })
+          // Recovery itself can throw (e.g. the re-handshake or the poison-path
+          // error append fails). Never let that leave the chain rejected, or every
+          // later batch's `.then` would be skipped and delivery would wedge. A
+          // future re-handshake (stream-side reconcile) is the way back.
+          .catch((error: unknown) => {
+            console.error(`stream processor "${name}" ingest recovery failed`, error);
+          });
         // waitUntil keeps the DO alive through ingest + recovery after the RPC
         // callback returns.
         ctx.waitUntil(entry.ingestChain);

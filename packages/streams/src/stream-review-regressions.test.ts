@@ -99,6 +99,7 @@ function fakeStream() {
   const hostAppends: StreamEventInput[] = [];
   let deliver: ((batch: StreamEventBatch) => unknown) | undefined;
   let cursor = 0;
+  let subscribeFailures = 0; // make the next N subscribeOutbound calls throw
 
   const pump = () => {
     if (deliver === undefined) return;
@@ -132,6 +133,10 @@ function fakeStream() {
       replayAfterOffset?: number;
       processEventBatch: (batch: StreamEventBatch) => unknown;
     }) {
+      if (subscribeFailures > 0) {
+        subscribeFailures -= 1;
+        throw new Error("subscribeOutbound boom");
+      }
       deliver = args.processEventBatch;
       cursor = args.replayAfterOffset ?? 0;
       queueMicrotask(pump);
@@ -154,7 +159,14 @@ function fakeStream() {
 
   // External producer: append a user event to the stream (drives delivery).
   const produce = (input: StreamEventInput) => push(input);
-  return { stream, produce, hostAppends };
+  return {
+    stream,
+    produce,
+    hostAppends,
+    failNextSubscribes: (count: number) => {
+      subscribeFailures = count;
+    },
+  };
 }
 
 const subscribeArgs = (stream: ReturnType<typeof fakeStream>["stream"]) => ({
@@ -237,6 +249,48 @@ describe("T1b — a poison batch records an error and disconnects (C1 poison pol
       (event) => event.type === "events.iterate.com/stream/error-occurred",
     );
     expect(errorEvents).toHaveLength(1);
+  });
+});
+
+describe("T1c — a failed recovery must not permanently wedge the ingest chain (C1)", () => {
+  // The ingest chain is extended with `.then(...)`; if recovery throws (the
+  // re-handshake or poison append fails) the chain must not stay rejected, or
+  // every later batch's handler would be skipped. A subsequent re-handshake must
+  // still be able to make progress.
+  it("keeps processing after a re-handshake when the first recovery threw", async () => {
+    const { ctx, settle } = fakeDurableObjectCtx();
+    const fake = fakeStream();
+    const host = createStreamProcessorHost(ctx);
+
+    let failOnAdd = true;
+    host.add(
+      "counter",
+      (deps) =>
+        new CounterProcessor({
+          ...deps,
+          onBatch: ({ events }) => {
+            if (failOnAdd && events.some((event) => event.type === "test/add")) {
+              failOnAdd = false;
+              throw new Error("transient ingest failure");
+            }
+          },
+        }),
+    );
+
+    await host.requestStreamSubscription(subscribeArgs(fake.stream));
+    await settle();
+
+    // The add fails, recovery re-handshakes — and that resubscribe throws.
+    fake.failNextSubscribes(1);
+    fake.produce({ type: "test/add", payload: { amount: 5 } });
+    await settle();
+
+    // A fresh handshake (as the stream's reconcile would do) must still recover
+    // the add. If the chain were left rejected, this would never be processed.
+    await host.requestStreamSubscription(subscribeArgs(fake.stream));
+    await settle();
+
+    expect(host.runtimeState("counter").snapshot?.state).toEqual({ total: 5 });
   });
 });
 
