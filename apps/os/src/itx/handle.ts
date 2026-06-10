@@ -486,7 +486,24 @@ export class ItxStream extends RpcTarget {
       getStreamDurableObjectName({ namespace: this.projectId, path }),
     ) as unknown as StreamRpc;
 
+    // "start" replays everything, a number replays after that offset, and
+    // "end"/omitted is live-only — replayAfterOffset must be ABSENT for that
+    // (toNewAfterOffset's MAX_SAFE_INTEGER sentinel would filter live batches
+    // out forever).
+    const replayAfterOffset =
+      opts.afterOffset === undefined || opts.afterOffset === "end"
+        ? undefined
+        : toNewAfterOffset(opts.afterOffset);
+
+    // Replay batches can arrive while stub.subscribe() is still in flight —
+    // if the callback breaks during that window, tear down as soon as the
+    // handle exists rather than leaking deliveries to a dead stub.
     let handle: StreamSubscriptionHandle | undefined;
+    let callbackBroken = false;
+    const teardown = () => {
+      callbackBroken = true;
+      handle?.unsubscribe();
+    };
     handle = await stub.subscribe({
       processEventBatch: (batch) => {
         void Promise.resolve(
@@ -494,10 +511,11 @@ export class ItxStream extends RpcTarget {
             events: batch.events.map((event) => toLegacyEvent(event, path)),
             streamMaxOffset: batch.streamMaxOffset,
           }),
-        ).catch(() => handle?.unsubscribe());
+        ).catch(teardown);
       },
-      replayAfterOffset: toNewAfterOffset(opts.afterOffset),
+      replayAfterOffset,
     });
+    if (callbackBroken) handle.unsubscribe();
     return new ItxStreamSubscription(handle);
   }
 

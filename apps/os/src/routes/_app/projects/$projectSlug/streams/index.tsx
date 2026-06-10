@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { Button } from "@iterate-com/ui/components/button";
@@ -21,6 +22,7 @@ import {
 } from "@iterate-com/ui/components/table";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
+import { projectStreamsListQueryOptions } from "~/lib/project-route-query.ts";
 import { streamPathFromInput } from "~/lib/stream-links.ts";
 import { itxKey, useItxMutation, useItxQuery } from "~/itx/react/index.ts";
 
@@ -38,6 +40,7 @@ type SortDirection = "asc" | "desc";
 function ProjectStreamsIndexPage() {
   const params = Route.useParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { project } = Route.useLoaderData();
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({
@@ -54,6 +57,11 @@ function ProjectStreamsIndexPage() {
     mutationFn: (itx, input: { streamPath: string }) => itx.streams.create(input),
     invalidates: [itxKey.project(project.id, "streams")],
     onSuccess: async (_state, input) => {
+      // Breadcrumbs and sibling pages still read the stream list through the
+      // oRPC query until the cutover finishes — keep both caches honest.
+      await queryClient.invalidateQueries({
+        queryKey: projectStreamsListQueryOptions(project.id).queryKey,
+      });
       setFilter("");
       void navigate({
         to: "/projects/$projectSlug/streams/$",
