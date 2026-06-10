@@ -743,33 +743,23 @@ test("revoked and offline caps fail with instructive errors", async () => {
     }),
   ).rejects.toThrow(/reserved/);
 
-  // itx.project IS the full Project DO surface (D17): any public method is
-  // callable, so a method added to the DO is instantly reachable here. But a
-  // hand-built reserved path through itxInvoke is still gated server-side, so
-  // the full surface can never be abused to reach prototype internals.
-  await projectItx.caps.define({
-    name: "probe",
-    target: {
-      type: "rpc",
-      worker: {
-        type: "source",
-        source: {
-          cacheKey: crypto.randomUUID(),
-          mainModule: "cap.js",
-          modules: {
-            "cap.js":
-              "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { ok() { return 1; } }",
-          },
-        },
-      },
-    },
-  });
+  // itx.project IS the full Project DO surface (D17) — except the itx*
+  // registry verbs, which are node-to-node plumbing: itxInvoke carries the
+  // trusted chain-delegation `origin`, so exposing it would let any handle
+  // holder spoof another context's identity (a sibling fork's workspace).
+  // The proxy masks them; the registry's reserved-segment gate stays as
+  // defense in depth for paths arriving over the real chain.
   const projectDo = (projectItx as { project: unknown }).project as {
-    itxInvoke(input: { args: unknown[]; name: string; path: string[] }): Promise<unknown>;
+    itxInvoke(input: {
+      args: unknown[];
+      name: string;
+      origin?: string;
+      path: string[];
+    }): Promise<unknown>;
   };
   await expect(
-    projectDo.itxInvoke({ args: [], name: "probe", path: ["constructor"] }),
-  ).rejects.toThrow(/reserved/);
+    projectDo.itxInvoke({ args: [], name: "workspace", origin: "ctx_spoofed", path: ["readFile"] }),
+  ).rejects.toThrow(/internal registry plumbing/);
 });
 
 // ---- execution modes --------------------------------------------------------

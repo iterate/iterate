@@ -158,7 +158,22 @@ export class Itx extends RpcTarget {
    */
   get project(): ProjectStub {
     const stub = this.#projectStub();
-    return new PathProxyRpcTarget((call) => replayPathCall(stub, call)) as unknown as ProjectStub;
+    return new PathProxyRpcTarget((call) => {
+      // The itx* verbs (itxInvoke, itxDefine, itxProjectWorkerCall, …) are
+      // node-to-node plumbing: chain delegation passes a TRUSTED `origin`
+      // and the forwarder passes registry-merged props. Reachable here,
+      // they would let any handle holder spoof another context's identity
+      // (e.g. read a sibling fork's workspace by faking origin). The proper
+      // doors are itx.caps and the caps themselves.
+      const head = call.path[0] ?? "";
+      if (/^itx[A-Z]/.test(head)) {
+        throw new ItxError({
+          code: "FORBIDDEN",
+          message: `${head} is internal registry plumbing, not part of the project surface — use itx.caps / itx.<cap> instead.`,
+        });
+      }
+      return replayPathCall(stub, call);
+    }) as unknown as ProjectStub;
   }
 
   get projects(): ItxProjects {
