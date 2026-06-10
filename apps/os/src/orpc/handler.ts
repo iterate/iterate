@@ -2,36 +2,18 @@ import { EvlogHandlerPlugin } from "@iterate-com/shared/evlog/orpc-plugin";
 import { OpenAPIHandler } from "@orpc/openapi/fetch";
 import { OpenAPIReferencePlugin } from "@orpc/openapi/plugins";
 import { ZodToJsonSchemaConverter } from "@orpc/zod/zod4";
-import { onError, type Context } from "@orpc/server";
+import { onError } from "@orpc/server";
 import { RPCHandler } from "@orpc/server/fetch";
-import type { FetchHandleResult, FetchHandlerInterceptorOptions } from "@orpc/server/fetch";
 import { experimental_RPCHandler as WebSocketRPCHandler } from "@orpc/server/crossws";
 import { CORSPlugin } from "@orpc/server/plugins";
 import packageJson from "../../package.json" with { type: "json" };
 import type { RequestContext } from "~/request-context.ts";
 import { appRouter } from "~/orpc/root.ts";
+import { prettyJsonInterceptor } from "~/orpc/pretty-json-interceptor.ts";
 import { prettifyStandardSchemaError } from "~/standard-schema/errors.ts";
 import { looksLikeStandardSchemaFailure } from "~/standard-schema/utils.ts";
 
 const plugins = [new CORSPlugin({ origin: "*" }), new EvlogHandlerPlugin<RequestContext>()];
-
-/**
- * Pretty-print JSON responses for curl ergonomics. Leaves SSE
- * (`text/event-stream`) and non-JSON responses untouched.
- */
-async function prettyJsonInterceptor(
-  options: FetchHandlerInterceptorOptions<Context> & {
-    next(): Promise<FetchHandleResult>;
-  },
-) {
-  const result = await options.next();
-  const type = result.response?.headers.get("content-type");
-  if (!result.matched || result.response.body === null || !type?.includes("json")) return result;
-  return {
-    ...result,
-    response: new Response(JSON.stringify(await result.response.json(), null, 2), result.response),
-  };
-}
 
 export const orpcOpenApiHandler = new OpenAPIHandler(appRouter, {
   adapterInterceptors: [prettyJsonInterceptor],
