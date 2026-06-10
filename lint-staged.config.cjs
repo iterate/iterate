@@ -20,7 +20,7 @@ const baseConfig = {
     () => "pnpm -C apps/semaphore run db:types:stale",
     "git add apps/semaphore/sql/queries.ts",
   ],
-  "skills/**": [
+  ".opencode/skills/**": [
     () => "pnpm -C apps/iterate-com skills:generate",
     "git add apps/iterate-com/backend/generated/skills-registry.ts",
   ],
