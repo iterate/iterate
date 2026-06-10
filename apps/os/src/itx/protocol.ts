@@ -121,7 +121,7 @@ export type SerializableCapTarget =
  * (fail fast) and again at dial time (authoritative).
  */
 export const DIALABLE_BINDINGS: ReadonlySet<string> = new Set(["AI"]);
-export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set(["BindingCapability"]);
+export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set(["BindingCapability", "McpClient"]);
 
 /**
  * Normalize a define() input to a serializable target. Legacy callers pass
