@@ -405,6 +405,10 @@ test("platform defaults arrive from the platform:project code context, and own r
     owner: "platform:project",
   });
 
+  // Defaults cannot be revoked — succeeding would lie (the default keeps
+  // serving). Shadowing is the override mechanism.
+  await expect(projectItx.caps.revoke({ name: "ai" })).rejects.toThrow(/platform default/);
+
   // Shadowing is prototype semantics: a row of this context's own wins, and
   // describe() shows exactly one `ai` with the project as owner.
   class ShadowAi extends RpcTarget {
