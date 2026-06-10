@@ -11,7 +11,7 @@ Fleshed-out spec committed; implementation not started yet.
 
 ## Problem
 
-`.github/ts-workflows/workflows/merge-to-main-slack.ts` posts a Slack message to `#building` for *every* PR merged to main. On a busy day that's a dozen-plus messages of pure noise.
+`.github/ts-workflows/workflows/merge-to-main-slack.ts` posts a Slack message to `#building` for _every_ PR merged to main. On a busy day that's a dozen-plus messages of pure noise.
 
 ## Goal
 
@@ -36,8 +36,8 @@ Old: #991, #993, #1010
 ## Decisions (assumptions made while fleshing out — flagged where guessed)
 
 - **Channel**: `#building`, same as the old workflow.
-- **Day boundary**: UTC date. Simple and unambiguous; the team is distributed anyway. *(guess)*
-- **Trigger**: `pull_request: [opened, closed, reopened, ready_for_review]` — no branch filter, so PRs targeting non-main branches (stacked PRs) show up too. No cron: quiet day → no message at all, which is the point. *(guess: original only watched merges to main)*
+- **Day boundary**: UTC date. Simple and unambiguous; the team is distributed anyway. _(guess)_
+- **Trigger**: `pull_request: [opened, closed, reopened, ready_for_review]` — no branch filter, so PRs targeting non-main branches (stacked PRs) show up too. No cron: quiet day → no message at all, which is the point. _(guess: original only watched merges to main)_
 - **Finding today's message**: read the channel's recent history via `conversations.history` and look for a bot message from today starting with the dashboard title. Slack itself is the state store — no repo variables / caches / pinned issues to keep in sync. Requires the bot to have `channels:history`; verify with a local run before merging, and fall back to a repo Actions variable if the scope is missing.
 - **Content** (all fetched fresh from the GitHub search API on each run, so the message is self-healing):
   - **Merged today**: `is:pr merged:>=<today>` — title, author, short merge sha.
