@@ -29,7 +29,16 @@ export type ItxScriptOutcome = {
   durationMs: number;
   /** console.log/warn/error lines captured from the script's isolate. */
   logs: string[];
-} & ({ ok: true; result: unknown } | { ok: false; error: string; stack?: string });
+} & (
+  | { ok: true; result: unknown }
+  | {
+      ok: false;
+      error: string;
+      stack?: string;
+      /** The ItxError code when the script's throw carried one (errors.ts). */
+      code?: string;
+    }
+);
 
 /** Keep stream payloads bounded; the full value still returns to the caller. */
 const MAX_RECORDED_RESULT_CHARS = 64_000;
@@ -106,7 +115,7 @@ export async function runItxScript(input: {
 
     const raw = JSON.parse(await entrypoint.run(input.vars ?? {})) as { logs?: string[] } & (
       | { ok: true; result: unknown }
-      | { error: string; ok: false; stack?: string }
+      | { code?: string; error: string; ok: false; stack?: string }
     );
     outcome = {
       ...raw,
@@ -171,6 +180,7 @@ function itxRunWorkerSource(functionSource: string) {
           return JSON.stringify({ logs, ok: true, result });
         } catch (error) {
           return JSON.stringify({
+            code: typeof error?.code === "string" ? error.code : undefined,
             error: error instanceof Error ? error.message : String(error),
             logs,
             ok: false,

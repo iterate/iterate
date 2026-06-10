@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { StreamCursor, Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
 import { ItxStream, ItxStreams, type ItxRuntime } from "~/itx/handle.ts";
+import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
@@ -38,6 +39,20 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
     return await this.#stream(input.path).subscribe(onEventBatch, {
       afterOffset: input.afterOffset,
     });
+  }
+
+  /**
+   * Trips the append-policy check inside StreamsCapability, so the resulting
+   * ItxError must cross the ctx.exports loopback (Workers RPC) back into this
+   * entrypoint, then the harness boundary into the test — proving that
+   * `code`/`details` survive Workers RPC hops, not just capnweb.
+   */
+  async appendOutsidePolicy(input: { path: string }) {
+    const capability = getStreamsCapability({
+      exports: this.ctx.exports as unknown as Parameters<typeof getStreamsCapability>[0]["exports"],
+      props: { appendPolicy: { mode: "none" }, projectId, streamPath: input.path },
+    });
+    await capability.append({ event: { type: "test.iterate.com/itx-subscribe/denied" } as never });
   }
 
   #stream(path: string): ItxStream {
