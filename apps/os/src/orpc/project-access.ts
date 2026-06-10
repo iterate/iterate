@@ -1,6 +1,7 @@
 import { ORPCError } from "@orpc/server";
 import type { AppContext } from "~/context.ts";
 import { getProjectById, getProjectBySlug } from "~/db/queries/.generated/index.ts";
+import { isProjectId } from "~/domains/projects/project-id.ts";
 
 /**
  * Confirms a caller can access an ownerless project before exposing
@@ -105,8 +106,4 @@ async function resolveProjectBySlugOrId(input: { context: AppContext; projectSlu
   }
 
   return project;
-}
-
-function isProjectId(value: string) {
-  return value.startsWith("proj_") || value.startsWith("prj_");
 }
