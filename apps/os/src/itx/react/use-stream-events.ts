@@ -7,7 +7,7 @@
 //   tail.status    // "connecting" | "live" | "error"
 
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { useItxClient } from "./provider.tsx";
+import { useItxClient } from "./context.ts";
 import { acquireStreamTailStore } from "./stream-tail.ts";
 import type { StreamTailSnapshot } from "./stream-tail.ts";
 

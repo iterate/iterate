@@ -4,7 +4,8 @@
 
 export { createItxBrowserClient } from "./connection.ts";
 export type { ItxBrowserClient, ItxConnectionStatus } from "./connection.ts";
-export { ItxProvider, useItxClient, useItxStatus } from "./provider.tsx";
+export { ItxProvider } from "./provider.tsx";
+export { useItxClient, useItxStatus } from "./context.ts";
 export { itxKey, useItxQuery, useItxMutation } from "./hooks.ts";
 export type { ItxHandle, UseItxQueryOptions, UseItxMutationOptions } from "./hooks.ts";
 export { useStreamEvents } from "./use-stream-events.ts";

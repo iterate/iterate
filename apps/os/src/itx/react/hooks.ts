@@ -26,7 +26,7 @@ import {
 } from "@tanstack/react-query";
 import type { RpcStub } from "capnweb";
 import type { Itx } from "../handle.ts";
-import { useItxClient } from "./provider.tsx";
+import { useItxClient } from "./context.ts";
 
 /** A connected handle as queryFn/mutationFn receive it. */
 export type ItxHandle = RpcStub<Itx>;
