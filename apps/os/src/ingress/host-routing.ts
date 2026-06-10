@@ -14,17 +14,10 @@ type DispatchContext = {
 export async function matchIngressRequest(input: {
   request: Request;
   lookupRule: LookupIngressRule;
-  fallbackRules?: readonly ExactHostIngressRule[];
 }): Promise<IngressMatch | null> {
   const requestHost = normalizeIngressHost(ingressHostnameFromRequest(input.request));
-  const directRule = await input.lookupRule(requestHost);
-  if (directRule) return { requestHost, rule: directRule };
-
-  const fallbackRule = [...(input.fallbackRules ?? [])]
-    .filter((rule) => rule.host === "*")
-    .sort((left, right) => right.priority - left.priority)[0];
-
-  return fallbackRule ? { requestHost, rule: fallbackRule } : null;
+  const rule = await input.lookupRule(requestHost);
+  return rule ? { requestHost, rule } : null;
 }
 
 export async function dispatchFetchCallable(input: {

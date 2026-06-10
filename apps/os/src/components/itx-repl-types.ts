@@ -239,16 +239,20 @@ interface ItxWorkspace {
 
 /** The Project Durable Object surface exposed as cap #0. */
 interface ItxProjectAdmin {
-  /** Call a public function exported by the project's config worker. */
-  callConfigWorkerFunction(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
+  /** Call a public function exported by the project's worker. */
+  callWorkerFunction(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   /** Return the project summary and ingress URL. */
   describe(): Promise<ProjectSummary & { ingressUrl: string }>;
   /** Fetch through the project's egress path. */
   egressFetch(request: Request): Promise<Response>;
-  /** Fetch through the project's ingress handler. */
+  /** fetch on the PROJECT is egress (the worker's fetch is the homepage). */
   fetch(request: Request): Promise<Response>;
   /** Return the project's public ingress URL. */
   ingressUrl(): Promise<string>;
+  /** The project's stream processor: phase/project/worker reduced state. */
+  readonly processor: {
+    snapshot(): Promise<{ offset: number; state: unknown }>;
+  };
 }
 
 /** What \`itx.describe()\` returns: context, principal, caps, and project breadcrumbs. */

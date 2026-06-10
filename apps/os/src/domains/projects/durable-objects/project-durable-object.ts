@@ -1,20 +1,43 @@
-import { env } from "cloudflare:workers";
-import { createD1Client } from "sqlfu";
-import { z } from "zod";
+// The Project Durable Object: the durable home of one PROJECT CONTEXT
+// (apps/os/docs/itx-spec.md). It has exactly three jobs:
+//
+// 1. ITX REGISTRY SUPERVISOR — it embeds the capability registry and is the
+//    dispatch point for every capability invocation in this project.
+//
+// 2. WORKER SOURCE-OF-TRUTH — it owns the build pipeline for the project's
+//    worker (durable-objects/worker.ts) and answers "what is the current
+//    worker code?". It does NOT serve ingress: project-host requests are
+//    dispatched by the stateless ProjectIngressEntrypoint, which loads the
+//    worker itself and only asks this DO for the checkout.
+//
+// 3. EGRESS AUTHORITY — `egressFetch` is the project's one pipe to the
+//    outside world (Law 5): secret placeholder substitution, the egress
+//    intercept tunnel, and (future) human-in-the-loop approval live here.
+//    Calling `fetch` on the project worker gets the project's homepage;
+//    calling `fetch` on the project gets egress — matching itx vocabulary,
+//    where `itx.fetch` IS project egress.
+//
+// State lives in the project's root event stream, projected by
+// ProjectProcessor (stream-processors/project-processor.ts), which also owns
+// every creation side effect — including the one D1 `projects` projection.
+// The DO's own SQLite holds only the itx registry's capability table; the
+// worker checkout cache is plain DO storage. There is no bespoke project
+// table and no lifecycle mixin: the DO is addressed by the plain project id.
+//
+// Endgame for egress (itx-next.md §9, out of scope here): a stateless egress
+// capability with policy cached outside the DO, and the captun intercept
+// tunnel replaced by a live egress-shadowing capability provided over
+// capnweb-with-WebSockets.
+
+import { DurableObject, env } from "cloudflare:workers";
 import { acceptCaptunTunnel, type Fetcher } from "captun";
-import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
-import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { StreamPath } from "@iterate-com/shared/streams/types";
+import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
 import type { StreamEvent } from "@iterate-com/streams/shared/event";
-import { typeid } from "@iterate-com/shared/typeid";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
 import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
-import { jsonataReactorEventTypes } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -22,48 +45,37 @@ import {
 } from "~/domains/streams/stream-runtime.ts";
 import { parseConfig } from "~/config.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
-import type { ItxProps } from "~/itx/protocol.ts";
-import type { ProjectEgressProps } from "~/itx/entrypoint.ts";
+import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import {
-  AGENTS_STREAM_PATH,
-  type AgentDurableObject,
-  getAgentDurableObjectName,
-} from "~/domains/agents/durable-objects/agent-durable-object.ts";
-import { deleteIngressRoutesByProject, upsertIngressRoute } from "~/db/queries/.generated/index.ts";
-import {
-  dispatchFetchCallable,
-  ingressHostnameFromRequest,
-  normalizeIngressHost,
-  parseIngressCallable,
-} from "~/ingress/host-routing.ts";
-import { parseProjectPlatformHosts } from "~/ingress/project-platform-host-routing.ts";
-import type { ExactHostIngressRule } from "~/ingress/types.ts";
-import {
-  PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE,
-  PROJECT_LIFECYCLE_STREAM_PATH,
-  ProjectLifecycleProcessor,
-  ProjectLifecycleProcessorContract,
-} from "~/domains/projects/stream-processors/project-lifecycle.ts";
+  PROJECT_STREAM_PATH,
+  projectFacts,
+  ProjectProcessorContract,
+  type ProjectFacts,
+} from "~/domains/projects/stream-processors/project/contract.ts";
+import { ProjectProcessor } from "~/domains/projects/stream-processors/project/implementation.ts";
 import {
   ProjectConfigWorkerProcessor,
   ProjectConfigWorkerProcessorContract,
 } from "~/domains/projects/stream-processors/project-config-worker/implementation.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import {
+  bundleWorkerCode,
+  cloneWorkerRepo,
+  readLoopbackExports,
+  WorkerHost,
+  type WorkerCheckout,
+  type WorkerCode,
+  type WorkerLoaderBinding,
+  type WorkerWorkspace,
+} from "~/domains/projects/durable-objects/worker.ts";
+import {
   type RepoDurableObject,
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { readRemoteBranchOid } from "~/domains/repos/repo-git.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
-import type { StreamsCapabilityProps } from "~/domains/streams/entrypoints/streams-capability.ts";
-import {
-  EXAMPLE_EGRESS_SECRET_KEY,
-  EXAMPLE_EGRESS_SECRET_MATERIAL,
-  EXAMPLE_EGRESS_SECRET_METADATA,
-} from "~/domains/secrets/example-secret.ts";
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
 import { platformProjectContext } from "~/itx/code-contexts.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
@@ -77,18 +89,10 @@ import type {
 } from "~/itx/protocol.ts";
 
 type CaptunServerTunnel = Fetcher & Disposable;
-export type ProjectStructuredName = {
-  projectId: string;
-};
 
-const ProjectStructuredName = z.object({
-  projectId: z.string(),
-});
-
+/** Project DOs are addressed by the plain project id. */
 export function getProjectDurableObjectName(projectId: string) {
-  return deriveDurableObjectNameFromStructuredName({
-    structuredName: { projectId },
-  });
+  return projectId;
 }
 
 /**
@@ -107,25 +111,6 @@ export type ProjectSummary = {
   hosts: string[];
 };
 
-export type ProjectCapability = Pick<
-  ProjectDurableObject,
-  | "callConfigWorkerFunction"
-  | "createProject"
-  | "describe"
-  | "egressFetch"
-  | "fetch"
-  | "getConfigWorker"
-  | "getProjectLifecycleRunnerState"
-  | "getSummary"
-  | "ingressFetch"
-  | "ingressUrl"
-  | "itxDefine"
-  | "itxDescribe"
-  | "itxInvoke"
-  | "itxProvide"
-  | "itxRevoke"
->;
-
 export type CreateProjectInput = {
   projectId: string;
   slug: string;
@@ -135,290 +120,168 @@ type ProjectEnv = {
   AGENT: DurableObjectNamespace<AgentDurableObject>;
   APP_CONFIG: string;
   DB: D1Database;
-  DO_CATALOG: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
-type ProjectStateRow = {
-  id: string;
-  slug: string;
-  default_host: string;
-  hosts_json: string;
-  created_at_ms: number;
-  updated_at_ms: number;
-};
-
-type ProjectIngressRouteRow = {
-  id: string;
-  host: string;
-  project_id: string | null;
-  priority: number;
-  notes: string | null;
-  callable_json: string;
-  created_at_ms: number;
-  updated_at_ms: number;
-};
-
-export type ProjectDynamicWorkerEntrypoint = {
-  [key: string]: any;
-  [Symbol.dispose]?(): void;
-  fetch(request: Request): Response | Promise<Response>;
-  /**
-   * The config worker's stream-processor hook: called with every event
-   * committed to the stream the platform subscribed it to (the project root
-   * stream), in order. Mirrors the StreamProcessor class model's processEvent.
-   */
-  processEvent?(input: { event: StreamEvent; streamPath: string }): unknown | Promise<unknown>;
-};
-
-type ProjectDynamicWorkerModule =
-  | string
-  | {
-      cjs?: string;
-      data?: ArrayBuffer;
-      js?: string;
-      json?: object;
-      text?: string;
-    };
-
-type ProjectDynamicWorkerCode = {
-  compatibilityDate: string;
-  env?: Record<string, unknown>;
-  compatibilityFlags: string[];
-  globalOutbound: Fetcher | null;
-  mainModule: string;
-  modules: Record<string, ProjectDynamicWorkerModule>;
-};
-
-type ProjectDynamicWorkerLoader = {
-  get(
-    name: string,
-    getCode: () => ProjectDynamicWorkerCode,
-  ): {
-    getEntrypoint(name?: string, options?: { props?: Record<string, unknown> }): unknown;
-  };
-  load(code: ProjectDynamicWorkerCode): {
-    getEntrypoint(name?: string, options?: { props?: Record<string, unknown> }): unknown;
-  };
-};
-
 type ProjectRuntimeEnv = {
-  LOADER: ProjectDynamicWorkerLoader;
+  LOADER: WorkerLoaderBinding;
   WORKSPACE: DurableObjectNamespace;
 };
 
-type ProjectConfigCheckout = {
-  commitOid: string;
-  workerCode: ProjectDynamicWorkerCode;
-};
+export class ProjectDurableObject extends DurableObject<ProjectEnv> {
+  // ---- processor: the project's durable state ----------------------------
+  //
+  // The root stream ("/") is the record; ProjectProcessor projects it into
+  // the snapshot this DO reads back and owns every creation side effect.
 
-type ProjectConfigGit = {
-  clone(input: Record<string, unknown>): Promise<unknown>;
-  log(input: { depth: number; dir: string; ref: string }): Promise<Array<{ oid: string }>>;
-  pull(input: Record<string, unknown>): Promise<unknown>;
-  status(input: { dir: string }): Promise<unknown>;
-};
-
-type ProjectConfigWorkspace = {
-  git: ProjectConfigGit;
-  workspace: ProjectConfigWorkspaceStub;
-};
-
-const PROJECT_CONFIG_WORKSPACE_ID = "project-ingress";
-const PROJECT_CONFIG_DIR = "/iterate-config";
-const PROJECT_CONFIG_WORKER_PATH = `${PROJECT_CONFIG_DIR}/worker.js`;
-const PROJECT_CONFIG_CHECKOUT_STORAGE_KEY = "project.configWorker.checkout";
-const PROJECT_CONFIG_READY_STORAGE_KEY = "project.configWorker.ready";
-const PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY = "project.configWorker.refreshedAt";
-const PROJECT_CONFIG_REFRESH_INTERVAL_MS = 10_000;
-const PROJECT_DYNAMIC_WORKER_MAIN_MODULE = "worker.js";
-const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE = "2026-04-27";
-const PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS = ["nodejs_compat"];
-const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
-
-type ProjectConfigWorkspaceName = {
-  projectId: string;
-  workspaceId: string;
-};
-
-type ProjectConfigWorkspaceStub = {
-  cloudflareShellGit(): Promise<unknown>;
-  cloudflareShellState(): Promise<Record<string, unknown>>;
-  hasFile(path: string): Promise<boolean>;
-  initialize(input: { name: string }): Promise<unknown>;
-  removePath(input: { force: boolean; path: string; recursive: boolean }): Promise<void>;
-};
-
-const ProjectLifecycleBase = createIterateDurableObjectBase<
-  typeof ProjectStructuredName,
-  Pick<ProjectEnv, "DO_CATALOG">
->({
-  className: "ProjectDurableObject",
-  getDatabase: (env) => env.DO_CATALOG,
-  indexes: {
-    projectId: (params) => params.projectId,
-  },
-  nameSchema: ProjectStructuredName,
-});
-
-export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
   host = createStreamProcessorHost(this.ctx);
-  projectLifecycle = this.host.add(
-    ProjectLifecycleProcessorContract.slug,
-    (deps) => new ProjectLifecycleProcessor(deps),
+  workerHost = new WorkerHost({
+    ctx: this.ctx,
+    loader: projectRuntimeEnv(this.env).LOADER,
+    workspaceNamespace: projectRuntimeEnv(this.env).WORKSPACE,
+    getRepo: (project) =>
+      ensureIterateConfigInfoForProject({
+        env: this.env,
+        projectId: project.id,
+        projectSlug: project.slug,
+      }),
+    cloneRepo: (input) => this.cloneWorkerRepo(input),
+    bundle: (files) => this.bundleWorkerCode(files),
+    // Every successful build leaves its fact on the stream — creation AND
+    // later rebuilds — so processor state tracks what dispatch serves. The
+    // per-commit idempotency key dedupes same-commit rebuilds.
+    onBuilt: (checkout) => {
+      this.ctx.waitUntil(
+        (async () => {
+          const stream = await this.projectStream(this.projectId);
+          await stream.append({
+            type: "events.iterate.com/project/config-worker-built",
+            idempotencyKey: `project-config-worker-built:${this.projectId}:${checkout.commitOid}`,
+            payload: {
+              commitOid: checkout.commitOid,
+              mainModule: checkout.workerCode.mainModule,
+              projectId: this.projectId,
+              repoSlug: ITERATE_CONFIG_REPO_SLUG,
+            },
+          });
+        })().catch((error) => {
+          console.error(`[ProjectDO] config-worker-built append failed:`, error);
+        }),
+      );
+    },
+  });
+  #projectProcessor = this.host.add(
+    ProjectProcessorContract.slug,
+    (deps) =>
+      new ProjectProcessor({
+        ...deps,
+        appConfig: () => this.getAppConfig(),
+        env: this.env,
+        exports: this.ctx.exports,
+        projectId: () => this.projectId,
+        workerHost: this.workerHost,
+      }),
   );
-  // The config worker as a stream processor: every root-stream event is
-  // forwarded to its processEvent export. See the processor's contract for
-  // the composition story (per-project agent context etc.).
-  projectConfigWorker = this.host.add(
+  // The worker as a stream processor: every root-stream event is forwarded
+  // to its processEvent export, checkpointed (project-config-worker/
+  // contract.ts has the composition story — per-project agent context etc.).
+  workerForwarder = this.host.add(
     ProjectConfigWorkerProcessorContract.slug,
     (deps) =>
       new ProjectConfigWorkerProcessor({
         ...deps,
         forwardToConfigWorker: (event) =>
-          this.forwardEventToConfigWorker({
-            event,
-            streamPath: PROJECT_LIFECYCLE_STREAM_PATH,
-          }),
+          this.forwardEventToWorker({ event, streamPath: PROJECT_STREAM_PATH }),
       }),
   );
 
-  #dynamicWorkerEntrypoint: {
-    commitOid: string;
-    entrypoint: ProjectDynamicWorkerEntrypoint;
-  } | null = null;
+  /**
+   * The project's processor, part of the DO's public surface:
+   *
+   *   await itx.project.processor.snapshot();   // one expression via itx
+   *
+   * A prototype getter (own instance fields don't cross Workers RPC). The
+   * one-expression spelling works because `itx.project` is a path proxy that
+   * awaits intermediate property segments (handle.ts) — workerd itself does
+   * not pipeline calls through property accesses, so code holding a RAW
+   * Workers stub must await the property first:
+   *
+   *   const processor = await stub.processor;
+   *   await processor.snapshot();
+   */
+  get processor() {
+    return this.#projectProcessor;
+  }
+
   #projectEgressInterceptTunnel: CaptunServerTunnel | null = null;
-  #projectConfigWorkerBuildPromise: Promise<ProjectDynamicWorkerEntrypoint> | null = null;
 
-  constructor(ctx: DurableObjectState, env: ProjectEnv) {
-    super(ctx, env);
-    const sql = this.getDurableObjectSql();
-    // Projects are intentionally ownerless at their core. Organization
-    // membership is an access grant in D1, not a property of the Project Durable Object,
-    // because we want agents to be able to create unclaimed projects and let a
-    // user or organization claim them later, similar to Stripe sandboxes.
-    sql.exec(`CREATE TABLE IF NOT EXISTS project_state (
-      id TEXT PRIMARY KEY,
-      slug TEXT NOT NULL,
-      default_host TEXT NOT NULL,
-      hosts_json TEXT NOT NULL,
-      created_at_ms INTEGER NOT NULL,
-      updated_at_ms INTEGER NOT NULL
-    )`);
-    sql.exec(`CREATE TABLE IF NOT EXISTS project_ingress_routes (
-      id TEXT PRIMARY KEY,
-      host TEXT NOT NULL UNIQUE,
-      project_id TEXT,
-      priority INTEGER NOT NULL,
-      notes TEXT,
-      callable_json TEXT NOT NULL,
-      created_at_ms INTEGER NOT NULL,
-      updated_at_ms INTEGER NOT NULL
-    )`);
-    sql.exec(`CREATE INDEX IF NOT EXISTS idx_project_ingress_routes_host
-      ON project_ingress_routes (host)`);
+  /** Subscription callables on the project's root stream dial this. */
+  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
+    return this.host.requestStreamSubscription(args);
+  }
 
-    this.registerOnFirstInitialize(async (params) => {
-      await this.ensureProjectLifecycleSubscription(params.projectId);
-      await this.ensureAgentsRoot(params.projectId);
-    });
-    // On every wake (not just first initialize) so projects created before
-    // this processor existed get subscribed too; the append is idempotent.
-    this.registerOnInstanceWake(async (params) => {
-      await this.ensureProjectConfigWorkerSubscription(params.projectId);
-    });
+  // ---- identity & creation ------------------------------------------------
+  //
+  // Projects are intentionally ownerless at their core. Organization
+  // membership is an access grant in D1, not a property of this DO, because
+  // agents can create unclaimed projects that a user or organization claims
+  // later, similar to Stripe sandboxes.
+
+  /** The DO name IS the project id (see getProjectDurableObjectName). */
+  private get projectId(): string {
+    const name = this.ctx.id.name;
+    if (!name) throw new Error("ProjectDurableObject must be addressed by name (the project id).");
+    return name;
   }
 
   async createProject(input: CreateProjectInput): Promise<ProjectSummary> {
-    await this.initialize({
-      name: getProjectDurableObjectName(input.projectId),
-    });
-    await this.ensureStarted();
-
-    const now = Date.now();
-    const config = this.getAppConfig();
-    const hosts = projectHosts({
-      bases: config.projectHostnameBases,
-      projectId: input.projectId,
-      slug: input.slug,
-    });
-    const defaultHost = hosts.defaultHost;
-
-    this.getDurableObjectSql().exec(
-      `INSERT INTO project_state
-        (id, slug, default_host, hosts_json, created_at_ms, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-        slug = excluded.slug,
-        default_host = excluded.default_host,
-        hosts_json = excluded.hosts_json,
-        updated_at_ms = excluded.updated_at_ms`,
-      input.projectId,
-      input.slug,
-      defaultHost,
-      JSON.stringify(hosts.projectHosts),
-      now,
-      now,
-    );
-
-    await upsertProjectProjection({
-      db: this.env.DB,
-      input,
-    });
-    await this.ensureExampleEgressSecret(input.projectId);
-    await this.writeIngressRoutes({ hosts, projectId: input.projectId });
-    const summary = this.requireSummary();
-    await this.writeProjectCreatedLifecycleEvent(summary);
-
-    // Defer heavy setup (config worker build, agents root) so the create call returns fast.
-    this.ctx.waitUntil(this.finishProjectSetup(summary));
-
-    return summary;
-  }
-
-  private async finishProjectSetup(summary: ProjectSummary) {
-    try {
-      const projectConfigCheckout = await this.buildFreshProjectDynamicWorker(summary);
-      await this.writeProjectConfigWorkerBuiltLifecycleEvent({
-        checkout: projectConfigCheckout,
-        summary,
-      });
-      await this.writeAgentsRootRule(summary);
-    } catch (error) {
-      console.error(`[ProjectDO] finishProjectSetup failed for ${summary.id}:`, error);
+    // The DO's name IS the project id; a mismatched input would wire the
+    // subscription and creation events to another project's stream.
+    if (input.projectId !== this.projectId) {
+      throw new Error(
+        `createProject(${input.projectId}) dialed on the DO for "${this.projectId}".`,
+      );
     }
-  }
 
-  private async ensureExampleEgressSecret(projectId: string) {
-    const secrets = getSecretsCapability({
-      exports: readLoopbackExports(this.ctx),
-      props: { projectId },
+    // Both appends are idempotent, as is every downstream creation step —
+    // calling createProject again is a no-op that returns the summary.
+    await this.ensureProjectSubscription(input.projectId);
+    const stream = await this.projectStream(input.projectId);
+    await stream.append({
+      type: "events.iterate.com/project/create-requested",
+      idempotencyKey: `project-create-requested:${input.projectId}`,
+      payload: { projectId: input.projectId, slug: input.slug },
     });
 
-    const existing = await secrets.getSecretSummaryByKeyOrNull({
-      key: EXAMPLE_EGRESS_SECRET_KEY,
-    });
-    if (existing) return;
-
-    await secrets.setSecret({
-      key: EXAMPLE_EGRESS_SECRET_KEY,
-      material: EXAMPLE_EGRESS_SECRET_MATERIAL,
-      metadata: EXAMPLE_EGRESS_SECRET_METADATA,
-    });
+    // That's it — no waiting. The creation steps (D1 projection, repo,
+    // example secret, agents root, created/create-completed events) run in
+    // ProjectProcessor and leave a trail on the root stream; callers redirect
+    // to the project immediately and watch `processor.snapshot()`
+    // (phase: creating → ready) if they care about progress.
+    return toSummary(projectFacts({ config: this.getAppConfig(), ...input }));
   }
 
   async getSummary(): Promise<ProjectSummary> {
-    await this.ensureStarted();
-    return this.requireSummary();
+    return await this.requireSummary();
   }
 
   async describe(): Promise<ProjectSummary & { ingressUrl: string }> {
-    await this.ensureStarted();
     return {
-      ...this.requireSummary(),
+      ...(await this.requireSummary()),
       ingressUrl: await this.ingressUrl(),
     };
+  }
+
+  async ingressUrl(): Promise<string> {
+    const summary = await this.requireSummary();
+    const config = this.getAppConfig();
+    const row = await this.env.DB.prepare(`SELECT custom_hostname FROM projects WHERE id = ?`)
+      .bind(summary.id)
+      .first<{ custom_hostname: string | null }>();
+    const host = row?.custom_hostname?.trim().toLowerCase() || summary.defaultHost;
+    const protocol = config.baseUrl ? new URL(config.baseUrl).protocol : "https:";
+    return new URL(`${protocol}//${host}`).origin;
   }
 
   // ---- itx capability registry (apps/os/docs/itx-spec.md §4) --------------
@@ -436,7 +299,6 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {
-    await this.ensureStarted();
     return this.itxRegistry().provide(input);
   }
 
@@ -446,28 +308,24 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {
-    await this.ensureStarted();
     return this.itxRegistry().define(input);
   }
 
   async itxRevoke(input: { name: string }) {
-    await this.ensureStarted();
     return this.itxRegistry().revoke(input);
   }
 
   async itxDescribe() {
-    await this.ensureStarted();
     return this.itxRegistry().describe();
   }
 
   async itxInvoke(input: PathCall & { name: string }) {
-    await this.ensureStarted();
     return await this.itxRegistry().invoke(input.name, { args: input.args, path: input.path });
   }
 
   private itxRegistry(): ContextRegistry {
     if (this.#itxRegistry) return this.#itxRegistry;
-    const projectId = this.structuredName.projectId;
+    const projectId = this.projectId;
     this.#itxRegistry = new ContextRegistry({
       // Best-effort audit trail on the project's /itx stream; the registry's
       // SQLite table is the authoritative state (itx DECISIONS.md D1).
@@ -508,172 +366,172 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
         return factory(options);
       },
       projectId,
-      sql: this.getDurableObjectSql(),
+      sql: this.ctx.storage.sql,
     });
     return this.#itxRegistry;
   }
 
-  async ingressUrl(): Promise<string> {
-    await this.ensureStarted();
-    const summary = this.requireSummary();
-    const config = this.getAppConfig();
-    const row = await this.env.DB.prepare(`SELECT custom_hostname FROM projects WHERE id = ?`)
-      .bind(summary.id)
-      .first<{ custom_hostname: string | null }>();
-    const host = row?.custom_hostname?.trim().toLowerCase() || summary.defaultHost;
-    const protocol = config.baseUrl ? new URL(config.baseUrl).protocol : "https:";
-    return new URL(`${protocol}//${host}`).origin;
-  }
+  // ---- the worker ----------------------------------------------------------
+  //
+  // Ingress dispatch happens in the stateless ProjectIngressEntrypoint; these
+  // methods are how it (and itx.worker) reach the worker's source of truth.
 
-  /** Subscription callables on the project lifecycle stream dial this. */
-  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    return this.host.requestStreamSubscription(args);
-  }
-
-  async getProjectLifecycleRunnerState() {
-    await this.ensureStarted();
-    const snapshot = await this.projectLifecycle.snapshot();
-    // Legacy runner runtimeState shape, kept for existing callers/tests. The
-    // class model has a single checkpoint, so both offsets are the same.
-    return {
-      processorSlug: this.projectLifecycle.contract.slug,
-      snapshot,
-      state: snapshot.state,
-      reducedThroughOffset: snapshot.offset,
-      afterAppendCompletedThroughOffset: snapshot.offset,
-    };
+  /**
+   * The current worker version, with dispatch semantics: serves the cached
+   * checkout while fresh, kicks off ONE background rebuild when stale, and
+   * reports "building" only when nothing is cached yet.
+   */
+  async getWorkerVersion(): Promise<
+    | { status: "ready"; commitOid: string; summary: ProjectSummary }
+    | { status: "building"; summary: ProjectSummary }
+  > {
+    const summary = await this.requireSummary();
+    const version = await this.workerHost.versionForDispatch(summary);
+    if (version.status === "ready") {
+      return { status: "ready", commitOid: version.checkout.commitOid, summary };
+    }
+    return { status: "building", summary };
   }
 
   /**
-   * Delivers one event to the config worker's `processEvent` export. No-op
-   * until the config worker has first been built (project provisioning does
-   * that within seconds of creation; earlier events are platform lifecycle
-   * noise).
-   *
-   * Failure handling distinguishes whose fault it is:
-   * - PLATFORM failures (entrypoint resolution, an awaited rebuild) THROW:
-   *   the forwarding processor delivers under blockProcessorWhile, so the
-   *   checkpoint holds and the at-least-once machinery redelivers the event —
-   *   a transient repo/build hiccup must not silently drop it.
-   * - USER-code failures (the project's processEvent throwing) are swallowed
-   *   and logged: the project author's bug must never wedge root-stream
-   *   delivery into the host's poison-batch disconnect.
+   * The current checkout (commit + worker code). Loader miss callbacks fetch
+   * this lazily, so the code payload only crosses RPC on a cold isolate.
    */
-  private async forwardEventToConfigWorker(input: { event: StreamEvent; streamPath: string }) {
-    const summary = this.currentSummary();
-    const configWorkerIsReady = await this.ctx.storage.get<boolean>(
-      PROJECT_CONFIG_READY_STORAGE_KEY,
+  async getWorkerCheckout(): Promise<WorkerCheckout> {
+    const summary = await this.requireSummary();
+    return (
+      (await this.workerHost.getCachedCheckout()) ?? (await this.workerHost.buildFresh(summary))
     );
-    if (summary === null || configWorkerIsReady !== true) return;
-    const entrypoint = await this.getForwardingProjectDynamicWorkerEntrypoint(summary);
+  }
+
+  /**
+   * `itx.worker.foo(...)`: replay a path call against the worker entrypoint.
+   * The entrypoint itself can never cross an RPC boundary (workerd forbids
+   * transferring loader entrypoints), so the call replays HERE — every public
+   * method/getter on the worker's default export is reachable with no wiring.
+   * Builds fresh so tool calls always see the latest pushed config.
+   */
+  async callWorkerFunction(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
+    const summary = await this.requireSummary();
+    const checkout = await this.workerHost.buildFresh(summary);
+    const entrypoint = this.workerHost.load({ checkout, projectId: summary.id });
+    return await replayPathCall(entrypoint, { args: input.args ?? [], path: input.path });
+  }
+
+  /**
+   * itx `{ type: "project-worker" }` refs dispatch here (via the
+   * ProjectWorker loopback forwarder, itx/caps/project-worker.ts): a named
+   * export of the project's OWN worker is the capability target — user
+   * space, same shape as first-party. The whole call arrives as data because
+   * loader entrypoints cannot cross an RPC boundary; the entrypoint is
+   * instantiated per call with the registry-merged props (definer
+   * parameterization + { cap, context, projectId } attribution).
+   */
+  async itxProjectWorkerCall(input: {
+    call: PathCall;
+    entrypoint?: string;
+    invoke: CapInvoke;
+    props: Record<string, unknown>;
+  }): Promise<unknown> {
+    const summary = await this.requireSummary();
+    const checkout = await this.workerHost.buildFresh(summary);
+    const worker = this.workerHost.loadWorker({ checkout, projectId: summary.id });
+    const entrypoint = worker.getEntrypoint(input.entrypoint, { props: input.props }) as unknown;
     try {
-      await entrypoint.processEvent?.(input);
-    } catch (error) {
-      console.error("Project config worker processEvent failed.", error);
+      if (input.invoke === "path-call") {
+        return await (entrypoint as PathCallTarget).call(input.call);
+      }
+      return await replayPathCall(entrypoint, input.call);
+    } finally {
+      (entrypoint as Partial<Disposable>)?.[Symbol.dispose]?.();
     }
   }
 
   /**
-   * Entrypoint resolution for event forwarding. Unlike the ingress path
-   * (which trusts a time-based freshness window and serves the stale cached
-   * worker while a rebuild runs in the background, preferring latency), the
-   * forwarder prefers correctness: an event can be the direct consequence of
-   * a config push — a new agent created right after its config landed — and
-   * serving the previous worker would consume the very trigger the new
-   * config exists to handle. So freshness is exact: one ls-remote request
-   * compares the repo's HEAD to the cached checkout's commit, and on any
-   * mismatch the rebuild is AWAITED. The forwarding processor delivers under
-   * blockProcessorWhile, so the wait just holds this subscription's queue;
-   * rebuilds only happen when the repo actually changed.
+   * Checkpointed delivery to the worker's processEvent export, dialed by the
+   * project-config-worker processor under blockProcessorWhile. USER failures
+   * (the project's hook throwing) are swallowed — an author's bug must never
+   * wedge root-stream delivery — while PLATFORM failures (entrypoint
+   * resolution, rebuilds) throw so the checkpoint holds and the event is
+   * redelivered rather than silently dropped.
    */
-  private async getForwardingProjectDynamicWorkerEntrypoint(
-    summary: ProjectSummary,
-  ): Promise<ProjectDynamicWorkerEntrypoint> {
+  private async forwardEventToWorker(input: { event: StreamEvent; streamPath: string }) {
+    const summary = await this.currentSummary();
+    if (summary === null || !(await this.workerHost.isReady())) return;
+    const entrypoint = await this.getForwardingWorkerEntrypoint(summary);
     try {
-      const cached = await this.ctx.storage.get<ProjectConfigCheckout>(
-        PROJECT_CONFIG_CHECKOUT_STORAGE_KEY,
-      );
-      if (isProjectConfigCheckout(cached)) {
-        const repo = await this.getOrCreateIterateConfigRepo(summary);
+      await entrypoint.processEvent?.({
+        event: input.event as unknown as Event,
+        streamPath: input.streamPath,
+      });
+    } catch (error) {
+      console.error("Project worker processEvent failed.", error);
+    }
+  }
+
+  /**
+   * Entrypoint resolution for event forwarding. Unlike ingress (time-window
+   * freshness, stale-while-revalidate, latency first), the forwarder prefers
+   * correctness: an event can be the direct consequence of a config push — a
+   * new agent created right after its config landed — and serving the
+   * previous worker would consume the very trigger the new config exists to
+   * handle. Freshness is exact: one ls-remote compares the repo's HEAD to
+   * the cached checkout's commit, and on any mismatch the rebuild is
+   * AWAITED (delivery runs under blockProcessorWhile, so the wait just holds
+   * this subscription's queue); rebuilds only happen when the repo changed.
+   */
+  private async getForwardingWorkerEntrypoint(summary: ProjectSummary) {
+    try {
+      const cached = await this.workerHost.getCachedCheckout();
+      if (cached) {
+        const repo = await ensureIterateConfigInfoForProject({
+          env: this.env,
+          projectId: summary.id,
+          projectSlug: summary.slug,
+        });
         const headOid = await readRemoteBranchOid({
           branch: repo.defaultBranch,
           remote: repo.remote,
           token: repo.token,
         });
         if (headOid !== null && headOid === cached.commitOid) {
-          return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
+          return this.workerHost.load({ checkout: cached, projectId: summary.id });
         }
       }
     } catch (error) {
       // The probe is an optimization for exactness, not a gate: on probe
       // failure fall back to the time-based window rather than blocking
       // delivery on repo availability.
-      console.error("Project config freshness probe failed; using freshness window.", error);
-      if (await this.projectConfigCheckoutIsFresh()) {
-        try {
-          return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
-        } catch (cacheError) {
-          await this.clearProjectConfigWorkerReady();
-          console.error("Cached project config worker is invalid.", cacheError);
-        }
+      console.error("Worker freshness probe failed; using freshness window.", error);
+      if (await this.workerHost.checkoutIsFresh()) {
+        const cached = await this.workerHost.getCachedCheckout();
+        if (cached) return this.workerHost.load({ checkout: cached, projectId: summary.id });
       }
     }
-    if (this.#projectConfigWorkerBuildPromise !== null) {
-      return await this.#projectConfigWorkerBuildPromise;
-    }
-    this.startProjectConfigWorkerBuild(summary);
-    return await this.#projectConfigWorkerBuildPromise!;
+    const checkout = await (this.workerHost.currentBuild() ?? this.workerHost.buildFresh(summary));
+    return this.workerHost.load({ checkout, projectId: summary.id });
   }
 
-  async ingressFetch(request: Request): Promise<Response> {
-    await this.ensureStarted();
-    const summary = this.requireSummary();
-    const url = new URL(request.url);
+  protected async cloneWorkerRepo(input: WorkerWorkspace & { repo: RepoInfo }) {
+    await cloneWorkerRepo(input);
+  }
 
-    if (url.pathname === "/__iterate/intercept-project-egress") {
+  protected async bundleWorkerCode(files: Record<string, string>): Promise<WorkerCode> {
+    return await bundleWorkerCode(files);
+  }
+
+  // ---- egress --------------------------------------------------------------
+
+  /**
+   * `fetch` on the project IS egress (the worker's `fetch` is the homepage).
+   * The one exception is the egress intercept tunnel's WebSocket handshake,
+   * which must ride the fetch path — upgrades cannot cross RPC methods.
+   */
+  async fetch(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname === "/__iterate/intercept-project-egress") {
       return this.acceptProjectEgressInterceptTunnel(request);
     }
-
-    const host = normalizeIngressHost(ingressHostnameFromRequest(request));
-    const route = this.lookupLocalRoute(host);
-
-    if (route) {
-      return await dispatchFetchCallable({
-        callable: route.callable,
-        context: {
-          env: this.env as unknown as Record<string, unknown>,
-          exports: readLoopbackExports(this.ctx),
-        },
-        request,
-      });
-    }
-
-    let entrypoint: ProjectDynamicWorkerEntrypoint;
-    try {
-      entrypoint = await this.getIngressProjectDynamicWorkerEntrypoint(summary);
-    } catch (error) {
-      if (error instanceof ProjectConfigWorkerUnavailableError) {
-        return projectWorkerBuildingResponse();
-      }
-
-      console.error("Project config worker load failed; serving fallback landing response.", error);
-      return projectLandingResponse({ request, summary });
-    }
-
-    try {
-      return await entrypoint.fetch(
-        withProjectAppSlug({
-          appSlug: await this.projectAppSlugFromHost({ host, summary }),
-          request,
-        }),
-      );
-    } catch (error) {
-      console.error(
-        "Project config worker fetch failed; serving fallback landing response.",
-        error,
-      );
-      return projectLandingResponse({ request, summary });
-    }
+    return await this.egressFetch(request);
   }
 
   async egressFetch(request: Request): Promise<Response> {
@@ -681,11 +539,9 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       return await fetch(request);
     }
 
-    await this.ensureStarted();
-    const summary = this.requireSummary();
     const secrets = getSecretsCapability({
-      exports: readLoopbackExports(this.ctx),
-      props: { projectId: summary.id },
+      exports: readLoopbackExports(this.ctx.exports),
+      props: { projectId: this.projectId },
     });
 
     // Use one request-level intercept decision for both secret substitution and
@@ -710,68 +566,6 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     }
 
     return await fetch(outboundRequest);
-  }
-
-  async callConfigWorkerFunction(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
-    await this.ensureStarted();
-    const summary = this.requireSummary();
-    const checkout = await this.buildFreshProjectDynamicWorker(summary);
-    // The config worker's env.ITERATE is a project-scoped ItxEntrypoint wired
-    // at load time, so tool calls need no per-call context construction. If a
-    // tool wants shortcuts like itx.slack, those are registry capabilities
-    // (itx.caps.provide/define) — durable wiring, not per-load props. This is
-    // what deleted the old getIterateContextProps() two-step load.
-    //
-    // Every public method/getter on the config worker entrypoint is proxied
-    // automatically via the shared path replay — exactly like worker/facet
-    // caps — so adding an exported method makes itx.worker.foo() work with no
-    // wiring here.
-    const entrypoint = this.loadProjectDynamicWorkerEntrypoint({
-      checkout,
-      projectId: summary.id,
-    });
-    return await replayPathCall(entrypoint, { args: input.args ?? [], path: input.path });
-  }
-
-  /**
-   * itx `{ type: "project-worker" }` refs dispatch here: a named export of
-   * the project's OWN worker (built from the project repo) is the capability
-   * target — user space, same shape as first-party. The whole call arrives
-   * as data because loader entrypoints cannot cross an RPC boundary; the
-   * entrypoint is instantiated per call with the registry-merged props
-   * (definer parameterization + { cap, context, projectId } attribution).
-   */
-  async itxProjectWorkerCall(input: {
-    call: PathCall;
-    entrypoint?: string;
-    invoke: CapInvoke;
-    props: Record<string, unknown>;
-  }): Promise<unknown> {
-    await this.ensureStarted();
-    const summary = this.requireSummary();
-    const checkout = await this.buildFreshProjectDynamicWorker(summary);
-    const worker = this.loadProjectDynamicWorker({ checkout, projectId: summary.id });
-    const entrypoint = worker.getEntrypoint(input.entrypoint, {
-      props: input.props,
-    }) as unknown;
-    try {
-      if (input.invoke === "path-call") {
-        return await (entrypoint as PathCallTarget).call(input.call);
-      }
-      return await replayPathCall(entrypoint, input.call);
-    } finally {
-      (entrypoint as Partial<Disposable>)?.[Symbol.dispose]?.();
-    }
-  }
-
-  async getConfigWorker(): Promise<ProjectDynamicWorkerEntrypoint> {
-    await this.ensureStarted();
-    const summary = this.requireSummary();
-    return await this.getFreshProjectDynamicWorkerEntrypoint(summary);
-  }
-
-  async fetch(request: Request): Promise<Response> {
-    return await this.ingressFetch(request);
   }
 
   private acceptProjectEgressInterceptTunnel(request: Request): Response {
@@ -819,473 +613,56 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     this.#projectEgressInterceptTunnel = tunnel;
   }
 
-  private async getIngressProjectDynamicWorkerEntrypoint(
-    summary: ProjectSummary,
-  ): Promise<ProjectDynamicWorkerEntrypoint> {
-    if (await this.projectConfigCheckoutIsFresh()) {
-      try {
-        return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
-      } catch (error) {
-        await this.clearProjectConfigWorkerReady();
-        console.error("Cached project config worker is invalid.", error);
-      }
-    }
+  // ---- plumbing ------------------------------------------------------------
 
-    const cachedWorker = await this.getAvailableCachedProjectDynamicWorkerEntrypoint(summary);
-    if (this.#projectConfigWorkerBuildPromise !== null) {
-      if (cachedWorker !== null) return cachedWorker;
-      throw new ProjectConfigWorkerUnavailableError("Project config worker is still building.");
-    }
-
-    this.startProjectConfigWorkerBuild(summary);
-    if (cachedWorker !== null) return cachedWorker;
-    throw new ProjectConfigWorkerUnavailableError("Project config worker is building.");
-  }
-
-  private async getAvailableCachedProjectDynamicWorkerEntrypoint(
-    summary: ProjectSummary,
-  ): Promise<ProjectDynamicWorkerEntrypoint | null> {
-    try {
-      return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
-    } catch (error) {
-      await this.clearProjectConfigWorkerReady();
-      console.error("Cached project config worker is unavailable.", error);
-      return null;
-    }
-  }
-
-  private startProjectConfigWorkerBuild(summary: ProjectSummary) {
-    const buildPromise = this.getFreshProjectDynamicWorkerEntrypoint(summary);
-    this.#projectConfigWorkerBuildPromise = buildPromise;
-    this.ctx.waitUntil(
-      buildPromise
-        .catch((error) => {
-          console.error("Project config worker build failed.", error);
-        })
-        .finally(() => {
-          if (this.#projectConfigWorkerBuildPromise === buildPromise) {
-            this.#projectConfigWorkerBuildPromise = null;
-          }
-        }),
-    );
-  }
-
-  private async getFreshProjectDynamicWorkerEntrypoint(
-    summary: ProjectSummary,
-  ): Promise<ProjectDynamicWorkerEntrypoint> {
-    const checkout = await this.buildFreshProjectDynamicWorker(summary);
-    return this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
-  }
-
-  private async buildFreshProjectDynamicWorker(summary: ProjectSummary) {
-    const checkout = await this.ensureProjectConfigCheckout(summary);
-    this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
-    await this.ctx.storage.put(PROJECT_CONFIG_CHECKOUT_STORAGE_KEY, checkout);
-    await this.ctx.storage.put(PROJECT_CONFIG_READY_STORAGE_KEY, true);
-    await this.ctx.storage.put(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY, Date.now());
-    return checkout;
-  }
-
-  private async getCachedProjectDynamicWorkerEntrypoint(
-    summary: ProjectSummary,
-  ): Promise<ProjectDynamicWorkerEntrypoint> {
-    const checkout = await this.ctx.storage.get<ProjectConfigCheckout>(
-      PROJECT_CONFIG_CHECKOUT_STORAGE_KEY,
-    );
-    if (!isProjectConfigCheckout(checkout)) {
-      throw new Error("Project config worker is marked ready but has no validated checkout.");
-    }
-
-    return this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
-  }
-
-  private loadProjectDynamicWorker(input: { checkout: ProjectConfigCheckout; projectId: string }) {
-    const loader = projectRuntimeEnv(this.env).LOADER;
-    const exports = readLoopbackExports(this.ctx);
-    const workerCode = projectDynamicWorkerCodeWithBindings({
-      // The config worker is cap #0's code: it gets a project-scoped itx
-      // (env.ITERATE.context) and the project egress pipe as its global
-      // fetch. It can never reach wider than its own project, and its bare
-      // fetch() gets secret substitution like every other loaded isolate.
-      globalOutbound: exports.ProjectEgress({
-        props: { cap: "configWorker", context: input.projectId, project: input.projectId },
-      }),
-      iterate: exports.ItxEntrypoint({
-        props: { cap: "configWorker", context: input.projectId },
-      }),
-      streams: exports.StreamsCapability({
-        props: { projectId: input.projectId },
-      }),
-      workerCode: input.checkout.workerCode,
-    });
-    return loader.get(
-      projectDynamicWorkerId({
-        commitOid: input.checkout.commitOid,
-        projectId: input.projectId,
-      }),
-      () => workerCode,
-    );
-  }
-
-  private loadProjectDynamicWorkerEntrypoint(input: {
-    checkout: ProjectConfigCheckout;
-    projectId: string;
-  }): ProjectDynamicWorkerEntrypoint {
-    const { checkout } = input;
-    if (this.#dynamicWorkerEntrypoint?.commitOid === checkout.commitOid) {
-      return this.#dynamicWorkerEntrypoint.entrypoint;
-    }
-
-    const worker = this.loadProjectDynamicWorker({ checkout, projectId: input.projectId });
-    const entrypoint = worker.getEntrypoint();
-
-    if (!isProjectDynamicWorkerEntrypoint(entrypoint)) {
-      throw new Error("Project dynamic worker entrypoint is missing fetch.");
-    }
-
-    this.#dynamicWorkerEntrypoint = {
-      commitOid: checkout.commitOid,
-      entrypoint,
-    };
-    return entrypoint;
-  }
-
-  private async clearProjectConfigWorkerReady() {
-    this.#dynamicWorkerEntrypoint = null;
-    await this.ctx.storage.delete(PROJECT_CONFIG_READY_STORAGE_KEY);
-    await this.ctx.storage.delete(PROJECT_CONFIG_CHECKOUT_STORAGE_KEY);
-    await this.ctx.storage.delete(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY);
-  }
-
-  private async projectConfigCheckoutIsFresh() {
-    const refreshedAt = await this.ctx.storage.get<number>(PROJECT_CONFIG_REFRESHED_AT_STORAGE_KEY);
-    return (
-      typeof refreshedAt === "number" &&
-      Number.isFinite(refreshedAt) &&
-      Date.now() - refreshedAt < PROJECT_CONFIG_REFRESH_INTERVAL_MS
-    );
-  }
-
-  private async ensureProjectConfigCheckout(
-    summary: ProjectSummary,
-  ): Promise<ProjectConfigCheckout> {
-    const repo = await this.getOrCreateIterateConfigRepo(summary);
-    const { git, workspace } = await this.getProjectConfigWorkspace(summary.id);
-
-    await workspace.removePath({
-      force: true,
-      path: PROJECT_CONFIG_DIR,
-      recursive: true,
-    });
-    await this.cloneProjectConfigRepo({ git, repo, workspace });
-    return await this.readProjectConfigCheckout({ git, workspace });
-  }
-
-  protected async cloneProjectConfigRepo(input: ProjectConfigWorkspace & { repo: RepoInfo }) {
-    await input.git.clone({
-      url: input.repo.remote,
-      dir: PROJECT_CONFIG_DIR,
-      branch: input.repo.defaultBranch,
-      depth: 1,
-      ...artifactGitAuth(input.repo),
-    });
-  }
-
-  private async readProjectConfigCheckout(input: ProjectConfigWorkspace) {
-    const [commit] = await input.git.log({
-      dir: PROJECT_CONFIG_DIR,
-      depth: 1,
-      ref: "HEAD",
-    });
-    if (!commit) {
-      throw new Error("Project iterate-config checkout does not have a HEAD commit.");
-    }
-
-    const state = await input.workspace.cloudflareShellState();
-    const files = await readProjectConfigFiles(state);
-    const workerSource = files[PROJECT_DYNAMIC_WORKER_MAIN_MODULE];
-    if (typeof workerSource !== "string" || workerSource.trim() === "") {
-      throw new Error(`${ITERATE_CONFIG_REPO_SLUG} repo is missing worker.js.`);
-    }
-    const workerCode =
-      typeof files["package.json"] === "string" && files["package.json"].trim() !== ""
-        ? await this.bundleProjectDynamicWorkerCode(files)
-        : projectDynamicWorkerCode(workerSource);
-
-    return {
-      commitOid: commit.oid,
-      workerCode,
-    };
-  }
-
-  protected async bundleProjectDynamicWorkerCode(
-    files: Record<string, string>,
-  ): Promise<ProjectDynamicWorkerCode> {
-    return await bundledProjectDynamicWorkerCode(files);
-  }
-
-  private async getProjectConfigWorkspace(projectId: string): Promise<ProjectConfigWorkspace> {
-    const name = projectConfigWorkspaceName(projectId);
-    const durableObjectName = deriveDurableObjectNameFromStructuredName({ structuredName: name });
-    const workspace = projectRuntimeEnv(this.env).WORKSPACE.getByName(
-      durableObjectName,
-    ) as unknown as ProjectConfigWorkspaceStub;
-    await workspace.initialize({ name: durableObjectName });
-
-    return {
-      git: (await workspace.cloudflareShellGit()) as unknown as ProjectConfigGit,
-      workspace,
-    };
-  }
-
-  private lookupLocalRoute(host: string): ExactHostIngressRule | null {
-    const row = this.getDurableObjectSql()
-      .exec<ProjectIngressRouteRow>(
-        `SELECT id, host, project_id, priority, notes, callable_json, created_at_ms, updated_at_ms
-         FROM project_ingress_routes
-         WHERE host = ?
-         ORDER BY priority DESC, created_at_ms ASC
-         LIMIT 1`,
-        host,
-      )
-      .toArray()[0];
-
-    if (!row) return null;
-
-    return {
-      id: row.id,
-      host: row.host,
-      projectId: row.project_id,
-      priority: row.priority,
-      notes: row.notes,
-      callable: parseIngressCallable(row.callable_json),
-      createdAt: new Date(row.created_at_ms).toISOString(),
-      updatedAt: new Date(row.updated_at_ms).toISOString(),
-    };
-  }
-
-  private async writeIngressRoutes(input: {
-    hosts: ReturnType<typeof projectHosts>;
-    projectId: string;
-  }) {
-    const db = createD1Client(this.env.DB);
-    await deleteIngressRoutesByProject(db, { projectId: input.projectId });
-    this.getDurableObjectSql().exec(`DELETE FROM project_ingress_routes`);
-
-    for (const host of input.hosts.projectHosts) {
-      const callable = {
-        type: "fetch",
-        via: {
-          type: "loopback-binding",
-          bindingType: "service",
-          exportName: "ProjectIngressEntrypoint",
-          props: { projectId: input.projectId },
-        },
-      } satisfies FetchCallable;
-      await this.writeGlobalRoute({
-        callable,
-        host,
-        notes: "Project ingress host",
-        projectId: input.projectId,
-      });
-    }
-  }
-
-  private async writeGlobalRoute(input: {
-    callable: FetchCallable;
-    host: string;
-    notes: string;
-    projectId: string;
-  }) {
-    await upsertIngressRoute(createD1Client(this.env.DB), {
-      id: this.createTypeId("route"),
-      host: normalizeIngressHost(input.host),
-      projectId: input.projectId,
-      priority: 100,
-      notes: input.notes,
-      callableJson: JSON.stringify(input.callable),
-    });
-  }
-
-  private writeLocalRoute(input: {
-    callable: FetchCallable;
-    host: string;
-    notes: string;
-    projectId: string;
-  }) {
-    const now = Date.now();
-    this.getDurableObjectSql().exec(
-      `INSERT INTO project_ingress_routes
-        (id, host, project_id, priority, notes, callable_json, created_at_ms, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(host) DO UPDATE SET
-        project_id = excluded.project_id,
-        priority = excluded.priority,
-        notes = excluded.notes,
-        callable_json = excluded.callable_json,
-        updated_at_ms = excluded.updated_at_ms`,
-      this.createTypeId("route"),
-      normalizeIngressHost(input.host),
-      input.projectId,
-      100,
-      input.notes,
-      JSON.stringify(input.callable),
-      now,
-      now,
-    );
-  }
-
-  private requireSummary(): ProjectSummary {
-    const summary = this.currentSummary();
+  private async requireSummary(): Promise<ProjectSummary> {
+    const summary = await this.currentSummary();
     if (!summary) throw new Error("Project has not been created yet.");
     return summary;
   }
 
-  private currentSummary(): ProjectSummary | null {
-    const row = this.getDurableObjectSql()
-      .exec<ProjectStateRow>(
-        `SELECT id, slug, default_host, hosts_json, created_at_ms, updated_at_ms
-         FROM project_state
-         LIMIT 1`,
-      )
-      .toArray()[0];
+  private async currentSummary(): Promise<ProjectSummary | null> {
+    const snapshot = await this.#projectProcessor.snapshot();
+    if (snapshot.state.project) return toSummary(snapshot.state.project);
 
+    // Cold path: the snapshot can lag the create-requested append by a beat.
+    // The D1 projection is the first creation step and hosts derive purely
+    // from (projectId, slug, config), so reconstruct from D1.
+    const projectId = this.projectId;
+    const row = await this.env.DB.prepare(`SELECT slug FROM projects WHERE id = ?`)
+      .bind(projectId)
+      .first<{ slug: string }>();
     if (!row) return null;
-
-    return {
-      id: row.id,
-      slug: row.slug,
-      defaultHost: row.default_host,
-      hosts: JSON.parse(row.hosts_json) as string[],
-    };
+    return toSummary(projectFacts({ config: this.getAppConfig(), projectId, slug: row.slug }));
   }
 
-  private createTypeId(prefix: string) {
-    return typeid({
-      env: { TYPEID_PREFIX: this.getAppConfig().typeIdPrefix },
-      prefix,
-    });
-  }
-
-  private getAppConfig() {
-    return parseConfig(this.env);
-  }
-
-  private async writeProjectCreatedLifecycleEvent(summary: ProjectSummary) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: summary.id,
-      path: PROJECT_LIFECYCLE_STREAM_PATH,
-    });
-
-    await stream.append({
-      type: "events.iterate.com/project/created",
-      idempotencyKey: `project-created:${summary.id}`,
-      payload: {
-        defaultHost: summary.defaultHost,
-        hosts: summary.hosts,
-        projectId: summary.id,
-        slug: summary.slug,
-      },
-    });
-  }
-
-  private async writeProjectConfigWorkerBuiltLifecycleEvent(input: {
-    checkout: ProjectConfigCheckout;
-    summary: ProjectSummary;
-  }) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: input.summary.id,
-      path: PROJECT_LIFECYCLE_STREAM_PATH,
-    });
-
-    await stream.append({
-      type: PROJECT_CONFIG_WORKER_BUILT_EVENT_TYPE,
-      idempotencyKey: `project-config-worker-built:${input.summary.id}:${input.checkout.commitOid}`,
-      payload: {
-        commitOid: input.checkout.commitOid,
-        mainModule: input.checkout.workerCode.mainModule,
-        projectId: input.summary.id,
-        repoSlug: ITERATE_CONFIG_REPO_SLUG,
-      },
-    });
-  }
-
-  private async getOrCreateIterateConfigRepo(summary: ProjectSummary) {
-    return await ensureIterateConfigInfoForProject({
-      env: this.env,
-      projectId: summary.id,
-      projectSlug: summary.slug,
-    });
-  }
-
-  private async ensureAgentsRoot(projectId: string) {
-    await getInitializedDoStub({
-      allowCreate: true,
-      namespace: this.env.AGENT,
-      name: getAgentDurableObjectName({
-        agentPath: AGENTS_STREAM_PATH,
-        projectId,
-      }),
-    });
-  }
-
-  private async writeAgentsRootRule(summary: ProjectSummary) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: summary.id,
-      path: AGENTS_STREAM_PATH,
-    });
-
-    await stream.append({
-      type: jsonataReactorEventTypes.ruleConfigured,
-      idempotencyKey: `agents-child-stream-setup:${summary.id}`,
-      payload: {
-        slug: "agents-child-stream-setup",
-        matcher: "type = 'events.iterate.com/stream/child-stream-created'",
-        reactions: [],
-      },
-    });
-  }
-
-  private async ensureProjectLifecycleSubscription(projectId: string) {
-    const stream = await getInitializedStreamStub({
+  private async projectStream(projectId: string) {
+    return await getInitializedStreamStub({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
       namespace: projectId,
-      path: PROJECT_LIFECYCLE_STREAM_PATH,
+      path: PROJECT_STREAM_PATH,
     });
+  }
 
-    // ":callable" suffix: the subscriber switched from the legacy built-in
-    // runner to a Callable subscription. Changing the idempotency key lets the
-    // new subscription-configured event land on existing streams that already
-    // recorded the old one.
+  private async ensureProjectSubscription(projectId: string) {
+    const stream = await this.projectStream(projectId);
     await stream.append({
-      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `project-lifecycle-subscription:${projectId}:workers-rpc:callable`,
+      type: "events.iterate.com/stream/subscription-configured",
+      idempotencyKey: `project-subscription:${projectId}:project-processor`,
       payload: {
-        subscriptionKey: projectLifecycleSubscriptionKey(projectId),
+        subscriptionKey: `project:${projectId}`,
         subscriber: durableObjectProcessorSubscriber({
           bindingName: "PROJECT",
           durableObjectName: getProjectDurableObjectName(projectId),
-          processorName: ProjectLifecycleProcessorContract.slug,
+          processorName: ProjectProcessorContract.slug,
         }),
       },
     });
-  }
-
-  private async ensureProjectConfigWorkerSubscription(projectId: string) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: projectId,
-      path: PROJECT_LIFECYCLE_STREAM_PATH,
-    });
-
     await stream.append({
-      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `project-config-worker-subscription:${projectId}:callable`,
+      type: "events.iterate.com/stream/subscription-configured",
+      idempotencyKey: `project-config-worker-subscription:${projectId}`,
       payload: {
-        subscriptionKey: projectConfigWorkerSubscriptionKey(projectId),
+        subscriptionKey: `project-config-worker:${projectId}`,
         subscriber: durableObjectProcessorSubscriber({
           bindingName: "PROJECT",
           durableObjectName: getProjectDurableObjectName(projectId),
@@ -1295,237 +672,18 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     });
   }
 
-  private async projectAppSlugFromHost(input: { host: string; summary: ProjectSummary }) {
-    const platformHosts = parseProjectPlatformHosts({
-      bases: this.getAppConfig().projectHostnameBases,
-      host: input.host,
-    });
-    for (const platformHost of platformHosts) {
-      if (
-        platformHost.projectIdentifier === input.summary.slug ||
-        platformHost.projectIdentifier === input.summary.id
-      ) {
-        return platformHost.appSlug;
-      }
-    }
-
-    const row = await this.env.DB.prepare(`SELECT custom_hostname FROM projects WHERE id = ?`)
-      .bind(input.summary.id)
-      .first<{ custom_hostname: string | null }>();
-    const customHostname = row?.custom_hostname?.trim().toLowerCase();
-    if (!customHostname) return null;
-
-    const host = normalizeIngressHost(input.host);
-    if (host === customHostname) return null;
-    if (!host.endsWith(`.${customHostname}`)) return null;
-
-    const prefix = host.slice(0, host.length - customHostname.length - 1);
-    return prefix !== "" && !prefix.includes(".") ? prefix : null;
+  private getAppConfig() {
+    return parseConfig(this.env);
   }
 }
 
-function projectConfigWorkerSubscriptionKey(projectId: string) {
-  return `project-config-worker:${projectId}`;
-}
-
-function projectLifecycleSubscriptionKey(projectId: string) {
-  return `project-lifecycle:${projectId}`;
-}
-
-async function upsertProjectProjection(input: { db: D1Database; input: CreateProjectInput }) {
-  const row = await input.db
-    .prepare(
-      `INSERT INTO projects (id, slug, updated_at)
-       VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S', 'now'))
-       ON CONFLICT(id) DO UPDATE SET
-        slug = excluded.slug,
-        updated_at = excluded.updated_at
-       RETURNING id`,
-    )
-    .bind(input.input.projectId, input.input.slug)
-    .first<{ id: string }>();
-
-  if (!row) throw new Error(`Project ${input.input.projectId} projection was not written.`);
-}
-
-function projectHosts(input: { bases: readonly string[]; projectId: string; slug: string }) {
-  const projectHosts = input.bases.flatMap((base) => [
-    normalizeIngressHost(`${input.slug}.${base}`),
-    normalizeIngressHost(`${input.projectId}.${base}`),
-  ]);
+function toSummary(facts: ProjectFacts): ProjectSummary {
   return {
-    defaultHost: normalizeIngressHost(`${input.slug}.${input.bases[0] ?? "iterate.localhost"}`),
-    mcpHosts: [],
-    projectHosts,
+    id: facts.projectId,
+    slug: facts.slug,
+    defaultHost: facts.defaultHost,
+    hosts: facts.hosts,
   };
-}
-
-function withProjectAppSlug(input: { appSlug: string | null; request: Request }) {
-  if (input.appSlug === null) return input.request;
-
-  const headers = new Headers(input.request.headers);
-  headers.set("x-iterate-app-slug", input.appSlug);
-  return new Request(input.request, { headers });
-}
-
-function projectDynamicWorkerId(input: { commitOid: string; projectId: string }) {
-  return `project-ingress:v4:${input.projectId}:${input.commitOid}`;
-}
-
-function projectDynamicWorkerCode(input: string) {
-  return {
-    compatibilityDate: PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE,
-    compatibilityFlags: PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS,
-    globalOutbound: null,
-    mainModule: PROJECT_DYNAMIC_WORKER_MAIN_MODULE,
-    modules: {
-      [PROJECT_DYNAMIC_WORKER_MAIN_MODULE]: {
-        js: input,
-      },
-    },
-  };
-}
-
-function projectDynamicWorkerCodeWithBindings(input: {
-  globalOutbound: Fetcher;
-  iterate: Fetcher;
-  streams: Fetcher;
-  workerCode: ProjectDynamicWorkerCode;
-}): ProjectDynamicWorkerCode {
-  return {
-    ...input.workerCode,
-    env: {
-      ...(input.workerCode.env ?? {}),
-      ITERATE: input.iterate,
-      STREAMS: input.streams,
-    },
-    globalOutbound: input.globalOutbound,
-    modules: {
-      ...input.workerCode.modules,
-    },
-  };
-}
-
-async function bundledProjectDynamicWorkerCode(
-  files: Record<string, string>,
-): Promise<ProjectDynamicWorkerCode> {
-  const { createWorker } = await import("@cloudflare/worker-bundler");
-  const result = await createWorker({
-    entryPoint: PROJECT_DYNAMIC_WORKER_MAIN_MODULE,
-    files,
-  });
-
-  for (const warning of result.warnings ?? []) {
-    console.warn(`Project config worker bundler warning: ${warning}`);
-  }
-
-  return {
-    compatibilityDate:
-      result.wranglerConfig?.compatibilityDate ?? PROJECT_DYNAMIC_WORKER_COMPATIBILITY_DATE,
-    compatibilityFlags:
-      result.wranglerConfig?.compatibilityFlags ?? PROJECT_DYNAMIC_WORKER_COMPATIBILITY_FLAGS,
-    globalOutbound: null,
-    mainModule: result.mainModule,
-    modules: result.modules,
-  };
-}
-
-async function readProjectConfigFiles(
-  state: Record<string, unknown>,
-): Promise<Record<string, string>> {
-  const readFile = state.readFile;
-  if (typeof readFile !== "function") {
-    throw new Error("Project Workspace state does not implement readFile.");
-  }
-  const readTextFile = readFile as (...args: unknown[]) => unknown;
-
-  const find = state.find;
-  if (typeof find !== "function") {
-    const workerSource = await readWorkspaceTextFile(readTextFile, PROJECT_CONFIG_WORKER_PATH);
-    const packageJson = await readOptionalWorkspaceTextFile(
-      readTextFile,
-      `${PROJECT_CONFIG_DIR}/package.json`,
-    );
-    return packageJson === null
-      ? { [PROJECT_DYNAMIC_WORKER_MAIN_MODULE]: workerSource }
-      : {
-          [PROJECT_DYNAMIC_WORKER_MAIN_MODULE]: workerSource,
-          "package.json": packageJson,
-        };
-  }
-
-  const entries = (await find(PROJECT_CONFIG_DIR, {
-    type: "file",
-  })) as Array<{ path?: unknown }>;
-  const files: Record<string, string> = {};
-
-  for (const entry of entries) {
-    if (typeof entry.path !== "string") continue;
-    const relativePath = projectConfigRelativePath(entry.path);
-    if (relativePath === null) continue;
-
-    files[relativePath] = await readWorkspaceTextFile(readTextFile, entry.path);
-  }
-
-  return files;
-}
-
-function projectConfigRelativePath(path: string) {
-  if (!path.startsWith(`${PROJECT_CONFIG_DIR}/`)) return null;
-
-  const relativePath = path.slice(PROJECT_CONFIG_DIR.length + 1);
-  if (
-    relativePath === "" ||
-    relativePath.startsWith(".git/") ||
-    relativePath.startsWith("node_modules/")
-  ) {
-    return null;
-  }
-
-  return relativePath;
-}
-
-async function readWorkspaceTextFile(
-  readFile: (...args: unknown[]) => unknown,
-  path: string,
-): Promise<string> {
-  const content = await readFile(path);
-  if (typeof content !== "string") {
-    throw new Error(`Project Workspace file ${path} did not contain text.`);
-  }
-
-  return content;
-}
-
-async function readOptionalWorkspaceTextFile(
-  readFile: (...args: unknown[]) => unknown,
-  path: string,
-) {
-  try {
-    return await readWorkspaceTextFile(readFile, path);
-  } catch (error) {
-    if (isFileMissingError(error)) return null;
-    throw error;
-  }
-}
-
-function projectLandingResponse(input: { request: Request; summary: ProjectSummary }) {
-  const url = new URL(input.request.url);
-  const hostname = input.request.headers.get("x-iterate-ingress-hostname") ?? url.hostname;
-  return new Response(
-    JSON.stringify({
-      defaultHost: input.summary.defaultHost,
-      hostname,
-      projectId: input.summary.id,
-      slug: input.summary.slug,
-    }),
-    {
-      headers: {
-        "content-type": "application/json; charset=utf-8",
-        "x-project-ingress-runtime": "static-fallback",
-      },
-    },
-  );
 }
 
 function isHttpRequestUrl(urlString: string) {
@@ -1533,96 +691,6 @@ function isHttpRequestUrl(urlString: string) {
   return url.protocol === "http:" || url.protocol === "https:";
 }
 
-function projectWorkerBuildingResponse() {
-  return new Response("This worker is currently being built.", {
-    status: 503,
-    headers: {
-      "content-type": "text/plain; charset=utf-8",
-      "retry-after": "5",
-      "x-project-ingress-runtime": "dynamic-worker-building",
-    },
-  });
-}
-
-class ProjectConfigWorkerUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ProjectConfigWorkerUnavailableError";
-  }
-}
-
-function projectConfigWorkspaceName(projectId: string): ProjectConfigWorkspaceName {
-  return {
-    projectId,
-    workspaceId: PROJECT_CONFIG_WORKSPACE_ID,
-  };
-}
-
-function artifactGitAuth(repo: RepoInfo) {
-  return {
-    username: "x",
-    password: stripArtifactTokenQuery(repo.token),
-  };
-}
-
 function projectRuntimeEnv(env: ProjectEnv): ProjectRuntimeEnv {
   return env as unknown as ProjectRuntimeEnv;
-}
-
-function readLoopbackExports(ctx: DurableObjectState) {
-  return ctx.exports as unknown as Cloudflare.Exports & {
-    ItxEntrypoint(input: { props: ItxProps }): Fetcher;
-    ProjectEgress(input: { props: ProjectEgressProps }): Fetcher;
-    StreamsCapability(input: { props: StreamsCapabilityProps }): Fetcher;
-  };
-}
-
-function isProjectDynamicWorkerEntrypoint(value: unknown): value is ProjectDynamicWorkerEntrypoint {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "fetch" in value &&
-    typeof value.fetch === "function"
-  );
-}
-
-function isProjectConfigCheckout(value: unknown): value is ProjectConfigCheckout {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "commitOid" in value &&
-    typeof value.commitOid === "string" &&
-    value.commitOid.length > 0 &&
-    "workerCode" in value &&
-    isProjectDynamicWorkerCode(value.workerCode)
-  );
-}
-
-function isProjectDynamicWorkerCode(value: unknown): value is ProjectDynamicWorkerCode {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "compatibilityDate" in value &&
-    typeof value.compatibilityDate === "string" &&
-    "compatibilityFlags" in value &&
-    Array.isArray(value.compatibilityFlags) &&
-    value.compatibilityFlags.every((flag) => typeof flag === "string") &&
-    "globalOutbound" in value &&
-    value.globalOutbound === null &&
-    "mainModule" in value &&
-    typeof value.mainModule === "string" &&
-    "modules" in value &&
-    typeof value.modules === "object" &&
-    value.modules !== null
-  );
-}
-
-function isFileMissingError(error: unknown) {
-  if (!(error instanceof Error)) return false;
-  const message = error.message.toLowerCase();
-  return (
-    message.includes("not found") ||
-    message.includes("could not find") ||
-    message.includes("no such file")
-  );
 }

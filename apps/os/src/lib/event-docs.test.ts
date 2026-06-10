@@ -4,6 +4,8 @@ import {
   getEventDocByPath,
   getProcessorDocByPath,
   processorDocs,
+  processorEventDocsPath,
+  type EventDoc,
 } from "~/lib/event-docs.ts";
 
 describe("event docs catalog", () => {
@@ -27,9 +29,17 @@ describe("event docs catalog", () => {
   });
 
   it("keeps full event paths in docs links when the event namespace differs from the page slug", () => {
-    const event = getEventDocByPath("os/project-created");
+    // No current contract declares an event outside its own namespace, so
+    // exercise the path mechanics directly.
+    const event = {
+      eventPath: "os/project-created",
+      eventSlug: "project-created",
+      processor: { slug: "project" },
+    } as EventDoc;
 
-    expect(event?.href).toBe("/docs/streams/processors/project/events/os/project-created");
+    expect(processorEventDocsPath(event)).toBe(
+      "/docs/streams/processors/project/events/os/project-created",
+    );
   });
 
   it("builds a non-empty processor and event catalog", () => {

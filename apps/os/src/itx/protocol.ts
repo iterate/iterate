@@ -12,7 +12,7 @@
  *   auth.
  * - `access` is the simplified access model: which projects a GLOBAL handle
  *   may narrow to. Ignored (forced to the context's own project) on
- *   project-context handles, mirroring the old "config workers cannot
+ *   project-context handles, mirroring the old "project workers cannot
  *   escalate scopes" rule.
  * - `cap` is pure attribution: which capability's isolate this is. It grants
  *   nothing; it labels egress and audit records.

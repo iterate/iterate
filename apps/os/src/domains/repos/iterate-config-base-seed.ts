@@ -28,17 +28,17 @@ export default {
       if (response) return response;
     }
 
-    return new Response("Hello from the project config worker");
+    return new Response("Hello from the project worker");
   },
 
-  // The config worker is a stream processor: processEvent receives every
-  // event committed to the project root stream ("/"), in order. React to
-  // facts by appending facts — e.g. customize every new agent in this project
-  // by watching for its stream to be created and appending your own context
+  // The worker is a stream processor: processEvent receives every event
+  // committed to the project root stream ("/"), in order. React to facts by
+  // appending facts — e.g. customize every new agent in this project by
+  // watching for its stream to be created and appending your own context
   // events (the last system-prompt-updated wins; platform defaults yield to
   // yours):
   async processEvent({ event, streamPath }) {
-    console.log("Project config worker processEvent", streamPath, event.type);
+    console.log("Project worker processEvent", streamPath, event.type);
   },
 
   // async processEvent({ event }, env) {

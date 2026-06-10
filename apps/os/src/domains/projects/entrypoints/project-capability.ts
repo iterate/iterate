@@ -64,7 +64,7 @@ export class ProjectCapability extends WorkerEntrypoint<
   }
 
   async ingressFetch(request: Request): Promise<Response> {
-    return await this.project().ingressFetch(request);
+    return await this.ingress().fetch(request);
   }
 
   async egressFetch(request: Request): Promise<Response> {
@@ -72,7 +72,7 @@ export class ProjectCapability extends WorkerEntrypoint<
   }
 
   async fetch(request: Request): Promise<Response> {
-    return await this.project().ingressFetch(request);
+    return await this.ingress().fetch(request);
   }
 
   private get projectProps() {
