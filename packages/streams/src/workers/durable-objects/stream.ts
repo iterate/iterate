@@ -364,6 +364,11 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     let workingCoreProcessorState = this.#coreProcessorState;
     const events: StreamEvent[] = [];
     const newEvents: StreamEvent[] = [];
+    const reducedSideEffects: Array<{
+      event: StreamEvent;
+      previousState: StreamCoreProcessorState;
+      state: StreamCoreProcessorState;
+    }> = [];
     const idempotencyHitsInBatch = new Map<string, StreamEvent>();
     // 1. Prepare events and reduced state.
     for (const eventInput of args.events) {
@@ -403,7 +408,13 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         state: previousCoreProcessorState,
       });
 
-      this.coreProcessor.processReducedEvent({
+      // Core side effects are deferred until after the commit below:
+      // `processReducedEvent` side effects (e.g. announcing this stream to its
+      // ancestors) call back into `append`/`#resolveStream`, which read
+      // `this.#coreProcessorState` — running them mid-batch would observe the
+      // stale pre-append state (on a brand-new stream that is the
+      // "uninitialized" placeholder namespace/path).
+      reducedSideEffects.push({
         event: committed,
         previousState: previousCoreProcessorState,
         state: workingCoreProcessorState,
@@ -429,6 +440,13 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     this.#appendEventRows(newEvents);
     this.writeCoreProcessorState(workingCoreProcessorState);
     this.#coreProcessorState = workingCoreProcessorState;
+
+    // Post-commit core side effects (see the deferral note above). Inline core
+    // side effects are fire-and-forget (`runInBackground`), so this cannot fail
+    // the append.
+    for (const reduced of reducedSideEffects) {
+      this.coreProcessor.processReducedEvent(reduced);
+    }
 
     // 3. Wake live delivery; reconcile only when subscription topology changed.
     // Append success is already decided above — this is pure post-commit fan-out.

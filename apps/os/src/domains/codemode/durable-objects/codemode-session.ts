@@ -10,6 +10,7 @@ import { withDurableObjectCore } from "@iterate-com/shared/durable-object-utils/
 import { withKvInspector } from "@iterate-com/shared/durable-object-utils/mixins/with-kv-inspector";
 import {
   deriveDurableObjectNameFromStructuredName,
+  NotInitializedError,
   withLifecycleHooks,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { withOuterbase } from "@iterate-com/shared/durable-object-utils/mixins/with-outerbase";
@@ -203,10 +204,28 @@ export class CodemodeSession extends CodemodeSessionBase<CodemodeSessionEnv> {
 
   /**
    * Subscription entry point dialed by the Stream DO through the callable
-   * subscriber appended in `ensureProcessorSubscription`.
+   * subscriber appended in `ensureProcessorSubscription` — or, for routed
+   * Slack-agent streams, through the bootstrap subscription appended by the
+   * Slack integration BEFORE anything has initialized this Durable Object.
+   * Initialize from the runtime name first: the hosted codemode processor's
+   * batch side effects (e.g. `session-started`'s capability callable) read
+   * `this.name`, and a NotInitializedError thrown mid-ingest is swallowed by
+   * the host while the stream pump advances — silently skipping events.
    */
-  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    return this.host.requestStreamSubscription(args);
+  async requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
+    await this.ensureStartedOrInitializeFromRuntimeName();
+    return await this.host.requestStreamSubscription(args);
+  }
+
+  private async ensureStartedOrInitializeFromRuntimeName() {
+    try {
+      return await this.ensureStarted();
+    } catch (error) {
+      if (!(error instanceof NotInitializedError)) throw error;
+      const runtimeName = this.getDurableObjectName();
+      if (runtimeName == null) throw error;
+      return await this.initialize({ name: runtimeName });
+    }
   }
 
   async getStreamPath() {

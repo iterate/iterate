@@ -287,7 +287,71 @@ gates unread-badge suppression. Verified: both specs pass under 6x/8x/10x
 throttle (previously failed at 6x on branch _and_ main) and 5x consecutively
 unthrottled; full 26-spec suite green twice.
 
-### I7. (running list — updated as migration proceeds)
+### I7. Core side effects ran against pre-commit stream state — ancestors dialed as `uninitialized:*`
+
+Preview e2e `admin-project` failed: `project.streams.list` only ever returned
+the root `/` stream. The list walks `childPaths` from the root, and no
+`stream/child-stream-created` events were landing on ancestors. Wrangler-tail
+plus a workerd repro showed the announcing stream dialing
+`uninitialized:/`/`uninitialized:/probe` — the core processor's
+`stream/created` side effect (`processReducedEvent` → `runInBackground` →
+`ctx.stream.append({ streamPath: ancestorPath })`) starts executing
+synchronously inside `#appendBatchHere`, _before_
+`this.#coreProcessorState = workingCoreProcessorState` commits, so
+`#resolveStream` read the initial placeholder state (`namespace:
+"uninitialized"`). This was latent on main too (repros identically at
+origin/main); production streams predate the new Stream DO listing path.
+
+Fix (`packages/streams/src/workers/durable-objects/stream.ts`):
+`#appendBatchHere` collects `{event, previousState, state}` tuples and runs
+`coreProcessor.processReducedEvent` _after_ the event rows + core state
+commit, alongside the rest of the post-commit fan-out. Regression test:
+`project-ingress.test.ts` "creating a stream registers childPaths on its
+ancestor streams".
+
+### I8. Stream dialed CodemodeSession before initialization — swallowed ingest failures silently skipped events
+
+Both remaining agents e2e failures (`routes Slack webhooks ... bang command
+replies` timeout; `completes slack-agent event-mode codemode calls` →
+`No codemode provider registered for slack.agent.threadInfo`) had one root
+cause. `routedStreamBootstrapEvents` appends the codemode subscription from
+the Slack integration, so the routed stream dials a `CodemodeSession` DO that
+nothing has ever `initialize({name})`d. Its `requestStreamSubscription` went
+straight to `host.requestStreamSubscription` (unlike slack-integration /
+slack-agent, which `ensureStartedOrInitializeFromRuntimeName` first). The
+handshake itself succeeded (`processor-registered codemode` landed), but the
+first delivered batch hit the codemode processor's session-started gate
+(`processEventBatch` → `#ensureSessionStarted` →
+`buildSessionCapabilityCallable()` → `this.name`) which threw
+`NotInitializedError`.
+
+The amplifier: the host's `processEventBatch` callback _swallows_ ingest
+failures (`.catch(console.error)`) while the Stream DO's pump cursor advances
+(fire-and-forget delivery, D1). A failed batch is therefore lost to that
+connection forever: the processor's checkpoint stays behind, but redelivery
+only happens on the next _handshake_ — and reconcile never re-dials a key
+whose connection is still open. Net effect on the routed stream: the default
+tool-provider registrations (offsets ~5–11) and the slack-agent provider
+(~17) were skipped; the eventual `executeScript` initialized the DO,
+re-appended a subscription-configured (same key → no re-dial), and the old
+pump delivered only `script-execution-requested` into a near-empty state —
+fresh `session-started` _after_ the script request, then "No codemode
+provider registered". In the bang-command test nothing ever initialized the
+session, so the script never executed at all (130s timeout).
+
+Fix: `CodemodeSession.requestStreamSubscription` now
+`ensureStartedOrInitializeFromRuntimeName()` (same pattern as
+slack-integration/slack-agent) before wiring the host. Regression test:
+`codemode-session.test.ts` "executes scripts on a session first dialed by a
+bootstrap subscription" (red without the fix). Sharp edge to remember: any
+deterministic throw inside a hosted processor's batch path (reduce, schema
+parse, blockProcessorWhile work) silently skips those events on the live
+connection — the checkpoint protects durability only across re-handshakes.
+The other hosted DOs were audited: Agent/Project/Repo processors read stream
+context from host subscription state (not lifecycle name), and their
+subscriptions are only appended post-initialize.
+
+### I9. (running list — updated as migration proceeds)
 
 ### Legacy deletion
 

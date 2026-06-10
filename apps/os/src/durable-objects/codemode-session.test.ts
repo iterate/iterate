@@ -3,6 +3,7 @@ import { createCodemodeContext } from "@iterate-com/shared/codemode/context-prox
 import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import { type Event, type EventInput, type StreamPath } from "@iterate-com/shared/streams/types";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 import { getInitializedStreamStub } from "~/domains/streams/new-stream-runtime.ts";
@@ -262,6 +263,67 @@ describe("CodemodeSession", () => {
         functionCallRequested(["preexistingAi", "run"], ["preexistingAi"], ["run"]),
       ]),
     );
+  });
+
+  // Regression: routed Slack-agent streams bootstrap the codemode subscription
+  // by appending events from the Slack integration, so the Stream DO dials a
+  // CodemodeSession that nothing has initialized yet. The session must
+  // initialize itself from its runtime name; previously the codemode
+  // processor's session-started side effect read `this.name`, threw
+  // NotInitializedError mid-ingest, and the swallowed failure made the
+  // processor silently skip the batch (losing the provider registrations).
+  test("executes scripts on a session first dialed by a bootstrap subscription", async () => {
+    const streamPath = `/codemode-session-tests/${crypto.randomUUID()}` as StreamPath;
+    const name = sessionName({ projectId, streamPath });
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: (env as TestEnv).STREAM,
+      namespace: projectId,
+      path: streamPath,
+    });
+
+    const scriptExecutionId = crypto.randomUUID();
+    // One batch, mirroring routedStreamBootstrapEvents + the forwarded webhook:
+    // subscription first, then providers, then the script request — all before
+    // anything initializes the CodemodeSession durable object.
+    await stream.appendBatch([
+      {
+        type: "events.iterate.com/stream/subscription-configured",
+        payload: {
+          subscriptionKey: `codemode-session:${name}`,
+          subscriber: durableObjectProcessorSubscriber({
+            bindingName: "CODEMODE_SESSION",
+            durableObjectName: name,
+            processorName: "codemode",
+          }),
+        },
+      },
+      {
+        type: "events.iterate.com/codemode/tool-provider-registered",
+        payload: createExampleRpcProviderRegistration({
+          exportName: "AiCapability",
+          instructions: "Use ctx.bootstrapAi.run(model, input).",
+          path: ["bootstrapAi"],
+          projectId,
+        }),
+      },
+      {
+        type: "events.iterate.com/codemode/script-execution-requested",
+        payload: {
+          code: `async (ctx) => {
+  return await ctx.bootstrapAi.run("test-model", { prompt: "hello" });
+}`,
+          scriptExecutionId,
+        },
+      },
+    ]);
+
+    const completed = await waitForScriptExecutionCompleted({ scriptExecutionId, streamPath });
+    expect(completed.payload).toMatchObject({
+      outcome: {
+        status: "returned",
+        value: expect.objectContaining({ model: "test-model" }),
+      },
+    });
   });
 
   test("runs loopback RPC capability examples with live handles and callbacks", async () => {
