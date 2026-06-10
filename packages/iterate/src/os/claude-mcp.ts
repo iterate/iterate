@@ -3,9 +3,9 @@ import process from "node:process";
 
 import { os } from "@orpc/server";
 import { z } from "zod";
-import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 
 const DEFAULT_MCP_BASE_URL = "https://mcp.iterate.com";
+const LOCAL_DEVELOPMENT_MCP_PATH = "/api/__mcp";
 const SERVER_NAME = "iterate";
 const DEFAULT_INITIAL_PROMPT = "describe the MCP tools you have available";
 
@@ -71,6 +71,23 @@ function defaultMcpUrlFromEnv() {
   return normalizeBaseUrl(DEFAULT_MCP_BASE_URL);
 }
 
+function resolveMcpBaseUrl(input: {
+  appBaseUrl?: string;
+  mcpBaseUrl?: string;
+  requestUrl?: string;
+}) {
+  const explicitMcpBaseUrl = input.mcpBaseUrl?.trim();
+  if (explicitMcpBaseUrl) return normalizeBaseUrl(explicitMcpBaseUrl);
+
+  const localBaseUrl = input.appBaseUrl?.trim() || input.requestUrl?.trim();
+  if (!localBaseUrl) return null;
+
+  const parsed = new URL(localBaseUrl);
+  if (!isLocalhostHostname(parsed.hostname)) return null;
+
+  return normalizeBaseUrl(new URL(LOCAL_DEVELOPMENT_MCP_PATH, parsed.origin).toString());
+}
+
 function requireEnv(name: string) {
   const value = process.env[name]?.trim();
   if (!value) {
@@ -94,6 +111,15 @@ function normalizeBaseUrl(value: string) {
   parsed.hash = "";
   parsed.pathname = parsed.pathname.replace(/\/+$/, "") || "/";
   return parsed.toString().replace(/\/$/, "");
+}
+
+function isLocalhostHostname(hostname: string) {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname === "[::1]"
+  );
 }
 
 export async function assertMcpAdminBearerAccepted(input: { mcpUrl: string; token: string }) {

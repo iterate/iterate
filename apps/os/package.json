@@ -41,6 +41,9 @@
     "test:watch": "vitest"
   },
   "iterateAppCli": {
+    "localRouterPaths": [
+      "../../packages/iterate/src/os/router.ts"
+    ],
     "remote": {
       "auth": "shared-api-secret-bearer",
       "defaultBaseUrl": "https://os.iterate.com"

@@ -3,7 +3,8 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "dev": "sh -c 'export VITE_AUTH_APP_ORIGIN=http://localhost:7101; export VITE_PUBLIC_URL=http://localhost:7101; export ITERATE_OAUTH_ISSUER=http://localhost:7101/api/auth; (cd apps/auth && doppler run --preserve-env=VITE_AUTH_APP_ORIGIN,VITE_PUBLIC_URL -- pnpm dev:local) & (cd apps/os && doppler run --preserve-env=DEV_TUNNEL,ITERATE_OAUTH_ISSUER -- pnpm dev:local); wait'",
+    "dev-all": "sh -c 'export VITE_AUTH_APP_ORIGIN=http://localhost:7101; export VITE_PUBLIC_URL=http://localhost:7101; export ITERATE_OAUTH_ISSUER=http://localhost:7101/api/auth; (cd apps/auth && doppler run --preserve-env=VITE_AUTH_APP_ORIGIN,VITE_PUBLIC_URL -- pnpm dev:local) & (cd apps/os && doppler run --preserve-env=DEV_TUNNEL,ITERATE_OAUTH_ISSUER -- pnpm dev:local); wait'",
+    "dev": "pnpm os dev",
     "build": "pnpm -r --parallel --filter '!iterate' build",
     "typecheck": "pnpm -r --parallel --filter '!iterate' typecheck",
     "format": "oxfmt",
@@ -11,6 +12,7 @@
     "os": "cd apps/os && pnpm",
     "skills:sync": "npx skills add . --skill '*' -a claude-code -a opencode -g -y",
     "skills:list": "npx skills list -g -a claude-code -a opencode",
+    "iterate": "node ./packages/iterate/bin/iterate.js",
     "preview": "node ./packages/iterate/bin/iterate.js --local-router ./scripts/preview/router.ts local-router preview",
     "lint": "oxlint . --threads 1 --deny-warnings",
     "lint:check": "pnpm lint",

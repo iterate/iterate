@@ -6,6 +6,7 @@ export function getOsResourceBases() {
     "https://os.iterate-dev-jonas.com",
     "https://os.iterate-dev-misha.com",
     "https://os.iterate-dev-rahul.com",
+    "http://localhost:5173",
     ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(
       (previewNumber) => `https://os.iterate-preview-${previewNumber}.com`,
     ),

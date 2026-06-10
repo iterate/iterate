@@ -9,12 +9,14 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
     // Handwritten design-of-record types for the itx protocol; intentionally unreferenced.
     ignore: ["src/itx/types.ts"],
     entry: [
-      ...(base.entry ?? []),
+      ...(base.entry ?? []).filter((entry) => entry !== "scripts/router.ts"),
       "e2e/vitest.config.ts",
       "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",
-      "scripts/claude-mcp.ts",
-      "scripts/event-stream-terminal.tsx",
+      // Mounted into the CLI by packages/iterate/src/os/router.ts, which knip
+      // doesn't traverse (the iterate package isn't a knip workspace).
+      "scripts/seed-iterate-config-base-repo.ts",
+      "scripts/setup-artifact-event-subscriptions.ts",
       "sqlfu.config.ts",
       "src/durable-objects/codemode-session.vitest.config.ts",
       "src/durable-objects/codemode-session-test-entry.ts",
