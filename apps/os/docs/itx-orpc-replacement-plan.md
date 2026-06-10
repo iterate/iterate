@@ -85,14 +85,18 @@ the crossws/`NitroWebSocketResponse` upgrade dance all disappear.
 
 ### SSR: the in-process handle
 
-TanStack Start loaders run inside the OS worker, so the server render never
-opens a socket: `getServerItx(requestContext)` calls `resolveItx` directly
-with `accessForPrincipal` applied. Handle construction is in-process (~zero
-cost); each built-in call is exactly one Workers RPC to the owning DO — the
-same hop today's oRPC routers make. Routes under `$projectSlug` get a
-project-narrowed handle in route context. Hold this in review: SSR of a
-project page must complete with a handful of DO round trips and no fetch to
-our own hostname.
+**Done** (itx DECISIONS D18). TanStack Start loaders run inside the OS
+worker, so the server render never opens a socket: `getServerItx`
+(`src/itx/server.ts`) calls `resolveItx` directly with `accessForPrincipal`
+applied — the same access.ts chain `/api/itx` connect runs. Handle
+construction is in-process (~zero cost); each built-in call is exactly one
+Workers RPC to the owning DO — the same hop today's oRPC routers make.
+Loaders reach it through the isomorphic `getLoaderItx` (`src/itx/loader.ts`;
+browser side reuses the per-tab socket singleton) and seed the QueryClient
+via `prefetchItxQuery` with the same `ItxQueryDefinition` the component's
+hook consumes (`lib/itx-queries.ts`), best-effort — prefetch failures never
+crash a route. SSR of a project page must complete with a handful of DO
+round trips and no fetch to our own hostname.
 
 ## Status
 
@@ -111,6 +115,9 @@ Done (PR #1423):
   riding capnweb as own enumerable props, duck-typed client detection
   (`getItxErrorCode`/`isItxAccessError`), and `onSendError` tagging every
   other outbound error INTERNAL with its stack — see DECISIONS.md D18.
+- SSR/loader prefetch: `getServerItx` + `getLoaderItx` + `prefetchItxQuery`
+  (DECISIONS D19); the streams index loader seeds the root stream state so
+  first paint skips the spinner.
 
 Happening separately: codemode is deleted and replaced by the **itx
 processor** (`events.iterate.com/itx/execution-requested` /
