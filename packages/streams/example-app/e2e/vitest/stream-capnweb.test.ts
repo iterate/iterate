@@ -600,8 +600,40 @@ describe("stream capnweb protocol", () => {
       .slice(afterSubscribe)
       .filter((frame) => frame.direction === "in");
     expect(inbound.every((frame) => isPushOrReleaseFrame(frame.data))).toBe(true);
-    expect(inbound.filter((frame) => isPushFrame(frame.data))).toMatchObject([
-      {
+    // The subscriber-connected fact's push frame may land during the subscribe
+    // round trip (before `afterSubscribe`) or after it, depending on network
+    // timing — so the captured push frames are the published event's frame,
+    // optionally preceded by the connected fact's. Assert the last exactly and
+    // any earlier ones loosely.
+    const pushFrames = inbound.filter((frame) => isPushFrame(frame.data));
+    expect(pushFrames.length).toBeGreaterThanOrEqual(1);
+    expect(pushFrames.at(-1)).toMatchObject({
+      direction: "in",
+      data: [
+        "push",
+        [
+          "pipeline",
+          expect.any(Number),
+          [],
+          [
+            {
+              events: [
+                [
+                  {
+                    type: input.type,
+                    payload: input.payload,
+                    offset: 4,
+                    createdAt: expect.any(String),
+                  },
+                ],
+              ],
+            },
+          ],
+        ],
+      ],
+    });
+    for (const frame of pushFrames.slice(0, -1)) {
+      expect(frame).toMatchObject({
         direction: "in",
         data: [
           "push",
@@ -613,44 +645,18 @@ describe("stream capnweb protocol", () => {
               {
                 events: [
                   [
-                    {
+                    expect.objectContaining({
                       type: "events.iterate.com/stream/subscriber-connected",
                       offset: 3,
-                      createdAt: expect.any(String),
-                    },
+                    }),
                   ],
                 ],
               },
             ],
           ],
         ],
-      },
-      {
-        direction: "in",
-        data: [
-          "push",
-          [
-            "pipeline",
-            expect.any(Number),
-            [],
-            [
-              {
-                events: [
-                  [
-                    {
-                      type: input.type,
-                      payload: input.payload,
-                      offset: 4,
-                      createdAt: expect.any(String),
-                    },
-                  ],
-                ],
-              },
-            ],
-          ],
-        ],
-      },
-    ]);
+      });
+    }
   });
 });
 
