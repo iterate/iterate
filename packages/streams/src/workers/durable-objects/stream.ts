@@ -38,7 +38,8 @@ const textEncoder = new TextEncoder();
 // History:
 // - 1 (implicit; no "stateVersion" key in KV): pre-descendantPaths state.
 // - 2: childPaths gained a sibling descendantPaths (full announced paths).
-const CORE_STATE_VERSION = 2;
+// - 3: descendantPaths removed; callers should walk immediate childPaths.
+const CORE_STATE_VERSION = 3;
 
 export class Stream extends DurableObject<Env> implements StreamRpc {
   #coreProcessorState: StreamCoreProcessorState;
@@ -800,15 +801,32 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 }
 
+// Allowlist the RPC surface explicitly. The Stream DO has `protected` helpers
+// (readCoreProcessorState/writeCoreProcessorState) that are public at runtime;
+// a denylist would leak them onto the unauthenticated PublicStreamRpcTarget,
+// where writeCoreProcessorState could inject an attacker-chosen subscription
+// callable. `subscribe` is intentionally absent: installSubscribeRpcTargetOverride
+// adds its own forwarding implementation below.
+const STREAM_RPC_METHODS = [
+  "append",
+  "appendBatch",
+  "getEvent",
+  "getEvents",
+  "runtimeState",
+  "reduce",
+  "kill",
+  "reset",
+] as const satisfies readonly (keyof StreamRpc)[];
+
 export const StreamRpcTarget = makeRpcTargetClass<StreamRpc, StreamRpc>(
   Stream as { prototype: StreamRpc },
-  { exclude: ["subscribe"] },
+  { include: [...STREAM_RPC_METHODS, "subscribeOutbound"] },
 );
 installSubscribeRpcTargetOverride(StreamRpcTarget);
 
 export const PublicStreamRpcTarget = makeRpcTargetClass<StreamRpc, StreamRpc>(
   Stream as { prototype: StreamRpc },
-  { exclude: ["subscribe", "subscribeOutbound"] },
+  { include: STREAM_RPC_METHODS },
 );
 installSubscribeRpcTargetOverride(PublicStreamRpcTarget);
 

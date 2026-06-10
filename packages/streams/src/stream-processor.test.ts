@@ -224,11 +224,6 @@ describe("core stream state and subscription processors", () => {
     expect(sim.streams.get("/")?.coreProcessorState.childPaths).toEqual(["/a"]);
     expect(sim.streams.get("/a")?.coreProcessorState.childPaths).toEqual(["/a/b"]);
     expect(sim.streams.get("/a/b")?.coreProcessorState.childPaths).toEqual(["/a/b/c"]);
-    // Every ancestor also keeps the FULL announced path (the root's copy is
-    // the namespace catalog that stream listing reads with one getState).
-    expect(sim.streams.get("/")?.coreProcessorState.descendantPaths).toEqual(["/a/b/c"]);
-    expect(sim.streams.get("/a")?.coreProcessorState.descendantPaths).toEqual(["/a/b/c"]);
-    expect(sim.streams.get("/a/b")?.coreProcessorState.descendantPaths).toEqual(["/a/b/c"]);
   });
 
   it("circuit breaker trips from an ordinary subscription processor", async () => {

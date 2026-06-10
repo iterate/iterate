@@ -78,18 +78,18 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       case "events.iterate.com/agent/status-updated":
       case "events.iterate.com/agent/llm-request-queued":
         return;
-      case "events.iterate.com/codemode/tool-provider-registered":
+      case "events.iterate.com/agent/capability-noted":
         // Blocking: these context rows must land before the checkpoint so a
         // failed append is retried instead of silently dropped from history.
         args.blockProcessorWhile(async () => {
           await this.#appendEventTypeExplanation({ eventType: event.type });
           await this.#appendRewrite({
             event,
-            key: "render-codemode-tool-provider-registered",
-            content: toolProviderRegisteredEventBlock({
+            key: "render-agent-capability-noted",
+            content: capabilityNotedEventBlock({
               instructions: event.payload.instructions,
+              name: event.payload.name,
               offset: event.offset,
-              path: event.payload.path,
               type: event.type,
             }),
           });
@@ -473,11 +473,11 @@ function eventTypeExplanation(eventType: string): string | null {
       meaning: "The current LLM request was interrupted by user input.",
     });
   }
-  if (eventType === "events.iterate.com/codemode/tool-provider-registered") {
+  if (eventType === "events.iterate.com/agent/capability-noted") {
     return eventTypeExplanationBlock({
       type: eventType,
       meaning:
-        "A codemode tool provider is now available. Call it as `ctx.<path>.<method>(args)` in your codemode scripts. If you're not sure about the shape of the result of a function call, just return it from a codemode block and you'll be shown it on your next turn. The event below shows the provider's path and usage instructions.",
+        "A capability is now available to your scripts. Call it as `itx.<name>.<method>(args)` in a code block. If you're not sure about the shape of a result, just return it and you'll be shown it on your next turn. The event below shows the capability's name and usage instructions.",
     });
   }
   return null;
@@ -514,12 +514,11 @@ function yamlBlockScalar(key: string, value: string): string[] {
   return [`  ${key}: |-`, ...value.split("\n").map((line) => `    ${line}`)];
 }
 
-function toolProviderRegisteredEventBlock(args: {
+function capabilityNotedEventBlock(args: {
   instructions: string;
+  name: string;
   offset: number;
-  path: readonly string[];
   type: string;
 }): string {
-  const ctxPath = `ctx.${args.path.join(".")}`;
-  return `Codemode tool provider registered for \`${ctxPath}\`. ${args.instructions} (to debug further, see ${args.type} event at offset ${args.offset})`;
+  return `Capability available as \`itx.${args.name}\`. ${args.instructions} (to debug further, see ${args.type} event at offset ${args.offset})`;
 }

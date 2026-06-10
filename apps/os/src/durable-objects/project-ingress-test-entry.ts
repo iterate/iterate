@@ -160,7 +160,7 @@ export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/rep
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
-export { OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
+export { OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
 export { ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
@@ -168,7 +168,7 @@ export {
   MockArtifactAgentDurableObject as AgentDurableObject,
   MockArtifactsBinding,
 } from "./mock-artifacts-binding.ts";
-export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
+export { CodemodeSession } from "~/durable-objects/codemode-session-tombstone.ts";
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
 export { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";

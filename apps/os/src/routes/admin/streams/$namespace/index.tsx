@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { StreamState, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
-import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
+import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
 import { useAdminItx } from "~/lib/admin-itx.ts";
+import { StreamNavigationState } from "~/lib/stream-navigation-state.ts";
 
 export const Route = createFileRoute("/admin/streams/$namespace/")({
   component: AdminStreamNamespacePage,
@@ -16,7 +17,9 @@ function AdminStreamNamespacePage() {
     () => ({
       key: ["admin", "streams", namespace] as const,
       getState: async (streamPath: StreamPathType) =>
-        StreamState.parse(await itx.streams.namespace(namespace).get(streamPath).getState()),
+        StreamNavigationState.parse(
+          await itx.streams.namespace(namespace).get(streamPath).getState(),
+        ),
     }),
     [itx, namespace],
   );
@@ -29,14 +32,15 @@ function AdminStreamNamespacePage() {
   }
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col gap-3 p-4">
-      <div className="min-w-0">
+    <StreamExplorerTreePage
+      header={
         <h1 className="truncate text-lg font-semibold">
           Namespace{" "}
           <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-sm">{namespace}</code>
         </h1>
-      </div>
-      <StreamTreeBrowser source={source} onOpenPath={openStream} />
-    </section>
+      }
+      source={source}
+      onOpenPath={openStream}
+    />
   );
 }

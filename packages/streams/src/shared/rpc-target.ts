@@ -26,19 +26,24 @@ export function makeRpcTargetClass<
   const TExcluded extends keyof TSource = never,
 >(
   sourceClass: { prototype: TSource },
-  options?: { exclude?: readonly TExcluded[] },
+  options?: { exclude?: readonly TExcluded[]; include?: readonly PropertyKey[] },
 ): RpcTargetClass<RpcMethods<TSource, TExcluded>, TSource>;
 
 export function makeRpcTargetClass<TApi extends object, TSource extends object = TApi>(
   sourceClass: { prototype: TSource },
-  options?: { exclude?: readonly PropertyKey[] },
+  options?: { exclude?: readonly PropertyKey[]; include?: readonly PropertyKey[] },
 ): RpcTargetClass<TApi, TSource>;
 
 export function makeRpcTargetClass<TSource extends object>(
   sourceClass: { prototype: TSource },
-  options: { exclude?: readonly PropertyKey[] } = {},
+  options: { exclude?: readonly PropertyKey[]; include?: readonly PropertyKey[] } = {},
 ): RpcTargetClass<object, TSource> {
   const exclude = new Set<PropertyKey>(["constructor", ...(options.exclude ?? [])]);
+  // When `include` is given it is an allowlist: only those methods are proxied.
+  // Prefer it for classes with internal (e.g. `protected`) methods — `protected`
+  // does not exist at runtime, so a denylist silently leaks any method not
+  // explicitly excluded.
+  const include = options.include === undefined ? undefined : new Set<PropertyKey>(options.include);
 
   class GeneratedRpcTarget extends RpcTarget {
     constructor(readonly source: TSource) {
@@ -50,6 +55,9 @@ export function makeRpcTargetClass<TSource extends object>(
     Object.getOwnPropertyDescriptors(sourceClass.prototype),
   )) {
     if (exclude.has(key)) {
+      continue;
+    }
+    if (include !== undefined && !include.has(key)) {
       continue;
     }
 

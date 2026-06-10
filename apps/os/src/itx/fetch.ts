@@ -165,7 +165,8 @@ async function authenticateItxRequest(input: {
 
 /** The simplified access model: admin sees all, users see their projects. */
 function accessForPrincipal(principal: Principal): ProjectAccess {
-  return principal.type === "admin" ? "all" : principal.projects.map((project) => project.id);
+  if (principal.type === "admin" || principal.isAdmin) return "all";
+  return principal.projects.map((project) => project.id);
 }
 
 /**
@@ -266,13 +267,17 @@ async function handleItxRun(input: {
     props = { access: input.access, context: GLOBAL_CONTEXT_ID };
   }
 
+  // The endpoint's API is `({ itx, vars }) => …` + a vars object; the runner
+  // knows ONE shape, `async (itx) => …`, so vars are baked into the source
+  // here — parameterization is the caller's concern, not the runner's.
   const outcome = await runItxScript({
     env: input.env,
     exports: workerExports(input.context),
-    functionSource: body.functionSource,
+    functionSource: `async (itx) => (${body.functionSource})({ itx, vars: ${JSON.stringify(
+      body.vars ?? {},
+    )} })`,
     projectId: scriptProjectId,
     props,
-    vars: body.vars,
   });
   if (!outcome.ok) {
     // The script isolate flattens throws to JSON, so the ItxError code (when

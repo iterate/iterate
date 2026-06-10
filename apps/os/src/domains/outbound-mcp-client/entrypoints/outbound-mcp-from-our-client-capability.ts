@@ -30,7 +30,7 @@ import {
   describeOutboundMcpFromOurClientTools,
   executeOutboundMcpFromOurClientToolFunction,
 } from "../utils/outbound-mcp-from-our-client-capability-core.ts";
-import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
+import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 
 /**
  * Each Durable Object instance bridges a single remote MCP server. The server

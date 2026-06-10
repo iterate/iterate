@@ -52,7 +52,7 @@ describe("SlackAgentProcessor", () => {
     expect(processor.state.botUserId).toBe("U_BOT");
   });
 
-  it("registers ctx.slack.agent as an event-based codemode provider when route context arrives", async () => {
+  it("notes Slack etiquette as a capability when route context arrives", async () => {
     const { appended, processor } = createProcessor();
 
     await processor.ingest({ events: [routeEvent()], streamMaxOffset: 1 });
@@ -62,13 +62,12 @@ describe("SlackAgentProcessor", () => {
       {
         streamPath: undefined,
         event: {
-          type: "events.iterate.com/codemode/tool-provider-registered",
+          type: "events.iterate.com/agent/capability-noted",
           idempotencyKey: "slack-agent/register-slack-agent-tool-provider@1",
           payload: {
-            path: ["slack", "agent"],
-            invocation: { kind: "event" },
+            name: "slack",
             instructions:
-              "Use ctx.slack.agent.threadInfo() only when you need route context that is not already in the Slack webhook payload. Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. Normal Slack replies can use channel/thread_ts from the webhook event directly.",
+              "Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. Normal Slack replies use channel/thread_ts from the webhook event directly.",
           },
         },
       },
@@ -86,20 +85,21 @@ describe("SlackAgentProcessor", () => {
 
     expect(appended).toHaveLength(1);
     expect(appended[0]!.event).toMatchObject({
-      type: "events.iterate.com/codemode/script-execution-requested",
+      type: "events.iterate.com/itx/execution-requested",
       idempotencyKey: "slack-agent/slack-bang-command-to-codemode-script@42",
       payload: {
-        scriptExecutionId: "slack-bang-command-42",
+        enqueued: true,
+        executionId: "slack-bang-command-42",
       },
     });
     const code = (appended[0]!.event.payload as { code: string }).code;
-    expect(code).toContain("const debug = await ctx.debug();");
-    expect(code).toContain("await ctx.slack.chat.postMessage({");
+    expect(code).toContain("const debug = await itx.debug();");
+    expect(code).toContain("await itx.slack.chat.postMessage({");
     expect(code).toContain('channel: "C123"');
     expect(code).toContain('thread_ts: "1772136258.963519"');
     expect(code).toContain("text: `Debug info:\\n${debug}`");
-    expect(code).not.toContain("ctx.slack.agent.threadInfo");
-    expect(code).not.toContain("ctx.slack.threadInfo");
+    expect(code).not.toContain("slack.agent.threadInfo()");
+    expect(code).not.toContain("slack.threadInfo");
   });
 
   it("emits direct codemode scripts for non-debug bang commands", async () => {
@@ -113,8 +113,8 @@ describe("SlackAgentProcessor", () => {
 
     expect(appended).toHaveLength(1);
     const code = (appended[0]!.event.payload as { code: string }).code;
-    expect(code).toContain("await ctx.slack.agent.threadInfo();");
-    expect(code).not.toContain("ctx.slack.chat.postMessage");
+    expect(code).toContain("await itx.slack.agent.threadInfo();");
+    expect(code).not.toContain("slack.chat.postMessage");
     expect(code).not.toContain("const debug = await");
   });
 
@@ -245,56 +245,6 @@ describe("SlackAgentProcessor", () => {
     expect((appended[0]!.event.payload as { content: string }).content).toContain(
       "action_id: approve",
     );
-  });
-
-  it("satisfies ctx.slack.agent.threadInfo function calls from reduced route state", async () => {
-    const { appended, processor } = createProcessor();
-
-    await processor.ingest({ events: [routeEvent()], streamMaxOffset: 1 });
-    await processor.ingest({
-      events: [
-        committedEvent({
-          offset: 44,
-          type: "events.iterate.com/codemode/function-call-requested",
-          payload: {
-            args: [],
-            functionCallId: "call-1",
-            functionPath: ["threadInfo"],
-            invocationKind: "event",
-            path: ["slack", "agent", "threadInfo"],
-            providerPath: ["slack", "agent"],
-            scriptExecutionId: "script-1",
-          },
-        }),
-      ],
-      streamMaxOffset: 44,
-    });
-    await flushBackgroundWork();
-
-    expect(appended.at(-1)).toEqual({
-      streamPath: undefined,
-      event: {
-        type: "events.iterate.com/codemode/function-call-completed",
-        idempotencyKey: "slack-agent/slack-agent-thread-info-function-call-completed@44",
-        payload: {
-          durationMs: 0,
-          functionCallId: "call-1",
-          functionPath: ["threadInfo"],
-          invocationKind: "event",
-          outcome: {
-            status: "returned",
-            value: {
-              channel: "C123",
-              thread_ts: "1772136258.963519",
-              streamPath: "/agents/slack/c123/ts-1772136258-963519",
-            },
-          },
-          path: ["slack", "agent", "threadInfo"],
-          providerPath: ["slack", "agent"],
-          scriptExecutionId: "script-1",
-        },
-      },
-    });
   });
 
   it("updates and clears the Slack assistant status for agent/codemode activity", async () => {

@@ -128,10 +128,13 @@ export const DIALABLE_BINDINGS: ReadonlySet<string> = new Set(["AI"]);
  * define a cap dialing them.
  */
 export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
+  "AgentCapability",
+  "AgentToolsCapability",
   "BindingCapability",
   "GmailCapability",
   "McpClient",
   "OrpcCapability",
+  "SlackCapability",
 ]);
 
 /**

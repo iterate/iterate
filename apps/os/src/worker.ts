@@ -37,7 +37,7 @@ import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
 // module so the runtime can find the classes the bindings refer to:
 // https://developers.cloudflare.com/durable-objects/get-started/
 export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
-export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
+export { CodemodeSession } from "~/durable-objects/codemode-session-tombstone.ts";
 export { DebugAppendChainSubscriber } from "~/durable-objects/debug-append-chain-subscriber.ts";
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
@@ -49,8 +49,8 @@ export { CaptunServerShard };
 export { PackageStream as StreamDurableObject };
 
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
-export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
-export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
+export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-capability.ts";
+export { AiCapability, OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { BindingCapability, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { McpClient } from "~/itx/caps/mcp-client.ts";

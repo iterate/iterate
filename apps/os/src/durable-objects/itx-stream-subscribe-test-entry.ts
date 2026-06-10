@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { StreamCursor, Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
-import { ItxStream, ItxStreams, type ItxRuntime } from "~/itx/handle.ts";
+import { ItxStream, type ItxRuntime } from "~/itx/handle.ts";
 import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
@@ -28,8 +28,8 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
     return (await this.#stream(input.path).read()) as StreamLegacyEvent[];
   }
 
-  async list(): Promise<{ streamPath: string }[]> {
-    return await new ItxStreams(this.#runtime(), projectId).list();
+  async getState(input: { path: string }): Promise<unknown> {
+    return await this.#stream(input.path).getState();
   }
 
   async subscribe(
@@ -60,8 +60,8 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
   }
 
   #runtime(): ItxRuntime {
-    // ItxStream/ItxStreams only touch `runtime.exports`; the rest of
-    // ItxRuntime is connect-time wiring this harness does not exercise.
+    // ItxStream only touches `runtime.exports`; the rest of ItxRuntime is
+    // connect-time wiring this harness does not exercise.
     return {
       access: [projectId],
       config: null as never,

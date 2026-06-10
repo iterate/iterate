@@ -250,18 +250,17 @@ describe("AgentProcessor", () => {
     expect(appended).toEqual([]);
   });
 
-  it("renders codemode tool-provider registrations into model-visible instructions", async () => {
+  it("renders capability notes into model-visible instructions", async () => {
     const { stream, appended } = memoryStream();
     const processor = newAgentProcessor({ stream });
 
     await processor.ingest({
       events: [
         agentEvent({
-          type: "events.iterate.com/codemode/tool-provider-registered",
+          type: "events.iterate.com/agent/capability-noted",
           payload: {
-            instructions: "Use ctx.chat.sendMessage({ message }) for chat output.",
-            invocation: { kind: "event" },
-            path: ["chat"],
+            instructions: "Use itx.chat.sendMessage({ message }) for chat output.",
+            name: "chat",
           },
           offset: 44,
         }),
@@ -272,14 +271,14 @@ describe("AgentProcessor", () => {
     expect(appended).toHaveLength(2);
     expect(appended[1]).toMatchObject({
       type: "events.iterate.com/agent/input-added",
-      idempotencyKey: "agent/render-codemode-tool-provider-registered@44",
+      idempotencyKey: "agent/render-agent-capability-noted@44",
       payload: {
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     });
     const payload = appended[1]?.payload as { content: string };
-    expect(payload.content).toContain("ctx.chat");
-    expect(payload.content).toContain("ctx.chat.sendMessage({ message })");
+    expect(payload.content).toContain("itx.chat");
+    expect(payload.content).toContain("itx.chat.sendMessage({ message })");
     expect(payload.content).toContain("offset 44");
   });
 
