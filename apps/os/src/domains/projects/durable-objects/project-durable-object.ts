@@ -55,6 +55,7 @@ import {
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
+import { readRemoteBranchOid } from "~/domains/repos/repo-git.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import type { StreamsCapabilityProps } from "~/domains/streams/entrypoints/streams-capability.ts";
@@ -565,23 +566,47 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
 
   /**
    * Entrypoint resolution for event forwarding. Unlike the ingress path
-   * (which serves the stale cached worker while a rebuild runs in the
-   * background, preferring latency), the forwarder prefers correctness: when
-   * the checkout is stale it AWAITS the rebuild, so a just-pushed config sees
-   * the very next event instead of losing the one that triggered it. The
-   * forwarding processor delivers under blockProcessorWhile, so the wait just
-   * holds this subscription's queue — at most one rebuild per freshness
-   * window.
+   * (which trusts a time-based freshness window and serves the stale cached
+   * worker while a rebuild runs in the background, preferring latency), the
+   * forwarder prefers correctness: an event can be the direct consequence of
+   * a config push — a new agent created right after its config landed — and
+   * serving the previous worker would consume the very trigger the new
+   * config exists to handle. So freshness is exact: one ls-remote request
+   * compares the repo's HEAD to the cached checkout's commit, and on any
+   * mismatch the rebuild is AWAITED. The forwarding processor delivers under
+   * blockProcessorWhile, so the wait just holds this subscription's queue;
+   * rebuilds only happen when the repo actually changed.
    */
   private async getForwardingProjectDynamicWorkerEntrypoint(
     summary: ProjectSummary,
   ): Promise<ProjectDynamicWorkerEntrypoint> {
-    if (await this.projectConfigCheckoutIsFresh()) {
-      try {
-        return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
-      } catch (error) {
-        await this.clearProjectConfigWorkerReady();
-        console.error("Cached project config worker is invalid.", error);
+    try {
+      const cached = await this.ctx.storage.get<ProjectConfigCheckout>(
+        PROJECT_CONFIG_CHECKOUT_STORAGE_KEY,
+      );
+      if (isProjectConfigCheckout(cached)) {
+        const repo = await this.getOrCreateIterateConfigRepo(summary);
+        const headOid = await readRemoteBranchOid({
+          branch: repo.defaultBranch,
+          remote: repo.remote,
+          token: repo.token,
+        });
+        if (headOid !== null && headOid === cached.commitOid) {
+          return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
+        }
+      }
+    } catch (error) {
+      // The probe is an optimization for exactness, not a gate: on probe
+      // failure fall back to the time-based window rather than blocking
+      // delivery on repo availability.
+      console.error("Project config freshness probe failed; using freshness window.", error);
+      if (await this.projectConfigCheckoutIsFresh()) {
+        try {
+          return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
+        } catch (cacheError) {
+          await this.clearProjectConfigWorkerReady();
+          console.error("Cached project config worker is invalid.", cacheError);
+        }
       }
     }
     if (this.#projectConfigWorkerBuildPromise !== null) {
