@@ -1,19 +1,20 @@
-# stream-staging-area
+# @iterate-com/streams
 
-This experiment is a staging area for the production stream implementation.
+The production stream runtime. `apps/os` binds this package's `Stream` class
+(`src/workers/durable-objects/stream.ts`) as its `STREAM` Durable Object, and
+OS domain Durable Objects host this package's `StreamProcessor` classes via
+`createStreamProcessorHost`.
 
-It keeps only the pieces we want to graduate:
+The pieces:
 
 - a stream processor abstraction with typed event contracts and reducer state
-- the stream Durable Object
-- the stream processor runner Durable Object
+  (`src/stream-processor.ts`, `src/shared/stream-processors.ts`)
+- the stream Durable Object and the stream processor runner Durable Object
+  (`src/workers/durable-objects/`)
 - CapnWeb-over-WebSocket RPC between streams and subscribers
 - browser, Node.js, and Workers client entry points
 - a tiny TanStack Start React app in `example-app/`, served by the same Worker
 - end-to-end fixtures for append, replay, outbound processors, and one-way batch delivery
-
-It intentionally does not include the old handwritten WebSocket protocol, benchmark runners,
-ORPC/minimal-stream comparisons, or measurement-specific storage delay knobs.
 
 ## Run
 
@@ -101,10 +102,9 @@ WORKER_URL=https://stream-staging-area.iterate-dev-preview.workers.dev STREAM_ST
 Outbound processor subscriptions are Workers RPC only for now. External websocket/http
 delivery was removed until there is a concrete product need for it again.
 
-## Evaluate
+## Invariants
 
-This experiment is successful when the staging API stays small and clear enough to port into the
-main repo:
+The API stays small and clear by holding to:
 
 - appends are expressed as event batches
 - subscribers consume event batches through a `processEventBatch({ events, streamMaxOffset })` RPC method
@@ -114,173 +114,68 @@ main repo:
 
 ## Stream Processor Abstraction
 
-The runner processes batches. There is no singular runner primitive; `afterAppend`
-is only a convenience for processor authors whose side effects are naturally
-per-event.
+Processors are classes extending `StreamProcessor` (`src/stream-processor.ts`)
+with a `defineProcessorContract` contract. The host feeds ordered event batches
+into `ingest({ events, streamMaxOffset })`; the base class reduces each
+consumed event into state, hands the batch to the `process*` hooks for side
+effects, and checkpoints `{ state, offset }` once all blocking work completed.
+Batches are serialized: a later batch never starts until the previous one
+completed or failed. `ingest` is host plumbing and must not be overridden.
 
-```ts
-type StreamEventBatch = {
-  events: StreamEvent[];
-  streamMaxOffset: number;
-};
-```
+Subclasses override up to three hooks (plus an optional one-time `prepare` for
+setup that must land before the checkpoint is first read, e.g. schema
+migrations):
 
-Each batch has two phases.
+- `reduce({ event, state })` — pure projection of one consumed event into the
+  next state: no network, no appends, no database writes, no wall-clock
+  decisions. This is what lets a processor catch up from old stream events
+  without accidentally re-performing old work.
+- `processEvent(args)` — synchronous per-event side effects; what most
+  processors implement. Called by the default `processEventBatch` once per
+  reduced event.
+- `processEventBatch(args)` — batch-level side effects with a natural batch
+  boundary (e.g. one SQLite transaction for the whole delivered batch).
 
-First, the runner reduces the batch with no side effects. `reduce({ state, event })`
-is pure replay logic: no network, no appends, no database writes, no wall-clock
-decisions. This is what lets a processor catch up from old stream events without
-accidentally performing old work.
+Side-effect helpers passed to both hooks:
 
-While reducing, the runner records the consumed events:
+- `blockProcessorWhile(work)` holds the checkpoint (and the next batch) until
+  the work completes. If the work fails, the batch is not checkpointed and can
+  run again after restart — intentionally at-least-once, so durable side
+  effects should be idempotent.
+- `runInBackground(work)` is fire-and-forget; failures are caught and logged,
+  and the checkpoint is not delayed.
 
-```ts
-type ReducedEvent<Contract> = {
-  event: ConsumedEvent<Contract>;
-  previousState: ProcessorState<Contract>;
-  state: ProcessorState<Contract>;
-};
-```
+The checkpoint offset advances across unconsumed events too: a processor that
+only consumes `invoice.paid` still checkpoints past unrelated `page.view`
+events, so replays do not rescan them.
 
-Second, the runner applies side effects:
+Host-provided constructor deps (`StreamProcessorBaseDeps`):
 
-- `afterAppendBatch` is called once with the reduced events, the batch's
-  `previousState`, final `state`, and `checkpointOffset`.
-- `afterAppend` is called once per reduced event.
-- A processor implementation must choose one of those hooks. The runner rejects
-  implementations that define both.
-- If neither hook exists, the runner only reduces and checkpoints.
+- `readState`/`writeState` — where checkpoints live (in-memory by default;
+  Durable Object storage or browser SQLite in real hosts).
+- `keepAliveWhile(work)` — keeps the host runtime alive while detached async
+  work is in flight (e.g. a Durable Object's `ctx.waitUntil`).
+- `sideEffectsAfterOffset` — the side-effect anchor. Events at or below it are
+  reduced into state but skipped by the default `processEvent` fan-out, so
+  attaching to an existing stream rebuilds state from history without
+  re-running historical side effects. Hosts set it to the offset where the
+  processor was attached.
 
-`checkpointOffset` advances across unconsumed events too. A processor that only
-consumes `invoice.paid` should still checkpoint past unrelated `page.view` events;
-otherwise every replay would scan those same unrelated events again.
+Hosting:
 
-The processor snapshot is saved only after the selected hook and all synchronous
-`blockProcessorUntil()` blockers succeed. So for a batch writing 100 rows to SQLite
-in one transaction: if the transaction fails, the runner does not checkpoint the
-batch. On restart, delivery resumes from the previous checkpoint and the batch can
-run again. This is intentionally at-least-once; durable side effects should be
-idempotent when duplicate attempts matter.
+- Workers: `createStreamProcessorHost(this.ctx)` in
+  `src/workers/stream-processor-host.ts` hosts named processors inside a
+  Durable Object. The host announces each processor's contract on the stream
+  with an idempotent `events.iterate.com/stream/processor-registered` append —
+  there is no per-processor `standardProcessorBehavior` self-registration
+  anymore.
+- Browser: `acquireStreamRuntime` in `src/browser/stream-browser-store.ts`
+  hosts a processor over a capnweb connection with a Web Locks writer election
+  (see `CONTEXT.md`).
 
-`keepAlive()` is different. It tracks detached work and logs failures, but it does
-not delay the checkpoint.
+Keep durable event type strings inline in the `events` object, `consumes`,
+`emits`, and reducer. Repeating the string inside one processor definition is
+preferred over local `eventTypes` objects or aliases that hide the wire
+contract.
 
-### Choosing `afterAppend` vs `afterAppendBatch`
-
-Use `afterAppend` when each consumed event independently causes a side effect:
-
-```ts
-afterAppend({ event, state, stream, keepAlive }) {
-  if (event.type !== "events.iterate.com/echo-example/input-received") return;
-  keepAlive(stream.append({
-    event: { type: "events.iterate.com/echo-example/output-echoed", payload: { seen: state.seen } },
-  }));
-}
-```
-
-Use `afterAppendBatch` when the side effect has a natural batch boundary. The raw
-browser mirror uses this shape: one delivered stream batch becomes one local SQLite
-transaction, and the local mirror checkpoint advances only after that transaction
-succeeds.
-
-```ts
-afterAppendBatch({ events, blockProcessorUntil }) {
-  blockProcessorUntil(() =>
-    sql.batch(
-      events.map(({ event }) => ({
-        sql: `INSERT INTO events (local_index, raw_jsonb) VALUES (?, jsonb(?))`,
-        params: [event.offset - 1, JSON.stringify(event)],
-      })),
-      { transaction: true },
-    ),
-  );
-}
-```
-
-### Historical Catch-Up and Side-Effect Windows
-
-Whether historical events should cause side effects is processor policy, not a
-runner-wide batch flag. A single delivered batch can straddle the moment a
-subscription was configured: early events may be pure catch-up, later events may
-deserve side effects, and the whole batch still has one checkpoint.
-
-When the runner knows the subscription anchor, hook args include:
-
-```ts
-shouldApplySideEffects({
-  event,
-  gracePeriodMs: 10_000,
-});
-```
-
-For outbound processors configured by the stream, the anchor is the
-`events.iterate.com/stream/subscription-configured` event.
-
-- With no anchor, it returns `true`; the runner has no subscription boundary.
-- Events at or after the anchor offset return `true`.
-- Older events return `true` only if their `createdAt` is within the supplied grace
-  period before the anchor's `createdAt`.
-
-This keeps the processor's choice local:
-
-```ts
-afterAppendBatch({ events, shouldApplySideEffects, blockProcessorUntil }) {
-  const eventsToMirror = events.filter(({ event }) =>
-    shouldApplySideEffects({ event, gracePeriodMs: 10_000 }),
-  );
-
-  if (eventsToMirror.length === 0) return;
-
-  blockProcessorUntil(() => mirror(eventsToMirror));
-}
-```
-
-A processor that should start side effects exactly at subscription time calls
-`shouldApplySideEffects({ event })`. A processor that wants a 10 second look-back
-passes `gracePeriodMs: 10_000`. A processor that must enact every historical side
-effect ignores the helper.
-
-### Standard processor behavior
-
-Ordinary processors self-register on the stream exactly once per processor version.
-Spread the shared pieces from `standardProcessorBehavior` into the contract, delegate
-`reduce` and the registration append from `afterAppend`, and let the core processor
-index `events.iterate.com/stream/processor-registered` into `processorsBySlug`:
-
-Keep durable event type strings inline in the `events` object, `consumes`, `emits`,
-and reducer. Repeating the string inside one processor definition is preferred over
-local `eventTypes` objects or aliases that hide the wire contract.
-
-```ts
-import { standardProcessorBehavior } from "./standard-processor-behavior.js";
-
-defineProcessorContract({
-  stateSchema: z.object({
-    ...standardProcessorBehavior.stateShape,
-    seen: z.number().int().min(0).default(0),
-  }),
-  processorDeps: [...standardProcessorBehavior.processorDeps],
-  consumes: [
-    ...standardProcessorBehavior.consumes,
-    "events.iterate.com/echo-example/input-received",
-  ],
-  emits: [
-    ...standardProcessorBehavior.emits,
-    "events.iterate.com/echo-example/output-echoed",
-  ],
-  reduce({ state, event, contract }) {
-    const nextState = standardProcessorBehavior.reduce({ state, event, contract });
-    return event.type === "events.iterate.com/echo-example/input-received"
-      ? { ...nextState, seen: nextState.seen + 1 }
-      : nextState;
-  },
-});
-
-afterAppend({ event, state, stream, shouldApplySideEffects, keepAlive }) {
-  if (!shouldApplySideEffects({ event })) return;
-  standardProcessorBehavior.afterAppend({ state, stream, keepAlive, contract });
-  // processor-specific side effects...
-}
-```
-
-See `processors/examples/echo/` for a full example processor.
+See `src/processors/examples/echo/` for a full example processor.
