@@ -527,7 +527,7 @@ the bigger `stream.ts` win, was abandoned).
       (`if (event.type === ".../stream/paused") return;`) — the line-54 guard
       already returned because reducing `paused` resets `availableTokens` > 0.
 - [~] **E4 — OBSOLETE** (processor-registered removed by #1460; shared
-      circuit-breaker-types is live, not dead). **Collapse schema duplication:**
+  circuit-breaker-types is live, not dead). **Collapse schema duplication:**
   - `core/contract.ts` declares the `processor-registered` payload twice
     (110-123 vs 190-204) — extract one const.
   - `SupportedSubscriptionConfiguredEvent` / `HistoricalSubscriptionConfiguredEvent`
@@ -542,13 +542,13 @@ the bigger `stream.ts` win, was abandoned).
       10 core events plus `"*"`; reduce only branches on
       configured/paused/resumed/woken. The 7 extra named entries buy nothing.
 - [~] **E7 — DECLINED** (override must retain the client callback / wire
-      `onRpcBroken` post-#1460; folding into the generic helper isn't worth it,
-      and Stage 2's bigger `stream.ts` win was abandoned). **`stream.ts` conciseness** (the owner's specific target). Biggest wins:
-      Stage 2 lazy-init (collapses constructor + offset-1 branch); the C3
-      allowlist letting `installSubscribeRpcTargetOverride` fold into
-      `makeRpcTargetClass`; and the M5 `eventTypes` decision. The chunking
-      helpers (`chunkBytes` / `decodeChunks`) are the other dense spot but are
-      load-bearing — leave them.
+  `onRpcBroken` post-#1460; folding into the generic helper isn't worth it,
+  and Stage 2's bigger `stream.ts` win was abandoned). **`stream.ts` conciseness** (the owner's specific target). Biggest wins:
+  Stage 2 lazy-init (collapses constructor + offset-1 branch); the C3
+  allowlist letting `installSubscribeRpcTargetOverride` fold into
+  `makeRpcTargetClass`; and the M5 `eventTypes` decision. The chunking
+  helpers (`chunkBytes` / `decodeChunks`) are the other dense spot but are
+  load-bearing — leave them.
 - [ ] **E8 — Note:** `echo` + `stream-processor-runner.ts` are e2e fixtures
       shipped in `src/`. `circuit-breaker` is real (configured by
       `apps/os/.../new-stream-runtime.ts` and hosted in the runner) — keep it.
