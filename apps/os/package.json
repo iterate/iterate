@@ -85,7 +85,7 @@
     "@valtown/codemirror-ts": "2.3.1",
     "agents": "^0.11.0",
     "capnweb": "^0.8.0",
-    "captun": "^0.0.3",
+    "captun": "https://pkg.pr.new/captun@14",
     "comlink": "^4.4.2",
     "crossws": "^0.4.4",
     "dedent": "^1.7.2",

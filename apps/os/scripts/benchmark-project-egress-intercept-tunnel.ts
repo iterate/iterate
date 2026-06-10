@@ -146,8 +146,8 @@ async function runOneTunnel(input: { interceptUrl: URL; options: Options }): Pro
   let tunnel: Disposable;
   try {
     tunnel = await createCaptunTunnel({
-      gateway: input.interceptUrl,
-      token: adminToken,
+      url: input.interceptUrl,
+      headers: { Authorization: `Bearer ${adminToken}` },
       fetch: globalThis.fetch,
     });
   } catch (error) {
