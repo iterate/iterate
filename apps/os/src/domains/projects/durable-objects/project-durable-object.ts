@@ -43,6 +43,10 @@ import {
   ProjectLifecycleProcessor,
   ProjectLifecycleProcessorContract,
 } from "~/domains/projects/stream-processors/project-lifecycle.ts";
+import {
+  ProjectConfigWorkerProcessor,
+  ProjectConfigWorkerProcessorContract,
+} from "~/domains/projects/stream-processors/project-config-worker/implementation.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import {
   type RepoDurableObject,
@@ -257,6 +261,22 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     ProjectLifecycleProcessorContract.slug,
     (deps) => new ProjectLifecycleProcessor(deps),
   );
+  // The config worker as a stream processor: every root-stream event is
+  // forwarded to its afterAppend export. See the processor's contract for the
+  // composition story (per-project agent context etc.).
+  projectConfigWorker = this.host.add(
+    ProjectConfigWorkerProcessorContract.slug,
+    (deps) =>
+      new ProjectConfigWorkerProcessor({
+        ...deps,
+        // This subscription is on the project root stream, so the legacy
+        // Event shape's streamPath is always "/" here.
+        forwardToConfigWorker: (event) =>
+          this.forwardEventToConfigWorker({
+            event: { streamPath: PROJECT_LIFECYCLE_STREAM_PATH, ...event } as Event,
+          }),
+      }),
+  );
 
   #dynamicWorkerEntrypoint: {
     commitOid: string;
@@ -296,6 +316,11 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     this.registerOnFirstInitialize(async (params) => {
       await this.ensureProjectLifecycleSubscription(params.projectId);
       await this.ensureAgentsRoot(params.projectId);
+    });
+    // On every wake (not just first initialize) so projects created before
+    // this processor existed get subscribed too; the append is idempotent.
+    this.registerOnInstanceWake(async (params) => {
+      await this.ensureProjectConfigWorkerSubscription(params.projectId);
     });
   }
 
@@ -513,21 +538,59 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
 
   async afterAppend(input: { event: Event }) {
     await this.ensureStarted();
+    await this.forwardEventToConfigWorker(input);
+    return await this.getProjectLifecycleRunnerState();
+  }
+
+  /**
+   * Delivers one event to the config worker's `afterAppend` export. No-op
+   * until the config worker has first been built (project provisioning does
+   * that within seconds of creation; earlier events are platform lifecycle
+   * noise). User-code failures are swallowed and logged — a throwing
+   * afterAppend is the project author's bug and must never wedge root-stream
+   * delivery (the host would otherwise treat the batch as poison and
+   * disconnect the subscription).
+   */
+  private async forwardEventToConfigWorker(input: { event: Event }) {
     const summary = this.currentSummary();
     const configWorkerIsReady = await this.ctx.storage.get<boolean>(
       PROJECT_CONFIG_READY_STORAGE_KEY,
     );
-    if (summary !== null && configWorkerIsReady === true) {
+    if (summary === null || configWorkerIsReady !== true) return;
+    try {
+      const entrypoint = await this.getForwardingProjectDynamicWorkerEntrypoint(summary);
+      await entrypoint.afterAppend?.(input);
+    } catch (error) {
+      console.error("Project config worker afterAppend failed.", error);
+    }
+  }
+
+  /**
+   * Entrypoint resolution for event forwarding. Unlike the ingress path
+   * (which serves the stale cached worker while a rebuild runs in the
+   * background, preferring latency), the forwarder prefers correctness: when
+   * the checkout is stale it AWAITS the rebuild, so a just-pushed config sees
+   * the very next event instead of losing the one that triggered it. The
+   * forwarding processor delivers under blockProcessorWhile, so the wait just
+   * holds this subscription's queue — at most one rebuild per freshness
+   * window.
+   */
+  private async getForwardingProjectDynamicWorkerEntrypoint(
+    summary: ProjectSummary,
+  ): Promise<ProjectDynamicWorkerEntrypoint> {
+    if (await this.projectConfigCheckoutIsFresh()) {
       try {
-        const entrypoint =
-          this.#dynamicWorkerEntrypoint?.entrypoint ??
-          (await this.getCachedProjectDynamicWorkerEntrypoint(summary));
-        await entrypoint.afterAppend?.(input);
+        return await this.getCachedProjectDynamicWorkerEntrypoint(summary);
       } catch (error) {
-        console.error("Project config worker afterAppend failed.", error);
+        await this.clearProjectConfigWorkerReady();
+        console.error("Cached project config worker is invalid.", error);
       }
     }
-    return await this.getProjectLifecycleRunnerState();
+    if (this.#projectConfigWorkerBuildPromise !== null) {
+      return await this.#projectConfigWorkerBuildPromise;
+    }
+    this.startProjectConfigWorkerBuild(summary);
+    return await this.#projectConfigWorkerBuildPromise!;
   }
 
   async ingressFetch(request: Request): Promise<Response> {
@@ -1144,6 +1207,27 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     });
   }
 
+  private async ensureProjectConfigWorkerSubscription(projectId: string) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: projectId,
+      path: PROJECT_LIFECYCLE_STREAM_PATH,
+    });
+
+    await stream.append({
+      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+      idempotencyKey: `project-config-worker-subscription:${projectId}:callable`,
+      payload: {
+        subscriptionKey: projectConfigWorkerSubscriptionKey(projectId),
+        subscriber: durableObjectProcessorSubscriber({
+          bindingName: "PROJECT",
+          durableObjectName: getProjectDurableObjectName(projectId),
+          processorName: ProjectConfigWorkerProcessorContract.slug,
+        }),
+      },
+    });
+  }
+
   private async projectAppSlugFromHost(input: { host: string; summary: ProjectSummary }) {
     const platformHosts = parseProjectPlatformHosts({
       bases: this.getAppConfig().projectHostnameBases,
@@ -1171,6 +1255,10 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     const prefix = host.slice(0, host.length - customHostname.length - 1);
     return prefix !== "" && !prefix.includes(".") ? prefix : null;
   }
+}
+
+function projectConfigWorkerSubscriptionKey(projectId: string) {
+  return `project-config-worker:${projectId}`;
 }
 
 function projectLifecycleSubscriptionKey(projectId: string) {

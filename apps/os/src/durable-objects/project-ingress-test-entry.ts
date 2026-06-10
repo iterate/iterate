@@ -1,4 +1,5 @@
 import { createD1Client } from "sqlfu";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -39,6 +40,20 @@ export default {
     }
 
     return new Response("Bundled project worker");
+  },
+
+  // The config worker is a stream processor: every project root-stream event
+  // is forwarded here. Echo pings back as facts so tests can observe the
+  // whole forwarding chain end to end.
+  async afterAppend({ event }, env) {
+    if (event.type !== "test.project/ping") return;
+    await env.STREAMS.append({
+      streamPath: "/config-worker-saw",
+      event: {
+        type: "test.project/config-worker-saw",
+        payload: { pingOffset: event.offset, n: event.payload.n },
+      },
+    });
   },
 };
 `;
@@ -246,6 +261,27 @@ export default {
         headers: Object.fromEntries(request.headers),
         url: request.url,
       });
+    }
+
+    if (url.pathname === "/__test/append-project-event") {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
+        namespace: "proj__local__test",
+        path: PROJECT_LIFECYCLE_STREAM_PATH,
+      });
+      const n = Number(url.searchParams.get("n") ?? "0");
+      const appended = await stream.append({ type: "test.project/ping", payload: { n } });
+      return Response.json({ appended });
+    }
+
+    if (url.pathname === "/__test/read-stream") {
+      const path = url.searchParams.get("path") ?? PROJECT_LIFECYCLE_STREAM_PATH;
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
+        namespace: "proj__local__test",
+        path: StreamPath.parse(path),
+      });
+      return Response.json({ events: await stream.history({ before: "end" }) });
     }
 
     if (url.pathname === "/__test/project-stream") {
