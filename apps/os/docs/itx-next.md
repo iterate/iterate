@@ -461,13 +461,118 @@ second step, taken only after the shared layer proves itself.
   (`callConfigWorkerFunction`, the base iterate-config artifact naming,
   docs, UI copy). Design docs and `types.ts` already use the new name.
 - `handle.ts` sheds its direct domain imports (repos/workspace/streams) —
-  becomes addresses or injected stubs; kernel approaches the ~500-line goal.
+  they become default caps; mechanism in §8. Kernel approaches the
+  ~500-line goal.
 - Document the share token as a sealed SturdyRef (§1).
 - Per-cap/per-call usage events at the supervisor (billing + audit hook,
   feeds §2 and §4).
 - Global-context implementation: make the node real, wire namespace
   currying through the built-ins. (Polishing its shape beyond that is
   explicitly LATER.)
+
+## 8. Default capabilities are parent contexts written in code
+
+The idea (born as "what if ProjectItx / GlobalItx / CodemodeSessionItx
+subclasses just called `this.caps.define()` a few times in their
+constructor, the way you would in a codemode snippet"): now that
+`caps.define` exists, the built-ins hardwired into the handle should be
+ordinary capability definitions. The instinct is right; the question is
+where those definitions live. Per-handle is wrong (handles are ephemeral
+views; defines are node writes). Per-node-as-rows works but churns: every
+project duplicates identical rows, and shipping a new platform default
+means migrating thousands of registries.
+
+The answer needs NO new concept — not "flavors", and not an ItxProps
+builder either. A named, addressable, shadowable collection of caps that
+lookup falls through to **is what a context is**. The defaults are simply a
+parent context that happens to be implemented in code instead of SQLite
+rows:
+
+```text
+ctx_session → prj_123 → platform:project (code) → global
+```
+
+Chain delegation already exists; a hop to a code-defined context resolves
+in-process (no DO hop). `describe()` merges it with
+`owner: "platform:project"` provenance like any ancestor. Shadowing works
+because shadowing already works. Law 1 said it all along: code holds
+composition — defaults are composition; only overrides are data.
+
+Why not props (the builder framing): Law 2 — props carry identity, never
+composition. "Here are the caps you have" riding in props is
+composition-as-data, the exact thing the mounts/scopes deletion killed. And
+defaults must resolve server-side at the node anyway: a worker cap calling
+`itx.ai` dispatches through its home context's chain regardless of how any
+handle was constructed. The builder intuition survives as the _authoring_
+surface: what you build is a code context, with the same verbs as a REPL
+snippet, executed once per isolate against an in-memory registry:
+
+```ts
+export const projectContext = defineCodeContext("platform:project", (caps) => {
+  caps.define({
+    name: "repos",
+    target: { type: "rpc", worker: { type: "loopback" }, entrypoint: "ReposCapability" },
+  });
+  caps.define({
+    name: "workspace",
+    target: { type: "rpc", worker: { type: "loopback" }, entrypoint: "WorkspaceCapability" },
+  });
+  caps.define({
+    name: "ai",
+    target: {
+      type: "rpc",
+      worker: { type: "loopback" },
+      entrypoint: "BindingCapability",
+      props: { binding: "AI" },
+    },
+  });
+  // worker → { type: "project-worker" }; project → { type: "durable-object" } — once those refs land
+});
+```
+
+(The registry injects `{ context, cap }` attribution at dial time, so code
+contexts stay fully static — entrypoints derive the project from context.)
+
+What this dissolves:
+
+- **"Cap #0" disappears.** Every hardwired built-in maps onto an
+  already-designed target kind — repos/workspace/streams → loopback,
+  ai → binding/loopback, worker → project-worker, project →
+  durable-object — strong validation of CapTarget. The irreducible kernel
+  shrinks to `caps`, `fork`, `describe`, `fetch` (Law 5 infrastructure),
+  plus `projects` on global handles. Reserved names shrink to match;
+  defaults become shadowable (prototype semantics — the point).
+- **The global context gets born for free.** The cheap first step to §3:
+  `global` starts as a code-defined context (its accessors are platform
+  composition anyway); a data node appears only when someone needs to
+  define on it at runtime.
+- **The GlobalItx/ProjectItx typing question (§5) gets its answer**: one
+  typed caps interface per code context, declared next to its definitions;
+  `ProjectItx` = builtins & the chain's caps. Types compose the way the
+  runtime resolves.
+- **Forking picks ancestry**: `itx.fork({ extend: "platform:codemode" })`
+  splices a code context above the project — the node stores parent NAMES
+  (sturdy refs into the code realm — Law 2 clean); resolution walks the
+  list. The codemode-session replacement (§4) becomes literally this.
+- **Versioning falls out**: code contexts version with deploys; describe()
+  can report which deploy's defaults you see, and stored overrides shadow
+  across deploys — exactly the semantics you want.
+
+The dynamic half of the original instinct is ALSO right, as a separate
+thing: per-context setup that genuinely varies (seeding a session with
+request-specific MCP servers) is a real itx snippet run against the fresh
+context after fork — actual `caps.define` calls, actual rows, actual audit
+events. Static defaults = code context; dynamic setup = snippet (data).
+Same verb, two lifecycles, and the platform uses the same public API users
+do.
+
+Sequencing: repos/workspace/streams are movable today (loopback refs
+shipped); worker/project wait on the project-worker and durable-object
+refs; fork-with-ancestry rides with the codemode drop.
+
+Open: the splice API shape on fork; ref naming for code contexts
+(`platform:` prefix?); can a context _revoke_ (not just shadow) a code
+default — tombstone rows? Defer until someone needs them.
 
 ## Resolved (was open, now decided)
 
