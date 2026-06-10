@@ -54,6 +54,7 @@ minimumReleaseAgeExclude:
 onlyBuiltDependencies:
   - "@tailwindcss/oxide"
   - better-sqlite3
+  - capnweb
   - esbuild
   - lightningcss
   - node-pty
@@ -61,6 +62,9 @@ onlyBuiltDependencies:
   - workerd
 
 overrides:
+  # Our capnweb fork, which adds WebSocket-over-RPC support (iterate/capnweb#1, not yet
+  # upstreamed). Installed from git; the pinned sha's prepare script builds dist on install.
+  "capnweb": "github:iterate/capnweb#4d384faa7865384f52432dc513b72af46cbaf69f"
   # x402,viem are optional peer dependencies of agents sdk, which is source of lot of unnecessary/deprecated packages, removing them is fine
   "axios": "1.13.6"
   "agents>x402": "-"

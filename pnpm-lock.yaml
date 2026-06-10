@@ -20,6 +20,7 @@ catalogs:
       version: 4.20260424.0
 
 overrides:
+  capnweb: github:iterate/capnweb#4d384faa7865384f52432dc513b72af46cbaf69f
   axios: 1.13.6
   agents>x402: '-'
   agents>viem: '-'
@@ -561,8 +562,8 @@ importers:
         specifier: ^0.11.0
         version: 0.11.0(@babel/core@7.29.0)(@babel/runtime@7.28.6)(@cloudflare/codemode@0.3.4(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.3.6))(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(zod@4.3.6))(@cloudflare/workers-types@4.20260426.1)(@tanstack/ai@0.10.2)(ai@6.0.159(zod@4.3.6))(react@19.2.4)(rolldown@1.1.0)(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(zod@4.3.6)
       capnweb:
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: github:iterate/capnweb#4d384faa7865384f52432dc513b72af46cbaf69f
+        version: https://codeload.github.com/iterate/capnweb/tar.gz/4d384faa7865384f52432dc513b72af46cbaf69f
       captun:
         specifier: https://pkg.pr.new/captun@14
         version: https://pkg.pr.new/captun@14(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0)
@@ -1035,8 +1036,8 @@ importers:
         specifier: ^1.7.0
         version: 1.7.0
       capnweb:
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: github:iterate/capnweb#4d384faa7865384f52432dc513b72af46cbaf69f
+        version: https://codeload.github.com/iterate/capnweb/tar.gz/4d384faa7865384f52432dc513b72af46cbaf69f
       react:
         specifier: ^19.2.0
         version: 19.2.4
@@ -1087,8 +1088,8 @@ importers:
         specifier: ^3.14.2
         version: 3.14.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       capnweb:
-        specifier: ^0.8.0
-        version: 0.8.0
+        specifier: github:iterate/capnweb#4d384faa7865384f52432dc513b72af46cbaf69f
+        version: https://codeload.github.com/iterate/capnweb/tar.gz/4d384faa7865384f52432dc513b72af46cbaf69f
       react:
         specifier: ^19.2.0
         version: 19.2.4
@@ -8037,8 +8038,9 @@ packages:
   caniuse-lite@1.0.30001793:
     resolution: {integrity: sha512-iwSsYWaCOoh26cV8NwNRViHlrfUvYsHDfRVcbtmw0Kg6PJIZZXwMkj1442FYLBGkeUf1juAsU3DTfxW579mrPA==}
 
-  capnweb@0.8.0:
-    resolution: {integrity: sha512-BK/TuXUiyfLSKsmjojn70yN7oYG/JJzoURZ3tckjg5Zj2KcygPm0A5jyOlswK7SYB4f0Gh9tt+RZ132b80iLfA==}
+  capnweb@https://codeload.github.com/iterate/capnweb/tar.gz/4d384faa7865384f52432dc513b72af46cbaf69f:
+    resolution: {tarball: https://codeload.github.com/iterate/capnweb/tar.gz/4d384faa7865384f52432dc513b72af46cbaf69f}
+    version: 0.8.0
 
   captun@https://pkg.pr.new/captun@14:
     resolution: {tarball: https://pkg.pr.new/captun@14}
@@ -21956,13 +21958,13 @@ snapshots:
 
   caniuse-lite@1.0.30001793: {}
 
-  capnweb@0.8.0: {}
+  capnweb@https://codeload.github.com/iterate/capnweb/tar.gz/4d384faa7865384f52432dc513b72af46cbaf69f: {}
 
   captun@https://pkg.pr.new/captun@14(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(ws@8.19.0):
     dependencies:
       '@inquirer/prompts': 8.4.3(@types/node@25.6.0)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      capnweb: 0.8.0
+      capnweb: https://codeload.github.com/iterate/capnweb/tar.gz/4d384faa7865384f52432dc513b72af46cbaf69f
       trpc-cli: 0.14.0(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(@trpc/server@11.12.0(typescript@5.9.3))(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(valibot@1.2.0(typescript@5.9.3))(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
