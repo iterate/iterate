@@ -24,9 +24,14 @@ export function useStreamEvents(options: {
     [client, options.project, options.streamPath],
   );
 
-  // retain/release is the effect; the store survives StrictMode's
-  // mount→unmount→mount because release lingers before tearing down.
-  useEffect(() => store.retain(), [store]);
+  // retain() starts (or joins) the shared subscription and returns its
+  // release, which React runs as the effect cleanup on unmount. The store
+  // survives StrictMode's mount→unmount→mount because release lingers
+  // before tearing down.
+  useEffect(() => {
+    const release = store.retain();
+    return release;
+  }, [store]);
 
   return useSyncExternalStore(store.subscribe, store.getSnapshot, getServerSnapshot);
 }
