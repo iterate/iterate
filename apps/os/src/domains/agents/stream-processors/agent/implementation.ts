@@ -344,8 +344,16 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         },
       },
     })) as StreamEvent;
+    // The append dedups on the idempotency key, so the committed payload may
+    // carry a different requestId than this call generated (a raced duplicate
+    // schedule, or a batch retry re-running this side effect). The timer must
+    // track the durable requestId — the handoff re-reads committed history and
+    // bails on a mismatch, which would wedge the schedule until the next
+    // subscriber-connected recovery.
+    const committedRequestId =
+      (scheduledEvent.payload as { requestId?: string }).requestId ?? requestId;
     this.#armLlmRequestDebounceTimer({
-      requestId,
+      requestId: committedRequestId,
       debounceMs,
       scheduledEvent,
     });
