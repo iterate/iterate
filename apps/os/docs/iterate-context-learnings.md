@@ -1,8 +1,7 @@
 # Iterate Context Learnings
 
-The current runtime learnings for the Cap'n Web / IterateContext model live next
-to the implementation:
-
-- [Cap'n Web Runtime Learnings](../src/capnweb/LEARNINGS.md)
-
-Keep new learnings there so this page does not become a second source of truth.
+The Cap'n Web learnings file this page pointed at (`src/capnweb/LEARNINGS.md`)
+has been deleted along with that tree. Runtime learnings for the successor,
+**itx**, live in [`../src/itx/DECISIONS.md`](../src/itx/DECISIONS.md) and
+[`../src/itx/README.md`](../src/itx/README.md); the design spec is
+[`itx-spec.md`](./itx-spec.md).

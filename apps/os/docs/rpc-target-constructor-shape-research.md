@@ -1,5 +1,9 @@
 # RpcTarget Constructor Shape Research
 
+> **Status: historical research notes.** Superseded by
+> [itx-spec.md](./itx-spec.md) and the implementation in
+> [`../src/itx/`](../src/itx/README.md).
+
 Last updated: 2026-06-08
 
 ## Question

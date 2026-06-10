@@ -289,9 +289,10 @@ export type ItxFn<V = Record<string, unknown>, R = unknown> = (input: {
 
 /**
  * Map an SDK's type surface onto its itx stub: every function becomes async,
- * everything else recurses. With this, `declare module` augmentation gives
- * `itx.slack` the real @slack/web-api types while the runtime stays a
- * ten-line path-call forwarder.
+ * everything else recurses. Cap lookups are untyped at runtime (the Proxy
+ * fallthrough), so callers cast: `itx.cap("slack") as
+ * Stubify<import("@slack/web-api").WebClient>` gives the real SDK types while
+ * the runtime stays a ten-line path-call forwarder.
  */
 export type Stubify<T> = T extends (...args: infer A) => infer R
   ? (...args: A) => Promise<Awaited<R>>

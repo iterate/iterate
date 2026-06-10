@@ -8,6 +8,12 @@ dependsOn:
 
 # Codemode Session Night Plan
 
+> **Status note (2026-06-10):** stale. Parts of this plan landed in some form
+> (the `CodemodeSession` DO, stream-native execution, tool providers), but the
+> capability/context design it builds on was superseded by itx (`src/itx/`,
+> `docs/itx-spec.md`), and the open checklist at the bottom was never groomed
+> against that. Verify against the code before acting on anything here.
+
 This is the working plan for finishing the Codemode Session architecture after
 the first vertical slice. It should grow through the grill-with-docs questions
 before implementation resumes.

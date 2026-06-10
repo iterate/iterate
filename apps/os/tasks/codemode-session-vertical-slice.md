@@ -7,6 +7,14 @@ dependsOn: []
 
 # Codemode Session Vertical Slice
 
+> **Status note (2026-06-10):** the slice shipped, but reality diverged from
+> the shape below. There is no `codemode-session-do` tiny worker (despite the
+> checked box): `CodemodeSession` lives in the main OS worker
+> (`src/domains/codemode/durable-objects/codemode-session.ts`, namespace
+> `codemode-session-local` in `alchemy.run.ts`). The capability/context model
+> has since been superseded by itx (`src/itx/`, `docs/itx-spec.md`). Treat the
+> checklist as a historical log, not current architecture.
+
 Build the first real `CodemodeSession` Durable Object as a tiny dedicated
 worker.
 
