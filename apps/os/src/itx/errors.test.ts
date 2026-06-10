@@ -1,6 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { ItxError, tagOutboundItxError } from "../errors.ts";
-import { getItxErrorCode, isItxAccessError } from "./errors.ts";
+import { getItxErrorCode, isItxAccessError, ItxError, tagOutboundItxError } from "./errors.ts";
 
 /**
  * What the far side of a capnweb session holds after an ItxError crosses:

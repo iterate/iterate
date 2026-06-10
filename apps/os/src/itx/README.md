@@ -110,6 +110,7 @@ https://{cap}--{project}.{base}/…
 | `fetch.ts`             | connect + run            | `/api/itx[/:context]`, `/api/itx/run`, project-host `/__itx`                                                                      |
 | `http.ts`              | routable caps            | hostname rule, `ItxCapIngress`, share tokens                                                                                      |
 | `client.ts`            | tier-3 clients           | `connectItx` for Node (browser uses `browser-repl.ts`/the REPL routes)                                                            |
+| `use-itx.ts`           | the browser hook         | `useItx`/`getBrowserItx`: per-context singleton sockets, Suspense until connected, never SSRs (DECISIONS D21)                     |
 | `browser-repl.ts`      | dev tooling              | the REPL snippet compiler (not part of the kernel)                                                                                |
 | `admin-auth-cookie.ts` | test bridge              | browser-WebSocket admin auth (cookies, since WS can't set headers)                                                                |
 
