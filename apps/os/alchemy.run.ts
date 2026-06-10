@@ -19,16 +19,58 @@ import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-ob
 import type { OutboundMcpFromOurClientCapability } from "./src/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 import type { StreamProcessorRunner } from "./src/domains/streams/durable-objects/stream-processor-runner.ts";
 
+const resolvedAuthIssuer =
+  process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER;
+
+// A static JWKS lets the worker verify auth JWTs without any runtime
+// roundtrip to the auth worker, including on cold isolate starts. Fetch it
+// from the issuer at deploy time; an explicit env value overrides. A static
+// JWKS only verifies tokens from the issuer it was exported from, so a
+// loopback issuer (local dev auth server with its own keys) never uses a
+// Doppler-provided production JWKS. Key rotation in auth requires an OS
+// redeploy. On fetch failure the worker falls back to remote JWKS at runtime.
+async function resolveStaticAuthJwks(issuer: string | undefined) {
+  if (!issuer) return undefined;
+
+  let issuerUrl: URL;
+  try {
+    issuerUrl = new URL(issuer);
+  } catch {
+    return undefined;
+  }
+  const issuerIsLoopback = ["localhost", "127.0.0.1", "::1"].includes(issuerUrl.hostname);
+
+  const explicit = process.env.APP_CONFIG_ITERATE_AUTH__JWKS ?? process.env.ITERATE_AUTH_JWKS;
+  if (explicit && !issuerIsLoopback) return explicit;
+
+  try {
+    const response = await fetch(`${issuer.replace(/\/+$/, "")}/jwks`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const jwks = (await response.json()) as { keys?: unknown[] };
+    if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) {
+      throw new Error("JWKS response has no keys");
+    }
+    return JSON.stringify(jwks);
+  } catch (error) {
+    console.warn(
+      `[alchemy.run] Could not fetch JWKS from ${issuer} at deploy time; ` +
+        `the worker will fetch it at runtime instead.`,
+      error instanceof Error ? error.message : error,
+    );
+    return undefined;
+  }
+}
+
 const env = {
   ...process.env,
-  APP_CONFIG_ITERATE_AUTH__ISSUER:
-    process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER,
+  APP_CONFIG_ITERATE_AUTH__ISSUER: resolvedAuthIssuer,
   APP_CONFIG_ITERATE_AUTH__CLIENT_ID:
     process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? process.env.ITERATE_OAUTH_CLIENT_ID,
   APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET:
     process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? process.env.ITERATE_OAUTH_CLIENT_SECRET,
-  APP_CONFIG_ITERATE_AUTH__JWKS:
-    process.env.APP_CONFIG_ITERATE_AUTH__JWKS ?? process.env.ITERATE_AUTH_JWKS,
+  APP_CONFIG_ITERATE_AUTH__JWKS: await resolveStaticAuthJwks(resolvedAuthIssuer),
   APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
     process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
 };

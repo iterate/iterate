@@ -93,12 +93,20 @@ export function ProjectStreamView({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Only auto-scroll to the bottom when the viewport is already pinned there.
+  // Yanking a scrolled-up reader back to the bottom on every append shifts the
+  // virtualized window far enough that the whole visible range re-queries and
+  // flashes grey skeletons before SQLite returns the new rows.
+  const stickToBottomRef = useRef(true);
 
   async function submit() {
     const trimmed = composerText.trim();
     if (!trimmed) return;
     setIsSubmitting(true);
     setSubmitError(undefined);
+    // The user just appended from the composer at the bottom, so follow the
+    // new event down even if they had scrolled up earlier.
+    stickToBottomRef.current = true;
     try {
       if (composerMode === "message" && messageComposer) {
         await messageComposer.onSubmit(trimmed);
@@ -121,6 +129,7 @@ export function ProjectStreamView({
   }
 
   useLayoutEffect(() => {
+    if (!stickToBottomRef.current) return;
     const frame = window.requestAnimationFrame(() => {
       const scrollContainer = scrollContainerRef.current;
       if (scrollContainer == null) {
@@ -133,7 +142,7 @@ export function ProjectStreamView({
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [eventCount, isSubmitting, submitError]);
+  }, [eventCount]);
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-white">
@@ -142,7 +151,16 @@ export function ProjectStreamView({
         <StreamStatus count={eventCount} snapshot={snapshot} />
       </header>
       {headerAccessory == null ? null : <div className="shrink-0 border-b">{headerAccessory}</div>}
-      <main ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto">
+      <main
+        ref={scrollContainerRef}
+        className="min-h-0 flex-1 overflow-y-auto"
+        onScroll={(event) => {
+          const el = event.currentTarget;
+          // Within ~80px of the bottom counts as "pinned"; expanding a row or a
+          // late virtualizer measurement can leave a few px of slack.
+          stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        }}
+      >
         {countResult.status !== "ok" ? (
           <Centered>
             {countResult.status === "error"
@@ -223,13 +241,22 @@ function VirtualEventRows({
      ORDER BY local_index ASC`,
     [first, last + 1],
   );
+  // Retain the last committed rows across range re-queries. When the visible
+  // window shifts (append grows the list, or a scroll moves it), the range SQL
+  // query is recreated and briefly reports `pending` carrying a *different*
+  // range's rows. Rendering straight from that pending data blanks every
+  // already-visible row to a grey skeleton for a frame. Keeping the last "ok"
+  // rows means only genuinely-new indices fall back to a skeleton.
+  const lastRowsRef = useRef<Map<number, StreamEventRow>>(new Map());
   const rowsByIndex = useMemo(() => {
+    if (rowsResult.status !== "ok") return lastRowsRef.current;
     const rows = new Map<number, StreamEventRow>();
     for (const row of rowsResult.data) {
       if (typeof row.local_index === "number") rows.set(row.local_index, row as StreamEventRow);
     }
+    lastRowsRef.current = rows;
     return rows;
-  }, [rowsResult.data]);
+  }, [rowsResult.data, rowsResult.status]);
 
   if (eventCount === 0) {
     return (

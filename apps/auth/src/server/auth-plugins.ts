@@ -184,7 +184,10 @@ export function getAuthPlugins(env: Record<string, unknown>) {
         },
       },
       silenceWarnings: { openidConfig: true, oauthAuthServerConfig: true },
-      accessTokenExpiresIn: 5 * 60,
+      // Long enough that refresh (which rotates the refresh token and treats
+      // rotated-token reuse as theft) is rare, short enough that org/project
+      // claim changes propagate within half an hour.
+      accessTokenExpiresIn: 30 * 60,
       scopes: ["openid", "profile", "email", "offline_access", ITERATE_PROJECT_SELECTION_SCOPE],
       validAudiences,
       allowDynamicClientRegistration: true,

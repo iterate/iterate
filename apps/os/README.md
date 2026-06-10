@@ -91,6 +91,7 @@ The script pattern is documented in
 - [Doppler-Backed Scripts](./docs/doppler-backed-scripts.md)
 - [Architecture And Operations](./docs/architecture-and-operations.md)
 - [Preview Agent Browser Smoke](./docs/preview-agent-browser-smoke.md)
+- [Headless Local Debugging](./docs/headless-local-debugging.md)
 - [Codemode Subrequest Depth](./docs/codemode-subrequest-depth.md)
 - [ADR: Replace Clerk With Auth Worker](../../docs/adr/0001-replace-clerk-with-auth-worker.md)
 - [Domain Context](./CONTEXT.md)
