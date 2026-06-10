@@ -4,7 +4,7 @@ import {
   createGoogleAuthorizationUrl,
   createSlackAuthorizationUrl,
   disconnectProvider,
-  providerSecretKey,
+  providerConnectionStatus,
   requestBaseUrl,
 } from "~/domains/secrets/oauth.ts";
 import {
@@ -12,7 +12,7 @@ import {
   GOOGLE_DISCONNECTED_EVENT_TYPE,
   SLACK_DISCONNECTED_EVENT_TYPE,
 } from "~/domains/secrets/integration-streams.ts";
-import { getProjectConnection, getProjectSecret } from "~/domains/secrets/secrets-store.ts";
+import { getProjectConnection } from "~/domains/secrets/secrets-store.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
 
@@ -126,50 +126,9 @@ export const projectIntegrationsRouter = {
     }),
 };
 
-async function connectionStatus(context: RequestContext, provider: "google" | "slack") {
+function connectionStatus(context: RequestContext, provider: "google" | "slack") {
   const project = requireProjectScope(context);
-  const connection = await getProjectConnection(context.db, {
-    projectId: project.id,
-    provider,
-  });
-
-  if (!connection) {
-    return {
-      connected: false,
-      displayName: null,
-      externalId: null,
-      metadata: {},
-      scopes: null,
-      token: null,
-    };
-  }
-
-  const secret = await getProjectSecret(context.db, {
-    key: providerSecretKey(provider),
-    projectId: project.id,
-  });
-
-  return {
-    connected: true,
-    displayName: readDisplayName(connection.providerData),
-    externalId: connection.externalId,
-    metadata: connection.providerData,
-    scopes: connection.scopes,
-    token: secret
-      ? {
-          createdAt: secret.createdAt,
-          expiresAt: readStringMetadata(secret.metadata, "expiresAt"),
-          hasMaterial: secret.material.length > 0,
-          refreshTokenStored: readStringMetadata(secret.metadata, "refreshToken") !== null,
-          updatedAt: secret.updatedAt,
-        }
-      : null,
-  };
-}
-
-function readDisplayName(metadata: Record<string, unknown>) {
-  const name = metadata.teamName ?? metadata.email ?? metadata.name;
-  return typeof name === "string" ? name : null;
+  return providerConnectionStatus({ db: context.db, projectId: project.id, provider });
 }
 
 function readStringMetadata(metadata: Record<string, unknown>, key: string) {

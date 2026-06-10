@@ -278,13 +278,17 @@ export type CapDescription = {
  *   pollution vectors, `map` is capnweb's magic promise method.
  */
 const ITX_BUILTIN_NAMES = [
+  "agents",
   "caps",
   "describe",
   "fetch",
   "fork",
+  "integrations",
+  "mcp",
   "project",
   "projects",
   "repos",
+  "secrets",
   "streams",
   "worker",
   "workspace",

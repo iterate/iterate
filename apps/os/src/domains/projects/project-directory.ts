@@ -46,10 +46,14 @@ type ProjectWithIngressUrl = ProjectListItem & {
   ingressUrl: string;
 };
 
+/** The slice of RequestContext these flows actually read — narrow enough for
+ * itx (handle.ts) to construct one from its runtime + connect-time principal. */
+type ProjectDirectoryContext = Pick<RequestContext, "config" | "db" | "principal">;
+
 export class ProjectsCapability extends RpcTarget {
   constructor(
     private readonly props: {
-      context: RequestContext;
+      context: ProjectDirectoryContext;
     },
   ) {
     super();
@@ -237,7 +241,7 @@ export async function toProjectWithIngressUrl(row: ProjectRow) {
 }
 
 export async function requireProject(input: {
-  context: RequestContext;
+  context: ProjectDirectoryContext;
   projectId?: string;
   projectIdOrSlug?: string;
 }): Promise<ProjectRow> {
@@ -318,7 +322,10 @@ function listSignedProjectClaims(context: Pick<RequestContext, "principal">): Au
   return context.principal?.type === "user" ? sortAuthProjects(context.principal.projects) : [];
 }
 
-function getAccessibleSignedProject(input: { context: RequestContext; projectId: string }) {
+function getAccessibleSignedProject(input: {
+  context: ProjectDirectoryContext;
+  projectId: string;
+}) {
   return (
     listSignedProjectClaims(input.context).find((project) => project.id === input.projectId) ?? null
   );

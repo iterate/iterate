@@ -24,6 +24,8 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "src/durable-objects/iterate-mcp-server-test-entry.ts",
       "src/durable-objects/project-ingress.vitest.config.ts",
       "src/durable-objects/project-ingress-test-entry.ts",
+      "src/durable-objects/itx-projects.vitest.config.ts",
+      "src/durable-objects/itx-projects-test-entry.ts",
       "src/durable-objects/itx-stream-subscribe.vitest.config.ts",
       "src/durable-objects/itx-stream-subscribe-test-entry.ts",
     ],

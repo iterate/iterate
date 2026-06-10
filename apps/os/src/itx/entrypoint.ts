@@ -32,6 +32,9 @@ import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/
 export async function resolveItx(input: {
   env: Env;
   exports: ItxRuntime["exports"];
+  /** Connect-time identity (fetch.ts only — props stay serializable, Law 2),
+   * so platform-wired isolates restoring from props never carry one. */
+  principal?: ItxRuntime["principal"];
   props: ItxProps;
 }): Promise<Itx> {
   const config = parseConfig(input.env);
@@ -56,6 +59,7 @@ export async function resolveItx(input: {
     contextId,
     env: input.env,
     exports: input.exports,
+    principal: input.principal,
     projectId,
   });
 }

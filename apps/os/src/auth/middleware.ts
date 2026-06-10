@@ -6,7 +6,7 @@ import {
 import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
 import { createMiddleware } from "@tanstack/react-start";
 import type { RequestContext } from "~/request-context.ts";
-import { authenticateAdminApiSecret } from "~/auth/admin.ts";
+import { authenticateCapnwebAdmin } from "~/itx/admin-auth-cookie.ts";
 import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import {
   principalFromAccessToken,
@@ -66,7 +66,14 @@ export async function resolveRequestAuth(input: {
   session: AuthenticatedSession | null;
   responseHeaders: Headers;
 }> {
-  const adminApiPrincipal = authenticateAdminApiSecret(input.context, input.request);
+  // The admin API secret authenticates as an Authorization bearer OR as the
+  // iterate-admin-auth cookie. The cookie already grants full itx admin
+  // (/api/itx); honoring it for pages too makes the admin secret one complete
+  // headless-verification credential instead of an itx-only split.
+  const adminApiPrincipal = authenticateCapnwebAdmin({
+    config: input.context.config,
+    request: input.request,
+  });
   if (adminApiPrincipal) {
     return {
       principal: adminApiPrincipal,

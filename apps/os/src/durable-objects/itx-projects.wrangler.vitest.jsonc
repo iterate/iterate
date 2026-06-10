@@ -1,0 +1,30 @@
+{
+  "name": "os-itx-projects-vitest",
+  "main": "itx-projects-test-entry.ts",
+  "compatibility_date": "2026-04-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "APP_CONFIG": "{\"adminApiSecret\":\"itx-projects-admin-secret\",\"openAiApiKey\":\"openai-test-key\",\"projectHostnameBases\":[\"iterate.localhost\"],\"typeIdPrefix\":\"os\",\"iterateAuth\":{\"issuer\":\"https://auth.test/api/auth\",\"clientId\":\"test-client\",\"clientSecret\":\"test-client-secret\",\"serviceToken\":\"test-service-token\"}}",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "os-itx-projects-test",
+      "database_id": "os-itx-projects-test",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PROJECT",
+        "class_name": "FakeProjectDurableObject",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["FakeProjectDurableObject"],
+    },
+  ],
+}

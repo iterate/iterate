@@ -61,8 +61,9 @@ Per user direction: access is "all" projects, a list of named projects, or
 none. `ItxProps = { context, access?, cap? }` where `access` only matters on
 global-context handles. Project-context handles imply access to exactly that
 project regardless of what props claim — the restorer overwrites, mirroring
-the old "config worker can't escalate scopes" rule. Org-membership flows stay
-in oRPC for now; `itx.projects.create` is admin-only.
+the old "config worker can't escalate scopes" rule. ~~Org-membership flows
+stay in oRPC for now; `itx.projects.create` is admin-only.~~ (Superseded by
+D22: create is org-membership-aware.)
 
 ## D8: Worker caps gain network access via ProjectEgress (they had none)
 
@@ -291,3 +292,33 @@ the plan's "one global-context WebSocket per tab" decision are superseded.
 `errors.ts` (`getItxErrorCode`/`isItxAccessError`) stays: catch blocks and
 error boundaries still read codes; there is just no retry-predicate layer to
 feed them to.
+
+## D22: Connect-time principal on the runtime; org-membership create; the admin cookie is a page credential
+
+Three boundary changes, one posture (surface parity for the oRPC teardown):
+
+- **`ItxRuntime.principal?`** — threaded by `/api/itx` connect (fetch.ts →
+  resolveItx) and ONLY there: props stay serializable (Law 2), so
+  platform-wired isolates restoring from props never carry one. It is the
+  smallest shape that lets the handle delegate to the same org-aware domain
+  flows oRPC calls — org claims authorize `projects.create`, userId
+  attributes OAuth state. Authority remains `access`; the principal is
+  identity. Narrowing (projects.get, fork) keeps it — a reconnect to the
+  child context would resolve the same principal anyway.
+- **`itx.projects.create` is org-membership-aware** (supersedes D7's
+  admin-only path): one delegation to `ProjectsCapability.create`
+  (project-directory.ts), the exact flow the dashboard's oRPC create runs. A
+  user principal creates through an auth organization they belong to (the
+  auth worker mints the canonical prj\_ id; FORBIDDEN outside their orgs); an
+  access-"all" handle takes the operator path (OS mints, no owning org);
+  anything else — cap isolates, a project-narrowed admin-cookie handle — is
+  FORBIDDEN, so narrowing still cannot mint projects. ORPCError codes map
+  onto ItxError by shared name; UNAUTHORIZED folds into FORBIDDEN (no
+  UNAUTHORIZED in itx, D18). Covered by the `pnpm test:itx-projects` worker
+  harness (real D1 + fake Project DO + fake auth worker at the
+  outbound-fetch boundary).
+- **The `iterate-admin-auth` cookie authenticates pages too**:
+  `resolveRequestAuth` (auth/middleware.ts) now accepts it alongside the
+  Authorization header. The cookie already granted full itx admin via
+  `/api/itx`; honoring it everywhere makes the admin secret ONE complete
+  headless-verification credential instead of an itx-only split.

@@ -10,7 +10,8 @@
 //
 // Anatomy:
 //   - typed built-ins (the trust kernel): caps, streams, repos, workspace,
-//     worker, project, projects, fetch, describe
+//     worker, project, projects, fetch, describe — plus the typed project
+//     facades (facades.ts): agents, integrations, mcp, secrets
 //   - a fallthrough Proxy: any unknown name becomes a PathProxy whose
 //     terminal call dispatches to the context node's registry. itx.slack
 //     works because someone provided "slack", not because anything here
@@ -39,20 +40,22 @@ import {
 import type { ContextDO } from "./context-do.ts";
 import { createShareToken, SHARE_TOKEN_PARAM } from "./http.ts";
 import type { LiveCapTarget } from "./registry.ts";
+import { ItxAgents, ItxIntegrations, ItxMcp, ItxSecrets, rethrowAsItxError } from "./facades.ts";
 import type { AppConfig } from "~/config.ts";
+import { adminPrincipal, getUserPrincipal, type Principal } from "~/auth/principal.ts";
 import {
   countAllProjects,
   deleteProject,
   getProjectById,
   getProjectBySlug,
-  insertProject,
   listAllProjects,
 } from "~/db/queries/.generated/index.ts";
 import {
   getProjectDurableObjectName,
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
-import { isProjectId, mintProjectId } from "~/domains/projects/project-id.ts";
+import { isProjectId } from "~/domains/projects/project-id.ts";
+import { ProjectsCapability } from "~/domains/projects/project-directory.ts";
 import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 
@@ -72,6 +75,11 @@ export type ItxRuntime = {
    * this equals contextId; for child contexts the restorer resolved it from
    * the ContextDO's descriptor. */
   projectId: string | null;
+  /** The connect-time principal, threaded by the auth boundary (fetch.ts) and
+   * absent on platform-wired handles (cap isolates — props are serializable,
+   * principals are not). Its org claims authorize projects.create; its userId
+   * attributes OAuth flows. Authority stays `access` — this is identity. */
+  principal?: Principal;
   env: Env;
   /** The parent worker's loopback exports (ctx.exports). */
   exports: Record<string, (options: { props: Record<string, unknown> }) => unknown>;
@@ -202,6 +210,25 @@ export class Itx extends RpcTarget {
 
   get projects(): ItxProjects {
     return new ItxProjects(this.#runtime);
+  }
+
+  // Typed project facades (facades.ts): wiring, not logic — each method is one
+  // delegation to the domain function the oRPC router calls.
+
+  get agents(): ItxAgents {
+    return new ItxAgents(this.#requireProjectId());
+  }
+
+  get integrations(): ItxIntegrations {
+    return new ItxIntegrations(this.#runtime, this.#requireProjectId());
+  }
+
+  get mcp(): ItxMcp {
+    return new ItxMcp(this.#requireProjectId());
+  }
+
+  get secrets(): ItxSecrets {
+    return new ItxSecrets(this.#runtime, this.#requireProjectId());
   }
 
   /**
@@ -654,58 +681,30 @@ export class ItxProjects extends RpcTarget {
   }
 
   /**
-   * Admin-only for now: org-membership project creation stays in oRPC until
-   * that flow moves over (DECISIONS.md D7).
+   * The same org-membership flow as the dashboard's oRPC projects.create
+   * (project-directory.ts): a user creates through an auth organization they
+   * belong to — the auth worker mints the canonical prj_ id — and is FORBIDDEN
+   * outside their orgs; an access-"all" handle takes the operator path (OS
+   * mints, no owning org). Supersedes D7's admin-only posture (DECISIONS D22).
    */
-  async create(input: { id?: string; slug: string }) {
-    this.requireAllAccess("create projects");
-    const db = this.db();
-    // Auth is the canonical id minter ("prj_"); this admin-only path mints in
-    // the same format only for the operator/recovery case where there is no
-    // auth org to own the project. A supplied id must already be a project id
-    // (legacy "proj_" still accepted), never a slug.
-    if (input.id !== undefined && !isProjectId(input.id)) {
+  async create(input: { id?: string; slug: string; organizationSlug?: string }) {
+    // Authority: the connect-time user principal, or the operator path on an
+    // access-"all" handle. Anything else (cap isolates, a project-narrowed
+    // admin-cookie handle) may not mint projects — narrowing must hold.
+    const principal =
+      getUserPrincipal(this.runtime.principal) ??
+      (this.runtime.access === "all" ? adminPrincipal : null);
+    if (!principal) {
       throw new ItxError({
-        code: "BAD_REQUEST",
-        details: { id: input.id },
-        message: "Project ID must start with prj_ (or legacy proj_).",
+        code: "FORBIDDEN",
+        message: "This itx handle may not create projects.",
       });
     }
-    const id = input.id ?? mintProjectId();
-
-    const existingById = await getProjectById(db, { id });
-    if (existingById) {
-      if (existingById.slug !== input.slug) {
-        throw new ItxError({
-          code: "CONFLICT",
-          details: { existingSlug: existingById.slug, id },
-          message: `Project ${id} already exists with slug ${existingById.slug}.`,
-        });
-      }
-      return toProjectSummary(existingById);
-    }
-    if (await getProjectBySlug(db, { slug: input.slug })) {
-      throw new ItxError({
-        code: "CONFLICT",
-        details: { slug: input.slug },
-        message: `A project with slug ${input.slug} already exists.`,
-      });
-    }
-
-    await insertProject(db, { id, slug: input.slug });
-    try {
-      await projectStub(this.runtime.env, id).createProject({ projectId: id, slug: input.slug });
-    } catch (error) {
-      await deleteProject(db, { id }).catch((cleanupError) => {
-        console.error(
-          `[itx] failed to clean up project ${id} after bootstrap failure`,
-          cleanupError,
-        );
-      });
-      throw error;
-    }
-    const row = await getProjectById(db, { id });
-    return toProjectSummary(row ?? { id, slug: input.slug });
+    return await rethrowAsItxError(() =>
+      new ProjectsCapability({
+        context: { config: this.runtime.config, db: this.db(), principal },
+      }).create(input),
+    );
   }
 
   async remove(input: { id: string }) {

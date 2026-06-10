@@ -47,7 +47,7 @@ export async function handleItxFetch(input: {
   const access = accessForPrincipal(auth.principal);
 
   if (subpath === "run") {
-    return await handleItxRun({ ...input, access });
+    return await handleItxRun({ ...input, access, principal: auth.principal });
   }
 
   // Bare prefix → global handle; anything else is a project id/slug or a
@@ -76,9 +76,17 @@ export async function handleItxFetch(input: {
     props = { context: resolved.contextId };
   }
 
+  input.context.log.set({
+    itx: itxLogFields({ context: props.context, op: "connect", principal: auth.principal }),
+  });
   const response = await newItxRpcResponse(
     input.request,
-    await resolveItx({ env: input.env, exports: requireWorkerExports(input.context), props }),
+    await resolveItx({
+      env: input.env,
+      exports: requireWorkerExports(input.context),
+      principal: auth.principal,
+      props,
+    }),
   );
   const setCookie = auth.responseHeaders.get("set-cookie");
   if (setCookie) response.headers.append("set-cookie", setCookie);
@@ -115,9 +123,28 @@ export async function handleProjectHostItxFetch(input: {
     await resolveItx({
       env: input.env,
       exports: input.exports as ItxRuntime["exports"],
+      principal,
       props: { context: input.projectId },
     }),
   );
+}
+
+/**
+ * The wide-event connect log (the oRPC-teardown observability gate): one
+ * structured line per /api/itx connect/run request. withEvlog (worker.ts)
+ * flushes outcome status and duration; this adds who connected to what.
+ */
+function itxLogFields(input: {
+  context: string;
+  op: "connect" | "run";
+  principal: Principal;
+}): Record<string, unknown> {
+  return {
+    context: input.context,
+    op: input.op,
+    principal: input.principal.type,
+    ...(input.principal.type === "user" ? { userId: input.principal.userId } : {}),
+  };
 }
 
 /**
@@ -146,8 +173,9 @@ async function authenticateItxRequest(input: {
   context: RequestContext;
   request: Request;
 }): Promise<{ principal: Principal | null; responseHeaders: Headers }> {
-  const admin = authenticateCapnwebAdmin({ config: input.config, request: input.request });
-  if (admin) return { principal: admin, responseHeaders: new Headers() };
+  // resolveRequestAuth honors the admin secret as both the Authorization
+  // header and the iterate-admin-auth cookie, so itx needs no admin check of
+  // its own anymore (auth/middleware.ts).
   const resolved = await resolveRequestAuth({
     auth: createOsIterateAuth(input.context, input.request),
     context: input.context,
@@ -167,6 +195,7 @@ async function handleItxRun(input: {
   access: ProjectAccess;
   context: RequestContext;
   env: Env;
+  principal: Principal;
   request: Request;
 }): Promise<Response> {
   if (!input.env.LOADER) {
@@ -217,6 +246,10 @@ async function handleItxRun(input: {
     }
     props = { access: input.access, context: GLOBAL_CONTEXT_ID };
   }
+
+  input.context.log.set({
+    itx: itxLogFields({ context: props.context, op: "run", principal: input.principal }),
+  });
 
   // The endpoint's API is `({ itx, vars }) => …` + a vars object; the runner
   // knows ONE shape, `async (itx) => …`, so vars are baked into the source

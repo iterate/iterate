@@ -1,8 +1,4 @@
-import { env } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
-import { StreamPath } from "@iterate-com/shared/streams/types";
-import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { listD1ObjectCatalogRecordsByIndex } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { RequestContext } from "~/request-context.ts";
 import { getProjectById, updateProjectConfig } from "~/db/queries/.generated/index.ts";
 import {
@@ -10,7 +6,7 @@ import {
   ensureProjectCustomHostnameStatus,
 } from "~/domains/projects/cloudflare-custom-hostnames.ts";
 import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object.ts";
-import type { ProjectMcpServerConnectionStructuredName } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
+import { listInboundMcpSessions } from "~/domains/inbound-mcp-server/session-directory.ts";
 import {
   isReservedProjectHostname,
   isValidCustomHostname,
@@ -33,9 +29,6 @@ type ProjectRow = {
   updated_at: string;
 };
 
-type InboundMcpSessionCatalogRecord =
-  D1ObjectCatalogRecord<ProjectMcpServerConnectionStructuredName>;
-
 function toProject(row: ProjectRow) {
   return {
     id: row.id,
@@ -51,20 +44,6 @@ async function toProjectWithIngressUrl(row: ProjectRow) {
   return {
     ...toProject(row),
     ingressUrl: await projectDurableObject(row.id).ingressUrl(),
-  };
-}
-
-function toInboundMcpSession(record: InboundMcpSessionCatalogRecord) {
-  return {
-    name: record.name,
-    projectId: record.structuredName.projectId,
-    projectSlug: record.structuredName.projectSlug,
-    streamPath: StreamPath.parse(record.structuredName.streamPath),
-    clientId: record.structuredName.clientId,
-    clientName: record.structuredName.clientName,
-    userId: record.structuredName.userId,
-    createdAt: record.createdAt,
-    lastWokenAt: record.lastWokenAt,
   };
 }
 
@@ -241,17 +220,7 @@ export const projectsRouter = {
         .use(projectScopeMiddleware)
         .handler(async ({ context }) => {
           const project = requireProjectScope(context);
-          const rows =
-            await listD1ObjectCatalogRecordsByIndex<ProjectMcpServerConnectionStructuredName>(
-              env.DB,
-              {
-                className: "ProjectMcpServerConnection",
-                indexName: "projectId",
-                indexValue: project.id,
-              },
-            );
-
-          return { sessions: rows.map(toInboundMcpSession) };
+          return await listInboundMcpSessions({ projectId: project.id });
         }),
     },
     integrations: projectIntegrationsRouter,

@@ -1,59 +1,29 @@
-import { env } from "cloudflare:workers";
-import { listD1ObjectCatalogRecordsByIndex } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
-import {
-  getInitializedStreamStub,
-  type StreamDurableObjectNamespace,
-} from "~/domains/streams/stream-runtime.ts";
 import {
   configuredAgentSetupEvents,
   normalizeAgentPresetBasePath,
   presetConfiguredEvent,
-  readAgentPathPrefixPresets,
   type AgentLlmProvider,
 } from "~/domains/agents/agent-presets.ts";
 import {
-  type AgentDurableObjectStructuredName,
-  AGENTS_STREAM_PATH,
-  getAgentDurableObjectName,
-} from "~/domains/agents/durable-objects/agent-durable-object.ts";
+  appendAgentsRootEvent,
+  getAgentStub,
+  listAgentPresets,
+  listProjectAgents,
+} from "~/domains/agents/agent-directory.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
 
 export const projectAgentsRouter = {
   list: os.project.agents.list.use(projectScopeMiddleware).handler(async ({ context }) => {
     const project = requireProjectScope(context);
-    const records = await listD1ObjectCatalogRecordsByIndex<AgentDurableObjectStructuredName>(
-      env.DB,
-      {
-        className: "AgentDurableObject",
-        indexName: "projectId",
-        indexValue: project.id,
-      },
-    );
-
-    return {
-      agents: records
-        .filter((record) => record.structuredName.agentPath.startsWith("/agents/"))
-        .map((record) => ({
-          agentPath: record.structuredName.agentPath,
-          createdAt: record.createdAt,
-          lastWokenAt: record.lastWokenAt,
-          name: record.name,
-          projectId: record.structuredName.projectId,
-        })),
-    };
+    return await listProjectAgents({ projectId: project.id });
   }),
 
   listPresets: os.project.agents.listPresets
     .use(projectScopeMiddleware)
     .handler(async ({ context }) => {
       const project = requireProjectScope(context);
-      const events = await readAgentsRootEvents({ projectId: project.id });
-      return {
-        presets: readAgentPathPrefixPresets(events),
-      };
+      return await listAgentPresets({ projectId: project.id });
     }),
 
   configurePreset: os.project.agents.configurePreset
@@ -114,44 +84,3 @@ export const projectAgentsRouter = {
     return { killed: true };
   }),
 };
-
-type AgentRpcStub = {
-  getRuntimeState(): Promise<unknown>;
-  kill(): Promise<void>;
-  sendMessage(input: { channel?: string; message: string }): Promise<{
-    event: Event;
-  }>;
-};
-
-async function readAgentsRootEvents(input: { projectId: string }) {
-  const stream = await getAgentsRootStream({ projectId: input.projectId });
-  return await stream.history({ before: "end" });
-}
-
-async function appendAgentsRootEvent(input: { event: EventInput; projectId: string }) {
-  const stream = await getAgentsRootStream({ projectId: input.projectId });
-  return await stream.append(input.event);
-}
-
-async function getAgentsRootStream(input: { projectId: string }) {
-  return await getInitializedStreamStub({
-    durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
-    namespace: input.projectId,
-    path: AGENTS_STREAM_PATH,
-  });
-}
-
-async function getAgentStub(input: {
-  agentPath: StreamPath;
-  projectId: string;
-}): Promise<AgentRpcStub> {
-  const name = {
-    agentPath: input.agentPath,
-    projectId: input.projectId,
-  };
-  return (await getInitializedDoStub({
-    allowCreate: true,
-    namespace: env.AGENT,
-    name: getAgentDurableObjectName(name),
-  })) as unknown as AgentRpcStub;
-}

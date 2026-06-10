@@ -43,20 +43,30 @@ rollback plan.
       simplification (PR #1472, DECISIONS D21)**: itx components never SSR,
       so the SSR door, the isomorphic loader accessor, and the query-cache
       prefetch were deleted.
-- [ ] Org-membership `itx.projects.create` (org claims on the handle runtime;
-      replaces the admin-only path for the dashboard create flow).
+- [x] Org-membership `itx.projects.create` — the connect-time principal rides
+      `ItxRuntime` and create delegates to the same `ProjectsCapability` flow
+      oRPC runs (DECISIONS D22; worker-harness coverage:
+      `pnpm test:itx-projects`).
 
 ### Surface parity (typed facades on the handle; wiring, not logic)
 
-- [ ] `itx.secrets` (list/get/upsert/remove, redaction moves with it)
-- [ ] `itx.integrations` (connections + start-OAuth returning redirect URL;
-      callback routes stay plain HTTP; redirect-URI derived from config, not
-      the request — verify on a preview)
-- [ ] `itx.project.hostnames` (updateConfig/customHostnameStatus/ensure)
-- [ ] `itx.agents` (list, presets, sendMessage; runtime state via
+All facades live in `apps/os/src/itx/facades.ts`; each method is one
+delegation to the domain function the oRPC router calls.
+
+- [x] `itx.secrets` (list/get/upsert/remove; redaction unchanged — the
+      capability's summary surface is all the facade touches)
+- [x] `itx.integrations` (getConnection + startOAuthFlow returning the
+      redirect URL; callback routes stay plain HTTP; redirect-URI derived
+      from config.baseUrl, never the request — still verify on a preview)
+- [x] `itx.project` hostnames — no facade needed: updateConfig /
+      customHostnameStatus / ensureCustomHostname now live on the Project DO
+      itself, so itx.project.\* reaches them with zero forwarder code (D17)
+- [x] `itx.agents` (list, presets, sendMessage; runtime state via
       reduced-state views)
-- [ ] `itx.mcp.listSessions`
-- [ ] slug lookup + pagination metadata on `itx.projects` for non-admins
+- [x] `itx.mcp.listSessions`
+- [x] slug lookup + pagination metadata on `itx.projects` for non-admins —
+      already true: `projects.get()` resolves slugs and `projects.list()`
+      returns `{ projects, total }` for both access models
 
 ### Convert all consumers
 
@@ -87,7 +97,9 @@ rollback plan.
 - [ ] Doc sweep: CLAUDE.md "Talking to OS", apps/os/AGENTS.md, architecture
       docs, doppler-backed-scripts (all reference `cli rpc` / `/api/orpc`);
       worker.ts header comment
-- [ ] Observability: wide-event log at `/api/itx` connect before prod cutover
+- [x] Observability: wide-event log at `/api/itx` connect — every connect/run
+      request logs principal type, target context, status, and duration
+      through the existing withEvlog flush (fetch.ts `itxLogFields`)
 
 ## Acceptance
 

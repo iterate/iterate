@@ -10,7 +10,7 @@ import {
   upsertProjectSecret,
 } from "~/domains/secrets/secrets-store.ts";
 
-type OAuthProvider = "google" | "slack";
+export type OAuthProvider = "google" | "slack";
 const GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 export function requireSlackConfig(config: AppConfig) {
@@ -194,6 +194,55 @@ export async function getFreshGoogleAccessToken(input: {
 
 export function providerSecretKey(provider: OAuthProvider) {
   return `${provider}.access_token`;
+}
+
+/**
+ * Connection status as the dashboard shows it: the connection row plus a
+ * redacted token summary — timestamps and presence flags, never the material.
+ * Shared by the oRPC integrations router and itx.integrations.
+ */
+export async function providerConnectionStatus(input: {
+  db: Client;
+  projectId: string;
+  provider: OAuthProvider;
+}) {
+  const connection = await getProjectConnection(input.db, input);
+  if (!connection) {
+    return {
+      connected: false,
+      displayName: null,
+      externalId: null,
+      metadata: {} as Record<string, unknown>,
+      scopes: null,
+      token: null,
+    };
+  }
+
+  const secret = await getProjectSecret(input.db, {
+    key: providerSecretKey(input.provider),
+    projectId: input.projectId,
+  });
+  const displayName =
+    connection.providerData.teamName ??
+    connection.providerData.email ??
+    connection.providerData.name;
+
+  return {
+    connected: true,
+    displayName: typeof displayName === "string" ? displayName : null,
+    externalId: connection.externalId,
+    metadata: connection.providerData,
+    scopes: connection.scopes,
+    token: secret
+      ? {
+          createdAt: secret.createdAt,
+          expiresAt: readStringMetadata(secret.metadata, "expiresAt"),
+          hasMaterial: secret.material.length > 0,
+          refreshTokenStored: readStringMetadata(secret.metadata, "refreshToken") !== null,
+          updatedAt: secret.updatedAt,
+        }
+      : null,
+  };
 }
 
 async function revokeProviderToken(input: { provider: OAuthProvider; token: string }) {
