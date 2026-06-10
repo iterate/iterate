@@ -228,4 +228,28 @@ describe("Stage 2 — lazy initialization", () => {
     const woken = after.filter((e) => e.type === "events.iterate.com/stream/woken");
     expect(woken).toHaveLength(2);
   });
+
+  it("resolves a relative child path against the DO name even when the parent was never initialized", async () => {
+    // Regression: relative resolution must use the DO's name, not reduced state
+    // (which is the "uninitialized" placeholder until the parent is appended to).
+    counter += 1;
+    const parentName = `stream:/review/resolve${counter}`;
+    const parent = STREAM.getByName(parentName);
+
+    // Never append directly to the parent — it stays lazy. Append to a child.
+    const committed = (await parent.append({
+      streamPath: "child",
+      event: { type: "test.resolve", payload: { k: 1 } },
+    })) as StreamEvent;
+    expect(committed.type).toBe("test.resolve");
+
+    // The intended `${parentPath}/child` stream received it...
+    const child = (await STREAM.getByName(`${parentName}/child`).getEvents()) as StreamEvent[];
+    expect(child.some((e) => e.type === "test.resolve")).toBe(true);
+
+    // ...and it did not leak into the parent (which would happen if resolution
+    // used the placeholder path).
+    const parentEvents = (await parent.getEvents()) as StreamEvent[];
+    expect(parentEvents.some((e) => e.type === "test.resolve")).toBe(false);
+  });
 });

@@ -790,7 +790,8 @@ test("kill reconnects and appends a new woken event", async ({ page }) => {
   });
   await expect(page.getByTestId("event-count")).toHaveText("3");
 
-  await page.getByRole("button", { name: "Kill" }).click();
+  // `exact` so this doesn't also match the appended `…/playwright-kill` event row.
+  await page.getByRole("button", { name: "Kill", exact: true }).click();
   await expect(page.getByTestId("stream-status")).toHaveText("subscribed", { timeout: 30_000 });
   // The new DO incarnation appends its own woken on wake, so the stream grows to count "4" with
   // two woken events (the init woken@2 and the reconnect woken).

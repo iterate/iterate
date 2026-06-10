@@ -106,14 +106,24 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 
   /**
-   * The events the first append prepends to lazily initialize a stream:
-   * `created` (offset 1, derived from the DO name `namespace:/some/stream/path`)
-   * then `woken` for the initializing incarnation. Later incarnations append
-   * their own `woken` from the constructor.
+   * The stream's identity, from its DO name (`namespace:/some/stream/path`).
+   * This is the source of truth even before initialization — a lazily
+   * uninitialized stream's reduced state still holds the `"uninitialized"`
+   * placeholders, so path resolution and the `created` event must use the name.
    */
-  #initEventInputs(): StreamEventInput[] {
+  #streamIdentity(): { namespace: string; path: string } {
     if (!this.ctx.id.name) throw new Error("ctx.id.name is falsey - this should never happen");
     const [namespace, path] = this.ctx.id.name.split(":");
+    return { namespace, path };
+  }
+
+  /**
+   * The events the first append prepends to lazily initialize a stream:
+   * `created` (offset 1) then `woken` for the initializing incarnation. Later
+   * incarnations append their own `woken` from the constructor.
+   */
+  #initEventInputs(): StreamEventInput[] {
+    const { namespace, path } = this.#streamIdentity();
     return [
       { type: "events.iterate.com/stream/created", payload: { namespace, path } },
       {
@@ -359,9 +369,15 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 
   #resolveStream(streamPath: string): Pick<StreamRpc, "append" | "appendBatch"> {
-    const resolvedPath = resolveStreamPath(this.#coreProcessorState.path, streamPath);
-    if (resolvedPath === resolveStreamPath(this.#coreProcessorState.path, ".")) return this;
-    return this.env.STREAM.getByName(`${this.#coreProcessorState.namespace}:${resolvedPath}`);
+    // Resolve against the DO's own name, not reduced state: a lazily
+    // uninitialized stream has only `"uninitialized"` placeholders in state, but
+    // its real namespace/path are always known from its name. Without this,
+    // appending to a relative child of a not-yet-appended parent targets the
+    // wrong stream.
+    const { namespace, path } = this.#streamIdentity();
+    const resolvedPath = resolveStreamPath(path, streamPath);
+    if (resolvedPath === resolveStreamPath(path, ".")) return this;
+    return this.env.STREAM.getByName(`${namespace}:${resolvedPath}`);
   }
 
   /**

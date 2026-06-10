@@ -1145,7 +1145,11 @@ function StreamSidebar({
         streamStore={streamStore}
       />
       <InsertEventsTool streamStore={streamStore} streamPath={streamView.path} />
-      <StreamControlTool snapshot={snapshot} streamStore={streamStore} />
+      <StreamControlTool
+        snapshot={snapshot}
+        streamStore={streamStore}
+        streamPath={streamView.path}
+      />
     </aside>
   );
 }
@@ -1372,9 +1376,11 @@ function useStreamRuntimeState(streamStore: StreamBrowserStore, connectionStatus
 function StreamControlTool({
   snapshot,
   streamStore,
+  streamPath,
 }: {
   snapshot: StreamBrowserSnapshot;
   streamStore: StreamBrowserStore;
+  streamPath: string;
 }) {
   const { runtimeState, pollError } = useStreamRuntimeState(streamStore, snapshot.connectionStatus);
   const core = runtimeState?.coreProcessorState;
@@ -1427,7 +1433,10 @@ function StreamControlTool({
               subscriptionKey,
               subscriber: durableObjectProcessorSubscriber({
                 bindingName: "STREAM_PROCESSOR_RUNNER",
-                durableObjectName: `${core.path}:${subscriptionKey}`,
+                // Use the real stream path, not `core.path`: with lazy init the
+                // reduced state is the "uninitialized" placeholder until the
+                // first append, which would name every runner the same.
+                durableObjectName: `${streamPath}:${subscriptionKey}`,
                 processorName: "circuit-breaker",
               }),
             },
