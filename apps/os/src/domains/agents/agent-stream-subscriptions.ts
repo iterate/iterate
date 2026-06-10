@@ -9,12 +9,21 @@ import { CloudflareAiProcessorContract } from "~/domains/agents/stream-processor
 import { OpenAiWsProcessorContract } from "~/domains/agents/stream-processors/openai-ws/contract.ts";
 import { AGENT_HOST_PROCESSOR_SLUG } from "~/domains/agents/stream-processors/agent-host/contract.ts";
 import type { AgentLlmProvider } from "~/domains/agents/agent-presets.ts";
+import {
+  VOICE_AGENT_PROVIDER_GEMINI_LIVE,
+  VOICE_AGENT_PROVIDER_GROK_REALTIME,
+  VOICE_AGENT_PROVIDER_OPENAI_REALTIME,
+  type VoiceAgentProvider,
+} from "~/domains/agents/stream-processors/voice-agent/contract.ts";
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 export { AGENT_HOST_PROCESSOR_SLUG } from "~/domains/agents/stream-processors/agent-host/contract.ts";
 
 export const AGENTS_STREAM_PATH = StreamPathSchema.parse("/agents");
+export const GEMINI_LIVE_VOICE_PROCESSOR_SLUG = "voice-agent/gemini-live";
+export const OPENAI_REALTIME_VOICE_PROCESSOR_SLUG = "voice-agent/openai-realtime";
+export const GROK_REALTIME_VOICE_PROCESSOR_SLUG = "voice-agent/grok-realtime";
 
 export type AgentDurableObjectStructuredName = {
   agentPath: StreamPath;
@@ -45,6 +54,17 @@ export function defaultAgentProcessorSlugs(provider: AgentLlmProvider) {
     agentLlmProcessorSlug(provider),
     AGENT_HOST_PROCESSOR_SLUG,
   ];
+}
+
+export function voiceProviderProcessorSlug(provider: VoiceAgentProvider) {
+  switch (provider) {
+    case VOICE_AGENT_PROVIDER_GEMINI_LIVE:
+      return GEMINI_LIVE_VOICE_PROCESSOR_SLUG;
+    case VOICE_AGENT_PROVIDER_OPENAI_REALTIME:
+      return OPENAI_REALTIME_VOICE_PROCESSOR_SLUG;
+    case VOICE_AGENT_PROVIDER_GROK_REALTIME:
+      return GROK_REALTIME_VOICE_PROCESSOR_SLUG;
+  }
 }
 
 export function agentProcessorSubscriptionConfiguredEvents(input: {

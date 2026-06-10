@@ -31,6 +31,14 @@ import {
   type OpenAiResponsesWebSocket,
   type OpenAiResponsesWebSocketStreamMessage,
 } from "~/domains/agents/stream-processors/openai-ws/implementation.ts";
+import {
+  VOICE_AGENT_PROVIDER_GEMINI_LIVE,
+  VOICE_AGENT_PROVIDER_GROK_REALTIME,
+  VOICE_AGENT_PROVIDER_OPENAI_REALTIME,
+  VOICE_AGENT_SETUP_CONFIGURED_EVENT_TYPE,
+  type VoiceAgentProvider,
+} from "~/domains/agents/stream-processors/voice-agent/contract.ts";
+import { VoiceAgentProviderProcessor } from "~/domains/agents/stream-processors/voice-agent/implementation.ts";
 import { JsonataReactorProcessorContract } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
 import { JsonataReactorProcessor } from "~/domains/agents/stream-processors/jsonata-reactor/implementation.ts";
 import { AgentHostProcessor } from "~/domains/agents/stream-processors/agent-host/implementation.ts";
@@ -71,9 +79,17 @@ import {
   AGENT_HOST_PROCESSOR_SLUG,
   AGENTS_STREAM_PATH,
   AgentDurableObjectStructuredName,
+  GEMINI_LIVE_VOICE_PROCESSOR_SLUG,
+  GROK_REALTIME_VOICE_PROCESSOR_SLUG,
+  OPENAI_REALTIME_VOICE_PROCESSOR_SLUG,
   agentLlmProcessorSlug,
   agentProcessorSubscriptionConfiguredEvents,
+  voiceProviderProcessorSlug,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
+import {
+  isVoiceAgentPath,
+  voiceAgentCodeAgentSetupEvents,
+} from "~/domains/voice-agents/voice-agent-code-agent.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
 
 export {
@@ -173,6 +189,42 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         readStreamEvents: () => this.readSubscribedStreamEvents("cloudflare-ai"),
       }),
   );
+  geminiLiveVoiceProcessor = this.host.add(
+    GEMINI_LIVE_VOICE_PROCESSOR_SLUG,
+    (deps) =>
+      new VoiceAgentProviderProcessor({
+        ...deps,
+        geminiApiKey: readGeminiApiKey(this.env as unknown as Record<string, unknown>),
+        openAiApiKey: readOpenAiApiKey(this.env as unknown as Record<string, unknown>),
+        processorSlug: GEMINI_LIVE_VOICE_PROCESSOR_SLUG,
+        provider: VOICE_AGENT_PROVIDER_GEMINI_LIVE,
+        xAiApiKey: readXAiApiKey(this.env as unknown as Record<string, unknown>),
+      }),
+  );
+  openAiRealtimeVoiceProcessor = this.host.add(
+    OPENAI_REALTIME_VOICE_PROCESSOR_SLUG,
+    (deps) =>
+      new VoiceAgentProviderProcessor({
+        ...deps,
+        geminiApiKey: readGeminiApiKey(this.env as unknown as Record<string, unknown>),
+        openAiApiKey: readOpenAiApiKey(this.env as unknown as Record<string, unknown>),
+        processorSlug: OPENAI_REALTIME_VOICE_PROCESSOR_SLUG,
+        provider: VOICE_AGENT_PROVIDER_OPENAI_REALTIME,
+        xAiApiKey: readXAiApiKey(this.env as unknown as Record<string, unknown>),
+      }),
+  );
+  grokRealtimeVoiceProcessor = this.host.add(
+    GROK_REALTIME_VOICE_PROCESSOR_SLUG,
+    (deps) =>
+      new VoiceAgentProviderProcessor({
+        ...deps,
+        geminiApiKey: readGeminiApiKey(this.env as unknown as Record<string, unknown>),
+        openAiApiKey: readOpenAiApiKey(this.env as unknown as Record<string, unknown>),
+        processorSlug: GROK_REALTIME_VOICE_PROCESSOR_SLUG,
+        provider: VOICE_AGENT_PROVIDER_GROK_REALTIME,
+        xAiApiKey: readXAiApiKey(this.env as unknown as Record<string, unknown>),
+      }),
+  );
   jsonataReactorProcessor = this.host.add(
     "jsonata-reactor",
     (deps) => new JsonataReactorProcessor(deps),
@@ -210,6 +262,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
           AgentProcessorContract.slug,
           agentLlmProcessorSlug(llmProvider),
           AGENT_HOST_PROCESSOR_SLUG,
+          ...(isVoiceAgentPath(params.agentPath)
+            ? [voiceProviderProcessorSlug(await this.resolveVoiceAgentProvider(params))]
+            : []),
         ]);
         await this.ensureCodemodeSession(params);
       }
@@ -399,6 +454,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       AgentProcessorContract.slug,
       agentLlmProcessorSlug(await this.resolveLlmProvider(params)),
       AGENT_HOST_PROCESSOR_SLUG,
+      ...(isVoiceAgentPath(params.agentPath)
+        ? [voiceProviderProcessorSlug(await this.resolveVoiceAgentProvider(params))]
+        : []),
     ];
   }
 
@@ -409,6 +467,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       agent: this.agentProcessor,
       "openai-ws": this.openAiWsProcessor,
       "cloudflare-ai": this.cloudflareAiProcessor,
+      [GEMINI_LIVE_VOICE_PROCESSOR_SLUG]: this.geminiLiveVoiceProcessor,
+      [OPENAI_REALTIME_VOICE_PROCESSOR_SLUG]: this.openAiRealtimeVoiceProcessor,
+      [GROK_REALTIME_VOICE_PROCESSOR_SLUG]: this.grokRealtimeVoiceProcessor,
       "jsonata-reactor": this.jsonataReactorProcessor,
       [AGENT_HOST_PROCESSOR_SLUG]: this.agentHostProcessor,
     };
@@ -546,20 +607,29 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       agentPath: params.agentPath,
       presets: readAgentPathPrefixPresets(rootEvents),
     });
-    const setupEvents =
-      preset?.events ?? defaultAgentSetupEvents(DEFAULT_AGENT_LLM_PROVIDER, params.agentPath);
+    const isVoiceAgent = isVoiceAgentPath(params.agentPath);
+    const setupEvents = isVoiceAgent
+      ? voiceAgentCodeAgentSetupEvents({
+          baseEvents: preset?.events,
+          streamPath: params.agentPath,
+        })
+      : (preset?.events ?? defaultAgentSetupEvents(DEFAULT_AGENT_LLM_PROVIDER, params.agentPath));
     const hasSetupPrompt = setupEvents.some(
       (event) => event.type === "events.iterate.com/agent/system-prompt-updated",
     );
 
     for (const [index, event] of setupEvents.entries()) {
       const idempotencyKey = `os-agent-setup:${normalizeIdempotencyKeyPart(
-        preset?.basePath ?? "default",
+        isVoiceAgent ? (preset?.basePath ?? "/agents/voice") : (preset?.basePath ?? "default"),
       )}:${index}:${event.type}`;
       if (events.some((existingEvent) => existingEvent.idempotencyKey === idempotencyKey)) {
         continue;
       }
-      if (preset == null && hasEquivalentDefaultSetupEvent({ event, existingEvents: events })) {
+      if (
+        preset == null &&
+        !isVoiceAgent &&
+        hasEquivalentDefaultSetupEvent({ event, existingEvents: events })
+      ) {
         continue;
       }
       await streamApi.append({
@@ -754,6 +824,31 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     return DEFAULT_AGENT_LLM_PROVIDER;
   }
 
+  private async resolveVoiceAgentProvider(
+    params: AgentDurableObjectStructuredName,
+  ): Promise<VoiceAgentProvider> {
+    const events = await this.streamsEntrypoint(params.agentPath).read({
+      afterOffset: "start",
+      beforeOffset: "end",
+    });
+    for (const event of events.toReversed()) {
+      if (event.type === VOICE_AGENT_SETUP_CONFIGURED_EVENT_TYPE) {
+        const provider = (event.payload as { provider?: unknown }).provider;
+        if (
+          provider === VOICE_AGENT_PROVIDER_GEMINI_LIVE ||
+          provider === VOICE_AGENT_PROVIDER_OPENAI_REALTIME ||
+          provider === VOICE_AGENT_PROVIDER_GROK_REALTIME
+        ) {
+          return provider;
+        }
+      }
+      if (event.type === "events.iterate.com/voice-agent/config-updated") {
+        return VOICE_AGENT_PROVIDER_GEMINI_LIVE;
+      }
+    }
+    return VOICE_AGENT_PROVIDER_GEMINI_LIVE;
+  }
+
   private streamsEntrypoint(streamPath: StreamPath) {
     return agentStreamApiFromNamespace({
       durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
@@ -787,6 +882,42 @@ export function readOpenAiApiKey(env: Record<string, unknown>) {
   try {
     const parsed = JSON.parse(rawConfig) as { openAiApiKey?: unknown };
     return typeof parsed.openAiApiKey === "string" ? parsed.openAiApiKey : "";
+  } catch {
+    return "";
+  }
+}
+
+export function readGeminiApiKey(env: Record<string, unknown>) {
+  return readAppConfigSecret({
+    env,
+    configKey: "geminiApiKey",
+    envKey: "APP_CONFIG_GEMINI_API_KEY",
+  });
+}
+
+export function readXAiApiKey(env: Record<string, unknown>) {
+  return readAppConfigSecret({
+    env,
+    configKey: "xAiApiKey",
+    envKey: "APP_CONFIG_X_AI_API_KEY",
+  });
+}
+
+function readAppConfigSecret(input: {
+  env: Record<string, unknown>;
+  envKey: string;
+  configKey: string;
+}) {
+  const override = input.env[input.envKey];
+  if (typeof override === "string") return override;
+
+  const rawConfig = input.env.APP_CONFIG;
+  if (typeof rawConfig !== "string" || rawConfig.trim() === "") return "";
+
+  try {
+    const parsed = JSON.parse(rawConfig) as Record<string, unknown>;
+    const value = parsed[input.configKey];
+    return typeof value === "string" ? value : "";
   } catch {
     return "";
   }
