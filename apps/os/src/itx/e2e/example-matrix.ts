@@ -31,16 +31,43 @@ export async function runExampleCode(
   runtime: MatrixRuntime,
   input: { code: string; id?: string; projectId: string; vars: Record<string, unknown> },
 ): Promise<unknown> {
-  switch (runtime) {
-    case "node":
-      return await runInNode(input);
-    case "cli":
-      return await runInCli(input);
-    case "dynamic-worker":
-      return await runInDynamicWorker(input);
-    case "config-worker":
-      return await runInConfigWorker(input);
+  // Worker-heavy examples (worker-to-worker, facets) running while the other
+  // e2e files load their own dynamic workers can trip the deployment's loader
+  // concurrency cap. That's shared-load contention, not a behavior bug — back
+  // off and retry that one error; anything else fails immediately.
+  return await retryOnLoaderContention(async () => {
+    switch (runtime) {
+      case "node":
+        return await runInNode(input);
+      case "cli":
+        return await runInCli(input);
+      case "dynamic-worker":
+        return await runInDynamicWorker(input);
+      case "config-worker":
+        return await runInConfigWorker(input);
+    }
+  });
+}
+
+const LOADER_CONTENTION_MESSAGE = "Too many concurrent dynamic workers";
+const LOADER_CONTENTION_BACKOFF_MS = [2_000, 5_000, 10_000];
+
+async function retryOnLoaderContention<T>(run: () => Promise<T>): Promise<T> {
+  for (const backoffMs of LOADER_CONTENTION_BACKOFF_MS) {
+    try {
+      return await run();
+    } catch (error) {
+      // The cli runtime surfaces script errors on the spawned process's
+      // stderr (execFile attaches it to the error), so check both.
+      const message = [
+        error instanceof Error ? error.message : String(error),
+        String((error as { stderr?: unknown }).stderr ?? ""),
+      ].join("\n");
+      if (!message.includes(LOADER_CONTENTION_MESSAGE)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
   }
+  return await run();
 }
 
 async function runInNode(input: {
