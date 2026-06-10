@@ -104,8 +104,7 @@ export default {
           lookupRule: (host) =>
             lookupIngressRule({
               appHostname,
-              db,
-              doCatalog: env.DB,
+              db: env.DB,
               host,
               projectHostnameBases: config.projectHostnameBases,
             }),

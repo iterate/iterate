@@ -1,5 +1,5 @@
 // The itx handle: the ONE thing user code ever touches, identical in the
-// browser, Node, the REPL, the iterate-config worker, itx scripts, and caps
+// browser, Node, the REPL, the project worker, itx scripts, and caps
 // themselves (spec §5).
 //
 // A handle is a cheap, ephemeral VIEW over a durable context node. Authority
@@ -164,20 +164,24 @@ export class Itx extends RpcTarget {
   }
 
   /**
-   * The project's iterate-config worker. The dynamic worker entrypoint itself
-   * can never cross an RPC boundary (workerd forbids transferring loader
-   * entrypoints), so the path is replayed against it INSIDE the Project DO —
-   * every public method/getter is proxied automatically, at any depth:
+   * The project's worker. The loaded worker entrypoint itself can never cross
+   * an RPC boundary (workerd forbids transferring loader entrypoints), so the
+   * path is replayed against it INSIDE the Project DO — every public
+   * method/getter is proxied automatically, at any depth:
    * itx.worker.someTool(args), itx.worker.group.tool(args). `fetch` is the
-   * one special case (the project's ingress fetch).
+   * one special case: the worker's fetch is the project's homepage, served by
+   * the stateless ingress entrypoint (fetch on the PROJECT is egress).
    */
   get worker(): unknown {
     const project = this.#projectStub();
     return new PathProxyRpcTarget(async ({ path, args }) => {
       if (path.length === 1 && path[0] === "fetch") {
-        return await project.fetch(args[0] as Request);
+        const ingress = this.#runtime.exports.ProjectIngressEntrypoint({
+          props: { projectId: this.#requireProjectId() },
+        }) as { fetch(request: Request): Promise<Response> };
+        return await ingress.fetch(args[0] as Request);
       }
-      return await project.callConfigWorkerFunction({ args, path });
+      return await project.callWorkerFunction({ args, path });
     });
   }
 

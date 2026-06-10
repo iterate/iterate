@@ -28,11 +28,11 @@ export default {
       if (response) return response;
     }
 
-    return new Response("Hello from the project config worker");
+    return new Response("Hello from the project worker");
   },
 
-  async afterAppend({ event }) {
-    console.log("Project config worker afterAppend", event.type);
+  async processEvent({ event }) {
+    console.log("Project worker processEvent", event.type);
   },
 };
 `;

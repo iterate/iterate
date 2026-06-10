@@ -28,8 +28,8 @@
  *
  * **An itx** is a live handle on one context — the only thing user code
  * ever touches, identical in the browser, Node, the REPL, the project
- * worker (the worker built from the project's own repo — formerly the
- * "iterate-config worker"), itx scripts, and capabilities themselves. Built-in
+ * worker (the worker built from the project's own repo), itx scripts, and
+ * capabilities themselves. Built-in
  * members (`caps`, `streams`, `fetch`, `fork`, …) are the trust kernel;
  * every other property falls through to the context's capability registry.
  * Authority is the handle itself: auth happens once at connect, and which

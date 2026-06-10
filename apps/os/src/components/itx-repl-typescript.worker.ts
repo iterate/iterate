@@ -97,7 +97,7 @@ interface ItxWorkspace {
 }
 
 interface ItxProjectAdmin {
-  callConfigWorkerFunction(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
+  callWorkerFunction(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   describe(): Promise<ProjectSummary & { ingressUrl: string }>;
   egressFetch(request: Request): Promise<Response>;
   fetch(request: Request): Promise<Response>;

@@ -1,4 +1,3 @@
-import { createD1Client } from "sqlfu";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -7,22 +6,18 @@ import {
   getProjectDurableObjectName,
   ProjectDurableObject as RealProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
-import { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
+import { PROJECT_STREAM_PATH } from "~/domains/projects/stream-processors/project-processor.ts";
 import {
   getRepoDurableObjectName,
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
-import { getIngressRouteByHost } from "~/db/queries/.generated/index.ts";
 import {
   dispatchFetchCallable,
   matchIngressRequest,
   normalizeIngressHost,
-  parseIngressCallable,
 } from "~/ingress/host-routing.ts";
-import { getProjectCustomHostnameIngressRule } from "~/ingress/project-custom-hostname-routing.ts";
-import { getProjectPlatformHostIngressRule } from "~/ingress/project-platform-host-routing.ts";
-import type { ExactHostIngressRule } from "~/ingress/types.ts";
+import { lookupIngressRule } from "~/ingress/lookup.ts";
 
 const PROJECT_CONFIG_DIR = "/iterate-config";
 const MOCK_ARTIFACT_REMOTE_BASE = "https://artifacts.example.test/";
@@ -92,13 +87,13 @@ export class ProjectDurableObject extends RealProjectDurableObject {
     });
   }
 
-  protected async cloneProjectConfigRepo(input: {
+  protected override async cloneWorkerRepo(input: {
     git: TestProjectConfigGit;
     repo: RepoInfo;
     workspace: TestProjectConfigWorkspace;
   }) {
     if (!input.repo.remote.startsWith(MOCK_ARTIFACT_REMOTE_BASE)) {
-      await super.cloneProjectConfigRepo(input);
+      await super.cloneWorkerRepo(input);
       return;
     }
 
@@ -125,7 +120,7 @@ export class ProjectDurableObject extends RealProjectDurableObject {
     });
   }
 
-  protected override async bundleProjectDynamicWorkerCode(files: Record<string, string>) {
+  protected override async bundleWorkerCode(files: Record<string, string>) {
     if (typeof files["package.json"] !== "string") {
       throw new Error("Test project worker bundler path requires package.json.");
     }
@@ -170,7 +165,7 @@ export {
 } from "./mock-artifacts-binding.ts";
 export { CodemodeSession } from "~/durable-objects/codemode-session-tombstone.ts";
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
-export { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
+export { PROJECT_STREAM_PATH } from "~/domains/projects/stream-processors/project-processor.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 
@@ -252,18 +247,17 @@ export default {
       const stream = await getInitializedStreamStub({
         durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
         namespace: "proj__local__test",
-        path: PROJECT_LIFECYCLE_STREAM_PATH,
+        path: PROJECT_STREAM_PATH,
       });
 
       return Response.json({ events: await stream.history({ before: "end" }) });
     }
 
-    if (url.pathname === "/__test/project-lifecycle-state") {
+    if (url.pathname === "/__test/project-state") {
       const project = env.PROJECT.getByName(
         getProjectDurableObjectName("proj__local__test"),
-      ) as unknown as ProjectLifecycleStateRpc;
-      const state = await project.getProjectLifecycleRunnerState();
-      return Response.json(state);
+      ) as unknown as ProjectStateRpc;
+      return Response.json(await project.getProjectState());
     }
 
     if (url.pathname === "/__test/iterate-config-repo") {
@@ -277,29 +271,15 @@ export default {
       return Response.json(repo satisfies RepoInfo);
     }
 
-    const db = createD1Client(env.DB);
-    const appHostname = "os.iterate.localhost";
-    const projectHostnameBases = ["iterate.localhost"];
     const ingressMatch = await matchIngressRequest({
       request,
-      lookupRule: async (host) => {
-        const row = await getIngressRouteByHost(db, { host: normalizeIngressHost(host) });
-        if (row) return ingressRouteRowToRule(row);
-
-        const platformRule = await getProjectPlatformHostIngressRule({
-          appHostname,
-          bases: projectHostnameBases,
+      lookupRule: (host) =>
+        lookupIngressRule({
+          appHostname: "os.iterate.localhost",
           db: env.DB,
           host,
-        });
-        if (platformRule) return platformRule;
-
-        return await getProjectCustomHostnameIngressRule({
-          appHostname,
-          db: env.DB,
-          host,
-        });
-      },
+          projectHostnameBases: ["iterate.localhost"],
+        }),
     });
 
     if (!ingressMatch) {
@@ -317,8 +297,8 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-type ProjectLifecycleStateRpc = {
-  getProjectLifecycleRunnerState(): Promise<unknown>;
+type ProjectStateRpc = {
+  getProjectState(): Promise<unknown>;
 };
 
 type ProjectEgressInterceptTestRpc = {
@@ -334,17 +314,6 @@ async function ensureD1Schema(db: D1Database) {
         created_at text not null default current_timestamp,
         updated_at text not null default current_timestamp
       )`),
-    db.prepare(`CREATE TABLE IF NOT EXISTS ingress_routes (
-      id text primary key not null,
-      host text not null unique,
-      project_id text references projects (id) on delete cascade,
-      priority integer not null,
-      notes text,
-      callable_json text not null check (json_valid(callable_json)),
-      created_at text not null default current_timestamp,
-      updated_at text not null default current_timestamp
-    )`),
-    db.prepare(`CREATE INDEX IF NOT EXISTS idx_ingress_routes_host ON ingress_routes (host)`),
     db.prepare(`CREATE TABLE IF NOT EXISTS project_secrets (
       id text primary key not null,
       project_id text not null references projects (id) on delete cascade,
@@ -359,32 +328,7 @@ async function ensureD1Schema(db: D1Database) {
       `CREATE INDEX IF NOT EXISTS idx_project_secrets_project_id ON project_secrets (project_id)`,
     ),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_project_secrets_key ON project_secrets (key)`),
-    db.prepare(
-      `CREATE INDEX IF NOT EXISTS idx_ingress_routes_project_id ON ingress_routes (project_id)`,
-    ),
   ]);
-}
-
-function ingressRouteRowToRule(row: {
-  id: string;
-  host: string;
-  project_id?: string | null;
-  priority: number;
-  notes?: string | null;
-  callable_json: string;
-  created_at: string;
-  updated_at: string;
-}): ExactHostIngressRule {
-  return {
-    id: row.id,
-    host: row.host,
-    projectId: row.project_id ?? null,
-    priority: row.priority,
-    notes: row.notes ?? null,
-    callable: parseIngressCallable(row.callable_json),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
 }
 
 function readWorkspaceStateMethod(input: { method: string; state: Record<string, unknown> }) {

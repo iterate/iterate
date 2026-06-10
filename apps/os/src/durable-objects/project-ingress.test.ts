@@ -67,32 +67,53 @@ describe("Project ingress routing", () => {
       slug: "demo",
     });
 
-    const ingressRows = await env.DB.prepare(
-      `SELECT host, project_id, callable_json
-       FROM ingress_routes
-       WHERE project_id = ?
-       ORDER BY host ASC`,
-    )
-      .bind("proj__local__test")
-      .all<{ host: string; project_id: string; callable_json: string }>();
-    expect(ingressRows.results.map((row) => row.host)).toEqual([
-      "demo.iterate.localhost",
-      "proj__local__test.iterate.localhost",
-    ]);
-    expect(
-      ingressRows.results.map((row) => ({
-        host: row.host,
-        exportName: (
-          JSON.parse(row.callable_json) as {
-            via: { exportName: string };
-          }
-        ).via.exportName,
-      })),
-    ).toEqual([
-      { host: "demo.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
-      { host: "proj__local__test.iterate.localhost", exportName: "ProjectIngressEntrypoint" },
+    await waitForProjectStreamEvents([
+      expect.objectContaining({
+        type: "events.iterate.com/project/create-requested",
+        payload: expect.objectContaining({
+          projectId: "proj__local__test",
+          slug: "demo",
+        }),
+      }),
+      expect.objectContaining({
+        type: "events.iterate.com/project/created",
+        payload: expect.objectContaining({
+          defaultHost: "demo.iterate.localhost",
+          projectId: "proj__local__test",
+          slug: "demo",
+        }),
+      }),
+      expect.objectContaining({
+        type: "events.iterate.com/project/create-completed",
+        payload: expect.objectContaining({
+          projectId: "proj__local__test",
+        }),
+      }),
+      expect.objectContaining({
+        type: "events.iterate.com/project/config-worker-built",
+        payload: expect.objectContaining({
+          mainModule: "worker.js",
+          projectId: "proj__local__test",
+          repoSlug: "iterate-config",
+        }),
+      }),
     ]);
 
+    const projectState = await waitForProjectState();
+    expect(projectState.state.project).toMatchObject({
+      defaultHost: "demo.iterate.localhost",
+      projectId: "proj__local__test",
+      slug: "demo",
+    });
+    expect(projectState.state.phase).toBe("ready");
+    expect(projectState.state.worker).toMatchObject({
+      mainModule: "worker.js",
+      repoSlug: "iterate-config",
+    });
+    expect(projectState.offset).toBeGreaterThanOrEqual(4);
+
+    // Creation side effects (the processor's create-requested steps) have
+    // completed once phase is "ready" — the example secret is one of them.
     const exampleSecret = await env.DB.prepare(
       `SELECT key, material
        FROM project_secrets
@@ -105,43 +126,6 @@ describe("Project ingress routing", () => {
       key: EXAMPLE_EGRESS_SECRET_KEY,
       material: EXAMPLE_EGRESS_SECRET_MATERIAL,
     });
-
-    const streamResponse = await SELF.fetch("https://os.iterate.localhost/__test/project-stream");
-    expect(streamResponse.ok).toBe(true);
-    const streamBody = (await streamResponse.json()) as {
-      events: Array<{ type: string; payload: Record<string, unknown> }>;
-    };
-    expect(streamBody.events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "events.iterate.com/project/created",
-          payload: expect.objectContaining({
-            defaultHost: "demo.iterate.localhost",
-            projectId: "proj__local__test",
-            slug: "demo",
-          }),
-        }),
-      ]),
-    );
-    await waitForProjectLifecycleEvents([
-      expect.objectContaining({
-        type: "events.iterate.com/project/config-worker-built",
-        payload: expect.objectContaining({
-          mainModule: "worker.js",
-          projectId: "proj__local__test",
-          repoSlug: "iterate-config",
-        }),
-      }),
-    ]);
-
-    const lifecycleState = await waitForProjectLifecycleState();
-    expect(lifecycleState.state.project).toMatchObject({
-      defaultHost: "demo.iterate.localhost",
-      projectId: "proj__local__test",
-      slug: "demo",
-    });
-    expect(lifecycleState.reducedThroughOffset).toBeGreaterThanOrEqual(4);
-    expect(lifecycleState.afterAppendCompletedThroughOffset).toBeGreaterThanOrEqual(4);
 
     const repoResponse = await SELF.fetch(
       "https://os.iterate.localhost/__test/iterate-config-repo",
@@ -351,33 +335,36 @@ function headersToArrays(headers: Headers) {
   return Object.fromEntries([...headers].map(([key, value]) => [key, [value]]));
 }
 
-async function waitForProjectLifecycleState() {
+async function waitForProjectState() {
   const deadline = Date.now() + 5_000;
   let latest: unknown;
 
   while (Date.now() < deadline) {
-    const response = await SELF.fetch(
-      "https://os.iterate.localhost/__test/project-lifecycle-state",
-    );
+    const response = await SELF.fetch("https://os.iterate.localhost/__test/project-state");
     latest = await response.json();
-    const state = latest as {
-      afterAppendCompletedThroughOffset: number;
-      reducedThroughOffset: number;
+    const snapshot = latest as {
+      offset: number;
       state: {
+        phase: string;
         project: { projectId: string } | null;
+        worker: { commitOid: string } | null;
       };
     };
-    if (state.state.project?.projectId === "proj__local__test") {
-      return state;
+    if (
+      snapshot.state.project?.projectId === "proj__local__test" &&
+      snapshot.state.phase === "ready" &&
+      snapshot.state.worker !== null
+    ) {
+      return snapshot;
     }
 
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 
-  throw new Error(`Timed out waiting for project lifecycle state: ${JSON.stringify(latest)}`);
+  throw new Error(`Timed out waiting for project state: ${JSON.stringify(latest)}`);
 }
 
-async function waitForProjectLifecycleEvents(expectedEvents: unknown[]) {
+async function waitForProjectStreamEvents(expectedEvents: unknown[]) {
   const deadline = Date.now() + 5_000;
   let latest: unknown;
 

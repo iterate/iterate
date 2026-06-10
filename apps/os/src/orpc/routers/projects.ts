@@ -232,7 +232,7 @@ export const projectsRouter = {
       .use(projectScopeMiddleware)
       .handler(async ({ context }) => {
         const project = requireProjectScope(context);
-        return await projectLifecycleDurableObject(project.id).getProjectLifecycleRunnerState();
+        return await projectStateDurableObject(project.id).getProjectState();
       }),
     agents: projectAgentsRouter,
     repos: projectReposRouter,
@@ -268,10 +268,10 @@ function projectDurableObject(projectId: string) {
   return getProjectDurableObjectStub(projectId);
 }
 
-type ProjectLifecycleStateRpc = {
-  getProjectLifecycleRunnerState(): Promise<unknown>;
+type ProjectStateRpc = {
+  getProjectState(): Promise<unknown>;
 };
 
-function projectLifecycleDurableObject(projectId: string): ProjectLifecycleStateRpc {
-  return getProjectDurableObjectStub(projectId) as unknown as ProjectLifecycleStateRpc;
+function projectStateDurableObject(projectId: string): ProjectStateRpc {
+  return getProjectDurableObjectStub(projectId) as unknown as ProjectStateRpc;
 }
