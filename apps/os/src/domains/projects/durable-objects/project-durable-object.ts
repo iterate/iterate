@@ -545,10 +545,16 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
    * Delivers one event to the config worker's `processEvent` export. No-op
    * until the config worker has first been built (project provisioning does
    * that within seconds of creation; earlier events are platform lifecycle
-   * noise). User-code failures are swallowed and logged — a throwing
-   * processEvent is the project author's bug and must never wedge root-stream
-   * delivery (the host would otherwise treat the batch as poison and
-   * disconnect the subscription).
+   * noise).
+   *
+   * Failure handling distinguishes whose fault it is:
+   * - PLATFORM failures (entrypoint resolution, an awaited rebuild) THROW:
+   *   the forwarding processor delivers under blockProcessorWhile, so the
+   *   checkpoint holds and the at-least-once machinery redelivers the event —
+   *   a transient repo/build hiccup must not silently drop it.
+   * - USER-code failures (the project's processEvent throwing) are swallowed
+   *   and logged: the project author's bug must never wedge root-stream
+   *   delivery into the host's poison-batch disconnect.
    */
   private async forwardEventToConfigWorker(input: { event: StreamEvent; streamPath: string }) {
     const summary = this.currentSummary();
@@ -556,8 +562,8 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       PROJECT_CONFIG_READY_STORAGE_KEY,
     );
     if (summary === null || configWorkerIsReady !== true) return;
+    const entrypoint = await this.getForwardingProjectDynamicWorkerEntrypoint(summary);
     try {
-      const entrypoint = await this.getForwardingProjectDynamicWorkerEntrypoint(summary);
       await entrypoint.processEvent?.(input);
     } catch (error) {
       console.error("Project config worker processEvent failed.", error);

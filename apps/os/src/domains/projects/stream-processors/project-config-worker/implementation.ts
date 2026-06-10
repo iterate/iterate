@@ -11,10 +11,12 @@ export type ProjectConfigWorkerProcessorDeps = {
   /**
    * Delivers one event to the config worker's `processEvent` export. The host
    * (ProjectDurableObject) owns the gate (no-op until the config worker has
-   * been built) and MUST swallow user-code failures: a throwing processEvent
-   * is the project author's bug and may never wedge the root stream's
-   * delivery — the host's poison-batch handling would otherwise disconnect
-   * this subscription after repeated failures.
+   * been built) and the failure split: USER-code failures (the project's
+   * processEvent throwing) must be swallowed there — the project author's bug
+   * may never wedge root-stream delivery into the poison-batch disconnect —
+   * while PLATFORM failures (entrypoint resolution, rebuilds) must throw so
+   * the blocking delivery below holds the checkpoint and the event is
+   * redelivered rather than silently dropped.
    */
   forwardToConfigWorker(event: StreamEvent): Promise<void>;
 };
