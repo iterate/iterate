@@ -127,13 +127,50 @@ export default {
                 .map((item) => `<${item.html_url}|#${item.number}>`);
               lines.push(`Old: ${oldLinks.join(", ")}`);
             }
-            const text = lines.join("\n");
-
-            console.log(`Dashboard message for ${channel}:\n\n${text}`);
+            console.log(`Dashboard message for ${channel}:\n\n${lines.join("\n")}`);
             if (dryRun) {
               console.log("Dry run (no Slack token available locally), not posting.");
               return;
             }
+
+            // a single text param hits chat.update's msg_too_long on busy days (postMessage
+            // truncates, update rejects), so chunk the lines into mrkdwn section blocks: 3000
+            // chars each, 50 blocks max - far more headroom than one text field
+            const BLOCK_CHARS = 2900;
+            const splitLongLine = (line: string) => {
+              if (line.length <= BLOCK_CHARS) return [line];
+              const parts: string[] = [];
+              let current = "";
+              for (const piece of line.split(", ")) {
+                const candidate = current ? `${current}, ${piece}` : piece;
+                if (candidate.length > BLOCK_CHARS && current) {
+                  parts.push(current);
+                  current = piece;
+                } else {
+                  current = candidate;
+                }
+              }
+              return [...parts, current];
+            };
+            const chunks: string[] = [];
+            for (const line of lines.flatMap(splitLongLine)) {
+              const last = chunks.at(-1);
+              if (last !== undefined && last.length + 1 + line.length <= BLOCK_CHARS) {
+                chunks[chunks.length - 1] = `${last}\n${line}`;
+              } else {
+                chunks.push(line);
+              }
+            }
+            if (chunks.length > 49) {
+              const dropped = chunks.splice(49).join("\n").split("\n").length;
+              chunks.push(`_…${dropped} more lines truncated_`);
+            }
+            const blocks = chunks.map((chunk) => ({
+              type: "section" as const,
+              text: { type: "mrkdwn" as const, text: chunk },
+            }));
+            // `text` becomes the notification fallback when blocks are present
+            const message_payload = { channel, text: heading.replaceAll("*", ""), blocks };
 
             const slack = getSlackClient(slackToken);
 
@@ -148,7 +185,7 @@ export default {
 
             if (state && state.date === today && state.channel === channel) {
               const updated = await slack.chat
-                .update({ channel, ts: state.ts, text })
+                .update({ ...message_payload, ts: state.ts })
                 .catch((error) => {
                   // e.g. message_not_found if someone deleted today's message - post a fresh one
                   console.warn(`chat.update failed, posting a new message instead:`, error);
@@ -160,7 +197,7 @@ export default {
               }
             }
 
-            const message = await slack.chat.postMessage({ channel, text });
+            const message = await slack.chat.postMessage(message_payload);
             if (!message.ts) throw new Error(`No ts in postMessage response`);
             const newState: State = { date: today, channel, ts: message.ts };
             await github.rest.actions
