@@ -49,7 +49,16 @@ export const AgentProcessorContract = defineProcessorContract({
       .default({ model: DEFAULT_WORKERS_AI_AGENT_MODEL, runOpts: {}, debounceMs: 1000 }),
     currentRequest: z
       .discriminatedUnion("phase", [
-        z.object({ phase: z.literal("scheduled"), requestId: z.string() }),
+        z.object({
+          phase: z.literal("scheduled"),
+          requestId: z.string(),
+          // Offset of the llm-request-scheduled event. Lets a rehydrated
+          // processor instance re-arm the debounce timer (the timer dies with
+          // the Durable Object; this is the durable anchor it is rebuilt
+          // from). Optional so checkpoints written before this field existed
+          // still parse.
+          scheduledOffset: z.number().int().positive().optional(),
+        }),
         z.object({ phase: z.literal("requested"), llmRequestId: z.number().int().positive() }),
       ])
       .nullable()
@@ -270,7 +279,11 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
     case "events.iterate.com/agent/llm-request-scheduled":
       return {
         ...state,
-        currentRequest: { phase: "scheduled" as const, requestId: event.payload.requestId },
+        currentRequest: {
+          phase: "scheduled" as const,
+          requestId: event.payload.requestId,
+          scheduledOffset: event.offset,
+        },
         pendingTriggerCount: 0,
       };
     case "events.iterate.com/agent/llm-request-requested":

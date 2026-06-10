@@ -634,14 +634,33 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         ? undefined
         : new Set(args.eventTypes);
 
+    let cursor = args.replayAfterOffset ?? this.#coreProcessorState.maxOffset;
+    let draining = false;
+    let open = true;
+
     // Workers RPC disposes parameter stubs when an RPC method returns unless the
     // callee duplicates them. Keep a retained callback because this stream calls
     // it later from the pump, after subscribe() has returned:
     // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
-    const processEventBatch = retainProcessEventBatch(args.processEventBatch);
-    let cursor = args.replayAfterOffset ?? this.#coreProcessorState.maxOffset;
-    let draining = false;
-    let open = true;
+    const processEventBatch = retainProcessEventBatch(args.processEventBatch, {
+      // A rejected delivery means the subscriber stub is gone (callee DO
+      // evicted/redeployed/aborted) or the batch was refused. Either way the
+      // connection is not making progress: drop it so reconcile can re-dial,
+      // and the subscriber re-handshakes from its durable checkpoint — replay
+      // covers whatever this connection's cursor already advanced past.
+      // Without this, a dead stub stayed in #connections for the rest of the
+      // incarnation and #reconcile skipped its key, stalling delivery forever.
+      onDeliveryError: (error) => {
+        if (!open) return;
+        console.error("Stream event batch delivery failed; dropping connection for re-dial", {
+          subscriptionKey,
+          direction: args.direction,
+          error,
+        });
+        connection.close();
+        if (args.direction === "outbound") this.#reconcile();
+      },
+    });
 
     // The single delivery path: drain committed events to the callback, then park.
     //
