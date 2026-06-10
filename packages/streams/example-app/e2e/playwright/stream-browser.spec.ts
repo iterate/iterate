@@ -5,6 +5,28 @@ import { join } from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { e2eStreamPath, streamRoute } from "../helpers.ts";
 
+// Local reproduction of CI conditions (slow runner + real network to a deployed worker).
+// Example: E2E_CPU_THROTTLE=6 E2E_NET_LATENCY_MS=100 WORKER_URL=https://... pnpm playwright.
+// No-op unless the env vars are set, so CI and normal local runs are unaffected.
+test.beforeEach(async ({ page }) => {
+  const cpuThrottleRate = Number(process.env.E2E_CPU_THROTTLE ?? "1");
+  const networkLatencyMs = Number(process.env.E2E_NET_LATENCY_MS ?? "0");
+  if (cpuThrottleRate <= 1 && networkLatencyMs <= 0) return;
+  const session = await page.context().newCDPSession(page);
+  if (cpuThrottleRate > 1) {
+    await session.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottleRate });
+  }
+  if (networkLatencyMs > 0) {
+    await session.send("Network.enable");
+    await session.send("Network.emulateNetworkConditions", {
+      offline: false,
+      latency: networkLatencyMs,
+      downloadThroughput: -1,
+      uploadThroughput: -1,
+    });
+  }
+});
+
 // Baseline end-to-end smoke test for the simplified browser mirror: a composer append must
 // go to the server, be delivered back through the single elected subscriber, land in SQLite,
 // and show up through the visible-range SQL query.

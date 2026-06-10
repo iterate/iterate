@@ -117,6 +117,17 @@ export default workflow({
           name: "Run streams Playwright e2e",
           run: "pnpm --dir packages/streams/example-app playwright",
         },
+        {
+          name: "Upload Playwright artifacts",
+          if: "failure()",
+          uses: "actions/upload-artifact@v4",
+          with: {
+            name: "streams-playwright-test-results",
+            path: "packages/streams/example-app/test-results",
+            "if-no-files-found": "ignore",
+            "retention-days": 7,
+          },
+        },
       ],
     },
     cleanup: {

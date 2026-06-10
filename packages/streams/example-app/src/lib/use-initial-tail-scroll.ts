@@ -10,7 +10,7 @@ const TAIL_CONVERGED_EPSILON_PX = 2;
 export type InitialTailScrollState = {
   settledInitialEndScroll: RefObject<boolean>;
   userLeftTail: RefObject<boolean>;
-  markUserLeftTail(): void;
+  markUserLeftTail(reason?: string): void;
 };
 
 /**
@@ -42,15 +42,21 @@ export function useInitialTailScroll<TScrollElement extends Element>(args: {
   const latest = useRef(args);
   latest.current = args;
 
-  function markUserLeftTail() {
+  function markUserLeftTail(reason: string = "explicit", detail: Record<string, number> = {}) {
+    if (!userLeftTail.current) {
+      // Deliberate breadcrumb: tail-pin releases are the prime suspect whenever the
+      // virtualized stream e2e specs strand the viewport mid-list, and Playwright traces
+      // capture console output. Logged once, on the release transition only.
+      console.debug(`[initial-tail-scroll] pin released: ${reason}`, JSON.stringify(detail));
+    }
     userLeftTail.current = true;
   }
 
   useEffect(() => {
     const element = args.scrollElementRef.current;
     if (element === null) return;
-    const onUserScroll = () => {
-      markUserLeftTail();
+    const onUserScroll = (event: Event) => {
+      markUserLeftTail(`user-input:${event.type}`);
     };
     // Any scroll that moves *away* from the tail means the viewport intentionally left it.
     // This catches scrolls that produce no input event (scrollbar drags mid-gesture,
@@ -67,7 +73,14 @@ export function useInitialTailScroll<TScrollElement extends Element>(args: {
         nextScrollTop < lastScrollTop - TAIL_CONVERGED_EPSILON_PX &&
         nextDistanceFromEnd > lastDistanceFromEnd + TAIL_CONVERGED_EPSILON_PX
       ) {
-        markUserLeftTail();
+        markUserLeftTail("scroll-away", {
+          lastScrollTop,
+          nextScrollTop,
+          lastDistanceFromEnd,
+          nextDistanceFromEnd,
+          scrollHeight: element.scrollHeight,
+          clientHeight: element.clientHeight,
+        });
       }
       lastScrollTop = nextScrollTop;
       lastDistanceFromEnd = nextDistanceFromEnd;
@@ -109,6 +122,12 @@ export function useInitialTailScroll<TScrollElement extends Element>(args: {
         latest.current.virtualizer.scrollToEnd();
         armTailSettleTimer();
         return;
+      }
+      if (!settledInitialEndScroll.current) {
+        console.debug(
+          `[initial-tail-scroll] pin settled`,
+          JSON.stringify({ count: latest.current.count, distanceFromEnd: realDistanceFromEnd() }),
+        );
       }
       settledInitialEndScroll.current = true;
     }, TAIL_SETTLE_MS);
