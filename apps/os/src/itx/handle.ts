@@ -21,7 +21,7 @@ import { typeid } from "@iterate-com/shared/typeid";
 import type { StreamCursor, Event as StreamEvent } from "@iterate-com/shared/streams/types";
 import { createD1Client } from "sqlfu";
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
-import { PathProxyRpcTarget } from "./path-proxy.ts";
+import { PathProxyRpcTarget, replayPathCall } from "./path-proxy.ts";
 import { ItxError } from "./errors.ts";
 import {
   GLOBAL_CONTEXT_ID,
@@ -186,19 +186,21 @@ export class Itx extends RpcTarget {
   }
 
   /**
-   * The project's own (cap #0) surface IS the Project Durable Object stub.
-   * Workers RPC proxies every public method/getter automatically, so adding a
-   * method to ProjectDurableObject makes it instantly callable as
-   * itx.project.newMethod() — zero forwarder code, nothing to keep in sync.
+   * The project's own (cap #0) surface IS the Project Durable Object —
+   * adding a method/getter to ProjectDurableObject makes it instantly
+   * reachable as itx.project.newMethod() — zero forwarder code, nothing to
+   * keep in sync (the owner-chosen whole-surface posture, DECISIONS D17).
    *
-   * This is a deliberate, owner-chosen posture (reverses the round-1 facade,
-   * DECISIONS D17): the access model is project-level — if your handle is on
-   * this project's context at all, you get its whole surface. The dangerous
-   * direction (a hand-built `path` into reserved/prototype names via
-   * itxInvoke) is still gated server-side in replayPathCall.
+   * Wrapped in a path proxy rather than handing out the raw stub: workerd
+   * does not pipeline calls through property accesses, so on a raw stub
+   * `stub.processor.snapshot()` throws. The proxy accumulates the path and
+   * replayPathCall awaits each intermediate segment, so deep traversal works
+   * in one expression: `await itx.project.processor.snapshot()`. Reserved/
+   * prototype path segments stay gated inside replayPathCall.
    */
   get project(): ProjectStub {
-    return this.#projectStub();
+    const stub = this.#projectStub();
+    return new PathProxyRpcTarget((call) => replayPathCall(stub, call)) as unknown as ProjectStub;
   }
 
   get projects(): ItxProjects {

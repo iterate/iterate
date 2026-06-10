@@ -126,20 +126,20 @@ test("bare fetch() inside a worker cap goes through egress (implicit door)", asy
 /**
  * createProject returns immediately; the creation steps (including the
  * example secret these tests rely on) run in ProjectProcessor and leave a
- * trail of events. Poll the processor snapshot until phase "ready" — in one
- * pipelined expression: the processor is a public RpcTarget on the Project
- * DO, reachable via `itx.project.processor()`.
+ * trail of events. Poll the processor snapshot until phase "ready" — in ONE
+ * expression: itx.project is a path proxy over the Project DO, so deep
+ * property traversal pipelines (`itx.project.processor.snapshot()`).
  */
 async function waitForProjectReady(projectItx: unknown) {
   const project = (
     projectItx as {
-      project: { processor(): { snapshot(): Promise<{ state: { phase: string } }> } };
+      project: { processor: { snapshot(): Promise<{ state: { phase: string } }> } };
     }
   ).project;
   const deadline = Date.now() + 30_000;
   let snapshot: { state: { phase: string } } | undefined;
   while (Date.now() < deadline) {
-    snapshot = await project.processor().snapshot();
+    snapshot = await project.processor.snapshot();
     if (snapshot.state.phase === "ready") return;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }

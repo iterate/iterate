@@ -274,13 +274,15 @@ export default {
     }
 
     if (url.pathname === "/__test/project-state") {
-      // Traverses the DO stub's `processor()` in ONE pipelined expression —
-      // processors are RpcTargets (capnweb's RpcTarget IS cloudflare:workers'
-      // inside workerd), and workerd pipelines calls on call results.
+      // Raw Workers stub: await the `processor` getter before calling —
+      // workerd does not pipeline calls through property accesses. (itx
+      // handles wrap the stub in a path proxy, so over itx the one-expression
+      // `itx.project.processor.snapshot()` spelling works.)
       const project = env.PROJECT.getByName(
         getProjectDurableObjectName("proj__local__test"),
       ) as unknown as ProjectStateRpc;
-      return Response.json(await project.processor().snapshot());
+      const processor = await project.processor;
+      return Response.json(await processor.snapshot());
     }
 
     if (url.pathname === "/__test/iterate-config-repo") {
@@ -321,7 +323,7 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 type ProjectStateRpc = {
-  processor(): { snapshot(): Promise<unknown> };
+  processor: { snapshot(): Promise<unknown> };
 };
 
 type ProjectEgressInterceptTestRpc = {

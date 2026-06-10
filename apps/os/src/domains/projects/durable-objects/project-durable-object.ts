@@ -154,16 +154,20 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   );
 
   /**
-   * The project's processor, part of the DO's public surface and traversable
-   * in one expression:
+   * The project's processor, part of the DO's public surface:
    *
-   *   await itx.project.processor().snapshot();
+   *   await itx.project.processor.snapshot();   // one expression via itx
    *
-   * A METHOD, not a getter: workerd pipelines calls on call results, but not
-   * through property accesses (and own instance fields don't cross Workers
-   * RPC at all), so the property spelling needed an await at the boundary.
+   * A prototype getter (own instance fields don't cross Workers RPC). The
+   * one-expression spelling works because `itx.project` is a path proxy that
+   * awaits intermediate property segments (handle.ts) — workerd itself does
+   * not pipeline calls through property accesses, so code holding a RAW
+   * Workers stub must await the property first:
+   *
+   *   const processor = await stub.processor;
+   *   await processor.snapshot();
    */
-  processor() {
+  get processor() {
     return this.#projectProcessor;
   }
 
@@ -202,7 +206,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     // That's it — no waiting. The creation steps (D1 projection, repo,
     // example secret, agents root, created/create-completed events) run in
     // ProjectProcessor and leave a trail on the root stream; callers redirect
-    // to the project immediately and watch `processor().snapshot()`
+    // to the project immediately and watch `processor.snapshot()`
     // (phase: creating → ready) if they care about progress.
     return toSummary(projectFacts({ config: this.getAppConfig(), ...input }));
   }

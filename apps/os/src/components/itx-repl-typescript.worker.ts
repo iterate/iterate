@@ -102,6 +102,9 @@ interface ItxProjectAdmin {
   egressFetch(request: Request): Promise<Response>;
   fetch(request: Request): Promise<Response>;
   ingressUrl(): Promise<string>;
+  readonly processor: {
+    snapshot(): Promise<{ offset: number; state: unknown }>;
+  };
 }
 
 interface Itx {

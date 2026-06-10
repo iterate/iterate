@@ -242,11 +242,12 @@ been circling:
   `repo-initialized`, `create-completed`, plus a cross-post of
   create-requested to the global namespace's `/projects` stream. Callers
   redirect to the project page right away and watch
-  `itx.project.processor().snapshot()` (phase: creating → ready) for
-  progress — the processor is a public RpcTarget on the DO, returned by a
-  METHOD so the call pipelines in one expression (capnweb's RpcTarget IS
-  cloudflare:workers' inside workerd; workerd pipelines calls on call
-  results but not through property accesses). Callers that need routing before the processor catches up
+  `itx.project.processor.snapshot()` (phase: creating → ready) for
+  progress — the processor is a public RpcTarget getter on the DO, and
+  `itx.project` is a path proxy (replayPathCall awaits intermediate
+  segments), so deep traversal works in one expression even though workerd
+  itself does not pipeline calls through property accesses on raw stubs
+  (capnweb's RpcTarget IS cloudflare:workers' inside workerd). Callers that need routing before the processor catches up
   (dashboard, itx.projects.create) insert the D1 projects row themselves
   first, as they always did. The worker build never gates creation (ingress
   self-heals builds); `config-worker-built` remains the historical event
