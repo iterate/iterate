@@ -113,6 +113,7 @@ async function setupArtifactEventSubscriptions(options: Options) {
 
 type Subscription = {
   destination?: { queue_id?: string; type?: string };
+  enabled?: boolean;
   events?: string[];
   id: string;
   name?: string;
@@ -124,6 +125,7 @@ function subscriptionMatches(
   desired: { events: string[]; source: Record<string, string> },
   queueId: string,
 ) {
+  if (current.enabled !== true) return false;
   if (current.destination?.queue_id !== queueId) return false;
   if ([...(current.events ?? [])].sort().join(",") !== [...desired.events].sort().join(",")) {
     return false;
@@ -149,8 +151,18 @@ async function findQueueId(options: Options, queueName: string) {
 }
 
 async function listSubscriptions(options: Options) {
-  const response = await subscriptionsApi<Subscription[]>(options, "GET", "");
-  return response.result ?? [];
+  const subscriptions: Subscription[] = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const response = await subscriptionsApi<Subscription[]>(
+      options,
+      "GET",
+      `?page=${page}&per_page=100`,
+    );
+    const batch = response.result ?? [];
+    subscriptions.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return subscriptions;
 }
 
 async function subscriptionsApi<T = unknown>(
