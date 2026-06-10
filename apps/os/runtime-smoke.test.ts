@@ -149,13 +149,13 @@ async function waitForReady(httpBaseUrl: string, timeoutMs = 30_000) {
 
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(new URL("/debug", httpBaseUrl), {
+      const res = await fetch(new URL("/sign-in", httpBaseUrl), {
         signal: AbortSignal.timeout(2_000),
       });
-      if (res.ok && (await res.text()).includes("oRPC Ping")) {
+      if (res.ok && (await res.text()).includes("Sign in to OS")) {
         return;
       }
-      last = new Error(`GET /debug -> ${res.status}`);
+      last = new Error(`GET /sign-in -> ${res.status}`);
     } catch (error) {
       last = error;
     }
