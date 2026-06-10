@@ -5,13 +5,9 @@ import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { z } from "zod";
 import { slugify } from "../../slugify.ts";
 import type {
-  AlarmTestRoom,
-  AlarmForwardingTestRoom,
   InitializeTestRoom,
   InspectorTestRoom,
   ListedRoom,
-  PublicRouteTestRoom,
-  SchedulerTestRoom,
 } from "../test-harness/initialize-fronting-worker.ts";
 
 const APP_NAME = "shared-durable-object-utils-e2e";
@@ -70,24 +66,6 @@ const rooms = DurableObjectNamespace<InitializeTestRoom>("rooms", {
   // The lifecycle hooks mixin relies on SQLite-backed DO synchronous KV.
   sqlite: true,
 });
-const alarmRooms = DurableObjectNamespace<AlarmTestRoom>("alarm-rooms", {
-  className: "AlarmTestRoom",
-  // Multiplexed alarms store logical alarm rows in local DO SQLite.
-  sqlite: true,
-});
-const alarmForwardingRooms = DurableObjectNamespace<AlarmForwardingTestRoom>(
-  "alarm-forwarding-rooms",
-  {
-    className: "AlarmForwardingTestRoom",
-    // Verifies alarmInfo is forwarded through composed alarm() implementations.
-    sqlite: true,
-  },
-);
-const scheduleRooms = DurableObjectNamespace<SchedulerTestRoom>("schedule-rooms", {
-  className: "SchedulerTestRoom",
-  // Scheduler rows are local SQLite metadata projected onto multiplexed alarms.
-  sqlite: true,
-});
 const inspectors = DurableObjectNamespace<InspectorTestRoom>("inspectors", {
   className: "InspectorTestRoom",
   // The inspector routes exercise both `ctx.storage.sql` and synchronous KV.
@@ -96,11 +74,6 @@ const inspectors = DurableObjectNamespace<InspectorTestRoom>("inspectors", {
 const listedRooms = DurableObjectNamespace<ListedRoom>("listed-rooms", {
   className: "ListedRoom",
   // The listed room combines local SQLite-backed init state with a D1 mirror.
-  sqlite: true,
-});
-const publicRouteRooms = DurableObjectNamespace<PublicRouteTestRoom>("public-route-rooms", {
-  className: "PublicRouteTestRoom",
-  // Public route tests exercise named/id/structured-name addressing through stub.fetch().
   sqlite: true,
 });
 const catalog = await D1Database("catalog", {
@@ -115,12 +88,8 @@ export const worker = await Worker(APP_NAME, {
   adopt: true,
   bindings: {
     ROOMS: rooms,
-    ALARM_ROOMS: alarmRooms,
-    ALARM_FORWARDING_ROOMS: alarmForwardingRooms,
-    SCHEDULE_ROOMS: scheduleRooms,
     INSPECTORS: inspectors,
     LISTED_ROOMS: listedRooms,
-    PUBLIC_ROUTE_ROOMS: publicRouteRooms,
     DO_CATALOG: catalog,
   },
   entrypoint: "./src/durable-object-utils/test-harness/initialize-fronting-worker.ts",
