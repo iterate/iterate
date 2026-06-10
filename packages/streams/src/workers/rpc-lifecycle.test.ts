@@ -83,6 +83,23 @@ describe("retainProcessEventBatch delivery rejection (M1)", () => {
     expect(onDeliveryError).not.toHaveBeenCalled();
   });
 
+  it("disposes immediately without pulling the result when no onDeliveryError is given", () => {
+    // The zero-return-traffic fast path for inbound/browser connections:
+    // attaching .then to a Cap'n Web promise would make the remote send a
+    // resolve frame per delivery, so without a handler the result must be
+    // disposed synchronously, never observed.
+    const disposed = vi.fn();
+    const then = vi.fn();
+    const result = { then, [Symbol.dispose]: disposed };
+    const alive: ProcessEventBatch = () => result as unknown as Promise<void>;
+
+    const retained = retainProcessEventBatch(alive);
+    retained(batch);
+
+    expect(disposed).toHaveBeenCalledTimes(1);
+    expect(then).not.toHaveBeenCalled();
+  });
+
   it("handles synchronous (non-thenable) callback results", () => {
     const calls: unknown[] = [];
     const sync: ProcessEventBatch = (delivered) => void calls.push(delivered);

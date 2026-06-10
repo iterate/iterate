@@ -27,6 +27,7 @@ export function retainProcessEventBatch(
   const retainable = processEventBatch as RetainableProcessEventBatch;
   const retained = retainable.dup?.() ?? retainable;
   const dispose = retained[Symbol.dispose]?.bind(retained);
+  const onDeliveryError = opts.onDeliveryError;
   const callback: RetainedProcessEventBatch = Object.assign(
     (batch: Parameters<ProcessEventBatch>[0]) => {
       let result: unknown;
@@ -34,17 +35,23 @@ export function retainProcessEventBatch(
         result = retained(batch);
       } catch (error) {
         // A disposed/broken stub can throw synchronously at call time.
-        opts.onDeliveryError?.(error);
+        onDeliveryError?.(error);
         return;
       }
-      if (isThenable(result)) {
+      if (onDeliveryError !== undefined && isThenable(result)) {
         // Delivery stays fire-and-forget (the pump never awaits the remote
         // result), but the rejection must be observed: a dead stub rejects
         // every call, and swallowing that left broken connections in place
         // forever. Dispose only after settle — disposing a pending Cap'n Web
         // promise cancels the call.
+        //
+        // Observing the result is not free: pulling a Cap'n Web promise makes
+        // the remote send a resolve frame per delivery. Callers that don't
+        // pass onDeliveryError (inbound/browser connections, whose liveness
+        // is covered by onRpcBroken on the terminated socket) keep the
+        // zero-return-traffic fast path below.
         void Promise.resolve(result)
-          .then(undefined, (error: unknown) => opts.onDeliveryError?.(error))
+          .then(undefined, (error: unknown) => onDeliveryError(error))
           .finally(() => disposeIgnoredRpcResult(result));
         return;
       }

@@ -482,26 +482,35 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     // callee duplicates them. Keep a retained callback because this stream calls
     // it later from the pump, after subscribe() has returned:
     // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
-    const processEventBatch = retainProcessEventBatch(args.processEventBatch, {
-      // A rejected delivery means the subscriber stub is gone (callee DO
-      // evicted/redeployed/aborted) or the batch was refused. Either way the
-      // connection is not making progress: drop it so reconciliation can
-      // re-dial, and the subscriber re-handshakes from its durable checkpoint
-      // — replay covers whatever this connection's cursor already advanced
-      // past. Without this, a dead stub stayed in the connection map for the
-      // rest of the incarnation and reconciliation skipped its key, stalling
-      // delivery forever.
-      onDeliveryError: (error) => {
-        if (!open) return;
-        console.error("Stream event batch delivery failed; dropping connection for re-dial", {
-          subscriptionKey,
-          direction: args.direction,
-          error,
-        });
-        connection.close("delivery-failed");
-        if (args.direction === "outbound") this.reconcileConnections();
-      },
-    });
+    // Outbound connections (native Workers RPC into a subscriber host DO)
+    // observe each delivery's result: a rejected delivery means the stub is
+    // dead (callee evicted/redeployed/aborted), so drop the connection and
+    // re-dial — the subscriber re-handshakes from its durable checkpoint and
+    // replay covers whatever the cursor already advanced past. Without this a
+    // dead stub stayed in the connection map for the rest of the incarnation
+    // and reconciliation skipped its key, stalling delivery forever.
+    //
+    // Inbound connections (capnweb via the fronting worker) deliberately do
+    // NOT observe results: pulling them would make every browser tab send a
+    // resolve frame per batch, and their liveness is already covered by
+    // onRpcBroken on the terminated socket.
+    const processEventBatch = retainProcessEventBatch(
+      args.processEventBatch,
+      args.direction === "outbound"
+        ? {
+            onDeliveryError: (error) => {
+              if (!open) return;
+              console.error("Stream event batch delivery failed; dropping connection for re-dial", {
+                subscriptionKey,
+                direction: args.direction,
+                error,
+              });
+              connection.close("delivery-failed");
+              this.reconcileConnections();
+            },
+          }
+        : {},
+    );
 
     const pump = async () => {
       if (draining) return;
