@@ -8,10 +8,13 @@ import {
 } from "../../shared/event.ts";
 import type { StreamSubscriptionHandshake } from "../stream-processor-host.ts";
 import { getInitialProcessorState } from "../../shared/stream-processors.ts";
-import type { StreamSubscriberDescriptor } from "../../shared/presence-events.ts";
 import type { ProcessEventBatch, StreamCoreProcessorState } from "../../types.ts";
 import { CoreStreamProcessor } from "../../processors/core/implementation.ts";
-import { CoreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
+import {
+  CoreProcessorContract,
+  type CoreProcessorState,
+  type StreamSubscriberDescriptor,
+} from "../../processors/core/contract.ts";
 import type { StreamRpc } from "../../types.ts";
 import { makeRpcTargetClass, type RpcTargetClass } from "../../shared/rpc-target.ts";
 import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecycle.ts";

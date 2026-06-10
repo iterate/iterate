@@ -63,8 +63,3 @@ export type StreamSubscriptionConfiguredEventInput = z.infer<
   typeof StreamSubscriptionConfiguredEventInput
 >;
 export type StreamSubscriptionConfiguredEvent = z.infer<typeof StreamSubscriptionConfiguredEvent>;
-
-export const ExternalSubscriberState = z.object({
-  subscribersBySlug: z.record(z.string(), ExternalSubscriber),
-});
-export type ExternalSubscriberState = z.infer<typeof ExternalSubscriberState>;

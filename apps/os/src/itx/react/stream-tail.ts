@@ -10,14 +10,14 @@
 //
 // Shaped for useSyncExternalStore: subscribe/getSnapshot per (project, path).
 
-import type { Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
+import type { Event as StreamEvent } from "@iterate-com/shared/streams/types";
 import type { ItxBrowserClient } from "./connection.ts";
 import { isItxAccessError } from "./errors.ts";
 
 export type StreamTailStatus = "connecting" | "live" | "error";
 
 export type StreamTailSnapshot = {
-  events: readonly StreamLegacyEvent[];
+  events: readonly StreamEvent[];
   status: StreamTailStatus;
   error?: string;
 };
@@ -91,7 +91,7 @@ export function acquireStreamTailStore(
     for (const listener of current.listeners) listener();
   }
 
-  function appendEvents(current: TailEntry, incoming: StreamLegacyEvent[]) {
+  function appendEvents(current: TailEntry, incoming: StreamEvent[]) {
     // Restarts re-replay from the last seen offset; offsets dedupe.
     const fresh = incoming.filter(
       (event) => current.lastOffset === undefined || event.offset > current.lastOffset,

@@ -1,18 +1,17 @@
 // Defines the built-in "core" processor contract.
 // This processor owns stream runtime state such as max offset, stream config,
-// outbound subscription configuration, registered processors, and the
+// outbound subscription configuration, the subscriber presence roster, and the
 // paused/resumed door. The Stream Durable Object runs it inline during append
 // instead of through a subscription runner. Token-bucket rate limiting lives in
 // the circuit-breaker processor.
+//
+// Contract files are the schema/type layer: plumbing modules (types.ts, the
+// processor host) import payload schemas from here, and processors that
+// reconcile on presence facts list this contract in their `processorDeps`.
 
 import { z } from "zod";
 import { Callable } from "@iterate-com/shared/callable/types.ts";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";
-import {
-  ProcessorContractAnnouncement,
-  StreamPresenceEvents,
-  StreamSubscriberDescriptor,
-} from "../../shared/presence-events.ts";
 
 /**
  * The one supported subscriber shape: a Callable descriptor the Stream DO
@@ -26,25 +25,6 @@ const SupportedOutboundSubscriber = z.object({
   callable: Callable,
 });
 
-// Older subscriber shapes still present in stored events/state. They reduce
-// without error but get dropped from supported runtime state, so streams with
-// stale subscriptions simply stop dialing until a callable subscription is
-// (re-)appended.
-const HistoricalOutboundSubscriber = z.union([
-  SupportedOutboundSubscriber,
-  z.object({
-    type: z.literal("built-in"),
-    transport: z.enum(["workers-rpc", "capnweb-websocket"]),
-    processorSlug: z.string().trim().min(1),
-  }),
-  z.object({
-    type: z.literal("external-url"),
-    transport: z.literal("capnweb-websocket"),
-    url: z.url(),
-    headers: z.record(z.string(), z.string()).optional(),
-  }),
-]);
-
 export const SupportedSubscriptionConfiguredEvent = z.object({
   offset: z.number().int().min(0),
   type: z.literal("events.iterate.com/stream/subscription-configured"),
@@ -55,38 +35,61 @@ export const SupportedSubscriptionConfiguredEvent = z.object({
   createdAt: z.string(),
 });
 
-const HistoricalSubscriptionConfiguredEvent = z.object({
-  offset: z.number().int().min(0),
-  type: z.literal("events.iterate.com/stream/subscription-configured"),
-  payload: z.object({
-    subscriptionKey: z.string().trim().min(1),
-    subscriber: HistoricalOutboundSubscriber,
-  }),
-  createdAt: z.string(),
+/**
+ * A processor contract announcement carried on the connect event when the
+ * subscriber is a hosted stream processor. This is what feeds the stream's
+ * `processorsBySlug` documentation registry.
+ */
+export const ProcessorContractAnnouncement = z.object({
+  slug: z.string().trim().min(1),
+  version: z.string().trim().min(1),
+  description: z.string(),
+  consumes: z.array(z.string()),
+  emits: z.array(z.string()),
+  ownedEvents: z.array(
+    z.object({
+      type: z.string().trim().min(1),
+      description: z.string().optional(),
+    }),
+  ),
 });
 
-const SubscriptionsByKey = z
-  .record(z.string(), z.object({ latestConfiguredEvent: HistoricalSubscriptionConfiguredEvent }))
-  .transform(
-    (
-      subscriptions,
-    ): Record<
-      string,
-      { latestConfiguredEvent: z.output<typeof SupportedSubscriptionConfiguredEvent> }
-    > => {
-      const supported: Record<
-        string,
-        { latestConfiguredEvent: z.output<typeof SupportedSubscriptionConfiguredEvent> }
-      > = {};
-      for (const [subscriptionKey, subscription] of Object.entries(subscriptions)) {
-        const parsed = SupportedSubscriptionConfiguredEvent.safeParse(
-          subscription.latestConfiguredEvent,
-        );
-        if (parsed.success) supported[subscriptionKey] = { latestConfiguredEvent: parsed.data };
-      }
-      return supported;
-    },
-  );
+export type ProcessorContractAnnouncement = z.infer<typeof ProcessorContractAnnouncement>;
+
+/**
+ * Identity the connecting party passes in its subscribe call. All fields are
+ * optional: anonymous inbound watchers (a stream-viewer tab) may pass nothing,
+ * processor hosts pass their incarnation id plus a contract announcement.
+ */
+export const StreamSubscriberDescriptor = z.object({
+  /**
+   * Stable for one instance of the subscriber's runtime (e.g. one Durable
+   * Object incarnation). A connected event with a new incarnationId means the
+   * subscriber's non-serializable runtime state was reset.
+   */
+  incarnationId: z.string().trim().min(1).optional(),
+  /** Human-readable label, e.g. "browser" or "orpc-bridge". */
+  description: z.string().optional(),
+  /** Present when the subscriber is a hosted stream processor. */
+  processor: ProcessorContractAnnouncement.optional(),
+});
+
+export type StreamSubscriberDescriptor = z.infer<typeof StreamSubscriberDescriptor>;
+
+export const StreamSubscriberDisconnectReason = z.enum([
+  /** A new connection for the same subscriptionKey replaced this one. */
+  "replaced",
+  /** The subscriber called unsubscribe(). */
+  "unsubscribed",
+  /** The RPC session to the subscriber broke (subscriber crashed or was evicted). */
+  "rpc-broken",
+  /** Delivering a batch into the subscriber failed (stub dead or callback threw). */
+  "delivery-failed",
+  /** The outbound subscription's configuration was removed. */
+  "subscription-removed",
+]);
+
+export type StreamSubscriberDisconnectReason = z.infer<typeof StreamSubscriberDisconnectReason>;
 
 export const CoreProcessorContract = defineProcessorContract({
   slug: "core",
@@ -113,7 +116,10 @@ export const CoreProcessorContract = defineProcessorContract({
         announcement: ProcessorContractAnnouncement,
       }),
     ),
-    subscriptionsByKey: SubscriptionsByKey,
+    subscriptionsByKey: z.record(
+      z.string(),
+      z.object({ latestConfiguredEvent: SupportedSubscriptionConfiguredEvent }),
+    ),
     /**
      * Live presence roster: who is connected to this stream right now, keyed
      * by subscriptionKey — the event-sourced mirror of the runtime connection
@@ -186,10 +192,26 @@ export const CoreProcessorContract = defineProcessorContract({
       description: "Configures or replaces an outbound subscription for this stream.",
       payloadSchema: z.object({
         subscriptionKey: z.string().trim().min(1),
-        subscriber: HistoricalOutboundSubscriber,
+        subscriber: SupportedOutboundSubscriber,
       }),
     },
-    ...StreamPresenceEvents,
+    "events.iterate.com/stream/subscriber-connected": {
+      description:
+        "A delivery connection to one subscriber opened. Appended by the stream itself, once per actual open — which is why presence facts carry no idempotency keys: a re-handshake after a transient break genuinely is a new connection and must re-land on the roster. Reconciling processors treat this as 'someone's runtime state was reset'; it is always the tail of any batch it shares (appended after the handshake fixes the replay offset), so state-at-event equals batch-final state.",
+      payloadSchema: z.object({
+        subscriptionKey: z.string().trim().min(1),
+        direction: z.enum(["inbound", "outbound"]),
+        subscriber: StreamSubscriberDescriptor.optional(),
+      }),
+    },
+    "events.iterate.com/stream/subscriber-disconnected": {
+      description:
+        "A delivery connection to one subscriber closed. Appended by the stream itself, once per actual close.",
+      payloadSchema: z.object({
+        subscriptionKey: z.string().trim().min(1),
+        reason: StreamSubscriberDisconnectReason,
+      }),
+    },
     "events.iterate.com/stream/error-occurred": {
       description: "Records a structured stream or processor runner error.",
       payloadSchema: z.object({

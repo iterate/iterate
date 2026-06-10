@@ -2,7 +2,7 @@ import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 
 /**
  * Consume Cloudflare event-subscription messages (currently Artifacts repo

@@ -19,7 +19,6 @@
     "./processors/examples/echo/implementation": "./src/processors/examples/echo/implementation.ts",
     "./shared/callable-subscriber": "./src/shared/callable-subscriber.ts",
     "./shared/event": "./src/shared/event.ts",
-    "./shared/presence-events": "./src/shared/presence-events.ts",
     "./shared/rpc-target": "./src/shared/rpc-target.ts",
     "./shared/stream-processors": "./src/shared/stream-processors.ts",
     "./subscription": "./src/subscription.ts",

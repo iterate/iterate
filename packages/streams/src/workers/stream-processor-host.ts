@@ -22,9 +22,11 @@
 // the stream pumps batches into `processor.ingest`.
 
 import type { StreamProcessorSnapshot } from "../stream-processor.ts";
-import type { SubscriptionConfiguredEvent } from "../processors/core/contract.ts";
+import type {
+  ProcessorContractAnnouncement,
+  SubscriptionConfiguredEvent,
+} from "../processors/core/contract.ts";
 import type { StreamEvent } from "../shared/event.ts";
-import type { ProcessorContractAnnouncement } from "../shared/presence-events.ts";
 import type { StreamCoreProcessorState, StreamRpc, StreamSubscriptionHandle } from "../types.ts";
 
 /** What the Stream DO sends when dialing a subscriber's callable. */

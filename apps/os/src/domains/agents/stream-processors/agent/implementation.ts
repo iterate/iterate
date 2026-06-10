@@ -46,8 +46,18 @@ type LlmRequestPolicy = Extract<
 type ScheduledLlmRequest = {
   requestId: string;
   timer: ReturnType<typeof setTimeout>;
-  scheduledEvent: { offset: number };
+  /** Absent for checkpoints written before scheduledOffset existed; the
+   * handoff then resolves the scheduled event from stream history. */
+  scheduledEvent?: { offset: number };
 };
+
+/**
+ * Retry delay when the `llm-request-requested` handoff append fails. The
+ * scheduled request is a durable promise (state stays `phase: "scheduled"`
+ * until the handoff commits), so a transient append failure must re-arm the
+ * timer instead of dropping the turn.
+ */
+const LLM_REQUEST_HANDOFF_RETRY_MS = 1000;
 
 export class AgentProcessor extends StreamProcessor<AgentProcessorContract, AgentProcessorDeps> {
   readonly contract = AgentProcessorContract;
@@ -92,7 +102,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         args.blockProcessorWhile(() =>
           this.#requestLlmWorkForSchedule({
             requestId: scheduled.requestId,
-            scheduledEvent: { offset: scheduled.scheduledAtOffset },
+            ...(scheduled.scheduledOffset === undefined
+              ? {}
+              : { scheduledEvent: { offset: scheduled.scheduledOffset } }),
           }),
         );
         return;
@@ -230,7 +242,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       this.#resetScheduledLlmRequestTimer({
         requestId: state.currentRequest.requestId,
         debounceMs: state.llmConfig.debounceMs,
-        scheduledAtOffset: state.currentRequest.scheduledAtOffset,
+        scheduledOffset: state.currentRequest.scheduledOffset,
       });
       return;
     }
@@ -356,27 +368,28 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   #resetScheduledLlmRequestTimer(args: {
     requestId: string;
     debounceMs: number;
-    scheduledAtOffset: number;
+    scheduledOffset: number | undefined;
   }) {
-    // The durable scheduledAtOffset is the fallback: after a restart the warm
+    // The durable scheduledOffset is the fallback: after a restart the warm
     // timer is gone but the reduced state still knows which scheduled event
     // this debounce belongs to, so the timer re-arms instead of silently
-    // dropping the schedule.
-    const scheduledEvent = this.#scheduledLlmRequest?.scheduledEvent ?? {
-      offset: args.scheduledAtOffset,
-    };
+    // dropping the schedule. (For checkpoints predating scheduledOffset the
+    // handoff resolves the scheduled event from history when the timer fires.)
+    const scheduledEvent =
+      this.#scheduledLlmRequest?.scheduledEvent ??
+      (args.scheduledOffset === undefined ? undefined : { offset: args.scheduledOffset });
     this.#cancelScheduledLlmRequest({ requestId: args.requestId });
     this.#armLlmRequestDebounceTimer({
       requestId: args.requestId,
       debounceMs: args.debounceMs,
-      scheduledEvent,
+      ...(scheduledEvent === undefined ? {} : { scheduledEvent }),
     });
   }
 
   #armLlmRequestDebounceTimer(args: {
     requestId: string;
     debounceMs: number;
-    scheduledEvent: { offset: number };
+    scheduledEvent?: { offset: number };
   }) {
     const timer = setTimeout(() => {
       // The timer fires outside any batch, so the base class's keep-alive-backed
@@ -386,7 +399,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     this.#scheduledLlmRequest = {
       requestId: args.requestId,
       timer,
-      scheduledEvent: args.scheduledEvent,
+      ...(args.scheduledEvent === undefined ? {} : { scheduledEvent: args.scheduledEvent }),
     };
   }
 
@@ -395,7 +408,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 
     const scheduledEvent = this.#scheduledLlmRequest.scheduledEvent;
     this.#scheduledLlmRequest = null;
-    await this.#requestLlmWorkForSchedule({ requestId: args.requestId, scheduledEvent });
+    await this.#requestLlmWorkForSchedule({
+      requestId: args.requestId,
+      ...(scheduledEvent === undefined ? {} : { scheduledEvent }),
+    });
   }
 
   /**
@@ -415,7 +431,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    */
   async #requestLlmWorkForSchedule(args: {
     requestId: string;
-    scheduledEvent: { offset: number };
+    scheduledEvent?: { offset: number };
   }) {
     const events = await this.deps.readStreamEvents();
     const stateAtRequest = reduceAgentEvents({ events });
@@ -427,21 +443,52 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       return;
     }
 
-    await this.ctx.stream.append({
-      event: {
-        type: "events.iterate.com/agent/llm-request-requested",
-        idempotencyKey: buildProcessorIdempotencyKey({
-          processor: AgentProcessorContract,
-          key: "llm-request-requested",
-          sourceEvent: args.scheduledEvent,
-        }),
-        payload: {
-          model: stateAtRequest.llmConfig.model,
-          body: buildLlmChatRequest(stateAtRequest),
-          runOpts: stateAtRequest.llmConfig.runOpts,
+    // Checkpoints written before scheduledOffset existed don't know which
+    // event the debounce belongs to; recover it from the committed history
+    // just read (the scheduled event must be there — reduced state only says
+    // "scheduled" because it was committed).
+    const scheduledEvent =
+      args.scheduledEvent ??
+      events.find(
+        (event) =>
+          event.type === "events.iterate.com/agent/llm-request-scheduled" &&
+          (event.payload as { requestId?: string }).requestId === args.requestId,
+      );
+    if (scheduledEvent === undefined) {
+      console.error("[agent] scheduled llm request has no llm-request-scheduled event", {
+        requestId: args.requestId,
+      });
+      return;
+    }
+
+    try {
+      await this.ctx.stream.append({
+        event: {
+          type: "events.iterate.com/agent/llm-request-requested",
+          idempotencyKey: buildProcessorIdempotencyKey({
+            processor: AgentProcessorContract,
+            key: "llm-request-requested",
+            sourceEvent: scheduledEvent,
+          }),
+          payload: {
+            model: stateAtRequest.llmConfig.model,
+            body: buildLlmChatRequest(stateAtRequest),
+            runOpts: stateAtRequest.llmConfig.runOpts,
+          },
         },
-      },
-    });
+      });
+    } catch (error) {
+      // The durable state still says "scheduled" (the handoff never
+      // committed), so dropping the turn here would wedge the stream until
+      // the next incarnation's subscriber-connected recovery. Re-arm and
+      // retry; the idempotency key makes a raced duplicate harmless.
+      console.error("[agent] scheduled llm request handoff failed; retrying", error);
+      this.#armLlmRequestDebounceTimer({
+        requestId: args.requestId,
+        debounceMs: LLM_REQUEST_HANDOFF_RETRY_MS,
+        scheduledEvent: { offset: scheduledEvent.offset },
+      });
+    }
   }
 
   async #emitQueued(args: { sourceEvent: { offset: number } }) {

@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
-import { StreamPresenceEvents } from "@iterate-com/streams/shared/presence-events";
+import { CoreProcessorContract } from "@iterate-com/streams/processors/core/contract";
 import { AgentProcessorContract } from "../agent/contract.ts";
 
 const LlmRequestId = z.number().int().positive();
@@ -27,7 +27,7 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
       .default({}),
   }),
   initialState: {},
-  processorDeps: [AgentProcessorContract, StreamPresenceEvents],
+  processorDeps: [AgentProcessorContract, CoreProcessorContract],
   events: {
     "events.iterate.com/cloudflare-ai/llm-request-attempt-failed": {
       description:

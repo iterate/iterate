@@ -300,7 +300,7 @@ describe("AgentProcessor", () => {
         offset: 7,
         state: {
           ...initialState(),
-          currentRequest: { phase: "scheduled", requestId: "req_lost", scheduledAtOffset: 7 },
+          currentRequest: { phase: "scheduled", requestId: "req_lost", scheduledOffset: 7 },
         },
       },
       readStreamEvents: async () => [
@@ -337,7 +337,7 @@ describe("AgentProcessor", () => {
         offset: 7,
         state: {
           ...initialState(),
-          currentRequest: { phase: "scheduled", requestId: "req_lost", scheduledAtOffset: 7 },
+          currentRequest: { phase: "scheduled", requestId: "req_lost", scheduledOffset: 7 },
         },
       },
       // Committed history says the schedule was already cancelled — the
@@ -378,7 +378,7 @@ describe("AgentProcessor", () => {
         offset: 7,
         state: {
           ...initialState(),
-          currentRequest: { phase: "scheduled", requestId: "req_lost", scheduledAtOffset: 7 },
+          currentRequest: { phase: "scheduled", requestId: "req_lost", scheduledOffset: 7 },
         },
       },
       readStreamEvents: async () => [
@@ -392,7 +392,7 @@ describe("AgentProcessor", () => {
 
     // Default-policy input during a timerless scheduled phase used to bail
     // silently (the warm scheduledEvent was gone), wedging the agent forever.
-    // The durable scheduledAtOffset lets the reset path re-arm instead.
+    // The durable scheduledOffset lets the reset path re-arm instead.
     await processor.ingest({
       events: [
         agentEvent({
@@ -404,6 +404,131 @@ describe("AgentProcessor", () => {
       streamMaxOffset: 8,
     });
     expect(appended).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(appended).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-requested",
+        idempotencyKey: "agent/llm-request-requested@7",
+      }),
+    ]);
+  });
+
+  it("recovers the scheduled offset from history for checkpoints written before scheduledOffset existed", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({
+      stream,
+      snapshot: {
+        offset: 9,
+        state: {
+          ...initialState(),
+          // Old checkpoint shape: no scheduledOffset.
+          currentRequest: { phase: "scheduled", requestId: "req_old" },
+        },
+      },
+      readStreamEvents: async () => [
+        agentEvent({
+          type: "events.iterate.com/agent/llm-request-scheduled",
+          payload: { requestId: "req_old", debounceMs: 1000, model: "test-model" },
+          offset: 9,
+        }),
+      ],
+    });
+
+    await processor.ingest({
+      events: [subscriberConnectedEvent({ offset: 10 })],
+      streamMaxOffset: 10,
+    });
+
+    expect(appended).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-requested",
+        idempotencyKey: "agent/llm-request-requested@9",
+      }),
+    ]);
+  });
+
+  it("does not re-request on connect when the live instance already owns the schedule", async () => {
+    vi.useFakeTimers();
+    const { stream, appended } = memoryStream();
+    const triggeringInput = agentEvent({
+      type: "events.iterate.com/agent/input-added",
+      payload: { content: "hi", llmRequestPolicy: { behaviour: "after-current-request" } },
+      offset: 3,
+    });
+    const processor = newAgentProcessor({
+      stream,
+      readStreamEvents: async () => [
+        triggeringInput,
+        ...appended
+          .filter((event) => event.type === "events.iterate.com/agent/llm-request-scheduled")
+          .map((event, index) =>
+            agentEvent({ type: event.type, payload: event.payload, offset: 4 + index }),
+          ),
+      ],
+    });
+
+    // Live path: the input schedules the request and arms the in-instance
+    // timer. A subscriber-connected fact arriving afterwards (any other
+    // processor or a browser attaching) must not fire the request early or
+    // double-request — the live timer owns the schedule.
+    await processor.ingest({ events: [triggeringInput], streamMaxOffset: 3 });
+    await processor.ingest({
+      events: [subscriberConnectedEvent({ offset: 5 })],
+      streamMaxOffset: 5,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    const requested = appended.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-requested",
+    );
+    expect(requested).toHaveLength(1);
+  });
+
+  it("retries the handoff append instead of dropping the turn when it fails", async () => {
+    vi.useFakeTimers();
+    const { stream, appended } = memoryStream();
+    const originalAppend = stream.append.bind(stream);
+    let failNextRequestAppend = true;
+    stream.append = (args: Parameters<typeof stream.append>[0]) => {
+      const event = args.event as { type: string };
+      if (
+        failNextRequestAppend &&
+        event.type === "events.iterate.com/agent/llm-request-requested"
+      ) {
+        failNextRequestAppend = false;
+        throw new Error("transient append failure");
+      }
+      return originalAppend(args);
+    };
+    const processor = newAgentProcessor({
+      stream,
+      snapshot: {
+        offset: 7,
+        state: {
+          ...initialState(),
+          currentRequest: { phase: "scheduled", requestId: "req_retry", scheduledOffset: 7 },
+        },
+      },
+      readStreamEvents: async () => [
+        agentEvent({
+          type: "events.iterate.com/agent/llm-request-scheduled",
+          payload: { requestId: "req_retry", debounceMs: 1000, model: "test-model" },
+          offset: 7,
+        }),
+      ],
+    });
+
+    // The connected-driven recovery's first handoff append fails; the durable
+    // state still says "scheduled", so the turn must re-arm and retry rather
+    // than silently dropping.
+    await processor.ingest({
+      events: [subscriberConnectedEvent({ offset: 8 })],
+      streamMaxOffset: 8,
+    });
+    expect(
+      appended.filter((event) => event.type === "events.iterate.com/agent/llm-request-requested"),
+    ).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(1000);
     expect(appended).toEqual([

@@ -15,16 +15,13 @@
 import type { StreamEvent, StreamEventInput } from "../../shared/event.ts";
 import type { ConsumedEvent } from "../../shared/stream-processors.ts";
 import type { ProcessEventBatch } from "../../types.ts";
-import type {
-  StreamSubscriberDescriptor,
-  StreamSubscriberDisconnectReason,
-} from "../../shared/presence-events.ts";
 import { StreamProcessor } from "../../stream-processor.ts";
 import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../../workers/rpc-lifecycle.ts";
 import {
   CoreProcessorContract,
-  SupportedSubscriptionConfiguredEvent,
   type CoreProcessorState,
+  type StreamSubscriberDescriptor,
+  type StreamSubscriberDisconnectReason,
 } from "./contract.ts";
 
 export type CoreProcessorContract = typeof CoreProcessorContract;
@@ -265,23 +262,22 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
         break;
       }
 
-      case "events.iterate.com/stream/subscription-configured": {
-        const parsed = SupportedSubscriptionConfiguredEvent.safeParse(args.event);
-        if (!parsed.success) {
-          const { [args.event.payload.subscriptionKey]: _removed, ...subscriptionsByKey } =
-            next.subscriptionsByKey;
-          next = { ...next, subscriptionsByKey };
-          break;
-        }
+      case "events.iterate.com/stream/subscription-configured":
         next = {
           ...next,
           subscriptionsByKey: {
             ...next.subscriptionsByKey,
-            [args.event.payload.subscriptionKey]: { latestConfiguredEvent: parsed.data },
+            [args.event.payload.subscriptionKey]: {
+              latestConfiguredEvent: {
+                offset: args.event.offset,
+                type: args.event.type,
+                payload: args.event.payload,
+                createdAt: args.event.createdAt,
+              },
+            },
           },
         };
         break;
-      }
 
       default:
         break;
@@ -478,14 +474,34 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
         ? undefined
         : new Set(args.eventTypes);
 
+    let cursor = args.replayAfterOffset ?? this.#currentState().maxOffset;
+    let draining = false;
+    let open = true;
+
     // Workers RPC disposes parameter stubs when an RPC method returns unless the
     // callee duplicates them. Keep a retained callback because this stream calls
     // it later from the pump, after subscribe() has returned:
     // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
-    const processEventBatch = retainProcessEventBatch(args.processEventBatch);
-    let cursor = args.replayAfterOffset ?? this.#currentState().maxOffset;
-    let draining = false;
-    let open = true;
+    const processEventBatch = retainProcessEventBatch(args.processEventBatch, {
+      // A rejected delivery means the subscriber stub is gone (callee DO
+      // evicted/redeployed/aborted) or the batch was refused. Either way the
+      // connection is not making progress: drop it so reconciliation can
+      // re-dial, and the subscriber re-handshakes from its durable checkpoint
+      // — replay covers whatever this connection's cursor already advanced
+      // past. Without this, a dead stub stayed in the connection map for the
+      // rest of the incarnation and reconciliation skipped its key, stalling
+      // delivery forever.
+      onDeliveryError: (error) => {
+        if (!open) return;
+        console.error("Stream event batch delivery failed; dropping connection for re-dial", {
+          subscriptionKey,
+          direction: args.direction,
+          error,
+        });
+        connection.close("delivery-failed");
+        if (args.direction === "outbound") this.reconcileConnections();
+      },
+    });
 
     const pump = async () => {
       if (draining) return;

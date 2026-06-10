@@ -22,7 +22,7 @@ import {
   type ConsumedEvent,
   type StreamEvent,
 } from "@iterate-com/streams/shared/stream-processors";
-import { StreamPresenceEvents } from "@iterate-com/streams/shared/presence-events";
+import { CoreProcessorContract } from "@iterate-com/streams/processors/core/contract";
 
 export const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.6";
 
@@ -58,9 +58,11 @@ export const AgentProcessorContract = defineProcessorContract({
            * debounce: a fresh instance (whose in-memory timer died with its
            * predecessor) re-derives the request handoff — and its idempotency
            * key — from this, so the recovery path and the timer path converge
-           * on the same llm-request-requested append.
+           * on the same llm-request-requested append. Optional so checkpoints
+           * written before this field existed still parse; recovery falls
+           * back to finding the scheduled event in stream history.
            */
-          scheduledAtOffset: z.number().int().positive(),
+          scheduledOffset: z.number().int().positive().optional(),
         }),
         z.object({ phase: z.literal("requested"), llmRequestId: z.number().int().positive() }),
       ])
@@ -69,9 +71,9 @@ export const AgentProcessorContract = defineProcessorContract({
     pendingTriggerCount: z.number().int().nonnegative().default(0),
   }),
   initialState: {},
-  // The presence catalog owns `stream/subscriber-connected`, the scheduler's
+  // The core contract owns `stream/subscriber-connected`, the scheduler's
   // reconcile trigger.
-  processorDeps: [StreamPresenceEvents],
+  processorDeps: [CoreProcessorContract],
   events: {
     "events.iterate.com/agent/capability-noted": {
       description:
@@ -292,7 +294,7 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
         currentRequest: {
           phase: "scheduled" as const,
           requestId: event.payload.requestId,
-          scheduledAtOffset: event.offset,
+          scheduledOffset: event.offset,
         },
         pendingTriggerCount: 0,
       };

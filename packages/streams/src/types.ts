@@ -1,6 +1,5 @@
 import type { StreamEvent, StreamEventInput } from "./shared/event.ts";
-import type { CoreProcessorState } from "./processors/core/contract.ts";
-import type { StreamSubscriberDescriptor } from "./shared/presence-events.ts";
+import type { CoreProcessorState, StreamSubscriberDescriptor } from "./processors/core/contract.ts";
 
 type MaybePromise<T> = T | Promise<T>;
 

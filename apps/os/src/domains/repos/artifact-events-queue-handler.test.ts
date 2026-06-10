@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { handleArtifactEventsBatch } from "./artifact-events-queue-handler.ts";
 import type { ArtifactEventsQueueEnv } from "./artifact-events-queue-handler.ts";
-import { getInitializedStreamStub } from "~/domains/streams/new-stream-runtime.ts";
+import { getInitializedStreamStub } from "~/domains/streams/stream-runtime.ts";
 
-vi.mock("~/domains/streams/new-stream-runtime.ts", () => ({
+vi.mock("~/domains/streams/stream-runtime.ts", () => ({
   getInitializedStreamStub: vi.fn(),
 }));
 

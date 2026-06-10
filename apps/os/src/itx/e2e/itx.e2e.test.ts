@@ -8,6 +8,7 @@
 import { expect, test } from "vitest";
 import { RpcTarget } from "capnweb";
 import type { ItxClient } from "../client.ts";
+import { getItxErrorCode } from "../errors.ts";
 import {
   adminApiSecret,
   baseUrl,
@@ -218,43 +219,48 @@ test.skipIf(!MCP_TEST_SERVER_URL)(
   },
 );
 
-test("script executions leave a two-event record on the /itx stream", async () => {
-  using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-rec` })) as { id: string };
-  createdProjectIds.push(project.id);
+// Cold first-run of the isolate + stream DO can take >45s on a fresh preview.
+test(
+  "script executions leave a two-event record on the /itx stream",
+  { timeout: 90_000 },
+  async () => {
+    using itx = connectGlobal();
+    const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-rec` })) as { id: string };
+    createdProjectIds.push(project.id);
 
-  const response = await fetch(new URL("/api/itx/run", baseUrl()), {
-    body: JSON.stringify({
-      context: project.id,
-      functionSource: "async ({ vars }) => vars.a + vars.b",
-      vars: { a: 40, b: 2 },
-    }),
-    headers: authHeaders(),
-    method: "POST",
-  });
-  const body = (await response.json()) as { executionId: string; result: unknown };
-  expect(response.ok).toBe(true);
-  expect(body.result).toBe(42);
-  expect(typeof body.executionId).toBe("string");
+    const response = await fetch(new URL("/api/itx/run", baseUrl()), {
+      body: JSON.stringify({
+        context: project.id,
+        functionSource: "async ({ vars }) => vars.a + vars.b",
+        vars: { a: 40, b: 2 },
+      }),
+      headers: authHeaders(),
+      method: "POST",
+    });
+    const body = (await response.json()) as { executionId: string; result: unknown };
+    expect(response.ok).toBe(true);
+    expect(body.result).toBe(42);
+    expect(typeof body.executionId).toBe("string");
 
-  using projectItx = await itx.projects.get(project.id);
-  const events = (await projectItx.streams.get("/itx").read()) as Array<{
-    payload: Record<string, unknown>;
-    type: string;
-  }>;
-  const requested = events.find(
-    (event) =>
-      event.type === "events.iterate.com/itx/execution-requested" &&
-      event.payload.executionId === body.executionId,
-  );
-  const completed = events.find(
-    (event) =>
-      event.type === "events.iterate.com/itx/execution-completed" &&
-      event.payload.executionId === body.executionId,
-  );
-  expect(requested?.payload).toMatchObject({ context: project.id });
-  expect(completed?.payload).toMatchObject({ ok: true, result: 42 });
-});
+    using projectItx = await itx.projects.get(project.id);
+    const events = (await projectItx.streams.get("/itx").read()) as Array<{
+      payload: Record<string, unknown>;
+      type: string;
+    }>;
+    const requested = events.find(
+      (event) =>
+        event.type === "events.iterate.com/itx/execution-requested" &&
+        event.payload.executionId === body.executionId,
+    );
+    const completed = events.find(
+      (event) =>
+        event.type === "events.iterate.com/itx/execution-completed" &&
+        event.payload.executionId === body.executionId,
+    );
+    expect(requested?.payload).toMatchObject({ context: project.id });
+    expect(completed?.payload).toMatchObject({ ok: true, result: 42 });
+  },
+);
 
 test("worker caps hold a correctly scoped itx of their own", async () => {
   using itx = connectGlobal();
@@ -397,9 +403,11 @@ test("kernel errors cross capnweb as ItxError-shaped errors with codes", async (
   // capnweb 0.8.0 reconstructs unknown error names as plain Error and drops
   // the name (ERROR_TYPES[name] || Error; the props loop skips "name"), so
   // class/name identity is untransmittable — detection is duck-typed via the
-  // own enumerable code/details props, which DO cross.
+  // own enumerable code/details props, which DO cross (DECISIONS D18).
   expect(error!.name).toBe("Error");
   expect(error!.code).toBe("NOT_FOUND");
+  // And the helper the whole client layer uses must agree:
+  expect(getItxErrorCode(error)).toBe("NOT_FOUND");
   expect(error!.details).toEqual({ projectIdOrSlug: "definitely-not-a-project" });
 });
 
