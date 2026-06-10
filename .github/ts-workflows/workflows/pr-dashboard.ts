@@ -40,8 +40,10 @@ export default {
               : "SLACK_PR_DASHBOARD_STATE";
 
             const slackToken = "${{ secrets.SLACK_CI_BOT_TOKEN }}";
-            // when run locally via `node cli.ts github-script`, the secret above is an unexpanded literal
-            const dryRun = slackToken.includes("${{");
+            // when run locally via `node cli.ts github-script`, the secret above is an unexpanded
+            // literal (careful not to write the expression-opener character sequence anywhere else
+            // in this script - github rejects the whole workflow file as malformed if we do)
+            const dryRun = slackToken.includes("secrets.SLACK_CI_BOT_TOKEN");
 
             const now = new Date();
             const today = now.toISOString().slice(0, 10);
