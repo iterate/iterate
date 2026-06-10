@@ -514,7 +514,7 @@ second step, taken only after the shared layer proves itself.
   currying through the built-ins. (Polishing its shape beyond that is
   explicitly LATER.)
 
-## 8. Default capabilities are parent contexts written in code
+## 8. Default capabilities are parent contexts written in code — SHIPPED (D23)
 
 The idea (born as "what if ProjectItx / GlobalItx / CodemodeSessionItx
 subclasses just called `this.caps.define()` a few times in their
@@ -630,7 +630,7 @@ Open: the splice API shape on fork; ref naming for code contexts
 (`platform:` prefix?); can a context _revoke_ (not just shadow) a code
 default — tombstone rows? Defer until someone needs them.
 
-## 9. Egress is a capability; the intercept tunnel is a live cap (position)
+## 9. Egress is a capability; the intercept tunnel is a live cap — SHIPPED (D23)
 
 Where PR #1466 left it (DECISIONS D22): `project.fetch` IS egress, ingress
 never touches the Project DO, but `egressFetch` itself still lives on the DO
