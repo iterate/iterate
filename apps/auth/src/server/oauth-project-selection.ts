@@ -1,4 +1,7 @@
-import { ITERATE_PROJECT_SCOPE_PREFIX } from "@iterate-com/shared/auth-claims";
+import {
+  ITERATE_PROJECT_SCOPE_PREFIX,
+  ITERATE_SUPERADMIN_SCOPE,
+} from "@iterate-com/shared/auth-claims";
 import { parseStringArray } from "./db/helpers.ts";
 import { getLatestOAuthProjectSelectionByUserId } from "./db/queries/.generated/index.ts";
 import { db } from "./db/index.ts";
@@ -67,8 +70,17 @@ export function parseOAuthProjectSelectionReferenceId(referenceId: string | null
 export function buildAugmentedScopeClaims(params: {
   projectIds: string[];
   requestedScopes: string[];
+  superadmin: boolean;
 }) {
   const scopeClaims = new Set(params.requestedScopes.filter(Boolean));
+
+  // The superadmin scope is server-granted, never client-requested: a client
+  // can put it in its scope request, so being in the requested list proves
+  // nothing — only the user's role does.
+  scopeClaims.delete(ITERATE_SUPERADMIN_SCOPE);
+  if (params.superadmin) {
+    scopeClaims.add(ITERATE_SUPERADMIN_SCOPE);
+  }
 
   for (const projectId of normalizeProjectIds(params.projectIds)) {
     scopeClaims.add(`${ITERATE_PROJECT_SCOPE_PREFIX}${projectId}`);

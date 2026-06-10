@@ -1,7 +1,8 @@
 import { createIterateAuth } from "@iterate-com/auth/server";
 import {
   ITERATE_PROJECT_SELECTION_SCOPE,
-  hasWildcardProjectScope,
+  ITERATE_SUPERADMIN_SCOPE,
+  hasSuperadminScope,
   listProjectScopeIds,
 } from "@iterate-com/shared/auth-claims";
 import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
@@ -94,9 +95,9 @@ export async function handleMcpFetch(input: McpHandlerInput): Promise<Response |
   const scopes = readAccessTokenScopes(accessToken);
   const principal = principalFromAccessToken(accessToken);
   const grantedProjectIds = new Set(listProjectScopeIds(scopes));
-  const hasWildcardProjects = hasWildcardProjectScope(scopes);
+  const isSuperadmin = hasSuperadminScope(scopes);
   const projects = principal.projects.flatMap((project) => {
-    if (!hasWildcardProjects && !grantedProjectIds.has(project.id)) return [];
+    if (!isSuperadmin && !grantedProjectIds.has(project.id)) return [];
 
     const organization = principal.organizations.find((org) => org.id === project.organizationId);
     return [
@@ -167,7 +168,7 @@ async function authenticateAdminMcpRequest(input: McpHandlerInput) {
       organizationRole: "admin",
       organizationSlug: null,
     })),
-    scopes: ["profile"],
+    scopes: [ITERATE_SUPERADMIN_SCOPE],
     userId: "admin-api-secret",
   } satisfies ProjectMcpServerConnectionProps;
 }

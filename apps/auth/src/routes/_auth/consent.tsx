@@ -13,7 +13,10 @@ import { Separator } from "@iterate-com/ui/components/separator";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod/v4";
-import { ITERATE_PROJECT_SELECTION_SCOPE } from "@iterate-com/shared/auth-claims";
+import {
+  ITERATE_PROJECT_SELECTION_SCOPE,
+  ITERATE_SUPERADMIN_SCOPE,
+} from "@iterate-com/shared/auth-claims";
 import { authClient, useSession } from "../../utils/auth-client.ts";
 import { oauthClientQueryOptions } from "../../utils/auth-query-options.ts";
 import { getInitials } from "../../utils/initials.ts";
@@ -198,6 +201,7 @@ function scopeLabel(scope: string): string {
     email: "View your email",
     offline_access: "Stay connected",
     [ITERATE_PROJECT_SELECTION_SCOPE]: "Use selected projects",
+    [ITERATE_SUPERADMIN_SCOPE]: "Administer Iterate",
   };
 
   return labels[scope] ?? scope;
@@ -210,6 +214,7 @@ function scopeDescription(scope: string): string {
     email: "Read the email address on this account.",
     offline_access: "Continue working after this browser session.",
     [ITERATE_PROJECT_SELECTION_SCOPE]: "Access only the projects you chose.",
+    [ITERATE_SUPERADMIN_SCOPE]: "Act with superadmin access across all organizations and projects.",
   };
 
   return descriptions[scope] ?? "Use this requested permission.";

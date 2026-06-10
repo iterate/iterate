@@ -10,6 +10,7 @@ import {
   ITERATE_IS_ADMIN_CLAIM,
   ITERATE_ORGANIZATIONS_CLAIM,
   ITERATE_ROLE_CLAIM,
+  ITERATE_SUPERADMIN_SCOPE,
   type IterateAuthAccessTokenOrganizationClaim,
   type IterateAuthOrganizationClaim,
   type IterateAuthProjectClaim,
@@ -188,7 +189,14 @@ export function getAuthPlugins(env: Record<string, unknown>) {
       // rotated-token reuse as theft) is rare, short enough that org/project
       // claim changes propagate within half an hour.
       accessTokenExpiresIn: 30 * 60,
-      scopes: ["openid", "profile", "email", "offline_access", ITERATE_PROJECT_SELECTION_SCOPE],
+      scopes: [
+        "openid",
+        "profile",
+        "email",
+        "offline_access",
+        ITERATE_PROJECT_SELECTION_SCOPE,
+        ITERATE_SUPERADMIN_SCOPE,
+      ],
       validAudiences,
       allowDynamicClientRegistration: true,
       allowUnauthenticatedClientRegistration: true,
@@ -209,6 +217,7 @@ export function getAuthPlugins(env: Record<string, unknown>) {
           scopes: buildAugmentedScopeClaims({
             requestedScopes: scopes,
             projectIds: isProjectScopedToken ? projects.map((project) => project.id) : [],
+            superadmin: typeof user?.role === "string" && user.role === "admin",
           }),
           [ITERATE_ACCESS_TOKEN_ORGANIZATIONS_CLAIM]: organizations,
           [ITERATE_ACCESS_TOKEN_PROJECTS_CLAIM]: projects,
