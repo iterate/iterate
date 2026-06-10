@@ -221,6 +221,7 @@ test.skipIf(!MCP_TEST_SERVER_URL)(
 test("script executions leave a two-event record on the /itx stream", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-rec` })) as { id: string };
+  createdProjectIds.push(project.id);
 
   const response = await fetch(new URL("/api/itx/run", baseUrl()), {
     body: JSON.stringify({
