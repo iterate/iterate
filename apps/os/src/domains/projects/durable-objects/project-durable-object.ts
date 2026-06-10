@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { createD1Client } from "sqlfu";
 import { z } from "zod";
-import { acceptFetcherCapability, type Fetcher } from "captun";
+import { acceptFetcherCapability, connectTokenFromRequest, type Fetcher } from "captun";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -657,10 +657,11 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       );
     }
 
-    // WebSocket clients can't set headers, so the captun client sends the
-    // admin token via its connect-token query param instead.
-    // captun's CONNECT_TOKEN_QUERY_PARAM; not re-exported from the package root in 0.0.3.
-    const connectToken = new URL(request.url).searchParams.get("captun-token");
+    // The captun client sends the token via the Sec-WebSocket-Protocol header
+    // (WebSocket clients can't set arbitrary headers, and URLs get logged);
+    // connectTokenFromRequest also reads captun's probe header and legacy
+    // query param.
+    const connectToken = connectTokenFromRequest(request);
     if (
       !authenticateAdminBearer({
         authorizationHeader:
@@ -678,7 +679,10 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       );
     }
 
+    // Passing the request lets captun echo the negotiated subprotocol on the
+    // 101 response — strict WebSocket clients abort the handshake without it.
     const { response, fetcher: tunnel } = acceptFetcherCapability({
+      request,
       onDisconnect: () => {
         if (this.#projectEgressInterceptTunnel === tunnel) {
           this.#projectEgressInterceptTunnel = null;
