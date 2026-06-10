@@ -40,7 +40,10 @@ const textEncoder = new TextEncoder();
 // - 1 (implicit; no "stateVersion" key in KV): pre-descendantPaths state.
 // - 2: childPaths gained a sibling descendantPaths (full announced paths).
 // - 3: descendantPaths removed; callers should walk immediate childPaths.
-const CORE_STATE_VERSION = 3;
+// - 4: subscriber presence — connectionsByKey roster added; processorsBySlug
+//      reshaped to fold contract announcements from subscriber-connected
+//      events instead of the removed processor-registered event.
+const CORE_STATE_VERSION = 4;
 
 export class Stream extends DurableObject<Env> implements StreamRpc {
   #coreProcessorState: StreamCoreProcessorState;
