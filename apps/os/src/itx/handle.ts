@@ -19,7 +19,6 @@
 import { RpcTarget } from "cloudflare:workers";
 import { typeid } from "@iterate-com/shared/typeid";
 import type { StreamCursor, Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
-import type { StreamRpc, StreamSubscriptionHandle } from "@iterate-com/streams/types";
 import { createD1Client } from "sqlfu";
 import { PathProxyRpcTarget } from "./path-proxy.ts";
 import {
@@ -48,16 +47,7 @@ import {
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { isProjectId, mintProjectId } from "~/domains/projects/project-id.ts";
-import {
-  getStreamsCapability,
-  resolveStreamPath,
-} from "~/domains/streams/entrypoints/streams-capability.ts";
-import {
-  getStreamDurableObjectName,
-  toLegacyEvent,
-  toNewAfterOffset,
-  type StreamDurableObjectNamespace,
-} from "~/domains/streams/new-stream-runtime.ts";
+import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 
 /**
@@ -467,55 +457,27 @@ export class ItxStream extends RpcTarget {
   }
 
   /**
-   * Live tail: catch-up from `afterOffset`, then every committed batch, pushed
-   * to `onEventBatch` until unsubscribed. The callback crosses whatever
-   * boundary the caller came in over (capnweb from a browser/Node session,
-   * Workers RPC from a cap isolate); the Stream DO only ever sees a plain
-   * Workers RPC stub held by this worker (Law 7 — Cap'n Web never terminates
-   * in a DO). If the callback's far end goes away, the subscription is torn
-   * down on the next failed delivery — offline means offline; durability is
-   * the stream itself, re-subscribe from the last offset you saw.
+   * Live tail: catch-up from `afterOffset` ("start" replays everything,
+   * "end" is live-only), then every committed batch, pushed to `onEventBatch`
+   * until unsubscribed. The callback crosses whatever boundary the caller
+   * came in over (capnweb from a browser/Node session, Workers RPC from a cap
+   * isolate); the streams capability holds the actual DO subscription, so the
+   * same append-policy props gate it. If the callback's far end goes away,
+   * the subscription is torn down on the next failed delivery — offline means
+   * offline; durability is the stream itself, re-subscribe from the last
+   * offset you saw.
    */
   async subscribe(
     onEventBatch: (batch: { events: StreamLegacyEvent[]; streamMaxOffset: number }) => unknown,
-    opts: { afterOffset?: StreamCursor } = {},
+    opts: { afterOffset: StreamCursor },
   ): Promise<ItxStreamSubscription> {
-    const path = resolveStreamPath(this.path);
-    const streamNamespace = this.runtime.env.STREAM as unknown as StreamDurableObjectNamespace;
-    const stub = streamNamespace.getByName(
-      getStreamDurableObjectName({ namespace: this.projectId, path }),
-    ) as unknown as StreamRpc;
-
-    // "start" replays everything, a number replays after that offset, and
-    // "end"/omitted is live-only — replayAfterOffset must be ABSENT for that
-    // (toNewAfterOffset's MAX_SAFE_INTEGER sentinel would filter live batches
-    // out forever).
-    const replayAfterOffset =
-      opts.afterOffset === undefined || opts.afterOffset === "end"
-        ? undefined
-        : toNewAfterOffset(opts.afterOffset);
-
-    // Replay batches can arrive while stub.subscribe() is still in flight —
-    // if the callback breaks during that window, tear down as soon as the
-    // handle exists rather than leaking deliveries to a dead stub.
-    let handle: StreamSubscriptionHandle | undefined;
-    let callbackBroken = false;
-    const teardown = () => {
-      callbackBroken = true;
-      handle?.unsubscribe();
-    };
-    handle = await stub.subscribe({
-      processEventBatch: (batch) => {
-        void Promise.resolve(
-          onEventBatch({
-            events: batch.events.map((event) => toLegacyEvent(event, path)),
-            streamMaxOffset: batch.streamMaxOffset,
-          }),
-        ).catch(teardown);
-      },
-      replayAfterOffset,
-    });
-    if (callbackBroken) handle.unsubscribe();
+    // Callback retention lives in StreamsCapability.subscribe: RPC layers
+    // implicitly dispose stubs received as parameters when the call
+    // completes, so the capability dup()s the callback its wrapper outlives
+    // — without that, replay (delivered in-call) works but the first LIVE
+    // batch hits a disposed stub. Verified both ways by
+    // itx-subscribe.e2e.test.ts against a live deployment.
+    const handle = await this.client().subscribe({ afterOffset: opts.afterOffset }, onEventBatch);
     return new ItxStreamSubscription(handle);
   }
 
@@ -535,13 +497,8 @@ export class ItxStream extends RpcTarget {
 
 /** Disposer for ItxStream.subscribe — callable from any execution mode. */
 export class ItxStreamSubscription extends RpcTarget {
-  constructor(private readonly handle: StreamSubscriptionHandle) {
+  constructor(private readonly handle: { unsubscribe(): void }) {
     super();
-  }
-
-  /** Highest committed offset at subscribe time — read up to here, then tail. */
-  get streamMaxOffset(): number {
-    return this.handle.streamMaxOffset;
   }
 
   unsubscribe() {

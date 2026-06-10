@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createStreamSubscription } from "@iterate-com/streams/subscription";
-import type { StreamRpc } from "@iterate-com/streams/types";
+import type { StreamRpc, StreamSubscriptionHandle } from "@iterate-com/streams/types";
 import {
   type Event,
   type EventInput,
@@ -57,10 +57,23 @@ type StreamEventsInput = StreamPathInput & {
   beforeOffset?: StreamCursor;
 };
 
+export type StreamSubscribeInput = StreamPathInput & {
+  /** "start" replays everything, a number replays after it, "end" is live-only. */
+  afterOffset: StreamCursor;
+};
+
 export type StreamListChildrenInput = StreamPathInput;
 type StreamsCapabilityClient = Pick<
   StreamsCapability,
-  "append" | "appendBatch" | "create" | "getState" | "list" | "listChildren" | "read" | "stream"
+  | "append"
+  | "appendBatch"
+  | "create"
+  | "getState"
+  | "list"
+  | "listChildren"
+  | "read"
+  | "stream"
+  | "subscribe"
 >;
 
 /**
@@ -197,6 +210,72 @@ export class StreamsCapability extends WorkerEntrypoint<
         "cache-control": "no-cache",
       },
     });
+  }
+
+  /**
+   * Live tail: catch-up from `afterOffset`, then every committed batch,
+   * pushed to `onEventBatch` until the returned handle's unsubscribe() is
+   * called. The Stream DO only ever sees a plain Workers RPC stub held by
+   * this worker (Law 7 — Cap'n Web never terminates in a DO); if the
+   * callback's far end goes away, the subscription is torn down on the next
+   * failed delivery — durability is the stream itself, re-subscribe from the
+   * last offset you saw.
+   */
+  async subscribe(
+    input: StreamSubscribeInput,
+    onEventBatch: (batch: { events: Event[]; streamMaxOffset: number }) => unknown,
+  ): Promise<{ unsubscribe(): void }> {
+    const path = this.resolveNamespacePath(input);
+    const streamStub = (this.env.STREAM as unknown as StreamDurableObjectNamespace).getByName(
+      getStreamDurableObjectName({ namespace: this.ctx.props.projectId, path }),
+    ) as unknown as StreamRpc;
+
+    // "end" is live-only — replayAfterOffset must be ABSENT for that
+    // (toNewAfterOffset's MAX_SAFE_INTEGER sentinel would filter live
+    // batches out forever; it has history-read semantics).
+    const replayAfterOffset =
+      input.afterOffset === "end" ? undefined : toNewAfterOffset(input.afterOffset);
+
+    // RPC param stubs are implicitly disposed when this call completes; the
+    // wrapper below outlives it, so retain the callback with dup() (no-op
+    // for plain in-process functions) and release it on unsubscribe.
+    const callback = (onEventBatch as { dup?(): typeof onEventBatch }).dup?.() ?? onEventBatch;
+    let released = false;
+    const releaseCallback = () => {
+      if (released) return;
+      released = true;
+      (callback as Partial<Disposable>)[Symbol.dispose]?.();
+    };
+
+    // Replay batches can arrive while subscribe() is still in flight — if the
+    // callback breaks during that window, tear down as soon as the handle
+    // exists rather than leaking deliveries to a dead stub.
+    let handle: StreamSubscriptionHandle | undefined;
+    let callbackBroken = false;
+    const teardown = () => {
+      callbackBroken = true;
+      handle?.unsubscribe();
+      releaseCallback();
+    };
+    handle = await streamStub.subscribe({
+      processEventBatch: (batch) => {
+        void Promise.resolve(
+          callback({
+            events: batch.events.map((event) => toLegacyEvent(event, path)),
+            streamMaxOffset: batch.streamMaxOffset,
+          }),
+        ).catch(teardown);
+      },
+      replayAfterOffset,
+    });
+    if (callbackBroken) handle.unsubscribe();
+    const settled = handle;
+    return {
+      unsubscribe: () => {
+        settled.unsubscribe();
+        releaseCallback();
+      },
+    };
   }
 
   async getState(input: StreamPathInput = {}) {
