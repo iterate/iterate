@@ -244,24 +244,44 @@ instantiates the DO and writes a `woken` event. Consequences:
   full reduce + KV write + connection fan-out.
 - A pure reader can never be side-effect-free; any touch mutates durable state.
 
-- [ ] **Defer schema + `created` to the first `append`.** Move
-      `#ensureStorageSchema()` and the `created` append into the append path
-      (`#appendBatchHere`), guarded so it runs once.
-- [ ] **Reconsider `woken` entirely.** Almost nothing consumes it (only the
-      circuit-breaker's pass-through list and the paused-gate exception). Prefer
-      making incarnation id a piece of runtime/core state rather than a logged
-      event, or drop it. If kept, it must not be what initializes a stream.
-- [ ] **Couplings to handle when init goes lazy:**
-  - `getEvents` / `runtimeState` / `getEvent` on a never-appended stream must
-    return empty / initial state rather than throw.
-  - `#reconcile()` on boot (`stream.ts:81`) currently assumes state was read in
-    the constructor; rework so boot reconcile works from recovered-or-empty
-    state.
-  - The `created`-must-be-offset-1 special case
-    (`processors/core/implementation.ts:108-113`) gets simpler once `created` is
-    the deterministic first append.
-- [ ] This is also the single biggest length win in `stream.ts`: it collapses
-      the constructor and the offset-1 branch.
+**Status (2026-06-10): IMPLEMENTED (branch `streams-review-stage2-lazy-init`, off main).**
+
+- [x] **Deferred schema + `created` to the first append.** The constructor no
+      longer creates tables or appends anything for an uninitialized stream; it
+      only detects existing storage (`#eventsTableExists()` → `#storageReady`).
+      `#appendBatchHere` ensures the schema and prepends the `created` event
+      (offset 1) on the first real append, and strips it from the input-aligned
+      return value so `append()` still returns the caller's event.
+- [x] **`woken` decision:** kept as a feature but appended **only when an
+      already-initialized stream wakes** (`maxOffset > 0`), preserving the
+      audit-trail/e2e behavior for active streams. A fresh stream's first boot no
+      longer logs a `woken` (it logs `created` via the first append). I did NOT
+      remove `woken` — it's product-observable (example-app UI, circuit-breaker
+      reset, incarnationId) and e2e-asserted; full removal can be a later call.
+- [x] **Couplings handled:** read helpers (`getEvents` / `getEvent` /
+      `#readHighestEventOffset` / range reads) short-circuit on `!#storageReady`;
+      `runtimeState`/`reduce` are memory-only; boot `#reconcile()` runs only when
+      `maxOffset > 0`. `readCoreProcessorState` only replays the event log when
+      storage exists. The `created`-must-be-offset-1 branch stays valid (created
+      is offset 1 as the first append).
+- [x] Covered by 3 new DO tests (Stage 2 — lazy initialization): empty fresh
+      stream (no tables), first append prepends `created`@1 / returns caller's
+      event@2 / no `woken`, and `woken` reappears when an initialized stream
+      wakes on a new incarnation (kill + fresh stub).
+
+**Behavior change / fallout (needs a human e2e pass):** visiting/subscribing to a
+stream no longer auto-creates it — a never-appended stream is empty until the
+first append. This changes the example-app UX (a freshly-opened stream shows 0
+events) and invalidates the gated browser/capnweb e2e assertions that expect
+`created`/`woken` on visit (`example-app/e2e/playwright/stream-browser.spec.ts`
+~15 `created`-visible checks + the `woken` count at :792; `stream-capnweb.test.ts`
+:302-303,:391-402). These are `STREAM_STAGING_E2E`/Playwright-gated (not in CI).
+**Left for a follow-up that can actually run e2e** — either embrace empty-on-visit
+and update the tests, or have the example app append a marker on load.
+
+- [ ] Follow-up: update example-app e2e for empty-on-visit (human-run).
+- [ ] Optional (not done): further shrink `stream.ts`; the constructor did get
+      smaller but the offset-1 branch in `core/implementation.ts` was left as-is.
 
 ---
 

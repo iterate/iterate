@@ -43,6 +43,9 @@ const CORE_STATE_VERSION = 3;
 
 export class Stream extends DurableObject<Env> implements StreamRpc {
   #coreProcessorState: StreamCoreProcessorState;
+  // Whether the SQLite tables exist yet. A stream that has never been appended
+  // to has no storage and no events; both are created lazily by the first append.
+  #storageReady: boolean;
   coreProcessor = new CoreStreamProcessor({
     iterateContext: {
       stream: {
@@ -61,37 +64,35 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.#ensureStorageSchema();
-
+    // Lazy initialization: a never-appended stream has no tables. Don't create
+    // them here — only detect whether a prior incarnation already did.
+    this.#storageReady = this.#eventsTableExists();
     this.#coreProcessorState = this.readCoreProcessorState();
 
-    // When the durable object boots up the _first time_, we add a
-    // events.iterate.com/stream/created event to the stream.
-    //
-    // And every time it's woken up for any reason (inbound fetch, rpc or alarm),
-    // we append a "woken" event to the stream.
-    if (this.#coreProcessorState.eventCount === 0) {
-      // stream durable objects have names like "namespace:/some/stream/path"
-      if (!ctx.id.name) throw new Error("ctx.id.name is falsey - this should never happen");
-      const [namespace, path] = ctx.id.name.split(":");
+    // An uninitialized stream stays completely empty: no storage, no `created`,
+    // no `woken`, nothing to reconcile. The first append initializes it (see
+    // `#appendBatchHere`). An already-initialized stream waking up records the
+    // incarnation and restores any outbound subscriptions it should have —
+    // without this, a stream that wakes with configured subscriptions but no new
+    // appends never reconnects.
+    if (this.#coreProcessorState.maxOffset > 0) {
       this.append({
         event: {
-          type: "events.iterate.com/stream/created",
-          payload: { namespace, path },
+          type: "events.iterate.com/stream/woken",
+          payload: { incarnationId: crypto.randomUUID() },
         },
       });
+      this.#reconcile();
     }
-    // each time the durable object wakes up, we append this event
-    this.append({
-      event: {
-        type: "events.iterate.com/stream/woken",
-        payload: { incarnationId: crypto.randomUUID() },
-      },
-    });
+  }
 
-    // Restore outbound connections this stream should have. Without this, a stream
-    // that wakes with configured subscriptions but no new appends never reconnects.
-    this.#reconcile();
+  /** Cheap existence check that does not itself create the table. */
+  #eventsTableExists(): boolean {
+    return (
+      this.ctx.storage.sql
+        .exec("select 1 from sqlite_master where type = 'table' and name = 'events' limit 1")
+        .toArray().length > 0
+    );
   }
 
   #ensureStorageSchema(): void {
@@ -100,6 +101,20 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     // - `event_chunks` stores the full event JSON as bounded UTF-8 byte rows.
     this.#createEventsTable();
     this.#createEventChunksTable();
+    this.#storageReady = true;
+  }
+
+  /**
+   * The `created` event input for this stream, derived from its DO name
+   * (`namespace:/some/stream/path`). Prepended by the first append.
+   */
+  #createdEventInput(): StreamEventInput {
+    if (!this.ctx.id.name) throw new Error("ctx.id.name is falsey - this should never happen");
+    const [namespace, path] = this.ctx.id.name.split(":");
+    return {
+      type: "events.iterate.com/stream/created",
+      payload: { namespace, path },
+    };
   }
 
   #createEventsTable(): void {
@@ -138,7 +153,11 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     const storedStateIsCurrent = stored !== undefined && storedVersion === CORE_STATE_VERSION;
     const storedState = storedStateIsCurrent
       ? CoreProcessorContract.stateSchema.parse(stored)
-      : this.#recoverCoreProcessorStateFromEventLog();
+      : // No usable KV state. Replay the event log only if storage exists; a
+        // never-appended stream has no tables and is simply uninitialized.
+        this.#storageReady
+        ? this.#recoverCoreProcessorStateFromEventLog()
+        : undefined;
     if (storedState === undefined) return getInitialProcessorState(CoreProcessorContract);
 
     const state = this.#catchUpCoreProcessorState(storedState);
@@ -169,6 +188,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 
   #readHighestEventOffset(): number {
+    if (!this.#storageReady) return 0;
     return (
       this.ctx.storage.sql
         .exec<{ offset: number | null }>("select max(offset) as offset from events")
@@ -209,6 +229,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 
   #readEventByOffset(offset: number): StreamEvent | undefined {
+    if (!this.#storageReady) return undefined;
     const row = this.ctx.storage.sql
       .exec<{ offset: number }>(
         `
@@ -225,6 +246,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 
   #readEventByIdempotencyKey(idempotencyKey: string): StreamEvent | undefined {
+    if (!this.#storageReady) return undefined;
     const row = this.ctx.storage.sql
       .exec<{ offset: number }>(
         `
@@ -264,6 +286,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     beforeOffset: number;
     limit: number;
   }): StreamEvent[] {
+    if (!this.#storageReady) return [];
     // One indexed metadata subquery picks the replay window; the join then streams each
     // event's chunks in primary-key order (offset, chunk_index).
     const chunks = this.ctx.storage.sql
@@ -379,6 +402,23 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 
   #appendBatchHere(args: { events: StreamEventInput[] }): StreamEvent[] {
+    // Lazy initialization: the first real append creates storage and prepends the
+    // `created` event (offset 1). A never-appended stream has no tables and no
+    // events; an empty append leaves it that way.
+    let inputEvents = args.events;
+    let prependedCreated = false;
+    if (
+      this.#coreProcessorState.maxOffset === 0 &&
+      inputEvents.length > 0 &&
+      inputEvents[0]?.type !== "events.iterate.com/stream/created"
+    ) {
+      inputEvents = [this.#createdEventInput(), ...inputEvents];
+      prependedCreated = true;
+    }
+    if (inputEvents.length > 0 && !this.#storageReady) {
+      this.#ensureStorageSchema();
+    }
+
     let workingCoreProcessorState = this.#coreProcessorState;
     const events: StreamEvent[] = [];
     const newEvents: StreamEvent[] = [];
@@ -389,7 +429,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     }> = [];
     const idempotencyHitsInBatch = new Map<string, StreamEvent>();
     // 1. Prepare events and reduced state.
-    for (const eventInput of args.events) {
+    for (const eventInput of inputEvents) {
       const input = StreamEventInputSchema.strict().parse(eventInput);
 
       if (input.idempotencyKey !== undefined) {
@@ -475,7 +515,9 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
       this.#reconcile();
     }
 
-    return events;
+    // Return only the caller's events, input-aligned. A `created` event we
+    // prepended for lazy init is committed but is not part of the caller's batch.
+    return prependedCreated ? events.slice(1) : events;
   }
 
   getEvent(

@@ -22,8 +22,10 @@ import { PublicStreamRpcTarget, type Stream } from "./stream.ts";
 
 const STREAM = (env as unknown as { STREAM: DurableObjectNamespace<Stream> }).STREAM;
 
-// Each test uses a fresh DO name. The DO constructor seeds `created` (offset 1)
-// and `woken` (offset 2) on first touch, so user appends start at offset 3.
+// Each test uses a fresh DO name. Storage is lazy: a never-appended stream has
+// no events. The first append prepends `created` (offset 1), so the caller's
+// first event is offset 2. `woken` is only appended when an already-initialized
+// stream wakes on a new incarnation (see the lazy-initialization tests below).
 let counter = 0;
 function freshStream() {
   counter += 1;
@@ -166,12 +168,63 @@ describe("T8 — Stream DO smoke (coverage)", () => {
         for (let i = 0; i < 20 && !seen.includes(target.offset); i += 1) {
           await new Promise((resolve) => setTimeout(resolve, 0));
         }
-        // Replay from 0 includes the seeded created/woken events plus our append.
+        // Replay from 0 includes the lazily-seeded `created` event plus our append.
         expect(seen).toContain(target.offset);
         expect(Math.min(...seen)).toBe(1);
       } finally {
         subscription.unsubscribe();
       }
     });
+  });
+});
+
+describe("Stage 2 — lazy initialization", () => {
+  it("a never-appended stream has no events and no storage", async () => {
+    await runInDurableObject(freshStream(), async (stream, state) => {
+      expect(await stream.getEvents()).toEqual([]);
+      // The runtime state is the uninitialized placeholder, max offset 0.
+      const runtime = await stream.runtimeState();
+      expect(runtime.coreProcessorState.maxOffset).toBe(0);
+      // And no SQLite tables were created just by instantiating + reading.
+      const tables = state.storage.sql
+        .exec("select name from sqlite_master where type = 'table' and name = 'events'")
+        .toArray();
+      expect(tables).toEqual([]);
+    });
+  });
+
+  it("the first append prepends `created` at offset 1 and returns only the caller's event", async () => {
+    await runInDurableObject(freshStream(), async (stream) => {
+      const committed = await stream.append({ event: { type: "test.first", payload: { n: 1 } } });
+      // The caller gets back their own event at offset 2, not the prepended created.
+      expect(committed.type).toBe("test.first");
+      expect(committed.offset).toBe(2);
+
+      const events = await stream.getEvents();
+      expect(events.map((e) => [e.offset, e.type])).toEqual([
+        [1, "events.iterate.com/stream/created"],
+        [2, "test.first"],
+      ]);
+      // No `woken` was written on the first boot.
+      expect(events.some((e) => e.type === "events.iterate.com/stream/woken")).toBe(false);
+    });
+  });
+
+  it("appends `woken` when an already-initialized stream wakes on a new incarnation", async () => {
+    counter += 1;
+    const name = `stream:/review/wake${counter}`;
+    const stub = STREAM.getByName(name);
+    await stub.append({ event: { type: "test.init", payload: {} } });
+
+    const before = (await stub.getEvents()) as StreamEvent[];
+    expect(before.some((e) => e.type === "events.iterate.com/stream/woken")).toBe(false);
+
+    // Abort the incarnation; the aborted stub is poisoned, so reach the fresh
+    // incarnation through a new stub for the same DO name.
+    await stub.kill().catch(() => undefined);
+
+    const after = (await STREAM.getByName(name).getEvents()) as StreamEvent[];
+    const woken = after.filter((e) => e.type === "events.iterate.com/stream/woken");
+    expect(woken).toHaveLength(1);
   });
 });
