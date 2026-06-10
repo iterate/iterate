@@ -25,3 +25,5 @@ jobs:
         run: pnpm exec oxlint . --threads 1 --deny-warnings
       - name: Run Typecheck
         run: pnpm typecheck
+      - name: Run Knip
+        run: pnpm knip

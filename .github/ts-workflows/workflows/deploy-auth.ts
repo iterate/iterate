@@ -1,4 +1,5 @@
 import { workflow } from "@jlarky/gha-ts/workflow-types";
+import { cloudflareAppSharedPaths } from "../../../scripts/preview/apps.ts";
 import * as utils from "../utils/index.ts";
 
 export default workflow({
@@ -14,7 +15,7 @@ export default workflow({
   on: {
     push: {
       branches: ["main"],
-      paths: ["apps/auth/**", "apps/auth-contract/**"],
+      paths: ["apps/auth/**", "apps/auth-contract/**", ...cloudflareAppSharedPaths],
     },
     workflow_dispatch: {
       inputs: {

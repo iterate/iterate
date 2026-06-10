@@ -31,10 +31,7 @@ jobs:
             const previewPaths = [
               ".github/workflows/cloudflare-previews.yml",
               ".github/ts-workflows/workflows/cloudflare-previews.ts",
-              "packages/shared/src/alchemy/**",
-              "packages/shared/src/config.ts",
-              "packages/shared/src/dev/**",
-              "packages/shared/src/evlog/**",
+              "packages/shared/**",
               "packages/ui/**",
               "packages/mock-http-proxy/**",
               "scripts/preview/**",
@@ -44,6 +41,7 @@ jobs:
               "apps/os-contract/**",
               "apps/auth/**",
               "apps/auth-contract/**",
+              "packages/streams/**",
               "apps/semaphore/**",
             ];
             const __handler = async function should_run_preview({ context, github }) {

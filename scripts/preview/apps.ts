@@ -16,11 +16,12 @@ export type CloudflarePreviewApp = {
   previewTestCommandArgs: readonly [string, ...string[]];
 };
 
+// Deployed apps compile in @iterate-com/shared via many subpath exports (streams,
+// durable-object-utils, callable, codemode, config, evlog, ...), so trigger on the
+// whole package rather than chasing individual subdirectories. Deploys are idempotent,
+// so over-triggering is safe; under-triggering means prod silently misses deploys.
 export const cloudflareAppSharedPaths = [
-  "packages/shared/src/alchemy/**",
-  "packages/shared/src/config.ts",
-  "packages/shared/src/dev/**",
-  "packages/shared/src/evlog/**",
+  "packages/shared/**",
   "packages/ui/**",
   "packages/mock-http-proxy/**",
 ] as const;
@@ -44,7 +45,14 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     displayName: "OS",
     appPath: "apps/os",
     dopplerProject: "os",
-    paths: ["apps/os/**", "apps/os-contract/**", "apps/auth/**", "apps/auth-contract/**"],
+    paths: [
+      "apps/os/**",
+      "apps/os-contract/**",
+      "apps/auth/**",
+      "apps/auth-contract/**",
+      // apps/os compiles in @iterate-com/streams (see apps/os/src/worker.ts).
+      "packages/streams/**",
+    ],
     previewDependencies: [],
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     previewTestCommandArgs: ["pnpm", "e2e", "-t", "OS preview smoke"],

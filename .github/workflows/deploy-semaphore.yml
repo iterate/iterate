@@ -13,10 +13,7 @@ on:
       - main
     paths:
       - apps/semaphore/**
-      - packages/shared/src/alchemy/**
-      - packages/shared/src/config.ts
-      - packages/shared/src/dev/**
-      - packages/shared/src/evlog/**
+      - packages/shared/**
       - packages/ui/**
       - packages/mock-http-proxy/**
   workflow_dispatch:
