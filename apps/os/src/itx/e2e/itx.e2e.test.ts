@@ -123,6 +123,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
 test("platform bindings are dialable capabilities (raw + wrapped)", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-ai` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   // (1) Raw binding ref: env.AI itself is the target; members replay applies
@@ -189,6 +190,7 @@ test.skipIf(!MCP_TEST_SERVER_URL)(
   async () => {
     using itx = connectGlobal();
     const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-mcp` })) as { id: string };
+    createdProjectIds.push(project.id);
     using projectItx = await itx.projects.get(project.id);
 
     await projectItx.caps.define({
