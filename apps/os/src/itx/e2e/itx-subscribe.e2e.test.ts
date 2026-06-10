@@ -4,16 +4,19 @@
 // the primitive the dashboard's live stream views are built on.
 
 import { expect, test } from "vitest";
-import { connectItx, type ItxClient } from "../client.ts";
+import { connectGlobal, registerCreatedProjectCleanup } from "./e2e-env.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const PROJECT_SLUG = `itx-sub-e2e-${RUN_SUFFIX}`;
 const STREAM_PATH = "/itx-e2e/subscribe";
 const EVENT_TYPE = "events.iterate.test/itx/subscribe-e2e";
 
+const createdProjectIds = registerCreatedProjectCleanup();
+
 test("subscribe replays history, tails live appends, and unsubscribes", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: PROJECT_SLUG })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   const stream = projectItx.streams.get(STREAM_PATH);
@@ -63,27 +66,4 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 8_00
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Timed out waiting for ${label}`);
-}
-
-function connectGlobal(): ItxClient {
-  return connectItx({ baseUrl: baseUrl(), token: adminApiSecret() });
-}
-
-function adminApiSecret() {
-  const secret =
-    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
-    "";
-  if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required for itx e2e tests.");
-  return secret;
-}
-
-function baseUrl() {
-  const url =
-    process.env.OS_ITX_E2E_BASE_URL?.trim().replace(/\/+$/, "") ||
-    process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "") ||
-    "";
-  if (!url) throw new Error("APP_CONFIG_BASE_URL (or OS_ITX_E2E_BASE_URL) is required.");
-  return url;
 }

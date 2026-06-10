@@ -7,7 +7,13 @@
 
 import { expect, test } from "vitest";
 import { RpcTarget } from "capnweb";
-import { connectItx, type ItxClient } from "../client.ts";
+import type { ItxClient } from "../client.ts";
+import {
+  adminApiSecret,
+  baseUrl,
+  connectGlobal,
+  registerCreatedProjectCleanup,
+} from "./e2e-env.ts";
 import {
   appendAndReadStream,
   callPathCapability,
@@ -20,12 +26,15 @@ import {
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const PROJECT_SLUG = `itx-e2e-${RUN_SUFFIX}`;
 
+const createdProjectIds = registerCreatedProjectCleanup();
+
 test("itx scripts run identically over Cap'n Web and /api/itx/run", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: PROJECT_SLUG })) as {
     id: string;
     slug: string;
   };
+  createdProjectIds.push(project.id);
   expect(project.slug).toBe(PROJECT_SLUG);
 
   for (const mode of executionModes(itx)) {
@@ -54,6 +63,7 @@ test("itx scripts run identically over Cap'n Web and /api/itx/run", async () => 
 test("the five-step capability flow: provide live, call, promote durable, call from a script", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-caps` })) as { id: string };
+  createdProjectIds.push(project.id);
 
   // (1) A provider written in this Node process: ONE call({ path, args })
   // method is the whole implementation of an SDK-shaped surface.
@@ -112,6 +122,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
 test("worker caps hold a correctly scoped itx of their own", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-todo` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   await projectItx.caps.define({
@@ -145,6 +156,7 @@ test("worker caps hold a correctly scoped itx of their own", async () => {
 test("members caps auto-proxy every public method/getter at any depth", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-proxy` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   // No method list anywhere: the WorkerEntrypoint just exports methods (and a
@@ -178,6 +190,7 @@ test("members caps auto-proxy every public method/getter at any depth", async ()
 test("one dynamic worker cap calls another's methods through its own itx", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-w2w` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   // Provider cap: a plain WorkerEntrypoint exporting a method + a nested
@@ -235,6 +248,7 @@ test("one dynamic worker cap calls another's methods through its own itx", async
 test("revoked and offline caps fail with instructive errors", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-err` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   await expect((projectItx as never as Record<string, any>).nothingHere.run()).rejects.toThrow(
@@ -302,32 +316,9 @@ function executionModes(itx: ItxClient): ExecutionMode[] {
   ];
 }
 
-function connectGlobal(): ItxClient {
-  return connectItx({ baseUrl: baseUrl(), token: adminApiSecret() });
-}
-
 function authHeaders() {
   return {
     authorization: `Bearer ${adminApiSecret()}`,
     "content-type": "application/json",
   };
-}
-
-function adminApiSecret() {
-  const secret =
-    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
-    process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
-    "";
-  if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required for itx e2e tests.");
-  return secret;
-}
-
-function baseUrl() {
-  const url =
-    process.env.OS_ITX_E2E_BASE_URL?.trim().replace(/\/+$/, "") ||
-    process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "") ||
-    "";
-  if (!url) throw new Error("APP_CONFIG_BASE_URL is required for itx e2e tests.");
-  return url;
 }

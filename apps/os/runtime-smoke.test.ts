@@ -24,8 +24,16 @@ const hasCfWranglerLocal = existsSync(join(appRoot, ".alchemy/local/wrangler.jso
 const runFullSmoke = process.env.RUNTIME_SMOKE_FULL === "1";
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe.sequential;
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
+/**
+ * Fixture admin secret: `stripInheritedAppConfig` removes any Doppler-provided
+ * `APP_CONFIG_ADMIN_API_SECRET` from the server's env, so the smoke bakes its
+ * own known secret into `APP_CONFIG` (redacted field — never reaches
+ * publicConfig) and uses it for the authenticated oRPC roundtrip.
+ */
+const SMOKE_ADMIN_API_SECRET = "runtime-smoke-admin-api-secret";
 const smokeEnv = {
   APP_CONFIG: JSON.stringify({
+    adminApiSecret: SMOKE_ADMIN_API_SECRET,
     openAiApiKey: "runtime-smoke-openai-key",
   }),
 };
@@ -101,10 +109,14 @@ async function assertSsrHtml(httpBaseUrl: string) {
   expect(html).toContain("Sign in to OS");
 }
 
-function createOpenApiClient(httpBaseUrl: string): ContractRouterClient<typeof osContract> {
+function createOpenApiClient(
+  httpBaseUrl: string,
+  headers?: Record<string, string>,
+): ContractRouterClient<typeof osContract> {
   return createORPCClient(
     new OpenAPILink(osContract, {
       url: new URL("/api", httpBaseUrl).toString(),
+      headers,
     }),
   );
 }
@@ -120,6 +132,25 @@ async function assertPublicConfigOverride(httpBaseUrl: string) {
   const client = createOpenApiClient(httpBaseUrl);
   const config = PublicConfigSchema.parse(await client.__internal.publicConfig({}));
   expect(config).toEqual({});
+}
+
+/**
+ * Authenticated oRPC end-to-end: the admin API secret (same mechanism the
+ * repo CLI uses — `Authorization: Bearer <APP_CONFIG_ADMIN_API_SECRET>`,
+ * resolved to the admin principal in `resolveRequestAuth`) must unlock an
+ * `authenticatedUserMiddleware`-gated procedure, and the same call without
+ * credentials must be rejected.
+ */
+async function assertAdminAuthenticatedOrpc(httpBaseUrl: string) {
+  const authenticated = createOpenApiClient(httpBaseUrl, {
+    authorization: `Bearer ${SMOKE_ADMIN_API_SECRET}`,
+  });
+  const listed = await authenticated.projects.list({});
+  expect(Array.isArray(listed.projects)).toBe(true);
+  expect(listed.total).toBeGreaterThanOrEqual(0);
+
+  const anonymous = createOpenApiClient(httpBaseUrl);
+  await expect(anonymous.projects.list({})).rejects.toMatchObject({ code: "UNAUTHORIZED" });
 }
 
 async function assertOrpcWebSocket(httpBaseUrl: string) {
@@ -140,6 +171,7 @@ async function assertFullStack(httpBaseUrl: string) {
   await assertSsrHtml(httpBaseUrl);
   await assertTypedClientHealth(httpBaseUrl);
   await assertPublicConfigOverride(httpBaseUrl);
+  await assertAdminAuthenticatedOrpc(httpBaseUrl);
   await assertOrpcWebSocket(httpBaseUrl);
 }
 

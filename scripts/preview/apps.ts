@@ -39,7 +39,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       CloudflarePreviewAppSlug.parse(appSlug),
     ),
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
-    previewTestCommandArgs: ["pnpm", "e2e", "-t", "OS preview smoke"],
+    // The itx e2e (node project only — the browser project needs a Playwright
+    // chromium install the preview e2e job doesn't have) reads
+    // APP_CONFIG_BASE_URL + APP_CONFIG_ADMIN_API_SECRET from the leased
+    // preview Doppler config, same as the preview smoke.
+    previewTestCommandArgs: [
+      "bash",
+      "-c",
+      'pnpm e2e -t "OS preview smoke" && pnpm e2e:itx --project node',
+    ],
   },
   semaphore: {
     ...newStyleCloudflareApps.semaphore,
