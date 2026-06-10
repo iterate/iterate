@@ -44,7 +44,7 @@ function ProjectStreamsIndexPage() {
     key: "lastWokenAt",
     direction: "desc",
   });
-  const { data, isPending } = useItxQuery({
+  const { data, isPending, error, refetch } = useItxQuery({
     project: project.id,
     queryKey: itxKey.project(project.id, "streams", "list"),
     queryFn: (itx) => itx.streams.list(),
@@ -147,7 +147,17 @@ function ProjectStreamsIndexPage() {
         </div>
       </form>
 
-      {isPending ? (
+      {error ? (
+        <Empty className="rounded-lg border">
+          <EmptyHeader>
+            <EmptyTitle>Could not load streams</EmptyTitle>
+            <EmptyDescription>{error.message}</EmptyDescription>
+          </EmptyHeader>
+          <Button type="button" variant="outline" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </Empty>
+      ) : isPending ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>Loading streams…</EmptyTitle>
