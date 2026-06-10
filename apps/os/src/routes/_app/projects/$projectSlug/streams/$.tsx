@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createBrowserOpenApiClient } from "~/orpc/client.ts";
-import { ProjectStreamView } from "~/components/project-stream-view.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 

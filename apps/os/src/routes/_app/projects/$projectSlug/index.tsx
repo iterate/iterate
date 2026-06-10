@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { ProjectStreamView } from "~/components/project-stream-view.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { projectLifecycleStateQueryOptions } from "~/lib/project-route-query.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/")({

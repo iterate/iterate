@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ProjectStreamView } from "~/components/project-stream-view.tsx";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import {
   projectAgentRuntimeStateQueryOptions,
   projectAgentsListQueryOptions,
