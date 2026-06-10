@@ -25,7 +25,7 @@ export type AgentToolsCapabilityProps = {
 
 export class AgentToolsCapability extends WorkerEntrypoint<Env, AgentToolsCapabilityProps> {
   async call(input: PathCall): Promise<unknown> {
-    const props = (Reflect.get(this, "ctx") as ExecutionContext<AgentToolsCapabilityProps>).props;
+    const props = this.ctx.props;
     if (!props.projectId) {
       throw new Error("AgentToolsCapability needs registry-injected projectId props.");
     }
