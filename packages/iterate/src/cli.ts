@@ -1,8 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -17,75 +16,26 @@ import { z } from "zod/v4";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 import type { AuthContractClient } from "../../../apps/auth-contract/src/index.ts";
 import { resourceLimits } from "node:worker_threads";
+import {
+  CONFIG_PATH,
+  Config,
+  readConfig,
+  readConfigFile,
+  removeConfigSession,
+  updateConfigSession,
+  writeConfigFile,
+  type StoredSession,
+} from "./config.ts";
 
 type ParsedRouter = ReturnType<typeof parseRouter>;
 
-const XDG_CONFIG_PARENT = join(
-  process.env.XDG_CONFIG_HOME ? process.env.XDG_CONFIG_HOME : join(homedir(), ".config"),
-  "iterate",
-);
-
-const CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
 const OAUTH_REFRESH_SKEW_MS = 60_000;
-
-/** Stored session (lives inside a config entry) */
-const Session = z.object({
-  token: z.string().optional(),
-  refreshToken: z.string().optional(),
-  clientId: z.string().optional(),
-  scope: z.string().optional(),
-  tokenType: z.string().optional(),
-  cookie: z.string().optional(),
-  expiresAt: z.string().optional(),
-});
-
-type StoredSession = z.infer<typeof Session>;
-
-/** A named config — describes which server to talk to and how to authenticate. */
-const Config = z.object({
-  defaultProject: z.string().optional(),
-  osBaseUrl: z.string().optional().default("https://os.iterate.com"),
-  authBaseUrl: z.string().optional().default("https://auth.iterate.com"),
-  session: Session.optional(),
-})
-
-type Config = z.infer<typeof Config>;
-
-/** The config file on disk (~/.config/iterate/config.json) */
-const ConfigFile = z.object({
-  configs: z.record(z.string(), Config).optional(),
-  default: z.string().optional(),
-  /** Maps absolute directory path to a config name */
-  workspaces: z.record(z.string(), z.string()).optional(),
-});
-
-type ConfigFile = z.infer<typeof ConfigFile>;
 
 const isAgent =
   process.env.AGENT === "1" ||
   process.env.OPENCODE === "1" ||
   Boolean(process.env.OPENCODE_SESSION) ||
   Boolean(process.env.CLAUDE_CODE);
-
-const readConfigFile = (): ConfigFile => {
-  if (!existsSync(CONFIG_PATH)) return {};
-  const rawText = readFileSync(CONFIG_PATH, "utf8");
-  try {
-    return JSON.parse(rawText) as ConfigFile;
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid JSON in ${CONFIG_PATH}: ${detail}`);
-  }
-};
-
-const writeConfigFile = (configFile: ConfigFile): void => {
-  const parsed = ConfigFile.safeParse(configFile);
-  if (!parsed.success) {
-    throw new Error(`Invalid config file: ${z.prettifyError(parsed.error)}`);
-  }
-  mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-  writeFileSync(CONFIG_PATH, `${JSON.stringify(parsed.data, null, 2)}\n`);
-};
 
 /** Global override set by --config flag before CLI commands run. */
 let configFlagOverride: string | undefined;
@@ -249,43 +199,25 @@ const resolveConfigName = (workspacePath: string): string | Error => {
   );
 };
 
-const resolveConfig = (workspacePath: string): { name: string; config: Config } | Error => {
-  const configFile = readConfigFile();
-  const name = resolveConfigName(workspacePath);
-  if (name instanceof Error) return name;
-  const config = configFile.configs?.[name];
-  if (!config) return new Error(`Config "${name}" not found`);
-  const parsed = Config.safeParse(config);
-  if (!parsed.success) {
-    return new Error(
-      `Invalid config "${name}" in ${CONFIG_PATH}:\n${z.prettifyError(parsed.error)}`,
-    );
-  }
-  // Normalize: strip trailing slashes from URLs to avoid double-slash issues
-  parsed.data.osBaseUrl = parsed.data.osBaseUrl.replace(/\/+$/, "");
-  return { name, config: parsed.data };
-};
-
-const resolveAuthBaseUrl = (config: Config) => {
-  return config.authBaseUrl || Config.shape.authBaseUrl.def.defaultValue;
-};
-
-const storeSession = (configName: string, session: StoredSession): void => {
-  const configFile = readConfigFile();
-  const entry = configFile.configs?.[configName];
-  if (!entry) throw new Error(`Config "${configName}" not found`);
-  entry.session = session;
-  writeConfigFile(configFile);
-};
-
-const removeSession = (configName: string): void => {
-  const configFile = readConfigFile();
-  const entry = configFile.configs?.[configName];
-  if (entry) {
-    delete entry.session;
-    writeConfigFile(configFile);
-  }
-};
+function resolveConfig(workspacePath: string): { name: string; config: Config } | Error;
+function resolveConfig(
+  workspacePath: string,
+  options: { throw: true },
+): { name: string; config: Config };
+function resolveConfig(
+  workspacePath: string,
+  options?: { throw: true },
+): { name: string; config: Config } | Error {
+  const result = ((): { name: string; config: Config } | Error => {
+    const name = resolveConfigName(workspacePath);
+    if (name instanceof Error) return name;
+    const config = readConfig(name);
+    if (config instanceof Error) return config;
+    return { name, config };
+  })();
+  if (result instanceof Error && options?.throw) throw result;
+  return result;
+}
 
 /**
  * Get auth headers for OS API calls based on the resolved config's stored session.
@@ -321,22 +253,16 @@ const sessionNeedsRefresh = (session: StoredSession) => {
   return Number.isFinite(expiresAt) && expiresAt <= Date.now() + OAUTH_REFRESH_SKEW_MS;
 };
 
-const authorizationHeaderToBearerToken = (authorization: string | undefined) => {
-  if (!authorization) return undefined;
-  const match = authorization.match(/^Bearer\s+(.+)$/i);
-  return match?.[1] || authorization;
-};
-
 const getAuthWorkerHeaders = async (
   config: Config,
 ): Promise<{ cookie?: string; authorization?: string }> => {
   const session = config.session;
   if (!session) {
-    throw new Error(`Not logged in to ${resolveAuthBaseUrl(config)}. Run \`iterate login\` first.`);
+    throw new Error(`Not logged in to ${config.authBaseUrl}. Run \`iterate login\` first.`);
   }
   if (session.expiresAt && new Date(session.expiresAt) < new Date()) {
     throw new Error(
-      `Session expired for ${resolveAuthBaseUrl(config)}. Run \`iterate login\` again.`,
+      `Session expired for ${config.authBaseUrl}. Run \`iterate login\` again.`,
     );
   }
   if (session.token) {
@@ -345,11 +271,11 @@ const getAuthWorkerHeaders = async (
   if (session.cookie) {
     return { cookie: session.cookie };
   }
-  throw new Error(`Stored session for ${resolveAuthBaseUrl(config)} has no token or cookie.`);
+  throw new Error(`Stored session for ${config.authBaseUrl} has no token or cookie.`);
 };
 
 const getAuthWorkerClient = async (config: Config): Promise<AuthContractClient> => {
-  const baseURL = resolveAuthBaseUrl(config);
+  const baseURL = config.authBaseUrl;
   const headers = await getAuthWorkerHeaders(config);
   return createORPCClient(
     new RPCLink({
@@ -602,7 +528,7 @@ const refreshOAuthSession = async (input: {
     throw new Error(`Session expired for ${input.config.osBaseUrl}. Run \`iterate login\` again.`);
   }
 
-  const authBaseUrl = resolveAuthBaseUrl(input.config);
+  const authBaseUrl = input.config.authBaseUrl;
   const body = new URLSearchParams({
     grant_type: "refresh_token",
     client_id: input.session.clientId,
@@ -628,12 +554,12 @@ const refreshOAuthSession = async (input: {
   const refreshedSession = oauthTokenToSession(token, input.session);
   refreshedSession.clientId = input.session.clientId;
   input.config.session = refreshedSession;
-  if (input.configName) storeSession(input.configName, refreshedSession);
+  if (input.configName) updateConfigSession(input.configName, refreshedSession);
   return refreshedSession;
 };
 
 const oauthLogin = async (config: Config): Promise<StoredSession> => {
-  const authBaseUrl = resolveAuthBaseUrl(config);
+  const authBaseUrl = config.authBaseUrl;
   const codeVerifier = randomBase64Url(48);
   const state = randomBase64Url(32);
   const callback = await startOAuthCallbackServer();
@@ -680,7 +606,7 @@ const oauthLogin = async (config: Config): Promise<StoredSession> => {
 const deviceFlowLogin = async (
   config: Config,
 ): Promise<{ token?: string; cookie?: string; expiresAt?: string }> => {
-  const authBaseUrl = resolveAuthBaseUrl(config);
+  const authBaseUrl = config.authBaseUrl;
   // Step 1: Request device code (RFC 8628 — all fields are snake_case)
   const codeRes = await fetch(`${authBaseUrl}/api/auth/device/code`, {
     method: "POST",
@@ -922,8 +848,7 @@ const getDaemonProcedures = async (params: { daemonBaseUrl: string }) => {
 const launcherProcedures = {
   ping: os
     .handler(async () => {
-      const resolved = resolveConfig(process.cwd());
-      if (resolved instanceof Error) throw resolved;
+      const resolved = resolveConfig(process.cwd(), { throw: true });
       const { config } = resolved;
       const osClient = createORPCClient(
         new RPCLink({
@@ -949,13 +874,12 @@ const launcherProcedures = {
       description: "Authenticate with the OS server via browser-based OAuth",
     })
     .handler(async () => {
-      const resolved = resolveConfig(process.cwd());
-      if (resolved instanceof Error) throw resolved;
+      const resolved = resolveConfig(process.cwd(), { throw: true });
       const { config } = resolved;
 
-      console.error(`Logging in to ${await resolveAuthBaseUrl(config)}...`);
+      console.error(`Logging in to ${config.authBaseUrl}...`);
       const oauthResult = await oauthLogin(config);
-      storeSession(resolved.name, oauthResult);
+      updateConfigSession(resolved.name, oauthResult);
       // Update in-memory config so subsequent verification and calls see the token.
       config.session = oauthResult;
 
@@ -986,15 +910,13 @@ const launcherProcedures = {
   logout: os
     .meta({ description: "Remove stored session for the current config" })
     .handler(async () => {
-      const resolved = resolveConfig(process.cwd());
-      if (resolved instanceof Error) throw resolved;
-      removeSession(resolved.name);
+      const resolved = resolveConfig(process.cwd(), { throw: true });
+      removeConfigSession(resolved.name);
       return { message: `Logged out from ${resolved.name} (${resolved.config.osBaseUrl})` };
     }),
 
   whoami: os.meta({ description: "Show current authenticated user" }).handler(async () => {
-    const resolved = resolveConfig(process.cwd());
-    if (resolved instanceof Error) throw resolved;
+    const resolved = resolveConfig(process.cwd(), { throw: true });
     const session = resolved.config.session;
     if (!session?.token) {
       throw new Error(`Not logged in to ${resolved.config.osBaseUrl}. Run \`iterate login\` first.`);
@@ -1034,38 +956,25 @@ const launcherProcedures = {
       description: "Open the Iterate chat terminal UI",
     })
     .handler(async ({ input }) => {
-      const resolved = resolveConfig(process.cwd());
-      if (resolved instanceof Error) throw resolved;
-      const osBaseUrl = resolved.config.osBaseUrl;
-      const authHeaders = await getOsAuthHeaders(resolved.config, resolved.name);
-      const session = resolved.config.session;
+      const resolved = resolveConfig(process.cwd(), { throw: true });
       const command = buildChatCommand({
-        osBaseUrl,
+        osBaseUrl: resolved.config.osBaseUrl,
         projectSlugOrId: input.project,
         streamPath: input.streamPath,
         entrypointPath: resolveStreamTuiEntrypointPath(),
       });
+      // Auth is the TUI's job: it reads admin/bearer secrets from the inherited
+      // environment when present (doppler, e2e), and otherwise loads the named
+      // config's stored session from the shared config file.
       await runInheritedProcess({
         ...command,
-        env: {
-          OS_E2E_BEARER_TOKEN: authorizationHeaderToBearerToken(authHeaders.authorization),
-          OS_E2E_COOKIE: authHeaders.cookie,
-          ITERATE_CONFIG_NAME: resolved.name,
-          ITERATE_OAUTH_AUTH_BASE_URL: resolveAuthBaseUrl(resolved.config),
-          ITERATE_OAUTH_CLIENT_ID: session?.clientId,
-          ITERATE_OAUTH_EXPIRES_AT: session?.expiresAt,
-          ITERATE_OAUTH_REFRESH_TOKEN: session?.refreshToken,
-          ITERATE_OAUTH_RESOURCE: osBaseUrl,
-          ITERATE_OAUTH_SCOPE: session?.scope,
-          ITERATE_OAUTH_TOKEN_TYPE: session?.tokenType,
-        },
+        env: { ITERATE_CONFIG_NAME: resolved.name },
       });
     }),
 
   orgs: {
     list: os.meta({ description: "List organizations from the auth worker" }).handler(async () => {
-      const resolved = resolveConfig(process.cwd());
-      if (resolved instanceof Error) throw resolved;
+      const resolved = resolveConfig(process.cwd(), { throw: true });
       const authClient = await getAuthWorkerClient(resolved.config);
       return await authClient.user.myOrganizations();
     }),
@@ -1181,12 +1090,11 @@ const launcherProcedures = {
       }),
 
     current: os.meta({ description: "Show which config is active and why" }).handler(async () => {
-      const resolved = resolveConfig(process.cwd());
-      if (resolved instanceof Error) throw resolved;
+      const resolved = resolveConfig(process.cwd(), { throw: true });
       return {
         name: resolved.name,
         config: resolved.config,
-        resolvedAuthBaseUrl: await resolveAuthBaseUrl(resolved.config),
+        resolvedAuthBaseUrl: resolved.config.authBaseUrl,
         resolvedVia: configFlagOverride ? "--config flag" : "workspace mapping or default",
       };
     }),

@@ -8,10 +8,8 @@
  * keyboard routing, and stream-scoped side effects.
  */
 import { Event, StreamPath, type EventInput } from "@iterate-com/shared/streams/types";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
 import type { EventsStreamViewState } from "@iterate-com/ui/components/events/feed-items";
+import { readConfig, updateConfigSession } from "../config.ts";
 import {
   reduceStreamViewEvents,
   StreamViewProcessorContract,
@@ -72,11 +70,6 @@ type OrpcClient = ContractRouterClient<typeof osContract>;
 const ROOT_STREAM_PATH = StreamPath.parse("/");
 const OAUTH_REFRESH_SKEW_MS = 60 * 1000;
 const OAUTH_FORCE_REFRESH_THROTTLE_MS = 10 * 1000;
-const XDG_CONFIG_PARENT = join(
-  process.env.XDG_CONFIG_HOME ? process.env.XDG_CONFIG_HOME : join(homedir(), ".config"),
-  "iterate",
-);
-const CONFIG_PATH = join(XDG_CONFIG_PARENT, "config.json");
 
 type AuthHeaders = Record<string, string>;
 type AuthProvider = {
@@ -946,27 +939,42 @@ function createAuthProvider(baseUrl: string): AuthProvider {
   const cookie = readEnv("OS_E2E_COOKIE");
   if (adminBearerToken) return createStaticAuthProvider(adminBearerToken, cookie);
 
-  const oauthBearerToken = readEnv("OS_E2E_BEARER_TOKEN");
-  if (oauthBearerToken) {
-    const session: OAuthRuntimeSession = {
-      token: oauthBearerToken,
-      refreshToken: readEnv("ITERATE_OAUTH_REFRESH_TOKEN"),
-      clientId: readEnv("ITERATE_OAUTH_CLIENT_ID"),
-      scope: readEnv("ITERATE_OAUTH_SCOPE"),
-      tokenType: readEnv("ITERATE_OAUTH_TOKEN_TYPE"),
-      expiresAt: readEnv("ITERATE_OAUTH_EXPIRES_AT"),
-      authBaseUrl: readEnv("ITERATE_OAUTH_AUTH_BASE_URL"),
-      resource: readEnv("ITERATE_OAUTH_RESOURCE") || baseUrl,
-      configName: readEnv("ITERATE_CONFIG_NAME"),
-    };
-    return createOAuthAuthProvider(session, cookie);
-  }
+  const bearerToken = readEnv("OS_E2E_BEARER_TOKEN");
+  if (bearerToken) return createStaticAuthProvider(bearerToken, cookie);
 
   if (cookie) return createStaticAuthProvider(undefined, cookie);
 
+  const configSession = loadStoredConfigSession({
+    baseUrl,
+    configName: readEnv("ITERATE_CONFIG_NAME"),
+  });
+  if (configSession) return createOAuthAuthProvider(configSession, cookie);
+
   throw new Error(
-    "OS_E2E_ADMIN_API_SECRET, OS_ADMIN_API_SECRET, APP_CONFIG_ADMIN_API_SECRET, OS_E2E_BEARER_TOKEN, or OS_E2E_COOKIE is required.",
+    "Run `iterate login`, or set OS_E2E_BEARER_TOKEN / OS_E2E_COOKIE / an admin API secret (OS_E2E_ADMIN_API_SECRET, OS_ADMIN_API_SECRET, APP_CONFIG_ADMIN_API_SECRET).",
   );
+}
+
+/**
+ * Load the stored `iterate login` session for the named config from the shared
+ * CLI config file. The OAuth provider writes refreshed tokens back to the same
+ * file, so the CLI and TUI stay in sync.
+ */
+function loadStoredConfigSession(args: {
+  baseUrl: string;
+  configName: string | undefined;
+}): OAuthRuntimeSession | undefined {
+  if (!args.configName) return undefined;
+  const config = readConfig(args.configName, { throw: true });
+  const session = config.session;
+  if (!session?.token) return undefined;
+  return {
+    ...session,
+    token: session.token,
+    authBaseUrl: config.authBaseUrl,
+    resource: args.baseUrl,
+    configName: args.configName,
+  };
 }
 
 function createStaticAuthProvider(bearerToken: string | undefined, cookie: string | undefined) {
@@ -992,7 +1000,9 @@ function createOAuthAuthProvider(initialSession: OAuthRuntimeSession, cookie: st
       refreshPromise = refreshOAuthSession(session)
         .then((refreshedSession) => {
           session = refreshedSession;
-          storeOAuthSession(refreshedSession);
+          if (refreshedSession.configName) {
+            updateConfigSession(refreshedSession.configName, refreshedSession);
+          }
           return true;
         })
         .finally(() => {
@@ -1083,26 +1093,6 @@ function oauthTokenToSession(
     resource: existing.resource,
     configName: existing.configName,
   };
-}
-
-function storeOAuthSession(session: OAuthRuntimeSession) {
-  if (!session.configName || !existsSync(CONFIG_PATH)) return;
-  const configFile = JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as {
-    configs?: Record<string, { session?: Record<string, unknown> }>;
-  };
-  const entry = configFile.configs?.[session.configName];
-  if (!entry) return;
-  entry.session = {
-    ...entry.session,
-    token: session.token,
-    refreshToken: session.refreshToken,
-    clientId: session.clientId,
-    scope: session.scope,
-    tokenType: session.tokenType,
-    expiresAt: session.expiresAt,
-  };
-  mkdirSync(dirname(CONFIG_PATH), { recursive: true });
-  writeFileSync(CONFIG_PATH, `${JSON.stringify(configFile, null, 2)}\n`);
 }
 
 async function readErrorBody(response: Response) {
