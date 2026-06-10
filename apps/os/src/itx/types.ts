@@ -535,14 +535,14 @@ export interface ItxProjects {
 // ---------------------------------------------------------------------------
 
 /**
- * An itx script: a plain function of `({ itx, vars })`, runnable identically
- * from every execution mode — the browser REPL, a Node process,
- * `POST /api/itx/run`, the project worker, and capabilities themselves.
+ * An itx script: a plain function of the handle — `async (itx) => …` —
+ * runnable identically from every execution mode: the browser REPL, a Node
+ * process, `POST /api/itx/run`, the project worker, and capabilities
+ * themselves. There is ONE shape; parameterization is the caller's concern
+ * (helpers that take a `vars` object bake it into the source before
+ * submitting, which is exactly what the /api/itx/run endpoint does).
  */
-export type ItxFn<V = Record<string, unknown>, R = unknown> = (input: {
-  itx: Itx;
-  vars: V;
-}) => Promise<R> | R;
+export type ItxFn<R = unknown> = (itx: Itx) => Promise<R> | R;
 
 /**
  * Map an SDK's type surface onto its itx stub: every function becomes

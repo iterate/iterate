@@ -298,11 +298,10 @@ export class Itx extends RpcTarget {
   }
 }
 
-/** Itx scripts are plain functions of ({ itx, vars }) — spec §2. */
-export type ItxFn<V = Record<string, unknown>, R = unknown> = (input: {
-  itx: Itx;
-  vars: V;
-}) => Promise<R> | R;
+/** Itx scripts are plain functions of the handle: `async (itx) => …`.
+ * Parameterization is the caller's concern — bake values into the source
+ * (the /api/itx/run endpoint does this for its `vars` API). */
+export type ItxFn<R = unknown> = (itx: Itx) => Promise<R> | R;
 
 /**
  * Map an SDK's type surface onto its itx stub: every function becomes async,

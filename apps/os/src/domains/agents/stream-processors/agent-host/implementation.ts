@@ -206,11 +206,9 @@ export async function runAgentItxScript(args: {
 }) {
   const contextId = await args.deps.getItxContextId();
   await runItxScript({
-    // LLM scripts are written `async (ctx) => { … }` — ctx IS the itx handle
-    // (the agent's caps and built-ins line up name-for-name), so the runner
-    // invokes them directly and the execution record carries exactly what
-    // the model wrote, no wrapper.
-    convention: "ctx",
+    // The runner's one shape is `async (itx) => …`; the model's code goes
+    // through verbatim (older histories say `async (ctx) =>` — the parameter
+    // name is the author's business, the single argument is the handle).
     executionId: args.executionId,
     recordRequested: args.recordRequested,
     env: args.deps.runnerEnv,
@@ -265,6 +263,12 @@ const CODEMODE_FENCE_RE =
 
 export function extractCodemodeScript(content: string): string | null {
   const trimmed = content.trim();
+  if (trimmed.startsWith("async (itx) => {") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+
+  // Legacy spelling from pre-itx agent histories; the parameter name is the
+  // author's business — the single argument is the handle either way.
   if (trimmed.startsWith("async (ctx) => {") && trimmed.endsWith("}")) {
     return trimmed;
   }

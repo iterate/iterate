@@ -733,7 +733,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         : [
             {
               instructions:
-                "Use ctx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
+                "Use itx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
               invoke: "path-call" as const,
               name: "chat",
               target: agentTool("chat"),
@@ -741,42 +741,42 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
           ]),
       {
         instructions:
-          "Use ctx.debug() to return OS debug information about the current agent stream.",
+          "Use itx.debug() to return OS debug information about the current agent stream.",
         invoke: "path-call" as const,
         name: "debug",
         target: agentTool("debug"),
       },
       {
         instructions:
-          "Workers AI. ctx.ai.run(model, input) — e.g. ctx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
+          "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
         invoke: "members" as const,
         name: "ai",
         target: { type: "rpc", worker: { binding: "AI", type: "binding" } },
       },
       {
         instructions:
-          "Project-bound OS API. Call ctx.os.listProcedures() for the TypeScript surface, then ctx.os.<path.to.procedure>({ …input }).",
+          "Project-bound OS API. Call itx.os.listProcedures() for the TypeScript surface, then itx.os.<path.to.procedure>({ …input }).",
         invoke: "path-call" as const,
         name: "os",
         target: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
-          "Gmail for this project's connected Google account. ctx.gmail.request({ path, method?, query?, body? }).",
+          "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }).",
         invoke: "members" as const,
         name: "gmail",
         target: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
-          "Use ctx.slack.<Slack Web API method path>(args), e.g. ctx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If no reply is needed, do not call chat.postMessage. For legitimate long-running Slack replies, use Promise.all to send an immediate acknowledgment while doing the real work in parallel, then send the actual result afterwards.",
+          "Use itx.slack.<Slack Web API method path>(args), e.g. itx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If no reply is needed, do not call chat.postMessage. For legitimate long-running Slack replies, use Promise.all to send an immediate acknowledgment while doing the real work in parallel, then send the actual result afterwards.",
         invoke: "path-call" as const,
         name: "slack",
         target: { entrypoint: "SlackCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
-          "Use ctx.agents.create() to get a promise-pipelineable subagent handle, e.g. await ctx.agents.create().doThing(args).",
+          "Use itx.agents.create() to get a promise-pipelineable subagent handle, e.g. await itx.agents.create().doThing(args).",
         invoke: "members" as const,
         name: "agents",
         target: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },

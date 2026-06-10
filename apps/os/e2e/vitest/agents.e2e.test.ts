@@ -56,8 +56,8 @@ test("can configure Cloudflare AI Gateway as the provider for an agent path pref
       "The block must evaluate to an async function.",
       "Use this exact code body:",
       dedent`
-        async (ctx) => {
-          await ctx.chat.sendMessage({ message: ${JSON.stringify(assistantMessage)} });
+        async (itx) => {
+          await itx.chat.sendMessage({ message: ${JSON.stringify(assistantMessage)} });
         }
       `,
     ].join("\n"),
@@ -203,7 +203,7 @@ test("uses OpenAI for unconfigured agent chats by default", async () => {
   );
 });
 
-test("lets agent scripts send visible agent responses through ctx.chat.sendMessage", async () => {
+test("lets agent scripts send visible agent responses through itx.chat.sendMessage", async () => {
   await using fixture = await createTestProjectFixture({ slugPrefix: "agent-chat-tool" });
   const { client, project } = fixture;
   const suffix = uniqueSuffix();
@@ -223,8 +223,8 @@ test("lets agent scripts send visible agent responses through ctx.chat.sendMessa
       payload: {
         content: dedent`
           \`\`\`js
-            async (ctx) => {
-              await ctx.chat.sendMessage({ message: ${JSON.stringify(message)} });
+            async (itx) => {
+              await itx.chat.sendMessage({ message: ${JSON.stringify(message)} });
             }
             \`\`\`
         `,
@@ -311,13 +311,13 @@ test("lets agent chat update iterate-config through the prepared workspace", asy
   const generatedCode = requiredStringPayload(output, "content");
   const requestedCode = requiredStringPayload(scriptRequested, "code");
 
-  expect(generatedCode).toContain("ctx.workspace.writeFile");
-  expect(generatedCode).toContain("ctx.workspace.git.commit");
-  expect(generatedCode).toContain("ctx.workspace.git.push");
+  expect(generatedCode).toContain("itx.workspace.writeFile");
+  expect(generatedCode).toContain("itx.workspace.git.commit");
+  expect(generatedCode).toContain("itx.workspace.git.push");
   expect(generatedCode).toContain("/iterate-config");
   expect(generatedCode).toContain("folder/banana.txt");
   expect(generatedCode).not.toContain("git.clone");
-  expect(generatedCode).not.toContain("ctx.repos");
+  expect(generatedCode).not.toContain(".repos");
   expect(requestedCode).not.toContain("git.clone");
   // Per-call events died with codemode; the workspace ops are proven by the
   // generated code above plus the execution completing ok (the git push
@@ -430,12 +430,12 @@ itIfSlackBotToken(
         "For every user message, reply with exactly one fenced JavaScript code block and no surrounding prose.",
         "The block must evaluate to an async function.",
         "Use this exact code body:",
-        `async (ctx) => {
-  const slack = await ctx.slack.chat.postMessage({
+        `async (itx) => {
+  const slack = await itx.slack.chat.postMessage({
     channel: ${JSON.stringify(slackChannelId)},
     text: ${JSON.stringify(slackText)}
   });
-  await ctx.chat.sendMessage({
+  await itx.chat.sendMessage({
     message: "posted slack " + slack.channel + " " + slack.ts
   });
 }`,
@@ -477,7 +477,7 @@ itIfSlackBotToken(
       expect.objectContaining({
         type: "events.iterate.com/agent/input-added",
         payload: expect.objectContaining({
-          content: expect.stringContaining("ctx.slack.chat.postMessage"),
+          content: expect.stringContaining("slack.chat.postMessage"),
         }),
       }),
     );
@@ -628,7 +628,7 @@ itIfSlackBotToken(
       expect.objectContaining({
         type: "events.iterate.com/itx/execution-requested",
         payload: expect.objectContaining({
-          code: expect.stringContaining("ctx.slack.chat.postMessage"),
+          code: expect.stringContaining("itx.slack.chat.postMessage"),
         }),
       }),
     );
@@ -675,7 +675,7 @@ itIfSlackBotToken(
       expect.objectContaining({
         type: "events.iterate.com/itx/execution-requested",
         payload: expect.objectContaining({
-          code: expect.stringContaining("const debug = await ctx.debug();"),
+          code: expect.stringContaining("const debug = await itx.debug();"),
         }),
       }),
     );
