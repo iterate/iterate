@@ -159,8 +159,10 @@ return await itx.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" });
     code: `
 // The source exports a WorkerEntrypoint. Its env.ITERATE is a project-scoped
 // itx, so the cap can use streams/fetch/other caps — but never reach beyond
-// its project. cacheKey must change whenever the source changes (loader
-// caches by it), so we use a fresh uuid here.
+// its project. The loader caches the built worker by cacheKey, so treat it as
+// a content version: keep it stable while the source is unchanged (re-running
+// this snippet reuses the loaded worker) and bump it whenever you edit the
+// module text.
 await itx.caps.define({
   name: "greeter",
   target: {
@@ -168,7 +170,7 @@ await itx.caps.define({
     worker: {
       type: "source",
       source: {
-        cacheKey: crypto.randomUUID(),
+        cacheKey: "itx-example-greeter-v1",
         mainModule: "cap.js",
         modules: {
           "cap.js": \`
@@ -206,7 +208,7 @@ await itx.caps.define({
     worker: {
       type: "source",
       source: {
-        cacheKey: crypto.randomUUID(),
+        cacheKey: "itx-example-todo-v1",
         mainModule: "cap.js",
         modules: {
           "cap.js": \`
@@ -252,7 +254,7 @@ await itx.caps.define({
     worker: {
       type: "source",
       source: {
-        cacheKey: crypto.randomUUID(),
+        cacheKey: "itx-example-kit-v1",
         mainModule: "cap.js",
         modules: {
           "cap.js": \`
@@ -292,7 +294,7 @@ await itx.caps.define({
     worker: {
       type: "source",
       source: {
-        cacheKey: crypto.randomUUID(),
+        cacheKey: "itx-example-inventory-v1",
         mainModule: "cap.js",
         modules: {
           "cap.js": \`
@@ -317,7 +319,7 @@ await itx.caps.define({
     worker: {
       type: "source",
       source: {
-        cacheKey: crypto.randomUUID(),
+        cacheKey: "itx-example-report-v1",
         mainModule: "cap.js",
         modules: {
           "cap.js": \`
@@ -355,7 +357,7 @@ await itx.caps.define({
     worker: {
       type: "source",
       source: {
-        cacheKey: crypto.randomUUID(),
+        cacheKey: "itx-example-counter-v1",
         entrypoint: "Counter",   // named export required for facets
         exportType: "durable-object",
         mainModule: "cap.js",
@@ -452,7 +454,7 @@ await itx.caps.define({
     worker: {
       type: "source",
       source: {
-        cacheKey: crypto.randomUUID(),
+        cacheKey: "itx-example-hello-http-v1",
         mainModule: "cap.js",
         modules: {
           "cap.js": \`
