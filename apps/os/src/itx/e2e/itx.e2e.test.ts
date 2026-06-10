@@ -8,6 +8,7 @@
 import { expect, test } from "vitest";
 import { RpcTarget } from "capnweb";
 import type { ItxClient } from "../client.ts";
+import { getItxErrorCode } from "../errors.ts";
 import {
   adminApiSecret,
   baseUrl,
@@ -218,43 +219,48 @@ test.skipIf(!MCP_TEST_SERVER_URL)(
   },
 );
 
-test("script executions leave a two-event record on the /itx stream", async () => {
-  using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-rec` })) as { id: string };
-  createdProjectIds.push(project.id);
+// Cold first-run of the isolate + stream DO can take >45s on a fresh preview.
+test(
+  "script executions leave a two-event record on the /itx stream",
+  { timeout: 90_000 },
+  async () => {
+    using itx = connectGlobal();
+    const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-rec` })) as { id: string };
+    createdProjectIds.push(project.id);
 
-  const response = await fetch(new URL("/api/itx/run", baseUrl()), {
-    body: JSON.stringify({
-      context: project.id,
-      functionSource: "async ({ vars }) => vars.a + vars.b",
-      vars: { a: 40, b: 2 },
-    }),
-    headers: authHeaders(),
-    method: "POST",
-  });
-  const body = (await response.json()) as { executionId: string; result: unknown };
-  expect(response.ok).toBe(true);
-  expect(body.result).toBe(42);
-  expect(typeof body.executionId).toBe("string");
+    const response = await fetch(new URL("/api/itx/run", baseUrl()), {
+      body: JSON.stringify({
+        context: project.id,
+        functionSource: "async ({ vars }) => vars.a + vars.b",
+        vars: { a: 40, b: 2 },
+      }),
+      headers: authHeaders(),
+      method: "POST",
+    });
+    const body = (await response.json()) as { executionId: string; result: unknown };
+    expect(response.ok).toBe(true);
+    expect(body.result).toBe(42);
+    expect(typeof body.executionId).toBe("string");
 
-  using projectItx = await itx.projects.get(project.id);
-  const events = (await projectItx.streams.get("/itx").read()) as Array<{
-    payload: Record<string, unknown>;
-    type: string;
-  }>;
-  const requested = events.find(
-    (event) =>
-      event.type === "events.iterate.com/itx/execution-requested" &&
-      event.payload.executionId === body.executionId,
-  );
-  const completed = events.find(
-    (event) =>
-      event.type === "events.iterate.com/itx/execution-completed" &&
-      event.payload.executionId === body.executionId,
-  );
-  expect(requested?.payload).toMatchObject({ context: project.id });
-  expect(completed?.payload).toMatchObject({ ok: true, result: 42 });
-});
+    using projectItx = await itx.projects.get(project.id);
+    const events = (await projectItx.streams.get("/itx").read()) as Array<{
+      payload: Record<string, unknown>;
+      type: string;
+    }>;
+    const requested = events.find(
+      (event) =>
+        event.type === "events.iterate.com/itx/execution-requested" &&
+        event.payload.executionId === body.executionId,
+    );
+    const completed = events.find(
+      (event) =>
+        event.type === "events.iterate.com/itx/execution-completed" &&
+        event.payload.executionId === body.executionId,
+    );
+    expect(requested?.payload).toMatchObject({ context: project.id });
+    expect(completed?.payload).toMatchObject({ ok: true, result: 42 });
+  },
+);
 
 test("worker caps hold a correctly scoped itx of their own", async () => {
   using itx = connectGlobal();
@@ -394,8 +400,10 @@ test("kernel errors cross capnweb as ItxError-shaped errors with codes", async (
     (thrown: unknown) => thrown as Error & { code?: unknown; details?: unknown },
   );
   expect(error).not.toBeNull();
-  expect(error!.name).toBe("ItxError");
-  expect(error!.code).toBe("NOT_FOUND");
+  // Deliberately NOT asserting error.name: capnweb's receiver rebuilds a
+  // plain Error (custom names and class identity do not survive the wire —
+  // DECISIONS D18); the duck-typed code/details props are the whole contract.
+  expect(getItxErrorCode(error)).toBe("NOT_FOUND");
   expect(error!.details).toEqual({ projectIdOrSlug: "definitely-not-a-project" });
 });
 
