@@ -238,9 +238,15 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     return params;
   }
 
-  /** Subscription callables on agent streams dial this host entry point. */
-  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    return this.host.requestStreamSubscription(args);
+  /**
+   * Subscription callables on agent streams dial this host entry point.
+   * Initialize from the runtime name first: a cold instance can receive the
+   * handshake before anything else has touched it, and the wake hook is what
+   * seeds the agent's own subscriptions and setup events.
+   */
+  async requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
+    await this.ensureStartedOrInitializeFromRuntimeName();
+    return await this.host.requestStreamSubscription(args);
   }
 
   async afterAppend(input: { event: Event }) {

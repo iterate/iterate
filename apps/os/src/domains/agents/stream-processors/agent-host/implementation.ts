@@ -24,10 +24,9 @@ export { AGENT_HOST_PROCESSOR_SLUG, AgentHostProcessorContract } from "./contrac
 
 export type AgentHostProcessorContract = typeof AgentHostProcessorContract;
 
-// Core lifecycle event types emitted by the @iterate-com/streams runtime. These use the
+// Core lifecycle event type emitted by the @iterate-com/streams runtime. Uses the
 // `events.iterate.com/stream/` prefix (NOT the legacy `@iterate-com/shared/streams` `/core/`
 // prefix, which never matches new-runtime events).
-const STREAM_CREATED_TYPE = "events.iterate.com/stream/created";
 const STREAM_CHILD_STREAM_CREATED_TYPE = "events.iterate.com/stream/child-stream-created";
 
 export type AgentHostProcessorDeps = {
@@ -47,6 +46,10 @@ export class AgentHostProcessor extends StreamProcessor<
 > {
   readonly contract = AgentHostProcessorContract;
 
+  // Once per DO incarnation, not per event: initialize() is idempotent, and any
+  // delivered event implies activity worth ensuring the agent for.
+  #ensuredOwnAgent = false;
+
   protected override processEvent(
     args: Parameters<StreamProcessor<AgentHostProcessorContract>["processEvent"]>[0],
   ): void {
@@ -57,14 +60,21 @@ export class AgentHostProcessor extends StreamProcessor<
     // onInstanceWake waits for every processor on the stream (including this agent-host) to
     // catch up; awaiting it inside blockProcessorWhile would deadlock the host against itself.
     // runInBackground runs it detached so the host advances and the catch-up can complete.
-    args.runInBackground(() =>
-      ensureAgentRunnerForOwnStream({
-        agentNamespace: this.deps.agentNamespace,
-        event,
-        projectId,
-        streamPath,
-      }),
-    );
+    //
+    // Triggered by ANY event past the side-effect anchor rather than by
+    // `stream/created`: on routed streams the created event predates this
+    // processor's subscription, so an anchor-gated created-only trigger would
+    // never fire (the anchor skips historical side effects by design).
+    if (!this.#ensuredOwnAgent) {
+      this.#ensuredOwnAgent = true;
+      args.runInBackground(() =>
+        ensureAgentRunnerForOwnStream({
+          agentNamespace: this.deps.agentNamespace,
+          projectId,
+          streamPath,
+        }),
+      );
+    }
     args.blockProcessorWhile(async () => {
       await ensureChildAgentRunner({
         agentNamespace: this.deps.agentNamespace,
@@ -119,12 +129,10 @@ export async function ensureChildAgentRunner(args: {
 // registers those processors and setup events.
 export async function ensureAgentRunnerForOwnStream(args: {
   agentNamespace: DurableObjectNamespace<AgentDurableObject> | undefined;
-  event: Event;
   projectId: string;
   streamPath: StreamPath;
 }) {
   if (args.agentNamespace === undefined) return;
-  if (args.event.type !== STREAM_CREATED_TYPE) return;
   // The `/agents` root DO is created explicitly by the project lifecycle; it is not an agent.
   if (args.streamPath === AGENTS_STREAM_PATH) return;
 
