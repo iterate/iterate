@@ -108,6 +108,7 @@ export const AppConfig = z.object({
   itx: z
     .object({
       dialableBindings: publicValue(z.array(z.string().trim().min(1)).default([])),
+      dialableDurableObjects: publicValue(z.array(z.string().trim().min(1)).default([])),
       dialableLoopbacks: publicValue(z.array(z.string().trim().min(1)).default([])),
     })
     .optional(),

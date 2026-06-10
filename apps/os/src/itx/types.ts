@@ -112,17 +112,22 @@ export interface ItxBuiltins {
    * is no separate "project object"; a narrowed itx IS the project. */
   readonly projects: ItxProjects;
 
-  /** The project's git repos. (Direction: becomes a defined capability
-   * rather than a hardwired built-in; surface unchanged.) */
+  /** PLATFORM DEFAULT, not kernel (§8 shipped): the project's git repos —
+   * an ordinary `platform:project` cap definition (ReposCapability
+   * loopback), shadowable like any inherited cap. Surface unchanged. */
   readonly repos: unknown;
 
-  /** The project's workspace: readFile/writeFile and the flat git methods
-   * (gitClone/gitAdd/gitCommit/gitPush/gitStatus — nested RpcTargets do not
-   * survive RPC boundaries). (Same direction as `repos`.) */
+  /** PLATFORM DEFAULT, not kernel: workspace readFile/writeFile and the
+   * flat git methods (gitClone/gitAdd/gitCommit/gitPush/gitStatus — nested
+   * RpcTargets do not survive RPC boundaries). Context-scoped: chain
+   * delegation carries the ORIGINATING context, so a forked child context
+   * gets its own isolated workspace even though the definition lives on
+   * `platform:project`. */
   readonly workspace: unknown;
 
-  /** The project worker. Every public method/getter is reachable at any
-   * depth: `itx.worker.someTool(args)`. */
+  /** PLATFORM DEFAULT, not kernel: the project's iterate-config worker via
+   * the ProjectWorker forwarder — `itx.worker.someTool(args)` reaches any
+   * public method of the default export, rebuilt from the repo per call. */
   readonly worker: unknown;
 
   /** The Project Durable Object stub, whole surface ("cap #0"). If your

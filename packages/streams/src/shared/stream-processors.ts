@@ -457,24 +457,6 @@ export type EmittedInput<Contract> = Contract extends {
   ? InputFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Emits>
   : never;
 
-/**
- * Props for a scoped stream API service.
- *
- * The intended Cloudflare shape is a WorkerEntrypoint exported from the script
- * and instantiated with `ctx.exports.StreamApi({ props: { streamPath } })`.
- * Method-level `streamPath` overrides let processors append/read/subscribe to
- * another stream without creating another service instance.
- */
-export type ProcessorStreamApiProps = {
-  /**
-   * Bound stream path for this API instance. If an operation omits
-   * `streamPath`, the runner should use this path. Relative method paths are
-   * resolved by the runner against this bound path; absolute paths target that
-   * absolute stream directly.
-   */
-  streamPath?: string;
-};
-
 export type ProcessorStreamApi<Contract> = {
   append(args: { event: EmittedInput<Contract>; streamPath?: string }): Promise<StreamEvent>;
   appendBatch(args: {
@@ -498,65 +480,6 @@ export type ProcessorReduction<Contract> = {
   previousState: ProcessorState<Contract>;
   state: ProcessorState<Contract>;
 };
-
-/**
- * Creates a one-key event catalog entry.
- *
- * Prefer inline event catalogs for new processors. This helper remains useful
- * in tests and for mechanically generated event catalogs.
- */
-export function createEvent<
-  const Type extends string,
-  const PayloadSchema extends z.ZodType,
->(args: {
-  type: Type;
-  description?: string;
-  examples?: readonly EventExample<z.input<PayloadSchema>>[];
-  payloadSchema: PayloadSchema;
-}): {
-  [Key in Type]: EventDefinition<Type, z.output<PayloadSchema>, z.input<PayloadSchema>>;
-} {
-  return {
-    [args.type]: {
-      ...(args.description == null ? {} : { description: args.description }),
-      ...(args.examples == null ? {} : { examples: args.examples }),
-      payloadSchema: args.payloadSchema,
-    },
-  } as unknown as {
-    [Key in Type]: EventDefinition<Type, z.output<PayloadSchema>, z.input<PayloadSchema>>;
-  };
-}
-
-/**
- * Runtime append-input parser for a string-keyed event definition.
- *
- * Most processor authors should not call this directly. `streamApi.append(...)`
- * is typed from `contract.emits`, so ordinary object literals are the ergonomic
- * path. Runners can use this helper at the append boundary when they need to
- * validate that a raw event input matches the payload schema for its `type`.
- */
-export function getEventInputSchema<
-  const Type extends string,
-  const PayloadSchema extends z.ZodType,
->(args: {
-  type: Type;
-  payloadSchema: PayloadSchema;
-}): z.ZodType<
-  StreamEventInput<Type, z.output<PayloadSchema>>,
-  StreamEventInput<Type, z.input<PayloadSchema>>
-> {
-  return z.strictObject({
-    type: z.literal(args.type),
-    payload: args.payloadSchema,
-    metadata: StreamEventMetadata.optional(),
-    source: StreamEventSourceSchema.optional(),
-    idempotencyKey: streamEventIdempotencyKeySchema.optional(),
-    offset: streamEventOffsetSchema.optional(),
-  }) as unknown as z.ZodType<
-    StreamEventInput<Type, z.output<PayloadSchema>>,
-    StreamEventInput<Type, z.input<PayloadSchema>>
-  >;
-}
 
 /**
  * Runtime stream-event parser for a string-keyed event definition.
@@ -704,61 +627,6 @@ export function buildProcessorIdempotencyKey(args: ProcessorIdempotencyKeyArgs):
   return `${key}@${args.sourceEvent.offset}`;
 }
 
-export function validateProcessorContract(contract: {
-  slug: string;
-  stateSchema: z.ZodType;
-  initialState?: unknown;
-  events: EventCatalog;
-  processorDeps?: readonly ({ slug?: string; events: EventCatalog } | EventCatalog)[];
-  consumes: readonly string[];
-  emits: readonly string[];
-}) {
-  assertObjectProcessorState({
-    processorSlug: contract.slug,
-    value: getInitialProcessorState(contract),
-  });
-
-  const resolvedEvents = new Map<string, { owner: string; event: EventDefinition }>();
-  for (const dependency of contract.processorDeps ?? []) {
-    const events = isProcessorContractDependency(dependency) ? dependency.events : dependency;
-    const owner = isProcessorContractDependency(dependency)
-      ? (dependency.slug ?? "processor dependency")
-      : "event catalog";
-
-    for (const [eventType, event] of Object.entries(events)) {
-      addResolvedEvent({
-        resolvedEvents,
-        eventType,
-        event,
-        owner,
-      });
-    }
-  }
-
-  for (const [eventType, event] of Object.entries(contract.events)) {
-    addResolvedEvent({ resolvedEvents, eventType, event, owner: contract.slug });
-  }
-
-  assertResolvedEventTypes({
-    field: "consumes",
-    resolvedEvents,
-    eventTypes: contract.consumes,
-    allowWildcard: true,
-  });
-  assertResolvedEventTypes({
-    field: "emits",
-    resolvedEvents,
-    eventTypes: contract.emits,
-  });
-}
-
-export function getProcessorStateSchema(contract: {
-  slug: string;
-  stateSchema: z.ZodType;
-}): z.ZodType {
-  return contract.stateSchema;
-}
-
 export function getInitialProcessorState<
   const Contract extends {
     stateSchema: z.ZodType;
@@ -891,49 +759,6 @@ function getResolvedEventDefinition(args: {
   }
 
   return undefined;
-}
-
-function addResolvedEvent(args: {
-  resolvedEvents: Map<string, { owner: string; event: EventDefinition }>;
-  eventType: string;
-  owner: string;
-  event: EventDefinition;
-}) {
-  const existing = args.resolvedEvents.get(args.eventType);
-  if (existing != null && existing.event !== args.event) {
-    throw new Error(
-      `Duplicate stream processor event type "${args.eventType}" owned by both "${existing.owner}" and "${args.owner}".`,
-    );
-  }
-  args.resolvedEvents.set(args.eventType, {
-    event: args.event,
-    owner: args.owner,
-  });
-}
-
-function assertResolvedEventTypes(args: {
-  field: "consumes" | "emits";
-  resolvedEvents: Map<string, { owner: string; event: EventDefinition }>;
-  eventTypes: readonly string[];
-  allowWildcard?: boolean;
-}) {
-  for (const eventType of args.eventTypes) {
-    if (args.allowWildcard === true && eventType === "*") {
-      continue;
-    }
-    if (args.resolvedEvents.has(eventType)) {
-      continue;
-    }
-    throw new Error(`Unresolved stream processor ${args.field} event type "${eventType}".`);
-  }
-}
-
-function isProcessorContractDependency(
-  dependency: { slug?: string; events: EventCatalog } | EventCatalog,
-): dependency is { slug?: string; events: EventCatalog } {
-  return (
-    "events" in dependency && typeof dependency.events === "object" && dependency.events != null
-  );
 }
 
 function getDependencyEvents(dependency: unknown): EventCatalog | undefined {

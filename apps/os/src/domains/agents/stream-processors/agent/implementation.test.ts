@@ -369,6 +369,174 @@ describe("AgentProcessor", () => {
     expect(appended).toEqual([]);
   });
 
+  it("recovers a triggering input whose scheduling side effect was skipped by the side-effect anchor", async () => {
+    // Production regression (2026-06-10): on a freshly bootstrapped Slack
+    // thread stream, the slack-agent processor rendered the webhook into a
+    // triggering input-added before this processor's subscription was
+    // configured. The host anchored side effects at the subscription-configured
+    // offset, so the input was reduced as historical and no llm-request was
+    // ever scheduled — the agent never replied. The subscriber-connected fact
+    // (always above the anchor) must recover the skipped trigger.
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream, sideEffectsAfterOffset: 15 });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agent/input-added",
+          payload: { content: "<@bot> yo" },
+          offset: 9,
+        }),
+        // The host announces every co-hosted processor, so several
+        // subscriber-connected facts land in quick succession (offsets 24-27
+        // in the prod stream). Each may race a recovery append; the shared
+        // idempotency key is what collapses them to one durable schedule.
+        subscriberConnectedEvent({ offset: 24 }),
+        subscriberConnectedEvent({ offset: 25 }),
+      ],
+      streamMaxOffset: 25,
+    });
+
+    const scheduled = appended.filter(
+      (event) => event.type === "events.iterate.com/agent/llm-request-scheduled",
+    );
+    expect(scheduled.length).toBeGreaterThanOrEqual(1);
+    for (const event of scheduled) {
+      // Keyed off the trigger input, identical to the live path's key, so
+      // raced duplicates dedup in the stream instead of double-scheduling.
+      expect(event.idempotencyKey).toBe("agent/llm-request-scheduled@9");
+    }
+    expect(appended.filter((event) => !scheduled.includes(event))).toEqual([]);
+  });
+
+  it("arms the recovery debounce with the committed requestId when the scheduled append dedups", async () => {
+    vi.useFakeTimers();
+    // A raced duplicate (another recovery or the live path) already committed
+    // the schedule under the shared idempotency key, so this append returns
+    // the existing event with a requestId this instance did not generate. The
+    // timer must adopt the committed requestId — the handoff re-reads durable
+    // history and bails on a mismatch, which would wedge the turn.
+    const triggerInput = agentEvent({
+      type: "events.iterate.com/agent/input-added",
+      payload: { content: "<@bot> yo", llmRequestPolicy: { behaviour: "after-current-request" } },
+      offset: 9,
+    });
+    const committedScheduled = agentEvent({
+      type: "events.iterate.com/agent/llm-request-scheduled",
+      payload: { requestId: "req_committed_elsewhere", debounceMs: 1000, model: "test-model" },
+      offset: 30,
+      idempotencyKey: "agent/llm-request-scheduled@9",
+    });
+    const appended: StreamEventInput[] = [];
+    const stream: StreamProcessorIterateContext["stream"] = {
+      append: (args) => {
+        appended.push(args.event);
+        if (args.event.idempotencyKey === "agent/llm-request-scheduled@9") {
+          return committedScheduled;
+        }
+        return { ...args.event, offset: 99, createdAt: new Date(0).toISOString() };
+      },
+      appendBatch: () => {
+        throw new Error("unused");
+      },
+    };
+    const processor = newAgentProcessor({
+      stream,
+      sideEffectsAfterOffset: 15,
+      readStreamEvents: async () => [triggerInput, committedScheduled],
+    });
+
+    await processor.ingest({
+      events: [triggerInput, subscriberConnectedEvent({ offset: 31 })],
+      streamMaxOffset: 31,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(appended).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-requested",
+        idempotencyKey: "agent/llm-request-requested@30",
+      }),
+    );
+  });
+
+  it("does not recover a non-triggering input below the side-effect anchor", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream, sideEffectsAfterOffset: 15 });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agent/input-added",
+          payload: {
+            content: "context row",
+            llmRequestPolicy: { behaviour: "dont-trigger-request" },
+          },
+          offset: 9,
+        }),
+        subscriberConnectedEvent({ offset: 25 }),
+      ],
+      streamMaxOffset: 25,
+    });
+
+    expect(appended).toEqual([]);
+  });
+
+  it("queues an anchor-skipped trigger when a request is already in flight", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({
+      stream,
+      sideEffectsAfterOffset: 20,
+      snapshot: {
+        offset: 12,
+        state: {
+          ...initialState(),
+          currentRequest: { phase: "requested", llmRequestId: 12 },
+        },
+      },
+    });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agent/input-added",
+          payload: { content: "follow up" },
+          offset: 18,
+        }),
+        subscriberConnectedEvent({ offset: 25 }),
+      ],
+      streamMaxOffset: 25,
+    });
+
+    expect(appended).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-queued",
+        idempotencyKey: "agent/llm-request-queued@18",
+      }),
+    ]);
+  });
+
+  it("leaves live triggers to the input-added handler instead of double-scheduling on subscriber-connected", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agent/input-added",
+          payload: { content: "hello" },
+          offset: 42,
+        }),
+        subscriberConnectedEvent({ offset: 43 }),
+      ],
+      streamMaxOffset: 43,
+    });
+
+    expect(
+      appended.filter((event) => event.type === "events.iterate.com/agent/llm-request-scheduled"),
+    ).toHaveLength(1);
+  });
+
   it("re-arms the debounce from durable state when input arrives after a restart", async () => {
     vi.useFakeTimers();
     const { stream, appended } = memoryStream();
@@ -539,7 +707,7 @@ describe("AgentProcessor", () => {
     ]);
   });
 
-  it("re-reads stream history before handing a scheduled LLM request to providers", async () => {
+  it("hands a scheduled LLM request to providers by reference, without a body", async () => {
     vi.useFakeTimers();
     const { stream, appended } = memoryStream();
     const triggeringInput = agentEvent({
@@ -575,18 +743,14 @@ describe("AgentProcessor", () => {
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(appended).toHaveLength(2);
+    // Request-by-reference: the handoff records which model to run and how,
+    // but never embeds the conversation — providers rebuild it from history
+    // up to this event's own offset (see llm-request-helpers.ts).
     expect(appended[1]).toMatchObject({
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: {
-        body: {
-          messages: [
-            { role: "system", content: "You are a helpful assistant. You can trust your user." },
-            { role: "user", content: "codemode primer" },
-            { role: "user", content: "hi" },
-          ],
-        },
-      },
+      payload: { model: expect.any(String), runOpts: {} },
     });
+    expect(appended[1]!.payload).not.toHaveProperty("body");
   });
 });
 
@@ -598,11 +762,15 @@ function newAgentProcessor(args: {
   stream: StreamProcessorIterateContext["stream"];
   snapshot?: StreamProcessorSnapshot<AgentState>;
   readStreamEvents?: () => Promise<StreamEvent[]>;
+  sideEffectsAfterOffset?: number;
 }) {
   return new AgentProcessor({
     iterateContext: { stream: args.stream },
     readState: () => args.snapshot,
     readStreamEvents: args.readStreamEvents ?? (async () => []),
+    ...(args.sideEffectsAfterOffset === undefined
+      ? {}
+      : { sideEffectsAfterOffset: () => args.sideEffectsAfterOffset! }),
   });
 }
 

@@ -60,22 +60,23 @@ WORKER_URL=https://stream-staging-area.iterate-dev-preview.workers.dev pnpm --fi
 Use the browser client library with a full stream URL:
 
 ```ts
-import { connectStream } from "./src/browser/connect.js";
+import { withStreamConnectionFromBrowser } from "./src/browser/connect.ts";
 
-await using connection = await connectStream({
-  url: "wss://stream-staging-area.iterate-dev-preview.workers.dev/api/streams/example",
+using connection = await withStreamConnectionFromBrowser({
+  url: "wss://stream-staging-area.iterate-dev-preview.workers.dev/api/streams?path=%2Fexample",
 });
 const event = await connection.stream.append({ event: { type: "example", payload: {} } });
 ```
 
 CapnWeb's `newWebSocketRpcSession()` queues sends while the browser WebSocket is connecting; the
-browser helper still returns an async-disposable connection so network/RPC cleanup has one shape.
+browser helper returns a (synchronously) `Disposable` connection so network/RPC cleanup has one shape.
 
-The React app serves one stream viewer:
+The React app serves one stream viewer; the stream path is a `?path=` search param, not a route
+segment:
 
-- `/` redirects to `/streams/`
-- `/streams/` shows the root stream with path `/`
-- `/streams/anything/else` shows the stream with path `/anything/else`
+- `/` redirects to `/streams?path=%2F`
+- `/streams?path=/` shows the root stream (path `/`)
+- `/streams?path=/anything/else` shows the stream with path `/anything/else`
 - `/split-stream?left=/a&right=/b` shows two stream viewers side by side
 
 The top bar has an editable stream path input, a `Go to stream` button when the input differs
@@ -111,6 +112,34 @@ The API stays small and clear by holding to:
 - stream delivery does not await each subscriber's `processEventBatch` result
 - stream state is the reduced state of the inline core processor
 - outbound subscribers are reconciled from `subscription-configured` events
+
+## Append & subscription semantics
+
+Non-obvious behaviors worth knowing:
+
+- **Offsets are 1-based.** `stream/created` is offset 1; the next event is 2, etc.
+- **Idempotency + offset precondition.** `idempotencyKey` is unique per stream; an append
+  whose key already exists (persisted or earlier in the same batch) is skipped and the
+  existing event returned. An optional `event.offset` acts as a precondition: it must equal
+  the next offset, else the append throws `expected offset N, got M` — and on an idempotency
+  hit it must equal the existing event's offset, else `idempotency hit at offset N, got M`.
+- **Auto-appended core/presence facts.** The stream itself appends `stream/created` (offset 1),
+  `stream/woken` on every Durable Object incarnation, and `stream/subscriber-connected` /
+  `stream/subscriber-disconnected` presence facts once per delivery-connection open/close.
+- **`eventTypes` subscription filter.** A subscription may pass `eventTypes` (processor hosts pass
+  their contract's `consumes`); non-matching events are skipped and the cursor advances past them,
+  so they are never re-delivered. Omit (or include `"*"`) for everything.
+- **`events: false` state-only mode.** Subscriptions can request state-only batches (`events: []`
+  plus current `state`/`streamMaxOffset`, coalesced per state advance); replay is ignored in this
+  mode. Every subscription gets one immediate initial batch.
+- **`replayAfterOffset` is exclusive and defaults to live-tail** (the current `maxOffset`); pass `0`
+  to replay from the first event. Delivery starts at `replayAfterOffset + 1`.
+- **512KB event chunking.** Each event's JSON is split into 512KB rows in `event_chunks`, so a
+  single event can exceed the Durable Object per-row size limit.
+- **Relative `streamPath`.** `append`/`appendBatch` accept a `streamPath` resolved relative to the
+  current stream's path; appends to another stream are dispatched to that Durable Object.
+- **`reset()` vs `kill()`.** `reset()` clears all durable storage for the stream then aborts the
+  current incarnation; `kill()` only aborts the incarnation.
 
 ## Stream Processor Abstraction
 

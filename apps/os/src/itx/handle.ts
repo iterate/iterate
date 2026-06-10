@@ -54,7 +54,6 @@ import {
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { isProjectId, mintProjectId } from "~/domains/projects/project-id.ts";
 import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
-import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 
 /**
  * Everything a handle needs, resolved once by the restorer
@@ -84,15 +83,6 @@ function isAccessor(target: object, prop: PropertyKey): boolean {
     if (descriptor) return descriptor.get !== undefined;
   }
   return false;
-}
-
-/**
- * Project contexts share one workspace ("itx"); child contexts each get
- * their own, derived from the context id — an agent session's repo clones
- * and files are isolated per context.
- */
-function itxWorkspaceId(contextId: string): string {
-  return isChildContextId(contextId) ? `itx:${contextId}` : "itx";
 }
 
 export class Itx extends RpcTarget {
@@ -153,57 +143,6 @@ export class Itx extends RpcTarget {
     return new ItxStreams(this.#runtime, GLOBAL_CONTEXT_ID);
   }
 
-  get repos() {
-    // The repos domain entrypoint is already a clean project-scoped
-    // capability; hand it out directly rather than wrapping it.
-    return getReposCapability({
-      exports: this.#runtime.exports as unknown as Parameters<
-        typeof getReposCapability
-      >[0]["exports"],
-      props: { projectId: this.#requireProjectId() },
-    });
-  }
-
-  get workspace() {
-    // Like itx.repos: the workspace domain entrypoint already exposes the
-    // exact surface we want (readFile/writeFile and the flat
-    // gitClone/gitAdd/gitCommit/gitPush/gitStatus methods), so hand it out
-    // directly rather than re-wrapping it. workspaceId is fixed to "itx" —
-    // one workspace per project context.
-    const factory = this.#runtime.exports.WorkspaceCapability;
-    if (typeof factory !== "function") {
-      throw new Error("WorkspaceCapability export is not available.");
-    }
-    return factory({
-      props: {
-        projectId: this.#requireProjectId(),
-        workspaceId: itxWorkspaceId(this.#runtime.contextId),
-      },
-    });
-  }
-
-  /**
-   * The project's worker. The loaded worker entrypoint itself can never cross
-   * an RPC boundary (workerd forbids transferring loader entrypoints), so the
-   * path is replayed against it INSIDE the Project DO — every public
-   * method/getter is proxied automatically, at any depth:
-   * itx.worker.someTool(args), itx.worker.group.tool(args). `fetch` is the
-   * one special case: the worker's fetch is the project's homepage, served by
-   * the stateless ingress entrypoint (fetch on the PROJECT is egress).
-   */
-  get worker(): unknown {
-    const project = this.#projectStub();
-    return new PathProxyRpcTarget(async ({ path, args }) => {
-      if (path.length === 1 && path[0] === "fetch") {
-        const ingress = this.#runtime.exports.ProjectIngressEntrypoint({
-          props: { projectId: this.#requireProjectId() },
-        }) as { fetch(request: Request): Promise<Response> };
-        return await ingress.fetch(args[0] as Request);
-      }
-      return await project.callWorkerFunction({ args, path });
-    });
-  }
-
   /**
    * The project's own (cap #0) surface IS the Project Durable Object —
    * adding a method/getter to ProjectDurableObject makes it instantly
@@ -219,7 +158,22 @@ export class Itx extends RpcTarget {
    */
   get project(): ProjectStub {
     const stub = this.#projectStub();
-    return new PathProxyRpcTarget((call) => replayPathCall(stub, call)) as unknown as ProjectStub;
+    return new PathProxyRpcTarget((call) => {
+      // The itx* verbs (itxInvoke, itxDefine, itxProjectWorkerCall, …) are
+      // node-to-node plumbing: chain delegation passes a TRUSTED `origin`
+      // and the forwarder passes registry-merged props. Reachable here,
+      // they would let any handle holder spoof another context's identity
+      // (e.g. read a sibling fork's workspace by faking origin). The proper
+      // doors are itx.caps and the caps themselves.
+      const head = call.path[0] ?? "";
+      if (/^itx[A-Z]/.test(head)) {
+        throw new ItxError({
+          code: "FORBIDDEN",
+          message: `${head} is internal registry plumbing, not part of the project surface — use itx.caps / itx.<cap> instead.`,
+        });
+      }
+      return replayPathCall(stub, call);
+    }) as unknown as ProjectStub;
   }
 
   get projects(): ItxProjects {

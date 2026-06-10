@@ -239,8 +239,6 @@ interface ItxWorkspace {
 
 /** The Project Durable Object surface exposed as cap #0. */
 interface ItxProjectAdmin {
-  /** Call a public function exported by the project's worker. */
-  callWorkerFunction(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
   /** Return the project summary and ingress URL. */
   describe(): Promise<ProjectSummary & { ingressUrl: string }>;
   /** Fetch through the project's egress path. */
@@ -292,11 +290,11 @@ interface ItxBuiltins {
    * there is no separate project object.
    */
   readonly projects: ItxProjects;
-  /** The project's git repos capability. */
+  /** Platform default cap (platform:project, shadowable): the project's git repos. */
   readonly repos: CapSurface;
-  /** The project's workspace: file reads/writes and git operations. */
+  /** Platform default cap (shadowable): workspace file reads/writes + flat git methods. */
   readonly workspace: ItxWorkspace;
-  /** The project worker. Public methods/getters are reachable at any depth. */
+  /** Platform default cap (shadowable): the project's iterate-config worker. */
   readonly worker: CapSurface;
   /** The Project Durable Object stub, whole surface, exposed as cap #0. */
   readonly project: ItxProjectAdmin;

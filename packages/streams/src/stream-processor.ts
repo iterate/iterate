@@ -88,6 +88,15 @@ type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
      * completes — the last event offset in the batch, not this event's offset.
      */
     checkpointOffset: number;
+    /**
+     * The side-effect anchor (see `StreamProcessorBaseDeps`). The default
+     * `processEventBatch` already skips `processEvent` for events at or below
+     * it; it is surfaced here so live handlers (e.g. reconciliation on
+     * `subscriber-connected`) can tell whether an earlier event's side effects
+     * were skipped as historical and recover the ones that are durable
+     * obligations.
+     */
+    sideEffectsAfterOffset: number;
   };
 
 type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
@@ -284,6 +293,7 @@ export abstract class StreamProcessor<
         ...reducedEvent,
         streamMaxOffset: args.streamMaxOffset,
         checkpointOffset: args.checkpointOffset,
+        sideEffectsAfterOffset: args.sideEffectsAfterOffset,
         blockProcessorWhile: args.blockProcessorWhile,
         runInBackground: args.runInBackground,
       });

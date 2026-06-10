@@ -67,10 +67,12 @@ export function defineCodeContext(
 }
 
 /**
- * The defaults every project context delegates to. Deliberately small to
- * start: `ai` is the first hardwired built-in to become an ordinary
- * capability definition (§8's "cap #0 disappears" direction — repos,
- * workspace, and streams follow as their handle accessors migrate).
+ * The defaults every project context delegates to (§8's "cap #0 disappears"
+ * direction). What was hardwired into the handle is now ordinary capability
+ * definitions: ai, repos, workspace, and the project worker. The remaining
+ * kernel — caps, streams, fetch, fork, project, projects, describe — is
+ * composition the registry cannot express (access checks, narrowing, the
+ * registry itself).
  */
 export const platformProjectContext = defineCodeContext("platform:project", (caps) => {
   caps.define({
@@ -84,6 +86,50 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
     target: {
       entrypoint: "BindingCapability",
       props: { binding: "AI" },
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    meta: {
+      instructions:
+        "The project's git repos: itx.repos.ensureIterateConfigInfo({ projectSlug }), " +
+        "list(), create({ slug }), get({ slug }) — repo handles expose commitFiles/readFiles/readLog.",
+    },
+    name: "repos",
+    target: {
+      entrypoint: "ReposCapability",
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    meta: {
+      instructions:
+        "A persistent workspace filesystem: itx.workspace.readFile/writeFile plus the flat " +
+        "git methods gitClone/gitAdd/gitCommit/gitPush/gitStatus. Project contexts share " +
+        "one workspace; forked child contexts each get their own.",
+    },
+    name: "workspace",
+    target: {
+      entrypoint: "WorkspaceCapability",
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    // path-call: the cap's own invoke describes the forwarder hop; the
+    // members replay against the user's default export rides in props.
+    invoke: "path-call",
+    meta: {
+      instructions:
+        "The project's own iterate-config worker, rebuilt from the repo on every call: " +
+        "itx.worker.someExportedFunction(args) reaches any public method of its default export.",
+    },
+    name: "worker",
+    target: {
+      entrypoint: "ProjectWorker",
+      props: { invoke: "members" },
       type: "rpc",
       worker: { type: "loopback" },
     },
