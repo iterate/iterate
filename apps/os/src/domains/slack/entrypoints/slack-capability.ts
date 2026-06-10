@@ -14,6 +14,21 @@ type SlackCapabilityProps = {
 };
 
 export class SlackCapability extends WorkerEntrypoint<SlackCapabilityEnv, SlackCapabilityProps> {
+  /** itx path-call surface: itx.slack.<Slack Web API method path>(body). */
+  async call(input: { args: unknown[]; path: string[] }): Promise<unknown> {
+    const method = input.path.join(".");
+    if (!method) {
+      throw new Error("SlackCapability expected a Slack Web API method path.");
+    }
+    if (input.args.length > 1) {
+      throw new Error(`Slack calls are unary; ${method} received ${input.args.length} args.`);
+    }
+    return await this.request({
+      body: input.args[0] as Record<string, unknown> | undefined,
+      method,
+    });
+  }
+
   async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
     // Slack's Web API is already method-path based (`chat.postMessage`,
     // `conversations.list`, ...), so this capability intentionally keeps the

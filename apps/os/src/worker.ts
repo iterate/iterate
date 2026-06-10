@@ -49,6 +49,7 @@ export { CaptunServerShard };
 export { PackageStream as StreamDurableObject };
 
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
+export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-capability.ts";
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
