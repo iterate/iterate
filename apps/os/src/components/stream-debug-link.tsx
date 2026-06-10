@@ -1,8 +1,8 @@
 import { ExternalLink } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 import type { StreamPath } from "@iterate-com/shared/streams/types";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
 
 export function StreamDebugLink({
   className,
@@ -16,22 +16,15 @@ export function StreamDebugLink({
   streamPath: StreamPath;
 }) {
   return (
-    <a
+    <Link
       className={cn(buttonVariants({ variant: "outline", size: "sm" }), className)}
-      href={buildProjectStreamViewerUrl({
-        baseUrl: currentOrigin(),
-        projectSlug,
-        streamPath,
-      })}
+      to="/projects/$projectSlug/streams/$"
+      params={{ projectSlug, _splat: streamPath }}
       target="_blank"
       rel="noreferrer"
     >
       <ExternalLink data-icon="inline-start" />
       {label}
-    </a>
+    </Link>
   );
-}
-
-function currentOrigin() {
-  return typeof window === "undefined" ? undefined : window.location.origin;
 }

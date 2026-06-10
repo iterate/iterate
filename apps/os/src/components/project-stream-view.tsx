@@ -467,7 +467,7 @@ function ProjectStreamRawView({
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [eventCount]);
+  }, [eventCount, stickToBottomRef]);
 
   function toggleOffset(offset: number) {
     setExpandedOffsets((previous) => {
