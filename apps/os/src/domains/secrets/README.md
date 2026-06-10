@@ -41,8 +41,11 @@ Google is project-scoped for this slice:
 - Lifecycle stream: that project's stream namespace at `/integrations/google`
 - Future processor slug: `google-integration`
 
-OAuth callbacks manually append `events.iterate.com/slack/connected`
-and `events.iterate.com/google-integration/connected` for now. Disconnect
-actions manually append the matching `/disconnected` events. Future
-`slack` and `google-integration` stream processors should own this
-event vocabulary.
+OAuth callbacks append `events.iterate.com/slack/connected` and
+`events.iterate.com/google-integration/connected`; disconnect actions append
+the matching `/disconnected` events (`integration-api.ts`,
+`integration-streams.ts`, and the integrations oRPC router). The `slack`
+stream processor (`~/domains/slack/stream-processors/slack`) exists and
+declares `slack/connected` and `slack/disconnected` in its contract. A
+`google-integration` processor does not exist yet; only its slug and event
+type constants are defined in `integration-streams.ts`.

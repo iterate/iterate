@@ -33,7 +33,7 @@ Rules:
 
 You need these MCP servers connected before starting:
 
-- **Cloudflare Workers Observability** (`https://observability.mcp.cloudflare.com/mcp`) - worker logs, errors, analytics, invocation timing
+- **Cloudflare API** (`https://mcp.cloudflare.com/mcp`) - worker logs, errors, analytics, invocation timing. Use the general API MCP server; do not configure a separate product-specific observability endpoint (see `.agents/skills/cloudflare-traces/SKILL.md`).
 - **PostHog** (`https://mcp.posthog.com/mcp`) - error tracking, exception investigation, event queries
 
 If either is unavailable, note it in your PR description and work with what you have.
@@ -63,7 +63,6 @@ Diagnosis tool access:
 
 - Cloudflare logs/observability via MCP
 - PostHog events/exceptions via MCP
-- Fly machine status via `fly` CLI (with credentials from env or Doppler)
 
 Anomaly triggers (use these to decide when to switch into diagnosis skills):
 
@@ -80,9 +79,9 @@ If there are anomalies, use one or more of the following skills:
 - `skills/architect-diagnose-test-flakes/SKILL.md`
 - `skills/debug-os-worker/SKILL.md`
 
-## Fly machine monitoring mode
+## Monitoring mode
 
-When the task is Fly machine health/usage monitoring, use:
+When the task is OS / Cloudflare app health monitoring, use:
 
 - `skills/architect-monitoring/SKILL.md`
 
@@ -138,13 +137,6 @@ gh pr create \
 
 For architect monitoring runs, follow `skills/architect-monitoring/SKILL.md` for Slack behavior and reporting.
 
-For all other architect runs, after opening a PR, post a summary to `#monitoring` (`C0AH6P1D1MJ`) with the PR link:
-
-```bash
-iterate tool exec-ts 'await slack.chat.postMessage({
-  channel: "C0AH6P1D1MJ",
-  text: "architect: <summary>\n<PR URL>\n\n<1-3 line summary of findings and fixes>",
-})'
-```
+For all other architect runs, after opening a PR, post a summary to `#monitoring` (`C0AH6P1D1MJ`) with the PR link and a 1-3 line summary of findings and fixes. The old `iterate tool exec-ts` daemon tooling is gone; use whatever Slack access your environment provides, and if you have none, note in the PR description that the Slack summary still needs to be posted.
 
 If a Slack thread already exists for this task (e.g. someone triggered the sweep from a thread), reply there instead of starting a new message. Always include the PR link.

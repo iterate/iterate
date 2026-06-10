@@ -1,8 +1,4 @@
 import { z } from "zod";
-import {
-  newStyleCloudflareApps,
-  newStyleCloudflareAppSharedPaths,
-} from "../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
 
 export const CloudflarePreviewAppSlug = z.enum(["os", "semaphore"]);
 
@@ -14,15 +10,25 @@ export type CloudflarePreviewApp = {
   appPath: `apps/${string}`;
   dopplerProject: string;
   paths: string[];
+  deploymentDependencies?: CloudflarePreviewAppSlug[];
   previewDependencies?: CloudflarePreviewAppSlug[];
   previewTestBaseUrlEnvVar: string;
   previewTestCommandArgs: readonly [string, ...string[]];
 };
 
+export const cloudflareAppSharedPaths = [
+  "packages/shared/src/alchemy/**",
+  "packages/shared/src/config.ts",
+  "packages/shared/src/dev/**",
+  "packages/shared/src/evlog/**",
+  "packages/ui/**",
+  "packages/mock-http-proxy/**",
+] as const;
+
 export const cloudflarePreviewSharedPaths = [
   ".github/workflows/cloudflare-previews.yml",
   ".github/ts-workflows/workflows/cloudflare-previews.ts",
-  ...newStyleCloudflareAppSharedPaths,
+  ...cloudflareAppSharedPaths,
   "scripts/preview/**",
 ] as const;
 
@@ -34,10 +40,12 @@ export const cloudflarePreviewAdditionalTriggerPaths = [
 
 export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflarePreviewApp> = {
   os: {
-    ...newStyleCloudflareApps.os,
-    previewDependencies: newStyleCloudflareApps.os.deploymentDependencies?.map((appSlug) =>
-      CloudflarePreviewAppSlug.parse(appSlug),
-    ),
+    slug: "os",
+    displayName: "OS",
+    appPath: "apps/os",
+    dopplerProject: "os",
+    paths: ["apps/os/**", "apps/os-contract/**", "apps/auth/**", "apps/auth-contract/**"],
+    previewDependencies: [],
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     // The itx e2e (node project only — the browser project needs a Playwright
     // chromium install the preview e2e job doesn't have) reads
@@ -50,7 +58,11 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     ],
   },
   semaphore: {
-    ...newStyleCloudflareApps.semaphore,
+    slug: "semaphore",
+    displayName: "Semaphore",
+    appPath: "apps/semaphore",
+    dopplerProject: "semaphore",
+    paths: ["apps/semaphore/**"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
   },

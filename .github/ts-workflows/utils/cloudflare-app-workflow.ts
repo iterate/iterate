@@ -1,8 +1,5 @@
 import { workflow } from "@jlarky/gha-ts/workflow-types";
-import {
-  isNewStyleCloudflareAppSlug,
-  newStyleCloudflareAppSharedPaths,
-} from "../../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
+import { cloudflareAppSharedPaths } from "../../../scripts/preview/apps.ts";
 import type { CloudflarePreviewApp as CloudflareApp } from "../../../scripts/preview/apps.ts";
 import * as utils from "./index.ts";
 
@@ -13,10 +10,6 @@ declare const shortSha: string;
 declare const slackChannelName: string;
 
 export async function createCloudflareAppWorkflow(meta: ImportMeta, app: CloudflareApp) {
-  const isNewStyleApp = isNewStyleCloudflareAppSlug(app.slug);
-  const successSlackChannelName = isNewStyleApp ? "#ci" : "#building";
-  const failureSlackChannelName = isNewStyleApp ? "#ci" : "#error-pulse";
-
   return workflow({
     name: `Deploy ${app.displayName}`,
     permissions: {
@@ -30,7 +23,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
     on: {
       push: {
         branches: ["main"],
-        paths: isNewStyleApp ? [...app.paths, ...newStyleCloudflareAppSharedPaths] : app.paths,
+        paths: [...app.paths, ...cloudflareAppSharedPaths],
       },
       workflow_dispatch: {
         inputs: {
@@ -85,22 +78,13 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
             env: {
               DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             },
-            run: isNewStyleApp
-              ? [
-                  "set -euo pipefail",
-                  'public_url="$(doppler run -- pnpm tsx -e \'import { resolveNewStyleCloudflareAppBaseUrlFromEnv } from "@iterate-com/shared/apps/new-style-cloudflare-apps"; console.log(resolveNewStyleCloudflareAppBaseUrlFromEnv(process.env) ?? "");\')"',
-                  'if [ -n "$public_url" ]; then',
-                  '  echo "public_url=${public_url}" >> "$GITHUB_OUTPUT"',
-                  "fi",
-                ].join("\n")
-              : [
-                  "set -euo pipefail",
-                  'routes="$(doppler secrets get WORKER_ROUTES --plain 2>/dev/null || true)"',
-                  'first_route="$(printf "%s" "$routes" | tr "," "\\n" | awk \'{ gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0); if ($0 != "") { sub(/\\/\\*$/, "", $0); print; exit } }\')"',
-                  'if [ -n "$first_route" ]; then',
-                  '  echo "public_url=https://${first_route}" >> "$GITHUB_OUTPUT"',
-                  "fi",
-                ].join("\n"),
+            run: [
+              "set -euo pipefail",
+              'public_url="$(doppler run -- node -e \'const env=process.env; const appConfig=env.APP_CONFIG?.trim()?JSON.parse(env.APP_CONFIG):{}; console.log(env.APP_CONFIG_BASE_URL || appConfig.baseUrl || "");\')"',
+              'if [ -n "$public_url" ]; then',
+              '  echo "public_url=${public_url}" >> "$GITHUB_OUTPUT"',
+              "fi",
+            ].join("\n"),
           },
           {
             name: `Deploy ${app.appPath}`,
@@ -108,9 +92,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
             env: {
               DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             },
-            run: isNewStyleApp
-              ? "doppler run -- pnpm tsx ./alchemy.run.ts"
-              : "doppler run -- pnpm alchemy:up",
+            run: "doppler run -- pnpm tsx ./alchemy.run.ts",
           },
         ],
       },
@@ -128,7 +110,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
                 publicUrl: "${{ needs.deploy.outputs.public_url }}",
                 runUrl: "${{ needs.variables.outputs.run_url }}",
                 shortSha: "${{ needs.variables.outputs.short_sha }}",
-                slackChannelName: successSlackChannelName,
+                slackChannelName: "#ci",
               },
             },
             async function notify_slack_on_success() {
@@ -165,7 +147,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
                 appDisplayName: app.displayName,
                 runUrl: "${{ needs.variables.outputs.run_url }}",
                 shortSha: "${{ needs.variables.outputs.short_sha }}",
-                slackChannelName: failureSlackChannelName,
+                slackChannelName: "#ci",
               },
             },
             async function notify_slack_on_failure() {

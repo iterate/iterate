@@ -1,18 +1,25 @@
-import { oc } from "@orpc/contract";
+import { createORPCClient } from "@orpc/client";
+import { oc, type ContractRouterClient } from "@orpc/contract";
+import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { z } from "zod";
 
-const SEMAPHORE_KEY_PATTERN = /^(?=.*[a-z])[a-z0-9-]+$/;
+/**
+ * oRPC contract for the semaphore app, plus `createSemaphoreClient` for typed
+ * HTTP access. Everything that talks to semaphore imports from this one file:
+ * the worker implementation (`src/orpc/*`), the seed scripts, the e2e tests,
+ * and the repo-root preview tooling (`scripts/preview/router.ts`).
+ */
+
 const MAX_LEASE_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_WAIT_MS = 5 * 60 * 1000;
 
-const semaphoreKeySchema = z
+/** Resource `type` and `slug` share one format: lowercase slugs like `cloudflare-tunnel`. */
+export const semaphoreKeySchema = z
   .string()
   .trim()
   .toLowerCase()
-  .regex(SEMAPHORE_KEY_PATTERN, "must match ^(?=.*[a-z])[a-z0-9-]+$");
-export const semaphoreTypeSchema = semaphoreKeySchema;
-const semaphoreSlugSchema = semaphoreKeySchema;
+  .regex(/^(?=.*[a-z])[a-z0-9-]+$/, "must match ^(?=.*[a-z])[a-z0-9-]+$");
 
 export type SemaphoreJsonObject = Record<string, unknown>;
 
@@ -37,6 +44,9 @@ function isJsonValue(value: unknown): boolean {
   return false;
 }
 
+// Validated with a refinement rather than `z.json()` so the inferred type stays
+// `Record<string, unknown>` instead of pushing a recursive JSONValue type through
+// every handler and Durable Object signature.
 export const semaphoreDataSchema = z
   .record(z.string(), z.unknown())
   .superRefine((value, context) => {
@@ -57,13 +67,12 @@ const semaphoreWaitMsSchema = z
   .int()
   .nonnegative()
   .max(MAX_WAIT_MS, `waitMs must be <= ${MAX_WAIT_MS}`);
-const SemaphoreLeaseState = z.enum(["available", "leased"]);
 
 export const SemaphoreResourceRecord = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
   data: semaphoreDataSchema,
-  leaseState: SemaphoreLeaseState,
+  leaseState: z.enum(["available", "leased"]),
   leasedUntil: z.number().int().positive().nullable(),
   lastAcquiredAt: z.number().int().positive().nullable(),
   lastReleasedAt: z.number().int().positive().nullable(),
@@ -72,56 +81,56 @@ export const SemaphoreResourceRecord = z.object({
 });
 
 export const SemaphoreLeaseRecord = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
   data: semaphoreDataSchema,
-  leaseId: z.string().uuid(),
+  leaseId: z.uuid(),
   expiresAt: z.number().int().positive(),
 });
 
 const AddResourceInput = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
   data: semaphoreDataSchema,
 });
 
 export const DeleteResourceInput = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
 });
 
 const ListResourcesInput = z.object({
-  type: semaphoreTypeSchema.optional(),
+  type: semaphoreKeySchema.optional(),
 });
 
 export const FindResourceInput = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
 });
 
 export const AcquireResourceInput = z.object({
-  type: semaphoreTypeSchema,
+  type: semaphoreKeySchema,
   leaseMs: semaphoreLeaseMsSchema,
   waitMs: semaphoreWaitMsSchema.optional(),
 });
 
 const AcquireSpecificResourceInput = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
   leaseMs: semaphoreLeaseMsSchema,
 });
 
 const RenewResourceLeaseInput = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
-  leaseId: z.string().uuid(),
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
+  leaseId: z.uuid(),
   leaseMs: semaphoreLeaseMsSchema,
 });
 
 export const ReleaseResourceInput = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
-  leaseId: z.string().uuid(),
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
+  leaseId: z.uuid(),
 });
 
 const DeleteResourceResult = z.object({
@@ -211,3 +220,58 @@ export const semaphoreContract = oc.router({
 
 export type SemaphoreResourceRecord = z.infer<typeof SemaphoreResourceRecord>;
 export type SemaphoreLeaseRecord = z.infer<typeof SemaphoreLeaseRecord>;
+
+export const cloudflareTunnelType = "cloudflare-tunnel";
+
+export const CloudflareTunnelData = z.object({
+  provider: z.literal(cloudflareTunnelType),
+  publicHostname: z.string().min(1),
+  tunnelId: z.string().min(1),
+  tunnelName: z.string().min(1),
+  tunnelToken: z.string().min(1),
+  service: z.string().min(1),
+  createdAt: z.string().min(1),
+});
+
+export type CloudflareTunnelData = z.infer<typeof CloudflareTunnelData>;
+
+type SemaphoreClient = ContractRouterClient<typeof semaphoreContract>;
+type SemaphoreFetch = (input: URL | string | Request, init?: RequestInit) => Promise<Response>;
+
+type CreateSemaphoreClientOptions =
+  | {
+      apiKey: string;
+      baseURL: string;
+      fetch?: SemaphoreFetch;
+    }
+  | {
+      apiKey: string;
+      fetch: SemaphoreFetch;
+      baseURL?: string;
+    };
+
+export function createSemaphoreClient(options: CreateSemaphoreClientOptions): SemaphoreClient {
+  if (!options.baseURL && !options.fetch) {
+    throw new Error("createSemaphoreClient requires either baseURL or fetch");
+  }
+
+  // OpenAPILink always needs a URL. When the caller supplies a custom `fetch`
+  // (e.g. a Cloudflare service binding) we use the IANA-reserved `.invalid`
+  // TLD (RFC 2606) so a misconfigured client fails fast instead of reaching a
+  // real host.
+  const url = options.baseURL
+    ? new URL("/api", options.baseURL).toString()
+    : "https://semaphore.invalid/api";
+
+  const authFetch: SemaphoreFetch = async (input, init) => {
+    const headers = new Headers(init?.headers);
+    headers.set("Authorization", `Bearer ${options.apiKey}`);
+
+    return (options.fetch ?? fetch)(input, {
+      ...init,
+      headers,
+    });
+  };
+
+  return createORPCClient(new OpenAPILink(semaphoreContract, { url, fetch: authFetch }));
+}

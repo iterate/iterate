@@ -1,5 +1,5 @@
 import alchemy from "alchemy";
-import { Ai, D1Database, DurableObjectNamespace, WorkerLoader } from "alchemy/cloudflare";
+import { Ai, D1Database, DurableObjectNamespace, Queue, WorkerLoader } from "alchemy/cloudflare";
 import { Artifacts } from "@iterate-com/shared/alchemy/artifacts";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
@@ -97,6 +97,9 @@ const mcpRouteHostname = routeHostnameForUrl(ctx.runtimeConfig.mcp?.baseUrl);
 const eventDocsRouteHostname = eventDocsHostnameForAppBaseUrl(ctx.runtimeConfig.baseUrl);
 const artifactsAccountId = requireEnv("CLOUDFLARE_ACCOUNT_ID");
 const artifactsNamespace = `${ctx.workerName}-repos`;
+// Stream namespace for worker-global (non-project-scoped) streams, such as the
+// raw Cloudflare event capture stream at /cloudflare/events.
+const globalStreamNamespace = `${ctx.workerName}-global`;
 const outboundMcpFromOurClientCapability =
   DurableObjectNamespace<OutboundMcpFromOurClientCapability>(
     "outbound-mcp-from-our-client-capability",
@@ -155,6 +158,11 @@ const slackAgent = DurableObjectNamespace<SlackAgentDurableObject>("slack-agent"
   className: "SlackAgentDurableObject",
   sqlite: true,
 });
+const artifactEventsQueue = await Queue("artifact-events", {
+  name: `${ctx.workerName}-artifact-events`,
+  adopt: true,
+});
+
 const debugAppendChainSubscriber = ctx.app.local
   ? DurableObjectNamespace<DebugAppendChainSubscriber>("debug-append-chain-subscriber", {
       className: "DebugAppendChainSubscriber",
@@ -164,12 +172,14 @@ const debugAppendChainSubscriber = ctx.app.local
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
   main: "./src/worker.ts",
+  eventSources: [artifactEventsQueue],
   bindings: {
     DB: db,
     DO_CATALOG: db,
     AI: Ai(),
     ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
     ARTIFACTS_NAMESPACE: artifactsNamespace,
+    GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
     LOADER: WorkerLoader(),
     CODEMODE_SESSION: codemodeSession,
     ITX_CONTEXT: itxContext,

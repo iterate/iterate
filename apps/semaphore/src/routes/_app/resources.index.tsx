@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import type { SemaphoreResourceRecord } from "@iterate-com/semaphore-contract";
+import type { SemaphoreResourceRecord } from "~/contract.ts";
 import { listResourcesFromDb } from "~/lib/resource-store.ts";
 
 type SerializableJsonValue =

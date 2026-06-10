@@ -19,19 +19,17 @@ iterate.com (anonymous)          os.iterate.com / os.iterate.com (identified)
 
 ## Cross-Domain Tracking
 
-Different origins do not share cookies. Marketing passes PostHog IDs on signup links:
-
-1. **iterate.com** — `apps/iterate-com/backend/routes/index.tsx` appends `ph_distinct_id` and `ph_session_id` on outbound product links.
-2. **OS app** — client init reads those params and bootstraps PostHog before `identify(userId)` on signup.
+Different origins do not share cookies. The reading side exists in shared code: `setupPosthog` in `packages/ui/src/components/posthog.tsx` bootstraps PostHog from `ph_distinct_id` / `ph_session_id` URL query params when `bootstrapFromUrl` is enabled (the default in `packages/ui/src/apps/providers.tsx`). Nothing currently appends those params to outbound links — a sender would need to add them for cross-domain identity to merge.
 
 ## Key Files
 
-| File                                                       | Purpose                               |
-| ---------------------------------------------------------- | ------------------------------------- |
-| `apps/iterate-com/backend/routes/index.tsx`                | Adds PostHog IDs to signup URLs       |
-| `apps/iterate-com/backend/components/posthog-provider.tsx` | PostHog init for marketing site       |
-| `apps/os/src/routes/posthog-proxy.$.ts`                    | Worker proxy route for PostHog ingest |
-| `packages/shared/src/posthog/`                             | Shared proxy + sourcemap helpers      |
+| File                                                       | Purpose                                                  |
+| ---------------------------------------------------------- | -------------------------------------------------------- |
+| `packages/ui/src/components/posthog.tsx`                   | Shared client init; bootstraps from `ph_*` URL params    |
+| `packages/ui/src/apps/providers.tsx`                       | Wires `setupPosthog` + `PostHogProvider` into app shells |
+| `apps/iterate-com/backend/components/posthog-provider.tsx` | PostHog init for marketing site                          |
+| `apps/os/src/routes/posthog-proxy.$.ts`                    | Worker proxy route for PostHog ingest                    |
+| `packages/shared/src/posthog/`                             | Shared proxy + sourcemap helpers                         |
 
 Search `apps/os` for PostHog client init and identity hooks when wiring new UI surfaces.
 
@@ -45,6 +43,6 @@ Configured in Doppler for `os` and `iterate-com`:
 
 ## Verification
 
-1. Click signup on iterate.com → URL contains `ph_distinct_id`
-2. Sign up in OS → person in PostHog includes marketing pageviews
+1. Open an app with `?ph_distinct_id=<id>` appended → PostHog bootstraps with that distinct id
+2. Browse a few pages → events arrive in PostHog under that distinct id with the expected `$environment`
 3. Exercise billing flows → confirm subscription/payment events if enabled for the environment

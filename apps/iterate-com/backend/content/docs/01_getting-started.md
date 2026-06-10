@@ -4,22 +4,29 @@ title: Getting Started
 
 These docs are a work in progress.
 
-![Sample Image](/backend/assets/nick.png)
+iterate runs in your browser — there is nothing to install. Sign in at
+[os.iterate.com](https://os.iterate.com) to get started.
 
-## Installation
+## 1. Create a project
 
-To get started, install the package:
+A project is the home for everything iterate does for you: its git repository,
+integrations, agents, and event streams. Pick a slug (lowercase letters,
+numbers, and hyphens) and create the project from the dashboard.
 
-```bash
-npm install iterate
-```
+## 2. Connect your tools
 
-## Basic Usage
+From the project's Integrations page you can connect:
 
-Here's a simple example:
+- **Slack** — so iterate can take part in your Slack workspace
+- **Google** — for Gmail, Calendar, Docs, Sheets, and Drive
 
-```javascript
-import { iterate } from "iterate";
+## 3. Talk to iterate in Slack
 
-const result = iterate.run();
-```
+Once Slack is connected, mention the iterate bot in a channel or thread and it
+will respond there. That conversation is the main way to work with iterate
+day to day.
+
+## What about the `iterate` package on npm?
+
+It's a command-line client for the platform, not a library — you don't need it
+to get started.

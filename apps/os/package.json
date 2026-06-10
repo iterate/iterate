@@ -103,7 +103,6 @@
     "@cloudflare/workers-types": "catalog:cloudflare",
     "@iterate-com/mock-http-proxy": "workspace:*",
     "@microsoft/tui-test": "0.0.4",
-    "@slack/web-api": "^7.14.1",
     "@tailwindcss/vite": "^4.1.18",
     "@tanstack/devtools-vite": "0.6.0",
     "@tanstack/router-generator": "1.167.17",

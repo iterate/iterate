@@ -16,11 +16,11 @@ const isAgent =
 /** @type {import('lint-staged').Configuration} */
 const baseConfig = {
   "*": ["oxfmt --no-error-on-unmatched-pattern"],
-  "apps/semaphore/{typesql.json,migrations/**/*.sql,sql/queries.sql}": [
-    () => "pnpm -C apps/semaphore run db:types:stale",
-    "git add apps/semaphore/sql/queries.ts",
+  "apps/semaphore/{definitions.sql,migrations/**/*.sql,sql/**/*.sql,sqlfu.config.ts}": [
+    () => "pnpm -C apps/semaphore sqlfu:generate",
+    "git add apps/semaphore/migrations/.generated apps/semaphore/sql/.generated",
   ],
-  "skills/**": [
+  ".opencode/skills/**": [
     () => "pnpm -C apps/iterate-com skills:generate",
     "git add apps/iterate-com/backend/generated/skills-registry.ts",
   ],

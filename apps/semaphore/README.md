@@ -1,12 +1,12 @@
 # Semaphore app
 
-Cloudflare-only: TanStack Start + oRPC + raw D1 inventory storage, with a Durable Object coordinator per resource type.
+Cloudflare-only: TanStack Start + oRPC + sqlfu/D1 inventory storage, with a Durable Object coordinator per resource type.
 
 ## Stack
 
 - **API:** oRPC over OpenAPI/HTTP at `/api`
 - **Frontend:** TanStack Start + Router + Query
-- **DB:** raw D1 queries via generated TypeSQL helpers (`sql/queries.ts`)
+- **DB:** sqlfu-generated D1 query wrappers (`sql/.generated/`)
 - **Coordinator:** one Durable Object per resource `type` handles active leases, waiters, and expiry
 - **Secrets:** Doppler project `semaphore` (see repo `doppler.yaml`). `DOPPLER_CONFIG` is injected by `doppler run`, and `_shared` defines `ALCHEMY_STAGE=${DOPPLER_CONFIG}`. The bearer/operator token is `APP_CONFIG.sharedApiSecret`; callers can expose the same value as `SEMAPHORE_API_TOKEN`.
 
@@ -14,11 +14,14 @@ Cloudflare-only: TanStack Start + oRPC + raw D1 inventory storage, with a Durabl
 
 - `alchemy.run.ts` — Alchemy app + D1 + Durable Object + TanStackStart
 - `vite.config.ts` — Alchemy Cloudflare TanStack Start plugin; optional `PORT` for dev
-- `src/entry.workerd.ts` — Worker fetch + `withEvlog`
-- `src/context.ts` — `manifest`, `config`, `env`, `db`, `log`
+- `src/worker.ts` — Worker fetch + `withEvlog`
+- `src/config.ts` — `AppConfig` schema + `parseConfig`
+- `src/request-context.ts` — per-request `RequestContext` (`config`, `db`, `log`, `rawRequest`)
 - `src/durable-objects/resource-coordinator.ts` — lease orchestration, alarms, and waiter dispatch
 - `src/lib/resource-store.ts` — D1-backed resource reads/writes and lease-state mirroring
-- `src/orpc/*` — contract binding + handlers
+- `definitions.sql`, `migrations/`, `sql/queries.sql`, `sqlfu.config.ts` — sqlfu schema, migration history, query sources, and config
+- `src/contract.ts` — oRPC contract, schemas, and client helper
+- `src/orpc/*` — contract implementation + handlers
 
 ## Scripts
 
@@ -29,6 +32,8 @@ pnpm build        # production client/server bundle
 pnpm deploy       # deploy prd through Doppler and alchemy.run.ts
 pnpm seed:tunnel-pool
 pnpm seed:environment-config-leases
+pnpm sqlfu:generate
+pnpm sqlfu:check
 pnpm test         # typecheck only
 pnpm test:e2e     # requires `SEMAPHORE_BASE_URL`
 ```
@@ -51,7 +56,7 @@ The browser UI calls this value the operator token. Do not copy the token into s
 
 ## Contract
 
-[`apps/semaphore-contract`](../semaphore-contract) — `src/orpc/orpc.ts` implements it.
+`src/contract.ts` contains the oRPC contract, schemas, and local client helper.
 
 ## Deploy
 

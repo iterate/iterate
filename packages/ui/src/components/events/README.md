@@ -5,8 +5,9 @@ This directory is the clean-room implementation for rendering an events stream.
 The core idea is intentionally small:
 
 1. Start with raw `Event[]` from the events oRPC client.
-2. Select one view reducer for the current view mode.
-3. The reducer synchronously reduces events into view state.
+2. The stream-view processor synchronously reduces every event into one
+   mode-agnostic view state.
+3. The host filters that state for the selected renderer mode.
 4. React renders `state.slots` by slot name and rendered element `type`.
 5. Raw summary rows open the shared event inspector for full payload navigation.
 
@@ -25,59 +26,50 @@ items" versus "feed items" inside the feed slot.
   and Stream View Reducer.
 - `DESIGN-EXPLORATION.md` sketches the slot model, prototype shapes, risks, and
   open questions for the next refactor pass.
-- `REFACTOR-ROADMAP.md` lists the current code gaps and a prioritized migration
-  path.
 - `SLOT-PROTOTYPES.md` sketches concrete event-to-slot snapshots that can later
   become tests.
 - `feed-items.ts` defines `EventsStreamRenderedElement`, built-in element prop
   types, `EventsStreamSlots`, and the reduced stream view state.
-- `feed-processors.ts` defines selectable view reducers.
+- `stream-view-processor/contract.ts` defines `StreamViewProcessorContract`,
+  the consumes-all stream processor whose reducer projects raw events into the
+  view state, plus the `reduceStreamViewEvents` batch helper.
+- `feed-processors.ts` defines the renderer-mode constants and dropdown
+  options (`eventsStreamRendererModes`).
+- `feed-element-renderers/` holds the per-element React renderers (message
+  card, agent output card, grouped raw event line, ...).
 - `stream-layout.tsx` defines the package-owned header/main/message-input
   layout regions for browser stream UIs.
 - `stream-feed.tsx` renders the stream view and feed items by `item.type`.
 - `event-inspector-sheet.tsx` renders the shared raw event detail drawer.
 
-## Reducers
+## Reducer and renderer modes
 
-Reducers are the view policy. If a dropdown mode wants different content, add
-or select a different reducer.
+There is one reducer: `StreamViewProcessorContract` in
+`stream-view-processor/contract.ts`. It follows the same reducer discipline as
+the other stream processor contracts (`defineProcessorContract` plus a pure
+`reduce({ event, state })`), consumes ALL events (`consumesAllEvents`), and
+always produces both raw summary elements and semantic elements. Consecutive
+events without a semantic renderer collapse into a grouped raw summary, but
+the group keeps every raw event for inspector navigation.
 
-The shape follows the same reducer discipline as the stream processor contracts:
-each reducer is plain data plus a pure `reduce({ event, state })` function.
-Rendering concerns stay outside the reducer.
+Renderer modes are pure view-time filters over that one state, not separate
+reducers. `feed-processors.ts` defines the modes (`raw-pretty` default,
+`pretty`, `raw-single-json`) and the dropdown options; the host app applies
+the filter (see `applyRendererMode` in `apps/os`'s `project-stream-view.tsx`).
 
-Current primary reducers:
-
-- `rawPrettyEventsStreamViewReducer` is the default stream view: each event
-  contributes to a raw summary feed item and may also contribute one semantic
-  feed item. Consecutive unsupported events with the same type may collapse into
-  a grouped summary only when each event produced no other feed item, but the
-  group keeps every raw event for inspector navigation.
-- `prettyEventsStreamViewReducer` emits the same semantic feed elements without
-  grouped raw event rows.
-- `rawJsonDumpEventsStreamViewReducer` emits one `raw-json-dump` item.
-
-`rawEventsStreamViewReducer` remains a helper for terminal/debug clients and is
-not exposed in the browser renderer-mode controls.
-
-All reducers also share small cross-slot projections:
+The reducer also makes small cross-slot projections:
 
 - event counts become an `event-counter` element in the header slot.
 - active LLM requests become an `activity` element in the header slot.
 - stream error events become a `composer-suggestion` element in the input slot.
-
-Keep reducers explicit. Start with a small number of named reducers and extract
-plain helper functions when they share real behavior. Do not add a reducer
-composition abstraction until the code has repeated pressure that makes the
-simple helper approach painful.
 
 ## Renderers
 
 Renderers are deliberately broader than any one view. It is fine for a renderer
 to exist even when the selected processor never emits that item type.
 
-Do not make renderer selection depend on the dropdown mode. The mode selects the
-reducer; `item.type` selects the renderer.
+Do not make renderer selection depend on the dropdown mode. The mode filters
+the view state; `item.type` selects the renderer.
 
 This directory currently has a web renderer in `stream-feed.tsx`. That is the
 intended split: processors and feed item data are shared; renderers belong to
@@ -99,12 +91,9 @@ does not silently mutate composer state.
 - Write new renderer-aware projections to `state.slots.{feed,header,input}`.
 - Raw summary elements must keep their source event data so click-through detail
   and previous/next navigation remain faithful to the wire log.
-- `state.outlets` and `state.feedItems` remain deprecated compatibility aliases
-  while older terminal/rendering code finishes migrating; do not use them in new
-  code.
 - Input-slot elements should render affordances or explicit actions. They should
   not directly mutate a composer during event replay.
-- Put new item types in `feed-items.ts`, add processor support in
-  `feed-processors.ts`, and add rendering in `stream-feed.tsx`.
+- Put new item types in `feed-items.ts`, add reducer support in
+  `stream-view-processor/contract.ts`, and add rendering in `stream-feed.tsx`.
 - If a Rendered Element needs provenance, include explicit event fields or raw
   source event data. Do not hide provenance in component state.

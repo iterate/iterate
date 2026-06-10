@@ -31,11 +31,9 @@ The default is **do not code immediately**. First spec the API with the user. If
 
 - `mixins/with-durable-object-core.ts`: root adapter for Cloudflare's protected `ctx` APIs. It exposes protected local SQLite, synchronous KV, and platform alarm capabilities so feature mixins do not reach into `ctx` directly.
 - `mixins/with-lifecycle-hooks.ts`: protected subclass surface, named initialization, first-initialize/start hooks, static/generic preservation through `DurableObjectClass`, and optional lifecycle-owned D1 object catalog projection.
-- `mixins/with-multiplexed-alarms.ts`: one owner for Cloudflare's single Durable Object alarm slot, protected scheduling methods, SQLite-backed logical alarm rows.
-- `mixins/with-scheduler.ts`: key-based scheduler layered above multiplexed alarms, tagged recurrence rows, split one-shot/recurring failure policy.
 - `mixins/with-kv-inspector.ts`: fetch wrapper that preserves generic `Base<Env>`.
 - `mixins/with-outerbase.ts`: fetch wrapper around SQLite debug routes.
-- `mixins/with-lifecycle-hooks.type.test.ts`: expect-type examples that prove lifecycle, env lower-bound, and alarm protected-surface type incantations still work.
+- `mixins/with-lifecycle-hooks.type.test.ts`: expect-type examples that prove lifecycle, env lower-bound, and protected-surface type incantations still work.
 - `test-harness/initialize-fronting-worker.ts`: shared Worker entrypoint for worker-pool unit tests and deployed E2E.
 - `README.md`: human/agent docs for composition, type shapes, runtime behavior, and test commands.
 
@@ -95,20 +93,23 @@ Use comments to explain:
 - The purpose is to keep `class Room extends Base<Env>` valid after composition.
 
 Feature mixins should generally consume protected capabilities from lower layers
-instead of touching Cloudflare `ctx` directly. For example, `withScheduler()`
-uses `withMultiplexedAlarms()` and `withDurableObjectCore()`, while
+instead of touching Cloudflare `ctx` directly. For example, `withOuterbase()`
+and `withKvInspector()` require `Constructor<DurableObjectCoreProtected>` and use
+`this.useDurableObjectSql(...)` / `this.useDurableObjectKv(...)`, while
 `withDurableObjectCore()` is the only reusable layer that adapts
 `ctx.storage.sql`, `ctx.storage.kv`, and platform alarms.
 
 When the mixin itself owns the operation, put the important call-site API at the
 top of the file. Keep the lower-level protected helpers below it or private. For
-example, `withStreamProcessorRunner(...)` is configured with one processor
-instance and a scoped stream API factory, then exposes `catchUpStreamProcessor()` and
-`consumeStreamProcessorEvent()`. The app Durable Object should not also contain
-the processor catch-up loop.
+example, `withLifecycleHooks(...)` is configured with a `nameSchema` and a
+`d1ObjectCatalog` setting (with `getDatabase(env)` and `indexes`), then owns the
+whole startup gate and catalog projection: it exposes `initialize()`,
+`ensureStarted()`, `assertInitialized()`, and `getD1ObjectCatalogRecord()`. The
+app Durable Object should not also contain the initialization/catalog loop.
 
 Configured mixins often need cached values. Store them under explicit private
-fields with names scoped to the mixin, such as `#streamProcessorRunnerProcessor`.
+fields with names scoped to the mixin, the way `withLifecycleHooks()` keeps
+`#structuredName`, `#instanceWakePromise`, and `#firstInitializeHooks`.
 This avoids accidental collisions and makes future stackability easier to reason
 about. If a mixin may be applied more than once, use unique method names or a
 single configured-map shape; don't rely on vague `super` chaining without a

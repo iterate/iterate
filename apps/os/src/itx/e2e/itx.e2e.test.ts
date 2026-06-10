@@ -115,7 +115,64 @@ test("the five-step capability flow: provide live, call, promote durable, call f
   const description = await projectItx.caps.describe();
   expect(description).toMatchObject([
     { connected: true, invoke: "path-call", kind: "live", name: "slack" },
-    { invoke: "path-call", kind: "worker", name: "slackDurable" },
+    // Legacy `source:` input normalizes to an rpc/source target.
+    { invoke: "path-call", kind: "rpc", name: "slackDurable" },
+  ]);
+});
+
+test("platform bindings are dialable capabilities (raw + wrapped)", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-ai` })) as { id: string };
+  using projectItx = await itx.projects.get(project.id);
+
+  // (1) Raw binding ref: env.AI itself is the target; members replay applies
+  // the dotted path straight onto it. models() is a free catalog read.
+  await projectItx.caps.define({
+    meta: { instructions: "Workers AI. Use like the env.AI binding." },
+    name: "ai",
+    target: { type: "rpc", worker: { binding: "AI", type: "binding" } },
+  });
+  const models = (await (projectItx as never as Record<string, any>).ai.models()) as unknown[];
+  expect(Array.isArray(models)).toBe(true);
+  expect(models.length).toBeGreaterThan(0);
+
+  // (2) Wrapped via the BindingCapability loopback (path-call): same binding,
+  // reached through the thin policy entrypoint — the §2 pattern.
+  await projectItx.caps.define({
+    invoke: "path-call",
+    name: "aiWrapped",
+    target: {
+      entrypoint: "BindingCapability",
+      props: { binding: "AI" },
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  const wrapped = (await (
+    projectItx as never as Record<string, any>
+  ).aiWrapped.models()) as unknown[];
+  expect(Array.isArray(wrapped)).toBe(true);
+
+  // (3) Allowlist: a non-dialable binding refuses at define time, and a
+  // loopback export outside DIALABLE_LOOPBACKS refuses too.
+  await expect(
+    projectItx.caps.define({
+      name: "db",
+      target: { type: "rpc", worker: { binding: "DB", type: "binding" } },
+    }),
+  ).rejects.toThrow(/not dialable/);
+  await expect(
+    projectItx.caps.define({
+      name: "sneaky",
+      target: { entrypoint: "ItxEntrypoint", type: "rpc", worker: { type: "loopback" } },
+    }),
+  ).rejects.toThrow(/not dialable/);
+
+  // describe() reports the new kinds and lifts instructions.
+  const caps = await projectItx.caps.describe();
+  expect(caps).toMatchObject([
+    { instructions: "Workers AI. Use like the env.AI binding.", kind: "rpc", name: "ai" },
+    { invoke: "path-call", kind: "rpc", name: "aiWrapped" },
   ]);
 });
 

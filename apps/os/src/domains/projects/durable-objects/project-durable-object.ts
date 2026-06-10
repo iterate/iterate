@@ -61,7 +61,13 @@ import {
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
 import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
-import type { CapInvoke, CapMeta, CapSource, PathCall } from "~/itx/protocol.ts";
+import type {
+  CapInvoke,
+  CapMeta,
+  CapSource,
+  PathCall,
+  SerializableCapTarget,
+} from "~/itx/protocol.ts";
 
 type CaptunServerTunnel = Fetcher & Disposable;
 export type ProjectStructuredName = {
@@ -405,7 +411,8 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
 
   async itxDefine(input: {
     name: string;
-    source: CapSource;
+    target?: SerializableCapTarget;
+    source?: CapSource;
     kind?: "worker" | "facet";
     invoke?: CapInvoke;
     meta?: CapMeta;
@@ -449,6 +456,8 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
           }),
         );
       },
+      // Gated on DIALABLE_BINDINGS inside the registry before this is called.
+      binding: (name) => (this.env as unknown as Record<string, unknown>)[name],
       contextId: projectId,
       facets: durableObjectFacetsHook(this.ctx),
       loader: projectRuntimeEnv(this.env).LOADER as unknown as ConstructorParameters<

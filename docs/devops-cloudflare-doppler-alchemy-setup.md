@@ -59,8 +59,8 @@ Examples:
 - `APP_CONFIG_PROJECT_HOSTNAME_BASES` is App Config.
 - `CLOUDFLARE_ACCOUNT_ID` is Deployment Config.
 - `CLOUDFLARE_API_TOKEN` is Deployment Config.
-- `DEPLOYMENT_CONFIG_STREAM_DURABLE_OBJECT_BINDING_SCRIPT_NAME` is Deployment
-  Config.
+- `OS_ARTIFACTS_NAMESPACE` (read by `apps/os/scripts/seed-iterate-config-base-repo.ts`)
+  is Deployment Config.
 
 ## Cloudflare Accounts
 
