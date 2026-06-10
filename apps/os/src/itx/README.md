@@ -172,14 +172,15 @@ await itx.caps.define({
 });
 ```
 
-**Typed caps** without runtime cost — declaration merging plus `Stubify`:
+**Typed caps**: there is no static registry of cap names — `itx.<name>` falls
+through a runtime Proxy (`handle.ts`), so TypeScript only knows the built-ins.
+To get an SDK's types on a cap, cast its stub through `Stubify` (exported from
+`handle.ts`), which maps every function in the type to its async stub form:
 
 ```ts
-declare module "~/itx/handle.ts" {
-  interface ProjectCaps {
-    slack: Stubify<import("@slack/web-api").WebClient>;
-  }
-}
+import type { Stubify } from "~/itx/handle.ts";
+const slack = itx.cap("slack") as Stubify<import("@slack/web-api").WebClient>;
+await slack.chat.postMessage({ channel, text });
 ```
 
 ## Execution modes (all proven in `e2e/`)

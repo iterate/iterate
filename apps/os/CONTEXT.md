@@ -1076,7 +1076,7 @@ The provider composition case targets provider-to-provider Tool Function Calls: 
 > **Domain expert:** "No. OS only lets an **Organization** own **Projects**."
 
 > **Dev:** "Can a project page be addressed without the organization slug?"
-> **Domain expert:** "Yes. A **Project Route** is `/projects/:projectSlug`; organization-level UI lives under `/org/:organizationSlug`."
+> **Domain expert:** "Yes. A **Project Route** is `/projects/:projectSlug`; OS URLs have no organization segment — organization membership and selection live in the auth worker."
 
 > **Dev:** "What should OS show after sign-in if auth worker has no **Active Organization**?"
 > **Domain expert:** "Redirect through the auth worker's organization selection or creation flow before rendering the **OS App**."

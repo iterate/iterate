@@ -1,9 +1,7 @@
 # Iterate Context
 
-The current Cap'n Web / IterateContext design lives with the implementation:
-
-- [Cap'n Web Capabilities](../src/capnweb/README.md)
-- [Cap'n Web Runtime Learnings](../src/capnweb/LEARNINGS.md)
-
-Keep design changes in `src/capnweb/` so the docs stay close to the code they
-describe.
+The Cap'n Web / IterateContext design this page pointed at (`src/capnweb/`) has
+been deleted. Its successor is **itx**: see
+[`../src/itx/README.md`](../src/itx/README.md) (architecture),
+[`../src/itx/DECISIONS.md`](../src/itx/DECISIONS.md) (decision log), and
+[`itx-spec.md`](./itx-spec.md) (design spec).
