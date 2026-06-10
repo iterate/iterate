@@ -19,6 +19,10 @@ export interface SemaphoreLeaseHandle<TData> extends AsyncDisposable {
   release(): Promise<void>;
 }
 
+// Deliberately a hand-rolled HTTP client rather than `createSemaphoreClient`
+// from apps/semaphore/src/contract.ts: packages/shared must not depend on an
+// app workspace, and this helper only touches two stable endpoints
+// (POST /api/resources/acquire and /api/resources/release).
 type SemaphoreLeaseResponse = {
   slug: string;
   leaseId: string;

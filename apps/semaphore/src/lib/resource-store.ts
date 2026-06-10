@@ -12,7 +12,7 @@ import {
 } from "../../sql/.generated/queries.sql.ts";
 import {
   semaphoreDataSchema,
-  semaphoreTypeSchema,
+  semaphoreKeySchema,
   type SemaphoreJsonObject,
   type SemaphoreResourceRecord,
 } from "~/contract.ts";
@@ -31,12 +31,8 @@ type ResourceRow = {
 
 export class ResourceInputError extends Error {}
 
-function client(db: D1Database) {
-  return createD1Client(db);
-}
-
 export function parseType(input: string): string {
-  return semaphoreTypeSchema.parse(input);
+  return semaphoreKeySchema.parse(input);
 }
 
 function parseData(value: string): SemaphoreJsonObject {
@@ -70,8 +66,8 @@ export async function listResourcesFromDb(
   params: { type?: string } = {},
 ): Promise<SemaphoreResourceRecord[]> {
   const rows = params.type
-    ? await selectResourcesByType(client(db), { type: params.type })
-    : await selectResources(client(db));
+    ? await selectResourcesByType(createD1Client(db), { type: params.type })
+    : await selectResources(createD1Client(db));
   return rows.map(rowToResourceRecord);
 }
 
@@ -79,7 +75,7 @@ export async function findResourceByKey(
   db: D1Database,
   key: { type: string; slug: string },
 ): Promise<SemaphoreResourceRecord | null> {
-  const row = await selectResourceByTypeAndSlug(client(db), key);
+  const row = await selectResourceByTypeAndSlug(createD1Client(db), key);
   return row ? rowToResourceRecord(row) : null;
 }
 
@@ -91,7 +87,7 @@ export async function insertResource(
     data: SemaphoreJsonObject;
   },
 ): Promise<SemaphoreResourceRecord> {
-  await insertResourceRow(client(db), {
+  await insertResourceRow(createD1Client(db), {
     type: resource.type,
     slug: resource.slug,
     data: JSON.stringify(resource.data),
@@ -116,7 +112,7 @@ export async function deleteResourceFromDb(
     slug: string;
   },
 ): Promise<boolean> {
-  const result = await deleteResourceByTypeAndSlug(client(db), key);
+  const result = await deleteResourceByTypeAndSlug(createD1Client(db), key);
   return (result.rowsAffected ?? 0) > 0;
 }
 
@@ -128,7 +124,7 @@ export async function selectInventoryByType(
 }
 
 export async function hasInventoryForType(db: D1Database, type: string): Promise<boolean> {
-  const result = await selectResourcePresenceByType(client(db), { type });
+  const result = await selectResourcePresenceByType(createD1Client(db), { type });
   return Boolean(result?.present);
 }
 
@@ -142,7 +138,7 @@ export async function markResourceLeasedInDb(
   },
 ): Promise<boolean> {
   const result = await updateResourceLeased(
-    client(db),
+    createD1Client(db),
     {
       leasedUntil: params.leasedUntil,
       lastAcquiredAt: params.lastAcquiredAt,
@@ -164,7 +160,7 @@ export async function markResourceAvailableInDb(
   },
 ): Promise<void> {
   await updateResourceAvailable(
-    client(db),
+    createD1Client(db),
     {
       lastReleasedAt: params.lastReleasedAt,
     },

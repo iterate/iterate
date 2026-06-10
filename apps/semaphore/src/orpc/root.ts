@@ -30,7 +30,7 @@ function hasValidBearerToken(context: RequestContext): boolean {
   return Boolean(providedToken && providedToken === expectedToken);
 }
 
-const authProcedure = semaphore.middleware(async ({ context, next }) => {
+const requireAuth = semaphore.middleware(async ({ context, next }) => {
   if (!hasValidBearerToken(context)) {
     throw new ORPCError("UNAUTHORIZED", {
       message: "Missing or invalid Authorization header",
@@ -40,6 +40,21 @@ const authProcedure = semaphore.middleware(async ({ context, next }) => {
   return next();
 });
 
+/**
+ * Converts storage and coordinator failures into meaningful HTTP errors.
+ * Applied to every `resources.*` procedure; `__internal.*` stays bare.
+ */
+const mapResourceErrors = semaphore.middleware(async ({ next }) => {
+  try {
+    return await next();
+  } catch (error) {
+    mapResourceError(error);
+  }
+});
+
+// Zod errors thrown inside the ResourceCoordinator durable object cross a
+// workerd JS RPC boundary that rebuilds them as plain `Error`s, so check for
+// the `issues` array structurally instead of relying on `instanceof z.ZodError`.
 function isZodErrorLike(error: unknown): error is { issues: Array<{ message?: string }> } {
   if (!(error instanceof z.ZodError) && !(error instanceof Error)) {
     return false;
@@ -81,158 +96,106 @@ function getCoordinator(type: string) {
 }
 
 const addResourceProcedure = semaphore.resources.add
-  .use(authProcedure)
+  .use(requireAuth)
+  .use(mapResourceErrors)
   .handler(async ({ input }) => {
-    try {
-      const { type, slug, data } = input;
-      const coordinator = getCoordinator(type);
-      const hasActiveLease = await coordinator.hasActiveLease({ type, slug });
-      if (hasActiveLease) {
-        throw new ORPCError("CONFLICT", {
-          message: "Cannot add a resource while an older lease is still active for this slug.",
-        });
-      }
-
-      const created = await insertResource(env.DB, {
-        type,
-        slug,
-        data,
+    const { type, slug, data } = input;
+    const coordinator = getCoordinator(type);
+    const hasActiveLease = await coordinator.hasActiveLease({ type, slug });
+    if (hasActiveLease) {
+      throw new ORPCError("CONFLICT", {
+        message: "Cannot add a resource while an older lease is still active for this slug.",
       });
-      await coordinator.inventoryChanged({ type });
-      return created;
-    } catch (error) {
-      return mapResourceError(error);
     }
+
+    const created = await insertResource(env.DB, { type, slug, data });
+    await coordinator.inventoryChanged({ type });
+    return created;
   });
 
 const deleteResourceProcedure = semaphore.resources.delete
-  .use(authProcedure)
+  .use(requireAuth)
+  .use(mapResourceErrors)
   .handler(async ({ input }) => {
-    try {
-      const { type, slug } = input;
-      const deleted = await deleteResourceFromDb(env.DB, { type, slug });
-      return { deleted };
-    } catch (error) {
-      return mapResourceError(error);
-    }
+    const { type, slug } = input;
+    const deleted = await deleteResourceFromDb(env.DB, { type, slug });
+    return { deleted };
   });
 
 const listResourcesProcedure = semaphore.resources.list
-  .use(authProcedure)
-  .handler(async ({ input }) => {
-    try {
-      return await listResourcesFromDb(env.DB, { type: input.type });
-    } catch (error) {
-      return mapResourceError(error);
-    }
-  });
+  .use(requireAuth)
+  .use(mapResourceErrors)
+  .handler(async ({ input }) => listResourcesFromDb(env.DB, { type: input.type }));
 
 const findResourceProcedure = semaphore.resources.find
-  .use(authProcedure)
+  .use(requireAuth)
+  .use(mapResourceErrors)
   .handler(async ({ input }) => {
-    try {
-      const resource = await findResourceByKey(env.DB, input);
-      if (!resource) {
-        throw new ORPCError("NOT_FOUND", {
-          message: `No resource exists for ${input.type}/${input.slug}.`,
-        });
-      }
-
-      return resource;
-    } catch (error) {
-      return mapResourceError(error);
+    const resource = await findResourceByKey(env.DB, input);
+    if (!resource) {
+      throw new ORPCError("NOT_FOUND", {
+        message: `No resource exists for ${input.type}/${input.slug}.`,
+      });
     }
+
+    return resource;
   });
 
 const acquireResourceProcedure = semaphore.resources.acquire
-  .use(authProcedure)
+  .use(requireAuth)
+  .use(mapResourceErrors)
   .handler(async ({ input }) => {
-    try {
-      const { type, leaseMs, waitMs = 0 } = input;
-      const hasInventory = await hasInventoryForType(env.DB, type);
-      if (!hasInventory) {
-        throw new ORPCError("NOT_FOUND", {
-          message: "No resources are configured for this type.",
-        });
-      }
-
-      const coordinator = getCoordinator(type);
-      const lease = await coordinator.acquire({
-        type,
-        leaseMs,
-        waitMs,
+    const { type, leaseMs, waitMs = 0 } = input;
+    const hasInventory = await hasInventoryForType(env.DB, type);
+    if (!hasInventory) {
+      throw new ORPCError("NOT_FOUND", {
+        message: "No resources are configured for this type.",
       });
-
-      if (!lease) {
-        throw new ORPCError("CONFLICT", {
-          message:
-            waitMs > 0
-              ? "No resource became available before waitMs elapsed."
-              : "No resource is currently available for this type.",
-        });
-      }
-
-      return lease;
-    } catch (error) {
-      return mapResourceError(error);
     }
+
+    const lease = await getCoordinator(type).acquire({ type, leaseMs, waitMs });
+    if (!lease) {
+      throw new ORPCError("CONFLICT", {
+        message:
+          waitMs > 0
+            ? "No resource became available before waitMs elapsed."
+            : "No resource is currently available for this type.",
+      });
+    }
+
+    return lease;
   });
 
 const acquireSpecificResourceProcedure = semaphore.resources.acquireSpecific
-  .use(authProcedure)
+  .use(requireAuth)
+  .use(mapResourceErrors)
   .handler(async ({ input }) => {
-    try {
-      const { type, slug, leaseMs } = input;
-      const hasInventory = await hasInventoryForType(env.DB, type);
-      if (!hasInventory) {
-        throw new ORPCError("NOT_FOUND", {
-          message: "No resources are configured for this type.",
-        });
-      }
-
-      const coordinator = getCoordinator(type);
-      return await coordinator.acquireSpecific({
-        type,
-        slug,
-        leaseMs,
+    const { type, slug, leaseMs } = input;
+    const hasInventory = await hasInventoryForType(env.DB, type);
+    if (!hasInventory) {
+      throw new ORPCError("NOT_FOUND", {
+        message: "No resources are configured for this type.",
       });
-    } catch (error) {
-      return mapResourceError(error);
     }
+
+    return await getCoordinator(type).acquireSpecific({ type, slug, leaseMs });
   });
 
 const renewResourceLeaseProcedure = semaphore.resources.renew
-  .use(authProcedure)
+  .use(requireAuth)
+  .use(mapResourceErrors)
   .handler(async ({ input }) => {
-    try {
-      const { type, slug, leaseId, leaseMs } = input;
-      const coordinator = getCoordinator(type);
-      return await coordinator.renew({
-        type,
-        slug,
-        leaseId,
-        leaseMs,
-      });
-    } catch (error) {
-      return mapResourceError(error);
-    }
+    const { type, slug, leaseId, leaseMs } = input;
+    return await getCoordinator(type).renew({ type, slug, leaseId, leaseMs });
   });
 
 const releaseResourceProcedure = semaphore.resources.release
-  .use(authProcedure)
+  .use(requireAuth)
+  .use(mapResourceErrors)
   .handler(async ({ input }) => {
-    try {
-      const { type, slug, leaseId } = input;
-      const coordinator = getCoordinator(type);
-      const released = await coordinator.release({
-        type,
-        slug,
-        leaseId,
-      });
-      return { released };
-    } catch (error) {
-      return mapResourceError(error);
-    }
+    const { type, slug, leaseId } = input;
+    const released = await getCoordinator(type).release({ type, slug, leaseId });
+    return { released };
   });
 
 /**

@@ -5,6 +5,8 @@ import { useSemaphoreLease } from "./use-semaphore-lease.ts";
 
 const DEFAULT_HEALTHCHECK_PATH = "/api/__internal/health";
 const DEFAULT_TUNNEL_TIMEOUT_MS = 60_000;
+// Local copy of the schema from apps/semaphore/src/contract.ts (kept in sync
+// by hand): packages/shared must not depend on an app workspace.
 const cloudflareTunnelType = "cloudflare-tunnel";
 const CloudflareTunnelData = z.object({
   provider: z.literal(cloudflareTunnelType),

@@ -1,71 +1,25 @@
 import { createORPCClient } from "@orpc/client";
 import { oc, type ContractRouterClient } from "@orpc/contract";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
+import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
 import { z } from "zod";
 
-const INTERNAL_OPENAPI_TAG = "/__internal";
-const SEMAPHORE_KEY_PATTERN = /^(?=.*[a-z])[a-z0-9-]+$/;
+/**
+ * oRPC contract for the semaphore app, plus `createSemaphoreClient` for typed
+ * HTTP access. Everything that talks to semaphore imports from this one file:
+ * the worker implementation (`src/orpc/*`), the seed scripts, the e2e tests,
+ * and the repo-root preview tooling (`scripts/preview/router.ts`).
+ */
+
 const MAX_LEASE_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_WAIT_MS = 5 * 60 * 1000;
 
-const EmptyInput = z.object({}).optional().default({});
-
-const internalContract = oc.router({
-  health: oc
-    .route({ method: "GET", path: "/__internal/health", tags: [INTERNAL_OPENAPI_TAG] })
-    .input(EmptyInput)
-    .output(
-      z.object({
-        ok: z.literal(true),
-        app: z.string(),
-        version: z.string(),
-      }),
-    ),
-  publicConfig: oc
-    .route({ method: "GET", path: "/__internal/public-config", tags: [INTERNAL_OPENAPI_TAG] })
-    .input(EmptyInput)
-    .output(z.record(z.string(), z.unknown())),
-  debug: oc
-    .route({ method: "GET", path: "/__internal/debug", tags: [INTERNAL_OPENAPI_TAG] })
-    .input(EmptyInput)
-    .output(z.record(z.string(), z.unknown())),
-  trpcCliProcedures: oc
-    .route({
-      method: "GET",
-      path: "/__internal/trpc-cli-procedures",
-      tags: [INTERNAL_OPENAPI_TAG],
-    })
-    .input(EmptyInput)
-    .output(
-      z.object({
-        procedures: z.array(z.unknown()),
-      }),
-    ),
-  refreshRegistry: oc
-    .route({ method: "POST", path: "/__internal/refresh-registry", tags: [INTERNAL_OPENAPI_TAG] })
-    .input(
-      z
-        .object({
-          registryBaseUrl: z.url().default("http://iterate.localhost"),
-          baseUrl: z.url().optional(),
-        })
-        .optional()
-        .default({ registryBaseUrl: "http://iterate.localhost" }),
-    )
-    .output(
-      z.object({
-        ok: z.literal(true),
-      }),
-    ),
-});
-
-const semaphoreKeySchema = z
+/** Resource `type` and `slug` share one format: lowercase slugs like `cloudflare-tunnel`. */
+export const semaphoreKeySchema = z
   .string()
   .trim()
   .toLowerCase()
-  .regex(SEMAPHORE_KEY_PATTERN, "must match ^(?=.*[a-z])[a-z0-9-]+$");
-export const semaphoreTypeSchema = semaphoreKeySchema;
-const semaphoreSlugSchema = semaphoreKeySchema;
+  .regex(/^(?=.*[a-z])[a-z0-9-]+$/, "must match ^(?=.*[a-z])[a-z0-9-]+$");
 
 export type SemaphoreJsonObject = Record<string, unknown>;
 
@@ -90,6 +44,9 @@ function isJsonValue(value: unknown): boolean {
   return false;
 }
 
+// Validated with a refinement rather than `z.json()` so the inferred type stays
+// `Record<string, unknown>` instead of pushing a recursive JSONValue type through
+// every handler and Durable Object signature.
 export const semaphoreDataSchema = z
   .record(z.string(), z.unknown())
   .superRefine((value, context) => {
@@ -110,13 +67,12 @@ const semaphoreWaitMsSchema = z
   .int()
   .nonnegative()
   .max(MAX_WAIT_MS, `waitMs must be <= ${MAX_WAIT_MS}`);
-const SemaphoreLeaseState = z.enum(["available", "leased"]);
 
 export const SemaphoreResourceRecord = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
   data: semaphoreDataSchema,
-  leaseState: SemaphoreLeaseState,
+  leaseState: z.enum(["available", "leased"]),
   leasedUntil: z.number().int().positive().nullable(),
   lastAcquiredAt: z.number().int().positive().nullable(),
   lastReleasedAt: z.number().int().positive().nullable(),
@@ -125,55 +81,55 @@ export const SemaphoreResourceRecord = z.object({
 });
 
 export const SemaphoreLeaseRecord = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
   data: semaphoreDataSchema,
   leaseId: z.uuid(),
   expiresAt: z.number().int().positive(),
 });
 
 const AddResourceInput = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
   data: semaphoreDataSchema,
 });
 
 export const DeleteResourceInput = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
 });
 
 const ListResourcesInput = z.object({
-  type: semaphoreTypeSchema.optional(),
+  type: semaphoreKeySchema.optional(),
 });
 
 export const FindResourceInput = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
 });
 
 export const AcquireResourceInput = z.object({
-  type: semaphoreTypeSchema,
+  type: semaphoreKeySchema,
   leaseMs: semaphoreLeaseMsSchema,
   waitMs: semaphoreWaitMsSchema.optional(),
 });
 
 const AcquireSpecificResourceInput = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
   leaseMs: semaphoreLeaseMsSchema,
 });
 
 const RenewResourceLeaseInput = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
   leaseId: z.uuid(),
   leaseMs: semaphoreLeaseMsSchema,
 });
 
 export const ReleaseResourceInput = z.object({
-  type: semaphoreTypeSchema,
-  slug: semaphoreSlugSchema,
+  type: semaphoreKeySchema,
+  slug: semaphoreKeySchema,
   leaseId: z.uuid(),
 });
 
@@ -294,22 +250,19 @@ type CreateSemaphoreClientOptions =
       baseURL?: string;
     };
 
-const FETCH_ONLY_PLACEHOLDER_URL = "https://semaphore.invalid/api";
-
-function resolveSemaphoreOrpcUrl(options: { baseURL?: string; fetch?: SemaphoreFetch }): string {
-  if (options.baseURL) {
-    return new URL("/api", options.baseURL).toString();
-  }
-
-  if (options.fetch) {
-    return FETCH_ONLY_PLACEHOLDER_URL;
-  }
-
-  throw new Error("createSemaphoreClient requires either baseURL or fetch");
-}
-
 export function createSemaphoreClient(options: CreateSemaphoreClientOptions): SemaphoreClient {
-  const url = resolveSemaphoreOrpcUrl(options);
+  if (!options.baseURL && !options.fetch) {
+    throw new Error("createSemaphoreClient requires either baseURL or fetch");
+  }
+
+  // OpenAPILink always needs a URL. When the caller supplies a custom `fetch`
+  // (e.g. a Cloudflare service binding) we use the IANA-reserved `.invalid`
+  // TLD (RFC 2606) so a misconfigured client fails fast instead of reaching a
+  // real host.
+  const url = options.baseURL
+    ? new URL("/api", options.baseURL).toString()
+    : "https://semaphore.invalid/api";
+
   const authFetch: SemaphoreFetch = async (input, init) => {
     const headers = new Headers(init?.headers);
     headers.set("Authorization", `Bearer ${options.apiKey}`);
@@ -320,10 +273,5 @@ export function createSemaphoreClient(options: CreateSemaphoreClientOptions): Se
     });
   };
 
-  const link = new OpenAPILink(semaphoreContract, {
-    url,
-    fetch: authFetch,
-  });
-
-  return createORPCClient(link);
+  return createORPCClient(new OpenAPILink(semaphoreContract, { url, fetch: authFetch }));
 }
