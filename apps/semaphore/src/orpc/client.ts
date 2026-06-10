@@ -3,7 +3,7 @@ import { createORPCClient } from "@orpc/client";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { createRouterClient, type RouterClient } from "@orpc/server";
 import { createIsomorphicFn, getGlobalStartContext } from "@tanstack/react-start";
-import { semaphoreContract } from "@iterate-com/semaphore-contract";
+import { semaphoreContract } from "~/contract.ts";
 import { appRouter } from "~/orpc/root.ts";
 
 export const makeQueryClient = () =>

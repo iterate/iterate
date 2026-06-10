@@ -1,12 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
+import { z } from "zod";
 import {
   AcquireResourceInput,
   DeleteResourceInput,
   ReleaseResourceInput,
   type SemaphoreJsonObject,
   type SemaphoreLeaseRecord,
-} from "@iterate-com/semaphore-contract";
-import { z } from "zod";
+} from "~/contract.ts";
 import type { Env } from "~/env.ts";
 import {
   markResourceAvailableInDb,

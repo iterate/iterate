@@ -22,15 +22,14 @@ const AlchemyEnv = z.object({
  *
  * - Parses `ALCHEMY_*` and `CLOUDFLARE_*` env vars via zod
  * - Loads `APP_CONFIG` + `APP_CONFIG_*` overrides into a typed config object
- *   (see `packages/shared/src/apps/config.ts` for the merge semantics)
  * - Selects state store: local SQLite for dev, Cloudflare KV for deploys
  *   (https://alchemy.run/guides/cloudflare-state-store/)
  *
  * Call `app.finalize()` after all resources have been declared.
  *
  * ```ts
- * import manifest, { AppConfig } from "./src/app.ts";
- * const ctx = await initAlchemy(manifest, AppConfig, process.env);
+ * import { AppConfig } from "./src/config.ts";
+ * const ctx = await initAlchemy("my-app", AppConfig, process.env);
  * // ... declare resources ...
  * await ctx.app.finalize();
  * ```

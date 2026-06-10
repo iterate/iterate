@@ -1,13 +1,18 @@
 import { initLogger } from "evlog";
 import { initWorkersLogger } from "evlog/workers";
-import type { AppContext } from "../apps/types.ts";
 import {
   createPrettyStdoutDrain,
   createRawStdoutDrain,
   installEvlogConsoleFilter,
 } from "./stdout.ts";
 
-type AppLoggingContext = AppContext<any, { logs: { stdoutFormat: "raw" | "pretty" } }>;
+type AppLoggingContext = {
+  config: { logs: { stdoutFormat: "raw" | "pretty" } };
+  manifest: {
+    packageName: string;
+    version: string;
+  };
+};
 
 /**
  * Nitro owns request logger lifecycle, but we still want app config to drive the

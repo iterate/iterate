@@ -2,13 +2,13 @@ import { useEffect, useState, useTransition } from "react";
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { env } from "cloudflare:workers";
+import { toast } from "@iterate-com/ui/components/sonner";
+import { z } from "zod";
 import {
   FindResourceInput,
   type SemaphoreLeaseRecord,
   type SemaphoreResourceRecord,
-} from "@iterate-com/semaphore-contract";
-import { toast } from "@iterate-com/ui/components/sonner";
-import { z } from "zod";
+} from "~/contract.ts";
 import { findResourceByKey } from "~/lib/resource-store.ts";
 
 const operatorTokenStorageKey = "semaphore-operator-token";

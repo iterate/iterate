@@ -54,9 +54,8 @@ OS no longer imports anything from `@iterate-com/shared/apps/*`:
   `alchemy.run.ts` passes the slug string to `initAlchemy`.
 - **Config utilities moved, not duplicated.** `redacted`/`publicValue`/
   `parseAppConfigFromEnv`/`extractPublicConfigSchema` are generic and used by
-  semaphore too, so they moved to `@iterate-com/shared/config` (and evlog to
-  `@iterate-com/shared/evlog`); the old `apps/*` paths are one-line re-export
-  shims so semaphore needs no changes in this PR.
+  semaphore too, so they live in `@iterate-com/shared/config` (and evlog in
+  `@iterate-com/shared/evlog`). The old app-framework config shims are gone.
 - **`AppContext` → `RequestContext`** (`src/request-context.ts`), which _is_
   the TanStack Start request context (the `Register` augmentation lives next
   to the type). It now carries request-scoped state only: config, db, log,
@@ -133,11 +132,9 @@ all our workers enable) `process.env` contains the raw `APP_CONFIG` secret blob
 secret). Confirmed live on both `os.iterate.com` and `semaphore.iterate.com`
 before this PR. Rotate those secrets.
 
-The leak was in the shared `createInternalDebugOutput`
-(`packages/shared/src/apps/internal-router.ts`). OS's inline `__internal`
-router already returns a static `{ runtime: "workerd" }`; this PR additionally
-guts the shared function so apps/semaphore (and any future app still on
-`createAppRouterWithInternal`) stops leaking immediately.
+The leak was in the old shared app internal router helper. OS's inline
+`__internal` router already returns a static `{ runtime: "workerd" }`, and
+semaphore now implements the same static debug response in its local router.
 
 ### 7. Preview smoke test: real agent conversation end to end (2026-06-10)
 

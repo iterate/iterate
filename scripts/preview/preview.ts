@@ -4,11 +4,6 @@ import { request as httpsRequest } from "node:https";
 import { resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
 import { z } from "zod";
-import {
-  isNewStyleCloudflareAppSlug,
-  newStyleCloudflareApps,
-  runNewStyleCloudflareAppAlchemy,
-} from "../../packages/shared/src/apps/new-style-cloudflare-apps.ts";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 import {
@@ -594,33 +589,24 @@ async function readPreviewAppConfig(input: {
   repositoryRoot: string;
   signal?: AbortSignal;
 }) {
-  const isNewStyleApp = isNewStyleCloudflareAppSlug(input.app.slug);
-  const script = isNewStyleApp
-    ? [
-        'import { resolveNewStyleCloudflareAppBaseUrlFromEnv } from "@iterate-com/shared/apps/new-style-cloudflare-apps";',
-        "function parseStringArrayEnv(value) {",
-        "  if (!value?.trim()) return [];",
-        "  const parsed = JSON.parse(value);",
-        "  return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string') : [];",
-        "}",
-        "function parseAppConfigProjectHostnameBases() {",
-        "  if (!process.env.APP_CONFIG?.trim()) return [];",
-        "  const parsed = JSON.parse(process.env.APP_CONFIG);",
-        "  return Array.isArray(parsed.projectHostnameBases) ? parsed.projectHostnameBases.filter((entry) => typeof entry === 'string') : [];",
-        "}",
-        "const config = {",
-        "  baseUrl: resolveNewStyleCloudflareAppBaseUrlFromEnv(process.env) ?? null,",
-        "  projectHostnameBases: (() => {",
-        "    const envBases = parseStringArrayEnv(process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES);",
-        "    return envBases.length > 0 ? envBases : parseAppConfigProjectHostnameBases();",
-        "  })(),",
-        "};",
-        "console.log(JSON.stringify(config));",
-      ].join("\n")
-    : [
-        "const config = { baseUrl: process.env.APP_CONFIG_BASE_URL ?? null, projectHostnameBases: [] };",
-        "console.log(JSON.stringify(config));",
-      ].join("\n");
+  const script = [
+    "function parseStringArrayEnv(value) {",
+    "  if (!value?.trim()) return [];",
+    "  const parsed = JSON.parse(value);",
+    "  return Array.isArray(parsed) ? parsed.filter((entry) => typeof entry === 'string') : [];",
+    "}",
+    "function parseAppConfig() {",
+    "  if (!process.env.APP_CONFIG?.trim()) return {};",
+    "  return JSON.parse(process.env.APP_CONFIG);",
+    "}",
+    "const appConfig = parseAppConfig();",
+    "const envBases = parseStringArrayEnv(process.env.APP_CONFIG_PROJECT_HOSTNAME_BASES);",
+    "const config = {",
+    "  baseUrl: process.env.APP_CONFIG_BASE_URL || appConfig.baseUrl || null,",
+    "  projectHostnameBases: envBases.length > 0 ? envBases : Array.isArray(appConfig.projectHostnameBases) ? appConfig.projectHostnameBases.filter((entry) => typeof entry === 'string') : [],",
+    "};",
+    "console.log(JSON.stringify(config));",
+  ].join("\n");
   const result = await runCommand({
     args: [
       "run",
@@ -629,9 +615,8 @@ async function readPreviewAppConfig(input: {
       "--config",
       input.dopplerConfig,
       "--",
-      isNewStyleApp ? "pnpm" : "node",
-      ...(isNewStyleApp ? ["exec", "tsx", "-e"] : []),
-      ...(!isNewStyleApp ? ["-e"] : []),
+      "node",
+      "-e",
       script,
     ],
     command: "doppler",
@@ -661,17 +646,6 @@ async function runPreviewAlchemyCommand(input: {
   repositoryRoot: string;
   signal?: AbortSignal;
 }) {
-  if (isNewStyleCloudflareAppSlug(input.app.slug)) {
-    return await runNewStyleCloudflareAppAlchemy({
-      app: newStyleCloudflareApps[input.app.slug],
-      commandEnvironment: input.commandEnvironment,
-      dopplerConfig: input.dopplerConfig,
-      operation: input.operation,
-      repositoryRoot: input.repositoryRoot,
-      signal: input.signal,
-    });
-  }
-
   return await runCommand({
     args: [
       "run",
@@ -681,7 +655,9 @@ async function runPreviewAlchemyCommand(input: {
       input.dopplerConfig,
       "--",
       "pnpm",
-      input.operation === "up" ? "alchemy:up" : "alchemy:down",
+      "tsx",
+      "./alchemy.run.ts",
+      ...(input.operation === "down" ? ["--destroy"] : []),
     ],
     command: "doppler",
     environment: input.commandEnvironment,
