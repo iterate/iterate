@@ -380,8 +380,22 @@ const providerEndpoints: Record<VoiceAgentProvider, ProviderEndpoint> = {
         },
         inputAudioTranscription: {},
         outputAudioTranscription: {},
+        // Gemini Live v1beta rejects toolConfig/functionCallingConfig anywhere in
+        // BidiGenerateContentSetup (close code 1007), so "required" tool choice
+        // can only be enforced through the system instruction.
         systemInstruction: {
-          parts: [{ text: systemInstructionWithMessageAgent(setup.systemInstruction) }],
+          parts: [
+            {
+              text: [
+                systemInstructionWithMessageAgent(setup.systemInstruction),
+                ...(setup.messageAgentToolChoice === "required"
+                  ? [
+                      "You MUST call the messageAgent tool for every caller request before responding. Never answer a substantive request without calling it first.",
+                    ]
+                  : []),
+              ].join("\n\n"),
+            },
+          ],
         },
         tools: [
           {
@@ -394,16 +408,6 @@ const providerEndpoints: Record<VoiceAgentProvider, ProviderEndpoint> = {
             ],
           },
         ],
-        ...(setup.messageAgentToolChoice === "required"
-          ? {
-              toolConfig: {
-                functionCallingConfig: {
-                  mode: "ANY",
-                  allowedFunctionNames: ["messageAgent"],
-                },
-              },
-            }
-          : {}),
       },
     }),
     handleMessage: handleGeminiMessage,

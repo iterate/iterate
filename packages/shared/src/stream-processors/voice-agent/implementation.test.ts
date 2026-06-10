@@ -100,7 +100,7 @@ describe("createVoiceAgentProcessor", () => {
     );
   });
 
-  it("forces Gemini to call messageAgent when configured as required", async () => {
+  it("forces Gemini to call messageAgent through the system instruction when required", async () => {
     const harness = createHarness(VOICE_AGENT_PROVIDER_GEMINI_LIVE, {
       messageAgentToolChoice: "required",
     });
@@ -108,16 +108,15 @@ describe("createVoiceAgentProcessor", () => {
     void harness.ingestText("Ask the agent to check the repo.");
 
     await waitFor(() => harness.socket.sent.length === 1);
-    expect(harness.socket.sent[0]).toMatchObject({
-      setup: {
-        toolConfig: {
-          functionCallingConfig: {
-            mode: "ANY",
-            allowedFunctionNames: ["messageAgent"],
-          },
-        },
-      },
-    });
+    // Gemini Live v1beta rejects toolConfig in setup, so "required" rides on the
+    // system instruction instead.
+    const setup = harness.socket.sent[0] as {
+      setup: { systemInstruction: { parts: Array<{ text: string }> }; toolConfig?: unknown };
+    };
+    expect(setup.setup.toolConfig).toBeUndefined();
+    expect(setup.setup.systemInstruction.parts[0]?.text).toContain(
+      "MUST call the messageAgent tool",
+    );
   });
 
   it.each([
