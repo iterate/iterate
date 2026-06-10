@@ -213,6 +213,34 @@ export class StreamBrowserDatabase implements Disposable {
     await this.exec(`VACUUM`);
   }
 
+  /**
+   * The server stream incarnation (its `created` identity) this mirror was last built
+   * against, or undefined if never recorded. Used to detect a server reset()/reincarnation
+   * so the mirror is rebuilt rather than reconciled by an offset that restarted.
+   */
+  async readMirrorIncarnation(): Promise<string | undefined> {
+    await this.#ensureMirrorMetaSchema();
+    const [row] = await this.exec(
+      `SELECT value FROM mirror_meta WHERE key = 'incarnation' LIMIT 1`,
+    );
+    return typeof row?.value === "string" ? row.value : undefined;
+  }
+
+  async writeMirrorIncarnation(incarnation: string): Promise<void> {
+    await this.#ensureMirrorMetaSchema();
+    await this.exec(
+      `INSERT INTO mirror_meta (key, value) VALUES ('incarnation', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      [incarnation],
+    );
+  }
+
+  async #ensureMirrorMetaSchema(): Promise<void> {
+    await this.exec(
+      `CREATE TABLE IF NOT EXISTS mirror_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+    );
+  }
+
   query(sql: string, params: SqlValue[]): SqliteQueryHandle {
     const key = `${sql}\0${JSON.stringify(params)}`;
     const existing = this.#queries.get(key);
@@ -249,15 +277,25 @@ export class StreamBrowserDatabase implements Disposable {
           return () => {
             entry.listeners.delete(listener);
             if (entry.listeners.size > 0) return;
-            entry.gcTimer = setTimeout(() => {
-              if (entry.listeners.size === 0) this.#queries.delete(key);
-            }, 0);
+            this.#armQueryGc(key, entry);
           };
         },
       },
     };
     this.#queries.set(key, entry);
+    // Arm GC at creation too: a `query()` whose handle is read for a snapshot but never
+    // subscribed (e.g. a render that unmounts before useSyncExternalStore subscribes)
+    // would otherwise leak in `#queries` forever. subscribe() cancels this timer.
+    this.#armQueryGc(key, entry);
     return entry.handle;
+  }
+
+  #armQueryGc(key: string, entry: RegisteredQuery) {
+    if (entry.gcTimer !== undefined) clearTimeout(entry.gcTimer);
+    entry.gcTimer = setTimeout(() => {
+      entry.gcTimer = undefined;
+      if (entry.listeners.size === 0) this.#queries.delete(key);
+    }, 0);
   }
 
   onChange(listener: (change: StreamDbChange) => void) {
@@ -266,28 +304,34 @@ export class StreamBrowserDatabase implements Disposable {
   }
 
   async #runQuery(entry: RegisteredQuery): Promise<void> {
+    const previous = entry.snapshot;
+    let next: SqliteQuerySnapshot<Record<string, SqlValue>>;
     try {
       const data = await this.exec(entry.sql, entry.params);
-      entry.snapshot = { data, status: "ok", error: undefined };
+      next = { data, status: "ok", error: undefined };
     } catch (error) {
       if (isMissingTableError(error)) {
         // A view's table may not exist until its processor's first write creates it. Treat
         // that as an empty result (count 0 / no rows) rather than a surfaced error.
-        entry.snapshot = { data: emptyTableRows(entry.sql), status: "ok", error: undefined };
-        for (const listener of entry.listeners) listener();
-        return;
+        next = { data: emptyTableRows(entry.sql), status: "ok", error: undefined };
+      } else {
+        console.error(`[stream-browser-db ${this.streamPath}] SQLite query failed`, {
+          error,
+          params: entry.params,
+          sql: entry.sql,
+        });
+        next = {
+          ...entry.snapshot,
+          status: "error",
+          error: error instanceof Error ? error : new Error(String(error)),
+        };
       }
-      console.error(`[stream-browser-db ${this.streamPath}] SQLite query failed`, {
-        error,
-        params: entry.params,
-        sql: entry.sql,
-      });
-      entry.snapshot = {
-        ...entry.snapshot,
-        status: "error",
-        error: error instanceof Error ? error : new Error(String(error)),
-      };
     }
+    entry.snapshot = next;
+    // Skip notifying when the result is unchanged: useSyncExternalStore re-reads the
+    // snapshot on every notify, so spurious notifications churn React re-renders even
+    // though nothing the view sees changed.
+    if (snapshotsEqual(previous, next)) return;
     for (const listener of entry.listeners) listener();
   }
 
@@ -311,7 +355,12 @@ export class StreamBrowserDatabase implements Disposable {
 
   #onChange(change: StreamDbChange) {
     this.#infoRefresh = undefined;
-    for (const entry of this.#queries.values()) void this.#runQuery(entry);
+    for (const entry of this.#queries.values()) {
+      // Skip entries no view is observing (and ones that never started): re-running them
+      // wastes a worker round trip and they will run on first subscribe anyway.
+      if (entry.listeners.size === 0 || !entry.started) continue;
+      void this.#runQuery(entry);
+    }
     for (const listener of this.#changeListeners) listener(change);
   }
 
@@ -391,6 +440,30 @@ function isSqlValue(value: unknown): value is SqlValue {
 
 function isMissingTableError(error: unknown) {
   return error instanceof Error && error.message.includes("no such table");
+}
+
+/**
+ * Structural equality for query snapshots, used to suppress redundant listener
+ * notifications. Rows are plain `Record<string, SqlValue>` objects, so a stable JSON
+ * serialization of the `data` array is a sufficient and cheap deep comparison (values are
+ * strings/numbers/bigint/null or numeric arrays; column order is stable for a fixed query).
+ */
+function snapshotsEqual(
+  a: SqliteQuerySnapshot<Record<string, SqlValue>>,
+  b: SqliteQuerySnapshot<Record<string, SqlValue>>,
+): boolean {
+  if (a === b) return true;
+  if (a.status !== b.status) return false;
+  if (a.error !== b.error) return false;
+  if (a.data === b.data) return true;
+  if (a.data.length !== b.data.length) return false;
+  return serializeRows(a.data) === serializeRows(b.data);
+}
+
+function serializeRows(rows: Record<string, SqlValue>[]): string {
+  return JSON.stringify(rows, (_key, value) =>
+    typeof value === "bigint" ? `__bigint__${value.toString()}` : value,
+  );
 }
 
 function emptyTableRows(sql: string): Record<string, SqlValue>[] {

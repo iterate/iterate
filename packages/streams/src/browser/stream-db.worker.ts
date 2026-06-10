@@ -113,7 +113,16 @@ async function batch(statements: Statement[], transaction: boolean): Promise<voi
     for (const statement of statements) await exec(statement.sql, statement.params);
     if (transaction) await sqlite3.exec(db, "COMMIT;");
   } catch (error) {
-    if (transaction) await sqlite3.exec(db, "ROLLBACK;");
+    // Roll back in its own try/catch: a ROLLBACK failure must NOT replace the original
+    // error, or withBusyRetry/isBusyError can no longer classify the real busy error and
+    // would stop retrying. Swallow (log) the rollback error and rethrow the original.
+    if (transaction) {
+      try {
+        await sqlite3.exec(db, "ROLLBACK;");
+      } catch (rollbackError) {
+        console.error("[stream-db.worker] ROLLBACK failed after batch error", rollbackError);
+      }
+    }
     throw error;
   }
 }
