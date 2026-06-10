@@ -412,6 +412,15 @@ describe("stream capnweb protocol", () => {
     const path = e2eStreamPathLabel("stream-capnweb-anon-sub");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
+    // Lazy init: initialize the stream first (created@1, woken@2, this@3) so the subscriptions
+    // below start from maxOffset and observe only events appended after they subscribe.
+    await stream.stream.append({
+      event: {
+        type: "test.stream.capnweb-anon-sub-init",
+        payload: { path },
+      },
+    });
+
     const callbackA = new TestSubscriptionCallback();
     const callbackB = new TestSubscriptionCallback();
     const first = await stream.stream.subscribe({

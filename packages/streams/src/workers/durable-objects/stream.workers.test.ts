@@ -23,9 +23,9 @@ import { PublicStreamRpcTarget, type Stream } from "./stream.ts";
 const STREAM = (env as unknown as { STREAM: DurableObjectNamespace<Stream> }).STREAM;
 
 // Each test uses a fresh DO name. Storage is lazy: a never-appended stream has
-// no events. The first append prepends `created` (offset 1), so the caller's
-// first event is offset 2. `woken` is only appended when an already-initialized
-// stream wakes on a new incarnation (see the lazy-initialization tests below).
+// no events. The first append prepends `created` (offset 1) + `woken` (offset
+// 2), so the caller's first event is offset 3. Each later incarnation appends
+// its own `woken` on wake (see the lazy-initialization tests below).
 let counter = 0;
 function freshStream() {
   counter += 1;
@@ -193,20 +193,19 @@ describe("Stage 2 — lazy initialization", () => {
     });
   });
 
-  it("the first append prepends `created` at offset 1 and returns only the caller's event", async () => {
+  it("the first append prepends `created` + `woken` and returns only the caller's event", async () => {
     await runInDurableObject(freshStream(), async (stream) => {
       const committed = await stream.append({ event: { type: "test.first", payload: { n: 1 } } });
-      // The caller gets back their own event at offset 2, not the prepended created.
+      // The caller gets back their own event at offset 3, after created + woken.
       expect(committed.type).toBe("test.first");
-      expect(committed.offset).toBe(2);
+      expect(committed.offset).toBe(3);
 
       const events = await stream.getEvents();
       expect(events.map((e) => [e.offset, e.type])).toEqual([
         [1, "events.iterate.com/stream/created"],
-        [2, "test.first"],
+        [2, "events.iterate.com/stream/woken"],
+        [3, "test.first"],
       ]);
-      // No `woken` was written on the first boot.
-      expect(events.some((e) => e.type === "events.iterate.com/stream/woken")).toBe(false);
     });
   });
 
@@ -216,15 +215,17 @@ describe("Stage 2 — lazy initialization", () => {
     const stub = STREAM.getByName(name);
     await stub.append({ event: { type: "test.init", payload: {} } });
 
+    // The initializing incarnation logged one woken (offset 2).
     const before = (await stub.getEvents()) as StreamEvent[];
-    expect(before.some((e) => e.type === "events.iterate.com/stream/woken")).toBe(false);
+    expect(before.filter((e) => e.type === "events.iterate.com/stream/woken")).toHaveLength(1);
 
     // Abort the incarnation; the aborted stub is poisoned, so reach the fresh
     // incarnation through a new stub for the same DO name.
     await stub.kill().catch(() => undefined);
 
+    // The new incarnation appended its own woken on wake.
     const after = (await STREAM.getByName(name).getEvents()) as StreamEvent[];
     const woken = after.filter((e) => e.type === "events.iterate.com/stream/woken");
-    expect(woken).toHaveLength(1);
+    expect(woken).toHaveLength(2);
   });
 });

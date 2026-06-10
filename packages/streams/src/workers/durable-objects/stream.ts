@@ -70,11 +70,12 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     this.#coreProcessorState = this.readCoreProcessorState();
 
     // An uninitialized stream stays completely empty: no storage, no `created`,
-    // no `woken`, nothing to reconcile. The first append initializes it (see
-    // `#appendBatchHere`). An already-initialized stream waking up records the
-    // incarnation and restores any outbound subscriptions it should have —
-    // without this, a stream that wakes with configured subscriptions but no new
-    // appends never reconnects.
+    // no `woken`, nothing to reconcile — connecting to a stream you never append
+    // to leaves no trace. The first append initializes it with `created` +
+    // `woken` (see `#appendBatchHere`). An already-initialized stream waking up
+    // records this incarnation's `woken` and restores any outbound subscriptions
+    // it should have — without this, a stream that wakes with configured
+    // subscriptions but no new appends never reconnects.
     if (this.#coreProcessorState.maxOffset > 0) {
       this.append({
         event: {
@@ -105,16 +106,21 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 
   /**
-   * The `created` event input for this stream, derived from its DO name
-   * (`namespace:/some/stream/path`). Prepended by the first append.
+   * The events the first append prepends to lazily initialize a stream:
+   * `created` (offset 1, derived from the DO name `namespace:/some/stream/path`)
+   * then `woken` for the initializing incarnation. Later incarnations append
+   * their own `woken` from the constructor.
    */
-  #createdEventInput(): StreamEventInput {
+  #initEventInputs(): StreamEventInput[] {
     if (!this.ctx.id.name) throw new Error("ctx.id.name is falsey - this should never happen");
     const [namespace, path] = this.ctx.id.name.split(":");
-    return {
-      type: "events.iterate.com/stream/created",
-      payload: { namespace, path },
-    };
+    return [
+      { type: "events.iterate.com/stream/created", payload: { namespace, path } },
+      {
+        type: "events.iterate.com/stream/woken",
+        payload: { incarnationId: crypto.randomUUID() },
+      },
+    ];
   }
 
   #createEventsTable(): void {
@@ -402,18 +408,19 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }
 
   #appendBatchHere(args: { events: StreamEventInput[] }): StreamEvent[] {
-    // Lazy initialization: the first real append creates storage and prepends the
-    // `created` event (offset 1). A never-appended stream has no tables and no
-    // events; an empty append leaves it that way.
+    // Lazy initialization: the first real append creates storage and prepends
+    // `created` (offset 1) + `woken` (offset 2). A never-appended stream has no
+    // tables and no events; an empty append leaves it that way.
     let inputEvents = args.events;
-    let prependedCreated = false;
+    let prependedCount = 0;
     if (
       this.#coreProcessorState.maxOffset === 0 &&
       inputEvents.length > 0 &&
       inputEvents[0]?.type !== "events.iterate.com/stream/created"
     ) {
-      inputEvents = [this.#createdEventInput(), ...inputEvents];
-      prependedCreated = true;
+      const init = this.#initEventInputs();
+      inputEvents = [...init, ...inputEvents];
+      prependedCount = init.length;
     }
     if (inputEvents.length > 0 && !this.#storageReady) {
       this.#ensureStorageSchema();
@@ -515,9 +522,10 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
       this.#reconcile();
     }
 
-    // Return only the caller's events, input-aligned. A `created` event we
-    // prepended for lazy init is committed but is not part of the caller's batch.
-    return prependedCreated ? events.slice(1) : events;
+    // Return only the caller's events, input-aligned. The `created`/`woken`
+    // events we prepended for lazy init are committed but are not part of the
+    // caller's batch.
+    return prependedCount > 0 ? events.slice(prependedCount) : events;
   }
 
   getEvent(
