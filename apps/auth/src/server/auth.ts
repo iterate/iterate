@@ -75,13 +75,13 @@ export const auth = betterAuth({
           // Email-domain promotion is safe because password signup is disabled:
           // both remaining sign-in methods (Google, email OTP) prove mailbox
           // ownership before this hook runs.
-          const superadminAllowlist = parseSignupAllowlist(env.SUPERADMIN_ALLOWLIST);
-          const isSuperadmin = matchesSignupAllowlist(email, superadminAllowlist);
+          const platformAdminAllowlist = parseSignupAllowlist(env.ADMIN_ALLOWLIST);
+          const isPlatformAdmin = matchesSignupAllowlist(email, platformAdminAllowlist);
 
           return {
             data: {
               ...user,
-              role: isSuperadmin ? "admin" : user.role,
+              role: isPlatformAdmin ? "admin" : user.role,
               image: user.image || generateDefaultAvatar(email),
             },
           };

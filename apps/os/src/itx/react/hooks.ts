@@ -2,10 +2,10 @@
 // stream-shaped (lists, settings). The typed handle IS the contract: there is
 // no generated client, queryFn just receives a connected handle.
 //
-//   const streams = useItxQuery({
+//   const rootState = useItxQuery({
 //     project: projectSlug,
-//     queryKey: itxKey.project(projectSlug, "streams", "list"),
-//     queryFn: (itx) => itx.streams.list(),
+//     queryKey: itxKey.project(projectSlug, "streams", "state", "/"),
+//     queryFn: (itx) => itx.streams.get("/").getState(),
 //   });
 //
 //   const create = useItxMutation({
@@ -25,6 +25,7 @@ import {
 import type { RpcStub } from "capnweb";
 import type { Itx } from "../handle.ts";
 import { useItxClient } from "./context.ts";
+import { getItxErrorCode } from "./errors.ts";
 
 /** A connected handle as queryFn/mutationFn receive it. */
 export type ItxHandle = RpcStub<Itx>;
@@ -55,6 +56,14 @@ export function useItxQuery<TData>(options: UseItxQueryOptions<TData>): UseQuery
   const client = useItxClient();
   const { project, queryFn, ...queryOptions } = options;
   return useQuery({
+    // Retry only what a retry could fix: code-less errors (socket/connection
+    // hiccups) and INTERNAL. Coded kernel failures (NOT_FOUND, FORBIDDEN,
+    // CONFLICT, BAD_REQUEST) are deterministic — surface them immediately
+    // instead of holding the pending state through retries.
+    retry: (failureCount, error) => {
+      const code = getItxErrorCode(error);
+      return (code === undefined || code === "INTERNAL") && failureCount < 1;
+    },
     ...queryOptions,
     queryFn: async () => await queryFn(await client.project(project)),
   });

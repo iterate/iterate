@@ -29,6 +29,7 @@ import { lookupIngressRule } from "~/ingress/lookup.ts";
 import { handleMcpFetch } from "~/domains/inbound-mcp-server/mcp-handler.ts";
 import { handleArtifactEventsBatch } from "~/domains/repos/artifact-events-queue-handler.ts";
 import { handleItxFetch, handleProjectHostItxFetch } from "~/itx/fetch.ts";
+import { handleAdminStreamRpcFetch } from "~/domains/streams/admin-stream-rpc.ts";
 import { handleProjectStreamRpcFetch } from "~/domains/streams/project-stream-rpc.ts";
 import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
 
@@ -36,7 +37,7 @@ import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
 // module so the runtime can find the classes the bindings refer to:
 // https://developers.cloudflare.com/durable-objects/get-started/
 export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
-export { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
+export { CodemodeSession } from "~/durable-objects/codemode-session-tombstone.ts";
 export { DebugAppendChainSubscriber } from "~/durable-objects/debug-append-chain-subscriber.ts";
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
@@ -48,14 +49,14 @@ export { CaptunServerShard };
 export { PackageStream as StreamDurableObject };
 
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
-export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
-export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
+export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-capability.ts";
+export { AiCapability, OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { BindingCapability, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
+export { McpClient } from "~/itx/caps/mcp-client.ts";
 export { ContextDO } from "~/itx/context-do.ts";
 export { ItxCapIngress } from "~/itx/http.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
-export { OutboundMcpFromOurClientCapability } from "~/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
 export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
@@ -149,6 +150,14 @@ export default {
 
         const streamRpcResponse = await handleProjectStreamRpcFetch({ context, env, request });
         if (streamRpcResponse) return streamRpcResponse;
+
+        const adminStreamRpcResponse = await handleAdminStreamRpcFetch({
+          config: requestConfig,
+          context,
+          env,
+          request,
+        });
+        if (adminStreamRpcResponse) return adminStreamRpcResponse;
 
         const itxResponse = await handleItxFetch({ config, context, env, request });
         if (itxResponse) return itxResponse;

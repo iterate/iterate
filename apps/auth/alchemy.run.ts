@@ -6,7 +6,7 @@ import { slugify } from "@iterate-com/shared/slugify";
 import { z } from "zod/v4";
 
 const APP_NAME = "auth";
-const SUPERADMIN_SEED_SQL_PATH = "./.alchemy/generated/auth-superadmin-seed.sql";
+const ADMIN_SEED_SQL_PATH = "./.alchemy/generated/auth-admin-seed.sql";
 
 const AlchemyEnv = z.object({
   ALCHEMY_PASSWORD: z.string().trim().min(1, "ALCHEMY_PASSWORD is required"),
@@ -47,7 +47,7 @@ const AlchemyEnv = z.object({
   RESEND_BOT_DOMAIN: z.string(),
   RESEND_BOT_API_KEY: z.string(),
   SIGNUP_ALLOWLIST: z.string(),
-  SUPERADMIN_ALLOWLIST: z.string().default("*@nustom.com"),
+  ADMIN_ALLOWLIST: z.string().default("*@nustom.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: z.string().optional(),
   GOOGLE_CLIENT_ID: z.string(),
   GOOGLE_CLIENT_SECRET: z.string(),
@@ -74,11 +74,11 @@ const workerName = slugify(`${APP_NAME}-${app.stage}`);
 const emailOtpEnabled =
   alchemyEnv.VITE_ENABLE_EMAIL_OTP_SIGNIN?.trim() || (app.stage.startsWith("dev") ? "true" : "");
 
-await Exec("render-superadmin-seed", {
-  command: `tsx ./scripts/render-superadmin-seed.ts ${SUPERADMIN_SEED_SQL_PATH}`,
+await Exec("render-admin-seed", {
+  command: `tsx ./scripts/render-admin-seed.ts ${ADMIN_SEED_SQL_PATH}`,
   env: {
     SERVICE_AUTH_TOKEN: alchemy.secret(alchemyEnv.SERVICE_AUTH_TOKEN),
-    SUPERADMIN_ALLOWLIST: alchemyEnv.SUPERADMIN_ALLOWLIST,
+    ADMIN_ALLOWLIST: alchemyEnv.ADMIN_ALLOWLIST,
   },
   cwd: import.meta.dirname,
 });
@@ -86,7 +86,7 @@ await Exec("render-superadmin-seed", {
 const DB = await D1Database("auth-db", {
   name: `${workerName}-auth-db`,
   migrationsDir: "./src/server/db/migrations",
-  importFiles: [SUPERADMIN_SEED_SQL_PATH],
+  importFiles: [ADMIN_SEED_SQL_PATH],
 });
 
 const worker = await TanStackStart(APP_NAME, {
@@ -100,7 +100,7 @@ const worker = await TanStackStart(APP_NAME, {
     RESEND_BOT_DOMAIN: alchemy.secret(alchemyEnv.RESEND_BOT_DOMAIN),
     RESEND_BOT_API_KEY: alchemy.secret(alchemyEnv.RESEND_BOT_API_KEY),
     SIGNUP_ALLOWLIST: alchemy.secret(alchemyEnv.SIGNUP_ALLOWLIST),
-    SUPERADMIN_ALLOWLIST: alchemy.secret(alchemyEnv.SUPERADMIN_ALLOWLIST),
+    ADMIN_ALLOWLIST: alchemy.secret(alchemyEnv.ADMIN_ALLOWLIST),
     VITE_ENABLE_EMAIL_OTP_SIGNIN: alchemy.secret(emailOtpEnabled),
     GOOGLE_CLIENT_ID: alchemy.secret(alchemyEnv.GOOGLE_CLIENT_ID),
     GOOGLE_CLIENT_SECRET: alchemy.secret(alchemyEnv.GOOGLE_CLIENT_SECRET),

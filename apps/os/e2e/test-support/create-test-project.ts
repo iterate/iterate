@@ -11,7 +11,6 @@ import {
   uniqueSuffix,
   requireAdminBearerToken,
 } from "./os-client.ts";
-import { CodemodeBuilder } from "./codemode-builder.ts";
 
 type Fetch = Parameters<typeof createCaptunTunnel>[0]["fetch"];
 
@@ -59,11 +58,6 @@ export async function createTestProjectFixture<
     /** recommended test stream path - arbitrary, but by convention mirrors test file + name as its path (`/${relativeFilePath}/${describeSlug}/${testSlug}`)  */
     streamPath,
     slugPrefix,
-    codemode: new CodemodeBuilder(project.os, {
-      projectSlugOrId: project.project.slug,
-      providers: [],
-      streamPath,
-    }),
     /** strongly-typed event constructor for the given processor contracts */
     event: (event: ProcessorContractEvent<ProcessorContracts>) => event,
     /** shorthand for appending an event to the test's associated project + stream */

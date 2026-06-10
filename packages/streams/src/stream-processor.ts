@@ -366,14 +366,21 @@ export abstract class StreamProcessor<
       await Promise.all(blockingWork);
     } catch (error) {
       // A failed batch must still settle work it already registered so nothing
-      // rejects unobserved. The checkpoint is not written; the batch retries.
+      // rejects unobserved. The checkpoint is not written, so the batch stays
+      // retryable — the host re-handshakes from the checkpoint on failure and
+      // the stream replays it (see createStreamProcessorHost).
       await Promise.allSettled(blockingWork);
       throw error;
     }
 
+    // Persist before advancing in-memory state. If the durable write fails, the
+    // batch must stay retryable: the redelivered batch re-reduces from the old
+    // state and tries the write again. Advancing #state/#checkpointOffset first
+    // would make the retry a silent no-op (every event filtered out, nothing
+    // re-saved), so a transient write failure would lose the batch durably.
+    await this.#writeState({ offset: checkpointOffset, state });
     this.#state = state;
     this.#checkpointOffset = checkpointOffset;
-    await this.#saveSnapshot();
   }
 
   // keepAliveWhile is fire-and-forget from the host's point of view (it only
@@ -418,12 +425,5 @@ export abstract class StreamProcessor<
   #getState(): ProcessorState<Contract> {
     this.#state ??= getInitialProcessorState(this.contract);
     return this.#state;
-  }
-
-  async #saveSnapshot(): Promise<void> {
-    await this.#writeState({
-      offset: this.#checkpointOffset,
-      state: this.#getState(),
-    });
   }
 }

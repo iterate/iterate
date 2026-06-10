@@ -14,79 +14,25 @@ on:
       - reopened
       - synchronize
       - closed
+    paths:
+      - .github/workflows/cloudflare-previews.yml
+      - .github/ts-workflows/workflows/cloudflare-previews.ts
+      - packages/shared/**
+      - packages/ui/**
+      - packages/mock-http-proxy/**
+      - scripts/preview/**
+      - apps/iterate-com/**
+      - apps/auth-example/**
+      - apps/os/**
+      - apps/os-contract/**
+      - apps/auth/**
+      - apps/auth-contract/**
+      - packages/streams/**
+      - apps/semaphore/**
 jobs:
-  scope:
-    runs-on: depot-ubuntu-24.04-32
-    outputs:
-      should_run: ${{ steps.should_run_preview.outputs.result }}
-    steps:
-      - name: should_run_preview
-        id: should_run_preview
-        uses: actions/github-script@v7
-        with:
-          result-encoding: string
-          script: |
-            github.log = { ...console, debug: () => {} };
-            const vars = { github, context, core, glob, io, require };
-            const previewPaths = [
-              ".github/workflows/cloudflare-previews.yml",
-              ".github/ts-workflows/workflows/cloudflare-previews.ts",
-              "packages/shared/**",
-              "packages/ui/**",
-              "packages/mock-http-proxy/**",
-              "scripts/preview/**",
-              "apps/iterate-com/**",
-              "apps/auth-example/**",
-              "apps/os/**",
-              "apps/os-contract/**",
-              "apps/auth/**",
-              "apps/auth-contract/**",
-              "packages/streams/**",
-              "apps/semaphore/**",
-            ];
-            const __handler = async function should_run_preview({ context, github }) {
-              const pullRequest = context.payload.pull_request;
-              if (!pullRequest) {
-                return "false";
-              }
-
-              if (context.payload.action === "closed") {
-                return "true";
-              }
-
-              const files = [];
-              let page = 1;
-
-              while (true) {
-                const response = await github.rest.pulls.listFiles({
-                  owner: context.repo.owner,
-                  page,
-                  per_page: 100,
-                  pull_number: pullRequest.number,
-                  repo: context.repo.repo,
-                });
-
-                files.push(...response.data.map((file) => ({ filename: file.filename })));
-                if (response.data.length < 100) {
-                  break;
-                }
-
-                page += 1;
-              }
-
-              const matchesPreviewPath = (filename) =>
-                previewPaths.some((pattern) =>
-                  pattern.endsWith("/**") ? filename.startsWith(pattern.slice(0, -2)) : filename === pattern,
-                );
-
-              return files.some((file) => matchesPreviewPath(file.filename)) ? "true" : "false";
-            };
-            return __handler(vars);
   preview:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed'
-    name: Preview / deploy
+    if: github.event.action != 'closed'
+    name: Preview / deploy + e2e
     runs-on: depot-ubuntu-24.04-32
     concurrency:
       group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
@@ -145,35 +91,6 @@ jobs:
             --repository-full-name "${{ github.repository }}" \
             --is-fork "${{ github.event.pull_request.head.repo.fork && 'true' || 'false' }}" \
             --workflow-run-url "$WORKFLOW_RUN_URL"
-  e2e:
-    needs:
-      - scope
-      - preview
-    if: needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true
-    name: Preview / e2e
-    runs-on: depot-ubuntu-24.04-32
-    concurrency:
-      group: cloudflare-preview-lifecycle-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - name: Install dependencies
-        run: pnpm install
-      - name: Install Doppler CLI
-        run: |-
-          for i in 1 2 3; do curl -sfLS https://cli.doppler.com/install.sh | sh -s -- --no-package-manager && break; echo "Attempt $i failed, retrying in 5s..."; sleep 5; done
-          doppler --version || { echo 'Failed to install Doppler CLI after 3 attempts'; exit 1; }
-        if: github.event.pull_request.head.repo.fork != true
       - if: github.event.pull_request.head.repo.fork != true
         name: Preview / e2e
         env:
@@ -189,9 +106,7 @@ jobs:
             --repository-full-name "${{ github.repository }}" \
             --workflow-run-url "$WORKFLOW_RUN_URL"
   cleanup:
-    needs:
-      - scope
-    if: needs.scope.outputs.should_run == 'true' && github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true
     name: Preview / cleanup
     runs-on: depot-ubuntu-24.04-32
     concurrency:

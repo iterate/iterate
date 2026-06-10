@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { StreamCursor, Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
 import { ItxStream, type ItxRuntime } from "~/itx/handle.ts";
+import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
@@ -27,6 +28,10 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
     return (await this.#stream(input.path).read()) as StreamLegacyEvent[];
   }
 
+  async getState(input: { path: string }): Promise<unknown> {
+    return await this.#stream(input.path).getState();
+  }
+
   async subscribe(
     input: { afterOffset: StreamCursor; path: string },
     onEventBatch: (batch: { events: StreamLegacyEvent[]; streamMaxOffset: number }) => unknown,
@@ -36,10 +41,28 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
     });
   }
 
+  /**
+   * Trips the append-policy check inside StreamsCapability, so the resulting
+   * ItxError must cross the ctx.exports loopback (Workers RPC) back into this
+   * entrypoint, then the harness boundary into the test — proving that
+   * `code`/`details` survive Workers RPC hops, not just capnweb.
+   */
+  async appendOutsidePolicy(input: { path: string }) {
+    const capability = getStreamsCapability({
+      exports: this.ctx.exports as unknown as Parameters<typeof getStreamsCapability>[0]["exports"],
+      props: { appendPolicy: { mode: "none" }, projectId, streamPath: input.path },
+    });
+    await capability.append({ event: { type: "test.iterate.com/itx-subscribe/denied" } as never });
+  }
+
   #stream(path: string): ItxStream {
+    return new ItxStream(this.#runtime(), projectId, path);
+  }
+
+  #runtime(): ItxRuntime {
     // ItxStream only touches `runtime.exports`; the rest of ItxRuntime is
     // connect-time wiring this harness does not exercise.
-    const runtime: ItxRuntime = {
+    return {
       access: [projectId],
       config: null as never,
       contextId: projectId,
@@ -47,7 +70,6 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
       exports: this.ctx.exports as unknown as ItxRuntime["exports"],
       projectId,
     };
-    return new ItxStream(runtime, projectId, path);
   }
 }
 

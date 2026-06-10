@@ -9,8 +9,14 @@
 //   POST    /api/itx/admin-cookie     test-only browser auth bridge (browsers
 //                                     cannot set WebSocket Authorization headers)
 
-import { newWorkersRpcResponse } from "capnweb";
+import {
+  newHttpBatchRpcResponse,
+  newWorkersWebSocketRpcResponse,
+  type RpcSessionOptions,
+} from "capnweb";
 import { resolveItx } from "./entrypoint.ts";
+import { tagOutboundItxError } from "./errors.ts";
+import { runItxScript } from "./run.ts";
 import {
   GLOBAL_CONTEXT_ID,
   isChildContextId,
@@ -71,11 +77,13 @@ export async function handleItxFetch(input: {
       env: input.env,
       idOrSlug: decodeURIComponent(subpath),
     });
-    if (!resolved) return new Response("Not Found", { status: 404 });
+    if (!resolved) {
+      return Response.json({ code: "NOT_FOUND", error: "Context not found" }, { status: 404 });
+    }
     props = { context: resolved.contextId };
   }
 
-  const response = await newWorkersRpcResponse(
+  const response = await newItxRpcResponse(
     input.request,
     await resolveItx({ env: input.env, exports: workerExports(input.context), props }),
   );
@@ -109,7 +117,7 @@ export async function handleProjectHostItxFetch(input: {
   const principal = authenticateCapnwebAdmin({ config: input.config, request: input.request });
   if (!principal) return new Response("Unauthorized", { status: 401 });
 
-  return await newWorkersRpcResponse(
+  return await newItxRpcResponse(
     input.request,
     await resolveItx({
       env: input.env,
@@ -117,6 +125,27 @@ export async function handleProjectHostItxFetch(input: {
       props: { context: input.projectId },
     }),
   );
+}
+
+/**
+ * capnweb's `newWorkersRpcResponse` convenience wrapper takes no
+ * RpcSessionOptions (0.8.0), so this re-implements its POST/WebSocket
+ * dispatch in order to pass `onSendError`: every error leaving an itx
+ * session is tagged with an ItxError code (non-ItxErrors become INTERNAL),
+ * and returning the error from the hook is what makes capnweb transmit its
+ * stack — tag-don't-redact, see `tagOutboundItxError` (errors.ts).
+ */
+async function newItxRpcResponse(request: Request, localMain: unknown): Promise<Response> {
+  const options: RpcSessionOptions = { onSendError: tagOutboundItxError };
+  if (request.method === "POST") {
+    const response = await newHttpBatchRpcResponse(request, localMain, options);
+    response.headers.set("Access-Control-Allow-Origin", "*");
+    return response;
+  }
+  if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+    return newWorkersWebSocketRpcResponse(request, localMain, options);
+  }
+  return new Response("This endpoint only accepts POST or WebSocket requests.", { status: 400 });
 }
 
 async function authenticateItxRequest(input: {
@@ -136,7 +165,8 @@ async function authenticateItxRequest(input: {
 
 /** The simplified access model: admin sees all, users see their projects. */
 function accessForPrincipal(principal: Principal): ProjectAccess {
-  return principal.type === "admin" ? "all" : principal.projects.map((project) => project.id);
+  if (principal.type === "admin" || principal.isAdmin) return "all";
+  return principal.projects.map((project) => project.id);
 }
 
 /**
@@ -177,34 +207,10 @@ async function resolveAccessibleContextId(input: {
 
 // ---- /api/itx/run ----------------------------------------------------------
 //
-// The dumb harness: load a one-off isolate whose env.ITERATE is an
-// ItxEntrypoint, call the provided function with { itx, vars }, JSON the
-// result. No fetch monkeypatching — when the script runs against a project
-// context, bare fetch() IS project egress via globalOutbound (Law 5).
-
-function itxRunWorkerSource(functionSource: string) {
-  return /* js */ `
-    import { WorkerEntrypoint } from "cloudflare:workers";
-
-    const script = (${functionSource});
-
-    export default class extends WorkerEntrypoint {
-      async run(vars) {
-        try {
-          const itx = await this.env.ITERATE.context;
-          const result = await script({ itx, vars });
-          return JSON.stringify({ ok: true, result });
-        } catch (error) {
-          return JSON.stringify({
-            error: error instanceof Error ? error.message : String(error),
-            ok: false,
-            stack: error instanceof Error ? error.stack : undefined,
-          });
-        }
-      }
-    }
-  `;
-}
+// Thin HTTP shim over the shared runner (run.ts): resolve + access-check the
+// target context here (Law 3 — this is the auth boundary), then delegate.
+// The runner leaves the two-event execution record on the project's /itx
+// stream; the HTTP response carries the executionId so callers can correlate.
 
 async function handleItxRun(input: {
   access: ProjectAccess;
@@ -213,7 +219,12 @@ async function handleItxRun(input: {
   request: Request;
 }): Promise<Response> {
   if (!input.env.LOADER) {
-    return Response.json({ error: "LOADER binding not available" }, { status: 503 });
+    return Response.json(
+      { code: "INTERNAL", error: "LOADER binding not available" },
+      {
+        status: 503,
+      },
+    );
   }
 
   const body = (await input.request.json()) as {
@@ -222,7 +233,12 @@ async function handleItxRun(input: {
     vars?: Record<string, unknown>;
   };
   if (typeof body.functionSource !== "string" || body.functionSource.trim() === "") {
-    return Response.json({ error: "functionSource is required" }, { status: 400 });
+    return Response.json(
+      { code: "BAD_REQUEST", error: "functionSource is required" },
+      {
+        status: 400,
+      },
+    );
   }
 
   let props: ItxProps;
@@ -234,62 +250,50 @@ async function handleItxRun(input: {
       env: input.env,
       idOrSlug: body.context,
     });
-    if (!resolved) return Response.json({ error: "Context not found" }, { status: 404 });
+    // NOT_FOUND covers both missing and forbidden contexts (existence
+    // masking — same posture as ItxProjects.get, see errors.ts).
+    if (!resolved) {
+      return Response.json({ code: "NOT_FOUND", error: "Context not found" }, { status: 404 });
+    }
     props = { context: resolved.contextId };
     scriptProjectId = resolved.projectId;
   } else {
     // A global-context script inherits the platform's own egress (no
-    // per-project globalOutbound below), so it is admin-only — same rule as
-    // the global connect handle.
-    if (input.access !== "all") return Response.json({ error: "Forbidden" }, { status: 403 });
+    // per-project globalOutbound), so it is admin-only — same rule as the
+    // global connect handle.
+    if (input.access !== "all") {
+      return Response.json({ code: "FORBIDDEN", error: "Forbidden" }, { status: 403 });
+    }
     props = { access: input.access, context: GLOBAL_CONTEXT_ID };
   }
 
-  const exports = workerExports(input.context) as Record<
-    string,
-    (options: { props: Record<string, unknown> }) => unknown
-  >;
-  const worker = input.env.LOADER.load({
-    compatibilityDate: "2026-04-27",
-    env: {
-      ITERATE: exports.ItxEntrypoint!({ props }),
-    },
-    // Project scripts get the egress pipe as their global fetch; global
-    // scripts inherit the parent's network (they are admin-held by
-    // construction — only connect-time auth mints global handles).
-    ...(scriptProjectId !== null
-      ? {
-          globalOutbound: exports.ProjectEgress!({
-            props: { context: props.context, project: scriptProjectId },
-          }) as Fetcher,
-        }
-      : {}),
-    mainModule: "itx-script.js",
-    modules: { "itx-script.js": itxRunWorkerSource(body.functionSource) },
+  // The endpoint's API is `({ itx, vars }) => …` + a vars object; the runner
+  // knows ONE shape, `async (itx) => …`, so vars are baked into the source
+  // here — parameterization is the caller's concern, not the runner's.
+  const outcome = await runItxScript({
+    env: input.env,
+    exports: workerExports(input.context),
+    functionSource: `async (itx) => (${body.functionSource})({ itx, vars: ${JSON.stringify(
+      body.vars ?? {},
+    )} })`,
+    projectId: scriptProjectId,
+    props,
   });
-
-  const entrypoint = worker.getEntrypoint() as unknown as {
-    run(vars: Record<string, unknown>): Promise<string>;
-  } & Partial<Disposable>;
-  try {
-    const outcome = JSON.parse(await entrypoint.run(body.vars ?? {})) as
-      | { ok: true; result: unknown }
-      | { error: string; ok: false; stack?: string };
-    if (!outcome.ok) {
-      return Response.json({ error: outcome.error, stack: outcome.stack }, { status: 500 });
-    }
-    return Response.json({ result: outcome.result ?? null });
-  } catch (error) {
+  if (!outcome.ok) {
+    // The script isolate flattens throws to JSON, so the ItxError code (when
+    // the kernel threw one) rides along as a plain field; anything code-less
+    // is INTERNAL, mirroring the capnweb sessions' tagging.
     return Response.json(
       {
-        error: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
+        code: outcome.code ?? "INTERNAL",
+        error: outcome.error,
+        executionId: outcome.executionId,
+        stack: outcome.stack,
       },
       { status: 500 },
     );
-  } finally {
-    entrypoint[Symbol.dispose]?.();
   }
+  return Response.json({ executionId: outcome.executionId, result: outcome.result ?? null });
 }
 
 function workerExports(context: RequestContext): ItxRuntime["exports"] {

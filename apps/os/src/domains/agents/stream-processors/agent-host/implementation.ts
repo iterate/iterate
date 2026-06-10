@@ -15,9 +15,9 @@ import {
   AGENTS_STREAM_PATH,
   getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
-import { startCodemodeScriptOnExistingSession } from "~/domains/codemode/codemode-session-rpc.ts";
-import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import { toLegacyEvent, toNewEventInput } from "~/domains/streams/new-stream-runtime.ts";
+import type { ItxRuntime } from "~/itx/handle.ts";
+import { runItxScript } from "~/itx/run.ts";
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 
 export { AGENT_HOST_PROCESSOR_SLUG, AgentHostProcessorContract } from "./contract.ts";
@@ -31,7 +31,11 @@ const STREAM_CHILD_STREAM_CREATED_TYPE = "events.iterate.com/stream/child-stream
 
 export type AgentHostProcessorDeps = {
   agentNamespace: DurableObjectNamespace<AgentDurableObject> | undefined;
-  codemodeSessionNamespace: DurableObjectNamespace<CodemodeSession> | undefined;
+  /** Ensures (and returns) the agent's itx child context id. */
+  getItxContextId: () => Promise<string>;
+  /** The worker env + exports the script runner needs (LOADER/STREAM/exports). */
+  runnerEnv: Env;
+  workerExports: unknown;
   /**
    * Resolves the stream this processor is attached to. Read lazily from the
    * host's subscription state because the processor is constructed at DO
@@ -75,19 +79,59 @@ export class AgentHostProcessor extends StreamProcessor<
         }),
       );
     }
+    // Script execution runs DETACHED: scripts can be long, and the two-event
+    // itx execution record (requested/completed on this stream) is the
+    // durable trace. The completion handler below turns the completed event
+    // into agent input on a later delivery.
+    const script = extractAgentScript({ event, streamPath });
+    if (script != null) {
+      args.runInBackground(() =>
+        runAgentItxScript({
+          code: script,
+          deps: this.deps,
+          projectId,
+          streamPath,
+        }),
+      );
+    }
+
+    // Enqueued executions (e.g. Slack bang commands): another processor
+    // appended itx/execution-requested with `enqueued: true`; this host is
+    // the runner. The flag distinguishes queue entries from the records
+    // runItxScript appends about its own runs.
+    if (
+      event.type === "events.iterate.com/itx/execution-requested" &&
+      streamPath !== AGENTS_STREAM_PATH
+    ) {
+      const payload = event.payload as {
+        code?: unknown;
+        enqueued?: unknown;
+        executionId?: unknown;
+      };
+      if (payload.enqueued === true && typeof payload.code === "string") {
+        const code = payload.code;
+        const executionId =
+          typeof payload.executionId === "string" ? payload.executionId : undefined;
+        args.runInBackground(() =>
+          runAgentItxScript({
+            code,
+            deps: this.deps,
+            executionId,
+            projectId,
+            recordRequested: false,
+            streamPath,
+          }),
+        );
+      }
+    }
+
     args.blockProcessorWhile(async () => {
       await ensureChildAgentRunner({
         agentNamespace: this.deps.agentNamespace,
         event,
         projectId,
       });
-      await handleAgentOutputAddedForCodemode({
-        codemodeSessionNamespace: this.deps.codemodeSessionNamespace,
-        event,
-        projectId,
-        streamPath,
-      });
-      await handleCodemodeScriptExecutionCompletedForAgent({
+      await handleItxExecutionCompletedForAgent({
         appendInput: async (input) => {
           await this.ctx.stream.append({
             event: toNewEventInput(input.event) as StreamEventInput,
@@ -144,88 +188,74 @@ export async function ensureAgentRunnerForOwnStream(args: {
   await stub.initialize({ name });
 }
 
-export async function handleAgentOutputAddedForCodemode(args: {
-  codemodeSessionNamespace: DurableObjectNamespace<CodemodeSession> | undefined;
-  event: Event;
+export function extractAgentScript(args: { event: Event; streamPath: StreamPath }): string | null {
+  if (args.streamPath === AGENTS_STREAM_PATH) return null;
+  if (args.event.type !== "events.iterate.com/agent/output-added") return null;
+  const payload = args.event.payload as { content?: unknown };
+  if (typeof payload.content !== "string") return null;
+  return extractCodemodeScript(payload.content);
+}
+
+export async function runAgentItxScript(args: {
+  code: string;
+  deps: Pick<AgentHostProcessorDeps, "getItxContextId" | "runnerEnv" | "workerExports">;
+  executionId?: string;
   projectId: string;
+  recordRequested?: boolean;
   streamPath: StreamPath;
 }) {
-  if (args.codemodeSessionNamespace === undefined) return;
-  if (args.streamPath === AGENTS_STREAM_PATH) return;
-  if (args.event.type !== "events.iterate.com/agent/output-added") return;
-
-  const payload = args.event.payload as { content?: unknown };
-  if (typeof payload.content !== "string") return;
-
-  const code = extractCodemodeScript(payload.content);
-  if (code == null) return;
-
-  await startCodemodeScriptOnExistingSession({
-    code,
-    events: [],
-    namespace: args.codemodeSessionNamespace,
+  const contextId = await args.deps.getItxContextId();
+  await runItxScript({
+    // The runner's one shape is `async (itx) => …`; the model's code goes
+    // through verbatim (older histories say `async (ctx) =>` — the parameter
+    // name is the author's business, the single argument is the handle).
+    executionId: args.executionId,
+    recordRequested: args.recordRequested,
+    env: args.deps.runnerEnv,
+    exports: args.deps.workerExports as ItxRuntime["exports"],
+    functionSource: args.code,
     projectId: args.projectId,
-    streamPath: args.streamPath,
+    props: { context: contextId },
+    record: { namespace: args.projectId, path: args.streamPath },
   });
 }
 
-export async function handleCodemodeScriptExecutionCompletedForAgent(args: {
+export async function handleItxExecutionCompletedForAgent(args: {
   appendInput(input: { event: EventInput }): Promise<unknown>;
   event: Event;
   streamPath: StreamPath;
 }) {
   if (args.streamPath === AGENTS_STREAM_PATH) return;
-  if (args.event.type !== "events.iterate.com/codemode/script-execution-completed") return;
+  if (args.event.type !== "events.iterate.com/itx/execution-completed") return;
 
   const payload = args.event.payload as {
-    outcome?: unknown;
-    scriptExecutionId?: unknown;
+    error?: unknown;
+    executionId?: unknown;
+    logs?: unknown;
+    ok?: unknown;
+    result?: unknown;
   };
-  const outcome = payload.outcome;
-  if (outcome == null || typeof outcome !== "object") return;
+  if (typeof payload.executionId !== "string") return;
 
-  const status = "status" in outcome ? outcome.status : undefined;
-  if (status === "returned") {
-    const value = "value" in outcome ? outcome.value : undefined;
-    if (value === undefined) return;
-    await args.appendInput({
-      event: {
-        type: "events.iterate.com/agent/input-added",
-        idempotencyKey: `agent-codemode-script-result:${String(payload.scriptExecutionId)}`,
-        payload: {
-          content: codemodeCompletionInputBlock({
-            event: args.event,
-            outcome: {
-              status,
-              value,
-            },
-          }),
-          llmRequestPolicy: { behaviour: "after-current-request" },
-        },
-      },
-    });
-    return;
-  }
+  const logs = Array.isArray(payload.logs) ? (payload.logs as string[]) : [];
+  const outcome =
+    payload.ok === true
+      ? ({ status: "returned", value: payload.result } as const)
+      : ({ error: payload.error ?? "Unknown script error", status: "threw" } as const);
+  // A script that returned nothing and logged nothing needs no agent input
+  // (matches the old codemode behaviour for undefined results).
+  if (outcome.status === "returned" && outcome.value === undefined && logs.length === 0) return;
 
-  if (status === "threw") {
-    const error = "error" in outcome ? outcome.error : "Unknown codemode error";
-    await args.appendInput({
-      event: {
-        type: "events.iterate.com/agent/input-added",
-        idempotencyKey: `agent-codemode-script-error:${String(payload.scriptExecutionId)}`,
-        payload: {
-          content: codemodeCompletionInputBlock({
-            event: args.event,
-            outcome: {
-              error,
-              status,
-            },
-          }),
-          llmRequestPolicy: { behaviour: "after-current-request" },
-        },
+  await args.appendInput({
+    event: {
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: `agent-itx-execution-result:${payload.executionId}`,
+      payload: {
+        content: itxCompletionInputBlock({ event: args.event, logs, outcome }),
+        llmRequestPolicy: { behaviour: "after-current-request" },
       },
-    });
-  }
+    },
+  });
 }
 
 const CODEMODE_FENCE_RE =
@@ -233,6 +263,12 @@ const CODEMODE_FENCE_RE =
 
 export function extractCodemodeScript(content: string): string | null {
   const trimmed = content.trim();
+  if (trimmed.startsWith("async (itx) => {") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+
+  // Legacy spelling from pre-itx agent histories; the parameter name is the
+  // author's business — the single argument is the handle either way.
   if (trimmed.startsWith("async (ctx) => {") && trimmed.endsWith("}")) {
     return trimmed;
   }
@@ -254,20 +290,18 @@ function formatCodemodeOutput(output: unknown) {
   }
 }
 
-export function codemodeCompletionInputBlock(input: {
+export function itxCompletionInputBlock(input: {
   event: Event;
+  logs: string[];
   outcome: { status: "returned"; value: unknown } | { status: "threw"; error: unknown };
 }) {
-  const scriptExecutionId = (input.event.payload as { scriptExecutionId?: unknown })
-    .scriptExecutionId;
+  const executionId = (input.event.payload as { executionId?: unknown }).executionId;
   return [
     "```yaml",
     "event:",
     `  offset: ${input.event.offset}`,
-    "  type: events.iterate.com/codemode/script-execution-completed",
-    ...(typeof scriptExecutionId === "string"
-      ? [`  scriptExecutionId: ${yamlScalar(scriptExecutionId)}`]
-      : []),
+    "  type: events.iterate.com/itx/execution-completed",
+    ...(typeof executionId === "string" ? [`  executionId: ${yamlScalar(executionId)}`] : []),
     "  outcome:",
     `    status: ${input.outcome.status}`,
     ...yamlBlockScalar(
@@ -276,6 +310,7 @@ export function codemodeCompletionInputBlock(input: {
         input.outcome.status === "returned" ? input.outcome.value : input.outcome.error,
       ),
     ),
+    ...(input.logs.length > 0 ? yamlBlockScalar("  console", input.logs.join("\n")) : []),
     "```",
   ].join("\n");
 }

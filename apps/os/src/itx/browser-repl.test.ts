@@ -1,8 +1,10 @@
 import { RpcStub, RpcTarget } from "capnweb";
 import { describe, expect, test, vi } from "vitest";
 import {
+  browserReplExternalScopesEqual,
   BROWSER_REPL_EXAMPLES,
   compileBrowserReplFunction,
+  createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
   evalBrowserReplCode,
   evalBrowserReplSessionCode,
@@ -78,8 +80,25 @@ describe("browser Cap'n Web REPL", () => {
       code: DEFAULT_BROWSER_REPL_CODE,
       output: JSON.stringify({ projects: [{ id: "proj_123" }], total: 1, limit: 5 }, null, 2),
       outputLanguage: "json",
+      result: { projects: [{ id: "proj_123" }], total: 1, limit: 5 },
       status: "success",
     });
+  });
+
+  test("external scope comparison preserves REPL bindings across equivalent renders", () => {
+    const currentScope = createBrowserReplScope({ projectId: "proj_123" });
+    currentScope.$_ = 42;
+    currentScope._ = 42;
+
+    expect(
+      browserReplExternalScopesEqual({ projectId: "proj_123" }, { projectId: "proj_123" }),
+    ).toBe(true);
+    expect(currentScope.$_).toBe(42);
+    expect(currentScope._).toBe(42);
+
+    expect(
+      browserReplExternalScopesEqual({ projectId: "proj_123" }, { projectId: "proj_456" }),
+    ).toBe(false);
   });
 
   test("REPL supports SDK-shaped calls through a server-side path target", async () => {

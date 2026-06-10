@@ -10,7 +10,7 @@ afterEach(() => {
 });
 
 // Regression: a brand-new stream announces itself to every ancestor stream so
-// each maintains childPaths (this is what `project.streams.list` walks). The
+// each maintains immediate childPaths. The
 // announcement is a core-processor side effect of the `stream/created` append;
 // it once ran mid-append against the pre-commit "uninitialized" core state and
 // dialed `uninitialized:/...` durable objects instead of the real ancestors.

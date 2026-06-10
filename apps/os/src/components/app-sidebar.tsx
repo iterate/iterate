@@ -182,7 +182,7 @@ function AppSidebarUser() {
   const accountManagementUrl = authWorkerUrl(config, "/");
   const [debugOpen, setDebugOpen] = useState(false);
   const user = session?.authenticated ? session.user : null;
-  const isSuperadmin = user?.isAdmin ?? false;
+  const isAdmin = user?.isAdmin ?? false;
   const label = nonEmptyLabel(user?.name, user?.email, "Account");
   const email = user?.email?.trim() ?? "";
   const initials = userInitials(label);
@@ -235,7 +235,7 @@ function AppSidebarUser() {
               align="end"
               sideOffset={4}
             >
-              <DropdownMenuLabel className="p-0 font-normal">
+              <div className="p-0 font-normal">
                 <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                   <Avatar className="size-8 rounded-lg">
                     <AvatarFallback className="rounded-lg">{initials}</AvatarFallback>
@@ -245,7 +245,7 @@ function AppSidebarUser() {
                     {email ? <span className="truncate text-xs">{email}</span> : null}
                   </div>
                 </div>
-              </DropdownMenuLabel>
+              </div>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
                 <DropdownMenuItem
@@ -257,7 +257,7 @@ function AppSidebarUser() {
                     </a>
                   }
                 />
-                {isSuperadmin && (
+                {isAdmin && (
                   <DropdownMenuItem render={<Link to="/admin" />}>
                     <Shield />
                     <span>Admin</span>
