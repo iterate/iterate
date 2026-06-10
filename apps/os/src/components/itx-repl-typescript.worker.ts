@@ -80,7 +80,6 @@ interface ItxStream {
 interface ItxStreams {
   create(input: { streamPath: string }): Promise<unknown>;
   get(path: string): ItxStream;
-  list(): Promise<unknown>;
 }
 
 interface ItxWorkspaceGit {

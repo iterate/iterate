@@ -223,16 +223,34 @@ function StreamTerminalApp() {
           vars: { streamPath: resolveStreamPath(input.streamPath) },
         }),
       listChildren: async (input = {}) => {
-        const { streams } = await client.project.streams.list({
-          projectSlugOrId: args.projectSlugOrId,
-        });
-        const basePath = resolveStreamPath(input.streamPath);
-        return streams
-          .filter((stream) => basePath === "/" || stream.streamPath.startsWith(`${basePath}/`))
-          .map((stream) => ({
-            path: stream.streamPath,
-            createdAt: stream.createdAt,
-          }));
+        // Walk the tree inside ONE itx script: each getState is a Durable
+        // Object hop, but running the loop server-side costs a single dynamic
+        // worker load instead of one per stream.
+        const descendantPaths = (await runItxScript({
+          functionSource: `async ({ itx, vars }) => {
+            const seen = new Set();
+            const queue = [vars.basePath];
+            while (queue.length > 0) {
+              const path = queue.shift();
+              if (seen.has(path)) continue;
+              seen.add(path);
+              const state = await itx.streams.get(path).getState();
+              queue.push(...(state.childPaths ?? []));
+            }
+            seen.delete(vars.basePath);
+            return [...seen].sort();
+          }`,
+          vars: { basePath: resolveStreamPath(input.streamPath) },
+        })) as string[];
+
+        // Stream state carries no creation time; epoch matches what the
+        // removed streams.list returned.
+        return descendantPaths.map(
+          (path): StreamSummary => ({
+            path: StreamPath.parse(path),
+            createdAt: new Date(0).toISOString(),
+          }),
+        );
       },
       resolvePath: resolveStreamPath,
     }),

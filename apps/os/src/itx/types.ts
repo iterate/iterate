@@ -508,7 +508,6 @@ export interface ItxStream {
 export interface ItxStreams {
   /** Resolve a stream ref — relative or absolute, see {@link StreamRef}. */
   get(ref: StreamRef): ItxStream;
-  list(): Promise<unknown>;
   create(input: { streamPath: string }): Promise<unknown>;
 }
 

@@ -377,8 +377,8 @@ lacks the `sqlite3` binary).
 
 ### I7. Core side effects ran against pre-commit stream state — ancestors dialed as `uninitialized:*`
 
-Preview e2e `admin-project` failed: `project.streams.list` only ever returned
-the root `/` stream. The list walks `childPaths` from the root, and no
+Preview e2e `admin-project` failed: the old stream listing path only ever returned
+the root `/` stream. Stream navigation walks immediate `childPaths`, and no
 `stream/child-stream-created` events were landing on ancestors. Wrangler-tail
 plus a workerd repro showed the announcing stream dialing
 `uninitialized:/`/`uninitialized:/probe` — the core processor's
