@@ -179,6 +179,15 @@ export default {
       const projectId = url.searchParams.get("projectId") ?? "proj__local__test";
       const slug = url.searchParams.get("slug") ?? "demo";
       const customHostname = url.searchParams.get("customHostname");
+      // Match the production callers (project directory, itx.projects.create):
+      // they insert the projects row BEFORE dialing the DO, because
+      // createProject returns immediately and the processor's own projection
+      // upsert is eventually consistent.
+      await env.DB.prepare(
+        `INSERT INTO projects (id, slug) VALUES (?, ?) ON CONFLICT(id) DO NOTHING`,
+      )
+        .bind(projectId, slug)
+        .run();
       const project = await env.PROJECT.getByName(
         getProjectDurableObjectName(projectId),
       ).createProject({
@@ -265,10 +274,16 @@ export default {
     }
 
     if (url.pathname === "/__test/project-state") {
+      // Traverses the DO stub's public `projectProcessor` getter — processors
+      // are RpcTargets (capnweb's RpcTarget IS cloudflare:workers' inside
+      // workerd). Await the property to get the processor stub, then call;
+      // workerd does not pipeline calls through property accesses in one
+      // expression.
       const project = env.PROJECT.getByName(
         getProjectDurableObjectName("proj__local__test"),
       ) as unknown as ProjectStateRpc;
-      return Response.json(await project.getProjectState());
+      const processor = await project.projectProcessor;
+      return Response.json(await processor.snapshot());
     }
 
     if (url.pathname === "/__test/iterate-config-repo") {
@@ -309,7 +324,7 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 type ProjectStateRpc = {
-  getProjectState(): Promise<unknown>;
+  projectProcessor: { snapshot(): Promise<unknown> };
 };
 
 type ProjectEgressInterceptTestRpc = {

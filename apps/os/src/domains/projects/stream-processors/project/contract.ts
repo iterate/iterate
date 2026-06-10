@@ -80,6 +80,14 @@ export const ProjectProcessorContract = defineProcessorContract({
       description: "The Project was registered and its platform hosts were assigned.",
       payloadSchema: ProjectFacts,
     },
+    "events.iterate.com/project/repo-initialized": {
+      description: "The Project's iterate-config repo exists and is cloneable.",
+      payloadSchema: z.object({
+        defaultBranch: z.string().trim().min(1),
+        projectId: z.string().trim().min(1),
+        repoSlug: z.string().trim().min(1),
+      }),
+    },
     // Historical type string ("config worker" is now just "the worker").
     "events.iterate.com/project/config-worker-built": {
       description: "The Project's worker was built and cached for dispatch.",
@@ -109,6 +117,7 @@ export const ProjectProcessorContract = defineProcessorContract({
   ],
   emits: [
     "events.iterate.com/project/created",
+    "events.iterate.com/project/repo-initialized",
     "events.iterate.com/project/config-worker-built",
     "events.iterate.com/project/create-completed",
   ],

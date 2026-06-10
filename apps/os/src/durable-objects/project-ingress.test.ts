@@ -84,6 +84,13 @@ describe("Project ingress routing", () => {
         }),
       }),
       expect.objectContaining({
+        type: "events.iterate.com/project/repo-initialized",
+        payload: expect.objectContaining({
+          projectId: "proj__local__test",
+          repoSlug: "iterate-config",
+        }),
+      }),
+      expect.objectContaining({
         type: "events.iterate.com/project/create-completed",
         payload: expect.objectContaining({
           projectId: "proj__local__test",

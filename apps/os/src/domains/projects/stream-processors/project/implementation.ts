@@ -4,11 +4,12 @@
 // `reduce` projects the lifecycle events into state (the DO keeps no project
 // table of its own — this snapshot IS the project's durable state).
 // `processEvent` owns the creation side effects END TO END: the one D1
-// `projects` projection (platform-host routing reads it), the example egress
-// secret, the agents root, and a cross-post of create-requested onto the
-// deployment-wide `global` namespace's /projects stream (the global audit
-// surface for project lifecycle). Every step is idempotent so at-least-once
-// delivery is safe. The worker build deliberately does NOT gate
+// `projects` projection (platform-host routing reads it), the iterate-config
+// repo, the example egress secret, the agents root, and a cross-post of
+// create-requested onto the deployment-wide `global` namespace's /projects
+// stream (the global audit surface for project lifecycle). Each step leaves
+// its fact on the stream and is idempotent, so at-least-once delivery is
+// safe. The worker build deliberately does NOT gate
 // create-completed: ingress requests build on demand, so a failed build
 // self-heals on the next request.
 //
@@ -40,6 +41,8 @@ import {
   EXAMPLE_EGRESS_SECRET_METADATA,
 } from "~/domains/secrets/example-secret.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
+import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
+import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import {
   readLoopbackExports,
   type LoadedWorkerEntrypoint,
@@ -58,6 +61,7 @@ export type ProjectProcessorDeps = {
   env: {
     AGENT: DurableObjectNamespace<AgentDurableObject>;
     DB: D1Database;
+    REPO: DurableObjectNamespace<RepoDurableObject>;
     STREAM: DurableObjectNamespace<StreamDurableObject>;
   };
   /** The hosting DO's `ctx.exports` (loopback entrypoints, e.g. secrets). */
@@ -117,6 +121,7 @@ export class ProjectProcessor extends StreamProcessor<
           payload: facts,
         },
       });
+      await this.#ensureIterateConfigRepo({ projectId, slug });
       await this.#ensureExampleEgressSecret(projectId);
       await this.#ensureAgentsRoot(projectId);
       await this.#writeAgentsRootRule(projectId);
@@ -196,6 +201,26 @@ export class ProjectProcessor extends StreamProcessor<
       type: "events.iterate.com/project/create-requested",
       idempotencyKey: `project-create-requested:${input.projectId}`,
       payload: { projectId: input.projectId, slug: input.slug },
+    });
+  }
+
+  /** The project's iterate-config repo, with its own fact on the stream. */
+  async #ensureIterateConfigRepo(input: { projectId: string; slug: string }) {
+    const repo = await ensureIterateConfigInfoForProject({
+      env: this.deps.env,
+      projectId: input.projectId,
+      projectSlug: input.slug,
+    });
+    await this.ctx.stream.append({
+      event: {
+        type: "events.iterate.com/project/repo-initialized",
+        idempotencyKey: `project-repo-initialized:${input.projectId}:${repo.slug}`,
+        payload: {
+          defaultBranch: repo.defaultBranch,
+          projectId: input.projectId,
+          repoSlug: repo.slug,
+        },
+      },
     });
   }
 

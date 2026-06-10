@@ -141,7 +141,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     cloneRepo: (input) => this.cloneWorkerRepo(input),
     bundle: (files) => this.bundleWorkerCode(files),
   });
-  projectProcessor = this.host.add(
+  #projectProcessor = this.host.add(
     ProjectProcessorContract.slug,
     (deps) =>
       new ProjectProcessor({
@@ -153,16 +153,26 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
       }),
   );
 
+  /**
+   * The processor is part of the DO's public surface: a prototype getter
+   * (own instance fields don't cross Workers RPC) returning an RpcTarget, so
+   * callers traverse it directly:
+   *
+   *   const processor = await itx.project.projectProcessor;
+   *   await processor.snapshot();
+   *
+   * (Await the property before calling — workerd does not pipeline calls
+   * through property accesses in a single expression.)
+   */
+  get projectProcessor() {
+    return this.#projectProcessor;
+  }
+
   #projectEgressInterceptTunnel: CaptunServerTunnel | null = null;
 
   /** Subscription callables on the project's root stream dial this. */
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
     return this.host.requestStreamSubscription(args);
-  }
-
-  /** The ProjectProcessor's checkpoint: `{ offset, state }`. */
-  async getProjectState() {
-    return await this.projectProcessor.snapshot();
   }
 
   // ---- identity & creation ------------------------------------------------
@@ -190,22 +200,12 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
       payload: { projectId: input.projectId, slug: input.slug },
     });
 
-    // The creation steps — D1 projection, example secret, agents root, the
-    // created/create-completed events — run in ProjectProcessor. Wait for
-    // them so a project is BORN with its guarantees (e.g. itx.fetch right
-    // after create finds the example secret); only the worker build is async.
-    await this.waitForCreateCompleted(input.projectId);
+    // That's it — no waiting. The creation steps (D1 projection, repo,
+    // example secret, agents root, created/create-completed events) run in
+    // ProjectProcessor and leave a trail on the root stream; callers redirect
+    // to the project immediately and watch `projectProcessor.snapshot()`
+    // (phase: creating → ready) if they care about progress.
     return toSummary(projectFacts({ config: this.getAppConfig(), ...input }));
-  }
-
-  private async waitForCreateCompleted(projectId: string) {
-    const deadline = Date.now() + 15_000;
-    while (Date.now() < deadline) {
-      const snapshot = await this.projectProcessor.snapshot();
-      if (snapshot.state.phase === "ready") return;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    console.warn(`[ProjectDO] createProject(${projectId}) returning before create-completed.`);
   }
 
   async getSummary(): Promise<ProjectSummary> {

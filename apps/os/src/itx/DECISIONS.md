@@ -234,13 +234,22 @@ been circling:
   dispatches; the code payload only crosses RPC inside the loader's
   cold-isolate miss callback. The DO is where the worker's source of truth
   lives, nothing more.
-- **Project creation is event-sourced.** `createProject` writes the D1
-  projection (routing needs the row synchronously), appends
-  `project/create-requested`, and waits (bounded) for the ProjectProcessor —
-  slug `project`, hosted on the DO — to run the idempotent steps and append
-  `created` / `create-completed`. The worker build never gates creation
-  (ingress self-heals builds); `config-worker-built` remains the historical
-  event string. The DO keeps NO bespoke tables: the processor snapshot is the
-  project's durable state (with a pure `projectHosts()` + D1-slug fallback for
-  cold snapshots), and "config worker" is now just **the worker**
+- **Project creation is event-sourced, fire-and-return.** `createProject`
+  appends `project/create-requested` and returns the (purely computed)
+  summary immediately — no waiting. The ProjectProcessor — slug `project`,
+  hosted on the DO — runs the idempotent steps (D1 projection, iterate-config
+  repo, example secret, agents root) and leaves the trail: `created`,
+  `repo-initialized`, `create-completed`, plus a cross-post of
+  create-requested to the global namespace's `/projects` stream. Callers
+  redirect to the project page right away and watch
+  `itx.project.projectProcessor.snapshot()` (phase: creating → ready) for
+  progress — the processor is a public RpcTarget property on the DO, directly
+  traversable over Workers RPC (capnweb's RpcTarget IS cloudflare:workers'
+  inside workerd). Callers that need routing before the processor catches up
+  (dashboard, itx.projects.create) insert the D1 projects row themselves
+  first, as they always did. The worker build never gates creation (ingress
+  self-heals builds); `config-worker-built` remains the historical event
+  string. The DO keeps NO bespoke tables: the processor snapshot is the
+  project's durable state (with a pure `projectFacts()` + D1-slug fallback
+  for cold snapshots), and "config worker" is now just **the worker**
   (`durable-objects/worker.ts`, `callWorkerFunction`, `itx.worker`).
