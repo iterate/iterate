@@ -139,6 +139,33 @@ router already returns a static `{ runtime: "workerd" }`; this PR additionally
 guts the shared function so apps/semaphore (and any future app still on
 `createAppRouterWithInternal`) stops leaking immediately.
 
+### 7. Preview smoke test: real agent conversation end to end (2026-06-10)
+
+Verified the deployed PR preview (`os.iterate-preview-3.com`) with a fully
+headless browser, no human in the loop (procedure: `preview-agent-browser-smoke.md`):
+
+- Signed in as the bootstrap superadmin, created a project via **`/new-project`**
+  (the renamed route — the original bug), and drove an agent conversation
+  through the browser UI: typed a question into the agent's message box, and the
+  agent (DO + OpenAI) replied correctly. Confirmed both via the UI send and via
+  `agents runtime-state`. The security fix is live (`/api/__internal/debug`
+  returns `{ runtime: "workerd" }`).
+
+Two findings worth keeping:
+
+- **Transient `Project <id> not found` on project pages = expired OS session
+  JWT, not a bug.** The OS session access token is short-lived; once it lapses,
+  project-scoped page queries surface a NOT_FOUND in the error boundary. A fresh
+  sign-in fixes it, and the same procedures succeed over direct RPC with a fresh
+  cookie throughout. Cost me a long debugging detour — documented so the next
+  person doesn't repeat it.
+- **Live stream display needs WebSocket, which 500'd on the preview host**
+  (`/api/orpc-ws`; `[stream /] subscribe failed`). The conversation completes
+  server-side regardless. The worker's WS-upgrade path (`NitroWebSocketResponse`
+  → `crossws.handleUpgrade` in `worker.ts`) is byte-identical to main, so this
+  is almost certainly preview-infra (WS on preview wildcard hosts), not the
+  refactor — flagged for follow-up confirmation, not claimed fixed.
+
 ## Learnings
 
 - An unauthenticated debug endpoint that echoes `process.env` is a secret leak
