@@ -78,6 +78,25 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       case "events.iterate.com/agent/status-updated":
       case "events.iterate.com/agent/llm-request-queued":
         return;
+      case "events.iterate.com/stream/subscriber-connected": {
+        // Scheduler reconciliation. Reduced state says a request should be
+        // scheduled; if this instance has no debounce timer armed for it, the
+        // timer died with a previous incarnation and nothing else will ever
+        // fire it — convert the schedule into a request now. The handoff is
+        // keyed off the original scheduled event, so if the dead timer's
+        // append did land, this dedups instead of double-requesting.
+        if (state.currentRequest?.phase !== "scheduled" || this.#scheduledLlmRequest !== null) {
+          return;
+        }
+        const scheduled = state.currentRequest;
+        args.blockProcessorWhile(() =>
+          this.#requestLlmWorkForSchedule({
+            requestId: scheduled.requestId,
+            scheduledEvent: { offset: scheduled.scheduledAtOffset },
+          }),
+        );
+        return;
+      }
       case "events.iterate.com/codemode/tool-provider-registered":
         // Blocking: these context rows must land before the checkpoint so a
         // failed append is retried instead of silently dropped from history.
@@ -211,6 +230,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       this.#resetScheduledLlmRequestTimer({
         requestId: state.currentRequest.requestId,
         debounceMs: state.llmConfig.debounceMs,
+        scheduledAtOffset: state.currentRequest.scheduledAtOffset,
       });
       return;
     }
@@ -333,11 +353,24 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     });
   }
 
-  #resetScheduledLlmRequestTimer(args: { requestId: string; debounceMs: number }) {
-    const scheduledEvent = this.#scheduledLlmRequest?.scheduledEvent;
+  #resetScheduledLlmRequestTimer(args: {
+    requestId: string;
+    debounceMs: number;
+    scheduledAtOffset: number;
+  }) {
+    // The durable scheduledAtOffset is the fallback: after a restart the warm
+    // timer is gone but the reduced state still knows which scheduled event
+    // this debounce belongs to, so the timer re-arms instead of silently
+    // dropping the schedule.
+    const scheduledEvent = this.#scheduledLlmRequest?.scheduledEvent ?? {
+      offset: args.scheduledAtOffset,
+    };
     this.#cancelScheduledLlmRequest({ requestId: args.requestId });
-    if (scheduledEvent == null) return;
-    this.#armLlmRequestDebounceTimer({ ...args, scheduledEvent });
+    this.#armLlmRequestDebounceTimer({
+      requestId: args.requestId,
+      debounceMs: args.debounceMs,
+      scheduledEvent,
+    });
   }
 
   #armLlmRequestDebounceTimer(args: {
@@ -360,26 +393,47 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   async #requestScheduledLlmWork(args: { requestId: string }) {
     if (this.#scheduledLlmRequest?.requestId !== args.requestId) return;
 
-    /**
-     * Rebuild the LLM handoff from durable stream history at the last possible
-     * moment. The request debounce timer is independent from batch delivery, so
-     * it can fire after the user-triggering input has been reduced but before
-     * related non-triggering context rows (e.g. the codemode primer) have
-     * reached this processor. Reading and reducing the committed stream here
-     * makes the provider request reflect the stream, not a stale warm object.
-     */
+    const scheduledEvent = this.#scheduledLlmRequest.scheduledEvent;
+    this.#scheduledLlmRequest = null;
+    await this.#requestLlmWorkForSchedule({ requestId: args.requestId, scheduledEvent });
+  }
+
+  /**
+   * Converts a scheduled request into the durable `llm-request-requested`
+   * handoff. Shared by the debounce-timer path and the subscriber-connected
+   * reconciliation path; both derive the idempotency key from the original
+   * scheduled event, so whichever fires first wins and the other dedups.
+   *
+   * Rebuilds the LLM handoff from durable stream history at the last possible
+   * moment. The request debounce timer is independent from batch delivery, so
+   * it can fire after the user-triggering input has been reduced but before
+   * related non-triggering context rows (e.g. the codemode primer) have
+   * reached this processor. Reading and reducing the committed stream here
+   * makes the provider request reflect the stream, not a stale warm object —
+   * and is also what protects the recovery path: if committed history says
+   * this schedule was already cancelled or superseded, no request is made.
+   */
+  async #requestLlmWorkForSchedule(args: {
+    requestId: string;
+    scheduledEvent: { offset: number };
+  }) {
     const events = await this.deps.readStreamEvents();
     const stateAtRequest = reduceAgentEvents({ events });
 
-    const scheduledEvent = this.#scheduledLlmRequest.scheduledEvent;
-    this.#scheduledLlmRequest = null;
+    if (
+      stateAtRequest.currentRequest?.phase !== "scheduled" ||
+      stateAtRequest.currentRequest.requestId !== args.requestId
+    ) {
+      return;
+    }
+
     await this.ctx.stream.append({
       event: {
         type: "events.iterate.com/agent/llm-request-requested",
         idempotencyKey: buildProcessorIdempotencyKey({
           processor: AgentProcessorContract,
           key: "llm-request-requested",
-          sourceEvent: scheduledEvent,
+          sourceEvent: args.scheduledEvent,
         }),
         payload: {
           model: stateAtRequest.llmConfig.model,

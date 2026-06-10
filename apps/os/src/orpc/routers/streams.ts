@@ -141,6 +141,7 @@ async function* subscribeProjectStreamEvents(input: {
     handle = await streamStub.subscribe({
       processEventBatch: subscription.processEventBatch,
       replayAfterOffset: toNewAfterOffset(input.afterOffset),
+      subscriber: { description: "orpc-bridge" },
     });
 
     for await (const batch of subscription) {

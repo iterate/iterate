@@ -283,6 +283,138 @@ describe("AgentProcessor", () => {
     expect(payload.content).toContain("offset 44");
   });
 
+  it("recovers a scheduled request whose debounce timer died with a previous incarnation", async () => {
+    const { stream, appended } = memoryStream();
+    const scheduledEvent = agentEvent({
+      type: "events.iterate.com/agent/llm-request-scheduled",
+      payload: { requestId: "req_lost", debounceMs: 1000, model: "test-model" },
+      offset: 7,
+    });
+    // The previous incarnation appended llm-request-scheduled and armed an
+    // in-memory debounce timer, then died before the timer fired. This fresh
+    // instance has the durable "scheduled" phase but no timer — the classic
+    // wedge. The subscriber-connected presence fact alone must convert the
+    // scheduled phase into a real llm-request-requested.
+    const processor = newAgentProcessor({
+      stream,
+      snapshot: {
+        offset: 7,
+        state: {
+          ...initialState(),
+          currentRequest: { phase: "scheduled", requestId: "req_lost", scheduledAtOffset: 7 },
+        },
+      },
+      readStreamEvents: async () => [
+        agentEvent({
+          type: "events.iterate.com/agent/input-added",
+          payload: { content: "hi", llmRequestPolicy: { behaviour: "after-current-request" } },
+          offset: 6,
+        }),
+        scheduledEvent,
+      ],
+    });
+
+    await processor.ingest({
+      events: [subscriberConnectedEvent({ offset: 8 })],
+      streamMaxOffset: 8,
+    });
+
+    expect(appended).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-requested",
+        // Derived from the original scheduled event, so the recovery path and
+        // the (dead) timer path converge on the same idempotency key — if the
+        // timer somehow fired before the crash landed its append, this dedups.
+        idempotencyKey: "agent/llm-request-requested@7",
+      }),
+    ]);
+  });
+
+  it("does not re-request when the scheduled phase was already cancelled in history", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({
+      stream,
+      snapshot: {
+        offset: 7,
+        state: {
+          ...initialState(),
+          currentRequest: { phase: "scheduled", requestId: "req_lost", scheduledAtOffset: 7 },
+        },
+      },
+      // Committed history says the schedule was already cancelled — the
+      // snapshot is just behind. The recovery must trust history and do
+      // nothing rather than fire a request the user interrupted.
+      readStreamEvents: async () => [
+        agentEvent({
+          type: "events.iterate.com/agent/llm-request-scheduled",
+          payload: { requestId: "req_lost", debounceMs: 1000, model: "test-model" },
+          offset: 7,
+        }),
+        agentEvent({
+          type: "events.iterate.com/agent/llm-request-cancelled",
+          payload: {
+            phase: "scheduled",
+            requestId: "req_lost",
+            reason: "interrupted-by-user-input",
+          },
+          offset: 8,
+        }),
+      ],
+    });
+
+    await processor.ingest({
+      events: [subscriberConnectedEvent({ offset: 9 })],
+      streamMaxOffset: 9,
+    });
+
+    expect(appended).toEqual([]);
+  });
+
+  it("re-arms the debounce from durable state when input arrives after a restart", async () => {
+    vi.useFakeTimers();
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({
+      stream,
+      snapshot: {
+        offset: 7,
+        state: {
+          ...initialState(),
+          currentRequest: { phase: "scheduled", requestId: "req_lost", scheduledAtOffset: 7 },
+        },
+      },
+      readStreamEvents: async () => [
+        agentEvent({
+          type: "events.iterate.com/agent/llm-request-scheduled",
+          payload: { requestId: "req_lost", debounceMs: 1000, model: "test-model" },
+          offset: 7,
+        }),
+      ],
+    });
+
+    // Default-policy input during a timerless scheduled phase used to bail
+    // silently (the warm scheduledEvent was gone), wedging the agent forever.
+    // The durable scheduledAtOffset lets the reset path re-arm instead.
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agent/input-added",
+          payload: { content: "hello?", llmRequestPolicy: { behaviour: "after-current-request" } },
+          offset: 8,
+        }),
+      ],
+      streamMaxOffset: 8,
+    });
+    expect(appended).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(appended).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-requested",
+        idempotencyKey: "agent/llm-request-requested@7",
+      }),
+    ]);
+  });
+
   it("re-reads stream history before handing a scheduled LLM request to providers", async () => {
     vi.useFakeTimers();
     const { stream, appended } = memoryStream();
@@ -293,6 +425,10 @@ describe("AgentProcessor", () => {
     });
     const processor = newAgentProcessor({
       stream,
+      // Committed history at the time the debounce fires: the primer row that
+      // reached the stream after the trigger, plus the scheduled event this
+      // processor appended (the request handoff re-verifies the schedule is
+      // still current against history).
       readStreamEvents: async () => [
         agentEvent({
           type: "events.iterate.com/agent/input-added",
@@ -303,6 +439,11 @@ describe("AgentProcessor", () => {
           offset: 2,
         }),
         triggeringInput,
+        ...appended
+          .filter((event) => event.type === "events.iterate.com/agent/llm-request-scheduled")
+          .map((event, index) =>
+            agentEvent({ type: event.type, payload: event.payload, offset: 4 + index }),
+          ),
       ],
     });
 
@@ -366,6 +507,19 @@ function memoryStream() {
       }),
   };
   return { stream, appended };
+}
+
+function subscriberConnectedEvent(args: { offset: number }): StreamEvent {
+  return {
+    type: "events.iterate.com/stream/subscriber-connected",
+    payload: {
+      subscriptionKey: "agent-host:agent",
+      direction: "outbound" as const,
+      subscriber: { incarnationId: "fresh-incarnation" },
+    },
+    offset: args.offset,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
 }
 
 function agentEvent(args: {

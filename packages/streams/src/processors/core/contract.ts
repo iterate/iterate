@@ -8,6 +8,11 @@
 import { z } from "zod";
 import { Callable } from "@iterate-com/shared/callable/types.ts";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";
+import {
+  ProcessorContractAnnouncement,
+  StreamPresenceEvents,
+  StreamSubscriberDescriptor,
+} from "../../shared/presence-events.ts";
 
 /**
  * The one supported subscriber shape: a Callable descriptor the Stream DO
@@ -104,28 +109,26 @@ export const CoreProcessorContract = defineProcessorContract({
     processorsBySlug: z.record(
       z.string(),
       z.object({
-        latestRegisteredEvent: z.object({
-          offset: z.number().int().min(0),
-          type: z.literal("events.iterate.com/stream/processor-registered"),
-          payload: z.object({
-            slug: z.string().trim().min(1),
-            version: z.string().trim().min(1),
-            description: z.string(),
-            consumes: z.array(z.string()),
-            emits: z.array(z.string()),
-            ownedEvents: z.array(
-              z.object({
-                type: z.string().trim().min(1),
-                description: z.string().optional(),
-                examples: z.array(z.unknown()).optional(),
-              }),
-            ),
-          }),
-          createdAt: z.string(),
-        }),
+        announcedAtOffset: z.number().int().min(0),
+        announcement: ProcessorContractAnnouncement,
       }),
     ),
     subscriptionsByKey: SubscriptionsByKey,
+    /**
+     * Live presence roster: who is connected to this stream right now, keyed
+     * by subscriptionKey — the event-sourced mirror of the runtime connection
+     * map. `stream/woken` clears it (every connection died with the previous
+     * stream incarnation; survivors re-dial and re-land), connected adds,
+     * disconnected removes.
+     */
+    connectionsByKey: z.record(
+      z.string(),
+      z.object({
+        direction: z.enum(["inbound", "outbound"]),
+        connectedAtOffset: z.number().int().min(0),
+        subscriber: StreamSubscriberDescriptor.optional(),
+      }),
+    ),
   }),
   initialState: {
     namespace: "uninitialized",
@@ -143,6 +146,7 @@ export const CoreProcessorContract = defineProcessorContract({
     pauseReason: null,
     processorsBySlug: {},
     subscriptionsByKey: {},
+    connectionsByKey: {},
   },
   events: {
     "events.iterate.com/stream/created": {
@@ -185,23 +189,7 @@ export const CoreProcessorContract = defineProcessorContract({
         subscriber: HistoricalOutboundSubscriber,
       }),
     },
-    "events.iterate.com/stream/processor-registered": {
-      description: "Records the public contract for a processor active on this stream.",
-      payloadSchema: z.object({
-        slug: z.string().trim().min(1),
-        version: z.string().trim().min(1),
-        description: z.string(),
-        consumes: z.array(z.string()),
-        emits: z.array(z.string()),
-        ownedEvents: z.array(
-          z.object({
-            type: z.string().trim().min(1),
-            description: z.string().optional(),
-            examples: z.array(z.unknown()).optional(),
-          }),
-        ),
-      }),
-    },
+    ...StreamPresenceEvents,
     "events.iterate.com/stream/error-occurred": {
       description: "Records a structured stream or processor runner error.",
       payloadSchema: z.object({
@@ -237,18 +225,20 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/metadata-updated",
     "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/stream/subscription-configured",
-    "events.iterate.com/stream/processor-registered",
+    "events.iterate.com/stream/subscriber-connected",
+    "events.iterate.com/stream/subscriber-disconnected",
     "events.iterate.com/stream/error-occurred",
     "events.iterate.com/stream/paused",
     "events.iterate.com/stream/resumed",
   ],
-  emits: [],
+  emits: [
+    "events.iterate.com/stream/subscriber-connected",
+    "events.iterate.com/stream/subscriber-disconnected",
+    "events.iterate.com/stream/child-stream-created",
+  ],
 });
 
 export type CoreProcessorState = z.infer<typeof CoreProcessorContract.stateSchema>;
 
 export type SubscriptionConfiguredEvent =
   CoreProcessorState["subscriptionsByKey"][string]["latestConfiguredEvent"];
-
-export type ProcessorRegisteredEvent =
-  CoreProcessorState["processorsBySlug"][string]["latestRegisteredEvent"];

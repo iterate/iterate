@@ -5,8 +5,8 @@
 // Differences from the legacy contract (per the migration decision log,
 // apps/os/tasks/stream-processor-class-migration-log.md):
 // - the reducer lives on the CodemodeProcessor class, not the contract (D6);
-// - standardProcessorBehavior is gone: contract self-registration is now the
-//   host's `stream/processor-registered` announcement, so the
+// - standardProcessorBehavior is gone: contract self-registration now rides
+//   the host's `stream/subscriber-connected` presence fact, so the
 //   `hasRegisteredCurrentVersion` state flag and the consumed/emitted
 //   `core/stream-processor-registered` event are dropped (D11).
 

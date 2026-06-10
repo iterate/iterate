@@ -101,10 +101,23 @@ export const projectAgentsRouter = {
       });
       return await agent.getRuntimeState();
     }),
+
+  kill: os.project.agents.kill.use(projectScopeMiddleware).handler(async ({ context, input }) => {
+    const project = requireProjectScope(context);
+    const agent = await getAgentStub({
+      agentPath: input.agentPath,
+      projectId: project.id,
+    });
+    // `ctx.abort` tears down the in-flight RPC along with the instance, so a
+    // rejection here is the expected signature of a successful kill.
+    await agent.kill().catch(() => undefined);
+    return { killed: true };
+  }),
 };
 
 type AgentRpcStub = {
   getRuntimeState(): Promise<unknown>;
+  kill(): Promise<void>;
   sendMessage(input: { channel?: string; message: string }): Promise<{
     event: Event;
   }>;

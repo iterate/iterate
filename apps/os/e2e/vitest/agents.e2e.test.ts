@@ -203,6 +203,95 @@ test("uses OpenAI for unconfigured agent chats by default", async () => {
   );
 });
 
+test("recovers and still replies when the agent host durable object is killed mid-turn", async () => {
+  await using fixture = await createTestProjectFixture({ slugPrefix: "agent-crash-recovery" });
+  const { client, project } = fixture;
+  const suffix = uniqueSuffix();
+  const basePath = `/agents/crash-recovery-${suffix}`;
+  const agentPath = `${basePath}/child`;
+  const assistantMessage = `crash recovery proof ${suffix}`;
+
+  await client.project.agents.configurePreset({
+    basePath,
+    events: [],
+    model: DEFAULT_WORKERS_AI_AGENT_MODEL,
+    projectSlugOrId: project.id,
+    provider: "cloudflare-ai",
+    systemPrompt: [
+      "For every user message, reply with exactly one fenced JavaScript code block and no surrounding prose.",
+      "The block must evaluate to an async function.",
+      "Use this exact code body:",
+      dedent`
+        async (ctx) => {
+          await ctx.chat.sendMessage({ message: ${JSON.stringify(assistantMessage)} });
+        }
+      `,
+    ].join("\n"),
+  });
+  await client.project.agents.runtimeState({ agentPath, projectSlugOrId: project.id });
+
+  // Round 1 — kill inside the debounce window. The llm-request-scheduled fact
+  // is durable but its debounce timer lives only in the incarnation that just
+  // died; the redial's subscriber-connected fact must drive the fresh
+  // instance's scheduler reconciliation, or the agent wedges forever.
+  await client.project.agents.sendMessage({
+    agentPath,
+    message: `crash during debounce ${suffix}`,
+    projectSlugOrId: project.id,
+  });
+  await client.project.agents.kill({ agentPath, projectSlugOrId: project.id });
+
+  const roundOneEvents = await readUntil({
+    agentPath,
+    client,
+    projectId: project.id,
+    afterOffset: "start",
+    predicate: (event) =>
+      event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+      (event.payload as { message?: unknown }).message === assistantMessage,
+  });
+  const roundOneMaxOffset = Math.max(...roundOneEvents.map((event) => event.offset));
+
+  // Round 2 — kill after the provider reports the request started, so the LLM
+  // execution (in-memory only) dies mid-flight. The fresh incarnation's
+  // dangling-started reconciliation must mark the dead attempt and re-execute.
+  // (If the model finishes before the kill lands, this degenerates into an
+  // ordinary turn and the reply assertion still holds.)
+  await client.project.agents.sendMessage({
+    agentPath,
+    message: `crash mid request ${suffix}`,
+    projectSlugOrId: project.id,
+  });
+  await readUntil({
+    agentPath,
+    client,
+    projectId: project.id,
+    afterOffset: roundOneMaxOffset,
+    predicate: (event) => event.type === "events.iterate.com/cloudflare-ai/llm-request-started",
+  });
+  await client.project.agents.kill({ agentPath, projectSlugOrId: project.id });
+
+  const roundTwoEvents = await readUntil({
+    agentPath,
+    client,
+    projectId: project.id,
+    afterOffset: roundOneMaxOffset,
+    predicate: (event) =>
+      event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+      (event.payload as { message?: unknown }).message === assistantMessage,
+  });
+
+  // The kills really produced fresh incarnations: their re-handshakes append
+  // subscriber-connected presence facts (one per processor subscription).
+  expect(
+    roundTwoEvents.filter(
+      (event) => event.type === "events.iterate.com/stream/subscriber-connected",
+    ).length,
+  ).toBeGreaterThan(0);
+  // No agent turn may end in an error.
+  expect(roundTwoEvents.filter((event) => event.type.endsWith("error-occurred"))).toEqual([]);
+});
+
 test("lets codemode send visible agent responses through ctx.chat.sendMessage", async () => {
   await using fixture = await createTestProjectFixture({ slugPrefix: "agent-chat-tool" });
   const { client, project } = fixture;

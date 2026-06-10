@@ -58,7 +58,7 @@ describe("CloudflareAiProcessor", () => {
     expect(runs).toEqual(["test-model"]);
   });
 
-  it("re-executes a dangling started request from a previous incarnation", async () => {
+  it("recovers a dangling started request on reconnect, with zero new domain events", async () => {
     const { stream, appended } = memoryStream();
     const runs: string[] = [];
     const processor = newProcessor({
@@ -73,10 +73,11 @@ describe("CloudflareAiProcessor", () => {
       readStreamEvents: async () => [llmRequestRequestedEvent({ offset: 11 })],
     });
 
-    // Ingest any consumed event — it neither redelivers nor completes request
-    // 11; only the post-batch reconciliation can re-execute it.
+    // The host re-handshakes after the crash; the only thing the stream
+    // delivers is its subscriber-connected presence fact. That alone must
+    // recover the request — no user message or other domain event required.
     await processor.ingest({
-      events: [llmRequestCompletedEvent({ offset: 13, llmRequestId: 5 })],
+      events: [subscriberConnectedEvent({ offset: 13 })],
       streamMaxOffset: 13,
     });
 
@@ -84,11 +85,38 @@ describe("CloudflareAiProcessor", () => {
       eventTypes(appended).includes("events.iterate.com/agent/llm-request-completed"),
     );
     expect(runs).toEqual(["test-model"]);
+    // The crash is recorded explicitly before the retry, so the stream
+    // honestly shows "attempt died here, retried here".
+    expect(eventTypes(appended)).toContain(
+      "events.iterate.com/cloudflare-ai/llm-request-attempt-failed",
+    );
     expect(eventTypes(appended)).toContain(
       "events.iterate.com/cloudflare-ai/llm-request-completed",
     );
     // The recovered request is still current, so agent output lands too.
     expect(eventTypes(appended)).toContain("events.iterate.com/agent/output-added");
+  });
+
+  it("does not run dangling recovery on ordinary domain batches", async () => {
+    const { stream, appended } = memoryStream();
+    const runs: string[] = [];
+    const processor = newProcessor({
+      stream,
+      runs,
+      snapshot: { offset: 12, state: stateWithRequest(11, "started") },
+      readStreamEvents: async () => [llmRequestRequestedEvent({ offset: 11 })],
+    });
+
+    // Recovery is connect-driven: a connected event is guaranteed on every
+    // host incarnation, so unrelated domain traffic does not need to (and
+    // must not) trigger speculative re-execution.
+    await processor.ingest({
+      events: [llmRequestCompletedEvent({ offset: 13, llmRequestId: 5 })],
+      streamMaxOffset: 13,
+    });
+
+    expect(runs).toEqual([]);
+    expect(appended).toEqual([]);
   });
 
   it("skips a request that already completed", async () => {
@@ -148,6 +176,19 @@ function llmRequestRequestedEvent(args: { offset: number }): StreamEvent {
       model: "test-model",
       body: { messages: [{ role: "user" as const, content: "hi" }] },
       runOpts: {},
+    },
+    offset: args.offset,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+function subscriberConnectedEvent(args: { offset: number }): StreamEvent {
+  return {
+    type: "events.iterate.com/stream/subscriber-connected",
+    payload: {
+      subscriptionKey: "agent-host:cloudflare-ai",
+      direction: "outbound" as const,
+      subscriber: { incarnationId: "fresh-incarnation" },
     },
     offset: args.offset,
     createdAt: "2026-01-01T00:00:00.000Z",

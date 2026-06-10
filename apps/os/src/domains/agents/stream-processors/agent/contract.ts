@@ -9,8 +9,8 @@
 // Migrated from packages/shared/src/stream-processors/agent/contract.ts.
 // Wire formats (event types and payload schemas) are unchanged. The
 // standardProcessorBehavior registration slice (`hasRegisteredCurrentVersion`
-// state + core stream-processor-registered consumption) is gone: the stream
-// processor host announces contracts via `stream/processor-registered` now.
+// state + core stream-processor-registered consumption) is gone: contract
+// announcements now ride the host's `stream/subscriber-connected` fact.
 
 import { z } from "zod";
 import {
@@ -22,6 +22,7 @@ import {
   type ConsumedEvent,
   type StreamEvent,
 } from "@iterate-com/streams/shared/stream-processors";
+import { StreamPresenceEvents } from "@iterate-com/streams/shared/presence-events";
 import { CodemodeProcessorContract } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 
 export const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.6";
@@ -50,7 +51,18 @@ export const AgentProcessorContract = defineProcessorContract({
       .default({ model: DEFAULT_WORKERS_AI_AGENT_MODEL, runOpts: {}, debounceMs: 1000 }),
     currentRequest: z
       .discriminatedUnion("phase", [
-        z.object({ phase: z.literal("scheduled"), requestId: z.string() }),
+        z.object({
+          phase: z.literal("scheduled"),
+          requestId: z.string(),
+          /**
+           * Offset of the llm-request-scheduled event. The durable half of the
+           * debounce: a fresh instance (whose in-memory timer died with its
+           * predecessor) re-derives the request handoff — and its idempotency
+           * key — from this, so the recovery path and the timer path converge
+           * on the same llm-request-requested append.
+           */
+          scheduledAtOffset: z.number().int().positive(),
+        }),
         z.object({ phase: z.literal("requested"), llmRequestId: z.number().int().positive() }),
       ])
       .nullable()
@@ -61,7 +73,9 @@ export const AgentProcessorContract = defineProcessorContract({
   // The codemode contract owns `codemode/tool-provider-registered`, which this
   // processor renders into model-visible context. Still the legacy shared
   // contract module until the codemode domain migrates onto the class model.
-  processorDeps: [CodemodeProcessorContract],
+  // The presence catalog owns `stream/subscriber-connected`, the scheduler's
+  // reconcile trigger.
+  processorDeps: [CodemodeProcessorContract, StreamPresenceEvents],
   events: {
     "events.iterate.com/agent/system-prompt-updated": {
       description: "Updates the system prompt used for future LLM requests.",
@@ -208,6 +222,7 @@ export const AgentProcessorContract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/codemode/tool-provider-registered",
+    "events.iterate.com/stream/subscriber-connected",
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/output-added",
@@ -240,8 +255,11 @@ export type AgentConsumedEvent = ConsumedEvent<typeof AgentProcessorContract>;
  */
 export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumedEvent }) {
   const { state, event } = args;
+  // subscriber-connected is consumed for side effects only (the scheduler's
+  // reconcile trigger); like tool-provider-registered it leaves state alone.
   switch (event.type) {
     case "events.iterate.com/codemode/tool-provider-registered":
+    case "events.iterate.com/stream/subscriber-connected":
       return state;
     case "events.iterate.com/agent/system-prompt-updated":
       return { ...state, systemPrompt: event.payload.systemPrompt };
@@ -267,7 +285,11 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
     case "events.iterate.com/agent/llm-request-scheduled":
       return {
         ...state,
-        currentRequest: { phase: "scheduled" as const, requestId: event.payload.requestId },
+        currentRequest: {
+          phase: "scheduled" as const,
+          requestId: event.payload.requestId,
+          scheduledAtOffset: event.offset,
+        },
         pendingTriggerCount: 0,
       };
     case "events.iterate.com/agent/llm-request-requested":

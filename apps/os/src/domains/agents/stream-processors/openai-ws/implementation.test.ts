@@ -227,7 +227,7 @@ describe("OpenAiWsProcessor", () => {
     expect(eventTypes(appended)).toContain("events.iterate.com/openai-ws/llm-request-started");
   });
 
-  it("re-executes a dangling started request from a previous incarnation", async () => {
+  it("recovers a dangling started request on reconnect, with zero new domain events", async () => {
     const { stream, appended } = memoryStream();
     const sockets: FakeOpenAiResponsesWebSocket[] = [];
     const processor = newProcessor({
@@ -248,10 +248,11 @@ describe("OpenAiWsProcessor", () => {
       ],
     });
 
-    // Ingest any consumed event — it neither redelivers nor completes request
-    // 33; only the post-batch reconciliation can re-execute it.
+    // The host re-handshakes after the crash; the only thing the stream
+    // delivers is its subscriber-connected presence fact. That alone must
+    // recover the request — no user message or other domain event required.
     const ingested = processor.ingest({
-      events: [configUpdatedEvent({ offset: 35, model: "gpt-test" })],
+      events: [subscriberConnectedEvent({ offset: 35 })],
       streamMaxOffset: 35,
     });
     await waitFor(() => sockets.length === 1);
@@ -263,9 +264,41 @@ describe("OpenAiWsProcessor", () => {
     await waitFor(() =>
       eventTypes(appended).includes("events.iterate.com/agent/llm-request-completed"),
     );
+    // The crash is recorded explicitly before the retry.
+    expect(eventTypes(appended)).toContain(
+      "events.iterate.com/openai-ws/llm-request-attempt-failed",
+    );
     expect(eventTypes(appended)).toContain("events.iterate.com/openai-ws/llm-request-started");
     // The recovered request is still current, so agent output lands too.
     expect(eventTypes(appended)).toContain("events.iterate.com/agent/output-added");
+  });
+
+  it("does not run dangling recovery on ordinary domain batches", async () => {
+    const { stream, appended } = memoryStream();
+    const sockets: FakeOpenAiResponsesWebSocket[] = [];
+    const processor = newProcessor({
+      stream,
+      appended,
+      sockets,
+      snapshot: {
+        offset: 34,
+        state: { ...testState(), requests: { "33": { status: "started" } } },
+      },
+      readStreamEvents: async () => [
+        llmRequestRequestedEvent({ content: "recover me", offset: 33 }),
+      ],
+    });
+
+    // Recovery is connect-driven: a connected event is guaranteed on every
+    // host incarnation, so unrelated domain traffic does not need to (and
+    // must not) trigger speculative re-execution.
+    await processor.ingest({
+      events: [configUpdatedEvent({ offset: 35, model: "gpt-test" })],
+      streamMaxOffset: 35,
+    });
+
+    expect(sockets).toHaveLength(0);
+    expect(appended).toEqual([]);
   });
 
   it("skips a request its reduced state already marks completed", async () => {
@@ -349,6 +382,19 @@ function configUpdatedEvent(args: { offset: number; model: string }): StreamEven
   return {
     type: "events.iterate.com/openai-ws/config-updated",
     payload: { model: args.model },
+    offset: args.offset,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+function subscriberConnectedEvent(args: { offset: number }): StreamEvent {
+  return {
+    type: "events.iterate.com/stream/subscriber-connected",
+    payload: {
+      subscriptionKey: "agent-host:openai-ws",
+      direction: "outbound" as const,
+      subscriber: { incarnationId: "fresh-incarnation" },
+    },
     offset: args.offset,
     createdAt: "2026-01-01T00:00:00.000Z",
   };
