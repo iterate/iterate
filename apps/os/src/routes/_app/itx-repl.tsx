@@ -8,12 +8,12 @@ import { createFileRoute } from "@tanstack/react-router";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import {
   browserReplExternalScopesEqual,
-  BROWSER_REPL_EXAMPLES,
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
   runBrowserReplEntry,
   type BrowserReplEntry,
 } from "~/itx/browser-repl.ts";
+import { ITX_EXAMPLES } from "~/itx/examples.ts";
 import type { Itx } from "~/itx/handle.ts";
 import { ItxRepl } from "~/components/itx-repl.tsx";
 
@@ -65,10 +65,12 @@ export function ItxReplPage({
   // ("RPC stub used after disposed"). createBrowserReplSession() with no arg
   // connects to the global context; project repls pass their own memoized one.
   connectSession = createBrowserReplSession,
+  context = "global",
   initialCode = DEFAULT_BROWSER_REPL_CODE,
   scope,
 }: {
   connectSession?: BrowserReplSessionFactory;
+  context?: "global" | "project";
   initialCode?: string;
   scope?: Record<string, unknown>;
 }) {
@@ -146,8 +148,9 @@ export function ItxReplPage({
     <ItxRepl
       canRun={Boolean(itx) && status !== "Running..." && code.trim() !== ""}
       code={code}
+      context={context}
       entries={entries}
-      examples={BROWSER_REPL_EXAMPLES}
+      examples={ITX_EXAMPLES}
       examplesOpen={examplesOpen}
       onChangeCode={setCode}
       onRun={() => void run()}
