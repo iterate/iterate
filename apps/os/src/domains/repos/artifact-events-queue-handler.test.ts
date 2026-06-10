@@ -1,4 +1,3 @@
-import { getInitializedStreamStub } from "~/domains/streams/new-stream-runtime.ts";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   CF_EVENT_RECEIVED_TYPE,
@@ -10,6 +9,7 @@ import {
 } from "./artifact-event-types.ts";
 import { handleArtifactEventsBatch } from "./artifact-events-queue-handler.ts";
 import type { ArtifactEventsQueueEnv } from "./artifact-events-queue-handler.ts";
+import { getInitializedStreamStub } from "~/domains/streams/new-stream-runtime.ts";
 
 // ---------------------------------------------------------------------------
 // Mocks

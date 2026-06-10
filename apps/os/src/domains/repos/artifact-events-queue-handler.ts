@@ -1,9 +1,9 @@
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
 } from "~/domains/streams/new-stream-runtime.ts";
-import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
   ACCOUNT_LEVEL_CF_TYPES,
   CF_EVENT_RECEIVED_TYPE,
