@@ -65,10 +65,12 @@ export function ItxReplPage({
   // ("RPC stub used after disposed"). createBrowserReplSession() with no arg
   // connects to the global context; project repls pass their own memoized one.
   connectSession = createBrowserReplSession,
+  context = "global",
   initialCode = DEFAULT_BROWSER_REPL_CODE,
   scope,
 }: {
   connectSession?: BrowserReplSessionFactory;
+  context?: "global" | "project";
   initialCode?: string;
   scope?: Record<string, unknown>;
 }) {
@@ -146,6 +148,7 @@ export function ItxReplPage({
     <ItxRepl
       canRun={Boolean(itx) && status !== "Running..." && code.trim() !== ""}
       code={code}
+      context={context}
       entries={entries}
       examples={ITX_EXAMPLES}
       examplesOpen={examplesOpen}
