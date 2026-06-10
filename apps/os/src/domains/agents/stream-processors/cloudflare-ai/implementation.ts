@@ -122,7 +122,11 @@ export class CloudflareAiProcessor extends StreamProcessor<
     state: CloudflareAiState;
   }): Promise<void> {
     const llmRequestId = args.event.offset;
-    if (args.state.requests[String(llmRequestId)] != null) return;
+    // Skip only finished requests: a "started" entry means a previous
+    // incarnation crashed mid-request, and the redelivered event must retry it
+    // (the started append is idempotency-keyed, so the retry cannot duplicate
+    // it). Mirrors the OpenAI WebSocket processor.
+    if (args.state.requests[String(llmRequestId)]?.status === "completed") return;
 
     const ai = this.deps.ai;
     if (ai == null) {
