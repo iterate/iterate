@@ -39,11 +39,10 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/cloudflare-ai/llm-request-started": {
       description:
-        "The Cloudflare AI processor started executing an agent LLM request. The llmRequestId is the offset of the source agent/llm-request-requested event.",
+        "The Cloudflare AI processor started executing an agent LLM request. The llmRequestId is the offset of the source agent/llm-request-requested event; the chat request is rebuilt from stream history up to that offset, never embedded.",
       payloadSchema: z.object({
         llmRequestId: LlmRequestId,
         model: z.string().min(1),
-        body: z.json(),
         runOpts: z.json().default({}),
       }),
     },

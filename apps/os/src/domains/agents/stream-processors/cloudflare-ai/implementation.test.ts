@@ -36,6 +36,42 @@ describe("CloudflareAiProcessor", () => {
     expect(eventTypes(appended)).toContain("events.iterate.com/cloudflare-ai/llm-request-started");
   });
 
+  it("rebuilds the chat request from history up to the request's offset", async () => {
+    const { stream, appended } = memoryStream();
+    const runs: string[] = [];
+    const bodies: unknown[] = [];
+    const processor = newProcessor({
+      stream,
+      runs,
+      bodies,
+      // Request-by-reference: the requested event carries no body, so what
+      // the model sees is exactly the reduction of committed history up to
+      // the request's own offset — rows that landed after it are excluded.
+      readStreamEvents: async () => [
+        inputAddedEvent({ offset: 2, content: "hello" }),
+        llmRequestRequestedEvent({ offset: 11 }),
+        inputAddedEvent({ offset: 15, content: "landed after the request" }),
+      ],
+    });
+
+    await processor.ingest({
+      events: [llmRequestRequestedEvent({ offset: 11 })],
+      streamMaxOffset: 11,
+    });
+
+    await waitFor(() =>
+      eventTypes(appended).includes("events.iterate.com/cloudflare-ai/llm-request-completed"),
+    );
+    expect(bodies).toEqual([
+      {
+        messages: [
+          { role: "system", content: "You are a helpful assistant. You can trust your user." },
+          { role: "user", content: "hello" },
+        ],
+      },
+    ]);
+  });
+
   it("retries a request a previous incarnation left in started", async () => {
     const { stream, appended } = memoryStream();
     const runs: string[] = [];
@@ -176,6 +212,7 @@ function stateWithRequest(
 function newProcessor(args: {
   stream: StreamProcessorIterateContext["stream"];
   runs: string[];
+  bodies?: unknown[];
   snapshot?: StreamProcessorSnapshot<CloudflareAiState>;
   readStreamEvents?: () => Promise<StreamEvent[]>;
 }) {
@@ -183,8 +220,9 @@ function newProcessor(args: {
     iterateContext: { stream: args.stream },
     readState: () => args.snapshot,
     ai: {
-      run: async (model: string) => {
+      run: async (model: string, body: unknown) => {
         args.runs.push(model);
+        args.bodies?.push(body);
         return { response: "ok" };
       },
     },
@@ -197,11 +235,16 @@ function newProcessor(args: {
 function llmRequestRequestedEvent(args: { offset: number }): StreamEvent {
   return {
     type: "events.iterate.com/agent/llm-request-requested",
-    payload: {
-      model: "test-model",
-      body: { messages: [{ role: "user" as const, content: "hi" }] },
-      runOpts: {},
-    },
+    payload: { model: "test-model", runOpts: {} },
+    offset: args.offset,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+function inputAddedEvent(args: { offset: number; content: string }): StreamEvent {
+  return {
+    type: "events.iterate.com/agent/input-added",
+    payload: { content: args.content, llmRequestPolicy: { behaviour: "dont-trigger-request" } },
     offset: args.offset,
     createdAt: "2026-01-01T00:00:00.000Z",
   };
