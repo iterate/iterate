@@ -72,31 +72,38 @@ export async function runItxScript(input: {
     string,
     (options: { props: Record<string, unknown> }) => unknown
   >;
-  const worker = loader.load({
-    compatibilityDate: "2026-04-27",
-    env: {
-      ITERATE: exports.ItxEntrypoint!({ props: input.props as Record<string, unknown> }),
-    },
-    // Project scripts get the egress pipe as their global fetch; global
-    // scripts inherit the parent's network (they are admin-held by
-    // construction — only connect-time auth mints global handles).
-    ...(input.projectId !== null
-      ? {
-          globalOutbound: exports.ProjectEgress!({
-            props: { context: input.props.context, project: input.projectId },
-          }) as Fetcher,
-        }
-      : {}),
-    mainModule: "itx-script.js",
-    modules: { "itx-script.js": itxRunWorkerSource(input.functionSource) },
-  });
-
-  const entrypoint = worker.getEntrypoint() as unknown as {
-    run(vars: Record<string, unknown>): Promise<string>;
-  } & Partial<Disposable>;
 
   let outcome: ItxScriptOutcome;
+  let entrypoint:
+    | ({ run(vars: Record<string, unknown>): Promise<string> } & Partial<Disposable>)
+    | undefined;
+  // One try/catch from loading through running: a loader failure must still
+  // produce an ok:false outcome (and the matching completed event) — never a
+  // throw that leaves a dangling execution-requested record.
   try {
+    const worker = loader.load({
+      compatibilityDate: "2026-04-27",
+      env: {
+        ITERATE: exports.ItxEntrypoint!({ props: input.props as Record<string, unknown> }),
+      },
+      // Project scripts get the egress pipe as their global fetch; global
+      // scripts inherit the parent's network (they are admin-held by
+      // construction — only connect-time auth mints global handles).
+      ...(input.projectId !== null
+        ? {
+            globalOutbound: exports.ProjectEgress!({
+              props: { context: input.props.context, project: input.projectId },
+            }) as Fetcher,
+          }
+        : {}),
+      mainModule: "itx-script.js",
+      modules: { "itx-script.js": itxRunWorkerSource(input.functionSource) },
+    });
+
+    entrypoint = worker.getEntrypoint() as unknown as {
+      run(vars: Record<string, unknown>): Promise<string>;
+    } & Partial<Disposable>;
+
     const raw = JSON.parse(await entrypoint.run(input.vars ?? {})) as { logs?: string[] } & (
       | { ok: true; result: unknown }
       | { error: string; ok: false; stack?: string }
@@ -117,7 +124,7 @@ export async function runItxScript(input: {
       stack: error instanceof Error ? error.stack : undefined,
     };
   } finally {
-    entrypoint[Symbol.dispose]?.();
+    entrypoint?.[Symbol.dispose]?.();
   }
 
   await recordExecutionEvent(input.env, record, {
