@@ -101,6 +101,12 @@ export class OrpcCapability extends WorkerEntrypoint<ExampleCapabilityEnv, Examp
 
   /** Legacy codemode dispatch shape; delegates to the itx path-call. */
   async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
+    if (input.functionPath.join(".") === "listProcedures") {
+      // Legacy callers are mount-agnostic: the generated typings must use the
+      // caller's full mount path as the namespace (the itx path-call has no
+      // mounts — the cap name is the namespace, handled in call()).
+      return createOrpcProcedureListing(input.path.slice(0, input.path.length - 1));
+    }
     return await this.call({ args: input.args, path: input.functionPath });
   }
 
