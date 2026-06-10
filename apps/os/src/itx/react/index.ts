@@ -7,3 +7,5 @@ export type { ItxBrowserClient, ItxConnectionStatus } from "./connection.ts";
 export { ItxProvider, useItxClient, useItxStatus } from "./provider.tsx";
 export { itxKey, useItxQuery, useItxMutation } from "./hooks.ts";
 export type { ItxHandle, UseItxQueryOptions, UseItxMutationOptions } from "./hooks.ts";
+export { useStreamEvents } from "./use-stream-events.ts";
+export type { StreamTailSnapshot, StreamTailStatus } from "./stream-tail.ts";

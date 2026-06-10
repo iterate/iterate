@@ -18,6 +18,8 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import { typeid } from "@iterate-com/shared/typeid";
+import type { StreamCursor, Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
+import type { StreamRpc, StreamSubscriptionHandle } from "@iterate-com/streams/types";
 import { createD1Client } from "sqlfu";
 import { PathProxyRpcTarget } from "./path-proxy.ts";
 import {
@@ -45,7 +47,16 @@ import {
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { isProjectId, mintProjectId } from "~/domains/projects/project-id.ts";
-import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+import {
+  getStreamsCapability,
+  resolveStreamPath,
+} from "~/domains/streams/entrypoints/streams-capability.ts";
+import {
+  getStreamDurableObjectName,
+  toLegacyEvent,
+  toNewAfterOffset,
+  type StreamDurableObjectNamespace,
+} from "~/domains/streams/new-stream-runtime.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 
 /**
@@ -440,6 +451,41 @@ export class ItxStream extends RpcTarget {
     return await this.client().listChildren({} as never);
   }
 
+  /**
+   * Live tail: catch-up from `afterOffset`, then every committed batch, pushed
+   * to `onEventBatch` until unsubscribed. The callback crosses whatever
+   * boundary the caller came in over (capnweb from a browser/Node session,
+   * Workers RPC from a cap isolate); the Stream DO only ever sees a plain
+   * Workers RPC stub held by this worker (Law 7 — Cap'n Web never terminates
+   * in a DO). If the callback's far end goes away, the subscription is torn
+   * down on the next failed delivery — offline means offline; durability is
+   * the stream itself, re-subscribe from the last offset you saw.
+   */
+  async subscribe(
+    onEventBatch: (batch: { events: StreamLegacyEvent[]; streamMaxOffset: number }) => unknown,
+    opts: { afterOffset?: StreamCursor } = {},
+  ): Promise<ItxStreamSubscription> {
+    const path = resolveStreamPath(this.path);
+    const streamNamespace = this.runtime.env.STREAM as unknown as StreamDurableObjectNamespace;
+    const stub = streamNamespace.getByName(
+      getStreamDurableObjectName({ namespace: this.projectId, path }),
+    ) as unknown as StreamRpc;
+
+    let handle: StreamSubscriptionHandle | undefined;
+    handle = await stub.subscribe({
+      processEventBatch: (batch) => {
+        void Promise.resolve(
+          onEventBatch({
+            events: batch.events.map((event) => toLegacyEvent(event, path)),
+            streamMaxOffset: batch.streamMaxOffset,
+          }),
+        ).catch(() => handle?.unsubscribe());
+      },
+      replayAfterOffset: toNewAfterOffset(opts.afterOffset),
+    });
+    return new ItxStreamSubscription(handle);
+  }
+
   private client(): StreamsClient {
     return getStreamsCapability({
       exports: this.runtime.exports as unknown as Parameters<
@@ -451,6 +497,22 @@ export class ItxStream extends RpcTarget {
         streamPath: this.path,
       },
     });
+  }
+}
+
+/** Disposer for ItxStream.subscribe — callable from any execution mode. */
+export class ItxStreamSubscription extends RpcTarget {
+  constructor(private readonly handle: StreamSubscriptionHandle) {
+    super();
+  }
+
+  /** Highest committed offset at subscribe time — read up to here, then tail. */
+  get streamMaxOffset(): number {
+    return this.handle.streamMaxOffset;
+  }
+
+  unsubscribe() {
+    this.handle.unsubscribe();
   }
 }
 
