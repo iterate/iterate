@@ -99,7 +99,7 @@ the workers-sdk rpc fixture test DOs):
       `readCoreProcessorState`. Today it does. _Done — red._
 - [x] **T4 — append with `source` field** (pins M2). Appends an event with a
       valid `source` and reads it back. Today it throws `Unrecognized key:
-    "source"`. _Done — red._
+  "source"`. _Done — red._
 - [x] **T5 — circuit-breaker clock regression** (pins M3). Spend a token with
       `createdAt` 1 s earlier than `lastRefillAtMs`; assert tokens decrement by
       ~1, not by 100k. _Done — red._
