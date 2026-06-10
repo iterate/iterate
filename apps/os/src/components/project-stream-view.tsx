@@ -65,6 +65,11 @@ type ProjectStreamMessageComposer = {
 };
 
 type ProjectStreamViewTab = "feed" | "raw" | "state";
+type StreamPathLinkRenderer = (input: {
+  children: ReactNode;
+  className?: string;
+  path: StreamPath;
+}) => ReactNode;
 
 const DEFAULT_RAW_EVENT_YAML =
   "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
@@ -76,6 +81,8 @@ export function ProjectStreamView({
   messageComposer,
   projectSlug,
   projectSlugOrId,
+  renderStreamPathLink,
+  streamUrl,
   streamPath,
 }: {
   defaultComposerMode?: "message" | "raw";
@@ -84,6 +91,8 @@ export function ProjectStreamView({
   messageComposer?: ProjectStreamMessageComposer;
   projectSlug: string;
   projectSlugOrId: string;
+  renderStreamPathLink?: StreamPathLinkRenderer;
+  streamUrl?: string;
   streamPath: StreamPath;
 }) {
   const streamPathText = streamPath.toString();
@@ -92,7 +101,7 @@ export function ProjectStreamView({
       acquireStreamRuntime({
         namespace: projectSlugOrId,
         streamPath: streamPathText,
-        streamUrl: projectStreamRpcPath(projectSlugOrId, streamPathText),
+        streamUrl: streamUrl ?? projectStreamRpcPath(projectSlugOrId, streamPathText),
         slug: BrowserRawEventsContract.slug,
         schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
         tables: ["events"],
@@ -110,7 +119,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [projectSlugOrId, streamPathText],
+    [projectSlugOrId, streamPathText, streamUrl],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -204,7 +213,18 @@ export function ProjectStreamView({
         <ProjectStreamFeedView
           database={store.streamDatabase}
           emptyLabel={connectionLabel}
-          projectSlug={projectSlug}
+          renderStreamPathLink={
+            renderStreamPathLink ??
+            (({ path, children, className }) => (
+              <Link
+                to="/projects/$projectSlug/streams/$"
+                params={{ projectSlug, _splat: path }}
+                {...(className == null ? {} : { className })}
+              >
+                {children}
+              </Link>
+            ))
+          }
           reductionKey={`${projectSlugOrId}:${streamPathText}`}
         />
       ) : activeTab === "raw" ? (
@@ -258,12 +278,12 @@ export function ProjectStreamView({
 function ProjectStreamFeedView({
   database,
   emptyLabel,
-  projectSlug,
+  renderStreamPathLink,
   reductionKey,
 }: {
   database: StreamBrowserDatabase;
   emptyLabel: string;
-  projectSlug: string;
+  renderStreamPathLink: StreamPathLinkRenderer;
   reductionKey: string;
 }) {
   const feed = useStreamFeedState({ database, reductionKey });
@@ -290,15 +310,7 @@ function ProjectStreamFeedView({
       onHiddenElementTypesChange={setHiddenElementTypes}
       rendererMode={rendererMode}
       onRendererModeChange={setRendererMode}
-      renderStreamPathLink={({ path, children, className }) => (
-        <Link
-          to="/projects/$projectSlug/streams/$"
-          params={{ projectSlug, _splat: path }}
-          {...(className == null ? {} : { className })}
-        >
-          {children}
-        </Link>
-      )}
+      renderStreamPathLink={renderStreamPathLink}
     />
   );
 }

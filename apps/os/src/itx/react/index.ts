@@ -3,6 +3,7 @@
 //   import { ItxProvider, useItxQuery, useItxMutation, itxKey } from "~/itx/react";
 
 export { ItxProvider } from "./provider.tsx";
+export { useItxClient } from "./context.ts";
 export { itxKey, useItxQuery, useItxMutation } from "./hooks.ts";
 export { useStreamEvents } from "./use-stream-events.ts";
 export { isItxAccessError } from "./errors.ts";

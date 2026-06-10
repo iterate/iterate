@@ -20,6 +20,7 @@ import { RpcTarget } from "cloudflare:workers";
 import { typeid } from "@iterate-com/shared/typeid";
 import type { StreamCursor, Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
 import { createD1Client } from "sqlfu";
+import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { PathProxyRpcTarget } from "./path-proxy.ts";
 import {
   GLOBAL_CONTEXT_ID,
@@ -410,6 +411,13 @@ export class ItxStreams extends RpcTarget {
 
   get(path: string): ItxStream {
     return new ItxStream(this.runtime, this.projectId, path);
+  }
+
+  namespace(namespace: string): ItxStreams {
+    if (this.runtime.access !== "all") {
+      throw new Error("Selecting an arbitrary stream namespace requires admin access.");
+    }
+    return new ItxStreams(this.runtime, StreamNamespace.parse(namespace));
   }
 
   async list() {
