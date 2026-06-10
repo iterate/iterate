@@ -374,9 +374,13 @@ function createStreamRuntime(
       return;
     }
 
-    if (localIncarnation !== undefined && localIncarnation !== serverIncarnation) {
+    if (localIncarnation !== serverIncarnation) {
+      // Either the incarnation changed (reset/reincarnation) OR we have local events but no
+      // recorded incarnation (a mirror that predates incarnation tracking). In both cases we
+      // can't trust the offset comparison — a reset that caught back up to the same maxOffset
+      // would otherwise be kept with stale rows — so rebuild from scratch.
       console.warn(
-        `[stream ${args.streamPath}] Server stream incarnation changed (reset/reincarnation); rebuilding local ${slug} mirror.`,
+        `[stream ${args.streamPath}] Cannot verify local ${slug} mirror against server incarnation (changed or unrecorded); rebuilding.`,
         { localIncarnation, serverIncarnation, localMaxOffset },
       );
       await discardLocalMirror();

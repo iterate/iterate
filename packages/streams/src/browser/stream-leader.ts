@@ -15,7 +15,12 @@
 // same subscriptionKey and `subscribe()` replaces the old connection for that key.
 
 export type WriterRole = {
-  /** Resolves true once this tab wins the lock; never resolves false (it just keeps waiting). */
+  /**
+   * Resolves once this tab wins the lock — OR once `release()` is called before the lock was
+   * granted, so the promise never dangles when an election is torn down while still queued.
+   * Consumers must re-check that they still own the runtime after it resolves (a release that
+   * settles this does so precisely because ownership has already moved on).
+   */
   whenWriter: Promise<void>;
   /** Resign writer role (releases the lock so another tab can take over). */
   release(): void;
@@ -51,8 +56,11 @@ export function acquireWriterRole(args: { lockName: string }): WriterRole {
   return {
     whenWriter,
     release: () => {
+      // Abort a not-yet-granted request, free a held lock, and settle whenWriter so an election
+      // awaiting it can't hang forever when it's released before the lock is ever granted.
       abortController.abort();
       release();
+      signalWriter();
     },
   };
 }
