@@ -50,7 +50,7 @@ export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.t
 export { AiCapability, OrpcCapability } from "~/domains/codemode/example-capabilities.ts";
 export { FetchCapability } from "~/domains/codemode/fetch-capability.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
-export { ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
+export { BindingCapability, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { ContextDO } from "~/itx/context-do.ts";
 export { ItxCapIngress } from "~/itx/http.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
