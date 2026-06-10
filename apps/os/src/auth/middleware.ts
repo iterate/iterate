@@ -137,18 +137,14 @@ export function createOsIterateAuth(context: RequestContext, request: Request) {
 
   const requestOrigin = new URL(request.url).origin;
   const resource = (config.resource ?? context.config.baseUrl ?? requestOrigin).replace(/\/+$/, "");
-  const resourceSet = new Set([resource]);
-  if (isLocalhostOrigin(requestOrigin)) {
-    resourceSet.add(requestOrigin.replace(/\/+$/, ""));
-  }
   const mcpResource = resolveMcpBaseUrl({
     appBaseUrl: context.config.baseUrl,
     mcpBaseUrl: context.config.mcp?.baseUrl,
     requestUrl: request.url,
   });
   const resources = mcpResource
-    ? [...resourceSet, ...oauthResourceAudienceVariants(mcpResource)]
-    : [...resourceSet];
+    ? [resource, ...oauthResourceAudienceVariants(mcpResource)]
+    : [resource];
 
   const authConfig = {
     issuer: config.issuer,
@@ -166,9 +162,4 @@ export function createOsIterateAuth(context: RequestContext, request: Request) {
   const auth = createIterateAuth(authConfig);
   authClients.set(cacheKey, auth);
   return auth;
-}
-
-function isLocalhostOrigin(origin: string) {
-  const hostname = new URL(origin).hostname.toLowerCase();
-  return hostname === "localhost";
 }
