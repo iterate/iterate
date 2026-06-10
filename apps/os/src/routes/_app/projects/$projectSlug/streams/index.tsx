@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { Button } from "@iterate-com/ui/components/button";
@@ -22,20 +21,14 @@ import {
 } from "@iterate-com/ui/components/table";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
-import { projectStreamsListQueryOptions } from "~/lib/project-route-query.ts";
 import { streamPathFromInput, streamPathToSplat } from "~/lib/stream-links.ts";
-import { orpc } from "~/orpc/client.ts";
+import { itxKey, useItxMutation, useItxQuery } from "~/itx/react/index.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
-  loader: async ({ context }) => {
-    const { project } = context;
-    await context.queryClient.ensureQueryData(projectStreamsListQueryOptions(project.id));
-
-    return {
-      breadcrumb: "All",
-      project,
-    };
-  },
+  loader: ({ context }) => ({
+    breadcrumb: "All",
+    project: context.project,
+  }),
   component: ProjectStreamsIndexPage,
 });
 
@@ -45,34 +38,36 @@ type SortDirection = "asc" | "desc";
 function ProjectStreamsIndexPage() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { project } = Route.useLoaderData();
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({
     key: "lastWokenAt",
     direction: "desc",
   });
-  const streamsQueryOptions = projectStreamsListQueryOptions(project.id);
-  const { data } = useQuery(streamsQueryOptions);
-  const createStream = useMutation(
-    orpc.project.streams.create.mutationOptions({
-      onSuccess: async (_state, input) => {
-        await queryClient.invalidateQueries({ queryKey: streamsQueryOptions.queryKey });
-        setFilter("");
-        void navigate({
-          to: "/projects/$projectSlug/streams/$",
-          params: {
-            projectSlug: params.projectSlug,
-            _splat: streamPathToSplat(input.streamPath),
-          },
-        });
-      },
-      onError: (error) => {
-        toast.error(error instanceof Error ? error.message : "Could not create stream.");
-      },
-    }),
-  );
-  const streams = useMemo(() => data?.streams ?? [], [data?.streams]);
+  const { data, isPending } = useItxQuery({
+    project: project.id,
+    queryKey: itxKey.project(project.id, "streams", "list"),
+    queryFn: (itx) => itx.streams.list(),
+  });
+  const createStream = useItxMutation({
+    project: project.id,
+    mutationFn: (itx, input: { streamPath: string }) => itx.streams.create(input),
+    invalidates: [itxKey.project(project.id, "streams")],
+    onSuccess: async (_state, input) => {
+      setFilter("");
+      void navigate({
+        to: "/projects/$projectSlug/streams/$",
+        params: {
+          projectSlug: params.projectSlug,
+          _splat: streamPathToSplat(input.streamPath),
+        },
+      });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Could not create stream.");
+    },
+  });
+  const streams = useMemo(() => data ?? [], [data]);
   const streamPaths = useMemo(() => streams.map((stream) => stream.streamPath), [streams]);
   const visibleStreams = useMemo(() => {
     const query = filter.trim().toLowerCase();
@@ -93,7 +88,6 @@ function ProjectStreamsIndexPage() {
   function submitCreateStream() {
     try {
       createStream.mutate({
-        projectSlugOrId: project.id,
         streamPath: streamPathFromInput(filter),
       });
     } catch (error) {
@@ -153,7 +147,13 @@ function ProjectStreamsIndexPage() {
         </div>
       </form>
 
-      {streams.length === 0 ? (
+      {isPending ? (
+        <Empty className="rounded-lg border">
+          <EmptyHeader>
+            <EmptyTitle>Loading streams…</EmptyTitle>
+          </EmptyHeader>
+        </Empty>
+      ) : streams.length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>No streams</EmptyTitle>
