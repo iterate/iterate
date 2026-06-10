@@ -15,25 +15,38 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/compone
 import { cn } from "@iterate-com/ui/lib/utils";
 
 type SourceCodeLanguage = "typescript" | "json" | "yaml" | "text";
-type EditorExtensions = Exclude<
+export type SourceCodeBlockExtension = Exclude<
   NonNullable<ConstructorParameters<typeof EditorView>[0]>["extensions"],
   undefined
 >;
 
 interface CodeMirrorProps {
   value: string;
-  extensions: readonly EditorExtensions[];
+  extensions: readonly SourceCodeBlockExtension[];
   editable: boolean;
+  selectAllSignal?: number;
   onChange?: (value: string) => void;
   onModEnter?: () => void;
 }
 
-function CodeMirror({ value, extensions, editable, onChange, onModEnter }: CodeMirrorProps) {
+function CodeMirror({
+  value,
+  extensions,
+  editable,
+  selectAllSignal,
+  onChange,
+  onModEnter,
+}: CodeMirrorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const onModEnterRef = useRef(onModEnter);
-  const initialValueRef = useRef(value);
+  const initialSelectAllSignalRef = useRef(selectAllSignal);
+  const selectAllSignalRef = useRef(selectAllSignal);
+  const latestSelectAllSignalRef = useRef(selectAllSignal);
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  latestSelectAllSignalRef.current = selectAllSignal;
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -44,14 +57,11 @@ function CodeMirror({ value, extensions, editable, onChange, onModEnter }: CodeM
   }, [onModEnter]);
 
   useEffect(() => {
-    if (!containerRef.current) {
-      return;
-    }
-
+    if (!containerRef.current) return;
     viewRef.current?.destroy();
 
     const view = new EditorView({
-      doc: initialValueRef.current,
+      doc: valueRef.current,
       extensions: [
         keymap.of([
           {
@@ -83,6 +93,12 @@ function CodeMirror({ value, extensions, editable, onChange, onModEnter }: CodeM
     });
 
     viewRef.current = view;
+    if (
+      latestSelectAllSignalRef.current !== undefined &&
+      latestSelectAllSignalRef.current !== initialSelectAllSignalRef.current
+    ) {
+      selectAll(view);
+    }
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!editable || event.key !== "Tab" || event.metaKey || event.ctrlKey || event.altKey) {
@@ -135,7 +151,31 @@ function CodeMirror({ value, extensions, editable, onChange, onModEnter }: CodeM
     });
   }, [value]);
 
+  useEffect(() => {
+    if (selectAllSignal === undefined || selectAllSignal === selectAllSignalRef.current) {
+      return;
+    }
+    selectAllSignalRef.current = selectAllSignal;
+
+    const view = viewRef.current;
+    if (!view) {
+      return;
+    }
+
+    selectAll(view);
+  }, [selectAllSignal]);
+
   return <div ref={containerRef} />;
+}
+
+function selectAll(view: EditorView) {
+  view.focus();
+  view.dispatch({
+    selection: {
+      anchor: 0,
+      head: view.state.doc.length,
+    },
+  });
 }
 
 export interface SourceCodeBlockProps {
@@ -143,8 +183,12 @@ export interface SourceCodeBlockProps {
   className?: string;
   language?: SourceCodeLanguage;
   showCopyButton?: boolean;
+  showLineNumbers?: boolean;
+  plainChrome?: boolean;
   wrapLongLines?: boolean;
   editable?: boolean;
+  codeMirrorExtensions?: readonly SourceCodeBlockExtension[];
+  selectAllSignal?: number;
   onChange?: (value: string) => void;
   onModEnter?: () => void;
 }
@@ -154,8 +198,12 @@ export function SourceCodeBlock({
   className,
   language = "typescript",
   showCopyButton = true,
+  showLineNumbers = true,
+  plainChrome = false,
   wrapLongLines = true,
   editable = false,
+  codeMirrorExtensions,
+  selectAllSignal,
   onChange,
   onModEnter,
 }: SourceCodeBlockProps) {
@@ -180,8 +228,26 @@ export function SourceCodeBlock({
       keymap.of(searchKeymap),
       EditorView.contentAttributes.of({ tabindex: "0" }),
       wrapLongLines ? EditorView.lineWrapping : [],
+      !showLineNumbers || plainChrome
+        ? EditorView.theme({
+            ".cm-gutters": {
+              display: "none",
+            },
+          })
+        : [],
+      plainChrome
+        ? EditorView.theme({
+            ".cm-activeLine, .cm-activeLineGutter, .cm-selectionMatch": {
+              backgroundColor: "transparent",
+            },
+            ".cm-focused": {
+              outline: "none",
+            },
+          })
+        : [],
+      codeMirrorExtensions ?? [],
     ];
-  }, [language, wrapLongLines]);
+  }, [codeMirrorExtensions, language, plainChrome, showLineNumbers, wrapLongLines]);
 
   const handleCopy = async () => {
     try {
@@ -196,11 +262,17 @@ export function SourceCodeBlock({
 
   return (
     <div className={cn("relative flex min-h-0 flex-col", className)}>
-      <div className="min-h-0 flex-1 overflow-hidden overflow-y-auto rounded border">
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-hidden overflow-y-auto",
+          plainChrome ? "" : "rounded border",
+        )}
+      >
         <CodeMirror
           value={code}
           extensions={extensions}
           editable={editable}
+          selectAllSignal={selectAllSignal}
           onChange={onChange}
           onModEnter={onModEnter}
         />

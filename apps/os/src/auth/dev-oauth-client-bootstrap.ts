@@ -1,6 +1,4 @@
-import { createORPCClient } from "@orpc/client";
-import { RPCLink } from "@orpc/client/fetch";
-import { SERVICE_TOKEN_HEADER, type AuthContractClient } from "@iterate-com/auth-contract";
+import { createAuthContractClient } from "@iterate-com/auth-contract";
 
 const RETRY_DELAY_MS = 1_000;
 const MAX_RETRIES = 30;
@@ -95,16 +93,7 @@ export async function ensureLocalDevOAuthClient(env: Record<string, string | und
 }
 
 function createAuthClient(authOrigin: string, serviceToken: string) {
-  return createORPCClient(
-    new RPCLink({
-      url: `${authOrigin.replace(/\/+$/, "")}/api/orpc/`,
-      fetch: (request: URL | Request, init?: RequestInit) => {
-        const headers = new Headers(request instanceof Request ? request.headers : init?.headers);
-        headers.set(SERVICE_TOKEN_HEADER, serviceToken);
-        return fetch(request, { ...init, headers });
-      },
-    }),
-  ) as AuthContractClient;
+  return createAuthContractClient({ baseUrl: authOrigin, serviceToken });
 }
 
 function isLoopbackOrigin(origin: string) {

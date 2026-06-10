@@ -2,71 +2,6 @@ import type { KnipConfig } from "knip";
 
 type WorkspaceConfig = NonNullable<KnipConfig["workspaces"]>[string];
 
-function makeDualRuntimeAppWorkspace(workerEnvShim: string): WorkspaceConfig {
-  return {
-    // Treat the real runtime roots as explicit entries instead of asking Knip
-    // to infer reachability through Vite/TanStack Start config loading.
-    // `!` marks files that should also count in `knip --production`.
-    entry: [
-      // Alchemy is the non-obvious Cloudflare entry root in these apps.
-      "alchemy.run.ts",
-      // Keep Vite configs as static entries so config-only build deps are
-      // counted, without making Knip execute those config modules.
-      "vite.config.ts",
-      "vite.cf.config.ts",
-      // This script is the package.json `start` target for the built server.
-      "scripts/start.ts",
-      // The local iterate router script is launched by package scripts, but the
-      // custom CLI args are easier to model explicitly here.
-      "scripts/router.ts",
-      "src/entry.node.ts!",
-      "src/entry.workerd.ts!",
-    ],
-    // Keep the project boundary focused on app source and exclude build
-    // artifacts from unused-file analysis. We intentionally keep generated
-    // route trees in-project so route discovery can mark route files as used.
-    project: [
-      // Include non-production helpers in the default run so Knip can flag
-      // orphaned tests and local scripts in these small app workspaces too.
-      "*.test.ts",
-      "scripts/**/*.ts",
-      "src/**/*.{ts,tsx}!",
-      "!drizzle/**!",
-      "!.output/**!",
-      "!dist/**!",
-      "!.alchemy/**!",
-    ],
-    // Disabled on purpose: these apps eagerly validate runtime env in Vite
-    // config, so explicit entries are a cleaner fit than plugin execution.
-    vite: false,
-    paths: {
-      // Model the Workers runtime import so Knip does not treat it like a
-      // normal package import from app source.
-      "cloudflare:workers": [workerEnvShim],
-    },
-    ignoreBinaries: [
-      // `doppler` is a globally installed CLI in this repo's workflow rather
-      // than a package dependency inside each app workspace.
-      "doppler",
-      // These app scripts shell out to the local iterate CLI package by binary
-      // name, which Knip does not infer from the import graph.
-      "iterate",
-    ],
-    ignoreDependencies: [
-      // Knip reports the Workers runtime specifier as `cloudflare`.
-      "cloudflare",
-      // These app scripts shell out to the local iterate CLI package by binary
-      // name, which Knip does not infer from the import graph.
-      "iterate",
-      // The router launches nodemon as a subprocess via tinyexec, which Knip
-      // cannot infer from the import graph.
-      "nodemon",
-      // CSS `@import "tailwindcss"` usage is outside the TS import graph.
-      "tailwindcss",
-    ],
-  };
-}
-
 function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   const base = makeCloudflareTanStackAppWorkspace(workerEnvShim);
   return {
@@ -97,7 +32,7 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
 
 function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   return {
-    entry: ["alchemy.run.ts", "vite.config.ts", "scripts/router.ts", "src/entry.workerd.ts!"],
+    entry: ["alchemy.run.ts", "vite.config.ts", "scripts/router.ts", "src/worker.ts!"],
     project: [
       "*.test.ts",
       "e2e/**/*.ts",
@@ -114,23 +49,6 @@ function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceCon
     },
     ignoreBinaries: ["doppler", "read", "sqlite3"],
     ignoreDependencies: ["cloudflare", "tailwindcss"],
-  };
-}
-
-function makeEventsCloudflareWorkspace(workerEnvShim: string): WorkspaceConfig {
-  const workspace = makeCloudflareTanStackAppWorkspace(workerEnvShim);
-
-  return {
-    ...workspace,
-    entry: [
-      ...(workspace.entry ?? []),
-      "scripts/demo/router.ts",
-      "sqlfu.config.ts",
-      "src/entry.workerd.vitest.ts",
-    ],
-    ignore: ["src/db/migrations/.generated/migrations.ts", "src/durable-objects/sqlfu.config.ts"],
-    ignoreBinaries: [...(workspace.ignoreBinaries ?? []), "sqlfu"],
-    ignoreDependencies: [...(workspace.ignoreDependencies ?? []), "miniflare"],
   };
 }
 
@@ -170,10 +88,6 @@ const config: KnipConfig = {
   // unrelated apps with heavyweight config loading.
   ignoreWorkspaces: [
     "apps/*",
-    "!apps/example",
-    "!apps/example-contract",
-    "!apps/events",
-    "!apps/events-contract",
     "!apps/os",
     "!apps/os-contract",
     "!apps/semaphore",
@@ -184,7 +98,6 @@ const config: KnipConfig = {
   ignoreIssues: {
     // TanStack Start resolves these router factories by convention from the
     // entrypoint, so there is no direct import Knip can follow.
-    "apps/example/src/router.tsx": ["exports"],
     "apps/os/src/router.tsx": ["exports"],
     "apps/os-contract/src/index.ts": ["exports", "types"],
     "apps/os/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
@@ -200,21 +113,8 @@ const config: KnipConfig = {
     "apps/semaphore-contract/src/client.ts": ["types"],
     "apps/semaphore/src/router.tsx": ["exports"],
     "apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts": ["exports"],
-    // Generated SQLFU bundles/configs are loaded by scripts/runtime conventions.
-    "apps/events/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
-    "apps/events/src/db/queries/.generated/index.ts": ["files", "exports", "types"],
-    "apps/events/src/durable-objects/db/migrations/.generated/migrations.ts": ["exports", "types"],
-    "apps/events/src/durable-objects/db/queries/.generated/index.ts": ["exports", "types"],
-    "apps/events/src/durable-objects/db/queries/.generated/tables.ts": ["types"],
-    "apps/events/src/db/queries/.generated/tables.ts": ["files", "types"],
-    "apps/events/src/durable-objects/sqlfu.config.ts": ["files"],
-    "apps/events/src/lib/custom-html-renderers.ts": ["exports"],
-    "apps/events/src/lib/stream-feed-summary.ts": ["types"],
-    "apps/events/src/lib/stream-helpers.ts": ["exports"],
     "packages/shared/src/streams/db/migrations/.generated/migrations.ts": ["exports", "types"],
     "packages/shared/src/streams/db/queries/.generated/tables.ts": ["types"],
-    // Cloudflare discovers DO default exports through Worker bindings.
-    "apps/example/src/durable-objects/example-counter.ts": ["exports"],
     "packages/shared/src/callable/entry.workerd.vitest.ts": ["exports"],
     "packages/shared/src/durable-object-utils/test-harness/initialize-fronting-worker.ts": [
       "exports",
@@ -223,21 +123,6 @@ const config: KnipConfig = {
     "packages/shared/src/durable-object-utils/mixins/fetch-mixin-utils.ts": ["types"],
   },
   workspaces: {
-    "apps/example": makeDualRuntimeAppWorkspace("./src/lib/worker-env.d.ts"),
-    "apps/example-contract": makePrivateContractWorkspace(),
-    "apps/events": {
-      ...makeEventsCloudflareWorkspace("./src/lib/worker-env.d.ts"),
-      ignoreDependencies: [
-        ...(makeEventsCloudflareWorkspace("./src/lib/worker-env.d.ts").ignoreDependencies ?? []),
-        // Form devtools expects the form package in this app workspace even
-        // though the root source only imports the devtools panel directly.
-        "@tanstack/react-form",
-        // SQLFU config is a tool entrypoint; `sqlfu` is intentionally
-        // resolved from the monorepo toolchain rather than app runtime code.
-        "sqlfu",
-      ],
-    },
-    "apps/events-contract": makePrivateContractWorkspace(),
     "apps/semaphore": makeCloudflareTanStackAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/semaphore-contract": makePrivateContractWorkspace(),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),

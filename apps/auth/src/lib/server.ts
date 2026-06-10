@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { parse, serialize } from "hono/utils/cookie";
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createLocalJWKSet, createRemoteJWKSet, jwtVerify, type JSONWebKeySet } from "jose";
 import * as oauth from "oauth4webapi";
 import { z } from "zod/v4";
 import {
@@ -19,14 +19,44 @@ import {
 } from "@iterate-com/shared/auth-claims";
 
 const DEFAULT_ISSUER = "https://auth.iterate.com/api/auth";
+export const DEFAULT_AUTH_HANDLER_BASE_PATH = "/api/iterate-auth";
 const SCOPES = ["openid", "profile", "email", "offline_access"] as const;
 const REFRESH_SKEW_MS = 30_000;
+
+/**
+ * Collapses concurrent calls keyed by the same string into a single in-flight
+ * promise. The OAuth refresh-token grant rotates the refresh token and revokes
+ * the whole family if a rotated token is presented twice, so two requests
+ * carrying the same session cookie must not both hit the token endpoint —
+ * otherwise the loser's "reuse" nukes the session and logs the user out. The
+ * entry is removed once settled so the next (rotated) token starts fresh.
+ */
+export function createSingleFlight<T>(): (key: string, fn: () => Promise<T>) => Promise<T> {
+  const inFlight = new Map<string, Promise<T>>();
+  return (key, fn) => {
+    const existing = inFlight.get(key);
+    if (existing) return existing;
+    // Clear inside the awaited promise's own finally so the entry is gone the
+    // moment callers observe the result — the next (rotated-token) cycle starts
+    // clean, while everyone racing the current cycle still shares this flight.
+    const flight = (async () => {
+      try {
+        return await fn();
+      } finally {
+        inFlight.delete(key);
+      }
+    })();
+    inFlight.set(key, flight);
+    return flight;
+  };
+}
 
 export type IterateAuthConfig = {
   issuer?: string;
   clientId: string;
   clientSecret: string;
   redirectURI: string;
+  jwks?: JSONWebKeySet;
   resource?: string | string[];
   logoutReturnToOrigins?: string[];
   cookiePrefix?: string;
@@ -127,7 +157,9 @@ function buildAuthenticatedSession(
       name:
         userInfo?.[ITERATE_ORGANIZATIONS_CLAIM]?.find(
           (userInfoOrganization) => userInfoOrganization.id === organization.id,
-        )?.name ?? organization.slug,
+        )?.name ??
+        organization.name ??
+        organization.slug,
     })) ?? null;
 
   return {
@@ -160,13 +192,14 @@ export type SessionResponse =
 
 const OAuthState = z.object({
   nonce: z.string(),
+  returnTo: z.string().optional(),
   state: z.string(),
   verifier: z.string(),
 });
 
 type OAuthState = z.infer<typeof OAuthState>;
 
-type JWKS = ReturnType<typeof createRemoteJWKSet>;
+type JWKS = ReturnType<typeof createRemoteJWKSet> | ReturnType<typeof createLocalJWKSet>;
 
 type OAuthInfra = {
   issuerURL: URL;
@@ -246,21 +279,31 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
     return _as;
   }
 
-  async function doRefresh(tokenSet: TokenSet): Promise<TokenSet | null> {
-    if (!tokenSet.refreshToken) return null;
-    const as = await getAuthorizationServer();
-    const response = await oauth.refreshTokenGrantRequest(
-      as,
-      oauthClient,
-      clientAuth,
-      tokenSet.refreshToken,
-      {
-        ...httpOptions(),
-        additionalParameters: { resource: resource() },
-      },
-    );
-    const result = await oauth.processRefreshTokenResponse(as, oauthClient, response);
-    return toTokenSet(result, tokenSet);
+  // The auth server rotates refresh tokens on every use and treats reuse of a
+  // rotated token as theft (revoking the whole token family). Concurrent
+  // requests carrying the same cookie must therefore share one refresh
+  // flight per refresh token instead of racing the token endpoint.
+  const refreshSingleFlight = createSingleFlight<TokenSet | null>();
+
+  function doRefresh(tokenSet: TokenSet): Promise<TokenSet | null> {
+    const refreshToken = tokenSet.refreshToken;
+    if (!refreshToken) return Promise.resolve(null);
+
+    return refreshSingleFlight(refreshToken, async () => {
+      const as = await getAuthorizationServer();
+      const response = await oauth.refreshTokenGrantRequest(
+        as,
+        oauthClient,
+        clientAuth,
+        refreshToken,
+        {
+          ...httpOptions(),
+          additionalParameters: { resource: resource() },
+        },
+      );
+      const result = await oauth.processRefreshTokenResponse(as, oauthClient, response);
+      return toTokenSet(result, tokenSet);
+    });
   }
 
   async function getUserInfo(accessToken: string): Promise<UserInfoClaims | null> {
@@ -306,6 +349,15 @@ export type AuthenticateResult = {
   responseHeaders: Headers;
 };
 
+export type AuthenticateOptions = {
+  /**
+   * Fetch fresh userinfo claims from the issuer while authenticating a cookie
+   * session. Route and API auth should usually leave this disabled so JWT
+   * validation stays local to the worker isolate.
+   */
+  includeUserInfo?: boolean;
+};
+
 export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfra) {
   const prefix = config.cookiePrefix ?? "iterate";
   const SESSION_COOKIE = `${prefix}_session`;
@@ -320,7 +372,10 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
   }
 
   return {
-    async authenticate({ headers }: { headers: Headers }): Promise<AuthenticateResult> {
+    async authenticate({
+      headers,
+      includeUserInfo = true,
+    }: { headers: Headers } & AuthenticateOptions): Promise<AuthenticateResult> {
       const cookieJar = parse(headers.get("Cookie") ?? "");
       if (!cookieJar) return { session: null, responseHeaders: new Headers() };
 
@@ -333,15 +388,34 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
 
       if (!tokenSet.idToken) return { session: null, responseHeaders: new Headers() };
 
+      // WebSocket upgrades can't carry Set-Cookie back to the browser, so a
+      // refresh here would rotate the refresh token into a response the
+      // client can never store — burning the session. Upgrades authenticate
+      // with the current access token only; once it expires they fail until
+      // a regular request refreshes the cookie and the client reconnects.
+      const isWebSocketUpgrade = headers.get("upgrade")?.toLowerCase() === "websocket";
+      const accessTokenExpired = tokenSet.accessTokenExpiresAt <= Date.now();
+      const accessTokenExpiresSoon = tokenSet.accessTokenExpiresAt <= Date.now() + REFRESH_SKEW_MS;
+
       let refreshed = false;
-      try {
-        if (tokenSet.accessTokenExpiresAt <= Date.now() + REFRESH_SKEW_MS) {
+      if (accessTokenExpiresSoon && !isWebSocketUpgrade) {
+        try {
           const newTokenSet = await doRefresh(tokenSet);
-          if (!newTokenSet) return { session: null, responseHeaders: new Headers() };
-          tokenSet = newTokenSet;
-          refreshed = true;
+          if (newTokenSet) {
+            tokenSet = newTokenSet;
+            refreshed = true;
+          } else if (accessTokenExpired) {
+            return { session: null, responseHeaders: new Headers() };
+          }
+        } catch {
+          // A failed refresh while the current access token is still valid is
+          // not fatal: serve this request with the existing token and let a
+          // later request retry the refresh.
+          if (accessTokenExpired) {
+            return { session: null, responseHeaders: new Headers() };
+          }
         }
-      } catch {
+      } else if (accessTokenExpired) {
         return { session: null, responseHeaders: new Headers() };
       }
 
@@ -357,7 +431,7 @@ export function createAuthMiddleware(config: IterateAuthConfig, infra: OAuthInfr
 
         const accessToken = AccessTokenClaims.parse(rawAccessToken);
         const idToken = IdTokenClaims.parse(rawIdToken);
-        const userInfo = await getUserInfo(tokenSet.accessToken);
+        const userInfo = includeUserInfo ? await getUserInfo(tokenSet.accessToken) : null;
 
         const responseHeaders = new Headers();
         if (refreshed) {
@@ -421,12 +495,18 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     return OAuthState.parse(JSON.parse(value));
   }
 
-  const app = new Hono().basePath(config.authHandlerBasePath ?? "/api/iterate-auth");
+  const authHandlerBasePath = normalizeAuthHandlerBasePath(config.authHandlerBasePath);
+  const app = new Hono().basePath(authHandlerBasePath);
 
   app.get("/login", async (c) => {
     const as = await getAuthorizationServer();
     if (!as.authorization_endpoint) throw new Error("No authorization_endpoint in server metadata");
 
+    const requestURL = new URL(c.req.url);
+    const returnTo = resolveAllowedReturnTo(requestURL.searchParams.get("return_to"), [
+      requestURL.origin,
+      ...(config.logoutReturnToOrigins ?? []),
+    ]);
     const state = oauth.generateRandomState();
     const verifier = oauth.generateRandomCodeVerifier();
     const nonce = oauth.generateRandomNonce();
@@ -442,10 +522,15 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     url.searchParams.set("code_challenge", challenge);
     url.searchParams.set("code_challenge_method", "S256");
 
-    setCookie(c, STATE_COOKIE, JSON.stringify({ nonce, state, verifier } satisfies OAuthState), {
-      ...cookieOpts(),
-      maxAge: 10 * 60,
-    });
+    setCookie(
+      c,
+      STATE_COOKIE,
+      JSON.stringify({ nonce, returnTo, state, verifier } satisfies OAuthState),
+      {
+        ...cookieOpts(),
+        maxAge: 10 * 60,
+      },
+    );
 
     return c.redirect(url.toString());
   });
@@ -498,7 +583,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
 
     writeCookie(c, toTokenSet(tokenResponse));
     deleteCookie(c, STATE_COOKIE, cookieOpts());
-    return c.redirect(`${requestURL.origin}/`);
+    return c.redirect(oauthState.returnTo ?? `${requestURL.origin}/`);
   });
 
   app.get("/session", async (c) => {
@@ -622,15 +707,40 @@ export function createIterateAuth(config: IterateAuthConfig) {
   }
 
   const issuer = config.issuer ?? DEFAULT_ISSUER;
-  const jwks = createRemoteJWKSet(new URL(`${issuer}/jwks`));
+  const jwks = config.jwks
+    ? createLocalJWKSet(config.jwks)
+    : createRemoteJWKSet(new URL(`${issuer}/jwks`));
   const infra = createOAuthInfra(config, jwks);
 
   const routes = createAuthHandler(config, infra);
   const middleware = createAuthMiddleware(config, infra);
+  const authHandlerBasePath = normalizeAuthHandlerBasePath(config.authHandlerBasePath);
 
   return {
+    authHandlerBasePath,
     handler: routes.handler,
+    handleRequest(request: Request): Response | Promise<Response> | null {
+      if (!isAuthHandlerRequest(request, authHandlerBasePath)) {
+        return null;
+      }
+      return routes.handler(request);
+    },
     authenticate: middleware.authenticate,
     authenticateBearer: middleware.authenticateBearer,
   };
+}
+
+export function isAuthHandlerRequest(
+  request: Request,
+  authHandlerBasePath = DEFAULT_AUTH_HANDLER_BASE_PATH,
+) {
+  const pathname = new URL(request.url).pathname;
+  const basePath = normalizeAuthHandlerBasePath(authHandlerBasePath);
+  return pathname === basePath || pathname.startsWith(`${basePath}/`);
+}
+
+function normalizeAuthHandlerBasePath(authHandlerBasePath: string | undefined) {
+  const basePath = authHandlerBasePath ?? DEFAULT_AUTH_HANDLER_BASE_PATH;
+  const normalized = `/${basePath.replace(/^\/+|\/+$/g, "")}`;
+  return normalized === "/" ? DEFAULT_AUTH_HANDLER_BASE_PATH : normalized;
 }

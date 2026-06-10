@@ -1,24 +1,14 @@
 import { ORPCError, implement } from "@orpc/server";
 import { osContract } from "@iterate-com/os-contract";
-import type { AppContext } from "~/context.ts";
-import { resolveActiveOrganizationAuth } from "~/orpc/auth.ts";
+import type { RequestContext } from "~/request-context.ts";
 import { requireProjectScopedAccess } from "~/orpc/project-access.ts";
 
-export const os = implement(osContract).$context<AppContext>();
+export const os = implement(osContract).$context<RequestContext>();
 
-export const activeOrganizationMiddleware = os.middleware(async ({ context, next }) => {
-  const activeOrganization = resolveActiveOrganizationAuth(context);
-  if (activeOrganization) {
+export const authenticatedUserMiddleware = os.middleware(async ({ context, next }) => {
+  if (context.principal?.type === "user" || context.principal?.type === "admin") {
     return next({
-      context: {
-        activeOrganization,
-      },
-    });
-  }
-
-  if (context.principal?.type === "user") {
-    throw new ORPCError("FORBIDDEN", {
-      message: "OS requires an active Organization.",
+      context: {},
     });
   }
 

@@ -3,10 +3,11 @@
 
 import { useEffect, useState } from "react";
 import { withStreamConnectionFromBrowser, streamRpcPath } from "../../../src/browser/connect.ts";
+import type { StreamViewSearch } from "../lib/stream-view-search.ts";
 
 const POLL_INTERVAL_MS = 1_000;
 
-export function StreamStateView({ streamPath }: { streamPath: string }) {
+export function StreamStateView({ streamView }: { streamView: StreamViewSearch }) {
   const [status, setStatus] = useState("connecting");
   const [stateText, setStateText] = useState<string | undefined>();
   const [error, setError] = useState<string | undefined>();
@@ -19,7 +20,10 @@ export function StreamStateView({ streamPath }: { streamPath: string }) {
     void (async () => {
       try {
         connection = await withStreamConnectionFromBrowser({
-          url: new URL(streamRpcPath(streamPath), window.location.href),
+          url: new URL(
+            streamRpcPath({ path: streamView.path, namespace: streamView.namespace }),
+            window.location.href,
+          ),
           onConnectionStatusChange: (next) => {
             if (!disposed) setStatus(next);
           },
@@ -50,7 +54,7 @@ export function StreamStateView({ streamPath }: { streamPath: string }) {
       if (timer !== undefined) clearTimeout(timer);
       connection?.[Symbol.dispose]();
     };
-  }, [streamPath]);
+  }, [streamView.namespace, streamView.path]);
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">

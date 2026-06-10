@@ -24,7 +24,9 @@ import {
 import { db } from "./db/index.ts";
 import {
   buildAugmentedScopeClaims,
+  buildOAuthProjectSelectionReferenceId,
   parseOAuthProjectSelectionReferenceId,
+  resolveStoredProjectSelection,
 } from "./oauth-project-selection.ts";
 import { getOsMcpResourceBases, getOsResourceBases } from "./oauth-resources.ts";
 
@@ -68,12 +70,7 @@ async function listOrganizationClaims(
 async function listAccessTokenOrganizationClaims(
   user: Record<string, unknown> | null | undefined,
 ): Promise<IterateAuthAccessTokenOrganizationClaim[]> {
-  const organizations = await listOrganizationClaims(user);
-  return organizations.map((organization) => ({
-    id: organization.id,
-    slug: organization.slug,
-    role: organization.role,
-  }));
+  return await listOrganizationClaims(user);
 }
 
 async function listProjectClaims(
@@ -170,12 +167,27 @@ export function getAuthPlugins(env: Record<string, unknown>) {
             return false;
           }
 
-          return false;
+          const selection = await resolveStoredProjectSelection({ userId: session?.userId });
+
+          return !selection;
         },
-        consentReferenceId: () => undefined,
+        consentReferenceId: async ({ session }) => {
+          const selection = await resolveStoredProjectSelection({ userId: session?.userId });
+          if (!selection || !session?.userId) {
+            return undefined;
+          }
+
+          return buildOAuthProjectSelectionReferenceId({
+            projectIds: selection,
+            userId: session.userId,
+          });
+        },
       },
       silenceWarnings: { openidConfig: true, oauthAuthServerConfig: true },
-      accessTokenExpiresIn: 5 * 60,
+      // Long enough that refresh (which rotates the refresh token and treats
+      // rotated-token reuse as theft) is rare, short enough that org/project
+      // claim changes propagate within half an hour.
+      accessTokenExpiresIn: 30 * 60,
       scopes: ["openid", "profile", "email", "offline_access", ITERATE_PROJECT_SELECTION_SCOPE],
       validAudiences,
       allowDynamicClientRegistration: true,
@@ -187,9 +199,10 @@ export function getAuthPlugins(env: Record<string, unknown>) {
         }
 
         const isProjectScopedToken = scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
+        const selectedProjectIds = isProjectScopedToken ? (selection?.projectIds ?? []) : null;
         const [organizations, projects] = await Promise.all([
           listAccessTokenOrganizationClaims(user),
-          listProjectClaims(user, null),
+          listProjectClaims(user, selectedProjectIds),
         ]);
 
         return {

@@ -261,12 +261,27 @@ The base repo is populated from the checked-in holder directory:
 apps/os/iterate-config-repo
 ```
 
-Run the seed script from `apps/os` with Cloudflare credentials and the exact
-Artifacts namespace configured in `alchemy.run.ts`:
+Run the seed command from `apps/os` in the Doppler config that owns the
+environment:
 
 ```sh
-pnpm artifacts:seed-config-base -- --namespace <worker-name>-repos
+pnpm cli artifacts seed-config-base
 ```
+
+The command resolves the Artifacts namespace from the active Doppler/Alchemy
+stage, pushes the checked-in holder tree to `iterate-config-base`, verifies Git
+access to the base repo, then creates and deletes a temporary fork to prove the
+same Artifact fork path used by new Project setup works.
+
+Target another environment explicitly with Doppler:
+
+```sh
+doppler run --project os --config dev_jonas -- pnpm cli artifacts seed-config-base
+doppler run --project os --config dev_localhost -- pnpm cli artifacts seed-config-base
+```
+
+Pass `--namespace <worker-name>-repos` only when repairing an environment whose
+namespace cannot be inferred from its Doppler config.
 
 The holder must contain `iterate.config.jsonc`. The file can stay a placeholder
 until project config semantics exist.

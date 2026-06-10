@@ -6,8 +6,9 @@ import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import type { CaptunServerShard } from "captun/worker";
 import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
-import manifest, { AppConfig } from "./src/app.ts";
+import { AppConfig } from "./src/config.ts";
 import type { CodemodeSession } from "./src/domains/codemode/durable-objects/codemode-session.ts";
+import type { ContextDO } from "./src/itx/context-do.ts";
 import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-append-chain-subscriber.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnection } from "./src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
@@ -17,23 +18,66 @@ import type { SlackAgentDurableObject } from "./src/domains/slack/durable-object
 import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import type { OutboundMcpFromOurClientCapability } from "./src/domains/outbound-mcp-client/entrypoints/outbound-mcp-from-our-client-capability.ts";
-import type { StreamProcessorRunner } from "./src/domains/streams/durable-objects/stream-processor-runner.ts";
+
+const resolvedAuthIssuer =
+  process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER;
+
+// A static JWKS lets the worker verify auth JWTs without any runtime
+// roundtrip to the auth worker, including on cold isolate starts. Fetch it
+// from the issuer at deploy time; an explicit env value overrides. A static
+// JWKS only verifies tokens from the issuer it was exported from, so a
+// loopback issuer (local dev auth server with its own keys) never uses a
+// Doppler-provided production JWKS. Key rotation in auth requires an OS
+// redeploy. On fetch failure the worker falls back to remote JWKS at runtime.
+async function resolveStaticAuthJwks(issuer: string | undefined) {
+  if (!issuer) return undefined;
+
+  let issuerUrl: URL;
+  try {
+    issuerUrl = new URL(issuer);
+  } catch {
+    return undefined;
+  }
+  const issuerIsLoopback = ["localhost", "127.0.0.1", "::1"].includes(issuerUrl.hostname);
+
+  const explicit = process.env.APP_CONFIG_ITERATE_AUTH__JWKS ?? process.env.ITERATE_AUTH_JWKS;
+  if (explicit && !issuerIsLoopback) return explicit;
+
+  try {
+    const response = await fetch(`${issuer.replace(/\/+$/, "")}/jwks`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const jwks = (await response.json()) as { keys?: unknown[] };
+    if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) {
+      throw new Error("JWKS response has no keys");
+    }
+    return JSON.stringify(jwks);
+  } catch (error) {
+    console.warn(
+      `[alchemy.run] Could not fetch JWKS from ${issuer} at deploy time; ` +
+        `the worker will fetch it at runtime instead.`,
+      error instanceof Error ? error.message : error,
+    );
+    return undefined;
+  }
+}
 
 const env = {
   ...process.env,
-  APP_CONFIG_ITERATE_AUTH__ISSUER:
-    process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER,
+  APP_CONFIG_ITERATE_AUTH__ISSUER: resolvedAuthIssuer,
   APP_CONFIG_ITERATE_AUTH__CLIENT_ID:
     process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? process.env.ITERATE_OAUTH_CLIENT_ID,
   APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET:
     process.env.APP_CONFIG_ITERATE_AUTH__CLIENT_SECRET ?? process.env.ITERATE_OAUTH_CLIENT_SECRET,
+  APP_CONFIG_ITERATE_AUTH__JWKS: await resolveStaticAuthJwks(resolvedAuthIssuer),
   APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
     process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
 };
 
 await ensureLocalDevOAuthClient(env);
 
-const ctx = await initAlchemy(manifest, AppConfig, env);
+const ctx = await initAlchemy("os", AppConfig, env);
 const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();
 
 const db = await D1Database("os-db", {
@@ -66,15 +110,13 @@ const stream = DurableObjectNamespace<Stream>("stream", {
   className: "StreamDurableObject",
   sqlite: true,
 });
-const streamProcessorRunner = DurableObjectNamespace<StreamProcessorRunner>(
-  "stream-processor-runner",
-  {
-    className: "StreamProcessorRunner",
-    sqlite: true,
-  },
-);
 const codemodeSession = DurableObjectNamespace<CodemodeSession>("codemode-session-local", {
   className: "CodemodeSession",
+  sqlite: true,
+});
+// itx child contexts (apps/os/docs/itx-spec.md §3): one instance per ctx_… id.
+const itxContext = DurableObjectNamespace<ContextDO>("itx-context", {
+  className: "ContextDO",
   sqlite: true,
 });
 const projectMcpServerConnection = DurableObjectNamespace<ProjectMcpServerConnection>(
@@ -119,6 +161,7 @@ const debugAppendChainSubscriber = ctx.app.local
   : undefined;
 
 const { worker, afterFinalize } = await IterateApp(ctx, {
+  main: "./src/worker.ts",
   bindings: {
     DB: db,
     DO_CATALOG: db,
@@ -127,6 +170,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     ARTIFACTS_NAMESPACE: artifactsNamespace,
     LOADER: WorkerLoader(),
     CODEMODE_SESSION: codemodeSession,
+    ITX_CONTEXT: itxContext,
     AGENT: agent,
     ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
     PROJECT: project,
@@ -137,17 +181,17 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
     OUTBOUND_MCP_FROM_OUR_CLIENT_CAPABILITY: outboundMcpFromOurClientCapability,
     STREAM: stream,
-    STREAM_PROCESSOR_RUNNER: streamProcessorRunner,
     WORKSPACE: workspace,
     ...(debugAppendChainSubscriber == null
       ? {}
       : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
     ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
   },
-  // OS fetches the auth worker's OIDC metadata and token/userinfo endpoints on
-  // auth.iterate.com from inside the Worker. Without this flag, same-zone
-  // subrequests bypass Worker routes and go to origin, which breaks auth-worker
-  // discovery on production iterate.com hostnames.
+  // OAuth login/refresh/logout, and JWT verification when static JWKS is not
+  // configured, can still talk to auth.iterate.com from inside the Worker.
+  // Without this flag, same-zone subrequests bypass Worker routes and go to
+  // origin, which breaks auth-worker discovery on production iterate.com
+  // hostnames.
   compatibilityFlags: ["global_fetch_strictly_public"],
   extraRouteHostnames: [
     ...(mcpRouteHostname ? [mcpRouteHostname] : []),

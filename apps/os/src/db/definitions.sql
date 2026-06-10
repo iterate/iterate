@@ -8,22 +8,6 @@ create table projects (
 
 create index idx_projects_created_at on projects (created_at);
 
-create table project_permissions (
-  project_id text not null references projects (id) on delete cascade,
-  principal_type text not null check (principal_type in ('clerk_organization')),
-  principal_id text not null,
-  role text not null check (role in ('owner')),
-  created_at text not null default current_timestamp,
-  updated_at text not null default current_timestamp,
-  primary key (project_id, principal_type, principal_id)
-);
-
-create index idx_project_permissions_project_id on project_permissions (project_id);
-create index idx_project_permissions_principal on project_permissions (
-  principal_type,
-  principal_id
-);
-
 create table ingress_routes (
   id text primary key not null,
   host text not null unique,

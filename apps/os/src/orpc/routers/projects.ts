@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -5,34 +6,29 @@ import {
   getD1ObjectCatalogRecord,
   listD1ObjectCatalogRecordsByIndex,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { AppContext } from "~/context.ts";
-import {
-  getProjectById,
-  getProjectPermission,
-  updateProjectConfig,
-} from "~/db/queries/.generated/index.ts";
+import type { RequestContext } from "~/request-context.ts";
+import { getProjectById, updateProjectConfig } from "~/db/queries/.generated/index.ts";
 import type { CodemodeSessionStructuredName } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import {
   ensureProjectCustomHostname,
   ensureProjectCustomHostnameStatus,
 } from "~/domains/projects/cloudflare-custom-hostnames.ts";
-import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnectionStructuredName } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import {
   isReservedProjectHostname,
   isValidCustomHostname,
   normalizeCustomHostname,
 } from "~/lib/project-host-routing.ts";
-import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
-import { activeOrganizationMiddleware, os, projectScopeMiddleware } from "~/orpc/orpc.ts";
-import { requireProjectScope } from "~/orpc/project-access.ts";
+import { authenticatedUserMiddleware, os, projectScopeMiddleware } from "~/orpc/orpc.ts";
+import { requireAuthorizedProject, requireProjectScope } from "~/orpc/project-access.ts";
 import { projectCodemodeRouter } from "~/orpc/routers/codemode.ts";
 import { projectAgentsRouter } from "~/orpc/routers/agents.ts";
 import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
 import { projectSecretsRouter } from "~/orpc/routers/secrets.ts";
 import { projectStreamsRouter } from "~/orpc/routers/streams.ts";
-import { ProjectsCapability } from "~/capnweb/projects-capability.ts";
+import { ProjectsCapability } from "~/domains/projects/project-directory.ts";
 
 type ProjectRow = {
   id: string;
@@ -53,13 +49,14 @@ function toProject(row: ProjectRow) {
     customHostname: row.custom_hostname ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    isOrphanedProjectFromAuthService: false,
   };
 }
 
-async function toProjectWithIngressUrl(context: AppContext, row: ProjectRow) {
+async function toProjectWithIngressUrl(row: ProjectRow) {
   return {
     ...toProject(row),
-    ingressUrl: await projectDurableObject(context, row.id).ingressUrl(),
+    ingressUrl: await projectDurableObject(row.id).ingressUrl(),
   };
 }
 
@@ -118,45 +115,40 @@ function isUniqueConstraintError(error: unknown) {
 export const projectsRouter = {
   projects: {
     create: os.projects.create
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async ({ context, input }) => {
         return await new ProjectsCapability({
-          activeOrganization: context.activeOrganization,
           context,
         }).create(input);
       }),
-    list: os.projects.list.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
+    list: os.projects.list.use(authenticatedUserMiddleware).handler(async ({ context, input }) => {
       return await new ProjectsCapability({
-        activeOrganization: context.activeOrganization,
         context,
       }).list(input);
     }),
-    find: os.projects.find.use(activeOrganizationMiddleware).handler(async ({ context, input }) => {
+    find: os.projects.find.use(authenticatedUserMiddleware).handler(async ({ context, input }) => {
       return await new ProjectsCapability({
-        activeOrganization: context.activeOrganization,
         context,
       }).find(input);
     }),
     findBySlug: os.projects.findBySlug
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async ({ context, input }) => {
         return await new ProjectsCapability({
-          activeOrganization: context.activeOrganization,
           context,
         }).findBySlug(input);
       }),
     updateConfig: os.projects.updateConfig
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async ({ context, input }) => {
         const existing = await requireProject({
-          activeOrganization: context.activeOrganization,
           context,
           projectId: input.id,
         });
 
         const normalizedCustomHostname = normalizeConfigCustomHostname(
           input.customHostname,
-          context.projectHostnameBases,
+          context.config.projectHostnameBases,
         );
         const nextCustomHostname =
           normalizedCustomHostname === undefined
@@ -191,17 +183,16 @@ export const projectsRouter = {
           await ensureProjectCustomHostnameStatus({
             apiToken: context.config.cloudflare.apiToken?.exposeSecret(),
             customHostname: row.custom_hostname,
-            projectHostnameBase: context.projectHostnameBases[0],
+            projectHostnameBase: context.config.projectHostnameBases[0],
           });
         }
 
-        return await toProjectWithIngressUrl(context, row);
+        return await toProjectWithIngressUrl(row);
       }),
     customHostnameStatus: os.projects.customHostnameStatus
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async ({ context, input }) => {
         const row = await requireProject({
-          activeOrganization: context.activeOrganization,
           context,
           projectId: input.id,
         });
@@ -209,14 +200,13 @@ export const projectsRouter = {
         return await ensureProjectCustomHostnameStatus({
           apiToken: context.config.cloudflare.apiToken?.exposeSecret(),
           customHostname: row.custom_hostname,
-          projectHostnameBase: context.projectHostnameBases[0],
+          projectHostnameBase: context.config.projectHostnameBases[0],
         });
       }),
     ensureCustomHostname: os.projects.ensureCustomHostname
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async ({ context, input }) => {
         const row = await requireProject({
-          activeOrganization: context.activeOrganization,
           context,
           projectId: input.id,
         });
@@ -238,14 +228,13 @@ export const projectsRouter = {
           apiToken: context.config.cloudflare.apiToken?.exposeSecret(),
           customHostname: row.custom_hostname,
           hostname,
-          projectHostnameBase: context.projectHostnameBases[0],
+          projectHostnameBase: context.config.projectHostnameBases[0],
         });
       }),
     remove: os.projects.remove
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async ({ context, input }) => {
         return await new ProjectsCapability({
-          activeOrganization: context.activeOrganization,
           context,
         }).remove(input);
       }),
@@ -253,16 +242,13 @@ export const projectsRouter = {
   project: {
     get: os.project.get.use(projectScopeMiddleware).handler(async ({ context }) => {
       const row = requireProjectScope(context);
-      return await toProjectWithIngressUrl(context, row);
+      return await toProjectWithIngressUrl(row);
     }),
     lifecycleState: os.project.lifecycleState
       .use(projectScopeMiddleware)
       .handler(async ({ context }) => {
         const project = requireProjectScope(context);
-        return await projectLifecycleDurableObject(
-          context,
-          project.id,
-        ).getProjectLifecycleRunnerState();
+        return await projectLifecycleDurableObject(project.id).getProjectLifecycleRunnerState();
       }),
     codemode: {
       ...projectCodemodeRouter,
@@ -271,7 +257,7 @@ export const projectsRouter = {
         .handler(async ({ context }) => {
           const project = requireProjectScope(context);
           const rows = await listD1ObjectCatalogRecordsByIndex<CodemodeSessionStructuredName>(
-            requireD1ObjectCatalog(context),
+            env.DB,
             {
               className: "CodemodeSession",
               indexName: "projectId",
@@ -285,13 +271,10 @@ export const projectsRouter = {
         .use(projectScopeMiddleware)
         .handler(async ({ context, input }) => {
           const project = requireProjectScope(context);
-          const record = await getD1ObjectCatalogRecord<CodemodeSessionStructuredName>(
-            requireD1ObjectCatalog(context),
-            {
-              className: "CodemodeSession",
-              name: input.name,
-            },
-          );
+          const record = await getD1ObjectCatalogRecord<CodemodeSessionStructuredName>(env.DB, {
+            className: "CodemodeSession",
+            name: input.name,
+          });
 
           if (!record || record.structuredName.projectId !== project.id) {
             throw new ORPCError("NOT_FOUND", {
@@ -311,7 +294,7 @@ export const projectsRouter = {
           const project = requireProjectScope(context);
           const rows =
             await listD1ObjectCatalogRecordsByIndex<ProjectMcpServerConnectionStructuredName>(
-              requireD1ObjectCatalog(context),
+              env.DB,
               {
                 className: "ProjectMcpServerConnection",
                 indexName: "projectId",
@@ -328,76 +311,18 @@ export const projectsRouter = {
   },
 };
 
-async function requireProject(input: {
-  activeOrganization: ActiveOrganizationAuth;
-  context: AppContext;
-  projectId: string;
-}) {
-  const project = await getProjectById(input.context.db, { id: input.projectId });
-
-  if (!project) {
-    throw new ORPCError("NOT_FOUND", {
-      message: `Project ${input.projectId} not found`,
-    });
-  }
-
-  if (input.activeOrganization.isAdminApi) {
-    return project;
-  }
-
-  if (input.context.principal?.can("read", { projectId: input.projectId })) {
-    return project;
-  }
-
-  const permission = await getProjectPermission(input.context.db, {
-    principalId: input.activeOrganization.orgId,
-    principalType: "clerk_organization",
-    projectId: input.projectId,
-  });
-  if (!permission) {
-    throw new ORPCError("FORBIDDEN", {
-      message: `Project ${input.projectId} not found`,
-    });
-  }
-
-  return project;
+async function requireProject(input: { context: RequestContext; projectId: string }) {
+  return await requireAuthorizedProject(input);
 }
 
-function requireD1ObjectCatalog(context: AppContext) {
-  if (!context.doCatalog) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "DO_CATALOG binding not available.",
-    });
-  }
-
-  return context.doCatalog;
-}
-
-function requireProjectDurableObjectNamespace(context: AppContext) {
-  if (!context.projectDurableObjectNamespace) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "PROJECT binding not available.",
-    });
-  }
-
-  return context.projectDurableObjectNamespace;
-}
-
-function projectDurableObject(context: AppContext, projectId: string) {
-  return requireProjectDurableObjectNamespace(context).getByName(
-    getProjectDurableObjectName(projectId),
-  );
+function projectDurableObject(projectId: string) {
+  return getProjectDurableObjectStub(projectId);
 }
 
 type ProjectLifecycleStateRpc = {
   getProjectLifecycleRunnerState(): Promise<unknown>;
 };
 
-function projectLifecycleDurableObject(
-  context: AppContext,
-  projectId: string,
-): ProjectLifecycleStateRpc {
-  return requireProjectDurableObjectNamespace(context).getByName(
-    getProjectDurableObjectName(projectId),
-  ) as unknown as ProjectLifecycleStateRpc;
+function projectLifecycleDurableObject(projectId: string): ProjectLifecycleStateRpc {
+  return getProjectDurableObjectStub(projectId) as unknown as ProjectLifecycleStateRpc;
 }

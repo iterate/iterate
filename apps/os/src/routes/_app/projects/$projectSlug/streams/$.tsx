@@ -1,18 +1,24 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { createBrowserOpenApiClient, orpc } from "~/orpc/client.ts";
+import { createBrowserOpenApiClient } from "~/orpc/client.ts";
 import { ProjectStreamView } from "~/components/project-stream-view.tsx";
-import { streamPathFromSplat } from "~/lib/stream-links.ts";
+import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
+import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
+  params: {
+    parse: (raw) => ({
+      _splat: streamPathFromSplat(raw._splat),
+    }),
+    stringify: (parsed) => ({
+      _splat: streamPathToSplat(parsed._splat),
+    }),
+  },
   ssr: false,
   loader: async ({ context, params }) => {
-    const streamPath = streamPathFromSplat(params._splat);
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
+    const streamPath = params._splat;
+    const { project } = context;
 
-    return {
+    return breadcrumbLoaderData({
       breadcrumb: streamPath,
       project,
       streamPath,
@@ -21,7 +27,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
         projectSlug: params.projectSlug,
         streamPath,
       },
-    };
+    });
   },
   component: ProjectStreamDetailPage,
 });

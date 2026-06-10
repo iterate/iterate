@@ -61,7 +61,7 @@ real preview MCP codemode session can use a simple JavaScript block to:
   but not sufficient.
 - Preview project creation can fail if the Artifacts namespace is missing the
   `iterate-config-base` source repo. The checked-in
-  `artifacts:seed-config-base` script is the intended repair path; the deployed
+  `pnpm cli artifacts seed-config-base` command is the intended repair path; the deployed
   worker no longer exposes a seed/debug route.
 - Cloudflare Artifacts write token TTLs must be at most 31,536,000 seconds. The
   repo write-token TTL is set to one year so project `iterate-config` creation

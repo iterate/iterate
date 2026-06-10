@@ -9,7 +9,7 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";
-import { coreProcessorContract } from "../core/contract.ts";
+import { CoreProcessorContract } from "../core/contract.ts";
 
 // Experiment defaults: effectively no rate limiting for normal browser/load tests.
 // Refill is per minute in the token bucket; 6_000_000/min ≈ 100k events/s sustained.
@@ -25,7 +25,7 @@ const CircuitBreakerProcessorState = z.object({
 
 export type CircuitBreakerProcessorState = z.infer<typeof CircuitBreakerProcessorState>;
 
-export const circuitBreakerProcessorContract = defineProcessorContract({
+export const CircuitBreakerContract = defineProcessorContract({
   slug: "circuit-breaker",
   version: "0.1.0",
   description: "Token-bucket rate limiter that trips the stream into paused state.",
@@ -36,7 +36,7 @@ export const circuitBreakerProcessorContract = defineProcessorContract({
     burstCapacity: DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
     refillRatePerMinute: DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE,
   },
-  processorDeps: [coreProcessorContract],
+  processorDeps: [CoreProcessorContract],
   events: {
     "events.iterate.com/circuit-breaker/configured": {
       description: "Configures burst capacity and refill rate for the token bucket.",
@@ -61,41 +61,13 @@ export const circuitBreakerProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/resumed",
   ],
   emits: ["events.iterate.com/stream/paused"],
-  reduce({ state, event }) {
-    if (event.type === "events.iterate.com/circuit-breaker/configured") {
-      return {
-        ...state,
-        burstCapacity: event.payload.burstCapacity,
-        refillRatePerMinute: event.payload.refillRatePerMinute,
-        availableTokens: event.payload.burstCapacity,
-        lastRefillAtMs: Date.parse(event.createdAt),
-      };
-    }
-
-    if (
-      event.type === "events.iterate.com/stream/paused" ||
-      event.type === "events.iterate.com/stream/resumed"
-    ) {
-      return {
-        ...state,
-        availableTokens: state.burstCapacity,
-        lastRefillAtMs: Date.parse(event.createdAt),
-      };
-    }
-
-    if (event.type === "events.iterate.com/stream/woken") {
-      return state;
-    }
-
-    return spendCircuitBreakerToken({ state, event });
-  },
 });
 
 export function shouldTripCircuitBreaker(state: CircuitBreakerProcessorState) {
   return state.availableTokens < 0;
 }
 
-function spendCircuitBreakerToken(args: {
+export function spendCircuitBreakerToken(args: {
   state: CircuitBreakerProcessorState;
   event: { createdAt: string };
 }): CircuitBreakerProcessorState {

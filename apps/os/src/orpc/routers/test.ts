@@ -1,11 +1,11 @@
 import { ORPCError } from "@orpc/server";
-import type { AppContext } from "~/context.ts";
-import { activeOrganizationMiddleware, os } from "~/orpc/orpc.ts";
+import type { RequestContext } from "~/request-context.ts";
+import { authenticatedUserMiddleware, os } from "~/orpc/orpc.ts";
 
 export const testRouter = {
   test: {
     logDemo: os.test.logDemo
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async ({ context, input }) => {
         const requestId = readRequestIdFromLog(context.log);
         const steps = [
@@ -110,12 +110,12 @@ export const testRouter = {
         };
       }),
     serverThrow: os.test.serverThrow.handler(async ({ context, input }): Promise<never> => {
-      requireActiveOrganizationForNeverEndpoint(context);
+      requireOrganizationMemberForNeverEndpoint(context);
       await new Promise((resolve) => setTimeout(resolve, 50));
       throw new Error(input.message);
     }),
     randomLogStream: os.test.randomLogStream
-      .use(activeOrganizationMiddleware)
+      .use(authenticatedUserMiddleware)
       .handler(async function* ({ input, context, signal }) {
         context.log.set({
           randomLogStream: {
@@ -152,17 +152,17 @@ export const testRouter = {
  * `serverThrow` intentionally has a `z.never()` output contract so OpenAPI and
  * clients know it only exercises the server error path. oRPC's middleware
  * generics currently infer a concrete middleware output and cannot compose that
- * with `never`, so this debug-only route performs the same active-organization
+ * with `never`, so this debug-only route performs the same organization-member
  * gate inline while keeping the public contract precise.
  */
-function requireActiveOrganizationForNeverEndpoint(context: AppContext) {
+function requireOrganizationMemberForNeverEndpoint(context: RequestContext) {
   if (context.principal?.type !== "user") {
     throw new ORPCError("UNAUTHORIZED");
   }
 
   if (context.principal.organizations.length === 0) {
     throw new ORPCError("FORBIDDEN", {
-      message: "OS requires an active Organization.",
+      message: "OS requires organization membership.",
     });
   }
 }

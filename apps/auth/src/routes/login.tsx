@@ -33,7 +33,7 @@ export const Route = createFileRoute("/login")({
   beforeLoad: async ({ search }) => {
     const session = await authClient.getSession().catch(() => null);
     if (session && !isOAuthProviderFlowSearch(search)) {
-      throw redirect({ to: search.redirect ?? "/" });
+      throw redirect({ to: safeRedirectPath(search.redirect) });
     }
   },
   loader: () => getLoginState(),
@@ -42,7 +42,7 @@ export const Route = createFileRoute("/login")({
 
 function RouteComponent() {
   const search = Route.useSearch();
-  const { redirect } = search;
+  const redirectTo = safeRedirectPath(search.redirect);
   const { emailOtpEnabled, session } = Route.useLoaderData();
   const signedInSession = session && isOAuthProviderFlowSearch(search) ? session : null;
 
@@ -62,9 +62,9 @@ function RouteComponent() {
         <Separator />
         <CardContent className="pt-6">
           {signedInSession ? (
-            <SignedInAccountCard redirectTo={redirect ?? "/"} session={signedInSession} />
+            <SignedInAccountCard redirectTo={redirectTo} session={signedInSession} />
           ) : (
-            <LoginActions redirectTo={redirect ?? "/"} emailOtpEnabled={emailOtpEnabled} />
+            <LoginActions redirectTo={redirectTo} emailOtpEnabled={emailOtpEnabled} />
           )}
         </CardContent>
       </Card>
@@ -363,7 +363,7 @@ function EmailOtpSignIn({
 
 async function getPostLoginRedirectUrl(fallbackRedirect: string) {
   if (!isOAuthProviderFlow()) {
-    return fallbackRedirect;
+    return safeRedirectPath(fallbackRedirect);
   }
 
   const redirectUrl = new URL("/api/auth/oauth2/authorize", window.location.origin);
@@ -372,6 +372,22 @@ async function getPostLoginRedirectUrl(fallbackRedirect: string) {
   searchParams.delete("sig");
   redirectUrl.search = searchParams.toString();
   return redirectUrl.toString();
+}
+
+function safeRedirectPath(rawRedirect: string | null | undefined) {
+  const fallback = "/";
+  const trimmed = rawRedirect?.trim();
+  if (!trimmed || !trimmed.startsWith("/") || trimmed.startsWith("//")) {
+    return fallback;
+  }
+
+  try {
+    const parsed = new URL(trimmed, "https://iterate-auth.local");
+    if (parsed.origin !== "https://iterate-auth.local") return fallback;
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return fallback;
+  }
 }
 
 function isOAuthProviderFlow() {

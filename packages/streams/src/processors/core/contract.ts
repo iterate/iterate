@@ -6,21 +6,30 @@
 // the circuit-breaker processor.
 
 import { z } from "zod";
+import { Callable } from "@iterate-com/shared/callable/types.ts";
 import { defineProcessorContract } from "../../shared/stream-processors.ts";
 
+/**
+ * The one supported subscriber shape: a Callable descriptor the Stream DO
+ * dispatches with the subscription handshake. The callable names the host
+ * (worker entrypoint or durable object) and the RPC method to invoke; the host
+ * then calls back `subscribeOutbound` to receive batches. No authorization yet:
+ * any appender can point a subscription at any dispatchable target.
+ */
 const SupportedOutboundSubscriber = z.object({
-  type: z.literal("built-in"),
-  transport: z.literal("workers-rpc"),
-  processorSlug: z.string().trim().min(1),
+  type: z.literal("callable"),
+  callable: Callable,
 });
-// TODO: Add dynamic-worker when a worker-name/entrypoint dialer exists.
-// TODO: Add webhooks only if we want non-capnweb delivery semantics.
 
+// Older subscriber shapes still present in stored events/state. They reduce
+// without error but get dropped from supported runtime state, so streams with
+// stale subscriptions simply stop dialing until a callable subscription is
+// (re-)appended.
 const HistoricalOutboundSubscriber = z.union([
   SupportedOutboundSubscriber,
   z.object({
     type: z.literal("built-in"),
-    transport: z.literal("capnweb-websocket"),
+    transport: z.enum(["workers-rpc", "capnweb-websocket"]),
     processorSlug: z.string().trim().min(1),
   }),
   z.object({
@@ -31,7 +40,7 @@ const HistoricalOutboundSubscriber = z.union([
   }),
 ]);
 
-const SupportedSubscriptionConfiguredEvent = z.object({
+export const SupportedSubscriptionConfiguredEvent = z.object({
   offset: z.number().int().min(0),
   type: z.literal("events.iterate.com/stream/subscription-configured"),
   payload: z.object({
@@ -74,7 +83,7 @@ const SubscriptionsByKey = z
     },
   );
 
-export const coreProcessorContract = defineProcessorContract({
+export const CoreProcessorContract = defineProcessorContract({
   slug: "core",
   version: "0.1.0",
   description: "Maintains the stream's own reduced state.",
@@ -234,122 +243,12 @@ export const coreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/resumed",
   ],
   emits: [],
-  reduce({ state, event }) {
-    const next = {
-      ...state,
-      eventCount: state.eventCount + 1,
-      maxOffset: event.offset,
-    };
-
-    switch (event.type) {
-      case "events.iterate.com/stream/paused":
-        return {
-          ...next,
-          paused: true,
-          pauseReason: event.payload.reason ?? null,
-        };
-
-      case "events.iterate.com/stream/resumed":
-        return {
-          ...next,
-          paused: false,
-          pauseReason: null,
-        };
-
-      case "events.iterate.com/stream/created":
-        if (event.offset !== 1) {
-          throw new Error(
-            "events.iterate.com/stream/created must be the first event and have offset 1",
-          );
-        }
-        return {
-          ...next,
-          namespace: event.payload.namespace,
-          path: event.payload.path,
-          createdAt: event.createdAt,
-        };
-
-      case "events.iterate.com/stream/woken":
-        return {
-          ...next,
-          incarnationId: event.payload.incarnationId,
-        };
-
-      case "events.iterate.com/stream/configured":
-        return {
-          ...next,
-          config: {
-            ...next.config,
-            ...event.payload.config,
-          },
-        };
-
-      case "events.iterate.com/stream/metadata-updated":
-        return {
-          ...next,
-          metadata: event.payload.metadata,
-        };
-
-      case "events.iterate.com/stream/child-stream-created": {
-        const childPath = getImmediateChildPath({
-          parentPath: state.path,
-          childPath: event.payload.childPath,
-        });
-        if (childPath === null || next.childPaths.includes(childPath)) return next;
-        return {
-          ...next,
-          childPaths: [...next.childPaths, childPath],
-        };
-      }
-
-      case "events.iterate.com/stream/subscription-configured": {
-        const parsed = SupportedSubscriptionConfiguredEvent.safeParse(event);
-        if (!parsed.success) {
-          const { [event.payload.subscriptionKey]: _removed, ...subscriptionsByKey } =
-            next.subscriptionsByKey;
-          return { ...next, subscriptionsByKey };
-        }
-        return {
-          ...next,
-          subscriptionsByKey: {
-            ...next.subscriptionsByKey,
-            [event.payload.subscriptionKey]: { latestConfiguredEvent: parsed.data },
-          },
-        };
-      }
-
-      case "events.iterate.com/stream/processor-registered":
-        return {
-          ...next,
-          processorsBySlug: {
-            ...next.processorsBySlug,
-            [event.payload.slug]: { latestRegisteredEvent: event },
-          },
-        };
-
-      default:
-        return next;
-    }
-  },
 });
 
-export type CoreProcessorState = z.infer<typeof coreProcessorContract.stateSchema>;
+export type CoreProcessorState = z.infer<typeof CoreProcessorContract.stateSchema>;
 
 export type SubscriptionConfiguredEvent =
   CoreProcessorState["subscriptionsByKey"][string]["latestConfiguredEvent"];
 
 export type ProcessorRegisteredEvent =
   CoreProcessorState["processorsBySlug"][string]["latestRegisteredEvent"];
-
-function getImmediateChildPath(args: { parentPath: string; childPath: string }): string | null {
-  if (args.childPath === args.parentPath) return null;
-  if (args.parentPath === "/") {
-    const [firstSegment] = args.childPath.split("/").filter(Boolean);
-    return firstSegment === undefined ? null : `/${firstSegment}`;
-  }
-
-  const parentPrefix = `${args.parentPath}/`;
-  if (!args.childPath.startsWith(parentPrefix)) return null;
-  const [firstSegment] = args.childPath.slice(parentPrefix.length).split("/").filter(Boolean);
-  return firstSegment === undefined ? null : `${args.parentPath}/${firstSegment}`;
-}

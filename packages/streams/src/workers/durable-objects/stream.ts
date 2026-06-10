@@ -1,20 +1,16 @@
 import { DurableObject } from "cloudflare:workers";
+import { dispatchCallable } from "@iterate-com/shared/callable/runtime.ts";
 import {
   StreamEvent as StreamEventSchema,
   StreamEventInput as StreamEventInputSchema,
   type StreamEvent,
   type StreamEventInput,
 } from "../../shared/event.ts";
-import { getInitialProcessorState, runProcessorReduce } from "../../shared/stream-processors.ts";
+import type { StreamSubscriptionHandshake } from "../stream-processor-host.ts";
+import { getInitialProcessorState } from "../../shared/stream-processors.ts";
 import type { ProcessEventBatch, StreamCoreProcessorState } from "../../types.ts";
-import type { ProcessorStream } from "../../processor-runner.ts";
-import {
-  getAncestorStreamPaths,
-  catchUpCoreProcessorState,
-  coreProcessor,
-  reduceCoreProcessorStateFromEvents,
-} from "../../processors/core/implementation.ts";
-import { coreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
+import { CoreStreamProcessor } from "../../processors/core/implementation.ts";
+import { CoreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
 import type { StreamRpc } from "../../types.ts";
 import { makeRpcTargetClass, type RpcTargetClass } from "../../shared/rpc-target.ts";
 import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecycle.ts";
@@ -25,10 +21,22 @@ import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecyc
  * HTTP/WebSocket Cap'n Web termination belongs at the fronting Worker, which
  * exposes this DO through `StreamRpcTarget`.
  */
+
+// Cloudflare Durable Objects cap each SQLite string/blob/table row at 2 MB.
+// BLOB columns do not raise that ceiling, and SQL-side substr(?) chunking would
+// still require binding the oversized value first, so event JSON is chunked in JS.
+const EVENT_CHUNK_SIZE = 512 * 1024;
+const textEncoder = new TextEncoder();
+
 export class Stream extends DurableObject<Env> implements StreamRpc {
   #coreProcessorState: StreamCoreProcessorState;
-  #coreProcessor = coreProcessor.build({
-    propagateChildStreamCreated: (state) => this.#propagateChildStreamCreated(state),
+  coreProcessor = new CoreStreamProcessor({
+    iterateContext: {
+      stream: {
+        append: (args) => this.append(args),
+        appendBatch: (args) => this.appendBatch(args),
+      },
+    },
   });
 
   // Live delivery connections, keyed by subscriptionKey. Runtime-only: outbound
@@ -40,17 +48,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.ctx.storage.sql.exec(`
-      -- Stream-owned append log. This is the same replay source that external
-      -- StreamProcessorRunner DOs consume over subscribe().
-      create table if not exists events (
-        offset integer primary key autoincrement,
-        type text not null,
-        created_at text not null,
-        idempotency_key text unique,
-        raw_json text not null
-      );
-    `);
+    this.#ensureStorageSchema();
 
     this.#coreProcessorState = this.readCoreProcessorState();
 
@@ -83,13 +81,48 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     this.#reconcile();
   }
 
+  #ensureStorageSchema(): void {
+    // Keep storage normalized:
+    // - `events` is the offset-ordered metadata/index table.
+    // - `event_chunks` stores the full event JSON as bounded UTF-8 byte rows.
+    this.#createEventsTable();
+    this.#createEventChunksTable();
+  }
+
+  #createEventsTable(): void {
+    this.ctx.storage.sql.exec(`
+      -- Stream-owned append log metadata. Full event JSON is stored in event_chunks.
+      -- offset is the replay cursor; idempotency_key's unique constraint is its lookup index.
+      create table if not exists events (
+        offset integer primary key autoincrement,
+        type text not null,
+        created_at text not null,
+        idempotency_key text unique
+      )
+    `);
+  }
+
+  #createEventChunksTable(): void {
+    this.ctx.storage.sql.exec(`
+      -- Full committed event JSON split into ordered byte chunks. The WITHOUT ROWID
+      -- primary key is the lookup index used by point reads and range replay.
+      create table if not exists event_chunks (
+        offset integer not null,
+        chunk_index integer not null,
+        chunk_bytes blob not null,
+        primary key (offset, chunk_index),
+        foreign key (offset) references events(offset) on delete cascade
+      ) without rowid
+    `);
+  }
+
   protected readCoreProcessorState(): StreamCoreProcessorState {
     const stored = this.ctx.storage.kv.get<unknown>("state");
     const storedState =
       stored === undefined
         ? this.#recoverCoreProcessorStateFromEventLog()
-        : coreProcessorContract.stateSchema.parse(stored);
-    if (storedState === undefined) return getInitialProcessorState(coreProcessorContract);
+        : CoreProcessorContract.stateSchema.parse(stored);
+    if (storedState === undefined) return getInitialProcessorState(CoreProcessorContract);
 
     const state = this.#catchUpCoreProcessorState(storedState);
 
@@ -107,7 +140,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     const highestOffset = this.#readHighestEventOffset();
     if (highestOffset <= state.maxOffset) return state;
 
-    return catchUpCoreProcessorState({
+    return this.#reduceCoreProcessorState({
       state,
       events: this.#readEventsInRange({
         afterOffset: state.maxOffset,
@@ -127,25 +160,41 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
   #appendEventRows(events: StreamEvent[]): void {
     for (const event of events) {
+      const rawJson = JSON.stringify(event);
       this.ctx.storage.sql.exec(
         `
-          insert into events (offset, type, created_at, idempotency_key, raw_json)
-          values (?, ?, ?, ?, ?)
+          insert into events (offset, type, created_at, idempotency_key)
+          values (?, ?, ?, ?)
         `,
         event.offset,
         event.type,
         event.createdAt,
         event.idempotencyKey ?? null,
-        JSON.stringify(event),
+      );
+      this.#insertEventChunks(event.offset, rawJson);
+    }
+  }
+
+  #insertEventChunks(offset: number, rawJson: string): void {
+    const rawJsonBytes = textEncoder.encode(rawJson);
+    for (const [chunkIndex, chunk] of chunkBytes(rawJsonBytes, EVENT_CHUNK_SIZE)) {
+      this.ctx.storage.sql.exec(
+        `
+          insert into event_chunks (offset, chunk_index, chunk_bytes)
+          values (?, ?, ?)
+        `,
+        offset,
+        chunkIndex,
+        chunk,
       );
     }
   }
 
   #readEventByOffset(offset: number): StreamEvent | undefined {
     const row = this.ctx.storage.sql
-      .exec<{ rawJson: string }>(
+      .exec<{ offset: number }>(
         `
-          select raw_json as rawJson
+          select offset
           from events
           where offset = ?
           limit 1
@@ -153,14 +202,15 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         offset,
       )
       .toArray()[0];
-    return row === undefined ? undefined : StreamEventSchema.parse(JSON.parse(row.rawJson));
+    if (row === undefined) return undefined;
+    return this.#readEventFromChunks(row.offset);
   }
 
   #readEventByIdempotencyKey(idempotencyKey: string): StreamEvent | undefined {
     const row = this.ctx.storage.sql
-      .exec<{ rawJson: string }>(
+      .exec<{ offset: number }>(
         `
-          select raw_json as rawJson
+          select offset
           from events
           where idempotency_key = ?
           limit 1
@@ -168,7 +218,27 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         idempotencyKey,
       )
       .toArray()[0];
-    return row === undefined ? undefined : StreamEventSchema.parse(JSON.parse(row.rawJson));
+    if (row === undefined) return undefined;
+    return this.#readEventFromChunks(row.offset);
+  }
+
+  #readEventFromChunks(offset: number): StreamEvent {
+    // Do not use group_concat here: it would recreate a multi-MiB SQLite result cell.
+    // Returning bounded chunk rows and joining in JS keeps SQLite row sizes predictable.
+    const chunks = this.ctx.storage.sql
+      .exec<{ chunkBytes: ArrayBuffer }>(
+        `
+          select chunk_bytes as chunkBytes
+          from event_chunks
+          where offset = ?
+          order by chunk_index asc
+        `,
+        offset,
+      )
+      .toArray()
+      .map((row) => row.chunkBytes);
+    const rawJson = decodeChunks(chunks);
+    return StreamEventSchema.parse(JSON.parse(rawJson));
   }
 
   #readEventsInRange(args: {
@@ -176,22 +246,40 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     beforeOffset: number;
     limit: number;
   }): StreamEvent[] {
-    return this.ctx.storage.sql
-      .exec<{ rawJson: string }>(
+    // One indexed metadata subquery picks the replay window; the join then streams each
+    // event's chunks in primary-key order (offset, chunk_index).
+    const chunks = this.ctx.storage.sql
+      .exec<{ offset: number; chunkBytes: ArrayBuffer }>(
         `
-          select raw_json as rawJson
-          from events
-          where offset > ?
-            and offset < ?
-          order by offset asc
-          limit ?
+          select selected.offset as offset, event_chunks.chunk_bytes as chunkBytes
+          from (
+            select offset
+            from events
+            where offset > ?
+              and offset < ?
+            order by offset asc
+            limit ?
+          ) selected
+          join event_chunks on event_chunks.offset = selected.offset
+          order by selected.offset asc, event_chunks.chunk_index asc
         `,
         args.afterOffset,
         args.beforeOffset,
         args.limit,
       )
-      .toArray()
-      .map((row) => StreamEventSchema.parse(JSON.parse(row.rawJson)));
+      .toArray();
+    const chunksByOffset = new Map<number, ArrayBuffer[]>();
+    for (const chunk of chunks) {
+      const eventChunks = chunksByOffset.get(chunk.offset);
+      if (eventChunks === undefined) {
+        chunksByOffset.set(chunk.offset, [chunk.chunkBytes]);
+      } else {
+        eventChunks.push(chunk.chunkBytes);
+      }
+    }
+    return [...chunksByOffset.values()].map((eventChunks) =>
+      StreamEventSchema.parse(JSON.parse(decodeChunks(eventChunks))),
+    );
   }
 
   #recoverCoreProcessorStateFromEventLog(): StreamCoreProcessorState | undefined {
@@ -205,7 +293,22 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     // KV state is the fast path, but SQL rows are the durable source of truth.
     // If a deployed DO has rows but no KV state, replay the event log instead of
     // treating the stream as empty and trying to insert offset 1 again.
-    return reduceCoreProcessorStateFromEvents(events);
+    return this.#reduceCoreProcessorState({
+      state: getInitialProcessorState(CoreProcessorContract),
+      events,
+    });
+  }
+
+  #reduceCoreProcessorState(args: {
+    state: StreamCoreProcessorState;
+    events: readonly StreamEvent[];
+  }): StreamCoreProcessorState {
+    let state = args.state;
+    for (const event of args.events) {
+      if (event.offset <= state.maxOffset) continue;
+      state = this.coreProcessor.reduceEvent({ event, state });
+    }
+    return state;
   }
 
   #resolveStream(streamPath: string): Pick<StreamRpc, "append" | "appendBatch"> {
@@ -261,12 +364,12 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     let workingCoreProcessorState = this.#coreProcessorState;
     const events: StreamEvent[] = [];
     const newEvents: StreamEvent[] = [];
+    const reducedSideEffects: Array<{
+      event: StreamEvent;
+      previousState: StreamCoreProcessorState;
+      state: StreamCoreProcessorState;
+    }> = [];
     const idempotencyHitsInBatch = new Map<string, StreamEvent>();
-    const appendStream: ProcessorStream = {
-      append: (appendArgs) => this.append(appendArgs),
-      appendBatch: (appendArgs) => this.appendBatch(appendArgs),
-    };
-
     // 1. Prepare events and reduced state.
     for (const eventInput of args.events) {
       const input = StreamEventInputSchema.strict().parse(eventInput);
@@ -285,7 +388,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         }
       }
 
-      this.#coreProcessor.beforeAppend?.({
+      this.coreProcessor.validateAppend({
         event: input,
         state: workingCoreProcessorState,
       });
@@ -299,28 +402,22 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         throw new Error(`expected offset ${committed.offset}, got ${input.offset}`);
       }
 
-      const previousCoreState = workingCoreProcessorState;
-
-      const coreReduction = runProcessorReduce({
-        processor: { contract: coreProcessorContract },
+      const previousCoreProcessorState = workingCoreProcessorState;
+      workingCoreProcessorState = this.coreProcessor.reduceEvent({
         event: committed,
-        state: previousCoreState,
+        state: previousCoreProcessorState,
       });
-      if (coreReduction === undefined) {
-        throw new Error(`core processor cannot reduce event type "${committed.type}"`);
-      }
 
-      workingCoreProcessorState = coreProcessorContract.stateSchema.parse(coreReduction.state);
-
-      this.#coreProcessor.afterAppend?.({
-        event: coreReduction.event,
-        previousState: previousCoreState,
+      // Core side effects are deferred until after the commit below:
+      // `processReducedEvent` side effects (e.g. announcing this stream to its
+      // ancestors) call back into `append`/`#resolveStream`, which read
+      // `this.#coreProcessorState` — running them mid-batch would observe the
+      // stale pre-append state (on a brand-new stream that is the
+      // "uninitialized" placeholder namespace/path).
+      reducedSideEffects.push({
+        event: committed,
+        previousState: previousCoreProcessorState,
         state: workingCoreProcessorState,
-        streamMaxOffset: committed.offset,
-        stream: appendStream,
-        shouldApplySideEffects: () => true,
-        blockProcessorUntil: (work) => void work(),
-        keepAlive: (work) => void work,
       });
 
       events.push(committed);
@@ -344,6 +441,13 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     this.writeCoreProcessorState(workingCoreProcessorState);
     this.#coreProcessorState = workingCoreProcessorState;
 
+    // Post-commit core side effects (see the deferral note above). Inline core
+    // side effects are fire-and-forget (`runInBackground`), so this cannot fail
+    // the append.
+    for (const reduced of reducedSideEffects) {
+      this.coreProcessor.processReducedEvent(reduced);
+    }
+
     // 3. Wake live delivery; reconcile only when subscription topology changed.
     // Append success is already decided above — this is pure post-commit fan-out.
     for (const connection of this.#connections.values()) connection.wake();
@@ -354,23 +458,6 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     }
 
     return events;
-  }
-
-  #propagateChildStreamCreated(state: CoreProcessorState) {
-    for (const ancestorPath of getAncestorStreamPaths(state.path)) {
-      const stream = this.env.STREAM.getByName(`${state.namespace}:${ancestorPath}`);
-      Promise.resolve(
-        stream.append({
-          event: {
-            type: "events.iterate.com/stream/child-stream-created",
-            idempotencyKey: `child-stream-created:${ancestorPath}:${state.path}`,
-            payload: { childPath: state.path },
-          },
-        }),
-      ).catch((error: unknown) => {
-        console.error("failed to propagate child stream event", error);
-      });
-    }
   }
 
   getEvent(
@@ -411,16 +498,10 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   }): StreamCoreProcessorState {
     const base = args.coreProcessorState ?? this.#coreProcessorState;
 
-    const coreReduction = runProcessorReduce({
-      processor: { contract: coreProcessorContract },
+    return this.coreProcessor.reduceEvent({
       event: args.event,
       state: base,
     });
-    if (coreReduction === undefined) {
-      throw new Error(`core processor cannot reduce event type "${args.event.type}"`);
-    }
-
-    return coreProcessorContract.stateSchema.parse(coreReduction.state);
   }
 
   /**
@@ -437,9 +518,9 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     subscriptionKey?: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    /** Only deliver these event types. Omit (or include `"*"`) for everything. */
+    eventTypes?: readonly string[];
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
-    // Type-filtered subscriptions belong here later. For now every subscription
-    // observes the stream's full ordered event log after its offset boundary.
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
     return this.#openConnection({ ...args, subscriptionKey, direction: "inbound" });
   }
@@ -448,6 +529,8 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     subscriptionKey: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    /** Only deliver these event types. Omit (or include `"*"`) for everything. */
+    eventTypes?: readonly string[];
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     return this.#openConnection({ ...args, direction: "outbound" });
   }
@@ -515,6 +598,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     subscriptionKey: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
+    eventTypes?: readonly string[];
     onClose?: () => void;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     const subscriptionKey = args.subscriptionKey.trim();
@@ -522,6 +606,15 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
 
     // Replacing any existing connection for this key.
     this.#connections.get(subscriptionKey)?.close();
+
+    // Optional event-type filter (processor hosts pass their contract's
+    // `consumes`). The cursor still advances past non-matching events — they
+    // are skipped, not deferred — so a subscriber's resume offset can sit on a
+    // filtered-out event without ever re-delivering it.
+    const eventTypeFilter =
+      args.eventTypes === undefined || args.eventTypes.includes("*")
+        ? undefined
+        : new Set(args.eventTypes);
 
     // Workers RPC disposes parameter stubs when an RPC method returns unless the
     // callee duplicates them. Keep a retained callback because this stream calls
@@ -547,10 +640,15 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
       draining = true;
       try {
         while (open) {
-          const events = this.getEvents({ afterOffset: cursor, limit: 100 }); // limit hardcoded for now
-          const lastOffset = events.at(-1)?.offset;
+          const readEvents = this.getEvents({ afterOffset: cursor, limit: 100 }); // limit hardcoded for now
+          const lastOffset = readEvents.at(-1)?.offset;
           if (lastOffset === undefined) return; // caught up; the next append wakes us again
           cursor = lastOffset;
+          const events =
+            eventTypeFilter === undefined
+              ? readEvents
+              : readEvents.filter((event) => eventTypeFilter.has(event.type));
+          if (events.length === 0) continue; // whole batch filtered out; keep draining
           connection.batchesSent += 1;
           connection.eventsSent += events.length;
           connection.lastDeliveredAt = new Date().toISOString();
@@ -657,19 +755,30 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     }
   }
 
+  /**
+   * Dials a configured subscriber by dispatching its Callable descriptor with
+   * the subscription handshake. The payload carries a live stream RpcTarget —
+   * Callable's workers-rpc dispatch is plain Workers RPC, so the stub survives —
+   * and the host is expected to call back `subscribeOutbound` to start
+   * receiving batches.
+   */
   async #connectOutboundConnection(args: {
     configured: CoreProcessorState["subscriptionsByKey"][string];
     subscriptionKey: string;
   }) {
-    const streamName = `${this.#coreProcessorState.namespace}:${this.#coreProcessorState.path}`;
-    await this.env.STREAM_PROCESSOR_RUNNER.getByName(
-      `${streamName}:${args.subscriptionKey}`,
-    ).requestSubscription({
-      stream: new StreamRpcTarget(this) as unknown as StreamRpc,
-      subscriptionKey: args.subscriptionKey,
-      streamMaxOffset: this.#coreProcessorState.maxOffset,
-      subscriptionConfiguredEvent: args.configured.latestConfiguredEvent,
-      streamRuntimeState: { coreProcessorState: this.#coreProcessorState },
+    await dispatchCallable({
+      callable: args.configured.latestConfiguredEvent.payload.subscriber.callable,
+      ctx: {
+        env: this.env as unknown as Record<string, unknown>,
+        exports: (this.ctx as { exports?: Record<string, unknown> }).exports,
+      },
+      payload: {
+        stream: new StreamRpcTarget(this) as unknown as StreamRpc,
+        subscriptionKey: args.subscriptionKey,
+        streamMaxOffset: this.#coreProcessorState.maxOffset,
+        subscriptionConfiguredEvent: args.configured.latestConfiguredEvent,
+        streamRuntimeState: { coreProcessorState: this.#coreProcessorState },
+      } satisfies StreamSubscriptionHandshake,
     });
   }
 }
@@ -741,8 +850,8 @@ function installSubscribeRpcTargetOverride(target: RpcTargetClass<StreamRpc, Str
  * Resolves `streamPath` against the current stream's path into a canonical
  * leading-slash path used for the target DO name (`${namespace}:${path}`).
  *
- * Stream identity uses leading-slash paths everywhere — DO names, ancestor names
- * (getAncestorStreamPaths) and runner names all keep it — so resolution preserves
+ * Stream identity uses leading-slash paths everywhere — DO names, ancestor paths
+ * and runner names all keep it — so resolution preserves
  * the leading slash rather than stripping it. Relative paths (`child`, `./child`,
  * `../sibling`) resolve against `basePath`; absolute paths (`/root/x`) resolve from
  * the root. `.` and empty segments are ignored, `..` pops a segment, and a `..` that
@@ -764,6 +873,28 @@ export function resolveStreamPath(basePath: string, streamPath: string): string 
     segments.push(segment);
   }
   return `/${segments.join("/")}`;
+}
+
+function* chunkBytes(value: Uint8Array, chunkSize: number): Generator<[number, ArrayBuffer]> {
+  if (!Number.isInteger(chunkSize) || chunkSize <= 0) {
+    throw new Error("chunkSize must be a positive integer.");
+  }
+  let chunkIndex = 0;
+  for (let start = 0; start < value.byteLength; start += chunkSize) {
+    const end = Math.min(start + chunkSize, value.byteLength);
+    const chunk = new ArrayBuffer(end - start);
+    new Uint8Array(chunk).set(value.subarray(start, end));
+    yield [chunkIndex, chunk];
+    chunkIndex += 1;
+  }
+  if (chunkIndex === 0) yield [0, new ArrayBuffer(0)];
+}
+
+function decodeChunks(chunks: ArrayBuffer[]): string {
+  const textDecoder = new TextDecoder();
+  let value = "";
+  for (const chunk of chunks) value += textDecoder.decode(chunk, { stream: true });
+  return value + textDecoder.decode();
 }
 
 /**

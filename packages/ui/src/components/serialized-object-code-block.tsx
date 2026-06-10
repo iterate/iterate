@@ -58,6 +58,7 @@ export interface SerializedObjectCodeBlockProps {
   showDebugConsoleButton?: boolean;
   scrollToBottom?: boolean;
   showLineNumbers?: boolean;
+  plainChrome?: boolean;
 }
 
 export function SerializedObjectCodeBlock({
@@ -69,6 +70,7 @@ export function SerializedObjectCodeBlock({
   showDebugConsoleButton = false,
   scrollToBottom = false,
   showLineNumbers = true,
+  plainChrome = false,
 }: SerializedObjectCodeBlockProps) {
   const [currentFormat, setCurrentFormat] = useState<SerializedFormat>(initialFormat);
   const [copiedFormat, setCopiedFormat] = useState<SerializedFormat | null>(null);
@@ -87,15 +89,25 @@ export function SerializedObjectCodeBlock({
       EditorView.editable.of(false),
       EditorView.contentAttributes.of({ tabindex: "0" }),
       EditorView.lineWrapping,
-      !showLineNumbers
+      !showLineNumbers || plainChrome
         ? EditorView.theme({
             ".cm-gutters": {
               display: "none",
             },
           })
         : [],
+      plainChrome
+        ? EditorView.theme({
+            ".cm-activeLine, .cm-activeLineGutter, .cm-selectionMatch": {
+              backgroundColor: "transparent",
+            },
+            ".cm-focused": {
+              outline: "none",
+            },
+          })
+        : [],
     ],
-    [currentFormat, showLineNumbers],
+    [currentFormat, plainChrome, showLineNumbers],
   );
 
   const handleCopy = async (format: SerializedFormat) => {
@@ -134,7 +146,10 @@ export function SerializedObjectCodeBlock({
     <div className={cn("relative flex min-h-0 flex-col", className)}>
       <div
         ref={scrollContainerRef}
-        className="cm-SerializedObjectCodeBlock min-h-0 flex-1 overflow-hidden overflow-y-auto rounded border"
+        className={cn(
+          "cm-SerializedObjectCodeBlock min-h-0 flex-1 overflow-hidden overflow-y-auto",
+          plainChrome ? "" : "rounded border",
+        )}
       >
         <CodeMirror value={code} extensions={extensions} />
       </div>

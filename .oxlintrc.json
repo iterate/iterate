@@ -116,7 +116,9 @@
     "iterate/relative-import-extensions": "error",
     "iterate/zod-schema-naming": "error",
     "iterate/drizzle-conventions": "error",
+    "iterate/no-raw-durable-object-binding-access": "error",
     "iterate/no-implied-eval": "error",
+    "iterate/stream-processor-override-args": "error",
     "prefer-const": "off",
     "iterate/prefer-const": "error",
     "iterate/isolated-codemode": [

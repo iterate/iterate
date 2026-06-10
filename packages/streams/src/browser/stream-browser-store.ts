@@ -14,15 +14,16 @@
 
 import type { RpcPromise, RpcStub } from "capnweb";
 import type { StreamEvent, StreamEventInput } from "../shared/event.ts";
-import { createProcessorRunner } from "../processor-runner.ts";
-import type { Processor } from "../processor.ts";
+import type { ProcessorStream } from "../types.ts";
+import type { StreamProcessorSnapshot } from "../stream-processor.ts";
 import type { StreamCoreProcessorState, StreamRpc } from "../types.ts";
-import { createStreamSubscription, type StreamSubscription } from "../subscription.ts";
 import {
+  DEFAULT_STREAM_NAMESPACE,
   withStreamConnectionFromBrowser,
   streamRpcPath,
   type StreamBrowserConnectionStatus,
 } from "./connect.ts";
+import { deleteBrowserProcessorState } from "./processor-state-storage.ts";
 import { acquireWriterRole, streamWriterLockName, type WriterRole } from "./stream-leader.ts";
 import {
   StreamBrowserDatabase,
@@ -30,9 +31,17 @@ import {
   type StreamDatabaseInfo,
 } from "./stream-browser-db.ts";
 
-// Stream DOs are named `${namespace}:${path}`; the browser namespace is "default".
-const STREAM_NAMESPACE = "default";
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
+
+/**
+ * The slice of `StreamProcessor` the browser runtime drives: read the
+ * checkpoint to pick the replay cursor, then feed delivered batches into
+ * `ingest`. Structural so views construct whatever processor class they like.
+ */
+type BrowserHostedProcessor = {
+  snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
+  ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void>;
+};
 
 export type StreamBrowserSnapshot = {
   connectionStatus: StreamBrowserConnectionStatus | "reconnecting" | "subscribing" | "subscribed";
@@ -44,15 +53,23 @@ export type StreamBrowserSnapshot = {
 
 /** What a view tells the runtime about the processor it wants hosted. */
 export type BrowserProcessorConfig = {
-  // Heterogeneous processors; the runner re-infers the contract per call, so the
-  // contract type is intentionally erased here.
-  processor: Processor<any, { sql: SqlClient }>;
+  /** Stable processor identity, used for runtime dedupe, locks, and state rows. */
+  slug: string;
   /** Bumped into the writer-lock name so a schema migration lets a fresh tab take over. */
   schemaVersion: number;
   /** Tables this processor owns, cleared together when the local mirror is discarded. */
   tables: string[];
-  /** Durable resume cursor + reduced state, read back from this processor's own tables. */
-  loadCheckpoint(sql: SqlClient): Promise<{ state: unknown; offset: number } | undefined>;
+  /** Create the concrete processor once the browser runtime has a stream connection. */
+  createProcessor(args: {
+    stream: ProcessorStream;
+    sql: SqlClient;
+    subscriptionKey: string;
+  }): BrowserHostedProcessor;
+};
+
+export type BrowserStreamConnectionConfig = {
+  namespace?: string;
+  streamUrl?: string | URL | ((args: { namespace: string; streamPath: string }) => string | URL);
 };
 
 export type StreamRuntimeState = {
@@ -80,11 +97,11 @@ export type StreamBrowserStore = Disposable & {
 
 const databaseRegistry = new Map<string, { db: StreamBrowserDatabase; refs: number }>();
 
-function acquireDatabase(streamPath: string) {
-  const key = streamPath;
+function acquireDatabase(namespace: string, streamPath: string) {
+  const key = `${namespace}\0${streamPath}`;
   let entry = databaseRegistry.get(key);
   if (entry === undefined) {
-    entry = { db: new StreamBrowserDatabase(STREAM_NAMESPACE, streamPath), refs: 0 };
+    entry = { db: new StreamBrowserDatabase(namespace, streamPath), refs: 0 };
     databaseRegistry.set(key, entry);
   }
   entry.refs += 1;
@@ -105,23 +122,36 @@ const runtimeRegistry = new Map<string, StreamBrowserStore>();
 
 /** Get (or lazily create) the shared runtime for one (path, processor). */
 export function acquireStreamRuntime(
-  args: { streamPath: string } & BrowserProcessorConfig,
+  args: { streamPath: string } & BrowserProcessorConfig & BrowserStreamConnectionConfig,
 ): StreamBrowserStore {
-  const slug = args.processor.contract.slug;
-  const key = `${args.streamPath} ${slug}`;
+  const namespace = args.namespace ?? DEFAULT_STREAM_NAMESPACE;
+  const slug = args.slug;
+  const key = `${namespace} ${args.streamPath} ${slug}`;
   const existing = runtimeRegistry.get(key);
   if (existing !== undefined) return existing;
-  const runtime = createStreamRuntime({ ...args, onDispose: () => runtimeRegistry.delete(key) });
+  const runtime = createStreamRuntime({
+    ...args,
+    namespace,
+    onDispose: () => runtimeRegistry.delete(key),
+  });
   runtimeRegistry.set(key, runtime);
   return runtime;
 }
 
 function createStreamRuntime(
-  args: { streamPath: string; onDispose?: () => void } & BrowserProcessorConfig,
+  args: {
+    namespace: string;
+    streamPath: string;
+    onDispose?: () => void;
+  } & BrowserProcessorConfig &
+    BrowserStreamConnectionConfig,
 ): StreamBrowserStore {
-  const { processor, schemaVersion, tables, loadCheckpoint } = args;
-  const slug = processor.contract.slug;
-  const { db: streamDatabase, release: releaseDatabase } = acquireDatabase(args.streamPath);
+  const { schemaVersion, tables } = args;
+  const slug = args.slug;
+  const { db: streamDatabase, release: releaseDatabase } = acquireDatabase(
+    args.namespace,
+    args.streamPath,
+  );
 
   // A plain SQLite client for the processor. Each committed write nudges the reactive
   // queries (coalesced to one notify per tick so a replay storm shows partial progress).
@@ -147,8 +177,6 @@ function createStreamRuntime(
   const listeners = new Set<() => void>();
   let stream: Awaited<ReturnType<typeof withStreamConnectionFromBrowser>> | undefined;
   let subscriptionHandle: { unsubscribe(): void } | undefined;
-  let subscription: StreamSubscription | undefined;
-  let processing: AsyncDisposable | undefined;
   let writerRole: WriterRole | undefined;
   let connectTimer: ReturnType<typeof setTimeout> | undefined;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -162,7 +190,7 @@ function createStreamRuntime(
     localStorage.getItem(browserSubscriberStorageKey) ?? crypto.randomUUID();
   localStorage.setItem(browserSubscriberStorageKey, browserSubscriberId);
   // One stream subscription per (browser profile, processor); namespace keeps it distinct.
-  const subscriptionKey = `${STREAM_NAMESPACE}:${browserSubscriberId}:${slug}`;
+  const subscriptionKey = `${args.namespace}:${browserSubscriberId}:${slug}`;
   let snapshot: StreamBrowserSnapshot = {
     clearVersion: 0,
     connectionStatus: "connecting",
@@ -248,6 +276,7 @@ function createStreamRuntime(
 
   async function discardLocalMirror() {
     await streamDatabase.clearTables(tables);
+    await deleteBrowserProcessorState({ sql, processorSlug: slug, subscriptionKey });
     await streamDatabase.compact();
     snapshot = {
       ...snapshot,
@@ -261,9 +290,12 @@ function createStreamRuntime(
   // Discard the local mirror when the server has fewer committed events than we do — a
   // reset/rewind makes our stored suffix impossible.
   async function reconcileLocalMirrorWithServer(rpc: RpcStub<StreamRpc>) {
-    const checkpoint = await loadCheckpoint(sql);
-    const localMaxOffset = checkpoint?.offset ?? -1;
-    if (localMaxOffset < 0) return;
+    // Deliberately a throwaway instance: processors memoize their checkpoint on
+    // first read, so the real instance must be created after any discard below.
+    const processor = args.createProcessor({ stream: rpc, sql, subscriptionKey });
+    const checkpoint = await processor.snapshot();
+    const localMaxOffset = checkpoint.offset;
+    if (localMaxOffset <= 0) return; // fresh mirror: nothing to discard
     const { coreProcessorState } = await rpc.runtimeState();
     if (coreProcessorState.maxOffset >= localMaxOffset) return;
     console.warn(
@@ -275,7 +307,7 @@ function createStreamRuntime(
 
   function connect() {
     if (stream !== undefined || disposed) return;
-    const streamUrl = new URL(streamRpcPath(args.streamPath), window.location.href);
+    const streamUrl = new URL(resolveStreamUrl(args), window.location.href);
 
     void withStreamConnectionFromBrowser({
       url: streamUrl,
@@ -325,7 +357,7 @@ function createStreamRuntime(
 
     writerRole = acquireWriterRole({
       lockName: streamWriterLockName({
-        namespace: STREAM_NAMESPACE,
+        namespace: args.namespace,
         streamPath: args.streamPath,
         slug,
         schemaVersion,
@@ -338,19 +370,16 @@ function createStreamRuntime(
         snapshot = { ...snapshot, subscriptionStatus: "leader" };
         emitSnapshot();
         await reconcileLocalMirrorWithServer(election.connection.stream);
-        const checkpoint = await loadCheckpoint(sql);
-        const processorRunner = createProcessorRunner({
-          processor,
-          deps: { sql },
-          storage: { load: () => checkpoint, save: () => {} },
+        const processor = args.createProcessor({
           stream: election.connection.stream,
+          sql,
+          subscriptionKey,
         });
-        const streamSubscription = createStreamSubscription({ subscriptionKey });
-        subscription = streamSubscription;
-        processing = processorRunner.run({ subscription: streamSubscription });
+        const checkpoint = await processor.snapshot();
         return {
-          replayAfterOffset: checkpoint?.offset ?? 0,
-          processEventBatch: streamSubscription.processEventBatch,
+          replayAfterOffset: checkpoint.offset,
+          processEventBatch: (batch: { events: readonly StreamEvent[]; streamMaxOffset: number }) =>
+            processor.ingest(batch),
         };
       })
       .then((ready) => {
@@ -385,10 +414,6 @@ function createStreamRuntime(
   function stopSubscriptionElection() {
     subscriptionHandle?.unsubscribe();
     subscriptionHandle = undefined;
-    void processing?.[Symbol.asyncDispose]();
-    processing = undefined;
-    void subscription?.[Symbol.asyncDispose]();
-    subscription = undefined;
     writerRole?.release();
     writerRole = undefined;
     snapshot = { ...snapshot, subscriptionStatus: "idle" };
@@ -503,4 +528,21 @@ function errorMessage(error: unknown) {
 
 function isWriteStatement(sql: string) {
   return /^\s*(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|REPLACE|PRAGMA\s+user_version)/i.test(sql);
+}
+
+function resolveStreamUrl(args: {
+  namespace: string;
+  streamPath: string;
+  streamUrl?: BrowserStreamConnectionConfig["streamUrl"];
+}) {
+  if (typeof args.streamUrl === "function") {
+    return args.streamUrl({ namespace: args.namespace, streamPath: args.streamPath });
+  }
+  return (
+    args.streamUrl ??
+    streamRpcPath({
+      path: args.streamPath,
+      namespace: args.namespace === DEFAULT_STREAM_NAMESPACE ? undefined : args.namespace,
+    })
+  );
 }

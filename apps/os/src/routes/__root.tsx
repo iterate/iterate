@@ -1,4 +1,3 @@
-/// <reference types="vite/client" />
 import { memo, type ReactNode } from "react";
 import {
   HeadContent,
@@ -7,48 +6,45 @@ import {
   Scripts,
   createRootRouteWithContext,
 } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
 import { TanStackDevtools } from "@tanstack/react-devtools";
 import { FormDevtoolsPanel } from "@tanstack/react-form-devtools";
 import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
-import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
+import { extractPublicConfigSchema } from "@iterate-com/shared/config";
+import { AuthClientProvider } from "@iterate-com/auth/client";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
 import iterateLogoAsset from "@iterate-com/ui/assets/iterate-logo.svg";
-import { DefaultErrorComponent } from "@iterate-com/ui/components/route-defaults";
-import { AppConfig } from "../app.ts";
-import type { OsSessionResponse } from "../auth/client-context.ts";
-import { AuthClientProvider } from "../auth/client.tsx";
+import {
+  DefaultErrorComponent,
+  DefaultNotFoundComponent,
+} from "@iterate-com/ui/components/route-defaults";
+import { AppConfig } from "../config.ts";
 import { orpcClient } from "../orpc/client.ts";
 import appCss from "../styles.css?url";
-import type { RouterContext } from "../router.tsx";
+import { fetchRootAuthSnapshot } from "~/lib/root-auth-snapshot.ts";
+import type { RouterContext } from "~/router-context.ts";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 
-const getInitialAuthSession = createServerFn({ method: "GET" }).handler(
-  ({ context }): OsSessionResponse => {
-    if (!context.iterateAuthSession) {
-      return { authenticated: false };
-    }
-
-    return {
-      authenticated: true,
-      user: context.iterateAuthSession.user,
-      session: context.iterateAuthSession.session,
-    };
-  },
-);
+const rootAuthSnapshotQueryOptions = {
+  queryKey: ["__root-auth-snapshot"] as const,
+  queryFn: () => fetchRootAuthSnapshot(),
+  // The session is a per-page-load snapshot: SSR seeds it and client-side
+  // navigations reuse it. Claims changes propagate on the next full page
+  // load (or token refresh), and the server independently re-authenticates
+  // every request regardless of what the router believes.
+  staleTime: Number.POSITIVE_INFINITY,
+};
 
 export const Route = createRootRouteWithContext<RouterContext>()({
-  loader: async () => {
-    const config = PublicConfigSchema.parse(
-      await (orpcClient.__internal as { publicConfig(input: {}): Promise<unknown> }).publicConfig(
-        {},
-      ),
-    );
+  beforeLoad: async ({ context }) => {
+    return await context.queryClient.ensureQueryData(rootAuthSnapshotQueryOptions);
+  },
+  loader: async ({ context }) => {
+    const config = PublicConfigSchema.parse(await orpcClient.__internal.publicConfig({}));
     return {
       config,
-      authSession: await getInitialAuthSession(),
+      authSession: context.authSession ?? { authenticated: false },
     };
   },
   staleTime: Number.POSITIVE_INFINITY,
@@ -66,6 +62,10 @@ export const Route = createRootRouteWithContext<RouterContext>()({
   shellComponent: RootDocument,
   component: RootComponent,
   errorComponent: RootErrorComponent,
+  // defaultNotFoundComponent on the router already covers this, but the
+  // reference implementation sets it explicitly on the root route too:
+  // https://github.com/TanStack/router/blob/main/examples/react/start-basic/src/routes/__root.tsx
+  notFoundComponent: () => <DefaultNotFoundComponent />,
 });
 
 function RootDocument({ children }: { children: ReactNode }) {
@@ -97,7 +97,7 @@ function RootComponent() {
 const OSDevtools = memo(function OSDevtools() {
   return (
     <TanStackDevtools
-      config={{ position: "bottom-left" }}
+      config={{ position: "bottom-right" }}
       plugins={[
         {
           name: "TanStack Router",

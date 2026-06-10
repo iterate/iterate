@@ -13,35 +13,23 @@ import {
 } from "./preview.ts";
 
 describe("preview app dependency expansion", () => {
-  it("adds explicit dependencies for affected apps", () => {
-    expect(expandPreviewDependencies(["events"])).toEqual(["events", "os"]);
-  });
-
   it("keeps independent apps as-is", () => {
     expect(expandPreviewDependencies(["os"])).toEqual(["os"]);
   });
 
   it("deduplicates dependencies", () => {
-    expect(expandPreviewDependencies(["events", "os"])).toEqual(["events", "os"]);
+    expect(expandPreviewDependencies(["os", "os"])).toEqual(["os"]);
   });
 });
 
 describe("preview app dependency batches", () => {
-  it("keeps dependent apps after their dependencies", () => {
-    expect(
-      batchPreviewAppsByDependencies([cloudflarePreviewApps.os, cloudflarePreviewApps.events]).map(
-        (batch) => batch.map((app) => app.slug),
-      ),
-    ).toEqual([["os"], ["events"]]);
-  });
-
   it("keeps independent apps in the same batch", () => {
     expect(
       batchPreviewAppsByDependencies([
-        cloudflarePreviewApps.agents,
-        cloudflarePreviewApps.example,
+        cloudflarePreviewApps.os,
+        cloudflarePreviewApps.semaphore,
       ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([["agents", "example"]]);
+    ).toEqual([["os", "semaphore"]]);
   });
 });
 
@@ -108,9 +96,9 @@ describe("preview retry selection", () => {
       selectPreviewAppsNeedingRetry({
         previousState: {
           apps: {
-            events: {
-              appDisplayName: "Events",
-              appSlug: "events",
+            os: {
+              appDisplayName: "OS",
+              appSlug: "os",
               headSha: "current-head",
               status: "tests-failed",
               updatedAt: "2026-05-01T00:00:00.000Z",
@@ -120,7 +108,7 @@ describe("preview retry selection", () => {
         },
         pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
-    ).toEqual(["events", "os"]);
+    ).toEqual(["os"]);
   });
 
   it("does not retry previously failed apps from older commits", () => {

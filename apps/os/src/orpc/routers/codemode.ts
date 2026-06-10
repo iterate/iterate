@@ -1,15 +1,15 @@
+import { env } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { StreamPath, type Event, type EventInput } from "@iterate-com/shared/streams/types";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import {
   CodemodeProcessorContract,
   type ToolProviderRegistration,
-} from "@iterate-com/shared/stream-processors/codemode/contract";
+} from "~/domains/codemode/stream-processors/codemode/contract.ts";
 import {
   createCodemodeSession,
   startCodemodeScriptOnSession,
 } from "~/domains/codemode/codemode-session-rpc.ts";
-import type { AppContext } from "~/context.ts";
 import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
@@ -39,7 +39,6 @@ export const projectCodemodeRouter = {
         input.streamPath ?? defaultStreamPathForProjectSession(generateSessionSlug());
       const result = await createSession({
         code: input.code,
-        context,
         events: input.events,
         projectId: project.id,
         providers,
@@ -74,7 +73,6 @@ export const projectCodemodeRouter = {
       });
       const result = await executeScriptOnSession({
         code: input.code,
-        context,
         events: input.events,
         projectId: project.id,
         providers,
@@ -205,19 +203,11 @@ function readRecordProps(props: unknown) {
 
 async function executeScriptOnSession(input: {
   code: string;
-  context: AppContext;
   events: EventInput[];
   projectId: string;
   providers: ToolProviderRegistration[];
   streamPath: string;
 }) {
-  const context = input.context;
-  if (!context.codemodeSession) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "CODEMODE_SESSION binding not available.",
-    });
-  }
-
   requireCodemodeStreamPathProject({
     projectId: input.projectId,
     streamPath: input.streamPath,
@@ -233,7 +223,7 @@ async function executeScriptOnSession(input: {
   return await startCodemodeScriptOnSession({
     code: input.code,
     events: input.events,
-    namespace: context.codemodeSession,
+    namespace: env.CODEMODE_SESSION,
     projectId: input.projectId,
     providers: input.providers,
     streamPath: StreamPath.parse(input.streamPath),
@@ -242,19 +232,11 @@ async function executeScriptOnSession(input: {
 
 async function createSession(input: {
   code?: string;
-  context: AppContext;
   events: EventInput[];
   projectId: string;
   providers: ToolProviderRegistration[];
   streamPath: string;
 }) {
-  const context = input.context;
-  if (!context.codemodeSession) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "CODEMODE_SESSION binding not available.",
-    });
-  }
-
   requireCodemodeStreamPathProject({
     projectId: input.projectId,
     streamPath: input.streamPath,
@@ -270,7 +252,7 @@ async function createSession(input: {
   return await createCodemodeSession({
     code: input.code,
     events: input.events,
-    namespace: context.codemodeSession,
+    namespace: env.CODEMODE_SESSION,
     projectId: input.projectId,
     providers: input.providers,
     streamPath: StreamPath.parse(input.streamPath),

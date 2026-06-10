@@ -14,8 +14,8 @@
  */
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { ExecuteCodemodeFunctionCallInput } from "@iterate-com/shared/stream-processors/codemode/implementation";
 import { executeOpenApiToolFunction, type OpenApiBridgeProps } from "./openapi-bridge-core.ts";
+import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
 export { createOpenApiProviderRegistration } from "./openapi-provider-registration.ts";
 
 export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, OpenApiBridgeProps> {

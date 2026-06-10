@@ -6,6 +6,7 @@ import { os } from "@orpc/server";
 import { z } from "zod";
 
 import { claudeMcpScript } from "./claude-mcp.ts";
+import { seedIterateConfigBaseRepoScript } from "./seed-iterate-config-base-repo.ts";
 
 const DEFAULT_APP_CONFIG_BASE_URL = "https://os.iterate.com";
 
@@ -26,6 +27,9 @@ const StreamTuiInput = z.object({
 });
 
 export const router = os.router({
+  artifacts: {
+    "seed-config-base": seedIterateConfigBaseRepoScript,
+  },
   "claude-mcp": claudeMcpScript,
   "stream-tui": os
     .input(StreamTuiInput)

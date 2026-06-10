@@ -1,5 +1,5 @@
 import type { Client } from "sqlfu";
-import type { AppConfig } from "~/app.ts";
+import type { AppConfig } from "~/config.ts";
 import {
   createOAuthState,
   deleteProjectConnection,
@@ -174,7 +174,7 @@ export async function getFreshGoogleAccessToken(input: {
   }
 
   await upsertProjectSecret(input.db, {
-    id: projectSecretId({ typeIdPrefix: input.config.typeIdPrefix.exposeSecret() }),
+    id: projectSecretId({ typeIdPrefix: input.config.typeIdPrefix }),
     key: providerSecretKey("google"),
     material: tokenData.access_token,
     metadata: {

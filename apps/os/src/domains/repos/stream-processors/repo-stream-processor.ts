@@ -1,10 +1,11 @@
+// Implements the "repo" processor.
+// A pure projection of Repo lifecycle facts and Git access state into reduced
+// state. Hosted on RepoDurableObject via createStreamProcessorHost; it has no
+// side effects of its own.
+
 import { z } from "zod";
-import {
-  defineProcessorContract,
-  implementProcessor,
-  reduceProcessorEvents,
-  type StreamEvent,
-} from "@iterate-com/shared/stream-processors";
+import { StreamProcessor } from "@iterate-com/streams/stream-processor";
+import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 
 export function repoStreamPath(repoSlug: string) {
@@ -42,30 +43,27 @@ export const RepoStreamProcessorContract = defineProcessorContract({
   },
   consumes: ["events.iterate.com/repo/created"],
   emits: [],
-  reduce({ state, event }) {
+});
+
+export type RepoStreamProcessorContract = typeof RepoStreamProcessorContract;
+
+export type RepoReducedState = z.infer<typeof RepoStreamProcessorContract.stateSchema>;
+
+export class RepoStreamProcessor extends StreamProcessor<RepoStreamProcessorContract> {
+  readonly contract = RepoStreamProcessorContract;
+
+  protected override reduce(
+    args: Parameters<StreamProcessor<RepoStreamProcessorContract>["reduce"]>[0],
+  ): RepoReducedState {
+    const { event, state } = args;
     switch (event.type) {
       case "events.iterate.com/repo/created":
         return {
           ...state,
           repo: event.payload,
         };
+      default:
+        return state;
     }
-  },
-});
-
-export type RepoReducedState = z.infer<typeof RepoStreamProcessorContract.stateSchema>;
-
-export function createRepoStreamProcessor() {
-  return implementProcessor(RepoStreamProcessorContract, {});
-}
-
-export function reduceRepoStreamEvents(args: {
-  events: readonly StreamEvent[];
-  state?: RepoReducedState;
-}) {
-  return reduceProcessorEvents({
-    contract: RepoStreamProcessorContract,
-    events: args.events,
-    state: args.state,
-  });
+  }
 }

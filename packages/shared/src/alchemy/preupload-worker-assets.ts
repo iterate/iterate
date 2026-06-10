@@ -201,6 +201,7 @@ async function computeCloudflareAssetHash(filePath: string) {
   const hash = createHash("sha256");
   hash.update(await readFile(filePath));
   hash.update(path.extname(filePath).slice(1));
+  hash.update(contentTypeForPath(filePath));
   return hash.digest("hex").slice(0, 32);
 }
 
@@ -256,6 +257,7 @@ function contentTypeForPath(filePath: string) {
   if (filePath.endsWith(".js")) return "application/javascript";
   if (filePath.endsWith(".json") || filePath.endsWith(".map")) return "application/json";
   if (filePath.endsWith(".svg")) return "image/svg+xml";
+  if (filePath.endsWith(".wasm")) return "application/wasm";
   return "application/octet-stream";
 }
 

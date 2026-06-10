@@ -1,7 +1,8 @@
+import { env } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
-import { withStreamConnectionFromWorkers } from "@iterate-com/streams/workers/connect";
 import { createStreamSubscription } from "@iterate-com/streams/subscription";
-import type { AppContext } from "~/context.ts";
+import type { StreamRpc } from "@iterate-com/streams/types";
+import type { RequestContext } from "~/request-context.ts";
 import {
   getStreamsCapability,
   resolveStreamPath,
@@ -10,7 +11,6 @@ import {
   getStreamDurableObjectName,
   toLegacyEvent,
   toNewAfterOffset,
-  type StreamDurableObject,
   type StreamDurableObjectNamespace,
 } from "~/domains/streams/new-stream-runtime.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
@@ -95,7 +95,7 @@ export const projectStreamsRouter = {
     }),
 };
 
-function getProjectStreamsCapability(context: AppContext, projectId: string) {
+function getProjectStreamsCapability(context: RequestContext, projectId: string) {
   if (!context.workerExports) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {
       message: "Worker exports are not available.",
@@ -113,23 +113,19 @@ function getProjectStreamsCapability(context: AppContext, projectId: string) {
 
 async function* subscribeProjectStreamEvents(input: {
   afterOffset?: Parameters<typeof toNewAfterOffset>[0];
-  context: AppContext;
+  context: RequestContext;
   projectId: string;
   signal?: AbortSignal;
   streamPath: string;
 }) {
-  const streamNamespace = requireStreamNamespace(input.context);
+  const streamNamespace = env.STREAM as unknown as StreamDurableObjectNamespace;
   const streamPath = resolveStreamPath(input.streamPath);
   const streamStub = streamNamespace.getByName(
     getStreamDurableObjectName({
       namespace: input.projectId,
       path: streamPath,
     }),
-  );
-  using connection = await withStreamConnectionFromWorkers({
-    url: "https://stream.local/",
-    fetch: (request) => fetchDurableObjectWebSocket(streamStub, request),
-  });
+  ) as unknown as StreamRpc;
   let handle: { unsubscribe(): void } | undefined;
   await using subscription = createStreamSubscription({
     onDispose: () => handle?.unsubscribe(),
@@ -142,7 +138,7 @@ async function* subscribeProjectStreamEvents(input: {
   try {
     if (input.signal?.aborted) return;
     input.signal?.addEventListener("abort", onAbort, { once: true });
-    handle = await connection.stream.subscribe({
+    handle = await streamStub.subscribe({
       processEventBatch: subscription.processEventBatch,
       replayAfterOffset: toNewAfterOffset(input.afterOffset),
     });
@@ -156,29 +152,4 @@ async function* subscribeProjectStreamEvents(input: {
   } finally {
     input.signal?.removeEventListener("abort", onAbort);
   }
-}
-
-function fetchDurableObjectWebSocket(
-  stub: DurableObjectStub<StreamDurableObject>,
-  request: Request,
-) {
-  const url = new URL(request.url);
-  if (url.protocol === "wss:") url.protocol = "https:";
-  if (url.protocol === "ws:") url.protocol = "http:";
-  return stub.fetch(
-    new Request(url, {
-      headers: new Headers(request.headers),
-      method: request.method,
-    }),
-  );
-}
-
-function requireStreamNamespace(context: AppContext): StreamDurableObjectNamespace {
-  if (!context.stream) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "STREAM Durable Object namespace is not configured.",
-    });
-  }
-
-  return context.stream as unknown as StreamDurableObjectNamespace;
 }

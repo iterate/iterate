@@ -193,6 +193,28 @@ export type InputFromDefinitionForType<Definition, Type extends string> =
     : never;
 
 /**
+ * An event delivered through the `"*"` wildcard that is not individually named
+ * in `consumes`. Its `type` is typed as the literal `"*"` — mirroring the
+ * contract entry it matched — so that narrowing over named consumed events
+ * stays exact and the fallthrough branch is reachable instead of `never`:
+ *
+ * ```ts
+ * switch (event.type) {
+ *   case "events.iterate.com/stream/paused":
+ *     event.payload.reason; // fully typed
+ *     break;
+ *   default:
+ *     event.payload; // unknown — wildcard event, runtime type string varies
+ * }
+ * ```
+ *
+ * At runtime `type` holds the actual event type string; the `"*"` literal is a
+ * type-level marker only. To compare against a specific event type, name it in
+ * `consumes` instead of string-matching inside the wildcard branch.
+ */
+export type WildcardConsumedEvent = StreamEvent<"*", unknown> & { payload: unknown };
+
+/**
  * Build the union of stream events corresponding to a `consumes` string
  * array. This is what makes reducer/`afterAppend` narrowing work:
  *
@@ -203,6 +225,13 @@ export type InputFromDefinitionForType<Definition, Type extends string> =
  *   }
  * }
  * ```
+ *
+ * `consumes` semantics by shape:
+ * - named only — exact union of those events; exhaustive switches can end in
+ *   `assertNever(event)`;
+ * - `["*"]` only — plain `StreamEvent` (real `type` string, `unknown` payload);
+ * - `["*", ...named]` — named union plus {@link WildcardConsumedEvent} for
+ *   everything else.
  */
 export type EventFromTypes<
   Events extends EventCatalog,
@@ -211,7 +240,7 @@ export type EventFromTypes<
 > = "*" extends Types[number]
   ? Exclude<Types[number], "*"> extends never
     ? StreamEvent
-    : EventFromType<Events, ProcessorDeps, Exclude<Types[number], "*">>
+    : EventFromType<Events, ProcessorDeps, Exclude<Types[number], "*">> | WildcardConsumedEvent
   : EventFromType<Events, ProcessorDeps, Types[number]>;
 
 export type EventFromType<
@@ -405,10 +434,10 @@ export type ProcessorState<Contract> = Contract extends {
  * `afterAppend`.
  */
 export type ConsumedEvent<Contract> = Contract extends {
-  events: infer Events extends EventCatalog;
+  events: EventCatalog;
   consumes: infer Consumes extends readonly string[];
 }
-  ? EventFromTypes<Events, ProcessorDepsOf<Contract>, Consumes>
+  ? EventFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Consumes>
   : never;
 
 /**
@@ -420,10 +449,10 @@ export type ConsumedEvent<Contract> = Contract extends {
  * plain object literals.
  */
 export type EmittedInput<Contract> = Contract extends {
-  events: infer Events extends EventCatalog;
+  events: EventCatalog;
   emits: infer Emits extends readonly string[];
 }
-  ? InputFromTypes<Events, ProcessorDepsOf<Contract>, Emits>
+  ? InputFromTypes<ContractEventCatalog<Contract>, ProcessorDepsOf<Contract>, Emits>
   : never;
 
 /**
@@ -466,106 +495,6 @@ export type ProcessorReduction<Contract> = {
   event: ConsumedEvent<Contract>;
   previousState: ProcessorState<Contract>;
   state: ProcessorState<Contract>;
-};
-
-/**
- * Runner-owned durable progress for one processor bound to one stream.
- *
- * `reducedThroughOffset` and `afterAppendCompletedThroughOffset` are separate
- * on purpose. A runner may successfully reduce and persist state for an event,
- * then fail while running `afterAppend`. Keeping both offsets lets the runner
- * retry live side effects without replaying reducer state from scratch.
- *
- * This is not part of the processor contract. It is runner bookkeeping: the
- * processor owns `state`, while the runner owns stream progress and side-effect
- * delivery policy.
- */
-export type StoredProcessorState<Contract> = {
-  state: ProcessorState<Contract>;
-  /**
-   * Whether this runner has finished its first attachment to the stream. Before
-   * this flips to true, the runner may apply `firstAttachAfterAppend` to a
-   * recent historical lookback window. After it flips, backlog events are not
-   * "ancient"; they are missed live events from an already-attached processor.
-   */
-  hasCompletedFirstAttach: boolean;
-  /**
-   * Offset boundary captured during first attach. Events above this offset are
-   * live from the processor's perspective. Events at or below it are historical
-   * unless a first-attach lookback policy deliberately treats them as live-ish.
-   */
-  liveAfterOffset: number;
-  reducedThroughOffset: number;
-  afterAppendCompletedThroughOffset: number;
-};
-
-/**
- * Runner policy for the very first time a processor is attached to an existing
- * stream.
- *
- * Historical replay is reduce-only except for a short default lookback window.
- * That default covers processors installed just after stream creation, where a
- * very recent event such as stream initialization should still run side
- * effects. Override this only when that default is confusing or unsafe for a
- * processor. This policy is deliberately backend-only: frontend projections
- * import contracts/reducers and should never decide when side effects run.
- */
-export type FirstAttachAfterAppendPolicy =
-  | { mode: "none" }
-  | { mode: "lookback"; milliseconds: number }
-  | { mode: "all" };
-
-export type ProcessorImplementation<Contract> = {
-  /**
-   * First-attach side-effect policy for runners. Leave this unset for the
-   * standard short lookback default; set `{ mode: "none" }` only for processors
-   * where even recent first-attach side effects are surprising or unsafe. A
-   * specific runner deployment may override this. Keep this off the contract so
-   * frontend code can import contracts without learning backend lifecycle
-   * policy.
-   */
-  firstAttachAfterAppend?: FirstAttachAfterAppendPolicy;
-  /**
-   * Runs after the runner has loaded or replayed reduced state, but before live
-   * post-append processing begins. Use this to materialize runtime-only state
-   * such as HTTP clients, MCP connections, subscriptions, or timers.
-   */
-  onStart?(args: {
-    state: ProcessorState<Contract>;
-    streamApi: ProcessorStreamApi<Contract>;
-    signal: AbortSignal;
-    waitUntil?: (promise: Promise<unknown>) => void;
-  }): Promise<void> | void;
-  /**
-   * Runs for live stream events after the runner has reduced and persisted the
-   * processor state for that event. Historical catch-up is otherwise
-   * reduce-only, except for the first-attach lookback policy.
-   */
-  afterAppend?(args: {
-    event: ConsumedEvent<Contract>;
-    previousState: ProcessorState<Contract>;
-    state: ProcessorState<Contract>;
-    streamApi: ProcessorStreamApi<Contract>;
-    signal: AbortSignal;
-    waitUntil?: (promise: Promise<unknown>) => void;
-  }): Promise<void> | void;
-};
-
-export type BuiltinProcessorImplementation<Contract> = ProcessorImplementation<Contract> & {
-  beforeAppend?(args: {
-    event: StreamEventInput;
-    state: ProcessorState<Contract>;
-  }): Promise<void> | void;
-};
-
-export type Processor<Contract> = {
-  contract: Contract;
-  implementation: ProcessorImplementation<Contract>;
-};
-
-export type BuiltinProcessor<Contract> = {
-  contract: Contract;
-  implementation: BuiltinProcessorImplementation<Contract>;
 };
 
 /**
@@ -735,20 +664,6 @@ export function defineProcessorContract(contract: unknown) {
   return contract;
 }
 
-export function implementProcessor<const Contract>(
-  contract: Contract,
-  implementation: ProcessorImplementation<Contract>,
-): Processor<Contract> {
-  return { contract, implementation };
-}
-
-export function implementBuiltinProcessor<const Contract>(
-  contract: Contract,
-  implementation: BuiltinProcessorImplementation<Contract>,
-): BuiltinProcessor<Contract> {
-  return { contract, implementation };
-}
-
 /**
  * Compile-time exhaustiveness guard for discriminated unions.
  *
@@ -846,25 +761,6 @@ export function getInitialProcessorState<
   return contract.stateSchema.parse(contract.initialState) as ProcessorState<Contract>;
 }
 
-export function createStoredProcessorState<
-  const Contract extends { stateSchema: z.ZodType },
->(args: {
-  contract: Contract;
-  state?: ProcessorState<Contract>;
-  hasCompletedFirstAttach?: boolean;
-  liveAfterOffset?: number;
-  reducedThroughOffset?: number;
-  afterAppendCompletedThroughOffset?: number;
-}): StoredProcessorState<Contract> {
-  return {
-    state: args.state === undefined ? getInitialProcessorState(args.contract) : args.state,
-    hasCompletedFirstAttach: args.hasCompletedFirstAttach ?? false,
-    liveAfterOffset: args.liveAfterOffset ?? 0,
-    reducedThroughOffset: args.reducedThroughOffset ?? 0,
-    afterAppendCompletedThroughOffset: args.afterAppendCompletedThroughOffset ?? 0,
-  };
-}
-
 export function runProcessorReduce<
   const Contract extends {
     events: EventCatalog;
@@ -917,393 +813,12 @@ export function runProcessorReduce<
   };
 }
 
-export function reduceProcessorEvents<
-  const Contract extends {
-    slug: string;
-    stateSchema: z.ZodType;
-    initialState?: unknown;
-    events: EventCatalog;
-    processorDeps?: readonly unknown[];
-    consumes: readonly string[];
-    reduce?: (args: {
-      contract: Contract;
-      state: ProcessorState<Contract>;
-      event: ConsumedEvent<Contract>;
-    }) => ProcessorState<Contract> | null | undefined;
-  },
->(args: {
-  contract: Contract;
-  events: readonly StreamEvent[];
-  state?: ProcessorState<Contract>;
-}): ProcessorState<Contract> {
-  let state = args.state ?? getInitialProcessorState(args.contract);
-
-  for (const event of args.events) {
-    const reduction = runProcessorReduce({
-      processor: { contract: args.contract },
-      event,
-      state,
-    });
-    state = reduction?.state ?? state;
-  }
-
-  return state;
-}
-
-export async function runProcessorOnStart<const Contract>(args: {
-  processor: { contract: Contract; implementation: ProcessorImplementation<Contract> };
-  state: ProcessorState<Contract>;
-  streamApi: ProcessorStreamApi<Contract>;
-  signal: AbortSignal;
-  waitUntil?: (promise: Promise<unknown>) => void;
-}): Promise<void> {
-  await args.processor.implementation.onStart?.({
-    state: args.state,
-    streamApi: args.streamApi,
-    signal: args.signal,
-    waitUntil: args.waitUntil,
-  });
-}
-
-export async function runProcessorAfterAppend<const Contract>(args: {
-  processor: { contract: Contract; implementation: ProcessorImplementation<Contract> };
-  event: ConsumedEvent<Contract>;
-  previousState: ProcessorState<Contract>;
-  state: ProcessorState<Contract>;
-  streamApi: ProcessorStreamApi<Contract>;
-  signal: AbortSignal;
-  waitUntil?: (promise: Promise<unknown>) => void;
-}): Promise<void> {
-  await args.processor.implementation.afterAppend?.({
-    event: args.event,
-    previousState: args.previousState,
-    state: args.state,
-    streamApi: args.streamApi,
-    signal: args.signal,
-    waitUntil: args.waitUntil,
-  });
-}
-
 /**
- * Bring a processor's stored reduced state up to the stream's current end.
- *
- * This is the startup/restart path for runners. It reads a finite stream range,
- * reduces every event into state, calls `onStart` after state is current, and
- * applies the first-attach lookback policy for any historical events that are
- * recent enough to run `afterAppend`.
+ * Enforces the invariant that reduced processor state is object-shaped (so
+ * state slices can evolve safely and hooks never branch on primitive state).
+ * Runners and the `StreamProcessor` class call this after every reduce.
  */
-export async function catchUpProcessorFromStream<
-  const Contract extends {
-    stateSchema: z.ZodType;
-    events: EventCatalog;
-    processorDeps?: readonly unknown[];
-    consumes: readonly string[];
-    reduce?: (args: {
-      contract: Contract;
-      state: ProcessorState<Contract>;
-      event: ConsumedEvent<Contract>;
-    }) => ProcessorState<Contract> | null | undefined;
-  },
->(args: {
-  processor: Processor<Contract>;
-  storedState: StoredProcessorState<Contract>;
-  saveStoredProcessorState(storedState: StoredProcessorState<Contract>): Promise<void>;
-  streamApi: ProcessorStreamApi<Contract>;
-  streamApiForEvent?(event: ConsumedEvent<Contract>): ProcessorStreamApi<Contract>;
-  afterAppendError?(args: {
-    error: unknown;
-    reduction: ProcessorReduction<Contract>;
-  }): Promise<void> | void;
-  signal: AbortSignal;
-  waitUntil?: (promise: Promise<unknown>) => void;
-  now?: Date;
-  firstAttachAfterAppend?: FirstAttachAfterAppendPolicy;
-}): Promise<StoredProcessorState<Contract>> {
-  const events = await args.streamApi.read({
-    afterOffset: args.storedState.reducedThroughOffset,
-    beforeOffset: "end",
-  });
-  /**
-   * Current stream reads are full-range, unfiltered, and unpaginated. Streams
-   * also start with an initialization event. That means:
-   *
-   * - on first attach from offset 0, a real stream should return at least that
-   *   initialization event, so the last event offset is the catch-up boundary;
-   * - on restart from offset N, an empty read means there is nothing after N,
-   *   so N remains the catch-up boundary.
-   *
-   * If reads later become filtered or paginated, this should change to a
-   * cursor-returning read result.
-   */
-  const readThroughOffset = events.at(-1)?.offset ?? args.storedState.reducedThroughOffset;
-  const firstAttach = !args.storedState.hasCompletedFirstAttach;
-  const firstAttachPolicy =
-    args.firstAttachAfterAppend ??
-    args.processor.implementation.firstAttachAfterAppend ??
-    ({ mode: "lookback", milliseconds: 1_000 } satisfies FirstAttachAfterAppendPolicy);
-  const now = args.now ?? new Date();
-
-  let storedState: StoredProcessorState<Contract> = {
-    ...args.storedState,
-    liveAfterOffset: firstAttach ? readThroughOffset : args.storedState.liveAfterOffset,
-    hasCompletedFirstAttach: true,
-  };
-  const pendingAfterAppend: ProcessorReduction<Contract>[] = [];
-
-  for (const event of events) {
-    const reduction = runProcessorReduce({
-      processor: args.processor,
-      state: storedState.state,
-      event,
-    });
-
-    if (reduction != null) {
-      storedState = { ...storedState, state: reduction.state };
-      if (
-        shouldRunAfterAppendDuringCatchUp({
-          event: reduction.event,
-          firstAttach,
-          firstAttachPolicy,
-          now,
-          afterAppendCompletedThroughOffset: args.storedState.afterAppendCompletedThroughOffset,
-        })
-      ) {
-        pendingAfterAppend.push(reduction);
-      }
-    }
-
-    storedState = {
-      ...storedState,
-      reducedThroughOffset: Math.max(storedState.reducedThroughOffset, event.offset),
-    };
-  }
-
-  storedState = {
-    ...storedState,
-    reducedThroughOffset: Math.max(storedState.reducedThroughOffset, readThroughOffset),
-  };
-  await args.saveStoredProcessorState(storedState);
-
-  await runProcessorOnStart({
-    processor: args.processor,
-    state: storedState.state,
-    streamApi: args.streamApi,
-    signal: args.signal,
-    waitUntil: args.waitUntil,
-  });
-
-  for (const reduction of pendingAfterAppend) {
-    try {
-      await runProcessorAfterAppend({
-        processor: args.processor,
-        ...reduction,
-        streamApi: args.streamApiForEvent?.(reduction.event) ?? args.streamApi,
-        signal: args.signal,
-        waitUntil: args.waitUntil,
-      });
-    } catch (error) {
-      await args.afterAppendError?.({ error, reduction });
-      throw error;
-    }
-    storedState = {
-      ...storedState,
-      afterAppendCompletedThroughOffset: Math.max(
-        storedState.afterAppendCompletedThroughOffset,
-        reduction.event.offset,
-      ),
-    };
-    await args.saveStoredProcessorState(storedState);
-  }
-
-  const beforeFinalAfterAppendCompletedThroughOffset =
-    storedState.afterAppendCompletedThroughOffset;
-  storedState = {
-    ...storedState,
-    afterAppendCompletedThroughOffset: Math.max(
-      storedState.afterAppendCompletedThroughOffset,
-      readThroughOffset,
-    ),
-  };
-  if (
-    storedState.afterAppendCompletedThroughOffset > beforeFinalAfterAppendCompletedThroughOffset
-  ) {
-    await args.saveStoredProcessorState(storedState);
-  }
-  return storedState;
-}
-
-/**
- * Consume one stream event that the runner is treating as live.
- *
- * The helper always advances runner progress for the event. If the processor
- * declares the event in `consumes`, it also reduces state, persists that state,
- * then runs `afterAppend`. If the event is not consumed, no hook runs.
- *
- * Important: "live" means "delivered through the runner's live transport", not
- * "guaranteed to be the next stream offset". WebSocket push delivery can race
- * with processor side effects that append new events. In the OpenAI WebSocket
- * proof, Codemode appended a non-triggering Agent input row at offset 13 while
- * Webchat appended the user-message rewrite at offset 14. The Agent runner saw
- * 14 first, advanced its completion cursor through 14, then ignored 13 when it
- * arrived later. That dropped the Codemode primer from Agent history, so the
- * provider request looked valid but lacked the instruction telling the model to
- * respond with executable codemode.
- *
- * This catch-up read is a conservative repair: before accepting an event at
- * offset N, reduce and run hooks for any missing offsets between the stored
- * cursor and N. It keeps stream order authoritative even when callback delivery
- * is not ordered. This is not the final ideal shape. A better runner would have
- * an ordered delivery contract, a pending-offset buffer, or a per-event
- * completion set instead of using one contiguous
- * `afterAppendCompletedThroughOffset` cursor for both ordering and retry.
- */
-export async function consumeLiveProcessorEvent<
-  const Contract extends {
-    events: EventCatalog;
-    processorDeps?: readonly unknown[];
-    consumes: readonly string[];
-    reduce?: (args: {
-      contract: Contract;
-      state: ProcessorState<Contract>;
-      event: ConsumedEvent<Contract>;
-    }) => ProcessorState<Contract> | null | undefined;
-  },
->(args: {
-  processor: Processor<Contract>;
-  storedState: StoredProcessorState<Contract>;
-  event: StreamEvent;
-  saveStoredProcessorState(storedState: StoredProcessorState<Contract>): Promise<void>;
-  streamApi: ProcessorStreamApi<Contract>;
-  streamApiForEvent?(event: ConsumedEvent<Contract>): ProcessorStreamApi<Contract>;
-  afterAppendError?(args: {
-    error: unknown;
-    reduction: ProcessorReduction<Contract>;
-  }): Promise<void> | void;
-  signal: AbortSignal;
-  waitUntil?: (promise: Promise<unknown>) => void;
-}): Promise<StoredProcessorState<Contract>> {
-  let storedState = args.storedState;
-
-  if (args.event.offset > storedState.reducedThroughOffset + 1) {
-    const gapEvents = await args.streamApi.read({
-      afterOffset: storedState.reducedThroughOffset,
-      beforeOffset: args.event.offset,
-    });
-
-    for (const gapEvent of gapEvents) {
-      storedState = await consumeLiveProcessorEventWithoutGapCatchUp({
-        ...args,
-        storedState,
-        event: gapEvent,
-      });
-    }
-  }
-
-  return await consumeLiveProcessorEventWithoutGapCatchUp({
-    ...args,
-    storedState,
-  });
-}
-
-async function consumeLiveProcessorEventWithoutGapCatchUp<
-  const Contract extends {
-    events: EventCatalog;
-    processorDeps?: readonly unknown[];
-    consumes: readonly string[];
-    reduce?: (args: {
-      contract: Contract;
-      state: ProcessorState<Contract>;
-      event: ConsumedEvent<Contract>;
-    }) => ProcessorState<Contract> | null | undefined;
-  },
->(args: {
-  processor: Processor<Contract>;
-  storedState: StoredProcessorState<Contract>;
-  event: StreamEvent;
-  saveStoredProcessorState(storedState: StoredProcessorState<Contract>): Promise<void>;
-  streamApi: ProcessorStreamApi<Contract>;
-  streamApiForEvent?(event: ConsumedEvent<Contract>): ProcessorStreamApi<Contract>;
-  afterAppendError?(args: {
-    error: unknown;
-    reduction: ProcessorReduction<Contract>;
-  }): Promise<void> | void;
-  signal: AbortSignal;
-  waitUntil?: (promise: Promise<unknown>) => void;
-}): Promise<StoredProcessorState<Contract>> {
-  if (args.event.offset <= args.storedState.afterAppendCompletedThroughOffset) {
-    return args.storedState;
-  }
-
-  const reduction = runProcessorReduce({
-    processor: args.processor,
-    event: args.event,
-    state: args.storedState.state,
-  });
-  const storedStateAfterReduce: StoredProcessorState<Contract> = {
-    ...args.storedState,
-    state: reduction?.state ?? args.storedState.state,
-    reducedThroughOffset: Math.max(args.storedState.reducedThroughOffset, args.event.offset),
-    afterAppendCompletedThroughOffset:
-      reduction == null
-        ? Math.max(args.storedState.afterAppendCompletedThroughOffset, args.event.offset)
-        : args.storedState.afterAppendCompletedThroughOffset,
-  };
-
-  await args.saveStoredProcessorState(storedStateAfterReduce);
-
-  if (reduction == null) {
-    return storedStateAfterReduce;
-  }
-
-  try {
-    await runProcessorAfterAppend({
-      processor: args.processor,
-      ...reduction,
-      streamApi: args.streamApiForEvent?.(reduction.event) ?? args.streamApi,
-      signal: args.signal,
-      waitUntil: args.waitUntil,
-    });
-  } catch (error) {
-    await args.afterAppendError?.({ error, reduction });
-    throw error;
-  }
-
-  const storedStateAfterAppend: StoredProcessorState<Contract> = {
-    ...storedStateAfterReduce,
-    afterAppendCompletedThroughOffset: Math.max(
-      storedStateAfterReduce.afterAppendCompletedThroughOffset,
-      args.event.offset,
-    ),
-  };
-  await args.saveStoredProcessorState(storedStateAfterAppend);
-  return storedStateAfterAppend;
-}
-
-function shouldRunAfterAppendDuringCatchUp(args: {
-  event: Pick<StreamEvent, "createdAt" | "offset">;
-  firstAttach: boolean;
-  firstAttachPolicy: FirstAttachAfterAppendPolicy;
-  now: Date;
-  afterAppendCompletedThroughOffset: number;
-}) {
-  if (!args.firstAttach) {
-    return args.event.offset > args.afterAppendCompletedThroughOffset;
-  }
-
-  if (args.firstAttachPolicy.mode === "all") {
-    return true;
-  }
-
-  if (args.firstAttachPolicy.mode === "none") {
-    return false;
-  }
-
-  return (
-    Date.parse(args.event.createdAt) >= args.now.getTime() - args.firstAttachPolicy.milliseconds
-  );
-}
-
-function assertObjectProcessorState(args: { processorSlug: string; value: unknown }) {
+export function assertObjectProcessorState(args: { processorSlug: string; value: unknown }) {
   if (typeof args.value === "object" && args.value !== null && !Array.isArray(args.value)) {
     return;
   }
@@ -1311,7 +826,14 @@ function assertObjectProcessorState(args: { processorSlug: string; value: unknow
   throw new Error(`Processor "${args.processorSlug}" state must be an object.`);
 }
 
-function getConsumedEventDefinition(args: {
+/**
+ * Resolve the payload schema a processor should use for an incoming event:
+ * the named definition (from local `events` or `processorDeps`) when the type
+ * is listed in `consumes`, a permissive `z.unknown()` definition when the
+ * contract consumes `"*"`, and `undefined` when the event is not consumed at
+ * all. This is the runtime counterpart of `ConsumedEvent<Contract>`.
+ */
+export function getConsumedEventDefinition(args: {
   contract: {
     events: EventCatalog;
     processorDeps?: readonly unknown[];

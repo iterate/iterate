@@ -1,10 +1,11 @@
+// Implements the "project-lifecycle" processor.
+// A pure projection of Project lifecycle facts (creation, config worker builds,
+// DNS provisioning) into reduced state. Hosted on ProjectDurableObject via
+// createStreamProcessorHost; it has no side effects of its own.
+
 import { z } from "zod";
-import {
-  defineProcessorContract,
-  implementProcessor,
-  reduceProcessorEvents,
-  type StreamEvent,
-} from "@iterate-com/shared/stream-processors";
+import { StreamProcessor } from "@iterate-com/streams/stream-processor";
+import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 
 export const PROJECT_LIFECYCLE_STREAM_PATH = StreamPath.parse("/");
@@ -95,7 +96,19 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
     PROJECT_CNAME_RECORD_CREATION_FAILED_EVENT_TYPE,
   ],
   emits: [],
-  reduce({ state, event }) {
+});
+
+export type ProjectLifecycleProcessorContract = typeof ProjectLifecycleProcessorContract;
+
+export type ProjectLifecycleState = z.infer<typeof ProjectLifecycleProcessorContract.stateSchema>;
+
+export class ProjectLifecycleProcessor extends StreamProcessor<ProjectLifecycleProcessorContract> {
+  readonly contract = ProjectLifecycleProcessorContract;
+
+  protected override reduce(
+    args: Parameters<StreamProcessor<ProjectLifecycleProcessorContract>["reduce"]>[0],
+  ): ProjectLifecycleState {
+    const { event, state } = args;
     switch (event.type) {
       case PROJECT_CREATED_EVENT_TYPE:
       case LEGACY_PROJECT_CREATED_EVENT_TYPE:
@@ -103,23 +116,8 @@ export const ProjectLifecycleProcessorContract = defineProcessorContract({
           ...state,
           project: event.payload,
         };
+      default:
+        return state;
     }
-  },
-});
-
-export type ProjectLifecycleState = z.infer<typeof ProjectLifecycleProcessorContract.stateSchema>;
-
-export function createProjectLifecycleProcessor() {
-  return implementProcessor(ProjectLifecycleProcessorContract, {});
-}
-
-export function reduceProjectLifecycleEvents(args: {
-  events: readonly StreamEvent[];
-  state?: ProjectLifecycleState;
-}) {
-  return reduceProcessorEvents({
-    contract: ProjectLifecycleProcessorContract,
-    events: args.events,
-    state: args.state,
-  });
+  }
 }

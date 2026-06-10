@@ -21,20 +21,15 @@ import {
   TableRow,
 } from "@iterate-com/ui/components/table";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { EventsDebugLink } from "~/components/events-debug-link.tsx";
-import { orpc } from "~/orpc/client.ts";
+import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
+import { projectStreamsListQueryOptions } from "~/lib/project-route-query.ts";
 import { streamPathFromInput, streamPathToSplat } from "~/lib/stream-links.ts";
+import { orpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
-  loader: async ({ context, params }) => {
-    const project = await context.queryClient.ensureQueryData({
-      ...orpc.projects.findBySlug.queryOptions({ input: { slug: params.projectSlug } }),
-      staleTime: 30_000,
-    });
-    await context.queryClient.ensureQueryData({
-      ...orpc.project.streams.list.queryOptions({ input: { projectSlugOrId: project.id } }),
-      staleTime: 10_000,
-    });
+  loader: async ({ context }) => {
+    const { project } = context;
+    await context.queryClient.ensureQueryData(projectStreamsListQueryOptions(project.id));
 
     return {
       breadcrumb: "All",
@@ -57,13 +52,8 @@ function ProjectStreamsIndexPage() {
     key: "lastWokenAt",
     direction: "desc",
   });
-  const streamsQueryOptions = orpc.project.streams.list.queryOptions({
-    input: { projectSlugOrId: project.id },
-  });
-  const { data } = useQuery({
-    ...streamsQueryOptions,
-    staleTime: 10_000,
-  });
+  const streamsQueryOptions = projectStreamsListQueryOptions(project.id);
+  const { data } = useQuery(streamsQueryOptions);
   const createStream = useMutation(
     orpc.project.streams.create.mutationOptions({
       onSuccess: async (_state, input) => {
@@ -114,7 +104,7 @@ function ProjectStreamsIndexPage() {
   return (
     <section className="w-full space-y-4 p-4">
       <div className="flex justify-end">
-        <EventsDebugLink label="Open namespace in Events" namespace={project.id} streamPath="/" />
+        <StreamDebugLink label="Open root stream" projectSlug={project.slug} streamPath="/" />
       </div>
       <form
         className="flex w-full flex-col gap-2 md:flex-row"
@@ -225,9 +215,9 @@ function ProjectStreamsIndexPage() {
                       {formatRelativeTime(stream.lastWokenAt)}
                     </TableCell>
                     <TableCell className="w-28 text-right">
-                      <EventsDebugLink
+                      <StreamDebugLink
                         label="Open"
-                        namespace={project.id}
+                        projectSlug={project.slug}
                         streamPath={stream.streamPath}
                       />
                     </TableCell>

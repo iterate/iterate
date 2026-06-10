@@ -3,7 +3,7 @@
 import type { Event } from "@iterate-com/shared/streams/types";
 import type { ReceiveFunctionCallResultInput } from "../../src/domains/codemode/durable-objects/codemode-session.ts";
 import { streamProjectEventsUntil, type OsClient } from "./os-client.ts";
-import type { AiCapability, ReposCapability, WorkspaceDurableObject } from "~/entry.workerd.ts";
+import type { AiCapability, ReposCapability, WorkspaceDurableObject } from "~/worker.ts";
 
 export class CodemodeBuilder<Ctx = DefaultCtx> {
   constructor(

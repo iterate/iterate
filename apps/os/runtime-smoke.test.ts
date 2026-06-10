@@ -13,10 +13,10 @@ import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { type ContractRouterClient } from "@orpc/contract";
 import { osContract } from "@iterate-com/os-contract";
-import { extractPublicConfigSchema } from "@iterate-com/shared/apps/config";
+import { extractPublicConfigSchema } from "@iterate-com/shared/config";
 import { x, type Result } from "tinyexec";
 import { describe, expect, test } from "vitest";
-import { AppConfig } from "./src/app.ts";
+import { AppConfig } from "./src/config.ts";
 
 const appRoot = dirname(fileURLToPath(import.meta.url));
 const CF_DEV_PORT = 3015;

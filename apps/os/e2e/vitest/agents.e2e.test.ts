@@ -8,10 +8,12 @@
  */
 import { expect, test } from "vitest";
 import type { Event } from "@iterate-com/shared/streams/types";
-import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "@iterate-com/shared/stream-processors/agent/contract";
+import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import dedent from "dedent";
 import { createTestProjectFixture } from "../test-support/create-test-project.ts";
 import type { OsClient } from "../test-support/os-client.ts";
+import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
+import { getSlackIntegrationDurableObjectName } from "~/domains/slack/slack-naming.ts";
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
@@ -603,7 +605,12 @@ itIfSlackBotToken(
         type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
         payload: expect.objectContaining({
           subscriptionKey: expect.stringContaining("slack-agent:"),
-          subscriber: expect.objectContaining({ processorSlug: "slack-agent" }),
+          subscriber: expect.objectContaining({
+            type: "callable",
+            callable: expect.objectContaining({
+              transformInput: { shallowMerge: { processorName: "slack-agent" } },
+            }),
+          }),
         }),
       }),
     );
@@ -612,7 +619,12 @@ itIfSlackBotToken(
         type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
         payload: expect.objectContaining({
           subscriptionKey: expect.stringContaining("agent:"),
-          subscriber: expect.objectContaining({ processorSlug: "agent-host" }),
+          subscriber: expect.objectContaining({
+            type: "callable",
+            callable: expect.objectContaining({
+              transformInput: { shallowMerge: { processorName: "agent-host" } },
+            }),
+          }),
         }),
       }),
     );
@@ -1118,12 +1130,14 @@ function slackProcessorSubscriptionEvent(input: { projectId: string; suffix: str
     type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
     idempotencyKey: `slack-integration-e2e-subscription:${input.projectId}:${input.suffix}`,
     payload: {
-      subscriptionKey: `slack:${input.projectId}:${input.suffix}`,
-      subscriber: {
-        type: "built-in",
-        transport: "capnweb-websocket",
-        processorSlug: "slack",
-      },
+      // Mirrors SlackIntegrationDurableObject.ensureIntegrationSubscription:
+      // a callable subscriber that dials the SLACK_INTEGRATION host DO.
+      subscriptionKey: `slack:${input.projectId}`,
+      subscriber: durableObjectProcessorSubscriber({
+        bindingName: "SLACK_INTEGRATION",
+        durableObjectName: getSlackIntegrationDurableObjectName(input.projectId),
+        processorName: "slack",
+      }),
     },
   } as const;
 }

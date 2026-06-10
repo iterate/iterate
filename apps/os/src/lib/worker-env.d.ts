@@ -2,7 +2,7 @@ import type { worker } from "../../alchemy.run.ts";
 
 export type CloudflareEnv = typeof worker.Env;
 
-type WorkerEntryExports = typeof import("../entry.workerd.ts");
+type WorkerEntryExports = typeof import("../worker.ts");
 type WorkerMainModule = Pick<
   WorkerEntryExports,
   Extract<
@@ -11,7 +11,8 @@ type WorkerMainModule = Pick<
     | "AiCapability"
     | "FetchCapability"
     | "GmailCapability"
-    | "IterateContextEntrypoint"
+    | "ItxEntrypoint"
+    | "ProjectEgress"
     | "OpenApiBridge"
     | "OrpcCapability"
     | "ProjectCapability"
@@ -40,7 +41,7 @@ declare global {
   namespace Cloudflare {
     /**
      * Tell Cloudflare's runtime types that OS's Worker loopback exports are
-     * exactly the exports from `entry.workerd.ts`.
+     * exactly the exports from `worker.ts`.
      *
      * First-party docs:
      *

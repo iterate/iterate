@@ -1,4 +1,4 @@
-import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
+import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 
 /**
  * Construct a codemode provider registration for a remote MCP server.

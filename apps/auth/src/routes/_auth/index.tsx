@@ -5,6 +5,10 @@ import { Separator } from "@iterate-com/ui/components/separator";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { authClient, useSession } from "../../utils/auth-client.ts";
+import {
+  oauthClientQueryOptions,
+  oauthConsentsQueryOptions,
+} from "../../utils/auth-query-options.ts";
 import { getInitials } from "../../utils/initials.ts";
 import { InfoRow } from "../../utils/info-row.tsx";
 
@@ -52,7 +56,7 @@ function RouteComponent() {
                 variant="outline"
                 onClick={() => navigate({ to: "/projects" })}
               >
-                Manage projects
+                Manage organizations
               </Button>
               <Button
                 className="w-full"
@@ -74,16 +78,14 @@ function RouteComponent() {
 
 function AuthorizedApps() {
   const queryClient = useQueryClient();
+  const consentsQueryOptions = oauthConsentsQueryOptions();
 
-  const consentsQuery = useQuery({
-    queryKey: ["oauth2", "consents"],
-    queryFn: () => authClient.oauth2.getConsents(),
-  });
+  const consentsQuery = useQuery(consentsQueryOptions);
 
   const revokeConsent = useMutation({
     mutationFn: (id: string) => authClient.oauth2.deleteConsent({ id }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["oauth2", "consents"] });
+      queryClient.invalidateQueries({ queryKey: consentsQueryOptions.queryKey });
     },
   });
 
@@ -140,10 +142,7 @@ function ConsentRow({
   onRevoke: () => void;
   isRevoking: boolean;
 }) {
-  const clientQuery = useQuery({
-    queryKey: ["oauth2", "client", consent.clientId],
-    queryFn: () => authClient.oauth2.publicClient({ query: { client_id: consent.clientId } }),
-  });
+  const clientQuery = useQuery(oauthClientQueryOptions(consent.clientId));
 
   const clientName = clientQuery.data?.client_name ?? consent.clientId;
   const logoURI = clientQuery.data?.logo_uri;

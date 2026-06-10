@@ -3,9 +3,9 @@ import { McpAgent } from "agents/mcp";
 import type { Connection } from "agents";
 import { z } from "zod";
 import { StreamPath, type Event, type EventInput } from "@iterate-com/shared/streams/types";
-import type { ToolProviderRegistration } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { upsertD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import packageJson from "../../../../package.json" with { type: "json" };
+import type { ToolProviderRegistration } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 import { createExampleCapabilityProviders } from "~/domains/codemode/example-provider-registrations.ts";
 import { createGmailProviderRegistration } from "~/domains/google/gmail-provider-registration.ts";
 import {
@@ -27,7 +27,7 @@ export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capabil
  * Project-scoped MCP server connection for os.
  *
  * Runs as a Durable Object in a separate Worker (`project-mcp-server-connection-do`).
- * `entry.workerd.ts` verifies Iterate Auth OAuth, resolves the token's project
+ * `worker.ts` verifies Iterate Auth OAuth, resolves the token's project
  * grants, and passes that identity into this Durable Object through McpAgent
  * props. That mirrors Cloudflare's documented OAuth integration point:
  * https://developers.cloudflare.com/agents/model-context-protocol/mcp-agent-api/
@@ -299,14 +299,6 @@ export class ProjectMcpServerConnection extends McpAgent<
     auth: ProjectMcpServerConnectionProps & { orgId: string; projectId: string },
   ): ToolProviderRegistration[] {
     const providers = createExampleCapabilityProviders({
-      activeOrganization: {
-        orgId: auth.orgId,
-        orgPermissions: auth.orgPermissions,
-        orgRole: auth.orgRole,
-        orgSlug: auth.orgSlug ?? auth.orgId,
-        sessionId: this.getSessionId(),
-        userId: auth.userId,
-      },
       projectId: auth.projectId,
     });
 

@@ -1,6 +1,7 @@
+import { env } from "cloudflare:workers";
 import { getInitializedStreamStub } from "~/domains/streams/new-stream-runtime.ts";
 import type { Principal } from "~/auth/principal.ts";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
 import {
   appendIntegrationEvent,
   GOOGLE_CONNECTED_EVENT_TYPE,
@@ -14,7 +15,10 @@ import {
   upsertProjectConnection,
   upsertProjectSecret,
 } from "~/domains/secrets/secrets-store.ts";
-import { getSlackIntegrationDurableObjectName } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
+import {
+  getSlackIntegrationDurableObjectName,
+  getSlackIntegrationStub,
+} from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import {
   oauthRedirectUri,
   providerSecretKey,
@@ -25,7 +29,7 @@ import {
 
 export async function handleIntegrationApiRequest(input: {
   auth: Principal | null | undefined;
-  context: AppContext;
+  context: RequestContext;
   request: Request;
 }): Promise<Response | null> {
   const url = new URL(input.request.url);
@@ -46,7 +50,7 @@ export async function handleIntegrationApiRequest(input: {
 
 async function handleSlackCallback(input: {
   auth: Principal | null | undefined;
-  context: AppContext;
+  context: RequestContext;
   request: Request;
 }) {
   const url = new URL(input.request.url);
@@ -113,7 +117,7 @@ async function handleSlackCallback(input: {
     webhookProviderIdentifier: tokenData.team.id,
   });
   await upsertProjectSecret(input.context.db, {
-    id: projectSecretId({ typeIdPrefix: input.context.config.typeIdPrefix.exposeSecret() }),
+    id: projectSecretId({ typeIdPrefix: input.context.config.typeIdPrefix }),
     key: providerSecretKey("slack"),
     material: tokenData.access_token,
     metadata: {
@@ -148,7 +152,7 @@ async function handleSlackCallback(input: {
 
 async function handleGoogleCallback(input: {
   auth: Principal | null | undefined;
-  context: AppContext;
+  context: RequestContext;
   request: Request;
 }) {
   const url = new URL(input.request.url);
@@ -221,7 +225,7 @@ async function handleGoogleCallback(input: {
     scopes: tokenData.scope ?? config.scopes.join(" "),
   });
   await upsertProjectSecret(input.context.db, {
-    id: projectSecretId({ typeIdPrefix: input.context.config.typeIdPrefix.exposeSecret() }),
+    id: projectSecretId({ typeIdPrefix: input.context.config.typeIdPrefix }),
     key: providerSecretKey("google"),
     material: tokenData.access_token,
     metadata: {
@@ -259,14 +263,17 @@ async function handleGoogleCallback(input: {
   return Response.redirect(stateData.callbackUrl ?? "/", 302);
 }
 
-async function handleSlackWebhook(input: { context: AppContext; request: Request }) {
+async function handleSlackWebhook(input: { context: RequestContext; request: Request }) {
   return await handleVerifiedSlackWebhook({
     ...input,
     parsePayload: parseSlackJsonPayload,
   });
 }
 
-async function handleSlackInteractivityWebhook(input: { context: AppContext; request: Request }) {
+async function handleSlackInteractivityWebhook(input: {
+  context: RequestContext;
+  request: Request;
+}) {
   return await handleVerifiedSlackWebhook({
     ...input,
     parsePayload: parseSlackInteractivityPayload,
@@ -274,7 +281,7 @@ async function handleSlackInteractivityWebhook(input: { context: AppContext; req
 }
 
 async function handleVerifiedSlackWebhook(input: {
-  context: AppContext;
+  context: RequestContext;
   parsePayload(body: string): Record<string, unknown> | null;
   request: Request;
 }) {
@@ -306,25 +313,15 @@ async function handleVerifiedSlackWebhook(input: {
   if (!connection) {
     return Response.json({ error: "Slack team is not claimed by a project." }, { status: 404 });
   }
-  if (!input.context.stream) {
-    return Response.json({ error: "STREAM binding is not available." }, { status: 500 });
-  }
-  if (!input.context.slackIntegration) {
-    return Response.json({ error: "SLACK_INTEGRATION binding is not available." }, { status: 500 });
-  }
-
   const slackIntegrationName = getSlackIntegrationDurableObjectName(connection.projectId);
-  const slackIntegration = input.context.slackIntegration.getByName(
-    slackIntegrationName,
-  ) as unknown as {
+  const slackIntegration = getSlackIntegrationStub(connection.projectId) as unknown as {
     ensureReady(): Promise<unknown>;
     initialize(input: { name: string }): Promise<unknown>;
   };
   await slackIntegration.initialize({ name: slackIntegrationName });
-  await slackIntegration.ensureReady();
 
   const stream = await getInitializedStreamStub({
-    durableObjectNamespace: input.context.stream as never,
+    durableObjectNamespace: env.STREAM as never,
     namespace: connection.projectId,
     path: SLACK_INTEGRATION_STREAM_PATH,
   });
@@ -345,6 +342,11 @@ async function handleVerifiedSlackWebhook(input: {
       body: payload,
     },
   });
+  input.context.waitUntil?.(
+    slackIntegration.ensureReady().catch((error) => {
+      console.error("[slack-integration-webhook] background catch-up failed", error);
+    }),
+  );
 
   return Response.json({ ok: true });
 }

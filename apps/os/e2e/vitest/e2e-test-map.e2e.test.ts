@@ -6,12 +6,12 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { x } from "tinyexec";
 import { describe, expect, test, vi, expectTypeOf } from "vitest";
 import { z } from "zod";
-import { CodemodeProcessorContract } from "@iterate-com/shared/stream-processors/codemode/contract";
 import { createExampleRpcProviderRegistration } from "../../src/domains/codemode/example-provider-registrations.ts";
 import {
   createPublicTunnel,
   createTestProjectFixture,
 } from "../test-support/create-test-project.ts";
+import { CodemodeProcessorContract } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 
 describe("e2e test map", () => {
   test.todo("can connect to MCP with admin token", async () => {

@@ -1,23 +1,41 @@
-import { createIterateAuth, type AuthenticatedSession } from "@iterate-com/auth/server";
+import {
+  createIterateAuth,
+  isAuthHandlerRequest,
+  type AuthenticatedSession,
+} from "@iterate-com/auth/server";
 import { oauthResourceAudienceVariants } from "@iterate-com/shared/oauth-resource";
 import { createMiddleware } from "@tanstack/react-start";
-import type { AppContext } from "~/context.ts";
+import type { RequestContext } from "~/request-context.ts";
+import { authenticateAdminApiSecret } from "~/auth/admin.ts";
 import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 import {
-  adminPrincipal,
   principalFromAccessToken,
   principalFromSession,
   type Principal,
 } from "~/auth/principal.ts";
 
-const AUTH_HANDLER_PREFIX = "/api/iterate-auth/";
+type OsIterateAuth = ReturnType<typeof createIterateAuth>;
 
-export const iterateAuthMiddleware = createMiddleware().server(
+const authClients = new Map<string, OsIterateAuth>();
+
+// Registered as requestMiddleware in src/start.ts — `type: "request"` makes
+// early `Response` returns part of the contract (and the context it passes to
+// `next` flow into every server route, server function, and oRPC procedure):
+// https://tanstack.com/start/latest/docs/framework/react/guide/middleware
+export const iterateAuthMiddleware = createMiddleware({ type: "request" }).server(
   async ({ request, context, next }) => {
+    // Start types the request context as possibly undefined, but worker.ts
+    // always passes one to handler.fetch — treat its absence as a wiring bug.
+    if (!context) {
+      throw new Error("Request context missing — handler.fetch was called without a context.");
+    }
     const auth = createOsIterateAuth(context, request);
-    const authHandlerResponse = handleAuthHandlerRequest({ auth, request });
+    const authHandlerResponse = auth?.handleRequest(request) ?? null;
     if (authHandlerResponse) {
       return authHandlerResponse;
+    }
+    if (!auth && isAuthHandlerRequest(request)) {
+      return new Response("Iterate auth is not configured.", { status: 503 });
     }
 
     const resolvedAuth = await resolveRequestAuth({ auth, context, request });
@@ -39,24 +57,9 @@ export const iterateAuthMiddleware = createMiddleware().server(
   },
 );
 
-function handleAuthHandlerRequest(input: {
-  auth: ReturnType<typeof createOsIterateAuth>;
-  request: Request;
-}) {
-  if (!new URL(input.request.url).pathname.startsWith(AUTH_HANDLER_PREFIX)) {
-    return null;
-  }
-
-  if (!input.auth) {
-    return new Response("Iterate auth is not configured.", { status: 503 });
-  }
-
-  return input.auth.handler(input.request);
-}
-
 export async function resolveRequestAuth(input: {
-  auth: ReturnType<typeof createOsIterateAuth>;
-  context: Pick<AppContext, "config">;
+  auth: OsIterateAuth | null;
+  context: Pick<RequestContext, "config">;
   request: Request;
 }): Promise<{
   principal: Principal | null;
@@ -92,7 +95,7 @@ export async function resolveRequestAuth(input: {
 }
 
 async function authenticateSession(input: {
-  auth: ReturnType<typeof createOsIterateAuth>;
+  auth: OsIterateAuth | null;
   headers: Headers;
 }): Promise<{
   principal: Principal | null;
@@ -107,7 +110,10 @@ async function authenticateSession(input: {
     };
   }
 
-  const result = await input.auth.authenticate({ headers: input.headers });
+  const result = await input.auth.authenticate({
+    headers: input.headers,
+    includeUserInfo: false,
+  });
   return {
     principal: result.session ? principalFromSession(result.session) : null,
     session: result.session,
@@ -116,7 +122,7 @@ async function authenticateSession(input: {
 }
 
 async function authenticateBearerPrincipal(input: {
-  auth: ReturnType<typeof createOsIterateAuth>;
+  auth: OsIterateAuth | null;
   headers: Headers;
 }): Promise<Principal | null> {
   if (!input.auth) return null;
@@ -125,35 +131,7 @@ async function authenticateBearerPrincipal(input: {
   return accessToken ? principalFromAccessToken(accessToken) : null;
 }
 
-export function readBearerToken(headerValue: string | null): string | null {
-  if (!headerValue) return null;
-  const match = /^bearer\s+(.+)$/i.exec(headerValue);
-  const token = match?.[1]?.trim() ?? "";
-  return token.length > 0 ? token : null;
-}
-
-export function authenticateAdminApiSecret(
-  context: Pick<AppContext, "config">,
-  request: Request,
-): Principal | null {
-  const expectedToken = context.config.adminApiSecret?.exposeSecret();
-  const providedToken = readBearerToken(request.headers.get("authorization"));
-
-  if (!expectedToken || !providedToken || providedToken !== expectedToken) {
-    return null;
-  }
-
-  return adminPrincipal;
-}
-
-export function authenticateRootApiSecret(
-  context: Pick<AppContext, "config">,
-  request: Request,
-): Principal | null {
-  return authenticateAdminApiSecret(context, request);
-}
-
-export function createOsIterateAuth(context: AppContext, request: Request) {
+export function createOsIterateAuth(context: RequestContext, request: Request) {
   const config = context.config.iterateAuth;
   if (!config) return null;
 
@@ -172,14 +150,22 @@ export function createOsIterateAuth(context: AppContext, request: Request) {
     ? [...resourceSet, ...oauthResourceAudienceVariants(mcpResource)]
     : [...resourceSet];
 
-  return createIterateAuth({
+  const authConfig = {
     issuer: config.issuer,
     clientId: config.clientId,
     clientSecret: config.clientSecret.exposeSecret(),
+    jwks: config.jwks,
     redirectURI: `${(context.config.baseUrl ?? requestOrigin).replace(/\/+$/, "")}/api/iterate-auth/callback`,
     resource: resources,
     logoutReturnToOrigins: context.config.baseUrl ? [context.config.baseUrl] : undefined,
-  });
+  };
+  const cacheKey = JSON.stringify(authConfig);
+  const cached = authClients.get(cacheKey);
+  if (cached) return cached;
+
+  const auth = createIterateAuth(authConfig);
+  authClients.set(cacheKey, auth);
+  return auth;
 }
 
 function isLocalhostOrigin(origin: string) {

@@ -1,23 +1,17 @@
 import { ORPCError } from "@orpc/server";
-import type { AppContext } from "~/context.ts";
-import {
-  getProjectById,
-  getProjectBySlug,
-  getProjectPermission,
-} from "~/db/queries/.generated/index.ts";
-import type { ActiveOrganizationAuth } from "~/lib/active-organization-auth.ts";
-import { resolveActiveOrganizationAuth } from "~/orpc/auth.ts";
+import type { RequestContext } from "~/request-context.ts";
+import { getProjectById, getProjectBySlug } from "~/db/queries/.generated/index.ts";
+import { isProjectId } from "~/domains/projects/project-id.ts";
 
 /**
  * Confirms a caller can access an ownerless project before exposing
  * project-scoped capabilities such as Code Mode or stream access. Projects are
- * deliberately not owned by organizations at their core; the permission table
- * is the current claim/grant layer, and admin API callers bypass it for
+ * deliberately not owned by organizations at their core; user access is claimed
+ * through signed Auth project claims, and admin API callers bypass that for
  * operator work.
  */
-export async function requireActiveOrganizationProject(input: {
-  activeOrganization: ActiveOrganizationAuth;
-  context: AppContext;
+export async function requireAuthorizedProject(input: {
+  context: RequestContext;
   projectId: string;
 }) {
   const project = await getProjectById(input.context.db, {
@@ -30,31 +24,17 @@ export async function requireActiveOrganizationProject(input: {
     });
   }
 
-  if (input.activeOrganization.isAdminApi) {
+  if (canReadProject(input.context, input.projectId)) {
     return project;
   }
 
-  if (input.context.principal?.can("read", { projectId: input.projectId })) {
-    return project;
-  }
-
-  const permission = await getProjectPermission(input.context.db, {
-    principalId: input.activeOrganization.orgId,
-    principalType: "clerk_organization",
-    projectId: input.projectId,
+  throw new ORPCError("FORBIDDEN", {
+    message: `Project ${input.projectId} not found`,
   });
-
-  if (!permission) {
-    throw new ORPCError("FORBIDDEN", {
-      message: `Project ${input.projectId} not found`,
-    });
-  }
-
-  return project;
 }
 
 export async function requireProjectScopedAccess(input: {
-  context: AppContext;
+  context: RequestContext;
   projectSlugOrId: string;
 }) {
   if (input.context.projectAccess) {
@@ -69,42 +49,28 @@ export async function requireProjectScopedAccess(input: {
 
   const project = await resolveProjectBySlugOrId(input);
 
-  const activeOrganization = resolveActiveOrganizationAuth(input.context);
-  if (!activeOrganization) {
-    if (input.context.principal?.type === "user") {
-      throw new ORPCError("FORBIDDEN", {
-        message: "OS requires an active Organization.",
-      });
-    }
+  if (!input.context.principal) {
     throw new ORPCError("UNAUTHORIZED");
   }
 
-  if (activeOrganization.isAdminApi) {
+  if (canReadProject(input.context, project.id)) {
     return project;
   }
 
-  if (input.context.principal?.can("read", { projectId: project.id })) {
-    return project;
-  }
-
-  const permission = await getProjectPermission(input.context.db, {
-    principalId: activeOrganization.orgId,
-    principalType: "clerk_organization",
-    projectId: project.id,
+  throw new ORPCError("FORBIDDEN", {
+    message: `Project ${input.projectSlugOrId} is not accessible.`,
   });
+}
 
-  if (!permission) {
-    throw new ORPCError("FORBIDDEN", {
-      message: `Project ${input.projectSlugOrId} is not accessible.`,
-    });
-  }
-
-  return project;
+export function canReadProject(context: Pick<RequestContext, "principal">, projectId: string) {
+  return (
+    context.principal?.type === "admin" || context.principal?.can("read", { projectId }) === true
+  );
 }
 
 export function requireProjectScope(
-  context: AppContext,
-): NonNullable<AppContext["projectScope"]>["project"] {
+  context: RequestContext,
+): NonNullable<RequestContext["projectScope"]>["project"] {
   if (!context.projectScope) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {
       message: "Project scope middleware did not run.",
@@ -114,7 +80,7 @@ export function requireProjectScope(
   return context.projectScope.project;
 }
 
-async function resolveBoundProject(input: { context: AppContext; projectSlugOrId: string }) {
+async function resolveBoundProject(input: { context: RequestContext; projectSlugOrId: string }) {
   if (input.context.db) {
     const project = await getProjectById(input.context.db, { id: input.projectSlugOrId });
     if (project) return project;
@@ -130,7 +96,10 @@ async function resolveBoundProject(input: { context: AppContext; projectSlugOrId
   };
 }
 
-async function resolveProjectBySlugOrId(input: { context: AppContext; projectSlugOrId: string }) {
+async function resolveProjectBySlugOrId(input: {
+  context: RequestContext;
+  projectSlugOrId: string;
+}) {
   const projectId = input.projectSlugOrId.trim();
   const project = isProjectId(projectId)
     ? await getProjectById(input.context.db, { id: projectId })
@@ -143,8 +112,4 @@ async function resolveProjectBySlugOrId(input: { context: AppContext; projectSlu
   }
 
   return project;
-}
-
-function isProjectId(value: string) {
-  return value.startsWith("proj_") || value.startsWith("prj_");
 }
