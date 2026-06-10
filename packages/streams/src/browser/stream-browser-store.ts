@@ -388,6 +388,7 @@ function createStreamRuntime(
           subscriptionKey,
           processEventBatch: ready.processEventBatch,
           replayAfterOffset: ready.replayAfterOffset,
+          subscriber: { description: "browser" },
         });
       })
       .then((handle) => {

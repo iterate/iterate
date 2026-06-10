@@ -9,6 +9,7 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
+import { CoreProcessorContract } from "@iterate-com/streams/processors/core/contract";
 import { AgentProcessorContract } from "../agent/contract.ts";
 
 const LlmRequestId = z.number().int().positive();
@@ -31,8 +32,16 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
       .default({}),
   }),
   initialState: {},
-  processorDeps: [AgentProcessorContract],
+  processorDeps: [AgentProcessorContract, CoreProcessorContract],
   events: {
+    "events.iterate.com/openai-ws/llm-request-attempt-failed": {
+      description:
+        "An execution attempt for an agent LLM request died before its terminal events landed (e.g. the hosting durable object crashed mid-request). Appended by the reconciler before it re-executes, so the stream honestly records the crash and the retry.",
+      payloadSchema: z.object({
+        llmRequestId: LlmRequestId,
+        reason: z.enum(["host-restarted", "unrecoverable"]),
+      }),
+    },
     "events.iterate.com/openai-ws/config-updated": {
       description: "Updates OpenAI WebSocket request configuration for future LLM requests.",
       payloadSchema: z.object({
@@ -110,6 +119,9 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
     "events.iterate.com/openai-ws/llm-request-started",
     "events.iterate.com/openai-ws/llm-request-completed",
     "events.iterate.com/agent/llm-request-requested",
+    // The reconcile trigger: a fresh subscriber connection means some host's
+    // runtime state was reset — check for started-but-not-executing requests.
+    "events.iterate.com/stream/subscriber-connected",
   ],
   emits: [
     "events.iterate.com/openai-ws/websocket-connected",
@@ -117,6 +129,7 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
     "events.iterate.com/openai-ws/websocket-message-sent",
     "events.iterate.com/openai-ws/websocket-message-received",
     "events.iterate.com/openai-ws/llm-request-started",
+    "events.iterate.com/openai-ws/llm-request-attempt-failed",
     "events.iterate.com/openai-ws/llm-request-completed",
     "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-request-completed",

@@ -408,6 +408,17 @@ describe("stream capnweb protocol", () => {
           },
         }),
         first,
+        // The subscriber's own connect is a durable presence fact, appended
+        // after the replay cursor is fixed — so it arrives as the tail of the
+        // subscriber's first batch.
+        expect.objectContaining({
+          type: "events.iterate.com/stream/subscriber-connected",
+          offset: 4,
+          payload: {
+            direction: "inbound",
+            subscriptionKey: "replay",
+          },
+        }),
       ],
       [second],
     ]);
@@ -448,21 +459,28 @@ describe("stream capnweb protocol", () => {
         payload: { path },
       },
     });
-    // Live-only subscriptions deliver an initial empty state batch before any
-    // append, so count delivered EVENTS rather than batches.
-    await waitFor(() => callbackA.events.length === 1 && callbackB.events.length === 1, 1_000);
+    // Each subscribe also appends a subscriber-connected presence fact, and
+    // every subscription gets an initial state push — batch counts are not
+    // stable here, so wait for the content instead.
+    const delivered = (callback: TestSubscriptionCallback, offset: number) =>
+      callback.batches.flat().some((event) => event.offset === offset);
+    await waitFor(
+      () => delivered(callbackA, appended.offset) && delivered(callbackB, appended.offset),
+      1_000,
+    );
     expect(callbackA.batches.at(-1)).toEqual([appended]);
     expect(callbackB.batches.at(-1)).toEqual([appended]);
+    const callbackABatchesBeforeUnsubscribe = callbackA.batches.length;
 
     first.unsubscribe();
-    await stream.stream.append({
+    const afterUnsubscribe = await stream.stream.append({
       event: {
         type: "test.stream.capnweb-anon-sub-after-unsub",
         payload: { path },
       },
     });
-    await waitFor(() => callbackB.events.length === 2, 1_000);
-    expect(callbackA.events.length).toBe(1);
+    await waitFor(() => delivered(callbackB, afterUnsubscribe.offset), 1_000);
+    expect(callbackA.batches.length).toBe(callbackABatchesBeforeUnsubscribe);
   });
 
   e2eIt("runs a hosted outbound processor from subscription-configured", async () => {
@@ -563,28 +581,45 @@ describe("stream capnweb protocol", () => {
       payload: { path },
     };
     const appended = await publisher.stream.append({ event: input });
-    await waitFor(() => callback.events.length === 1, 1_000);
+    // Deliveries before the published event: the subscription's initial state
+    // push (events: []) and/or the subscriber's own subscriber-connected
+    // presence fact (offset 3, appended during subscribe) — wait for content.
+    await waitFor(
+      () => callback.batches.flat().some((event) => event.offset === appended.offset),
+      1_000,
+    );
 
     expect(appended).toMatchObject({
       type: input.type,
       payload: input.payload,
-      offset: 3,
+      offset: 4,
       createdAt: expect.any(String),
     });
-    // The subscription's initial state push (events: []) precedes the live
-    // batch; the appended event arrives exactly once, in the last batch.
+    // Batch boundaries race (initial push, presence fact commit timing), but
+    // the delivered EVENTS are exact: the subscriber's own connected fact,
+    // then the published event — each exactly once, in offset order.
     expect(callback.batches.at(-1)).toEqual([appended]);
-    expect(callback.events).toEqual([appended]);
+    expect(callback.batches.flat()).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/stream/subscriber-connected",
+        offset: 3,
+      }),
+      appended,
+    ]);
     expect(outboundFrames(frames, afterSubscribe)).toEqual([]);
 
     const inbound = parsedFrames(frames)
       .slice(afterSubscribe)
       .filter((frame) => frame.direction === "in");
     expect(inbound.every((frame) => isPushOrReleaseFrame(frame.data))).toBe(true);
-    // The last push frame is the live delivery; the initial state batch may
-    // land before or after the `afterSubscribe` snapshot, so only the live
-    // frame's shape is asserted.
-    expect(inbound.filter((frame) => isPushFrame(frame.data)).at(-1)).toMatchObject({
+    // Earlier push frames race the `afterSubscribe` snapshot and each other:
+    // the subscription's initial state push (events: []) and the
+    // subscriber-connected fact's delivery. Assert the last frame (the
+    // published event's) exactly; earlier ones are push frames by the
+    // `isPushOrReleaseFrame` check above.
+    const pushFrames = inbound.filter((frame) => isPushFrame(frame.data));
+    expect(pushFrames.length).toBeGreaterThanOrEqual(1);
+    expect(pushFrames.at(-1)).toMatchObject({
       direction: "in",
       data: [
         "push",
@@ -599,7 +634,7 @@ describe("stream capnweb protocol", () => {
                   {
                     type: input.type,
                     payload: input.payload,
-                    offset: 3,
+                    offset: 4,
                     createdAt: expect.any(String),
                   },
                 ],

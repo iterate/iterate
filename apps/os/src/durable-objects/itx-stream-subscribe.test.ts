@@ -139,8 +139,14 @@ describe("itx stream subscribe against a real Stream Durable Object", () => {
 
     // No append after subscribing — the initial push alone must arrive, so a
     // subscriber can paint its first render without a separate getState call.
+    // (The subscribe itself appends a subscriber-connected presence fact,
+    // which may ride the first batch or follow it; nothing older arrives.)
     await vi.waitFor(() => expect(collector.batches.length).toBeGreaterThanOrEqual(1));
-    expect(collector.batches[0]!.events).toEqual([]);
+    expect(
+      collector.batches[0]!.events.every(
+        (event) => event.type === "events.iterate.com/stream/subscriber-connected",
+      ),
+    ).toBe(true);
     // created + woken + "pre" are already committed.
     expect(collector.batches[0]!.state.eventCount).toBeGreaterThanOrEqual(3);
     expect(collector.batches[0]!.streamMaxOffset).toBeGreaterThanOrEqual(3);
