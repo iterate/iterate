@@ -401,13 +401,13 @@ test("lets agent chat update iterate-config through the prepared workspace", asy
   const requestedCode = requiredStringPayload(scriptRequested, "code");
 
   expect(generatedCode).toContain("itx.workspace.writeFile");
-  expect(generatedCode).toContain("itx.workspace.git.commit");
-  expect(generatedCode).toContain("itx.workspace.git.push");
+  expect(generatedCode).toContain("itx.workspace.gitCommit");
+  expect(generatedCode).toContain("itx.workspace.gitPush");
   expect(generatedCode).toContain("/iterate-config");
   expect(generatedCode).toContain("folder/banana.txt");
-  expect(generatedCode).not.toContain("git.clone");
+  expect(generatedCode).not.toContain("gitClone");
   expect(generatedCode).not.toContain(".repos");
-  expect(requestedCode).not.toContain("git.clone");
+  expect(requestedCode).not.toContain("gitClone");
   // Per-call events died with codemode; the workspace ops are proven by the
   // generated code above plus the execution completing ok (the git push
   // would fail the script otherwise).

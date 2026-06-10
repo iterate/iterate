@@ -33,7 +33,6 @@ import {
   RESERVED_CAP_NAMES,
   type CapInvoke,
   type CapMeta,
-  type CapSource,
   type ProjectAccess,
   type SerializableCapTarget,
 } from "./protocol.ts";
@@ -151,10 +150,10 @@ export class Itx extends RpcTarget {
 
   get workspace() {
     // Like itx.repos: the workspace domain entrypoint already exposes the
-    // exact surface we want (readFile/writeFile and a nested git with
-    // add/clone/commit/push/status), so hand it out directly rather than
-    // re-wrapping it. workspaceId is fixed to "itx" — one workspace per
-    // project context.
+    // exact surface we want (readFile/writeFile and the flat
+    // gitClone/gitAdd/gitCommit/gitPush/gitStatus methods), so hand it out
+    // directly rather than re-wrapping it. workspaceId is fixed to "itx" —
+    // one workspace per project context.
     const factory = this.#runtime.exports.WorkspaceCapability;
     if (typeof factory !== "function") {
       throw new Error("WorkspaceCapability export is not available.");
@@ -367,11 +366,7 @@ export class ItxCaps extends RpcTarget {
     name: string;
     /** The capability's target (types.ts). Serializable kinds only — for a
      * live stub use provide(). */
-    target?: SerializableCapTarget;
-    /** Legacy: sugar for target { type: "rpc", worker: { type: "source" } }. */
-    source?: CapSource;
-    /** Legacy: "facet" maps to source.exportType "durable-object". */
-    kind?: "worker" | "facet";
+    target: SerializableCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {

@@ -660,6 +660,12 @@ default — tombstone rows? Defer until someone needs them.
 - ~~capnweb error identity?~~ → capnweb 0.8.0 drops custom error names on
   reconstruction (`ERROR_TYPES[name] || Error`, props loop skips `name`).
   ItxError detection is duck-typed via code/details, never name/instanceof.
+- ~~Keep the legacy define compat paths?~~ → DELETED (2026-06-10,
+  no-backcompat decision): the legacy define inputs (`source`/`kind`), the
+  `codeId` spelling of `cacheKey`, stored `worker`/`facet` kinds, and the
+  `source_json` rollback column are all gone. `caps.define` takes a
+  `target` (SerializableCapTarget) only, and stored rows are read back
+  verbatim — no normalization on read.
 
 - ~~Root registry from day one?~~ → Global context gets the same anatomy as
   every context; no special-casing. Authority lives in access, not in node
@@ -705,14 +711,14 @@ default — tombstone rows? Defer until someone needs them.
 
 ## New debts (2026-06-10 evening)
 
-- `itx.workspace.git.*` (the nested WorkspaceGitCapability RpcTarget) fails
-  with "RPC receiver does not implement the method" both over capnweb and
-  from loader isolates — the flat `gitClone`/`gitAdd`/`gitCommit`/`gitPush`
-  methods work everywhere and are what scripts should use until the nested
-  target is fixed or removed.
-- Vite `server.allowedHosts` started blocking the dev tunnel host
-  (`os.iterate-dev-jonas.com`) for local e2e; localhost works. Find which
-  main change dropped the tunnel hosts from allowedHosts.
+- ~~`itx.workspace.git.*` nested RpcTarget broken~~ → DELETED. The flat
+  `gitClone`/`gitAdd`/`gitCommit`/`gitPush`/`gitStatus` methods are the
+  surface; nested RpcTargets returned from entrypoint getters do not
+  survive RPC boundaries reliably, so don't ship one.
+- ~~Vite allowedHosts blocks the dev tunnel host~~ → Misdiagnosis. The
+  config is `allowedHosts: true`; the 403/502s came from a wedged vite
+  process behind the still-connected cloudflared tunnel. Restarting the
+  dev server fixes it; e2e through `os.iterate-dev-<user>.com` passes.
 - prd cleanup after tombstone soak: CodemodeSession class + stale stream
   subscriber events, then namespace deletion (mechanically proven safe).
 - Legacy `executeCodemodeFunctionCall` methods on capability entrypoints —

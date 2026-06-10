@@ -34,14 +34,11 @@ export class AgentToolsCapability extends WorkerEntrypoint<Env, AgentToolsCapabi
       projectId: props.projectId,
     });
     const agent = this.env.AGENT.getByName(name) as unknown as AgentDurableObject;
-    return await agent.executeCodemodeFunctionCall({
+    return await agent.callAgentTool({
       args: input.args,
-      codemodeSessionCapability: undefined as never,
-      functionCallId: crypto.randomUUID(),
-      functionPath: input.path,
-      invocationKind: "rpc",
-      path: [props.tool, ...input.path],
-      providerPath: [props.tool],
+      callId: crypto.randomUUID(),
+      path: input.path,
+      tool: props.tool,
     });
   }
 }

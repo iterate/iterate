@@ -168,7 +168,6 @@ export {
   MockArtifactAgentDurableObject as AgentDurableObject,
   MockArtifactsBinding,
 } from "./mock-artifacts-binding.ts";
-export { CodemodeSession } from "~/durable-objects/codemode-session-tombstone.ts";
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
 export { PROJECT_LIFECYCLE_STREAM_PATH } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
@@ -201,23 +200,14 @@ export default {
     if (url.pathname === "/__test/upsert-secret") {
       const secret = await ctx.exports
         .OrpcCapability({ props: { projectId: "proj__local__test" } })
-        .executeCodemodeFunctionCall({
+        .call({
           args: [
             {
               key: url.searchParams.get("key") ?? "openai",
               material: url.searchParams.get("material") ?? "mvp-secret-value",
             },
           ],
-          codemodeSessionCapability: {
-            async callFunction() {
-              throw new Error("Project ingress tests do not route nested codemode calls.");
-            },
-          },
-          functionCallId: crypto.randomUUID(),
-          functionPath: ["secrets", "upsert"],
-          invocationKind: "rpc",
-          path: ["PROJECT", "orpc", "secrets", "upsert"],
-          providerPath: ["PROJECT", "orpc"],
+          path: ["secrets", "upsert"],
         });
       return Response.json(secret);
     }

@@ -4,7 +4,6 @@ import {
   listD1ObjectCatalogRecordsByIndex,
   type D1ObjectCatalogRecord,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import type {
   RepoInfo,
   RepoDurableObject,
@@ -89,30 +88,6 @@ export class RepoHandle extends RpcTarget {
 }
 
 export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposCapabilityProps> {
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    const [request] = input.args;
-    const options =
-      request != null && typeof request === "object" ? (request as Record<string, unknown>) : {};
-
-    switch (input.functionPath.join(".")) {
-      case "create":
-        return await this.create({
-          projectSlug: readOptionalString(options.projectSlug),
-          slug: readSlug(options.slug),
-        });
-      case "get":
-        return await this.get({ slug: readSlug(options.slug) });
-      case "ensureIterateConfigInfo":
-        return await this.ensureIterateConfigInfo({
-          projectSlug: readOptionalString(options.projectSlug) || null,
-        });
-      case "list":
-        return await this.list();
-      default:
-        throw new Error(`ReposCapability does not implement ${input.functionPath.join(".")}`);
-    }
-  }
-
   async create(input: { projectSlug?: string; slug: string }) {
     const namespace = this.requireRepoNamespace();
     const name = this.repoName(input.slug);
@@ -318,29 +293,12 @@ function toRepoCatalogRecord(record: RepoLifecycleCatalogRecord): RepoCatalogRec
   };
 }
 
-function readSlug(value: unknown) {
-  if (typeof value !== "string") {
-    throw new Error("Repo slug is required.");
-  }
-
-  const slug = value.trim();
-  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-    throw new Error("Repo slug must be lowercase kebab-case.");
-  }
-
-  return slug;
-}
-
 function requireRepoNamespace(env: Pick<ReposCapabilityEnv, "REPO">) {
   if (!env.REPO) {
     throw new Error("REPO Durable Object namespace is not configured.");
   }
 
   return env.REPO;
-}
-
-function readOptionalString(value: unknown) {
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
 }
 
 export { getRepoDurableObjectName };

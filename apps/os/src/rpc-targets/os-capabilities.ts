@@ -8,12 +8,11 @@ import {
 } from "@orpc/server";
 import { osContract } from "@iterate-com/os-contract";
 import {
-  generateCodemodeContextTypesFromJsonSchema,
+  generateContextTypesFromJsonSchema,
   type JsonSchemaToolDescriptors,
-} from "@iterate-com/shared/codemode/json-schema-types";
+} from "@iterate-com/shared/type-tree/json-schema-types";
 import { createRequestLogger } from "@iterate-com/shared/request-logging";
 import { createD1Client } from "sqlfu";
-import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import type { RequestContext } from "~/request-context.ts";
 import type { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { StreamDurableObject } from "~/domains/streams/stream-runtime.ts";
@@ -38,15 +37,6 @@ const OrpcCapabilityContract = osContract.project;
 const OrpcCapabilityContractPath = [] as const;
 
 export class AiCapability extends WorkerEntrypoint<ExampleCapabilityEnv, ExampleCapabilityProps> {
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    if (input.functionPath.join(".") !== "run") {
-      throw new Error(`AiCapability does not implement ${input.functionPath.join(".")}`);
-    }
-
-    const [model, request] = input.args as [string, unknown];
-    return await this.run(model, request);
-  }
-
   async run(model: string, request: unknown) {
     if (this.env.AI) {
       return await this.env.AI.run(model, request);
@@ -80,7 +70,7 @@ export class OrpcCapability extends WorkerEntrypoint<ExampleCapabilityEnv, Examp
         procedure,
         readUnaryOrpcInput(input, requireProviderProjectId(this.ctx.props)),
         {
-          context: createCodemodeOrpcContext({
+          context: createOrpcCapabilityContext({
             ctx: this.ctx,
             env: this.env,
             props: this.ctx.props,
@@ -91,17 +81,6 @@ export class OrpcCapability extends WorkerEntrypoint<ExampleCapabilityEnv, Examp
     }
 
     throw new Error(`OrpcCapability does not implement ${path}`);
-  }
-
-  /** Legacy codemode dispatch shape; delegates to the itx path-call. */
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    if (input.functionPath.join(".") === "listProcedures") {
-      // Legacy callers are mount-agnostic: the generated typings must use the
-      // caller's full mount path as the namespace (the itx path-call has no
-      // mounts — the cap name is the namespace, handled in call()).
-      return createOrpcProcedureListing(input.path.slice(0, input.path.length - 1));
-    }
-    return await this.call({ args: input.args, path: input.functionPath });
   }
 
   async listProcedures() {
@@ -142,7 +121,7 @@ function createOrpcProcedureListing(providerPath: readonly string[]) {
     outputSchema: { type: "string" },
   };
 
-  return generateCodemodeContextTypesFromJsonSchema({
+  return generateContextTypesFromJsonSchema({
     namespace: providerPath.length > 0 ? [...providerPath] : ["os"],
     tools,
   });
@@ -177,7 +156,7 @@ function readOrpcDefinition(contract: unknown): {
 } {
   const definition = (contract as { "~orpc"?: unknown })["~orpc"];
   if (!definition || typeof definition !== "object") {
-    throw new Error("Expected oRPC procedure metadata while listing codemode procedures.");
+    throw new Error("Expected oRPC procedure metadata while listing procedures.");
   }
 
   const record = definition as Record<string, unknown>;
@@ -224,13 +203,13 @@ function resolveOrpcProcedure(input: { path: string[]; router: AnyRouter }): Any
 function readUnaryOrpcInput(input: { args: unknown[]; path: string[] }, projectId: string) {
   if (input.args.length > 1) {
     throw new Error(
-      `ORPC codemode calls are unary; ${input.path.join(".")} received ${input.args.length} args.`,
+      `ORPC calls are unary; ${input.path.join(".")} received ${input.args.length} args.`,
     );
   }
 
   const request = input.args[0] ?? {};
   if (!request || typeof request !== "object" || Array.isArray(request)) {
-    throw new Error(`ORPC codemode calls require an object input for ${input.path.join(".")}.`);
+    throw new Error(`ORPC calls require an object input for ${input.path.join(".")}.`);
   }
   return {
     ...(request as Record<string, unknown>),
@@ -238,7 +217,7 @@ function readUnaryOrpcInput(input: { args: unknown[]; path: string[] }, projectI
   };
 }
 
-function createCodemodeOrpcContext(input: {
+function createOrpcCapabilityContext(input: {
   ctx: ExecutionContext & { props: ExampleCapabilityProps };
   env: ExampleCapabilityEnv;
   props: ExampleCapabilityProps | undefined;
@@ -248,14 +227,14 @@ function createCodemodeOrpcContext(input: {
     // The ORPC capability runs after the original browser request has gone
     // away, so it reconstructs a project-bound request context from scratch.
     // INVARIANT: only `project.*` procedures are exposed through this context
-    // (see OrpcCapability below), and none of them read `config`. If you expose
+    // (see OrpcCapability above), and none of them read `config`. If you expose
     // a config-reading procedure here, populate config instead of this stub —
     // e.g. `parseConfig(env)` — or it will throw at runtime.
     config: {} as RequestContext["config"],
     db: env.DB ? createD1Client(env.DB) : (undefined as never),
     log: createRequestLogger({
-      method: "CODEMODE",
-      path: "codemode://orpc-capability",
+      method: "RPC",
+      path: "itx://orpc-capability",
       requestId: crypto.randomUUID(),
     }),
     projectAccess: {
@@ -267,6 +246,6 @@ function createCodemodeOrpcContext(input: {
 
 function requireProviderProjectId(props: ExampleCapabilityProps | undefined) {
   const projectId = props?.projectId;
-  if (!projectId) throw new Error("Codemode example capability requires ctx.props.projectId.");
+  if (!projectId) throw new Error("OrpcCapability requires ctx.props.projectId.");
   return projectId;
 }

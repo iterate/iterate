@@ -90,15 +90,22 @@ test("the five-step capability flow: provide live, call, promote durable, call f
   expect(liveResult).toMatchObject({ method: "chat.postMessage", provider: "node-live" });
 
   // (4) "I like this mount" → promote: durable means the code moves
-  // server-side (define with source), not a flag on the live stub.
+  // server-side (define with an rpc/source target), not a flag on the live
+  // stub.
   const marker = `durable-${RUN_SUFFIX}`;
   await projectItx.caps.define({
     invoke: "path-call",
     name: "slackDurable",
-    source: {
-      codeId: crypto.randomUUID(),
-      mainModule: "cap.js",
-      modules: { "cap.js": pathCallCapSource({ marker }) },
+    target: {
+      type: "rpc",
+      worker: {
+        type: "source",
+        source: {
+          cacheKey: crypto.randomUUID(),
+          mainModule: "cap.js",
+          modules: { "cap.js": pathCallCapSource({ marker }) },
+        },
+      },
     },
   });
 
@@ -118,7 +125,6 @@ test("the five-step capability flow: provide live, call, promote durable, call f
   const description = (await projectItx.caps.describe()) as Array<{ owner: string }>;
   expect(description.filter((cap) => cap.owner === project.id)).toMatchObject([
     { connected: true, invoke: "path-call", kind: "live", name: "slack" },
-    // Legacy `source:` input normalizes to an rpc/source target.
     { invoke: "path-call", kind: "rpc", name: "slackDurable" },
   ]);
 });
@@ -527,10 +533,16 @@ test("worker caps hold a correctly scoped itx of their own", async () => {
 
   await projectItx.caps.define({
     name: "todo",
-    source: {
-      codeId: crypto.randomUUID(),
-      mainModule: "cap.js",
-      modules: { "cap.js": todoCapSource() },
+    target: {
+      type: "rpc",
+      worker: {
+        type: "source",
+        source: {
+          cacheKey: crypto.randomUUID(),
+          mainModule: "cap.js",
+          modules: { "cap.js": todoCapSource() },
+        },
+      },
     },
   });
 
@@ -563,20 +575,26 @@ test("members caps auto-proxy every public method/getter at any depth", async ()
   // getter returning a nested surface), and they are all instantly callable.
   await projectItx.caps.define({
     name: "kit",
-    source: {
-      codeId: crypto.randomUUID(),
-      mainModule: "cap.js",
-      modules: {
-        "cap.js": `
-          import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-          class Math extends RpcTarget {
-            add({ a, b }) { return a + b; }
-          }
-          export default class extends WorkerEntrypoint {
-            echo(input) { return { echoed: input }; }
-            get math() { return new Math(); }
-          }
-        `,
+    target: {
+      type: "rpc",
+      worker: {
+        type: "source",
+        source: {
+          cacheKey: crypto.randomUUID(),
+          mainModule: "cap.js",
+          modules: {
+            "cap.js": `
+              import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+              class Math extends RpcTarget {
+                add({ a, b }) { return a + b; }
+              }
+              export default class extends WorkerEntrypoint {
+                echo(input) { return { echoed: input }; }
+                get math() { return new Math(); }
+              }
+            `,
+          },
+        },
       },
     },
   });
@@ -597,18 +615,24 @@ test("one dynamic worker cap calls another's methods through its own itx", async
   // getter. No method list — the whole public surface is proxied.
   await projectItx.caps.define({
     name: "inventory",
-    source: {
-      codeId: crypto.randomUUID(),
-      mainModule: "cap.js",
-      modules: {
-        "cap.js": `
-          import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-          class Skus extends RpcTarget { priceOf({ sku }) { return sku === "ABC" ? 42 : 0; } }
-          export default class extends WorkerEntrypoint {
-            count() { return 7; }
-            get skus() { return new Skus(); }
-          }
-        `,
+    target: {
+      type: "rpc",
+      worker: {
+        type: "source",
+        source: {
+          cacheKey: crypto.randomUUID(),
+          mainModule: "cap.js",
+          modules: {
+            "cap.js": `
+              import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+              class Skus extends RpcTarget { priceOf({ sku }) { return sku === "ABC" ? 42 : 0; } }
+              export default class extends WorkerEntrypoint {
+                count() { return 7; }
+                get skus() { return new Skus(); }
+              }
+            `,
+          },
+        },
       },
     },
   });
@@ -618,21 +642,27 @@ test("one dynamic worker cap calls another's methods through its own itx", async
   // itx.inventory.skus.priceOf(...) are proxied worker→worker, no wiring.
   await projectItx.caps.define({
     name: "report",
-    source: {
-      codeId: crypto.randomUUID(),
-      mainModule: "cap.js",
-      modules: {
-        "cap.js": `
-          import { WorkerEntrypoint } from "cloudflare:workers";
-          export default class extends WorkerEntrypoint {
-            async build({ sku }) {
-              const itx = await this.env.ITERATE.context;
-              const count = await itx.inventory.count();
-              const price = await itx.inventory.skus.priceOf({ sku });
-              return { count, price, total: count * price };
-            }
-          }
-        `,
+    target: {
+      type: "rpc",
+      worker: {
+        type: "source",
+        source: {
+          cacheKey: crypto.randomUUID(),
+          mainModule: "cap.js",
+          modules: {
+            "cap.js": `
+              import { WorkerEntrypoint } from "cloudflare:workers";
+              export default class extends WorkerEntrypoint {
+                async build({ sku }) {
+                  const itx = await this.env.ITERATE.context;
+                  const count = await itx.inventory.count();
+                  const price = await itx.inventory.skus.priceOf({ sku });
+                  return { count, price, total: count * price };
+                }
+              }
+            `,
+          },
+        },
       },
     },
   });
@@ -681,7 +711,17 @@ test("revoked and offline caps fail with instructive errors", async () => {
   await expect(
     projectItx.caps.define({
       name: "then",
-      source: { codeId: "x", mainModule: "cap.js", modules: { "cap.js": "export default {}" } },
+      target: {
+        type: "rpc",
+        worker: {
+          type: "source",
+          source: {
+            cacheKey: "x",
+            mainModule: "cap.js",
+            modules: { "cap.js": "export default {}" },
+          },
+        },
+      },
     }),
   ).rejects.toThrow(/reserved/);
 
@@ -691,12 +731,18 @@ test("revoked and offline caps fail with instructive errors", async () => {
   // the full surface can never be abused to reach prototype internals.
   await projectItx.caps.define({
     name: "probe",
-    source: {
-      codeId: crypto.randomUUID(),
-      mainModule: "cap.js",
-      modules: {
-        "cap.js":
-          "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { ok() { return 1; } }",
+    target: {
+      type: "rpc",
+      worker: {
+        type: "source",
+        source: {
+          cacheKey: crypto.randomUUID(),
+          mainModule: "cap.js",
+          modules: {
+            "cap.js":
+              "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { ok() { return 1; } }",
+          },
+        },
       },
     },
   });

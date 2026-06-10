@@ -18,7 +18,6 @@ import type {
   CapDescription,
   CapInvoke,
   CapMeta,
-  CapSource,
   PathCall,
   SerializableCapTarget,
 } from "./protocol.ts";
@@ -94,9 +93,7 @@ export class ContextDO extends DurableObject<Env> {
 
   itxDefine(input: {
     name: string;
-    target?: SerializableCapTarget;
-    source?: CapSource;
-    kind?: "worker" | "facet";
+    target: SerializableCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {

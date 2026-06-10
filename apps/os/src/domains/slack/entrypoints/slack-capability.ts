@@ -1,6 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createD1Client } from "sqlfu";
-import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
 
 type SlackCapabilityEnv = {
@@ -23,27 +22,6 @@ export class SlackCapability extends WorkerEntrypoint<SlackCapabilityEnv, SlackC
     if (input.args.length > 1) {
       throw new Error(`Slack calls are unary; ${method} received ${input.args.length} args.`);
     }
-    return await this.request({
-      body: input.args[0] as Record<string, unknown> | undefined,
-      method,
-    });
-  }
-
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    // Slack's Web API is already method-path based (`chat.postMessage`,
-    // `conversations.list`, ...), so this capability intentionally keeps the
-    // provider glue generic: codemode path segments become the Slack method
-    // name, and the single codemode arg becomes the JSON request body.
-    const method = input.functionPath.join(".");
-    if (!method) {
-      throw new Error("SlackCapability expected a Slack Web API method path.");
-    }
-    if (input.args.length > 1) {
-      throw new Error(
-        `Slack codemode calls are unary; ${input.path.join(".")} received ${input.args.length} args.`,
-      );
-    }
-
     return await this.request({
       body: input.args[0] as Record<string, unknown> | undefined,
       method,

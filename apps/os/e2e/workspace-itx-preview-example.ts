@@ -163,7 +163,7 @@ function workspaceCodemodeScript() {
     : repo.token;
   const auth = { username: "x", password };
 
-  await itx.workspace.git.clone({
+  await itx.workspace.gitClone({
     url: repo.remote,
     dir,
     branch: repo.defaultBranch,
@@ -177,13 +177,13 @@ function workspaceCodemodeScript() {
     \`# Workspace itx preview example\\n\\nCreated: \${new Date().toISOString()}\\n\`,
   );
   const readBack = await itx.workspace.readFile(filePath);
-  await itx.workspace.git.add({ dir, filepath: fileName });
-  const commit = await itx.workspace.git.commit({
+  await itx.workspace.gitAdd({ dir, filepath: fileName });
+  const commit = await itx.workspace.gitCommit({
     dir,
     message: "Verify workspace codemode preview example",
     author: { name: "Codemode", email: "codemode@iterate.com" },
   });
-  const pushed = await itx.workspace.git.push({
+  const pushed = await itx.workspace.gitPush({
     dir,
     remote: "origin",
     ref: repo.defaultBranch,
@@ -200,7 +200,7 @@ function workspaceCodemodeScript() {
       remote: repo.remote,
       defaultBranch: repo.defaultBranch,
     },
-    status: await itx.workspace.git.status({ dir }),
+    status: await itx.workspace.gitStatus({ dir }),
   };
 }`;
 }

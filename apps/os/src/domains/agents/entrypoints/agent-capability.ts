@@ -5,7 +5,6 @@ import {
   type AgentDurableObject,
   getAgentDurableObjectName,
 } from "../durable-objects/agent-durable-object.ts";
-import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 
 type AgentCapabilityEnv = {
   AGENT?: DurableObjectNamespace<AgentDurableObject>;
@@ -22,19 +21,6 @@ type AgentRpcStub = {
 };
 
 export class AgentCapability extends WorkerEntrypoint<AgentCapabilityEnv, AgentCapabilityProps> {
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    if (input.functionPath.length !== 0) {
-      throw new Error(
-        `AgentCapability is unary and expected an empty functionPath, received ${input.functionPath.join(".")}`,
-      );
-    }
-    if (!this.env.AGENT) {
-      throw new Error("AGENT Durable Object namespace is not configured.");
-    }
-
-    return this.create();
-  }
-
   create() {
     if (!this.env.AGENT) {
       throw new Error("AGENT Durable Object namespace is not configured.");

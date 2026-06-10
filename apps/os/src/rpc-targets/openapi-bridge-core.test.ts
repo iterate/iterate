@@ -39,7 +39,7 @@ describe("OpenAPI bridge core", () => {
     await expect(
       executeOpenApiToolFunction({
         args: [{ include: "owner", petId: "pet-123" }],
-        functionPath: ["getPet"],
+        path: ["getPet"],
         providerProps: {
           baseUrl: server.url,
           headers: { authorization: "Bearer openapi-token" },
@@ -53,7 +53,7 @@ describe("OpenAPI bridge core", () => {
     });
   });
 
-  test("lists mocked OpenAPI operations as a normal codemode function", async () => {
+  test("lists mocked OpenAPI operations as a normal function call", async () => {
     await using server = await useMockHttpServer({ transformRequest: false });
     server.use(
       http.get(`${server.url}/openapi.json`, () =>
@@ -75,7 +75,7 @@ describe("OpenAPI bridge core", () => {
     await expect(
       executeOpenApiToolFunction({
         args: [],
-        functionPath: ["listOperations"],
+        path: ["listOperations"],
         providerProps: {
           baseUrl: server.url,
           specUrl: `${server.url}/openapi.json`,

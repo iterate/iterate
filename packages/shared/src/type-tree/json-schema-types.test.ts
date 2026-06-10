@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
-  generateCodemodeContextTypesFromJsonSchema,
+  generateContextTypesFromJsonSchema,
   generateTypesFromJsonSchema,
   jsonSchemaToType,
   jsonSchemaToTypeString,
@@ -577,7 +577,7 @@ describe("generateTypesFromJsonSchema", () => {
         "}",
         "type GetWeatherOutput = unknown",
         "",
-        "declare const codemode: {",
+        "declare const tools: {",
         "\t/**",
         "\t * Get weather for a city",
         "\t * @param input.city - City name",
@@ -625,7 +625,7 @@ describe("generateTypesFromJsonSchema", () => {
         "}",
         "type GetItemOutput = unknown",
         "",
-        "declare const codemode: {",
+        "declare const tools: {",
         "\t/**",
         "\t * Search for items",
         "\t */",
@@ -669,7 +669,7 @@ describe("generateTypesFromJsonSchema", () => {
         "    email: string;",
         "}",
         "",
-        "declare const codemode: {",
+        "declare const tools: {",
         "\t/**",
         "\t * Get a user",
         "\t */",
@@ -680,7 +680,7 @@ describe("generateTypesFromJsonSchema", () => {
   });
 
   it("handles an empty tool set", () => {
-    expect(generateTypesFromJsonSchema({})).toBe("declare const codemode: {}");
+    expect(generateTypesFromJsonSchema({})).toBe("declare const tools: {}");
   });
 
   it("generates types from MCP-style tool definitions", () => {
@@ -744,7 +744,7 @@ describe("generateTypesFromJsonSchema", () => {
         "}",
         "type ListIssuesOutput = unknown",
         "",
-        "declare const codemode: {",
+        "declare const tools: {",
         "\t/**",
         "\t * Create a GitHub issue",
         "\t * @param input.owner - Repository owner",
@@ -783,7 +783,7 @@ describe("generateTypesFromJsonSchema", () => {
         "}",
         "type BlaBlaDoItOutput = string",
         "",
-        "declare const codemode: {",
+        "declare const tools: {",
         "\tbla: {",
         "\t\tbla: {",
         "\t\t\t/**",
@@ -880,8 +880,8 @@ describe("generateTypesFromJsonSchema", () => {
     expect(result).toContain("read: (input: FilesReadInput) => Promise<FilesReadOutput>;");
   });
 
-  it("generates codemode ctx declarations with core built-ins and nested provider paths", () => {
-    const result = generateCodemodeContextTypesFromJsonSchema({
+  it("generates ctx declarations with core built-ins and nested provider paths", () => {
+    const result = generateContextTypesFromJsonSchema({
       namespace: ["builtin", "slack"],
       tools: {
         "chat.postMessage": {
@@ -905,15 +905,15 @@ describe("generateTypesFromJsonSchema", () => {
       },
     });
 
-    expect(result).toContain("interface CodemodeExecutionContext {");
+    expect(result).toContain("interface ItxExecutionContext {");
     expect(result).toContain("fetch: typeof fetch;");
-    expect(result).toContain("console: CodemodeConsole;");
+    expect(result).toContain("console: ItxConsole;");
     expect(result).toContain("builtin: {");
     expect(result).toContain("slack: {");
     expect(result).toContain("chat: {");
     expect(result).toContain(
       "postMessage: (input: ChatPostMessageInput) => Promise<ChatPostMessageOutput>;",
     );
-    expect(result).toContain("declare const ctx: CodemodeExecutionContext");
+    expect(result).toContain("declare const ctx: ItxExecutionContext");
   });
 });
