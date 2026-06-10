@@ -170,6 +170,11 @@ export const StreamState = z.object({
   path: StreamPath,
   eventCount: z.number().int().nonnegative(),
   childPaths: z.array(StreamPath),
+  /**
+   * Full paths of every stream strictly under this one, in announcement order.
+   * The root stream's copy lists every stream in the namespace.
+   */
+  descendantPaths: z.array(StreamPath),
   metadata: JSONObject,
   processors: ProcessorsState,
 });

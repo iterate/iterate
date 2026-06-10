@@ -25,6 +25,7 @@ export class StreamDurableObject extends DurableObject {
 
     await this.ctx.storage.put("state", {
       childPaths: [],
+      descendantPaths: [],
       eventCount: 0,
       metadata: {},
       namespace: structuredName.namespace,

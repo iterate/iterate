@@ -264,8 +264,54 @@ describe("core processor contract", () => {
     }
 
     expect(state.childPaths).toEqual(["/a/b"]);
+    expect(state.descendantPaths).toEqual(["/a/b/c"]);
     expect(state.metadata).toEqual({ title: "Demo stream" });
     expect(state.maxOffset).toBe(3);
+  });
+
+  it("accumulates full descendant paths from child-stream-created announcements", () => {
+    const announcement = (offset: number, childPath: string): StreamEvent => ({
+      offset,
+      createdAt: `2026-06-01T12:00:0${offset}.000Z`,
+      type: "events.iterate.com/stream/child-stream-created",
+      idempotencyKey: `child-stream-created:${offset}:${childPath}`,
+      payload: { childPath },
+    });
+
+    // The root hears every announcement in the namespace and keeps each full
+    // path once, in insertion order — this is what namespace listing reads.
+    const rootState = reduceEvents({
+      state: CoreProcessorContract.stateSchema.parse({
+        ...CoreProcessorContract.initialState,
+        path: "/",
+      }),
+      events: [
+        announcement(1, "/a"),
+        announcement(2, "/a/b"),
+        announcement(3, "/c"),
+        announcement(4, "/a/b"), // duplicate announcement is ignored
+      ],
+    });
+    expect(rootState.childPaths).toEqual(["/a", "/c"]);
+    expect(rootState.descendantPaths).toEqual(["/a", "/a/b", "/c"]);
+
+    // An intermediate ancestor keeps only paths strictly under its own path:
+    // not itself, not siblings, and not a path that merely shares a prefix.
+    const intermediateState = reduceEvents({
+      state: CoreProcessorContract.stateSchema.parse({
+        ...CoreProcessorContract.initialState,
+        path: "/a",
+      }),
+      events: [
+        announcement(1, "/a"),
+        announcement(2, "/a/b"),
+        announcement(3, "/a/b/c"),
+        announcement(4, "/c"),
+        announcement(5, "/ab"),
+      ],
+    });
+    expect(intermediateState.childPaths).toEqual(["/a/b"]);
+    expect(intermediateState.descendantPaths).toEqual(["/a/b", "/a/b/c"]);
   });
 
   it("rebuilds state by replaying committed events", () => {
@@ -300,6 +346,7 @@ describe("core processor contract", () => {
       eventCount: 3,
       maxOffset: 3,
       childPaths: ["/agents/debug"],
+      descendantPaths: ["/agents/debug"],
     });
   });
 

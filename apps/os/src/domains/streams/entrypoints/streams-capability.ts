@@ -163,10 +163,17 @@ export class StreamsCapability extends WorkerEntrypoint<
   }
 
   async list() {
-    const paths = await listNamespaceStreamPaths({
+    // One Durable Object call: every stream/created is announced to all of its
+    // ancestor streams, and the root stream's reduced state accumulates the
+    // full announced paths in descendantPaths. Streams persisted before that
+    // field existed are rebuilt by CORE_STATE_VERSION replay on their next
+    // wake, so the root state is authoritative — no per-stream DO walk.
+    const rootState = await getNamespaceStreamState({
       durableObjectNamespace: this.env.STREAM,
       namespace: this.ctx.props.projectId,
+      path: StreamPath.parse("/"),
     });
+    const paths = ["/", ...rootState.descendantPaths];
     return paths.map((path) => ({
       name: `${this.ctx.props.projectId}:${path}`,
       namespace: this.ctx.props.projectId,
@@ -458,31 +465,6 @@ async function getNamespaceStreamState(args: {
 }) {
   const stub = await getInitializedNamespaceStreamStub(args);
   return await stub.getState();
-}
-
-async function listNamespaceStreamPaths(args: {
-  durableObjectNamespace: DurableObjectNamespace<StreamDurableObject>;
-  namespace: string;
-}) {
-  const visited = new Set<string>();
-  const paths: StreamPath[] = [];
-
-  async function visit(path: StreamPath) {
-    if (visited.has(path)) return;
-    visited.add(path);
-    paths.push(path);
-    const state = await getNamespaceStreamState({
-      durableObjectNamespace: args.durableObjectNamespace,
-      namespace: args.namespace,
-      path,
-    });
-    for (const childPath of state.childPaths) {
-      await visit(StreamPath.parse(childPath));
-    }
-  }
-
-  await visit(StreamPath.parse("/"));
-  return paths;
 }
 
 async function* streamNamespaceStreamEvents(args: {
