@@ -24,10 +24,12 @@ import {
   type StreamDurableObjectNamespace,
 } from "~/domains/streams/new-stream-runtime.ts";
 
-export type ItxScriptOutcome = { executionId: string; durationMs: number } & (
-  | { ok: true; result: unknown }
-  | { ok: false; error: string; stack?: string }
-);
+export type ItxScriptOutcome = {
+  executionId: string;
+  durationMs: number;
+  /** console.log/warn/error lines captured from the script's isolate. */
+  logs: string[];
+} & ({ ok: true; result: unknown } | { ok: false; error: string; stack?: string });
 
 /** Keep stream payloads bounded; the full value still returns to the caller. */
 const MAX_RECORDED_RESULT_CHARS = 64_000;
@@ -40,6 +42,10 @@ export async function runItxScript(input: {
   /** The owning project; null only for global-context scripts (no egress
    * pipe, no event record — admin-only by construction). */
   projectId: string | null;
+  /** Where the two-event record lands. Defaults to the owning project's
+   * /itx stream; callers whose loop lives on another stream (e.g. an agent
+   * reading completions off its own stream) point this there. */
+  record?: { namespace: string; path: string };
   functionSource: string;
   vars?: Record<string, unknown>;
 }): Promise<ItxScriptOutcome> {
@@ -48,8 +54,11 @@ export async function runItxScript(input: {
 
   const executionId = crypto.randomUUID();
   const startedAtMs = Date.now();
+  const record =
+    input.record ??
+    (input.projectId === null ? null : { namespace: input.projectId, path: ITX_AUDIT_STREAM_PATH });
 
-  await recordExecutionEvent(input, {
+  await recordExecutionEvent(input.env, record, {
     type: ITX_EVENT_TYPES.executionRequested,
     payload: {
       code: input.functionSource,
@@ -88,15 +97,22 @@ export async function runItxScript(input: {
 
   let outcome: ItxScriptOutcome;
   try {
-    const raw = JSON.parse(await entrypoint.run(input.vars ?? {})) as
+    const raw = JSON.parse(await entrypoint.run(input.vars ?? {})) as { logs?: string[] } & (
       | { ok: true; result: unknown }
-      | { error: string; ok: false; stack?: string };
-    outcome = { ...raw, durationMs: Date.now() - startedAtMs, executionId };
+      | { error: string; ok: false; stack?: string }
+    );
+    outcome = {
+      ...raw,
+      durationMs: Date.now() - startedAtMs,
+      executionId,
+      logs: raw.logs ?? [],
+    };
   } catch (error) {
     outcome = {
       durationMs: Date.now() - startedAtMs,
       error: error instanceof Error ? error.message : String(error),
       executionId,
+      logs: [],
       ok: false,
       stack: error instanceof Error ? error.stack : undefined,
     };
@@ -104,12 +120,13 @@ export async function runItxScript(input: {
     entrypoint[Symbol.dispose]?.();
   }
 
-  await recordExecutionEvent(input, {
+  await recordExecutionEvent(input.env, record, {
     type: ITX_EVENT_TYPES.executionCompleted,
     payload: {
       context: input.props.context,
       durationMs: outcome.durationMs,
       executionId,
+      ...(outcome.logs.length > 0 ? { logs: outcome.logs.slice(0, 200) } : {}),
       ok: outcome.ok,
       ...(outcome.ok
         ? { result: boundRecordedResult(outcome.result) }
@@ -126,15 +143,29 @@ function itxRunWorkerSource(functionSource: string) {
 
     const script = (${functionSource});
 
+    const logs = [];
+    const stringify = (value) => {
+      if (typeof value === "string") return value;
+      try { return JSON.stringify(value) ?? String(value); } catch { return String(value); }
+    };
+    for (const level of ["log", "warn", "error"]) {
+      const original = console[level].bind(console);
+      console[level] = (...args) => {
+        if (logs.length < 200) logs.push("[" + level + "] " + args.map(stringify).join(" "));
+        original(...args);
+      };
+    }
+
     export default class extends WorkerEntrypoint {
       async run(vars) {
         try {
           const itx = await this.env.ITERATE.context;
           const result = await script({ itx, vars });
-          return JSON.stringify({ ok: true, result });
+          return JSON.stringify({ logs, ok: true, result });
         } catch (error) {
           return JSON.stringify({
             error: error instanceof Error ? error.message : String(error),
+            logs,
             ok: false,
             stack: error instanceof Error ? error.stack : undefined,
           });
@@ -145,15 +176,16 @@ function itxRunWorkerSource(functionSource: string) {
 }
 
 async function recordExecutionEvent(
-  input: { env: Env; projectId: string | null },
+  env: Env,
+  record: { namespace: string; path: string } | null,
   event: { type: string; payload: Record<string, unknown> },
 ): Promise<void> {
-  if (input.projectId === null) return; // global scripts have no project stream
+  if (record === null) return; // global scripts have no project stream
   try {
     const stream = await getInitializedStreamStub({
-      durableObjectNamespace: input.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: input.projectId,
-      path: StreamPath.parse(ITX_AUDIT_STREAM_PATH),
+      durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: record.namespace,
+      path: StreamPath.parse(record.path),
     });
     await stream.append(event);
   } catch (error) {
