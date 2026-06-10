@@ -2,9 +2,11 @@ import type { Workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 /**
- * Maintains a single "PR dashboard" Slack message per (UTC) day in #building, instead of
- * one message per merged PR. The first PR event of the day creates the message; subsequent
- * events update it in place. The Slack message ts is remembered in a repo Actions variable.
+ * Maintains a single "PR dashboard" Slack message per (UTC) day in #ci, instead of one
+ * message per merged PR. The channel message is a compact summary (counts only); the full
+ * per-PR breakdown lives in a single threaded reply. The first PR event of the day creates
+ * both; subsequent events update them in place. The Slack message timestamps are remembered
+ * in a repo Actions variable.
  */
 export default {
   name: "Daily PR dashboard",
@@ -34,7 +36,7 @@ export default {
               await import("../utils/slack.ts");
 
             const isTest = context.eventName !== "pull_request";
-            const channel = isTest ? slackChannelIds["#misha-test"] : slackChannelIds["#building"];
+            const channel = isTest ? slackChannelIds["#misha-test"] : slackChannelIds["#ci"];
             const stateVariableName = isTest
               ? "SLACK_PR_DASHBOARD_STATE_TEST"
               : "SLACK_PR_DASHBOARD_STATE";
@@ -96,7 +98,15 @@ export default {
             const month = now.toLocaleString("en-GB", { month: "long", timeZone: "UTC" });
             const heading = `*PR dashboard ${ordinal(now.getUTCDate())} ${month}*`;
 
-            const lines = [heading, ""];
+            const counts = [
+              `${mergedToday.length} merged`,
+              closedToday.length ? `${closedToday.length} closed without merging` : "",
+              `${openedToday.length} opened`,
+              oldOpen.length ? `${oldOpen.length} older still open` : "",
+            ].filter(Boolean);
+            const summaryText = `${heading} — ${counts.join(" · ")} (details in thread)`;
+
+            const lines: string[] = [];
             if (mergedToday.length) {
               lines.push("*Merged:*");
               for (const { item, pr } of mergedToday) {
@@ -127,7 +137,9 @@ export default {
                 .map((item) => `<${item.html_url}|#${item.number}>`);
               lines.push(`Old: ${oldLinks.join(", ")}`);
             }
-            console.log(`Dashboard message for ${channel}:\n\n${lines.join("\n")}`);
+            console.log(
+              `Dashboard for ${channel}:\n\n${summaryText}\n\n--- thread ---\n\n${lines.join("\n")}`,
+            );
             if (dryRun) {
               console.log("Dry run (no Slack token available locally), not posting.");
               return;
@@ -170,11 +182,11 @@ export default {
               text: { type: "mrkdwn" as const, text: chunk },
             }));
             // `text` becomes the notification fallback when blocks are present
-            const message_payload = { channel, text: heading.replaceAll("*", ""), blocks };
+            const detailsPayload = { channel, text: heading.replaceAll("*", ""), blocks };
 
             const slack = getSlackClient(slackToken);
 
-            type State = { date: string; channel: string; ts: string };
+            type State = { date: string; channel: string; ts: string; details_ts?: string };
             const state: State | null = await github.rest.actions
               .getRepoVariable({ ...context.repo, name: stateVariableName })
               .then((res) => JSON.parse(res.data.value) as State)
@@ -183,38 +195,59 @@ export default {
                 throw error;
               });
 
+            const writeState = async (newState: State) => {
+              const value = JSON.stringify(newState);
+              await github.rest.actions
+                .updateRepoVariable({ ...context.repo, name: stateVariableName, value })
+                .catch(async (error: { status?: number }) => {
+                  if (error.status !== 404) throw error;
+                  await github.rest.actions.createRepoVariable({
+                    ...context.repo,
+                    name: stateVariableName,
+                    value,
+                  });
+                });
+            };
+            const postDetailsInThread = async (parentTs: string) => {
+              const details = await slack.chat.postMessage({
+                ...detailsPayload,
+                thread_ts: parentTs,
+              });
+              if (!details.ts) throw new Error(`No ts in details postMessage response`);
+              return details.ts;
+            };
+
             if (state && state.date === today && state.channel === channel) {
               const updated = await slack.chat
-                .update({ ...message_payload, ts: state.ts })
+                // blocks: [] strips any existing blocks - chat.update retains them otherwise
+                .update({ channel, ts: state.ts, text: summaryText, blocks: [] })
                 .catch((error) => {
                   // e.g. message_not_found if someone deleted today's message - post a fresh one
                   console.warn(`chat.update failed, posting a new message instead:`, error);
                   return null;
                 });
               if (updated) {
+                const detailsUpdated =
+                  state.details_ts &&
+                  (await slack.chat
+                    .update({ ...detailsPayload, ts: state.details_ts })
+                    .catch((error) => {
+                      console.warn(`details chat.update failed, re-posting in thread:`, error);
+                      return null;
+                    }));
+                if (!detailsUpdated) {
+                  await writeState({ ...state, details_ts: await postDetailsInThread(state.ts) });
+                }
                 console.log(`Updated existing dashboard message ${state.ts}`);
                 return;
               }
             }
 
-            const message = await slack.chat.postMessage(message_payload);
+            const message = await slack.chat.postMessage({ channel, text: summaryText });
             if (!message.ts) throw new Error(`No ts in postMessage response`);
-            const newState: State = { date: today, channel, ts: message.ts };
-            await github.rest.actions
-              .updateRepoVariable({
-                ...context.repo,
-                name: stateVariableName,
-                value: JSON.stringify(newState),
-              })
-              .catch(async (error: { status?: number }) => {
-                if (error.status !== 404) throw error;
-                await github.rest.actions.createRepoVariable({
-                  ...context.repo,
-                  name: stateVariableName,
-                  value: JSON.stringify(newState),
-                });
-              });
-            console.log(`Posted new dashboard message ${message.ts}`);
+            const detailsTs = await postDetailsInThread(message.ts);
+            await writeState({ date: today, channel, ts: message.ts, details_ts: detailsTs });
+            console.log(`Posted new dashboard message ${message.ts} (details ${detailsTs})`);
           },
         ),
       ],
