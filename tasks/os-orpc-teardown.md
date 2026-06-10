@@ -26,14 +26,16 @@ rollback plan.
 
 ### Kernel hardening
 
-- [ ] `ItxError { code, message, details? }` serialized across capnweb and
-      rehydrated in the client core (codes: NOT_FOUND, FORBIDDEN, CONFLICT,
-      BAD_REQUEST). UI conversion of mutating pages waits on this.
+- [x] `ItxError { code, message, details? }` serialized across capnweb and
+      read back duck-typed in the client core (codes: NOT_FOUND, FORBIDDEN,
+      CONFLICT, BAD_REQUEST, INTERNAL; `onSendError` tags everything else
+      INTERNAL) — **PR #1456**, see `apps/os/src/itx/errors.ts` and
+      DECISIONS.md D18. UI conversion of mutating pages is unblocked.
 - [x] `getServerItx` — in-process handle for SSR loaders (resolveItx +
       accessForPrincipal via the shared access.ts boundary); isomorphic
       `getLoaderItx` + best-effort `prefetchItxQuery` seed the QueryClient
       with the same itxKey keys the browser uses (streams index wired; itx
-      DECISIONS D18, PR #1457).
+      DECISIONS D19, PR #1457).
 - [ ] Org-membership `itx.projects.create` (org claims on the handle runtime;
       replaces the admin-only path for the dashboard create flow).
 

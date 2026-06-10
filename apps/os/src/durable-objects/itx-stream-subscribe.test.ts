@@ -19,6 +19,7 @@ type HarnessStub = {
     path: string;
     event: { type: string; payload: Record<string, unknown> };
   }): Promise<StreamEvent>;
+  appendOutsidePolicy(input: { path: string }): Promise<void>;
   list(): Promise<{ streamPath: string }[]>;
   read(input: { path: string }): Promise<StreamEvent[]>;
   subscribe(
@@ -157,6 +158,24 @@ describe("itx stream subscribe against a real Stream Durable Object", () => {
     // The worker (and the stream) survived: both appends were committed.
     const events = await harness.read({ path });
     expect(markersOf(events)).toEqual(["boom", "after-boom"]);
+  });
+});
+
+describe("itx errors across real Workers RPC boundaries", () => {
+  test("an ItxError's code and details survive the loopback and harness hops", async () => {
+    const path = newStreamPath();
+    // The append-policy FORBIDDEN is thrown inside StreamsCapability, crosses
+    // the ctx.exports loopback into the harness entrypoint, then the harness
+    // RPC boundary into this test — two real Workers RPC serializations.
+    const error = await harness.appendOutsidePolicy({ path }).then(
+      () => null,
+      (thrown: unknown) => thrown as Error & { code?: unknown; details?: unknown },
+    );
+
+    expect(error).not.toBeNull();
+    expect(error!.name).toBe("ItxError");
+    expect(error!.code).toBe("FORBIDDEN");
+    expect(error!.details).toEqual({ path, policyMode: "none" });
   });
 });
 

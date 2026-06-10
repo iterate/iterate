@@ -162,7 +162,36 @@ The genuinely dangerous direction — a hand-built `path` into
 reserved/prototype names via `itxInvoke` — stays gated in `replayPathCall`
 (D16), which is exactly why that server-side filter is load-bearing now.
 
-## D18: SSR reaches itx in-process; loader prefetch is best-effort
+## D18: ItxError — five codes, duck-typed, tag-don't-redact
+
+Structured kernel errors live in `errors.ts`; full rationale in its doc
+comments. The compact version:
+
+- **Wire shape over class identity.** capnweb serializes an error's own
+  enumerable props and reconstructs a plain `Error` on the far side, so
+  `ItxError` is just `Error` + enumerable `code`/`details` and detection is
+  duck-typed (`getItxErrorCode`), never `instanceof`. No rehydration layer.
+- **Exactly five codes**: NOT_FOUND, FORBIDDEN, CONFLICT, BAD_REQUEST,
+  INTERNAL. No UNAUTHORIZED — auth happens at connect (Law 3), so auth
+  failures are transport-level 401s before a session exists.
+- **Existence masking**: resolution boundaries (`itx.projects.get`,
+  `/api/itx[/run]` context resolution) answer NOT_FOUND for missing AND
+  forbidden, byte-identical, so callers cannot probe which ids/slugs exist.
+  FORBIDDEN is reserved for cases where existence is established or not
+  secret (global streams, append policy, create/remove projects).
+- **Tag, don't redact**: the `/api/itx` sessions' `onSendError`
+  (`tagOutboundItxError`, wired in `fetch.ts`) rewrites every non-ItxError to
+  `ItxError { code: "INTERNAL" }` keeping the original message and stack — we
+  trust our callers; returning the error from the hook is also what makes
+  capnweb transmit the stack at all. `details` ships in v1 (maximum info).
+- **Retry semantics downstream**: `useItxQuery` retries only code-less
+  (socket) or INTERNAL errors, once; the stream-tail multiplexer skips
+  retry exactly for access errors (NOT_FOUND/FORBIDDEN).
+- Verified by the worker harness (`pnpm test:itx-stream-subscribe`) that
+  `code`/`details` also survive plain Workers RPC hops, so kernel throws
+  born inside `StreamsCapability` keep their codes on the way to capnweb.
+
+## D19: SSR reaches itx in-process; loader prefetch is best-effort
 
 Three pieces, one seam each:
 
