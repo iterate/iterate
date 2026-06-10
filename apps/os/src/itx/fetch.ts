@@ -25,6 +25,7 @@ import type { AppContext } from "~/context.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import type { Principal } from "~/auth/principal.ts";
 import { getProjectById, getProjectBySlug } from "~/db/queries/.generated/index.ts";
+import { isProjectId } from "~/domains/projects/project-id.ts";
 
 export const ITX_PREFIX = "/api/itx";
 
@@ -162,7 +163,11 @@ async function resolveAccessibleContextId(input: {
     }
   }
 
-  const row = input.idOrSlug.startsWith("proj_")
+  // Classify by prefix: auth mints the canonical "prj_" id, "proj_" is the
+  // legacy OS typeid prefix, anything else is a slug. Treating a "prj_" id as a
+  // slug is what 404'd the project REPL connect — the global REPL hits the
+  // bare-prefix branch above and so was never affected.
+  const row = isProjectId(input.idOrSlug)
     ? await getProjectById(input.context.db, { id: input.idOrSlug })
     : await getProjectBySlug(input.context.db, { slug: input.idOrSlug });
   if (!row) return null;
