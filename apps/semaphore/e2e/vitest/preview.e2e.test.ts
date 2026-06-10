@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { createSemaphoreClient } from "@iterate-com/semaphore-contract";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
+import { createSemaphoreClient } from "../../src/contract.ts";
 import {
   createSemaphoreAppFixture,
   requireSemaphoreApiToken,

@@ -1,6 +1,6 @@
-import { createSemaphoreClient } from "@iterate-com/semaphore-contract";
 import { z } from "zod";
 import { syncPreviewInventory } from "../../../scripts/preview/preview-inventory.ts";
+import { createSemaphoreClient } from "../src/contract.ts";
 
 const DEFAULT_SEMAPHORE_BASE_URL = "https://semaphore.iterate.com";
 

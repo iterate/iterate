@@ -1,10 +1,63 @@
-import { oc } from "@orpc/contract";
-import { internalContract } from "@iterate-com/shared/apps/internal-router-contract";
+import { createORPCClient } from "@orpc/client";
+import { oc, type ContractRouterClient } from "@orpc/contract";
+import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { z } from "zod";
 
+const INTERNAL_OPENAPI_TAG = "/__internal";
 const SEMAPHORE_KEY_PATTERN = /^(?=.*[a-z])[a-z0-9-]+$/;
 const MAX_LEASE_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_WAIT_MS = 5 * 60 * 1000;
+
+const EmptyInput = z.object({}).optional().default({});
+
+const internalContract = oc.router({
+  health: oc
+    .route({ method: "GET", path: "/__internal/health", tags: [INTERNAL_OPENAPI_TAG] })
+    .input(EmptyInput)
+    .output(
+      z.object({
+        ok: z.literal(true),
+        app: z.string(),
+        version: z.string(),
+      }),
+    ),
+  publicConfig: oc
+    .route({ method: "GET", path: "/__internal/public-config", tags: [INTERNAL_OPENAPI_TAG] })
+    .input(EmptyInput)
+    .output(z.record(z.string(), z.unknown())),
+  debug: oc
+    .route({ method: "GET", path: "/__internal/debug", tags: [INTERNAL_OPENAPI_TAG] })
+    .input(EmptyInput)
+    .output(z.record(z.string(), z.unknown())),
+  trpcCliProcedures: oc
+    .route({
+      method: "GET",
+      path: "/__internal/trpc-cli-procedures",
+      tags: [INTERNAL_OPENAPI_TAG],
+    })
+    .input(EmptyInput)
+    .output(
+      z.object({
+        procedures: z.array(z.unknown()),
+      }),
+    ),
+  refreshRegistry: oc
+    .route({ method: "POST", path: "/__internal/refresh-registry", tags: [INTERNAL_OPENAPI_TAG] })
+    .input(
+      z
+        .object({
+          registryBaseUrl: z.url().default("http://iterate.localhost"),
+          baseUrl: z.url().optional(),
+        })
+        .optional()
+        .default({ registryBaseUrl: "http://iterate.localhost" }),
+    )
+    .output(
+      z.object({
+        ok: z.literal(true),
+      }),
+    ),
+});
 
 const semaphoreKeySchema = z
   .string()
@@ -75,7 +128,7 @@ export const SemaphoreLeaseRecord = z.object({
   type: semaphoreTypeSchema,
   slug: semaphoreSlugSchema,
   data: semaphoreDataSchema,
-  leaseId: z.string().uuid(),
+  leaseId: z.uuid(),
   expiresAt: z.number().int().positive(),
 });
 
@@ -114,14 +167,14 @@ const AcquireSpecificResourceInput = z.object({
 const RenewResourceLeaseInput = z.object({
   type: semaphoreTypeSchema,
   slug: semaphoreSlugSchema,
-  leaseId: z.string().uuid(),
+  leaseId: z.uuid(),
   leaseMs: semaphoreLeaseMsSchema,
 });
 
 export const ReleaseResourceInput = z.object({
   type: semaphoreTypeSchema,
   slug: semaphoreSlugSchema,
-  leaseId: z.string().uuid(),
+  leaseId: z.uuid(),
 });
 
 const DeleteResourceResult = z.object({
@@ -211,3 +264,66 @@ export const semaphoreContract = oc.router({
 
 export type SemaphoreResourceRecord = z.infer<typeof SemaphoreResourceRecord>;
 export type SemaphoreLeaseRecord = z.infer<typeof SemaphoreLeaseRecord>;
+
+export const cloudflareTunnelType = "cloudflare-tunnel";
+
+export const CloudflareTunnelData = z.object({
+  provider: z.literal(cloudflareTunnelType),
+  publicHostname: z.string().min(1),
+  tunnelId: z.string().min(1),
+  tunnelName: z.string().min(1),
+  tunnelToken: z.string().min(1),
+  service: z.string().min(1),
+  createdAt: z.string().min(1),
+});
+
+export type CloudflareTunnelData = z.infer<typeof CloudflareTunnelData>;
+
+type SemaphoreClient = ContractRouterClient<typeof semaphoreContract>;
+type SemaphoreFetch = (input: URL | string | Request, init?: RequestInit) => Promise<Response>;
+
+type CreateSemaphoreClientOptions =
+  | {
+      apiKey: string;
+      baseURL: string;
+      fetch?: SemaphoreFetch;
+    }
+  | {
+      apiKey: string;
+      fetch: SemaphoreFetch;
+      baseURL?: string;
+    };
+
+const FETCH_ONLY_PLACEHOLDER_URL = "https://semaphore.invalid/api";
+
+function resolveSemaphoreOrpcUrl(options: { baseURL?: string; fetch?: SemaphoreFetch }): string {
+  if (options.baseURL) {
+    return new URL("/api", options.baseURL).toString();
+  }
+
+  if (options.fetch) {
+    return FETCH_ONLY_PLACEHOLDER_URL;
+  }
+
+  throw new Error("createSemaphoreClient requires either baseURL or fetch");
+}
+
+export function createSemaphoreClient(options: CreateSemaphoreClientOptions): SemaphoreClient {
+  const url = resolveSemaphoreOrpcUrl(options);
+  const authFetch: SemaphoreFetch = async (input, init) => {
+    const headers = new Headers(init?.headers);
+    headers.set("Authorization", `Bearer ${options.apiKey}`);
+
+    return (options.fetch ?? fetch)(input, {
+      ...init,
+      headers,
+    });
+  };
+
+  const link = new OpenAPILink(semaphoreContract, {
+    url,
+    fetch: authFetch,
+  });
+
+  return createORPCClient(link);
+}

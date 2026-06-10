@@ -3,7 +3,6 @@ packages:
   - apps/os
   - apps/os-contract
   - apps/semaphore
-  - apps/semaphore-contract
   - apps/*
   - packages/*
   - packages/*/example-app

@@ -250,7 +250,7 @@ inside the oRPC call chain.
 - `packages/shared/src/apps/logging/runtime.ts` still has older helpers shaped
   around `context.manifest`; if they are unused, remove them or reshape them to
   match `withEvlog({ manifest, config })`.
-- Rename or narrow the shared `packages/shared/src/apps/types.ts` `AppContext`
+- Remove the old shared `AppContext`
   type so it does not imply every app should share a manifest-bearing context.
 
 ## Implementation Plan

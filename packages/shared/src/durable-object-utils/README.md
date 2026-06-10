@@ -85,7 +85,7 @@ config shape as the worker entrypoint:
 ```ts
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
-import { BaseAppConfig } from "@iterate-com/shared/apps/config";
+import { BaseAppConfig } from "@iterate-com/shared/config";
 import { withAppConfig } from "@iterate-com/shared/durable-object-utils/mixins/with-app-config";
 
 const AppConfig = BaseAppConfig.extend({

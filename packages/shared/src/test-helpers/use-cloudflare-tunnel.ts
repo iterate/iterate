@@ -1,10 +1,20 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import { CloudflareTunnelData, cloudflareTunnelType } from "@iterate-com/semaphore-contract";
+import { z } from "zod";
 import { useSemaphoreLease } from "./use-semaphore-lease.ts";
 
 const DEFAULT_HEALTHCHECK_PATH = "/api/__internal/health";
 const DEFAULT_TUNNEL_TIMEOUT_MS = 60_000;
+const cloudflareTunnelType = "cloudflare-tunnel";
+const CloudflareTunnelData = z.object({
+  provider: z.literal(cloudflareTunnelType),
+  publicHostname: z.string().min(1),
+  tunnelId: z.string().min(1),
+  tunnelName: z.string().min(1),
+  tunnelToken: z.string().min(1),
+  service: z.string().min(1),
+  createdAt: z.string().min(1),
+});
 
 function parseSeededServiceUrl(value: string) {
   const url = new URL(value);

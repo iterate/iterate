@@ -14,7 +14,7 @@ import {
   listResourcesFromDb,
   ResourceInputError,
 } from "~/lib/resource-store.ts";
-import { os } from "~/orpc/orpc.ts";
+import { semaphore } from "~/orpc/orpc.ts";
 
 function readBearerToken(headerValue: string | null): string | null {
   if (!headerValue) return null;
@@ -30,7 +30,7 @@ function hasValidBearerToken(context: RequestContext): boolean {
   return Boolean(providedToken && providedToken === expectedToken);
 }
 
-const authProcedure = os.middleware(async ({ context, next }) => {
+const authProcedure = semaphore.middleware(async ({ context, next }) => {
   if (!hasValidBearerToken(context)) {
     throw new ORPCError("UNAUTHORIZED", {
       message: "Missing or invalid Authorization header",
@@ -80,30 +80,32 @@ function getCoordinator(type: string) {
   return env.RESOURCE_COORDINATOR.getByName(type);
 }
 
-const addResourceProcedure = os.resources.add.use(authProcedure).handler(async ({ input }) => {
-  try {
-    const { type, slug, data } = input;
-    const coordinator = getCoordinator(type);
-    const hasActiveLease = await coordinator.hasActiveLease({ type, slug });
-    if (hasActiveLease) {
-      throw new ORPCError("CONFLICT", {
-        message: "Cannot add a resource while an older lease is still active for this slug.",
+const addResourceProcedure = semaphore.resources.add
+  .use(authProcedure)
+  .handler(async ({ input }) => {
+    try {
+      const { type, slug, data } = input;
+      const coordinator = getCoordinator(type);
+      const hasActiveLease = await coordinator.hasActiveLease({ type, slug });
+      if (hasActiveLease) {
+        throw new ORPCError("CONFLICT", {
+          message: "Cannot add a resource while an older lease is still active for this slug.",
+        });
+      }
+
+      const created = await insertResource(env.DB, {
+        type,
+        slug,
+        data,
       });
+      await coordinator.inventoryChanged({ type });
+      return created;
+    } catch (error) {
+      return mapResourceError(error);
     }
+  });
 
-    const created = await insertResource(env.DB, {
-      type,
-      slug,
-      data,
-    });
-    await coordinator.inventoryChanged({ type });
-    return created;
-  } catch (error) {
-    return mapResourceError(error);
-  }
-});
-
-const deleteResourceProcedure = os.resources.delete
+const deleteResourceProcedure = semaphore.resources.delete
   .use(authProcedure)
   .handler(async ({ input }) => {
     try {
@@ -115,30 +117,34 @@ const deleteResourceProcedure = os.resources.delete
     }
   });
 
-const listResourcesProcedure = os.resources.list.use(authProcedure).handler(async ({ input }) => {
-  try {
-    return await listResourcesFromDb(env.DB, { type: input.type });
-  } catch (error) {
-    return mapResourceError(error);
-  }
-});
-
-const findResourceProcedure = os.resources.find.use(authProcedure).handler(async ({ input }) => {
-  try {
-    const resource = await findResourceByKey(env.DB, input);
-    if (!resource) {
-      throw new ORPCError("NOT_FOUND", {
-        message: `No resource exists for ${input.type}/${input.slug}.`,
-      });
+const listResourcesProcedure = semaphore.resources.list
+  .use(authProcedure)
+  .handler(async ({ input }) => {
+    try {
+      return await listResourcesFromDb(env.DB, { type: input.type });
+    } catch (error) {
+      return mapResourceError(error);
     }
+  });
 
-    return resource;
-  } catch (error) {
-    return mapResourceError(error);
-  }
-});
+const findResourceProcedure = semaphore.resources.find
+  .use(authProcedure)
+  .handler(async ({ input }) => {
+    try {
+      const resource = await findResourceByKey(env.DB, input);
+      if (!resource) {
+        throw new ORPCError("NOT_FOUND", {
+          message: `No resource exists for ${input.type}/${input.slug}.`,
+        });
+      }
 
-const acquireResourceProcedure = os.resources.acquire
+      return resource;
+    } catch (error) {
+      return mapResourceError(error);
+    }
+  });
+
+const acquireResourceProcedure = semaphore.resources.acquire
   .use(authProcedure)
   .handler(async ({ input }) => {
     try {
@@ -172,7 +178,7 @@ const acquireResourceProcedure = os.resources.acquire
     }
   });
 
-const acquireSpecificResourceProcedure = os.resources.acquireSpecific
+const acquireSpecificResourceProcedure = semaphore.resources.acquireSpecific
   .use(authProcedure)
   .handler(async ({ input }) => {
     try {
@@ -195,7 +201,7 @@ const acquireSpecificResourceProcedure = os.resources.acquireSpecific
     }
   });
 
-const renewResourceLeaseProcedure = os.resources.renew
+const renewResourceLeaseProcedure = semaphore.resources.renew
   .use(authProcedure)
   .handler(async ({ input }) => {
     try {
@@ -212,7 +218,7 @@ const renewResourceLeaseProcedure = os.resources.renew
     }
   });
 
-const releaseResourceProcedure = os.resources.release
+const releaseResourceProcedure = semaphore.resources.release
   .use(authProcedure)
   .handler(async ({ input }) => {
     try {
@@ -234,32 +240,32 @@ const releaseResourceProcedure = os.resources.release
  * namespace the `iterate` CLI relies on: `pnpm cli rpc` discovers procedures
  * through `trpcCliProcedures`, and deploy tooling probes `health`.
  */
-const internalRouter = os.__internal.router({
-  health: os.__internal.health.handler(() => ({
+const internalRouter = semaphore.__internal.router({
+  health: semaphore.__internal.health.handler(() => ({
     ok: true as const,
     app: "semaphore",
     version: packageJson.version,
   })),
   // Strips `redacted(...)` fields, exposing only `publicValue(...)` ones — this
   // is what the browser boots from in routes/__root.tsx.
-  publicConfig: os.__internal.publicConfig.handler(({ context }) =>
+  publicConfig: semaphore.__internal.publicConfig.handler(({ context }) =>
     getPublicConfig(context.config, AppConfig),
   ),
   // UNAUTHENTICATED route — never return secrets here (see the os incident).
-  debug: os.__internal.debug.handler(() => ({ runtime: "workerd" })),
-  trpcCliProcedures: os.__internal.trpcCliProcedures.handler(() => ({
+  debug: semaphore.__internal.debug.handler(() => ({ runtime: "workerd" })),
+  trpcCliProcedures: semaphore.__internal.trpcCliProcedures.handler(() => ({
     procedures: listCliProcedures(),
   })),
-  refreshRegistry: os.__internal.refreshRegistry.handler(() => {
+  refreshRegistry: semaphore.__internal.refreshRegistry.handler(() => {
     throw new ORPCError("NOT_IMPLEMENTED", {
       message: "__internal.refreshRegistry is not implemented for semaphore",
     });
   }),
 });
 
-export const appRouter = os.router({
+export const appRouter = semaphore.router({
   __internal: internalRouter,
-  resources: os.resources.router({
+  resources: semaphore.resources.router({
     add: addResourceProcedure,
     delete: deleteResourceProcedure,
     list: listResourcesProcedure,

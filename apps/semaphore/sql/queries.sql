@@ -1,45 +1,45 @@
--- @query selectResources
+/** @name selectResources */
 SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at
 FROM resources
-ORDER BY type ASC, created_at ASC, slug ASC
+ORDER BY type ASC, created_at ASC, slug ASC;
 
--- @query selectResourcesByType
+/** @name selectResourcesByType */
 SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at
 FROM resources
 WHERE type = :type
-ORDER BY created_at ASC, slug ASC
+ORDER BY created_at ASC, slug ASC;
 
--- @query insertResourceRow
+/** @name insertResourceRow */
 INSERT INTO resources (type, slug, data)
-VALUES (:type, :slug, :data)
+VALUES (:type, :slug, :data);
 
--- @query selectResourceByTypeAndSlug
+/** @name selectResourceByTypeAndSlug */
 SELECT type, slug, data, lease_state, leased_until, last_acquired_at, last_released_at, created_at, updated_at
 FROM resources
-WHERE type = :type AND slug = :slug
+WHERE type = :type AND slug = :slug;
 
--- @query deleteResourceByTypeAndSlug
+/** @name deleteResourceByTypeAndSlug */
 DELETE FROM resources
-WHERE type = :type AND slug = :slug
+WHERE type = :type AND slug = :slug;
 
--- @query selectResourcePresenceByType
+/** @name selectResourcePresenceByType */
 SELECT 1 AS present
 FROM resources
 WHERE type = :type
-LIMIT 1
+LIMIT 1;
 
--- @query updateResourceLeased
+/** @name updateResourceLeased */
 UPDATE resources
 SET lease_state = 'leased',
   leased_until = :leasedUntil,
   last_acquired_at = :lastAcquiredAt,
-  updated_at = CURRENT_TIMESTAMP
-WHERE type = :type AND slug = :slug
+  updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')
+WHERE type = :type AND slug = :slug;
 
--- @query updateResourceAvailable
+/** @name updateResourceAvailable */
 UPDATE resources
 SET lease_state = 'available',
   leased_until = NULL,
   last_released_at = COALESCE(:lastReleasedAt, last_released_at),
-  updated_at = CURRENT_TIMESTAMP
-WHERE type = :type AND slug = :slug
+  updated_at = strftime('%Y-%m-%d %H:%M:%S', 'now')
+WHERE type = :type AND slug = :slug;
