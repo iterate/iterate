@@ -10,6 +10,14 @@ import {
 } from "../db/queries/index.ts";
 import type { Variables } from "../utils/hono.ts";
 import type { CloudflareEnv } from "../env.ts";
+import { isSuperadminUser } from "../superadmin.ts";
+
+// Two role namespaces appear below; don't mix them up:
+// - `session.user.role` is the system-wide better-auth admin-plugin role.
+//   "admin" there means superadmin (see superadmin.ts) and bypasses every
+//   membership check.
+// - `membership.role` is scoped to one organization and is one of
+//   "owner" | "admin" | "member".
 
 type ORPCContext = RequestHeadersPluginContext & Variables & { env: CloudflareEnv };
 
@@ -31,7 +39,7 @@ export const protectedMiddleware = os.middleware(async ({ context, next }) => {
 
 export const superadminOnlyMiddleware = os.middleware(async ({ context, next }) => {
   const { session } = context;
-  if (!session || session.user.role !== "admin") {
+  if (!session || !isSuperadminUser(session.user)) {
     throw new ORPCError("UNAUTHORIZED", { message: "Not authorized" });
   }
   return next({
@@ -71,7 +79,7 @@ async function loadOrganization(params: {
     organizationId: organization.id,
     userId: params.user.id,
   });
-  if (!membership && params.user.role !== "admin") {
+  if (!membership && !isSuperadminUser(params.user)) {
     throw new ORPCError("FORBIDDEN", { message: "You do not have access to this organization" });
   }
 
@@ -82,9 +90,8 @@ function assertOrganizationAdmin(params: {
   user: { role?: string | null };
   membership: { role: string } | null;
 }) {
-  const isSystemAdmin = params.user.role === "admin";
   const role = params.membership?.role;
-  if (!isSystemAdmin && role !== "owner" && role !== "admin") {
+  if (!isSuperadminUser(params.user) && role !== "owner" && role !== "admin") {
     throw new ORPCError("FORBIDDEN", { message: "Admin role required" });
   }
 }
@@ -169,7 +176,7 @@ async function loadProject(params: {
     organizationId: organization.id,
     userId: params.user.id,
   });
-  if (!membership && params.user.role !== "admin") {
+  if (!membership && !isSuperadminUser(params.user)) {
     throw new ORPCError("FORBIDDEN", { message: "You do not have access to this project" });
   }
 

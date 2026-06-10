@@ -6,6 +6,24 @@ import { parseStringArray } from "./db/helpers.ts";
 import { getLatestOAuthProjectSelectionByUserId } from "./db/queries/.generated/index.ts";
 import { db } from "./db/index.ts";
 
+// Project-scoped tokens: when a client requests the `project` scope, the user
+// picks which projects the token may reach on the /project-access page, and
+// that choice has to travel from a UI page into token minting. better-auth's
+// oauth provider has no direct channel for this, so the selection makes a
+// three-step trip (all wired up in auth-plugins.ts):
+//
+//   1. /project-access stores the chosen project ids in the
+//      oauthProjectSelection table (one row per attempt, latest wins).
+//   2. postLogin.consentReferenceId reads that row and encodes
+//      { userId, projectIds } into the consent flow's opaque referenceId
+//      (build/parse helpers below).
+//   3. customAccessTokenClaims decodes the referenceId, deletes the stored
+//      rows (it's a one-shot handoff, not durable state), and narrows the
+//      token's `projects` claim + `project:<id>` scope entries to the
+//      selection.
+//
+// Refreshed tokens re-enter step 3 with the referenceId preserved by
+// better-auth, so the narrowing sticks for the lifetime of the grant.
 const OAUTH_PROJECT_SELECTION_REFERENCE_PREFIX = "iterate-project-selection-v1";
 
 export async function resolveStoredProjectSelection(params: { userId: string | null | undefined }) {
