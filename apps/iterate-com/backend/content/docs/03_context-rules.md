@@ -5,15 +5,13 @@ category: Core concepts
 
 # Context Rules
 
-Context rules define how iterate should behave for your company. They live in your iterate repository and are loaded at runtime to guide agents.
+> **Coming soon.** Context rules are not available yet — this page describes
+> where we're headed.
 
-## What to include
+Context rules will let you define how iterate should behave for your company:
+tone of voice, coding standards, security constraints, and decision-making
+principles. The plan is for them to live in your iterate repository, so
+changes are versioned and reviewed like any other code.
 
-- Company tone of voice and writing preferences
-- Coding standards and architectural conventions
-- Security and data handling constraints
-- Decision-making principles and trade-offs
-
-## How it works
-
-Agents read these rules on startup and during tasks to align responses and actions with your preferences. Update them in git to roll out changes safely via PRs.
+Until then, the way to steer iterate is to tell it what you want directly in
+Slack.
