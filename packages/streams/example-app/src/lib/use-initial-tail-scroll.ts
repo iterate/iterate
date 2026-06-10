@@ -1,7 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 import type { Virtualizer } from "@tanstack/react-virtual";
 
-const INITIAL_TAIL_SETTLE_MS = 250;
+const TAIL_SETTLE_MS = 250;
+// Real scroll distance (in px) from the bottom of the scroller that still counts as "at the
+// tail". Kept tiny on purpose: TanStack's `scrollEndThreshold` (80px) decides when *following*
+// kicks in, but once appends quiesce the pin must land exactly at the bottom.
+const TAIL_CONVERGED_EPSILON_PX = 2;
 
 export type InitialTailScrollState = {
   settledInitialEndScroll: RefObject<boolean>;
@@ -9,7 +13,24 @@ export type InitialTailScrollState = {
   markUserLeftTail(): void;
 };
 
-/** Keep the virtual list pinned to the tail while SQLite replay fills the mirror. */
+/**
+ * Keep the virtual list pinned to the tail while SQLite replay / bulk appends fill the mirror.
+ *
+ * Two invariants make this deterministic on slow machines (CI):
+ * 1. The pin holds until the *user* leaves the tail — detected from input events AND from any
+ *    backward scroll (scrollTop decreasing). Time-based heuristics alone are racy: a late
+ *    SQLite invalidation used to re-pin the list after a programmatic scroll away, and a
+ *    mid-replay stall used to release the pin while thousands of rows were still streaming in,
+ *    permanently losing the tail (TanStack's followOnAppend only re-engages within
+ *    scrollEndThreshold of the end).
+ * 2. After each append burst the pin converges to the *actual* bottom. TanStack's
+ *    followOnAppend can resolve its scroll target against a pre-commit scrollHeight and stop
+ *    short by the measurement delta of newly windowed rows (estimate vs. measured height),
+ *    which can exceed scrollEndThreshold and silently break the follow chain.
+ *
+ * `settledInitialEndScroll` flips once the pin has both converged and quiesced; it only gates
+ * the unread-badge suppression, never the pin itself.
+ */
 export function useInitialTailScroll<TScrollElement extends Element>(args: {
   count: number;
   scrollElementRef: RefObject<TScrollElement | null>;
@@ -18,6 +39,8 @@ export function useInitialTailScroll<TScrollElement extends Element>(args: {
   const settledInitialEndScroll = useRef(false);
   const userLeftTail = useRef(false);
   const tailSettleTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const latest = useRef(args);
+  latest.current = args;
 
   function markUserLeftTail() {
     userLeftTail.current = true;
@@ -29,11 +52,33 @@ export function useInitialTailScroll<TScrollElement extends Element>(args: {
     const onUserScroll = () => {
       markUserLeftTail();
     };
+    // Any scroll that moves *away* from the tail means the viewport intentionally left it.
+    // This catches scrolls that produce no input event (scrollbar drags mid-gesture,
+    // programmatic scrollTop writes from tests or other code). "Away from the tail" requires
+    // BOTH a scrollTop decrease and a distance-from-end increase: appends grow scrollHeight
+    // without touching scrollTop, and TanStack's above-viewport resize adjustments move
+    // scrollTop and scrollHeight together, so neither trips this.
+    let lastScrollTop = element.scrollTop;
+    let lastDistanceFromEnd = element.scrollHeight - element.clientHeight - element.scrollTop;
+    const onScroll = () => {
+      const nextScrollTop = element.scrollTop;
+      const nextDistanceFromEnd = element.scrollHeight - element.clientHeight - element.scrollTop;
+      if (
+        nextScrollTop < lastScrollTop - TAIL_CONVERGED_EPSILON_PX &&
+        nextDistanceFromEnd > lastDistanceFromEnd + TAIL_CONVERGED_EPSILON_PX
+      ) {
+        markUserLeftTail();
+      }
+      lastScrollTop = nextScrollTop;
+      lastDistanceFromEnd = nextDistanceFromEnd;
+    };
+    element.addEventListener("scroll", onScroll, { passive: true });
     element.addEventListener("wheel", onUserScroll, { passive: true });
     element.addEventListener("pointerdown", onUserScroll);
     element.addEventListener("touchmove", onUserScroll, { passive: true });
     element.addEventListener("keydown", onUserScroll);
     return () => {
+      element.removeEventListener("scroll", onScroll);
       element.removeEventListener("wheel", onUserScroll);
       element.removeEventListener("pointerdown", onUserScroll);
       element.removeEventListener("touchmove", onUserScroll);
@@ -41,30 +86,47 @@ export function useInitialTailScroll<TScrollElement extends Element>(args: {
     };
   }, [args.scrollElementRef]);
 
-  useLayoutEffect(() => {
-    if (args.count === 0) return;
+  function realDistanceFromEnd() {
+    const element = latest.current.scrollElementRef.current;
+    if (element === null) return 0;
+    return element.scrollHeight - element.clientHeight - element.scrollTop;
+  }
 
-    if (!settledInitialEndScroll.current && !userLeftTail.current) {
-      args.virtualizer.scrollToEnd();
-      requestAnimationFrame(() => {
-        args.virtualizer.scrollToEnd();
-      });
-    }
+  function clearTailSettleTimer() {
+    if (tailSettleTimer.current === undefined) return;
+    clearTimeout(tailSettleTimer.current);
+    tailSettleTimer.current = undefined;
+  }
 
-    if (settledInitialEndScroll.current) return;
-
-    if (tailSettleTimer.current !== undefined) clearTimeout(tailSettleTimer.current);
+  function armTailSettleTimer() {
+    clearTailSettleTimer();
     tailSettleTimer.current = setTimeout(() => {
+      tailSettleTimer.current = undefined;
+      if (userLeftTail.current) return;
+      if (realDistanceFromEnd() > TAIL_CONVERGED_EPSILON_PX) {
+        // Not at the actual bottom yet (late measurements, a follow that resolved against a
+        // stale scrollHeight, or rows still streaming in): keep pinning until converged.
+        latest.current.virtualizer.scrollToEnd();
+        armTailSettleTimer();
+        return;
+      }
       settledInitialEndScroll.current = true;
-      tailSettleTimer.current = undefined;
-    }, INITIAL_TAIL_SETTLE_MS);
+    }, TAIL_SETTLE_MS);
+  }
 
-    return () => {
-      if (tailSettleTimer.current === undefined) return;
-      clearTimeout(tailSettleTimer.current);
-      tailSettleTimer.current = undefined;
-    };
+  useLayoutEffect(() => {
+    if (args.count === 0 || userLeftTail.current) return;
+    args.virtualizer.scrollToEnd();
+    requestAnimationFrame(() => {
+      if (userLeftTail.current) return;
+      args.virtualizer.scrollToEnd();
+    });
+    armTailSettleTimer();
   }, [args.count, args.virtualizer]);
+
+  // Clear the (self-re-arming) settle timer on unmount only; per-render cleanup would race
+  // with the convergence loop between count changes.
+  useEffect(() => clearTailSettleTimer, []);
 
   return { settledInitialEndScroll, userLeftTail, markUserLeftTail };
 }

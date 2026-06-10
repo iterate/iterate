@@ -243,7 +243,51 @@ slack-agent, codemode-session) already waited only in regular methods; rule of
 thumb going forward: never await processor catch-up inside
 `blockConcurrencyWhile` on a DO that hosts the processors.
 
-### I6. (running list — updated as migration proceeds)
+### I6. streams-e2e tail-anchoring flake (large-streams + heavy-append specs)
+
+The two `stream-browser.spec.ts` failures on this branch (`[data-index='1501']`
+never visible; `streamDistanceFromEnd > 200` received `0`) are **not** caused
+by the migration. They reproduce identically on origin/main under 6x CDP CPU
+throttling (`Emulation.setCPUThrottlingRate`) and pass 5x consecutively
+unthrottled on both branch and main on a fast machine. The branch's only
+plausible contribution is shifting CI timing closer to a pre-existing cliff
+(this also explains I1: the reverted checkpoint commit perturbed the same
+timing). Branch suspects were cleared explicitly: browser subscribers pass no
+`eventTypes` filter to `subscribe` (delivery unchanged), local spec durations
+match main, and the zod 4.3.6 pin is type-level only.
+
+Root cause — two races in the example app's `use-initial-tail-scroll.ts`
+tail pin, plus a TanStack Virtual (3.17 core) behavior they interact with:
+
+1. **Snap-back** (heavy-append spec, distance `0`): the pin "settled" on a
+   250ms count-quiescence timer, and programmatic `scrollTop` writes never set
+   `userLeftTail` (only wheel/pointer/touch/key did). On a slow runner a late
+   rAF-batched SQLite invalidation lands after the test scrolls up 500px, the
+   not-yet-settled pin fires `scrollToEnd()`, and the viewport snaps back.
+2. **Lost/short tail** (large-streams spec, tail row never rendered; locally
+   the pin stopped 74px short): a >250ms gap mid-replay settles the pin while
+   thousands of rows are still streaming; afterwards only TanStack's
+   `followOnAppend` holds the tail, but it (a) only re-engages within
+   `scrollEndThreshold` (80px) of the end and (b) can resolve its reconcile
+   target against a pre-commit `scrollHeight`, leaving a residual undershoot
+   of ~2px per newly-windowed row (estimate 38px vs measured 40px; a ~44-row
+   window ≈ 88px > 80px threshold) — which silently breaks the follow chain.
+
+Fix (`packages/streams/example-app/src/lib/use-initial-tail-scroll.ts`, no
+wire/subscription changes): the pin now holds until the user actually leaves
+the tail and converges to the real bottom. "Left the tail" additionally
+detects any scroll with a scrollTop decrease **and** a distance-from-end
+increase (catches programmatic/test scrolls and scrollbar drags; immune to
+appends, which grow scrollHeight without touching scrollTop, and to TanStack's
+above-viewport resize adjustments, which move scrollTop and scrollHeight
+together). The settle timer now re-arms and re-`scrollToEnd()`s until the real
+DOM distance-from-end is ≤2px, so mid-replay stalls and stale-scrollHeight
+follows can no longer strand the viewport; `settledInitialEndScroll` only
+gates unread-badge suppression. Verified: both specs pass under 6x/8x/10x
+throttle (previously failed at 6x on branch _and_ main) and 5x consecutively
+unthrottled; full 26-spec suite green twice.
+
+### I7. (running list — updated as migration proceeds)
 
 ### Legacy deletion
 
