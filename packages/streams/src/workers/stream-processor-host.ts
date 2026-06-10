@@ -302,6 +302,11 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
 
       entry.handle?.unsubscribe();
       entry.stream?.[Symbol.dispose]();
+      // Invalidate the previous connection (same as recoverFromIngestFailure):
+      // this handshake replaces it, so any batch still queued on it must be
+      // dropped by the generation gate — the new connection's replay from the
+      // checkpoint is authoritative.
+      entry.generation += 1;
       // Workers RPC parameter stubs are disposed when the call returns unless
       // duplicated. Processor side effects may append later, so retain the
       // stream capability until the next handshake replaces it.
