@@ -74,6 +74,15 @@ export async function prefetchItxQuery<TData>(input: {
       staleTime: input.query.staleTime,
     });
   } catch {
-    // Swallowed by design — see the doc comment above.
+    // Swallowed by design — see the doc comment above. One bit of hygiene: a
+    // failed FIRST fetch leaves an errored, data-less cache entry behind, and
+    // a component mounting against it flashes its error state before
+    // retryOnMount refetches. Removing the empty entry means the component
+    // mounts pending instead. An entry that already HAS data is kept — stale
+    // data plus a background error beats no data.
+    const state = input.queryClient.getQueryState(input.query.queryKey);
+    if (state?.status === "error" && state.data === undefined) {
+      input.queryClient.removeQueries({ exact: true, queryKey: input.query.queryKey });
+    }
   }
 }
