@@ -113,8 +113,9 @@ class AnswerCapability extends RpcTarget {
   }
 }
 
-// provide() = live cap. It disappears when this tab disconnects; reconnect
-// and provide() again to restore it.
+// A live target makes a session-bound cap: it disappears when this tab
+// disconnects; reconnect and register again to restore it. provide() is an
+// alias for define() — a live stub is just another target.
 await project.caps.provide({ name: "answer", target: new AnswerCapability() });
 
 // Unknown names on the handle fall through to the registry, so the cap is
@@ -139,8 +140,9 @@ class FakeSlackSdk extends RpcTarget {
 }
 
 // invoke: "path-call" tells the registry to deliver { path, args } in one
-// shot rather than replaying property access.
-await project.caps.provide({
+// shot rather than replaying property access. define() with a live target
+// registers a session-bound cap.
+await project.caps.define({
   name: "fakeSlack",
   invoke: "path-call",
   target: new FakeSlackSdk(),
@@ -154,7 +156,7 @@ return await project.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" })
     id: "define-durable-worker-cap",
     title: "Define a durable worker capability from source",
     description:
-      "define() stores source code as a DURABLE capability (a stateless dynamic worker), loaded on demand. Unlike provide(), it survives this session. Every public method on the WorkerEntrypoint is auto-proxied — add a method, call it instantly.",
+      "define() stores source code as a DURABLE capability (a stateless dynamic worker), loaded on demand. Unlike a live target, it survives this session. Every public method on the WorkerEntrypoint is auto-proxied — add a method, call it instantly.",
     code: `
 ${RESOLVE_PROJECT}
 
@@ -392,7 +394,7 @@ return { current: await project.counter.current() };   // 2, and it persists
 ${RESOLVE_PROJECT}
 
 // A cap on the project — visible to every child through the chain.
-await project.caps.provide({
+await project.caps.define({
   name: "shared",
   invoke: "path-call",
   target: new (class extends RpcTarget {
@@ -404,7 +406,7 @@ await project.caps.provide({
 const child = await project.fork({ name: "repl-scratch" });
 
 // The child can shadow 'shared' with its own definition...
-await child.caps.provide({
+await child.caps.define({
   name: "shared",
   invoke: "path-call",
   target: new (class extends RpcTarget {

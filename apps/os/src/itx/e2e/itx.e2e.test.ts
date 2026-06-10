@@ -74,9 +74,11 @@ test("the five-step capability flow: provide live, call, promote durable, call f
     }
   }
 
-  // (2) Provide it as a live cap on the project context.
+  // (2) define() it as a live cap on the project context — ONE verb: a live
+  // stub is just another target, discriminated structurally from the
+  // serializable rpc/url kinds. (caps.provide remains as a thin alias.)
   using projectItx = await itx.projects.get(project.id);
-  await projectItx.caps.provide({
+  await projectItx.caps.define({
     invoke: "path-call",
     name: "slack",
     target: new FakeSlackSdk() as never,
@@ -455,6 +457,78 @@ test("platform defaults arrive from the platform:project code context, and own r
     method: "run",
     provider: "shadow",
   });
+});
+
+test("fetch is a shadowable capability: a live provider intercepts project egress", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-fetch` })) as { id: string };
+  createdProjectIds.push(project.id);
+  using projectItx = await itx.projects.get(project.id);
+
+  // (1) Fresh project: `fetch` is a platform default, not kernel.
+  type DescribedCaps = { caps: Array<{ name: string; owner: string }> };
+  const before = (await projectItx.describe()) as DescribedCaps;
+  expect(before.caps.find((cap) => cap.name === "fetch")).toMatchObject({
+    invoke: "path-call",
+    owner: "platform:project",
+  });
+
+  // (2) A Node-side shadow provider: the whole intercept is ONE call method.
+  // args[0] arrives as a Request (the iterate capnweb fork serializes
+  // Request/Response by prototype), but read .url defensively in case a
+  // transport hop degrades it to a plain object.
+  class EgressInterceptor extends RpcTarget {
+    async call({ args }: { path: string[]; args: unknown[] }) {
+      const url = (args[0] as { url?: string })?.url ?? String(args[0]);
+      return new Response(JSON.stringify({ intercepted: true, url }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+  }
+  await projectItx.caps.define({
+    invoke: "path-call",
+    name: "fetch",
+    target: new EgressInterceptor() as never,
+  });
+
+  // (3) The explicit door: itx.fetch now lands on the provider, not the
+  // network. The .invalid TLD guarantees NXDOMAIN, so a canned response can
+  // only have come from the shadow.
+  const intercepted = await projectItx.fetch("https://intercept-probe.invalid/x");
+  expect(await intercepted.json()).toEqual({
+    intercepted: true,
+    url: "https://intercept-probe.invalid/x",
+  });
+
+  // (4) The implicit door: bare fetch() inside a platform-loaded isolate
+  // (globalOutbound = ProjectEgress.fetch) routes registry-first too, so the
+  // same shadow intercepts it — the loop-breaking property end to end.
+  const bareFetchScript = async ({ itx: scriptItx }: { itx: Record<string, any> }) => {
+    void scriptItx;
+    const response = await fetch("https://intercept-probe.invalid/bare");
+    return await response.json();
+  };
+  const scriptResponse = await fetch(new URL("/api/itx/run", baseUrl()), {
+    body: JSON.stringify({ context: project.id, functionSource: bareFetchScript.toString() }),
+    headers: authHeaders(),
+    method: "POST",
+  });
+  const scriptBody = (await scriptResponse.json()) as { error?: string; result?: unknown };
+  if (!scriptResponse.ok) throw new Error(`bare-fetch script failed: ${scriptBody.error}`);
+  expect(scriptBody.result).toEqual({
+    intercepted: true,
+    url: "https://intercept-probe.invalid/bare",
+  });
+
+  // (5) Revoke the shadow: the default egress pipe resurfaces — a real
+  // network fetch to the NXDOMAIN host now fails instead of returning the
+  // canned response.
+  await projectItx.caps.revoke({ name: "fetch" });
+  const after = (await projectItx.describe()) as DescribedCaps;
+  expect(after.caps.find((cap) => cap.name === "fetch")).toMatchObject({
+    owner: "platform:project",
+  });
+  await expect(projectItx.fetch("https://intercept-probe.invalid/x")).rejects.toThrow();
 });
 
 test("absolute stream refs are sugar through the one access check", async () => {

@@ -12,8 +12,9 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "./registry.ts";
-import { ITX_AUDIT_STREAM_PATH, ITX_EVENT_TYPES, resolveDialableTargets } from "./protocol.ts";
+import { ContextRegistry, type LiveCapTarget } from "./registry.ts";
+import { createContextRegistryHost } from "./registry-host.ts";
+import { ITX_AUDIT_STREAM_PATH, ITX_EVENT_TYPES } from "./protocol.ts";
 import type {
   CapDescription,
   CapInvoke,
@@ -26,7 +27,6 @@ import {
   type StreamDurableObjectNamespace,
 } from "~/domains/streams/stream-runtime.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
-import { parseConfig } from "~/config.ts";
 
 export type ContextDescriptor = {
   id: string;
@@ -87,13 +87,9 @@ export class ContextDO extends DurableObject<Env> {
     return { id: row.id, name: row.name, parent: row.parent, projectId: row.project_id };
   }
 
-  itxProvide(input: { name: string; target: LiveCapTarget; invoke?: CapInvoke; meta?: CapMeta }) {
-    return this.registry().provide(input);
-  }
-
   itxDefine(input: {
     name: string;
-    target: SerializableCapTarget;
+    target: SerializableCapTarget | LiveCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {
@@ -143,30 +139,18 @@ export class ContextDO extends DurableObject<Env> {
   private registry(): ContextRegistry {
     if (this.#registry) return this.#registry;
     const descriptor = this.descriptor();
-    this.#registry = new ContextRegistry({
-      audit: (event) => this.audit(event.type, event.payload),
-      // Gated on DIALABLE_BINDINGS inside the registry before this is called.
-      binding: (name) => (this.env as unknown as Record<string, unknown>)[name],
-      contextId: descriptor.id,
-      dialable: resolveDialableTargets(parseConfig(this.env).itx),
-      facets: durableObjectFacetsHook(this.ctx),
-      loader: this.env.LOADER as unknown as ConstructorParameters<
-        typeof ContextRegistry
-      >[0]["loader"],
-      loopback: (exportName, options) => {
-        const exports = this.ctx.exports as unknown as Record<
-          string,
-          (options: Record<string, unknown>) => unknown
-        >;
-        const factory = exports[exportName];
-        if (typeof factory !== "function") {
-          throw new Error(`Loopback export ${exportName} is not available.`);
-        }
-        return factory(options);
-      },
-      projectId: descriptor.projectId,
-      sql: this.ctx.storage.sql,
-    });
+    this.#registry = new ContextRegistry(
+      // No `defaults` here, deliberately: a child context's misses delegate
+      // up the real chain (itxInvoke below) to the parent node, which is
+      // where the platform:project code-context link lives.
+      createContextRegistryHost({
+        audit: (event) => this.audit(event.type, event.payload),
+        contextId: descriptor.id,
+        ctx: this.ctx,
+        env: this.env,
+        projectId: descriptor.projectId,
+      }),
+    );
     return this.#registry;
   }
 
