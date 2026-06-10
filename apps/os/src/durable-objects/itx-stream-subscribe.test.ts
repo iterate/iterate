@@ -4,11 +4,13 @@
 // .subscribe → Stream DO holds the wrapper. The key risk under test is
 // lifetime: deliveries must keep arriving after every initiating RPC call has
 // returned, for as long as the returned subscription handle is held.
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, test, vi } from "vitest";
 import type { StreamCursor, Event as StreamEvent } from "@iterate-com/shared/streams/types";
 
 const TEST_EVENT_TYPE = "test.iterate.com/itx-subscribe/marker";
+// Must match the harness entrypoint's project id (itx-stream-subscribe-test-entry.ts).
+const PROJECT_ID = "proj__test__itxsubscribe";
 
 type EventBatch = { events: StreamEvent[]; streamMaxOffset: number };
 
@@ -17,6 +19,7 @@ type HarnessStub = {
     path: string;
     event: { type: string; payload: Record<string, unknown> };
   }): Promise<StreamEvent>;
+  list(): Promise<{ streamPath: string }[]>;
   read(input: { path: string }): Promise<StreamEvent[]>;
   subscribe(
     input: { afterOffset: StreamCursor; path: string },
@@ -154,6 +157,62 @@ describe("itx stream subscribe against a real Stream Durable Object", () => {
     // The worker (and the stream) survived: both appends were committed.
     const events = await harness.read({ path });
     expect(markersOf(events)).toEqual(["boom", "after-boom"]);
+  });
+});
+
+describe("streams list against a real Stream Durable Object", () => {
+  test("list() enumerates every stream (nested included) from the root's reduced state", async () => {
+    const base = `/list-tests/${crypto.randomUUID()}`;
+    for (const path of [`${base}/a`, `${base}/a/b`, `${base}/c`]) {
+      await harness.append({ path, event: markerEvent("seed") });
+    }
+
+    // Ancestor announcements (and the intermediate streams they create) are
+    // fire-and-forget background appends, so poll until they all land.
+    await vi.waitFor(
+      async () => {
+        const paths = (await harness.list()).map((stream) => stream.streamPath);
+        expect(paths).toEqual(
+          expect.arrayContaining(["/", base, `${base}/a`, `${base}/a/b`, `${base}/c`]),
+        );
+      },
+      { timeout: 10_000 },
+    );
+  });
+
+  test("a root persisted before descendantPaths existed is rebuilt by replay on its next wake", async () => {
+    const base = `/migration-tests/${crypto.randomUUID()}`;
+    await harness.append({ path: `${base}/a/b`, event: markerEvent("seed") });
+    await vi.waitFor(
+      async () => {
+        const paths = (await harness.list()).map((stream) => stream.streamPath);
+        expect(paths).toEqual(expect.arrayContaining([base, `${base}/a`, `${base}/a/b`]));
+      },
+      { timeout: 10_000 },
+    );
+
+    // Rewrite the root stream's persisted state to the pre-descendantPaths
+    // shape (no descendantPaths field, no stateVersion key) — exactly what a
+    // stream last reduced before the schema change has on disk.
+    const streamNamespace = (env as unknown as { STREAM: DurableObjectNamespace }).STREAM;
+    const rootStub = streamNamespace.getByName(`${PROJECT_ID}:/`);
+    await runInDurableObject(rootStub, async (_instance, state) => {
+      const stored = state.storage.kv.get<Record<string, unknown>>("state");
+      if (stored === undefined) throw new Error("expected persisted root stream state");
+      expect(stored.descendantPaths).toEqual(expect.arrayContaining([`${base}/a/b`]));
+      const { descendantPaths: _dropped, ...preDescendantPathsShape } = stored;
+      state.storage.kv.put("state", preDescendantPathsShape);
+      state.storage.kv.delete("stateVersion");
+    });
+    // Abort the current incarnation so the next call re-runs the constructor's
+    // read-persisted-state path against the doctored storage. The abort makes
+    // the kill() RPC itself reject; that is expected.
+    await (rootStub as unknown as { kill(): Promise<void> }).kill().catch(() => {});
+
+    // The rewoken root sees the version mismatch, replays its event log and
+    // serves the full catalog again — list() never walks child streams.
+    const paths = (await harness.list()).map((stream) => stream.streamPath);
+    expect(paths).toEqual(expect.arrayContaining(["/", base, `${base}/a`, `${base}/a/b`]));
   });
 });
 

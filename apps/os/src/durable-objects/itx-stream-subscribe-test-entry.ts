@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { StreamCursor, Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
-import { ItxStream, type ItxRuntime } from "~/itx/handle.ts";
+import { ItxStream, ItxStreams, type ItxRuntime } from "~/itx/handle.ts";
 
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
@@ -27,6 +27,10 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
     return (await this.#stream(input.path).read()) as StreamLegacyEvent[];
   }
 
+  async list(): Promise<{ streamPath: string }[]> {
+    return await new ItxStreams(this.#runtime(), projectId).list();
+  }
+
   async subscribe(
     input: { afterOffset: StreamCursor; path: string },
     onEventBatch: (batch: { events: StreamLegacyEvent[]; streamMaxOffset: number }) => unknown,
@@ -37,9 +41,13 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
   }
 
   #stream(path: string): ItxStream {
-    // ItxStream only touches `runtime.exports`; the rest of ItxRuntime is
-    // connect-time wiring this harness does not exercise.
-    const runtime: ItxRuntime = {
+    return new ItxStream(this.#runtime(), projectId, path);
+  }
+
+  #runtime(): ItxRuntime {
+    // ItxStream/ItxStreams only touch `runtime.exports`; the rest of
+    // ItxRuntime is connect-time wiring this harness does not exercise.
+    return {
       access: [projectId],
       config: null as never,
       contextId: projectId,
@@ -47,7 +55,6 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
       exports: this.ctx.exports as unknown as ItxRuntime["exports"],
       projectId,
     };
-    return new ItxStream(runtime, projectId, path);
   }
 }
 
