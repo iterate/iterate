@@ -212,6 +212,52 @@ export async function listRepoFiles(input: RepoRemote & { branch: string }): Pro
   return paths.sort();
 }
 
+/**
+ * Resolve a branch's commit oid on the remote with ONE HTTP request — the git
+ * smart-HTTP ref advertisement (`git ls-remote`), no clone. This is the cheap
+ * freshness probe: "does my cached checkout still match the remote?".
+ */
+export async function readRemoteBranchOid(
+  input: RepoRemote & { branch: string },
+): Promise<string | null> {
+  const base = input.remote.replace(/\/+$/, "");
+  const response = await fetch(`${base}/info/refs?service=git-upload-pack`, {
+    headers: {
+      accept: "application/x-git-upload-pack-advertisement",
+      authorization: `Bearer ${stripArtifactTokenQuery(input.token)}`,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`ls-remote against ${base} failed: ${response.status}`);
+  }
+  const wanted = `refs/heads/${input.branch}`;
+  for (const line of parsePktLines(await response.text())) {
+    // Advertisement lines are "<oid> <ref>"; the first ref also carries
+    // "\0<capabilities>". Non-ref pkt-lines (the service banner) fall out of
+    // the shape check.
+    const [oidAndRef = ""] = line.split("\0");
+    const oid = oidAndRef.slice(0, 40);
+    const ref = oidAndRef.slice(41).trim();
+    if (ref === wanted && /^[0-9a-f]{40}$/.test(oid)) return oid;
+  }
+  return null;
+}
+
+/** Git pkt-line framing: 4 hex length bytes (including themselves), "0000" = flush. */
+function* parsePktLines(body: string): Generator<string> {
+  let index = 0;
+  while (index + 4 <= body.length) {
+    const length = Number.parseInt(body.slice(index, index + 4), 16);
+    if (Number.isNaN(length)) return;
+    if (length === 0) {
+      index += 4; // flush-pkt
+      continue;
+    }
+    yield body.slice(index + 4, index + length).replace(/\n$/, "");
+    index += length;
+  }
+}
+
 export async function readRepoLog(
   input: RepoRemote & { branch: string; depth?: number },
 ): Promise<GitLogEntry[]> {

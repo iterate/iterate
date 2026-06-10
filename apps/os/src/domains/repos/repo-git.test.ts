@@ -1,12 +1,13 @@
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   CommitRepoFilesInput,
   REPO_COMMIT_AUTHOR,
   RepoFileChange,
   applyRepoFileChanges,
   isMissingRemoteRefError,
+  readRemoteBranchOid,
 } from "./repo-git.ts";
 
 const REPO_DIR = "/repo";
@@ -186,4 +187,65 @@ describe("CommitRepoFilesInput", () => {
       CommitRepoFilesInput.parse({ changes: [{ content: "x", path: "a" }], message: " " }),
     ).toThrow();
   });
+});
+
+describe("readRemoteBranchOid", () => {
+  const OID = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+  const OTHER = "ffffffffffffffffffffffffffffffffffffffff";
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  test("parses the branch oid out of a smart-HTTP ref advertisement", async () => {
+    const fetchSpy = mockAdvertisement(
+      pktLine("# service=git-upload-pack\n") +
+        "0000" +
+        pktLine(`${OID} HEAD\u0000multi_ack side-band-64k agent=git/test\n`) +
+        pktLine(`${OID} refs/heads/main\n`) +
+        pktLine(`${OTHER} refs/heads/other\n`) +
+        "0000",
+    );
+
+    await expect(
+      readRemoteBranchOid({
+        branch: "main",
+        remote: "https://acc.artifacts.cloudflare.net/git/ns/iterate-config.git/",
+        token: "tok?expires=123",
+      }),
+    ).resolves.toBe(OID);
+
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(String(url)).toBe(
+      "https://acc.artifacts.cloudflare.net/git/ns/iterate-config.git/info/refs?service=git-upload-pack",
+    );
+    expect((init as RequestInit).headers).toMatchObject({ authorization: "Bearer tok" });
+  });
+
+  test("returns null when the branch is not advertised", async () => {
+    mockAdvertisement(pktLine(`${OID} refs/heads/other\n`) + "0000");
+    await expect(
+      readRemoteBranchOid({ branch: "main", remote: "https://r.test/x.git", token: "t" }),
+    ).resolves.toBeNull();
+  });
+
+  test("throws on a non-ok response so callers fall back to the freshness window", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 401 }));
+    await expect(
+      readRemoteBranchOid({ branch: "main", remote: "https://r.test/x.git", token: "t" }),
+    ).rejects.toThrow("ls-remote");
+  });
+
+  function pktLine(content: string): string {
+    return (content.length + 4).toString(16).padStart(4, "0") + content;
+  }
+
+  function mockAdvertisement(body: string) {
+    return vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(body, {
+        headers: { "content-type": "application/x-git-upload-pack-advertisement" },
+        status: 200,
+      }),
+    );
+  }
 });
