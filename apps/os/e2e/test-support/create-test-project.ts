@@ -143,8 +143,8 @@ export async function createProjectEgressInterceptTunnel(input: {
   fetch: Fetch;
 }) {
   return createCaptunTunnel({
-    url: `${input.project.ingressUrl}/__iterate/intercept-project-egress`,
-    headers: { Authorization: `Bearer ${requireAdminBearerToken()}` },
+    gateway: `${input.project.ingressUrl}/__iterate/intercept-project-egress`,
+    token: requireAdminBearerToken(),
     fetch: input.fetch,
   });
 }
@@ -154,8 +154,9 @@ export async function createPublicTunnel(input: { fetch: Fetch; tunnelName?: str
   const tunnelName = input.tunnelName || `e2e-${uniqueSuffix()}`;
   const url = `${requireBaseUrl()}/__iterate/captun/${encodeURIComponent(tunnelName)}`;
   const tunnel = await createCaptunTunnel({
-    url: `${url}/__captun-connect`,
-    headers: { Authorization: `Bearer ${requireAdminBearerToken()}` },
+    gateway: `${requireBaseUrl()}/__iterate/captun`,
+    name: tunnelName,
+    token: requireAdminBearerToken(),
     fetch: input.fetch,
   });
 

@@ -197,7 +197,7 @@ async function handleCaptunTunnelFetch(request: Request, env: Env, config: AppCo
   url.pathname = url.pathname.slice(CAPTUN_TUNNEL_ROUTE_PREFIX.length) || "/";
 
   return await captunWorker.fetch(new Request(url, request), {
-    CAPTUN_SECRET: config.adminApiSecret?.exposeSecret(),
+    CAPTUN_TOKEN: config.adminApiSecret?.exposeSecret(),
     CaptunServerShard: env.CaptunServerShard,
     SHARD_COUNT: "1",
   });
