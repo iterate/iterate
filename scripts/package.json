@@ -1,0 +1,17 @@
+{
+  "name": "@iterate-com/scripts",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@octokit/rest": "^22.0.0",
+    "@orpc/server": "1.13.14",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.7"
+  }
+}
