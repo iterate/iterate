@@ -133,6 +133,9 @@ const AgentLifecycleBase = createIterateDurableObjectBase<
   nameSchema: AgentDurableObjectStructuredName,
 });
 
+/** Bump when agentContextCaps changes shape or membership. */
+const AGENT_CONTEXT_CAPS_VERSION = "2";
+
 export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv> {
   host = createStreamProcessorHost(this.ctx);
   agentChatProcessor = this.host.add("agent-chat", (deps) => new AgentChatProcessor(deps));
@@ -461,13 +464,18 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   /** The agent's itx child context: its tools live on it as caps, scripts
-   * run against it, misses delegate up to the project context. */
+   * run against it, misses delegate up to the project context. Seeding is
+   * versioned: bump AGENT_CONTEXT_CAPS_VERSION when agentContextCaps
+   * changes so existing agents re-define caps (defines upsert; the
+   * capability-noted idempotency keys dedupe re-appends per cap name). */
   async ensureItxContext(params: AgentDurableObjectStructuredName): Promise<string> {
     const existing = await this.ctx.storage.get<string>("itxContextId");
-    if (existing) return existing;
+    const seededVersion = await this.ctx.storage.get<string>("itxContextCapsVersion");
+    if (existing && seededVersion === AGENT_CONTEXT_CAPS_VERSION) return existing;
 
     const config = this.getAppConfig();
-    const contextId = typeid({ env: { TYPEID_PREFIX: config.typeIdPrefix }, prefix: "ctx" });
+    const contextId =
+      existing ?? typeid({ env: { TYPEID_PREFIX: config.typeIdPrefix }, prefix: "ctx" });
     const contextStub = this.env.ITX_CONTEXT.getByName(contextId);
     await contextStub.initialize({
       id: contextId,
@@ -494,6 +502,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       })),
     });
     await this.ctx.storage.put("itxContextId", contextId);
+    await this.ctx.storage.put("itxContextCapsVersion", AGENT_CONTEXT_CAPS_VERSION);
     return contextId;
   }
 
@@ -745,6 +754,20 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         invoke: "members" as const,
         name: "gmail",
         target: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
+      },
+      {
+        instructions:
+          "Use ctx.slack.<Slack Web API method path>(args), e.g. ctx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If no reply is needed, do not call chat.postMessage. For legitimate long-running Slack replies, use Promise.all to send an immediate acknowledgment while doing the real work in parallel, then send the actual result afterwards.",
+        invoke: "path-call" as const,
+        name: "slack",
+        target: { entrypoint: "SlackCapability", type: "rpc", worker: { type: "loopback" } },
+      },
+      {
+        instructions:
+          "Use ctx.agents.create() to get a promise-pipelineable subagent handle, e.g. await ctx.agents.create().doThing(args).",
+        invoke: "members" as const,
+        name: "agents",
+        target: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },
       },
     ];
   }
