@@ -62,7 +62,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     previewTestCommandArgs: [
       "bash",
       "-c",
-      'pnpm e2e -t "OS preview smoke" && pnpm e2e:itx --project node',
+      [
+        'pnpm e2e -t "OS preview smoke" & smoke_pid=$!',
+        "OS_ITX_E2E_FILE_PARALLELISM=true pnpm e2e:itx --project node & itx_pid=$!",
+        "smoke_status=0",
+        "itx_status=0",
+        'wait "$smoke_pid" || smoke_status=$?',
+        'wait "$itx_pid" || itx_status=$?',
+        'if [ "$smoke_status" -ne 0 ] || [ "$itx_status" -ne 0 ]; then exit 1; fi',
+      ].join("; "),
     ],
   },
   semaphore: {

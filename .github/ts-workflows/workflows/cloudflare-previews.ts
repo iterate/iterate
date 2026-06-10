@@ -75,34 +75,8 @@ function createCommonPreviewArguments(input: {
   ];
 }
 
-function createPreviewLifecycleJob(input: {
-  command: string;
-  if: string;
-  name: string;
-  needs: string[];
-  runsOnDoppler?: boolean;
-  runsOnForks?: boolean;
-}) {
-  const forkStep: Step = {
-    if: "github.event.pull_request.head.repo.fork == true",
-    name: `${input.name} for forks`,
-    env: {
-      GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
-      SEMAPHORE_BASE_URL: "https://semaphore.iterate.com",
-      WORKFLOW_RUN_URL:
-        "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-    },
-    run: createPreviewCommand({
-      command: input.command,
-      includePullRequestBaseSha: input.command === "deploy",
-      includePullRequestHeadRefName: input.command === "deploy",
-      includePullRequestHeadSha: input.command !== "cleanup",
-      includePullRequestIsFork: input.command === "deploy",
-      includeSemaphoreBaseUrl: true,
-      includeWorkflowRunUrl: true,
-    }),
-  };
-  const dopplerStep: Step = {
+function createDopplerStep(input: { command: string; name: string }): Step {
+  return {
     if: "github.event.pull_request.head.repo.fork != true",
     name: input.name,
     env: {
@@ -121,9 +95,41 @@ function createPreviewLifecycleJob(input: {
       prefix: "doppler run --project _shared --config prd -- ",
     }),
   };
+}
+
+function createPreviewLifecycleJob(input: {
+  command: string;
+  /** Step name for the main command; defaults to the job name. */
+  commandStepName?: string;
+  /** Doppler-only commands run in the same job after the main command, sharing its runner and setup. */
+  dopplerFollowUps?: Array<{ command: string; name: string }>;
+  if: string;
+  name: string;
+  runsOnDoppler?: boolean;
+  runsOnForks?: boolean;
+}) {
+  const commandStepName = input.commandStepName ?? input.name;
+  const forkStep: Step = {
+    if: "github.event.pull_request.head.repo.fork == true",
+    name: `${commandStepName} for forks`,
+    env: {
+      GITHUB_TOKEN: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN || github.token }}",
+      SEMAPHORE_BASE_URL: "https://semaphore.iterate.com",
+      WORKFLOW_RUN_URL:
+        "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+    },
+    run: createPreviewCommand({
+      command: input.command,
+      includePullRequestBaseSha: input.command === "deploy",
+      includePullRequestHeadRefName: input.command === "deploy",
+      includePullRequestHeadSha: input.command !== "cleanup",
+      includePullRequestIsFork: input.command === "deploy",
+      includeSemaphoreBaseUrl: true,
+      includeWorkflowRunUrl: true,
+    }),
+  };
 
   return {
-    needs: input.needs,
     if: input.if,
     name: input.name,
     ...utils.runsOnDepotUbuntu,
@@ -140,7 +146,10 @@ function createPreviewLifecycleJob(input: {
         if: "github.event.pull_request.head.repo.fork != true",
       },
       ...(input.runsOnForks ? [forkStep] : []),
-      ...(input.runsOnDoppler ? [dopplerStep] : []),
+      ...(input.runsOnDoppler
+        ? [createDopplerStep({ command: input.command, name: commandStepName })]
+        : []),
+      ...(input.dopplerFollowUps ?? []).map((followUp) => createDopplerStep(followUp)),
     ],
   } satisfies Workflow["jobs"][string];
 }
@@ -158,85 +167,26 @@ export default {
   on: {
     pull_request: {
       types: ["opened", "reopened", "synchronize", "closed"],
+      paths: previewPaths,
     },
   },
   jobs: {
-    scope: {
-      ...utils.runsOnDepotUbuntu,
-      outputs: {
-        should_run: "${{ steps.should_run_preview.outputs.result }}",
-      },
-      steps: [
-        await utils.githubScript(
-          import.meta,
-          {
-            params: {
-              previewPaths,
-            },
-            "result-encoding": "string",
-          },
-          async function should_run_preview({ context, github }) {
-            const pullRequest = context.payload.pull_request;
-            if (!pullRequest) {
-              return "false";
-            }
-
-            if (context.payload.action === "closed") {
-              return "true";
-            }
-
-            const files: Array<{ filename: string }> = [];
-            let page = 1;
-
-            while (true) {
-              const response = await github.rest.pulls.listFiles({
-                owner: context.repo.owner,
-                page,
-                per_page: 100,
-                pull_number: pullRequest.number,
-                repo: context.repo.repo,
-              });
-
-              files.push(...response.data.map((file) => ({ filename: file.filename })));
-              if (response.data.length < 100) {
-                break;
-              }
-
-              page += 1;
-            }
-
-            const matchesPreviewPath = (filename: string) =>
-              previewPaths.some((pattern) =>
-                pattern.endsWith("/**")
-                  ? filename.startsWith(pattern.slice(0, -2))
-                  : filename === pattern,
-              );
-
-            return files.some((file) => matchesPreviewPath(file.filename)) ? "true" : "false";
-          },
-        ),
-      ],
-    },
+    // Deploy and e2e share one job: a separate e2e job paid ~80s of runner
+    // pickup plus checkout/install before running a single test. The e2e step
+    // is doppler-only, so forks still deploy and simply skip it.
     preview: createPreviewLifecycleJob({
       command: "deploy",
-      if: "needs.scope.outputs.should_run == 'true' && github.event.action != 'closed'",
-      name: "Preview / deploy",
-      needs: ["scope"],
+      commandStepName: "Preview / deploy",
+      dopplerFollowUps: [{ command: "test", name: "Preview / e2e" }],
+      if: "github.event.action != 'closed'",
+      name: "Preview / deploy + e2e",
       runsOnDoppler: true,
       runsOnForks: true,
     }),
-    e2e: createPreviewLifecycleJob({
-      command: "test",
-      if: "needs.scope.outputs.should_run == 'true' && github.event.action != 'closed' && github.event.pull_request.head.repo.fork != true",
-      name: "Preview / e2e",
-      needs: ["scope", "preview"],
-      runsOnDoppler: true,
-    }),
     cleanup: createPreviewLifecycleJob({
       command: "cleanup",
-      if: "needs.scope.outputs.should_run == 'true' && github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true",
+      if: "github.event.action == 'closed' && github.event.pull_request.head.repo.fork != true",
       name: "Preview / cleanup",
-      needs: ["scope"],
       runsOnDoppler: true,
     }),
   },
