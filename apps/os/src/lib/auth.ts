@@ -45,6 +45,7 @@ function getUserPrincipalFromSession(
   return createUserPrincipal({
     userId: session.user.id,
     sessionId: session.session.sessionId,
+    isAdmin: session.user.isAdmin === true || session.user.role === "admin",
     organizations: session.session.organizations,
     projects: session.session.projects,
   });

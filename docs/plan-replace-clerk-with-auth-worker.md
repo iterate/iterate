@@ -543,7 +543,7 @@ Phase F is last.
   `https://os.iterate-dev-jonas.com` as an OAuth `resource`.
 - Re-ran real OAuth login/callback/session flows against both
   `https://os.iterate-dev-jonas.com` and `https://os.iterate-preview-2.com`
-  using the production auth worker, bootstrap superadmin credentials from auth
+  using the production auth worker, bootstrap admin credentials from auth
   Doppler, and in-memory cookies. Both flows completed and returned
   authenticated OS sessions without printing tokens, codes, cookies, or secrets.
 - Fixed the post-login empty-organization path on OS. `/organization` now shows

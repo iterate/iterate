@@ -123,6 +123,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
 test("platform bindings are dialable capabilities (raw + wrapped)", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-ai` })) as { id: string };
+  createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   // (1) Raw binding ref: env.AI itself is the target; members replay applies
@@ -174,6 +175,85 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
     { instructions: "Workers AI. Use like the env.AI binding.", kind: "rpc", name: "ai" },
     { invoke: "path-call", kind: "rpc", name: "aiWrapped" },
   ]);
+});
+
+// A remote MCP server to test against: explicit env wins; otherwise the mock
+// provider worker (same source the inbound-MCP e2e suite uses), if deployed.
+const MCP_TEST_SERVER_URL =
+  process.env.OS_E2E_MCP_SERVER_URL?.trim() ||
+  (process.env.MOCK_PROVIDER_BASE_URL
+    ? `${process.env.MOCK_PROVIDER_BASE_URL.replace(/\/+$/, "")}/mcp`
+    : "");
+
+test.skipIf(!MCP_TEST_SERVER_URL)(
+  "the first-party McpClient cap bridges a remote MCP server",
+  async () => {
+    using itx = connectGlobal();
+    const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-mcp` })) as { id: string };
+    createdProjectIds.push(project.id);
+    using projectItx = await itx.projects.get(project.id);
+
+    await projectItx.caps.define({
+      invoke: "path-call",
+      meta: { instructions: "Test MCP server. Call listTools() first." },
+      name: "mcptest",
+      target: {
+        entrypoint: "McpClient",
+        props: { serverUrl: MCP_TEST_SERVER_URL },
+        type: "rpc",
+        worker: { type: "loopback" },
+      },
+    });
+
+    const handle = projectItx as never as Record<string, any>;
+    const listed = (await handle.mcptest.listTools()) as { tools: { name: string }[] };
+    expect(Array.isArray(listed.tools)).toBe(true);
+    expect(listed.tools.length).toBeGreaterThan(0);
+
+    // Call the first listed tool with empty args — the mock provider's tools
+    // are unary echoes; any structured result proves the bridge end to end.
+    const firstTool = listed.tools[0]!.name;
+    const result = await handle.mcptest[firstTool]({});
+    expect(result).toBeDefined();
+  },
+);
+
+test("script executions leave a two-event record on the /itx stream", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-rec` })) as { id: string };
+  createdProjectIds.push(project.id);
+
+  const response = await fetch(new URL("/api/itx/run", baseUrl()), {
+    body: JSON.stringify({
+      context: project.id,
+      functionSource: "async ({ vars }) => vars.a + vars.b",
+      vars: { a: 40, b: 2 },
+    }),
+    headers: authHeaders(),
+    method: "POST",
+  });
+  const body = (await response.json()) as { executionId: string; result: unknown };
+  expect(response.ok).toBe(true);
+  expect(body.result).toBe(42);
+  expect(typeof body.executionId).toBe("string");
+
+  using projectItx = await itx.projects.get(project.id);
+  const events = (await projectItx.streams.get("/itx").read()) as Array<{
+    payload: Record<string, unknown>;
+    type: string;
+  }>;
+  const requested = events.find(
+    (event) =>
+      event.type === "events.iterate.com/itx/execution-requested" &&
+      event.payload.executionId === body.executionId,
+  );
+  const completed = events.find(
+    (event) =>
+      event.type === "events.iterate.com/itx/execution-completed" &&
+      event.payload.executionId === body.executionId,
+  );
+  expect(requested?.payload).toMatchObject({ context: project.id });
+  expect(completed?.payload).toMatchObject({ ok: true, result: 42 });
 });
 
 test("worker caps hold a correctly scoped itx of their own", async () => {
@@ -300,6 +380,27 @@ test("one dynamic worker cap calls another's methods through its own itx", async
     price: 42,
     total: 294,
   });
+});
+
+test("kernel errors cross capnweb as ItxError-shaped errors with codes", async () => {
+  using itx = connectGlobal();
+
+  // The REAL wire crossing: capnweb reconstructs a plain Error and reattaches
+  // the kernel ItxError's own enumerable props (code, details). NOT_FOUND
+  // also covers forbidden projects (existence masking), so this is the shape
+  // every access failure takes.
+  const error = await itx.projects.get("definitely-not-a-project").then(
+    () => null,
+    (thrown: unknown) => thrown as Error & { code?: unknown; details?: unknown },
+  );
+  expect(error).not.toBeNull();
+  // capnweb 0.8.0 reconstructs unknown error names as plain Error and drops
+  // the name (ERROR_TYPES[name] || Error; the props loop skips "name"), so
+  // class/name identity is untransmittable — detection is duck-typed via the
+  // own enumerable code/details props, which DO cross.
+  expect(error!.name).toBe("Error");
+  expect(error!.code).toBe("NOT_FOUND");
+  expect(error!.details).toEqual({ projectIdOrSlug: "definitely-not-a-project" });
 });
 
 test("revoked and offline caps fail with instructive errors", async () => {

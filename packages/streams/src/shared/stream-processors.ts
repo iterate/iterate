@@ -1,8 +1,10 @@
 import { z } from "zod";
 import {
   streamEventCreatedAtIsoSchema,
+  streamEventIdempotencyKeySchema,
   StreamEventMetadata,
   streamEventOffsetSchema,
+  StreamEventSourceSchema,
   type StreamEvent,
   type StreamEventInput,
 } from "./event.ts";
@@ -547,7 +549,8 @@ export function getEventInputSchema<
     type: z.literal(args.type),
     payload: args.payloadSchema,
     metadata: StreamEventMetadata.optional(),
-    idempotencyKey: z.string().trim().min(1).optional(),
+    source: StreamEventSourceSchema.optional(),
+    idempotencyKey: streamEventIdempotencyKeySchema.optional(),
     offset: streamEventOffsetSchema.optional(),
   }) as unknown as z.ZodType<
     StreamEventInput<Type, z.output<PayloadSchema>>,
@@ -586,7 +589,8 @@ export function getEventSchema<
     type: z.literal(args.type),
     payload: args.payloadSchema,
     metadata: StreamEventMetadata.optional(),
-    idempotencyKey: z.string().trim().min(1).optional(),
+    source: StreamEventSourceSchema.optional(),
+    idempotencyKey: streamEventIdempotencyKeySchema.optional(),
     offset: streamEventOffsetSchema,
     createdAt: streamEventCreatedAtIsoSchema,
   }) as unknown as z.ZodType<

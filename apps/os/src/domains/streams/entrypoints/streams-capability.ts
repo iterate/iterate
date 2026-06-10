@@ -7,7 +7,8 @@ import {
   type StreamCursor,
   StreamPath,
 } from "@iterate-com/shared/streams/types";
-import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
+import { ItxError } from "~/itx/errors.ts";
+import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import {
   getStreamDurableObjectName,
   getInitializedStreamStub,
@@ -69,7 +70,6 @@ type StreamsCapabilityClient = Pick<
   | "appendBatch"
   | "create"
   | "getState"
-  | "list"
   | "listChildren"
   | "read"
   | "stream"
@@ -102,8 +102,6 @@ export class StreamsCapability extends WorkerEntrypoint<
         return await this.appendBatch(options as StreamAppendBatchInput);
       case "create":
         return await this.create(options as StreamPathInput);
-      case "list":
-        return await this.list();
       case "read":
         return await this.read(options as StreamReadInput);
       case "getState":
@@ -160,20 +158,6 @@ export class StreamsCapability extends WorkerEntrypoint<
       path: this.resolveNamespacePath(input),
       namespace: this.ctx.props.projectId,
     });
-  }
-
-  async list() {
-    const paths = await listNamespaceStreamPaths({
-      durableObjectNamespace: this.env.STREAM,
-      namespace: this.ctx.props.projectId,
-    });
-    return paths.map((path) => ({
-      name: `${this.ctx.props.projectId}:${path}`,
-      namespace: this.ctx.props.projectId,
-      streamPath: StreamPath.parse(path),
-      createdAt: new Date(0).toISOString(),
-      lastWokenAt: new Date(0).toISOString(),
-    }));
   }
 
   async read(input: StreamReadInput = {}): Promise<Event[]> {
@@ -316,7 +300,13 @@ export class StreamsCapability extends WorkerEntrypoint<
       return;
     }
 
-    throw new Error(`Stream append policy rejected append to ${path}.`);
+    // FORBIDDEN, not NOT_FOUND: the caller already holds this capability, so
+    // the stream's existence is not a secret — only the append right is.
+    throw new ItxError({
+      code: "FORBIDDEN",
+      details: { path, policyMode: policy.mode },
+      message: `Stream append policy rejected append to ${path}.`,
+    });
   }
 }
 
@@ -345,7 +335,7 @@ export function getStreamsCapability(input: {
 export function resolveStreamPath(pathInput: string): StreamPath {
   const trimmedPath = pathInput.trim();
   if (!trimmedPath) {
-    throw new Error("Stream path is required.");
+    throw new ItxError({ code: "BAD_REQUEST", message: "Stream path is required." });
   }
 
   const path = trimmedPath.startsWith("/") ? trimmedPath : `/${trimmedPath}`;
@@ -355,7 +345,7 @@ export function resolveStreamPath(pathInput: string): StreamPath {
 function resolveCapabilityStreamPath(input: { basePath?: string; pathInput?: string }): StreamPath {
   if (input.pathInput == null) {
     if (input.basePath == null) {
-      throw new Error("Stream path is required.");
+      throw new ItxError({ code: "BAD_REQUEST", message: "Stream path is required." });
     }
 
     return resolveStreamPath(input.basePath);
@@ -363,7 +353,7 @@ function resolveCapabilityStreamPath(input: { basePath?: string; pathInput?: str
 
   const trimmedPath = input.pathInput.trim();
   if (!trimmedPath) {
-    throw new Error("Stream path is required.");
+    throw new ItxError({ code: "BAD_REQUEST", message: "Stream path is required." });
   }
 
   if (trimmedPath.startsWith("/")) {
@@ -458,31 +448,6 @@ async function getNamespaceStreamState(args: {
 }) {
   const stub = await getInitializedNamespaceStreamStub(args);
   return await stub.getState();
-}
-
-async function listNamespaceStreamPaths(args: {
-  durableObjectNamespace: DurableObjectNamespace<StreamDurableObject>;
-  namespace: string;
-}) {
-  const visited = new Set<string>();
-  const paths: StreamPath[] = [];
-
-  async function visit(path: StreamPath) {
-    if (visited.has(path)) return;
-    visited.add(path);
-    paths.push(path);
-    const state = await getNamespaceStreamState({
-      durableObjectNamespace: args.durableObjectNamespace,
-      namespace: args.namespace,
-      path,
-    });
-    for (const childPath of state.childPaths) {
-      await visit(StreamPath.parse(childPath));
-    }
-  }
-
-  await visit(StreamPath.parse("/"));
-  return paths;
 }
 
 async function* streamNamespaceStreamEvents(args: {

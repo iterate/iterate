@@ -4,11 +4,13 @@
 // .subscribe → Stream DO holds the wrapper. The key risk under test is
 // lifetime: deliveries must keep arriving after every initiating RPC call has
 // returned, for as long as the returned subscription handle is held.
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, test, vi } from "vitest";
 import type { StreamCursor, Event as StreamEvent } from "@iterate-com/shared/streams/types";
 
 const TEST_EVENT_TYPE = "test.iterate.com/itx-subscribe/marker";
+// Must match the harness entrypoint's project id (itx-stream-subscribe-test-entry.ts).
+const PROJECT_ID = "proj__test__itxsubscribe";
 
 type EventBatch = { events: StreamEvent[]; streamMaxOffset: number };
 
@@ -17,6 +19,8 @@ type HarnessStub = {
     path: string;
     event: { type: string; payload: Record<string, unknown> };
   }): Promise<StreamEvent>;
+  appendOutsidePolicy(input: { path: string }): Promise<void>;
+  getState(input: { path: string }): Promise<{ childPaths: string[] }>;
   read(input: { path: string }): Promise<StreamEvent[]>;
   subscribe(
     input: { afterOffset: StreamCursor; path: string },
@@ -154,6 +158,113 @@ describe("itx stream subscribe against a real Stream Durable Object", () => {
     // The worker (and the stream) survived: both appends were committed.
     const events = await harness.read({ path });
     expect(markersOf(events)).toEqual(["boom", "after-boom"]);
+  });
+});
+
+describe("itx errors across real Workers RPC boundaries", () => {
+  test("an ItxError's code and details survive the loopback and harness hops", async () => {
+    const path = newStreamPath();
+    // The append-policy FORBIDDEN is thrown inside StreamsCapability, crosses
+    // the ctx.exports loopback into the harness entrypoint, then the harness
+    // RPC boundary into this test — two real Workers RPC serializations.
+    const error = await harness.appendOutsidePolicy({ path }).then(
+      () => null,
+      (thrown: unknown) => thrown as Error & { code?: unknown; details?: unknown },
+    );
+
+    expect(error).not.toBeNull();
+    expect(error!.name).toBe("ItxError");
+    expect(error!.code).toBe("FORBIDDEN");
+    expect(error!.details).toEqual({ path, policyMode: "none" });
+  });
+});
+
+describe("stream child paths against a real Stream Durable Object", () => {
+  test("child stream creation records immediate child paths", async () => {
+    const base = `/list-tests/${crypto.randomUUID()}`;
+    for (const path of [`${base}/a`, `${base}/a/b`, `${base}/c`]) {
+      await harness.append({ path, event: markerEvent("seed") });
+    }
+
+    // Ancestor announcements (and the intermediate streams they create) are
+    // fire-and-forget background appends, so poll until they all land.
+    await vi.waitFor(
+      async () => {
+        await expect(harness.getState({ path: "/" })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining(["/list-tests"]),
+        });
+        await expect(harness.getState({ path: "/list-tests" })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining([base]),
+        });
+        await expect(harness.getState({ path: base })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining([`${base}/a`, `${base}/c`]),
+        });
+        await expect(harness.getState({ path: `${base}/a` })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining([`${base}/a/b`]),
+        });
+      },
+      { timeout: 10_000 },
+    );
+  });
+
+  test("a root persisted with obsolete descendantPaths is rebuilt without it", async () => {
+    const base = `/migration-tests/${crypto.randomUUID()}`;
+    await harness.append({ path: `${base}/a/b`, event: markerEvent("seed") });
+    await vi.waitFor(
+      async () => {
+        await expect(harness.getState({ path: "/" })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining(["/migration-tests"]),
+        });
+        await expect(harness.getState({ path: "/migration-tests" })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining([base]),
+        });
+        await expect(harness.getState({ path: base })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining([`${base}/a`]),
+        });
+        await expect(harness.getState({ path: `${base}/a` })).resolves.toMatchObject({
+          childPaths: expect.arrayContaining([`${base}/a/b`]),
+        });
+      },
+      { timeout: 10_000 },
+    );
+
+    const streamNamespace = (env as unknown as { STREAM: DurableObjectNamespace }).STREAM;
+    const rootStub = streamNamespace.getByName(`${PROJECT_ID}:/`);
+    await runInDurableObject(rootStub, async (_instance, state) => {
+      const stored = state.storage.kv.get<Record<string, unknown>>("state");
+      if (stored === undefined) throw new Error("expected persisted root stream state");
+      state.storage.kv.put("state", {
+        ...stored,
+        descendantPaths: [base, `${base}/a`, `${base}/a/b`],
+      });
+      state.storage.kv.put("stateVersion", 2);
+    });
+    // Abort the current incarnation so the next call re-runs the constructor's
+    // read-persisted-state path against the stale storage. The abort makes
+    // the kill() RPC itself reject; that is expected.
+    await (rootStub as unknown as { kill(): Promise<void> }).kill().catch(() => {});
+
+    const rewokenRootStub = streamNamespace.getByName(`${PROJECT_ID}:/`);
+    await vi.waitFor(async () => {
+      const runtimeState = await (
+        rewokenRootStub as unknown as {
+          runtimeState(): Promise<{ coreProcessorState: Record<string, unknown> }>;
+        }
+      ).runtimeState();
+      expect(runtimeState.coreProcessorState).not.toHaveProperty("descendantPaths");
+    });
+
+    // The rewoken root sees the version mismatch, replays its event log, and
+    // keeps only immediate child paths.
+    await expect(harness.getState({ path: "/" })).resolves.toMatchObject({
+      childPaths: expect.arrayContaining(["/migration-tests"]),
+    });
+    await expect(harness.getState({ path: "/migration-tests" })).resolves.toMatchObject({
+      childPaths: expect.arrayContaining([base]),
+    });
+    await expect(harness.getState({ path: base })).resolves.toMatchObject({
+      childPaths: expect.arrayContaining([`${base}/a`]),
+    });
   });
 });
 

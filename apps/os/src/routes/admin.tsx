@@ -70,6 +70,9 @@ function AdminLayout() {
           <Link to="/admin" className="hover:text-foreground [&.active]:text-foreground">
             Global stream
           </Link>
+          <Link to="/admin/streams" className="hover:text-foreground [&.active]:text-foreground">
+            Stream explorer
+          </Link>
         </nav>
         <div className="ml-auto text-sm">
           <Link to="/" className="text-muted-foreground hover:text-foreground">

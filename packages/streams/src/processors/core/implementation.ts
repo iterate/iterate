@@ -144,18 +144,19 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
         break;
 
       case "events.iterate.com/stream/child-stream-created": {
+        const announcedPath = args.event.payload.childPath;
         let childPath: string | null;
-        if (args.event.payload.childPath === state.path) {
+        if (announcedPath === state.path) {
           childPath = null;
         } else if (state.path === "/") {
-          const [firstSegment] = args.event.payload.childPath.split("/").filter(Boolean);
+          const [firstSegment] = announcedPath.split("/").filter(Boolean);
           childPath = firstSegment === undefined ? null : `/${firstSegment}`;
         } else {
           const parentPrefix = `${state.path}/`;
-          if (!args.event.payload.childPath.startsWith(parentPrefix)) {
+          if (!announcedPath.startsWith(parentPrefix)) {
             childPath = null;
           } else {
-            const [firstSegment] = args.event.payload.childPath
+            const [firstSegment] = announcedPath
               .slice(parentPrefix.length)
               .split("/")
               .filter(Boolean);
@@ -163,10 +164,9 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract> 
           }
         }
 
-        next =
-          childPath === null || next.childPaths.includes(childPath)
-            ? next
-            : { ...next, childPaths: [...next.childPaths, childPath] };
+        if (childPath !== null && !next.childPaths.includes(childPath)) {
+          next = { ...next, childPaths: [...next.childPaths, childPath] };
+        }
         break;
       }
 

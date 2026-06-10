@@ -51,8 +51,14 @@ export class CircuitBreakerProcessor extends StreamProcessor<CircuitBreakerContr
   protected override processEvent(
     args: Parameters<StreamProcessor<CircuitBreakerContract>["processEvent"]>[0],
   ): void {
+    // Level-triggered, not edge-triggered: fire whenever the bucket is in deficit
+    // on a live event. An edge guard (`!tripped(previousState)`) would miss the
+    // common case where the not-tripped->tripped transition happened at or below
+    // the side-effect anchor during replay — processEvent isn't called there, so
+    // the live flood that follows would never pause. The pause append is
+    // idempotency-keyed per offset and self-limits: once the stream is paused,
+    // ordinary appends are rejected, so the breaker stops being fed.
     if (!shouldTripCircuitBreaker(args.state)) return;
-    if (shouldTripCircuitBreaker(args.previousState)) return;
     if (args.event.type === "events.iterate.com/stream/paused") return;
     args.runInBackground(async () => {
       await this.ctx.stream.append({

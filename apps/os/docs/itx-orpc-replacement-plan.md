@@ -107,6 +107,10 @@ Done (PR #1423):
   `useStreamEvents`, and `ItxActivityTail` (live `/itx` audit tail on the
   project repl page).
 - First route conversion: project streams index reads through the handle.
+- `ItxError { code, message, details? }` (`src/itx/errors.ts`): five codes
+  riding capnweb as own enumerable props, duck-typed client detection
+  (`getItxErrorCode`/`isItxAccessError`), and `onSendError` tagging every
+  other outbound error INTERNAL with its stack — see DECISIONS.md D18.
 
 Happening separately: codemode is deleted and replaced by the **itx
 processor** (`events.iterate.com/itx/execution-requested` /
@@ -116,9 +120,6 @@ Remaining: see `tasks/os-orpc-teardown.md`.
 
 ## Known risks
 
-- **Error opacity**: capnweb flattens server throws to strings. A structured
-  `ItxError { code, message }` rehydrated client-side must land before the
-  bulk of the UI converts.
 - **OAuth redirect-URI derivation** currently uses the incoming request URL;
   over itx the call arrives on a long-lived socket — derive from project/app
   config instead, verify on a preview.
@@ -127,13 +128,16 @@ Remaining: see `tasks/os-orpc-teardown.md`.
   wide-event log before prod cutover.
 - **`run` is powerful**: rate limiting / approval policy is explicitly punted
   to the egress/approval work.
-- **Silent stall after Stream DO eviction**: inbound DO subscriptions are
-  runtime-only and not restored on wake. If Cloudflare evicts a Stream DO,
-  its subscriptions die while the browser↔worker socket stays healthy — no
-  status transition fires, the tail keeps saying "live", and events just
-  stop. Needs a liveness signal (heartbeat or periodic `getState` maxOffset
-  comparison) before stream views are load-bearing; the stream-tail layer
-  already resumes from `lastOffset` once told to restart.
+- **Silent stall after Stream DO eviction** — _addressed client-side_:
+  inbound DO subscriptions are runtime-only and not restored on wake, and a
+  dead DO produces no status transition on the healthy browser↔worker
+  socket. The stream-tail multiplexer now runs a 30s liveness probe per live
+  tail: compare the server's `eventCount` (offsets are dense, so it IS the
+  highest offset) against the last delivered offset, and restart from
+  `lastOffset` when the server is ahead with no delivery progress during the
+  probe roundtrip. Residual shape: a stalled stream with NO new events is
+  indistinguishable from an idle one — and equally harmless, since nothing
+  was missed; detection latency is up to one probe interval.
 - **Two live-tail stacks**: `~/itx/react` (stream-tail multiplexer over the
   shared itx socket) and `ProjectStreamView`'s browser SQLite mirror over
   `/api/project-streams`. The itx stack is the strategic one; port

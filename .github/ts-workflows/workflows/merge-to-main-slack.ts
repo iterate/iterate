@@ -36,7 +36,7 @@ export default {
           ].filter(Boolean);
 
           await slack.chat.postMessage({
-            channel: slackChannelIds["#building"],
+            channel: slackChannelIds["#ci"],
             text: pieces.join(" "),
           });
         }),

@@ -24,13 +24,18 @@ import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AppNewProjectRouteImport } from './routes/_app/new-project'
 import { Route as AppItxReplRouteImport } from './routes/_app/itx-repl'
 import { Route as EventDocsProcessorSlugSplatRouteImport } from './routes/$eventDocsProcessorSlug.$'
+import { Route as AdminStreamsRouteRouteImport } from './routes/admin/streams/route'
 import { Route as AppProjectsRouteRouteImport } from './routes/_app/projects/route'
+import { Route as AdminStreamsIndexRouteImport } from './routes/admin/streams/index'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
 import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
+import { Route as AdminStreamsNamespaceRouteRouteImport } from './routes/admin/streams/$namespace/route'
 import { Route as AppProjectsProjectSlugRouteRouteImport } from './routes/_app/projects/$projectSlug/route'
 import { Route as DocsStreamsProcessorsIndexRouteImport } from './routes/docs.streams.processors.index'
+import { Route as AdminStreamsNamespaceIndexRouteImport } from './routes/admin/streams/$namespace/index'
 import { Route as AppProjectsProjectSlugIndexRouteImport } from './routes/_app/projects/$projectSlug/index'
 import { Route as DocsStreamsProcessorsProcessorSlugRouteImport } from './routes/docs.streams.processors.$processorSlug'
+import { Route as AdminStreamsNamespaceSplatRouteImport } from './routes/admin/streams/$namespace/$'
 import { Route as AppProjectsProjectSlugSettingsRouteImport } from './routes/_app/projects/$projectSlug/settings'
 import { Route as AppProjectsProjectSlugReplRouteImport } from './routes/_app/projects/$projectSlug/repl'
 import { Route as AppProjectsProjectSlugMcpRouteImport } from './routes/_app/projects/$projectSlug/mcp'
@@ -40,13 +45,10 @@ import { Route as AppProjectsProjectSlugAgentsRouteRouteImport } from './routes/
 import { Route as AppProjectsProjectSlugStreamsIndexRouteImport } from './routes/_app/projects/$projectSlug/streams/index'
 import { Route as AppProjectsProjectSlugSecretsIndexRouteImport } from './routes/_app/projects/$projectSlug/secrets/index'
 import { Route as AppProjectsProjectSlugReposIndexRouteImport } from './routes/_app/projects/$projectSlug/repos/index'
-import { Route as AppProjectsProjectSlugCodemodeSessionsIndexRouteImport } from './routes/_app/projects/$projectSlug/codemode-sessions/index'
 import { Route as AppProjectsProjectSlugAgentsIndexRouteImport } from './routes/_app/projects/$projectSlug/agents/index'
 import { Route as AppProjectsProjectSlugStreamsSplatRouteImport } from './routes/_app/projects/$projectSlug/streams/$'
 import { Route as AppProjectsProjectSlugSecretsSecretIdRouteImport } from './routes/_app/projects/$projectSlug/secrets/$secretId'
 import { Route as AppProjectsProjectSlugReposRepoSlugRouteImport } from './routes/_app/projects/$projectSlug/repos/$repoSlug'
-import { Route as AppProjectsProjectSlugCodemodeSessionsNewRouteImport } from './routes/_app/projects/$projectSlug/codemode-sessions/new'
-import { Route as AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRouteImport } from './routes/_app/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
 import { Route as AppProjectsProjectSlugAgentsNewPresetRouteImport } from './routes/_app/projects/$projectSlug/agents/new-preset'
 import { Route as AppProjectsProjectSlugAgentsNewRouteImport } from './routes/_app/projects/$projectSlug/agents/new'
 import { Route as DocsStreamsProcessorsProcessorSlugEventsSplatRouteImport } from './routes/docs.streams.processors.$processorSlug.events.$'
@@ -127,10 +129,20 @@ const EventDocsProcessorSlugSplatRoute =
     path: '/$',
     getParentRoute: () => EventDocsProcessorSlugRoute,
   } as any)
+const AdminStreamsRouteRoute = AdminStreamsRouteRouteImport.update({
+  id: '/streams',
+  path: '/streams',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AppProjectsRouteRoute = AppProjectsRouteRouteImport.update({
   id: '/projects',
   path: '/projects',
   getParentRoute: () => AppRoute,
+} as any)
+const AdminStreamsIndexRoute = AdminStreamsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminStreamsRouteRoute,
 } as any)
 const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
   id: '/',
@@ -142,6 +154,12 @@ const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
   path: '/api/orpc/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminStreamsNamespaceRouteRoute =
+  AdminStreamsNamespaceRouteRouteImport.update({
+    id: '/$namespace',
+    path: '/$namespace',
+    getParentRoute: () => AdminStreamsRouteRoute,
+  } as any)
 const AppProjectsProjectSlugRouteRoute =
   AppProjectsProjectSlugRouteRouteImport.update({
     id: '/$projectSlug',
@@ -154,6 +172,12 @@ const DocsStreamsProcessorsIndexRoute =
     path: '/streams/processors/',
     getParentRoute: () => DocsRoute,
   } as any)
+const AdminStreamsNamespaceIndexRoute =
+  AdminStreamsNamespaceIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AdminStreamsNamespaceRouteRoute,
+  } as any)
 const AppProjectsProjectSlugIndexRoute =
   AppProjectsProjectSlugIndexRouteImport.update({
     id: '/',
@@ -165,6 +189,12 @@ const DocsStreamsProcessorsProcessorSlugRoute =
     id: '/streams/processors/$processorSlug',
     path: '/streams/processors/$processorSlug',
     getParentRoute: () => DocsRoute,
+  } as any)
+const AdminStreamsNamespaceSplatRoute =
+  AdminStreamsNamespaceSplatRouteImport.update({
+    id: '/$',
+    path: '/$',
+    getParentRoute: () => AdminStreamsNamespaceRouteRoute,
   } as any)
 const AppProjectsProjectSlugSettingsRoute =
   AppProjectsProjectSlugSettingsRouteImport.update({
@@ -220,12 +250,6 @@ const AppProjectsProjectSlugReposIndexRoute =
     path: '/repos/',
     getParentRoute: () => AppProjectsProjectSlugRouteRoute,
   } as any)
-const AppProjectsProjectSlugCodemodeSessionsIndexRoute =
-  AppProjectsProjectSlugCodemodeSessionsIndexRouteImport.update({
-    id: '/codemode-sessions/',
-    path: '/codemode-sessions/',
-    getParentRoute: () => AppProjectsProjectSlugRouteRoute,
-  } as any)
 const AppProjectsProjectSlugAgentsIndexRoute =
   AppProjectsProjectSlugAgentsIndexRouteImport.update({
     id: '/',
@@ -248,18 +272,6 @@ const AppProjectsProjectSlugReposRepoSlugRoute =
   AppProjectsProjectSlugReposRepoSlugRouteImport.update({
     id: '/repos/$repoSlug',
     path: '/repos/$repoSlug',
-    getParentRoute: () => AppProjectsProjectSlugRouteRoute,
-  } as any)
-const AppProjectsProjectSlugCodemodeSessionsNewRoute =
-  AppProjectsProjectSlugCodemodeSessionsNewRouteImport.update({
-    id: '/codemode-sessions/new',
-    path: '/codemode-sessions/new',
-    getParentRoute: () => AppProjectsProjectSlugRouteRoute,
-  } as any)
-const AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute =
-  AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRouteImport.update({
-    id: '/codemode-sessions/$codemodeSessionName',
-    path: '/codemode-sessions/$codemodeSessionName',
     getParentRoute: () => AppProjectsProjectSlugRouteRoute,
   } as any)
 const AppProjectsProjectSlugAgentsNewPresetRoute =
@@ -293,6 +305,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AdminRouteWithChildren
   '/docs': typeof DocsRouteWithChildren
   '/projects': typeof AppProjectsRouteRouteWithChildren
+  '/admin/streams': typeof AdminStreamsRouteRouteWithChildren
   '/$eventDocsProcessorSlug/$': typeof EventDocsProcessorSlugSplatRoute
   '/itx-repl': typeof AppItxReplRoute
   '/new-project': typeof AppNewProjectRoute
@@ -304,26 +317,27 @@ export interface FileRoutesByFullPath {
   '/admin/': typeof AdminIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
+  '/admin/streams/$namespace': typeof AdminStreamsNamespaceRouteRouteWithChildren
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/projects/': typeof AppProjectsIndexRoute
+  '/admin/streams/': typeof AdminStreamsIndexRoute
   '/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
   '/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/mcp': typeof AppProjectsProjectSlugMcpRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
+  '/admin/streams/$namespace/$': typeof AdminStreamsNamespaceSplatRoute
   '/docs/streams/processors/$processorSlug': typeof DocsStreamsProcessorsProcessorSlugRouteWithChildren
   '/projects/$projectSlug/': typeof AppProjectsProjectSlugIndexRoute
+  '/admin/streams/$namespace/': typeof AdminStreamsNamespaceIndexRoute
   '/docs/streams/processors/': typeof DocsStreamsProcessorsIndexRoute
   '/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
-  '/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
-  '/projects/$projectSlug/codemode-sessions/new': typeof AppProjectsProjectSlugCodemodeSessionsNewRoute
   '/projects/$projectSlug/repos/$repoSlug': typeof AppProjectsProjectSlugReposRepoSlugRoute
   '/projects/$projectSlug/secrets/$secretId': typeof AppProjectsProjectSlugSecretsSecretIdRoute
   '/projects/$projectSlug/streams/$': typeof AppProjectsProjectSlugStreamsSplatRoute
   '/projects/$projectSlug/agents/': typeof AppProjectsProjectSlugAgentsIndexRoute
-  '/projects/$projectSlug/codemode-sessions/': typeof AppProjectsProjectSlugCodemodeSessionsIndexRoute
   '/projects/$projectSlug/repos/': typeof AppProjectsProjectSlugReposIndexRoute
   '/projects/$projectSlug/secrets/': typeof AppProjectsProjectSlugSecretsIndexRoute
   '/projects/$projectSlug/streams/': typeof AppProjectsProjectSlugStreamsIndexRoute
@@ -345,22 +359,22 @@ export interface FileRoutesByTo {
   '/docs': typeof DocsIndexRoute
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/projects': typeof AppProjectsIndexRoute
+  '/admin/streams': typeof AdminStreamsIndexRoute
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/mcp': typeof AppProjectsProjectSlugMcpRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
+  '/admin/streams/$namespace/$': typeof AdminStreamsNamespaceSplatRoute
   '/docs/streams/processors/$processorSlug': typeof DocsStreamsProcessorsProcessorSlugRouteWithChildren
   '/projects/$projectSlug': typeof AppProjectsProjectSlugIndexRoute
+  '/admin/streams/$namespace': typeof AdminStreamsNamespaceIndexRoute
   '/docs/streams/processors': typeof DocsStreamsProcessorsIndexRoute
   '/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
-  '/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
-  '/projects/$projectSlug/codemode-sessions/new': typeof AppProjectsProjectSlugCodemodeSessionsNewRoute
   '/projects/$projectSlug/repos/$repoSlug': typeof AppProjectsProjectSlugReposRepoSlugRoute
   '/projects/$projectSlug/secrets/$secretId': typeof AppProjectsProjectSlugSecretsSecretIdRoute
   '/projects/$projectSlug/streams/$': typeof AppProjectsProjectSlugStreamsSplatRoute
   '/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsIndexRoute
-  '/projects/$projectSlug/codemode-sessions': typeof AppProjectsProjectSlugCodemodeSessionsIndexRoute
   '/projects/$projectSlug/repos': typeof AppProjectsProjectSlugReposIndexRoute
   '/projects/$projectSlug/secrets': typeof AppProjectsProjectSlugSecretsIndexRoute
   '/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsIndexRoute
@@ -375,6 +389,7 @@ export interface FileRoutesById {
   '/admin': typeof AdminRouteWithChildren
   '/docs': typeof DocsRouteWithChildren
   '/_app/projects': typeof AppProjectsRouteRouteWithChildren
+  '/admin/streams': typeof AdminStreamsRouteRouteWithChildren
   '/$eventDocsProcessorSlug/$': typeof EventDocsProcessorSlugSplatRoute
   '/_app/itx-repl': typeof AppItxReplRoute
   '/_app/new-project': typeof AppNewProjectRoute
@@ -386,26 +401,27 @@ export interface FileRoutesById {
   '/admin/': typeof AdminIndexRoute
   '/docs/': typeof DocsIndexRoute
   '/_app/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
+  '/admin/streams/$namespace': typeof AdminStreamsNamespaceRouteRouteWithChildren
   '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/projects/': typeof AppProjectsIndexRoute
+  '/admin/streams/': typeof AdminStreamsIndexRoute
   '/_app/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
   '/_app/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
   '/_app/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/_app/projects/$projectSlug/mcp': typeof AppProjectsProjectSlugMcpRoute
   '/_app/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/_app/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
+  '/admin/streams/$namespace/$': typeof AdminStreamsNamespaceSplatRoute
   '/docs/streams/processors/$processorSlug': typeof DocsStreamsProcessorsProcessorSlugRouteWithChildren
   '/_app/projects/$projectSlug/': typeof AppProjectsProjectSlugIndexRoute
+  '/admin/streams/$namespace/': typeof AdminStreamsNamespaceIndexRoute
   '/docs/streams/processors/': typeof DocsStreamsProcessorsIndexRoute
   '/_app/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
   '/_app/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
-  '/_app/projects/$projectSlug/codemode-sessions/$codemodeSessionName': typeof AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
-  '/_app/projects/$projectSlug/codemode-sessions/new': typeof AppProjectsProjectSlugCodemodeSessionsNewRoute
   '/_app/projects/$projectSlug/repos/$repoSlug': typeof AppProjectsProjectSlugReposRepoSlugRoute
   '/_app/projects/$projectSlug/secrets/$secretId': typeof AppProjectsProjectSlugSecretsSecretIdRoute
   '/_app/projects/$projectSlug/streams/$': typeof AppProjectsProjectSlugStreamsSplatRoute
   '/_app/projects/$projectSlug/agents/': typeof AppProjectsProjectSlugAgentsIndexRoute
-  '/_app/projects/$projectSlug/codemode-sessions/': typeof AppProjectsProjectSlugCodemodeSessionsIndexRoute
   '/_app/projects/$projectSlug/repos/': typeof AppProjectsProjectSlugReposIndexRoute
   '/_app/projects/$projectSlug/secrets/': typeof AppProjectsProjectSlugSecretsIndexRoute
   '/_app/projects/$projectSlug/streams/': typeof AppProjectsProjectSlugStreamsIndexRoute
@@ -420,6 +436,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/docs'
     | '/projects'
+    | '/admin/streams'
     | '/$eventDocsProcessorSlug/$'
     | '/itx-repl'
     | '/new-project'
@@ -431,26 +448,27 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/docs/'
     | '/projects/$projectSlug'
+    | '/admin/streams/$namespace'
     | '/api/orpc/$'
     | '/projects/'
+    | '/admin/streams/'
     | '/projects/$projectSlug/agents'
     | '/projects/$projectSlug/streams'
     | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/mcp'
     | '/projects/$projectSlug/repl'
     | '/projects/$projectSlug/settings'
+    | '/admin/streams/$namespace/$'
     | '/docs/streams/processors/$processorSlug'
     | '/projects/$projectSlug/'
+    | '/admin/streams/$namespace/'
     | '/docs/streams/processors/'
     | '/projects/$projectSlug/agents/new'
     | '/projects/$projectSlug/agents/new-preset'
-    | '/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
-    | '/projects/$projectSlug/codemode-sessions/new'
     | '/projects/$projectSlug/repos/$repoSlug'
     | '/projects/$projectSlug/secrets/$secretId'
     | '/projects/$projectSlug/streams/$'
     | '/projects/$projectSlug/agents/'
-    | '/projects/$projectSlug/codemode-sessions/'
     | '/projects/$projectSlug/repos/'
     | '/projects/$projectSlug/secrets/'
     | '/projects/$projectSlug/streams/'
@@ -472,22 +490,22 @@ export interface FileRouteTypes {
     | '/docs'
     | '/api/orpc/$'
     | '/projects'
+    | '/admin/streams'
     | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/mcp'
     | '/projects/$projectSlug/repl'
     | '/projects/$projectSlug/settings'
+    | '/admin/streams/$namespace/$'
     | '/docs/streams/processors/$processorSlug'
     | '/projects/$projectSlug'
+    | '/admin/streams/$namespace'
     | '/docs/streams/processors'
     | '/projects/$projectSlug/agents/new'
     | '/projects/$projectSlug/agents/new-preset'
-    | '/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
-    | '/projects/$projectSlug/codemode-sessions/new'
     | '/projects/$projectSlug/repos/$repoSlug'
     | '/projects/$projectSlug/secrets/$secretId'
     | '/projects/$projectSlug/streams/$'
     | '/projects/$projectSlug/agents'
-    | '/projects/$projectSlug/codemode-sessions'
     | '/projects/$projectSlug/repos'
     | '/projects/$projectSlug/secrets'
     | '/projects/$projectSlug/streams'
@@ -501,6 +519,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/docs'
     | '/_app/projects'
+    | '/admin/streams'
     | '/$eventDocsProcessorSlug/$'
     | '/_app/itx-repl'
     | '/_app/new-project'
@@ -512,26 +531,27 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/docs/'
     | '/_app/projects/$projectSlug'
+    | '/admin/streams/$namespace'
     | '/api/orpc/$'
     | '/_app/projects/'
+    | '/admin/streams/'
     | '/_app/projects/$projectSlug/agents'
     | '/_app/projects/$projectSlug/streams'
     | '/_app/projects/$projectSlug/integrations'
     | '/_app/projects/$projectSlug/mcp'
     | '/_app/projects/$projectSlug/repl'
     | '/_app/projects/$projectSlug/settings'
+    | '/admin/streams/$namespace/$'
     | '/docs/streams/processors/$processorSlug'
     | '/_app/projects/$projectSlug/'
+    | '/admin/streams/$namespace/'
     | '/docs/streams/processors/'
     | '/_app/projects/$projectSlug/agents/new'
     | '/_app/projects/$projectSlug/agents/new-preset'
-    | '/_app/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
-    | '/_app/projects/$projectSlug/codemode-sessions/new'
     | '/_app/projects/$projectSlug/repos/$repoSlug'
     | '/_app/projects/$projectSlug/secrets/$secretId'
     | '/_app/projects/$projectSlug/streams/$'
     | '/_app/projects/$projectSlug/agents/'
-    | '/_app/projects/$projectSlug/codemode-sessions/'
     | '/_app/projects/$projectSlug/repos/'
     | '/_app/projects/$projectSlug/secrets/'
     | '/_app/projects/$projectSlug/streams/'
@@ -660,12 +680,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EventDocsProcessorSlugSplatRouteImport
       parentRoute: typeof EventDocsProcessorSlugRoute
     }
+    '/admin/streams': {
+      id: '/admin/streams'
+      path: '/streams'
+      fullPath: '/admin/streams'
+      preLoaderRoute: typeof AdminStreamsRouteRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/_app/projects': {
       id: '/_app/projects'
       path: '/projects'
       fullPath: '/projects'
       preLoaderRoute: typeof AppProjectsRouteRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/admin/streams/': {
+      id: '/admin/streams/'
+      path: '/'
+      fullPath: '/admin/streams/'
+      preLoaderRoute: typeof AdminStreamsIndexRouteImport
+      parentRoute: typeof AdminStreamsRouteRoute
     }
     '/_app/projects/': {
       id: '/_app/projects/'
@@ -681,6 +715,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiOrpcSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/streams/$namespace': {
+      id: '/admin/streams/$namespace'
+      path: '/$namespace'
+      fullPath: '/admin/streams/$namespace'
+      preLoaderRoute: typeof AdminStreamsNamespaceRouteRouteImport
+      parentRoute: typeof AdminStreamsRouteRoute
+    }
     '/_app/projects/$projectSlug': {
       id: '/_app/projects/$projectSlug'
       path: '/$projectSlug'
@@ -695,6 +736,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsStreamsProcessorsIndexRouteImport
       parentRoute: typeof DocsRoute
     }
+    '/admin/streams/$namespace/': {
+      id: '/admin/streams/$namespace/'
+      path: '/'
+      fullPath: '/admin/streams/$namespace/'
+      preLoaderRoute: typeof AdminStreamsNamespaceIndexRouteImport
+      parentRoute: typeof AdminStreamsNamespaceRouteRoute
+    }
     '/_app/projects/$projectSlug/': {
       id: '/_app/projects/$projectSlug/'
       path: '/'
@@ -708,6 +756,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/docs/streams/processors/$processorSlug'
       preLoaderRoute: typeof DocsStreamsProcessorsProcessorSlugRouteImport
       parentRoute: typeof DocsRoute
+    }
+    '/admin/streams/$namespace/$': {
+      id: '/admin/streams/$namespace/$'
+      path: '/$'
+      fullPath: '/admin/streams/$namespace/$'
+      preLoaderRoute: typeof AdminStreamsNamespaceSplatRouteImport
+      parentRoute: typeof AdminStreamsNamespaceRouteRoute
     }
     '/_app/projects/$projectSlug/settings': {
       id: '/_app/projects/$projectSlug/settings'
@@ -772,13 +827,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectSlugReposIndexRouteImport
       parentRoute: typeof AppProjectsProjectSlugRouteRoute
     }
-    '/_app/projects/$projectSlug/codemode-sessions/': {
-      id: '/_app/projects/$projectSlug/codemode-sessions/'
-      path: '/codemode-sessions'
-      fullPath: '/projects/$projectSlug/codemode-sessions/'
-      preLoaderRoute: typeof AppProjectsProjectSlugCodemodeSessionsIndexRouteImport
-      parentRoute: typeof AppProjectsProjectSlugRouteRoute
-    }
     '/_app/projects/$projectSlug/agents/': {
       id: '/_app/projects/$projectSlug/agents/'
       path: '/'
@@ -805,20 +853,6 @@ declare module '@tanstack/react-router' {
       path: '/repos/$repoSlug'
       fullPath: '/projects/$projectSlug/repos/$repoSlug'
       preLoaderRoute: typeof AppProjectsProjectSlugReposRepoSlugRouteImport
-      parentRoute: typeof AppProjectsProjectSlugRouteRoute
-    }
-    '/_app/projects/$projectSlug/codemode-sessions/new': {
-      id: '/_app/projects/$projectSlug/codemode-sessions/new'
-      path: '/codemode-sessions/new'
-      fullPath: '/projects/$projectSlug/codemode-sessions/new'
-      preLoaderRoute: typeof AppProjectsProjectSlugCodemodeSessionsNewRouteImport
-      parentRoute: typeof AppProjectsProjectSlugRouteRoute
-    }
-    '/_app/projects/$projectSlug/codemode-sessions/$codemodeSessionName': {
-      id: '/_app/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
-      path: '/codemode-sessions/$codemodeSessionName'
-      fullPath: '/projects/$projectSlug/codemode-sessions/$codemodeSessionName'
-      preLoaderRoute: typeof AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRouteImport
       parentRoute: typeof AppProjectsProjectSlugRouteRoute
     }
     '/_app/projects/$projectSlug/agents/new-preset': {
@@ -915,11 +949,8 @@ interface AppProjectsProjectSlugRouteRouteChildren {
   AppProjectsProjectSlugReplRoute: typeof AppProjectsProjectSlugReplRoute
   AppProjectsProjectSlugSettingsRoute: typeof AppProjectsProjectSlugSettingsRoute
   AppProjectsProjectSlugIndexRoute: typeof AppProjectsProjectSlugIndexRoute
-  AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute: typeof AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute
-  AppProjectsProjectSlugCodemodeSessionsNewRoute: typeof AppProjectsProjectSlugCodemodeSessionsNewRoute
   AppProjectsProjectSlugReposRepoSlugRoute: typeof AppProjectsProjectSlugReposRepoSlugRoute
   AppProjectsProjectSlugSecretsSecretIdRoute: typeof AppProjectsProjectSlugSecretsSecretIdRoute
-  AppProjectsProjectSlugCodemodeSessionsIndexRoute: typeof AppProjectsProjectSlugCodemodeSessionsIndexRoute
   AppProjectsProjectSlugReposIndexRoute: typeof AppProjectsProjectSlugReposIndexRoute
   AppProjectsProjectSlugSecretsIndexRoute: typeof AppProjectsProjectSlugSecretsIndexRoute
 }
@@ -936,16 +967,10 @@ const AppProjectsProjectSlugRouteRouteChildren: AppProjectsProjectSlugRouteRoute
     AppProjectsProjectSlugReplRoute: AppProjectsProjectSlugReplRoute,
     AppProjectsProjectSlugSettingsRoute: AppProjectsProjectSlugSettingsRoute,
     AppProjectsProjectSlugIndexRoute: AppProjectsProjectSlugIndexRoute,
-    AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute:
-      AppProjectsProjectSlugCodemodeSessionsCodemodeSessionNameRoute,
-    AppProjectsProjectSlugCodemodeSessionsNewRoute:
-      AppProjectsProjectSlugCodemodeSessionsNewRoute,
     AppProjectsProjectSlugReposRepoSlugRoute:
       AppProjectsProjectSlugReposRepoSlugRoute,
     AppProjectsProjectSlugSecretsSecretIdRoute:
       AppProjectsProjectSlugSecretsSecretIdRoute,
-    AppProjectsProjectSlugCodemodeSessionsIndexRoute:
-      AppProjectsProjectSlugCodemodeSessionsIndexRoute,
     AppProjectsProjectSlugReposIndexRoute:
       AppProjectsProjectSlugReposIndexRoute,
     AppProjectsProjectSlugSecretsIndexRoute:
@@ -985,11 +1010,42 @@ const AppRouteChildren: AppRouteChildren = {
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
 
+interface AdminStreamsNamespaceRouteRouteChildren {
+  AdminStreamsNamespaceSplatRoute: typeof AdminStreamsNamespaceSplatRoute
+  AdminStreamsNamespaceIndexRoute: typeof AdminStreamsNamespaceIndexRoute
+}
+
+const AdminStreamsNamespaceRouteRouteChildren: AdminStreamsNamespaceRouteRouteChildren =
+  {
+    AdminStreamsNamespaceSplatRoute: AdminStreamsNamespaceSplatRoute,
+    AdminStreamsNamespaceIndexRoute: AdminStreamsNamespaceIndexRoute,
+  }
+
+const AdminStreamsNamespaceRouteRouteWithChildren =
+  AdminStreamsNamespaceRouteRoute._addFileChildren(
+    AdminStreamsNamespaceRouteRouteChildren,
+  )
+
+interface AdminStreamsRouteRouteChildren {
+  AdminStreamsNamespaceRouteRoute: typeof AdminStreamsNamespaceRouteRouteWithChildren
+  AdminStreamsIndexRoute: typeof AdminStreamsIndexRoute
+}
+
+const AdminStreamsRouteRouteChildren: AdminStreamsRouteRouteChildren = {
+  AdminStreamsNamespaceRouteRoute: AdminStreamsNamespaceRouteRouteWithChildren,
+  AdminStreamsIndexRoute: AdminStreamsIndexRoute,
+}
+
+const AdminStreamsRouteRouteWithChildren =
+  AdminStreamsRouteRoute._addFileChildren(AdminStreamsRouteRouteChildren)
+
 interface AdminRouteChildren {
+  AdminStreamsRouteRoute: typeof AdminStreamsRouteRouteWithChildren
   AdminIndexRoute: typeof AdminIndexRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
+  AdminStreamsRouteRoute: AdminStreamsRouteRouteWithChildren,
   AdminIndexRoute: AdminIndexRoute,
 }
 

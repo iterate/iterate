@@ -1,3 +1,5 @@
+import { RpcTarget } from "capnweb";
+
 export const DEFAULT_BROWSER_REPL_CODE = "await itx.projects.list({ limit: 5 })";
 
 export type BrowserReplExample = {
@@ -12,8 +14,29 @@ export type BrowserReplEntry = {
   consoleOutput: string;
   output: string;
   outputLanguage: "json" | "text";
+  result?: unknown;
   status: "error" | "success";
 };
+
+export function createBrowserReplScope(scope?: Record<string, unknown>): Record<string, unknown> {
+  return { RpcTarget, ...scope };
+}
+
+export function browserReplExternalScopesEqual(
+  first?: Record<string, unknown>,
+  second?: Record<string, unknown>,
+) {
+  const firstKeys = Object.keys(first ?? {});
+  const secondKeys = Object.keys(second ?? {});
+  if (firstKeys.length !== secondKeys.length) return false;
+
+  for (const key of firstKeys) {
+    if (!Object.prototype.hasOwnProperty.call(second ?? {}, key)) return false;
+    if (!Object.is(first?.[key], second?.[key])) return false;
+  }
+
+  return true;
+}
 
 // These are living examples: each one mirrors a scenario from the itx e2e
 // suite (apps/os/src/itx/e2e/*), rewritten as a self-contained REPL snippet.
@@ -450,6 +473,7 @@ export async function runBrowserReplEntry(input: {
       consoleOutput: formatBrowserReplConsoleOutput(consoleLogs),
       output: formattedResult.text,
       outputLanguage: formattedResult.language,
+      result,
       status: "success",
     };
   } catch (error) {
