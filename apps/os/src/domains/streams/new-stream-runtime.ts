@@ -4,17 +4,8 @@ import type {
   StreamEventInput as NewStreamEventInput,
 } from "@iterate-com/streams/shared/event";
 import type { StreamRpc } from "@iterate-com/streams/types";
-import {
-  DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
-  DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE,
-} from "@iterate-com/streams/processors/circuit-breaker/contract";
-import type {
-  Event,
-  EventInput,
-  StreamState,
-  StreamCursor,
-} from "@iterate-com/shared/streams/types";
-import { StreamPath } from "@iterate-com/shared/streams/types";
+import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
+import { StreamPath, StreamState } from "@iterate-com/shared/streams/types";
 
 export type StreamDurableObject = Stream;
 export type StreamDurableObjectNamespace = DurableObjectNamespace<Stream>;
@@ -66,7 +57,7 @@ export async function getInitializedStreamStub(input: {
       ).map((event) => toLegacyEvent(event, path));
     },
     async getState() {
-      return toLegacyStreamState(await stub.runtimeState());
+      return toStreamState(await stub.runtimeState());
     },
     async history(query = {}) {
       const events = await stub.getEvents({
@@ -85,42 +76,24 @@ export async function getInitializedStreamStub(input: {
   };
 }
 
-function toLegacyStreamState(
+/**
+ * Project the Stream Durable Object's core reduced state onto the public
+ * {@link StreamState} contract. Parsed (not cast) so the contract and this
+ * projection can never silently drift apart — a past version fabricated a
+ * "legacy" processors payload behind `as` casts that the schema rejected at
+ * runtime, which broke every stream navigation UI.
+ */
+export function toStreamState(
   runtimeState: Awaited<ReturnType<StreamRpc["runtimeState"]>>,
 ): StreamState {
   const core = runtimeState.coreProcessorState;
-  return {
+  return StreamState.parse({
     namespace: core.namespace,
-    path: StreamPath.parse(core.path),
+    path: core.path,
     eventCount: core.eventCount,
-    childPaths: core.childPaths.map((childPath: string) => StreamPath.parse(childPath)),
-    metadata: core.metadata as StreamState["metadata"],
-    processors: {
-      "circuit-breaker": {
-        paused: core.paused,
-        pauseReason: core.pauseReason,
-        pausedAt: null,
-        config: {
-          burstCapacity: DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
-          refillRatePerMinute: DEFAULT_CIRCUIT_BREAKER_REFILL_RATE_PER_MINUTE,
-        },
-        availableTokens: DEFAULT_CIRCUIT_BREAKER_BURST_CAPACITY,
-        lastRefillAtMs: null,
-      },
-      "external-subscriber": {
-        subscribersBySlug: Object.fromEntries(
-          Object.entries(core.subscriptionsByKey).map(([key]) => [
-            key,
-            {
-              slug: key,
-              type: "callable",
-              callable: {},
-            },
-          ]),
-        ) as StreamState["processors"]["external-subscriber"]["subscribersBySlug"],
-      },
-    },
-  };
+    childPaths: core.childPaths,
+    metadata: core.metadata,
+  });
 }
 
 export function toLegacyEvent(event: NewStreamEvent, streamPath: StreamPath): Event {

@@ -48,20 +48,3 @@ export const StreamResumedEvent = GenericEventBase.extend(
 );
 export type StreamResumedEventInput = z.infer<typeof StreamResumedEventInput>;
 export type StreamResumedEvent = z.infer<typeof StreamResumedEvent>;
-
-export const CircuitBreakerState = z.object({
-  paused: z.boolean(),
-  pauseReason: z.string().nullable(),
-  pausedAt: z.string().nullable(),
-  config: CircuitBreakerConfig,
-  availableTokens: z.number(),
-  lastRefillAtMs: z.number().int().nonnegative().nullable(),
-});
-export type CircuitBreakerState = z.infer<typeof CircuitBreakerState>;
-
-export class StreamPausedError extends Error {
-  constructor() {
-    super("stream is paused; only stream/resumed is allowed");
-    this.name = "StreamPausedError";
-  }
-}

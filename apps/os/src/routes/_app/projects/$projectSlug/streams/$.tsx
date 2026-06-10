@@ -1,10 +1,9 @@
 import { useMemo } from "react";
-import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { StreamState, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
 import { useItxClient } from "~/itx/react/index.ts";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
-import { StreamNavigationState } from "~/lib/stream-navigation-state.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { createBrowserOpenApiClient } from "~/orpc/client.ts";
 
@@ -45,9 +44,7 @@ function ProjectStreamDetailPage() {
     () => ({
       key: ["project", project.id, "streams"] as const,
       getState: async (path: StreamPathType) =>
-        StreamNavigationState.parse(
-          await (await itxClient.project(project.id)).streams.get(path).getState(),
-        ),
+        StreamState.parse(await (await itxClient.project(project.id)).streams.get(path).getState()),
     }),
     [itxClient, project.id],
   );
