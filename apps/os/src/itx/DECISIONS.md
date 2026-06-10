@@ -215,3 +215,32 @@ Three pieces, one seam each:
   same error inline instead. Only the streams index prefetches today;
   breadcrumbs stay lazy by choice and are seeded for free through the shared
   per-path cache keys.
+
+## D20: fetch on the project IS egress; ingress is stateless; creation is events
+
+The Project DO cleanup (PR #1466) landed three postures the spec/notes had
+been circling:
+
+- **`project.fetch` = egress.** In itx vocabulary `itx.fetch` is project
+  egress (Law 5), so the DO's bare `fetch` now routes to `egressFetch` — the
+  worker's `fetch` is the project's homepage. The one exception on the DO
+  fetch path is the captun intercept tunnel's WebSocket handshake (upgrades
+  cannot cross RPC methods). Endgame, not built: egress as a stateless
+  capability with policy cached outside the DO, and the tunnel replaced by a
+  live egress-shadowing capability `provide`d over capnweb-with-WebSockets.
+- **Ingress never touches the DO.** `ProjectIngressEntrypoint` (stateless)
+  asks the DO `getWorkerVersion()` (freshness + deduped rebuild semantics),
+  loads the worker itself via `env.LOADER` with the shared cache key, and
+  dispatches; the code payload only crosses RPC inside the loader's
+  cold-isolate miss callback. The DO is where the worker's source of truth
+  lives, nothing more.
+- **Project creation is event-sourced.** `createProject` writes the D1
+  projection (routing needs the row synchronously), appends
+  `project/create-requested`, and waits (bounded) for the ProjectProcessor —
+  slug `project`, hosted on the DO — to run the idempotent steps and append
+  `created` / `create-completed`. The worker build never gates creation
+  (ingress self-heals builds); `config-worker-built` remains the historical
+  event string. The DO keeps NO bespoke tables: the processor snapshot is the
+  project's durable state (with a pure `projectHosts()` + D1-slug fallback for
+  cold snapshots), and "config worker" is now just **the worker**
+  (`durable-objects/worker.ts`, `callWorkerFunction`, `itx.worker`).

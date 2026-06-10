@@ -132,25 +132,6 @@ export type ProjectSummary = {
   hosts: string[];
 };
 
-export type ProjectCapability = Pick<
-  ProjectDurableObject,
-  | "callWorkerFunction"
-  | "createProject"
-  | "describe"
-  | "egressFetch"
-  | "fetch"
-  | "getProjectState"
-  | "getSummary"
-  | "getWorkerCheckout"
-  | "getWorkerVersion"
-  | "ingressUrl"
-  | "itxDefine"
-  | "itxDescribe"
-  | "itxInvoke"
-  | "itxProvide"
-  | "itxRevoke"
->;
-
 export type CreateProjectInput = {
   projectId: string;
   slug: string;

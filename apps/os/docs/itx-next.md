@@ -457,9 +457,14 @@ second step, taken only after the shared layer proves itself.
 
 ## 7. Smaller items
 
-- **Rename "iterate-config worker" → "project worker" codebase-wide**
-  (`callConfigWorkerFunction`, the base iterate-config artifact naming,
-  docs, UI copy). Design docs and `types.ts` already use the new name.
+- ~~Rename "iterate-config worker" → "project worker" codebase-wide~~ →
+  SHIPPED (PR #1466, DECISIONS D20): it's just **the worker** now —
+  `durable-objects/worker.ts`, `callWorkerFunction`, `itx.worker`. Same PR
+  also made `project.fetch` = egress, moved ingress dispatch into the
+  stateless `ProjectIngressEntrypoint`, and event-sourced project creation
+  through the `project` processor (creation-requested → steps → completed —
+  the §4-adjacent "domain objects come to be via events" jam, applied to
+  projects).
 - `handle.ts` sheds its direct domain imports (repos/workspace/streams) —
   they become default caps; mechanism in §8. Kernel approaches the
   ~500-line goal.
