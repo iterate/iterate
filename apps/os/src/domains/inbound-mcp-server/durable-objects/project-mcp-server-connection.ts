@@ -27,7 +27,7 @@ export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capabil
  * props. That mirrors Cloudflare's documented OAuth integration point:
  * https://developers.cloudflare.com/agents/model-context-protocol/mcp-agent-api/
  *
- * Code execution is delegated to the project/stream-scoped CodemodeSession DO.
+ * Code execution runs through the shared itx runner (src/itx/run.ts).
  *
  * Tools:
  * - exec_js: Execute JavaScript in an isolated dynamic worker sandbox
@@ -426,7 +426,7 @@ export class ProjectMcpServerConnection extends McpAgent<
     return this.ctx.exports;
   }
 
-  /** Stable event stream for lifecycle and codemode events emitted by one MCP session. */
+  /** Stable event stream for lifecycle events emitted by one MCP session. */
   private async getSessionStreamPath() {
     return StreamPath.parse(`/mcp-server-sessions/${await this.getSessionSlug()}`);
   }

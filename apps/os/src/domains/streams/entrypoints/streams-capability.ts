@@ -8,7 +8,6 @@ import {
   StreamPath,
 } from "@iterate-com/shared/streams/types";
 import { ItxError } from "~/itx/errors.ts";
-import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import {
   getStreamDurableObjectName,
   getInitializedStreamStub,
@@ -91,28 +90,6 @@ export class StreamsCapability extends WorkerEntrypoint<
   StreamsCapabilityEnv,
   StreamsCapabilityProps
 > {
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    const [request] = input.args;
-    const options =
-      request != null && typeof request === "object" ? (request as Record<string, unknown>) : {};
-    switch (input.functionPath.join(".")) {
-      case "append":
-        return await this.append(options as StreamAppendInput);
-      case "appendBatch":
-        return await this.appendBatch(options as StreamAppendBatchInput);
-      case "create":
-        return await this.create(options as StreamPathInput);
-      case "read":
-        return await this.read(options as StreamReadInput);
-      case "getState":
-        return await this.getState(options as StreamPathInput);
-      case "listChildren":
-        return await this.listChildren(options as StreamListChildrenInput);
-      default:
-        throw new Error(`StreamsCapability does not implement ${input.functionPath.join(".")}`);
-    }
-  }
-
   async append(input: StreamAppendInput): Promise<Event> {
     const path = this.resolveNamespacePath(input);
     this.assertMayAppend(path);

@@ -7,10 +7,6 @@
   "durable_objects": {
     "bindings": [
       {
-        "name": "CODEMODE_SESSION",
-        "class_name": "CodemodeSession",
-      },
-      {
         "name": "PROJECT_MCP_SERVER_CONNECTION",
         "class_name": "ProjectMcpServerConnection",
       },
@@ -48,7 +44,7 @@
   "migrations": [
     {
       "tag": "v1",
-      "new_sqlite_classes": ["CodemodeSession", "ProjectMcpServerConnection"],
+      "new_sqlite_classes": ["ProjectMcpServerConnection"],
     },
     {
       "tag": "v2",

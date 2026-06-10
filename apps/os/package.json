@@ -28,7 +28,6 @@
     "routes:check": "tsx ./scripts/generate-route-tree.ts --check",
     "typecheck": "pnpm routes:check && tsc --noEmit",
     "test": "vitest run --exclude 'src/durable-objects/*.test.ts' --exclude 'src/itx/e2e/**'",
-    "test:codemode-session": "OS_CODEMODE_SESSION_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os/src/durable-objects/codemode-session.vitest.config.ts",
     "test:itx-stream-subscribe": "OS_ITX_STREAM_SUBSCRIBE_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os/src/durable-objects/itx-stream-subscribe.vitest.config.ts",
     "test:project-ingress": "OS_PROJECT_INGRESS_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os/src/durable-objects/project-ingress.vitest.config.ts",
     "test:project-mcp-server-connection": "OS_ITERATE_MCP_SERVER_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os/src/durable-objects/iterate-mcp-server.vitest.config.ts",

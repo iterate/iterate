@@ -1,6 +1,5 @@
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import {
   type CloudflareShellState,
   type WorkspaceDurableObject,
@@ -70,32 +69,6 @@ export class WorkspaceCapability extends WorkerEntrypoint<
       method: "writeFile",
       namespace: "ctx.workspace",
       target: state as {},
-    });
-  }
-
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    if (input.functionPath.length === 0) {
-      throw new Error("WorkspaceCapability requires a workspace method path.");
-    }
-
-    if (input.functionPath[0] === "git") {
-      const method = readSingleMethodName("ctx.workspace.git", input.functionPath.slice(1));
-      const git = await (await this.workspace()).cloudflareShellGit();
-      return await callMethod({
-        method,
-        namespace: "ctx.workspace.git",
-        target: git,
-        args: input.args,
-      });
-    }
-
-    const method = readSingleMethodName("ctx.workspace", input.functionPath);
-    const state = await (await this.workspace()).cloudflareShellState();
-    return await callMethod({
-      method,
-      namespace: "ctx.workspace",
-      target: state as {},
-      args: input.args,
     });
   }
 
@@ -187,12 +160,4 @@ async function callMethod(input: {
   }
 
   return await fn(...input.args);
-}
-
-function readSingleMethodName(namespace: string, path: string[]) {
-  if (path.length !== 1 || path[0] == null || path[0].trim() === "") {
-    throw new Error(`${namespace} expected a single method name, received ${path.join(".")}.`);
-  }
-
-  return path[0];
 }

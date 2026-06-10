@@ -227,14 +227,6 @@ export default defineConfig({
             entrypoint: "MockArtifactsBinding",
             name: miniflare.kCurrentWorker,
           },
-          BUILTIN_MATRIX_PROVIDER: {
-            entrypoint: "TestBuiltinMatrixProvider",
-            name: miniflare.kCurrentWorker,
-          },
-          LEAF_PROVIDER: {
-            entrypoint: "TestLeafProvider",
-            name: miniflare.kCurrentWorker,
-          },
           OPENAPI_BRIDGE: {
             entrypoint: "OpenApiBridge",
             name: miniflare.kCurrentWorker,
