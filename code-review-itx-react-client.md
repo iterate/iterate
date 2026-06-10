@@ -87,8 +87,8 @@ during connection setup (navigation between stream pages).
 
 `apps/os/src/itx/handle.ts:484` reuses `toNewAfterOffset`
 (`new-stream-runtime.ts:141-145`), which maps `"end"` → `Number.MAX_SAFE_INTEGER` — the DO pump
-then waits for offsets past MAX_SAFE_INTEGER forever. `"end"` is the obvious spelling of "tail
-from now" and silently delivers nothing. Conversely, _omitting_ `afterOffset` replays the entire
+then waits for offsets past MAX*SAFE_INTEGER forever. `"end"` is the obvious spelling of "tail
+from now" and silently delivers nothing. Conversely, \_omitting* `afterOffset` replays the entire
 history (`undefined` → 0), while the DO's own default for subscribe is live-tail. The reused
 helper has read semantics, wrong for subscribe. Latent today (both callers pass explicit
 values) but it's a kernel API trap.
