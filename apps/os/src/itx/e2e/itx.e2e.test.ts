@@ -394,7 +394,11 @@ test("kernel errors cross capnweb as ItxError-shaped errors with codes", async (
     (thrown: unknown) => thrown as Error & { code?: unknown; details?: unknown },
   );
   expect(error).not.toBeNull();
-  expect(error!.name).toBe("ItxError");
+  // capnweb 0.8.0 reconstructs unknown error names as plain Error and drops
+  // the name (ERROR_TYPES[name] || Error; the props loop skips "name"), so
+  // class/name identity is untransmittable — detection is duck-typed via the
+  // own enumerable code/details props, which DO cross.
+  expect(error!.name).toBe("Error");
   expect(error!.code).toBe("NOT_FOUND");
   expect(error!.details).toEqual({ projectIdOrSlug: "definitely-not-a-project" });
 });

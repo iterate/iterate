@@ -206,14 +206,16 @@ export async function runAgentItxScript(args: {
 }) {
   const contextId = await args.deps.getItxContextId();
   await runItxScript({
+    // LLM scripts are written `async (ctx) => { … }` — ctx IS the itx handle
+    // (the agent's caps and built-ins line up name-for-name), so the runner
+    // invokes them directly and the execution record carries exactly what
+    // the model wrote, no wrapper.
+    convention: "ctx",
     executionId: args.executionId,
     recordRequested: args.recordRequested,
     env: args.deps.runnerEnv,
     exports: args.deps.workerExports as ItxRuntime["exports"],
-    // LLM scripts are written `async (ctx) => { … }`; itx scripts take
-    // ({ itx, vars }). ctx IS the itx handle — the agent's caps (chat, debug,
-    // ai, os, gmail) and built-ins (fetch, streams) line up name-for-name.
-    functionSource: `async ({ itx, vars }) => { const ctx = itx; return await (${args.code})(ctx, vars); }`,
+    functionSource: args.code,
     projectId: args.projectId,
     props: { context: contextId },
     record: { namespace: args.projectId, path: args.streamPath },

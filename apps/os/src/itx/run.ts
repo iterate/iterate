@@ -55,6 +55,14 @@ export async function runItxScript(input: {
    * /itx stream; callers whose loop lives on another stream (e.g. an agent
    * reading completions off its own stream) point this there. */
   record?: { namespace: string; path: string };
+  /**
+   * How the script is invoked:
+   * - "itx" (default): `script({ itx, vars })` — the REPL / run-endpoint shape.
+   * - "ctx": `script(itx)` — the agent/LLM shape (`async (ctx) => …`): the
+   *   handle IS ctx, no wrapper, and the recorded code is exactly what the
+   *   model wrote. `vars` is unused in this convention.
+   */
+  convention?: "itx" | "ctx";
   /** Use a caller-minted id (e.g. when the requested event already exists). */
   executionId?: string;
   /** Skip the execution-requested append (the caller already recorded one). */
@@ -111,7 +119,9 @@ export async function runItxScript(input: {
           }
         : {}),
       mainModule: "itx-script.js",
-      modules: { "itx-script.js": itxRunWorkerSource(input.functionSource) },
+      modules: {
+        "itx-script.js": itxRunWorkerSource(input.functionSource, input.convention ?? "itx"),
+      },
     });
 
     entrypoint = worker.getEntrypoint() as unknown as {
@@ -158,7 +168,7 @@ export async function runItxScript(input: {
   return outcome;
 }
 
-function itxRunWorkerSource(functionSource: string) {
+function itxRunWorkerSource(functionSource: string, convention: "itx" | "ctx") {
   return /* js */ `
     import { WorkerEntrypoint } from "cloudflare:workers";
 
@@ -181,7 +191,7 @@ function itxRunWorkerSource(functionSource: string) {
       async run(vars) {
         try {
           const itx = await this.env.ITERATE.context;
-          const result = await script({ itx, vars });
+          const result = await ${convention === "ctx" ? "script(itx)" : "script({ itx, vars })"};
           return JSON.stringify({ logs, ok: true, result });
         } catch (error) {
           return JSON.stringify({

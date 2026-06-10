@@ -89,6 +89,9 @@ const sessionSlugStorageKey = "mcpServerSessionSlug";
 const eventTypePrefix = "events.iterate.com/mcp-server";
 const requiredToolScope = "profile";
 
+/** Bump when SEEDED_CAPS changes; existing sessions re-seed on next call. */
+const MCP_CONTEXT_CAPS_VERSION = "1";
+
 /** Capabilities every MCP session context starts with (instructions feed the
  * exec_js tool description AND itx describe()). */
 const SEEDED_CAPS: Array<{
@@ -306,15 +309,33 @@ export class ProjectMcpServerConnection extends McpAgent<
    * delegates up to the project context (the itx prototype chain).
    */
   private async ensureItxContext(projectId: string): Promise<string> {
+    // Single-flight per project: concurrent exec_js calls must not race the
+    // storage get/put into minting two context ids.
+    const inflight = this.#ensureItxContextPromises.get(projectId);
+    if (inflight) return await inflight;
+    const promise = this.#ensureItxContextOnce(projectId).finally(() => {
+      this.#ensureItxContextPromises.delete(projectId);
+    });
+    this.#ensureItxContextPromises.set(projectId, promise);
+    return await promise;
+  }
+
+  readonly #ensureItxContextPromises = new Map<string, Promise<string>>();
+
+  async #ensureItxContextOnce(projectId: string): Promise<string> {
     const storageKey = `itxContextId:${projectId}`;
+    const versionKey = `itxContextCapsVersion:${projectId}`;
     const existing = await this.ctx.storage.get<string>(storageKey);
-    if (existing) return existing;
+    const seededVersion = await this.ctx.storage.get<string>(versionKey);
+    if (existing && seededVersion === MCP_CONTEXT_CAPS_VERSION) return existing;
 
     const config = parseConfig(this.env as unknown as Env);
-    const contextId = typeid({
-      env: { TYPEID_PREFIX: config.typeIdPrefix },
-      prefix: "ctx",
-    });
+    const contextId =
+      existing ??
+      typeid({
+        env: { TYPEID_PREFIX: config.typeIdPrefix },
+        prefix: "ctx",
+      });
     const contextStub = this.env.ITX_CONTEXT.getByName(contextId);
     await contextStub.initialize({
       id: contextId,
@@ -331,6 +352,7 @@ export class ProjectMcpServerConnection extends McpAgent<
       });
     }
     await this.ctx.storage.put(storageKey, contextId);
+    await this.ctx.storage.put(versionKey, MCP_CONTEXT_CAPS_VERSION);
     return contextId;
   }
 

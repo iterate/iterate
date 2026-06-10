@@ -468,6 +468,18 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
    * changes so existing agents re-define caps (defines upsert; the
    * capability-noted idempotency keys dedupe re-appends per cap name). */
   async ensureItxContext(params: AgentDurableObjectStructuredName): Promise<string> {
+    // Single-flight: the wake hook's workspace prep (waitUntil) and script
+    // runs can call this concurrently; without memoization the interleaved
+    // storage get/put could mint two different context ids.
+    this.#ensureItxContextPromise ??= this.#ensureItxContextOnce(params).finally(() => {
+      this.#ensureItxContextPromise = undefined;
+    });
+    return await this.#ensureItxContextPromise;
+  }
+
+  #ensureItxContextPromise: Promise<string> | undefined;
+
+  async #ensureItxContextOnce(params: AgentDurableObjectStructuredName): Promise<string> {
     const existing = await this.ctx.storage.get<string>("itxContextId");
     const seededVersion = await this.ctx.storage.get<string>("itxContextCapsVersion");
     if (existing && seededVersion === AGENT_CONTEXT_CAPS_VERSION) return existing;

@@ -45,12 +45,14 @@ const ITX_ERROR_CODE_SET: ReadonlySet<string> = new Set(ITX_ERROR_CODES);
  *
  * - The serializer emits `["error", name, message, stack?, props?]` where
  *   `props` is the error's OWN ENUMERABLE properties (everything except
- *   name/message/stack). The receiver reconstructs a plain `Error` (builtin
- *   names like TypeError map to their classes; anything else — including
- *   "ItxError" — becomes `Error` with `name` reattached) and copies the props
- *   back on. Class identity is lost in transit, so `code` and `details` are
- *   own enumerable properties and detection is duck-typed via
- *   {@link getItxErrorCode} — NEVER `instanceof ItxError` on the client.
+ *   name/message/stack). The receiver reconstructs builtin names
+ *   (TypeError, …) as their classes; anything else — including "ItxError" —
+ *   becomes a plain `Error` and the name is DROPPED (the props loop skips
+ *   `name`), then the remaining props are copied back on. Both class and
+ *   name identity are lost in transit, so `code` and `details` are own
+ *   enumerable properties and detection is duck-typed via
+ *   {@link getItxErrorCode} — NEVER `instanceof ItxError` or `.name` checks
+ *   on the client.
  * - The stack is only transmitted when the session's `onSendError` hook
  *   returns a rewritten error; see {@link tagOutboundItxError}.
  *
