@@ -1,8 +1,7 @@
 import { useMemo } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
-import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
+import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
 import { useAdminItx } from "~/lib/admin-itx.ts";
 import { StreamNavigationState } from "~/lib/stream-navigation-state.ts";
 import { adminStreamRpcPath } from "~/lib/stream-rpc-paths.ts";
@@ -42,15 +41,15 @@ function AdminStreamDetailPage() {
   }
 
   return (
-    <section className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[20rem_minmax(0,1fr)]">
-      <aside className="hidden min-h-0 border-r p-3 lg:flex">
-        <StreamTreeBrowser source={source} currentPath={streamPath} onOpenPath={openStream} />
-      </aside>
-      <ProjectStreamView
-        emptyLabel="No events in this stream yet."
-        projectSlug={namespace}
-        projectSlugOrId={namespace}
-        renderStreamPathLink={({ path, children, className }) => (
+    <StreamExplorerDetail
+      currentPath={streamPath}
+      onOpenPath={openStream}
+      source={source}
+      streamView={{
+        emptyLabel: "No events in this stream yet.",
+        projectSlug: namespace,
+        projectSlugOrId: namespace,
+        renderStreamPathLink: ({ path, children, className }) => (
           <Link
             to="/admin/streams/$namespace/$"
             params={{ namespace, _splat: path }}
@@ -58,10 +57,9 @@ function AdminStreamDetailPage() {
           >
             {children}
           </Link>
-        )}
-        streamPath={streamPath}
-        streamUrl={adminStreamRpcPath(namespace, streamPath)}
-      />
-    </section>
+        ),
+        streamUrl: adminStreamRpcPath(namespace, streamPath),
+      }}
+    />
   );
 }
