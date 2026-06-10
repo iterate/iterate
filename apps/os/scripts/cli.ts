@@ -19,6 +19,15 @@ if (!process.env.DOPPLER_CONFIG) {
   run("doppler", ["run", "--", "tsx", fileURLToPath(import.meta.url), ...args], process.env);
 }
 
+// `pnpm cli itx`: an itx REPL / one-shot evaluator, not an oRPC procedure.
+if (args[0] === "itx") {
+  run(
+    "tsx",
+    [fileURLToPath(new URL("./itx-repl.ts", import.meta.url)), ...args.slice(1)],
+    process.env,
+  );
+}
+
 run("iterate-app-cli", args, process.env);
 
 function run(command: string, commandArgs: string[], env: NodeJS.ProcessEnv): never {
