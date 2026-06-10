@@ -14,7 +14,14 @@ import { DurableObject } from "cloudflare:workers";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "./registry.ts";
 import { ITX_AUDIT_STREAM_PATH, ITX_EVENT_TYPES } from "./protocol.ts";
-import type { CapDescription, CapInvoke, CapMeta, CapSource, PathCall } from "./protocol.ts";
+import type {
+  CapDescription,
+  CapInvoke,
+  CapMeta,
+  CapSource,
+  PathCall,
+  SerializableCapTarget,
+} from "./protocol.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -86,7 +93,8 @@ export class ContextDO extends DurableObject<Env> {
 
   itxDefine(input: {
     name: string;
-    source: CapSource;
+    target?: SerializableCapTarget;
+    source?: CapSource;
     kind?: "worker" | "facet";
     invoke?: CapInvoke;
     meta?: CapMeta;
@@ -130,6 +138,8 @@ export class ContextDO extends DurableObject<Env> {
     const descriptor = this.descriptor();
     this.#registry = new ContextRegistry({
       audit: (event) => this.audit(event.type, event.payload),
+      // Gated on DIALABLE_BINDINGS inside the registry before this is called.
+      binding: (name) => (this.env as unknown as Record<string, unknown>)[name],
       contextId: descriptor.id,
       facets: durableObjectFacetsHook(this.ctx),
       loader: this.env.LOADER as unknown as ConstructorParameters<

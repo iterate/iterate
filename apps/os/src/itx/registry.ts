@@ -16,8 +16,13 @@
 // caller already held a handle on this context.
 
 import {
+  assertDefinableCapTarget,
   assertValidCapName,
+  capSourceCacheKey,
+  DIALABLE_BINDINGS,
+  DIALABLE_LOOPBACKS,
   ITX_EVENT_TYPES,
+  normalizeCapTarget,
   type CapDescription,
   type CapInvoke,
   type CapKind,
@@ -25,6 +30,7 @@ import {
   type CapSource,
   type PathCall,
   type PathCallTarget,
+  type SerializableCapTarget,
 } from "./protocol.ts";
 import { replayPathCall } from "./path-proxy.ts";
 
@@ -65,8 +71,13 @@ export type ContextRegistryHost = {
   /** The owning project (egress + worker-cap itx scoping). */
   projectId: string;
   sql: SqlStorage;
-  /** Worker Loader for worker-kind caps; absent in environments without it. */
+  /** Worker Loader for source-ref caps; absent in environments without it. */
   loader?: WorkerLoaderLike;
+  /**
+   * Resolve an env binding by name for `{ type: "binding" }` worker refs.
+   * The registry gates lookups on DIALABLE_BINDINGS before calling this.
+   */
+  binding?: (name: string) => unknown;
   /**
    * Create a loopback service-binding stub for a named export of the parent
    * worker, parameterized by props. Used to hand worker caps their
@@ -91,11 +102,17 @@ export type ContextRegistryHost = {
   ) => unknown;
 };
 
+/**
+ * `kind` is stored raw: new rows carry a CapKind ("live" | "rpc" | "url"),
+ * rows written before CapTarget landed carry the legacy "worker"/"facet".
+ * `targetOf()` is the single place legacy rows normalize.
+ */
 type CapRow = {
   name: string;
-  kind: CapKind;
+  kind: CapKind | "worker" | "facet";
   invoke: CapInvoke;
   source_json: string | null;
+  target_json: string | null;
   meta_json: string;
   updated_at_ms: number;
 };
@@ -164,6 +181,12 @@ export class ContextRegistry {
       meta_json TEXT NOT NULL,
       updated_at_ms INTEGER NOT NULL
     )`);
+    // CapTarget storage; rows from before this column exist with NULL and
+    // normalize from kind + source_json on read (targetOf).
+    const columns = host.sql.exec(`PRAGMA table_info(itx_caps)`).toArray() as { name: string }[];
+    if (!columns.some((column) => column.name === "target_json")) {
+      host.sql.exec(`ALTER TABLE itx_caps ADD COLUMN target_json TEXT`);
+    }
   }
 
   /**
@@ -205,7 +228,7 @@ export class ContextRegistry {
       kind: "live",
       meta: input.meta ?? {},
       name: input.name,
-      source: null,
+      target: null,
     });
     this.host.audit({
       type: ITX_EVENT_TYPES.capProvided,
@@ -215,41 +238,43 @@ export class ContextRegistry {
   }
 
   /**
-   * Register a durable capability from source. Loaded on demand via the
-   * Worker Loader; `source.codeId` must rotate with content (loader caches
-   * by id).
+   * Register a durable capability: a name plus a serializable target
+   * (types.ts is the design of record). Legacy callers pass `source`
+   * (+ optional kind "worker"/"facet"); both normalize to an rpc/source
+   * target. Targets are validated here so misconfiguration fails at
+   * define(), and again at dial time (the authoritative gate).
    */
   define(input: {
     name: string;
-    source: CapSource;
-    kind?: Exclude<CapKind, "live">;
+    target?: SerializableCapTarget;
+    source?: CapSource;
+    kind?: "worker" | "facet";
     invoke?: CapInvoke;
     meta?: CapMeta;
   }): { name: string; ok: true } {
     assertValidCapName(input.name);
-    const kind = input.kind ?? "worker";
-    if (kind === "facet" && !input.source.entrypoint) {
-      // Default-export DO classes make workerd's facet instantiation fail
-      // with an opaque internal error; a NAMED export works. Fail loudly at
-      // definition time instead (observed against workerd 2026-04, see
-      // DECISIONS.md D12).
-      throw new Error(
-        `Facet capability "${input.name}" needs source.entrypoint naming an exported ` +
-          `"class X extends DurableObject" (default exports do not work as facet classes).`,
-      );
-    }
+    const target = normalizeCapTarget(input);
+    assertDefinableCapTarget(input.name, target);
     const invoke = input.invoke ?? "members";
 
     this.upsertRow({
       invoke,
-      kind,
+      kind: target.type,
       meta: input.meta ?? {},
       name: input.name,
-      source: input.source,
+      target,
     });
     this.host.audit({
       type: ITX_EVENT_TYPES.capDefined,
-      payload: { codeId: input.source.codeId, invoke, kind, name: input.name },
+      payload: {
+        invoke,
+        kind: target.type,
+        name: input.name,
+        ...(target.type === "rpc" ? { worker: target.worker.type } : {}),
+        ...(target.type === "rpc" && target.worker.type === "source"
+          ? { cacheKey: capSourceCacheKey(target.worker.source) }
+          : {}),
+      },
     });
     return { name: input.name, ok: true };
   }
@@ -262,15 +287,19 @@ export class ContextRegistry {
   }
 
   describe(): CapDescription[] {
-    return this.rows().map((row) => ({
-      connected: row.kind === "live" ? this.#live.has(row.name) : undefined,
-      invoke: row.invoke,
-      kind: row.kind,
-      meta: JSON.parse(row.meta_json) as CapMeta,
-      name: row.name,
-      owner: this.host.contextId,
-      updatedAtMs: row.updated_at_ms,
-    }));
+    return this.rows().map((row) => {
+      const meta = JSON.parse(row.meta_json) as CapMeta;
+      return {
+        connected: row.kind === "live" ? this.#live.has(row.name) : undefined,
+        instructions: typeof meta.instructions === "string" ? meta.instructions : undefined,
+        invoke: row.invoke,
+        kind: normalizeKind(row.kind),
+        meta,
+        name: row.name,
+        owner: this.host.contextId,
+        updatedAtMs: row.updated_at_ms,
+      };
+    });
   }
 
   has(name: string): boolean {
@@ -314,98 +343,156 @@ export class ContextRegistry {
     }
   }
 
+  /**
+   * The two-case shape (types.ts): a capability is either held up by a live
+   * connection, or its serializable target is resolved at invoke time.
+   */
   private borrowTarget(row: CapRow): { target: unknown; dispose: () => void } {
-    switch (row.kind) {
-      case "live": {
-        const connection = this.#live.get(row.name);
-        if (!connection) throw new CapOfflineError(row.name);
-        // Borrow a duplicate, not the stored stub itself. Disposing the borrow
-        // releases only this call's reference; the registered target stays
-        // callable for the next caller (matches the original getConnection
-        // dup-on-borrow behaviour).
-        const target = connection.target.dup ? connection.target.dup() : connection.target;
-        return { target, dispose: () => disposeIfPossible(target) };
-      }
-      case "worker": {
-        const target = this.loadWorker(row).getEntrypoint(this.sourceFor(row).entrypoint);
-        return { target, dispose: () => disposeIfPossible(target) };
-      }
-      case "facet": {
-        const facets = this.host.facets;
-        if (!facets) {
-          throw new Error("Facet capabilities need a Durable-Object host with ctx.facets.");
+    if (row.kind === "live") {
+      const connection = this.#live.get(row.name);
+      if (!connection) throw new CapOfflineError(row.name);
+      // Borrow a duplicate, not the stored stub itself. Disposing the borrow
+      // releases only this call's reference; the registered target stays
+      // callable for the next caller (matches the original getConnection
+      // dup-on-borrow behaviour).
+      const target = connection.target.dup ? connection.target.dup() : connection.target;
+      return { target, dispose: () => disposeIfPossible(target) };
+    }
+    return this.resolveTarget(row.name, targetOf(row));
+  }
+
+  private resolveTarget(
+    name: string,
+    target: SerializableCapTarget,
+  ): { target: unknown; dispose: () => void } {
+    if (target.type === "url") {
+      throw new Error(
+        `Capability "${name}": url targets are not implemented yet (Law 7 — the dial must ` +
+          `terminate in a stateless worker, never this DO).`,
+      );
+    }
+    const worker = target.worker;
+    switch (worker.type) {
+      case "binding": {
+        // Authoritative allowlist gate (define-time check is fail-fast only).
+        if (!DIALABLE_BINDINGS.has(worker.binding)) {
+          throw new Error(`Capability "${name}": binding "${worker.binding}" is not dialable.`);
         }
-        // Facet name deliberately excludes codeId: the facet's private SQLite
-        // database survives code upgrades (new source, same data) — the same
-        // property Cloudflare's AppRunner example relies on.
-        const target = facets(`cap:${row.name}`, () => {
-          const source = this.sourceFor(row);
-          const facetClass = this.loadWorker(row).getDurableObjectClass?.(source.entrypoint);
-          if (!facetClass) {
-            throw new Error(
-              `Capability "${row.name}" did not yield a DurableObject class ` +
-                `(facet caps must export one, and the runtime must support getDurableObjectClass).`,
-            );
-          }
-          return { class: facetClass };
-        });
-        return { target, dispose: () => disposeIfPossible(target) };
+        const binding = this.host.binding?.(worker.binding);
+        if (binding == null) {
+          throw new Error(
+            `Capability "${name}": binding "${worker.binding}" is not available on this host.`,
+          );
+        }
+        // Env bindings are long-lived host objects, never per-call borrows —
+        // do NOT dispose them.
+        return { target: binding, dispose: () => {} };
       }
+      case "loopback": {
+        if (!target.entrypoint || !DIALABLE_LOOPBACKS.has(target.entrypoint)) {
+          throw new Error(
+            `Capability "${name}": loopback export "${target.entrypoint}" is not dialable.`,
+          );
+        }
+        const stub = this.host.loopback(target.entrypoint, {
+          props: {
+            ...target.props,
+            // Attribution wins over definer-supplied props, by spread order.
+            cap: name,
+            context: this.host.contextId,
+          },
+        });
+        return { target: stub, dispose: () => disposeIfPossible(stub) };
+      }
+      case "source": {
+        const source = worker.source;
+        if (source.exportType === "durable-object") {
+          const facets = this.host.facets;
+          if (!facets) {
+            throw new Error("Durable-object caps need a Durable-Object host with ctx.facets.");
+          }
+          // Facet name deliberately excludes the cache key: the facet's
+          // private SQLite survives code upgrades (new source, same data) —
+          // the same property Cloudflare's AppRunner example relies on.
+          const facetTarget = facets(`cap:${name}`, () => {
+            const facetClass = this.loadWorker(name, source).getDurableObjectClass?.(
+              source.entrypoint,
+            );
+            if (!facetClass) {
+              throw new Error(
+                `Capability "${name}" did not yield a DurableObject class ` +
+                  `(durable-object caps must export one, and the runtime must support getDurableObjectClass).`,
+              );
+            }
+            return { class: facetClass };
+          });
+          return { target: facetTarget, dispose: () => disposeIfPossible(facetTarget) };
+        }
+        const entrypoint = this.loadWorker(name, source).getEntrypoint(source.entrypoint);
+        return { target: entrypoint, dispose: () => disposeIfPossible(entrypoint) };
+      }
+      case "durable-object":
+      case "project-worker":
+        throw new Error(
+          `Capability "${name}": ${worker.type} refs are not implemented yet (itx-next.md §1).`,
+        );
     }
   }
 
-  private sourceFor(row: CapRow): CapSource {
-    const source = JSON.parse(row.source_json ?? "null") as CapSource | null;
-    if (!source) throw new Error(`Capability "${row.name}" has no stored source.`);
-    return source;
-  }
-
-  private loadWorker(row: CapRow): ReturnType<WorkerLoaderLike["get"]> {
+  private loadWorker(name: string, source: CapSource): ReturnType<WorkerLoaderLike["get"]> {
     const loader = this.host.loader;
-    if (!loader) throw new Error("Worker capabilities need a LOADER binding.");
-    const source = this.sourceFor(row);
+    if (!loader) throw new Error("Source capabilities need a LOADER binding.");
 
-    return loader.get(`itx-cap:${this.host.contextId}:${row.name}:${source.codeId}`, () => ({
-      compatibilityDate: source.compatibilityDate ?? DEFAULT_CAP_COMPATIBILITY_DATE,
-      compatibilityFlags: DEFAULT_CAP_COMPATIBILITY_FLAGS,
-      env: {
-        // The cap's own itx is scoped to its home context — a cap can never
-        // reach wider than where it is defined (Law 4). `cap` is attribution.
-        ITERATE: this.host.loopback("ItxEntrypoint", {
-          props: { cap: row.name, context: this.host.contextId },
+    return loader.get(
+      `itx-cap:${this.host.contextId}:${name}:${capSourceCacheKey(source)}`,
+      () => ({
+        compatibilityDate: source.compatibilityDate ?? DEFAULT_CAP_COMPATIBILITY_DATE,
+        compatibilityFlags: DEFAULT_CAP_COMPATIBILITY_FLAGS,
+        env: {
+          // The cap's own itx is scoped to its home context — a cap can never
+          // reach wider than where it is defined (Law 4). `cap` is attribution.
+          ITERATE: this.host.loopback("ItxEntrypoint", {
+            props: { cap: name, context: this.host.contextId },
+          }),
+        },
+        // Bare fetch() inside the cap IS project egress: secret substitution
+        // and (future) policy live in the Project DO, and the cap's isolate
+        // never sees secret material (Law 5).
+        globalOutbound: this.host.loopback("ProjectEgress", {
+          props: { cap: name, context: this.host.contextId, project: this.host.projectId },
         }),
-      },
-      // Bare fetch() inside the cap IS project egress: secret substitution
-      // and (future) policy live in the Project DO, and the cap's isolate
-      // never sees secret material (Law 5).
-      globalOutbound: this.host.loopback("ProjectEgress", {
-        props: { cap: row.name, context: this.host.contextId, project: this.host.projectId },
+        mainModule: source.mainModule,
+        modules: source.modules,
       }),
-      mainModule: source.mainModule,
-      modules: source.modules,
-    }));
+    );
   }
 
   private upsertRow(input: {
     name: string;
     kind: CapKind;
     invoke: CapInvoke;
-    source: CapSource | null;
+    target: SerializableCapTarget | null;
     meta: CapMeta;
   }) {
     this.host.sql.exec(
-      `INSERT INTO itx_caps (name, kind, invoke, source_json, meta_json, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO itx_caps (name, kind, invoke, source_json, target_json, meta_json, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET
          kind = excluded.kind,
          invoke = excluded.invoke,
          source_json = excluded.source_json,
+         target_json = excluded.target_json,
          meta_json = excluded.meta_json,
          updated_at_ms = excluded.updated_at_ms`,
       input.name,
       input.kind,
       input.invoke,
-      input.source ? JSON.stringify(input.source) : null,
+      // source_json kept in sync for source targets so a rollback to the
+      // pre-CapTarget code can still read rows written by this version.
+      input.target?.type === "rpc" && input.target.worker.type === "source"
+        ? JSON.stringify(input.target.worker.source)
+        : null,
+      input.target ? JSON.stringify(input.target) : null,
       JSON.stringify(input.meta),
       Date.now(),
     );
@@ -414,7 +501,7 @@ export class ContextRegistry {
   private rows(): CapRow[] {
     return this.host.sql
       .exec<CapRow>(
-        `SELECT name, kind, invoke, source_json, meta_json, updated_at_ms FROM itx_caps ORDER BY name`,
+        `SELECT name, kind, invoke, source_json, target_json, meta_json, updated_at_ms FROM itx_caps ORDER BY name`,
       )
       .toArray();
   }
@@ -423,10 +510,38 @@ export class ContextRegistry {
     return (
       this.host.sql
         .exec<CapRow>(
-          `SELECT name, kind, invoke, source_json, meta_json, updated_at_ms FROM itx_caps WHERE name = ?`,
+          `SELECT name, kind, invoke, source_json, target_json, meta_json, updated_at_ms FROM itx_caps WHERE name = ?`,
           name,
         )
         .toArray()[0] ?? null
     );
   }
+}
+
+/** Legacy stored kinds ("worker"/"facet") report as "rpc" — their targets
+ * normalize to rpc/source refs in targetOf(). */
+function normalizeKind(kind: CapRow["kind"]): CapKind {
+  return kind === "worker" || kind === "facet" ? "rpc" : kind;
+}
+
+/**
+ * The single place a stored row becomes a serializable target. Rows written
+ * before target_json existed (kind "worker"/"facet" + source_json) normalize
+ * here; "facet" becomes exportType "durable-object".
+ */
+function targetOf(row: CapRow): SerializableCapTarget {
+  if (row.target_json) return JSON.parse(row.target_json) as SerializableCapTarget;
+  const source = JSON.parse(row.source_json ?? "null") as CapSource | null;
+  if (!source) throw new Error(`Capability "${row.name}" has no stored target.`);
+  return {
+    type: "rpc",
+    worker: {
+      source: {
+        ...source,
+        exportType:
+          source.exportType ?? (row.kind === "facet" ? "durable-object" : "worker-entrypoint"),
+      },
+      type: "source",
+    },
+  };
 }
