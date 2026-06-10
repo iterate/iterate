@@ -79,11 +79,14 @@ export async function getInitializedStreamStub(input: {
  * projection can never silently drift apart — a past version fabricated a
  * "legacy" processors payload behind `as` casts that the schema rejected at
  * runtime, which broke every stream navigation UI.
+ *
+ * This is THE projection: `getState()` and the `state` carried on every
+ * subscription batch both go through it, so subscribe-state and
+ * getState-state are the same shape by construction.
  */
-export function toStreamState(
-  runtimeState: Awaited<ReturnType<StreamRpc["runtimeState"]>>,
+export function coreStateToStreamState(
+  core: Awaited<ReturnType<StreamRpc["runtimeState"]>>["coreProcessorState"],
 ): StreamState {
-  const core = runtimeState.coreProcessorState;
   return StreamState.parse({
     namespace: core.namespace,
     path: core.path,
@@ -91,6 +94,12 @@ export function toStreamState(
     childPaths: core.childPaths,
     metadata: core.metadata,
   });
+}
+
+export function toStreamState(
+  runtimeState: Awaited<ReturnType<StreamRpc["runtimeState"]>>,
+): StreamState {
+  return coreStateToStreamState(runtimeState.coreProcessorState);
 }
 
 export function withStreamPath(event: StreamEvent, streamPath: StreamPath): Event {

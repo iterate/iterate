@@ -534,6 +534,17 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
    * the old connection. Omit `subscriptionKey` for an anonymous subscription; the stream
    * assigns a random key and returns it. Call the returned `unsubscribe()` to stop
    * delivery.
+   *
+   * Every batch carries the stream's core reduced `state` as of
+   * `streamMaxOffset` (see {@link StreamEventBatch}), and every subscription —
+   * with or without replay — immediately receives one batch on open so the
+   * subscriber can paint its first render without a separate getState call:
+   * the replay batch when there is one, otherwise a batch with `events: []`.
+   *
+   * Pass `events: false` for a state-only subscription: same batches, but
+   * `events` is always `[]` and consecutive appends coalesce into one state
+   * delivery. Replay is meaningless without events, so state-only
+   * subscriptions are implicitly live-from-now (`replayAfterOffset` ignored).
    */
   subscribe(args: {
     subscriptionKey?: string;
@@ -541,6 +552,8 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     replayAfterOffset?: number;
     /** Only deliver these event types. Omit (or include `"*"`) for everything. */
     eventTypes?: readonly string[];
+    /** `false` = state-only batches (`events: []`, live-from-now). Default `true`. */
+    events?: boolean;
     /** Who is subscribing; lands on the stream's presence roster. */
     subscriber?: StreamSubscriberDescriptor;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
@@ -669,6 +682,7 @@ function installSubscribeRpcTargetOverride(target: RpcTargetClass<StreamRpc, Str
           subscriptionKey: args.subscriptionKey,
           replayAfterOffset: args.replayAfterOffset,
           eventTypes: args.eventTypes,
+          events: args.events,
           subscriber: args.subscriber,
           processEventBatch,
         });

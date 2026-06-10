@@ -1,10 +1,7 @@
 import type { ComponentProps, ReactNode } from "react";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import {
-  StreamTreeBrowser,
-  type StreamTreeBrowserSource,
-} from "~/components/stream-tree-browser.tsx";
+import { StreamTreeBrowser, type StreamTreeSource } from "~/components/stream-tree-browser.tsx";
 
 type ProjectStreamViewProps = ComponentProps<typeof ProjectStreamView>;
 
@@ -17,7 +14,7 @@ export function StreamExplorerTreePage({
   currentPath?: StreamPathType;
   header?: ReactNode;
   onOpenPath: (streamPath: StreamPathType) => void;
-  source: StreamTreeBrowserSource;
+  source: StreamTreeSource;
 }) {
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-3 p-4">
@@ -35,7 +32,7 @@ export function StreamExplorerDetail({
 }: {
   currentPath: StreamPathType;
   onOpenPath: (streamPath: StreamPathType) => void;
-  source: StreamTreeBrowserSource;
+  source: StreamTreeSource;
   streamView: Omit<ProjectStreamViewProps, "streamPath">;
 }) {
   return (

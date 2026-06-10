@@ -25,8 +25,10 @@ test("subscribe replays history, tails live appends, and unsubscribes", async ()
 
   // The callback lives in THIS Node process; batches are pushed to it.
   const seen: { marker: string; offset: number }[] = [];
+  const batchStates: { eventCount: number; namespace: string; path: string }[] = [];
   const subscription = await stream.subscribe(
     (batch) => {
+      batchStates.push(batch.state);
       for (const event of batch.events) {
         seen.push({
           marker: (event.payload as { marker?: string }).marker ?? "",
@@ -50,6 +52,15 @@ test("subscribe replays history, tails live appends, and unsubscribes", async ()
   const offsets = seen.map((e) => e.offset);
   expect([...offsets].sort((a, b) => a - b)).toEqual(offsets);
 
+  // Every batch carries the stream's public state (the getState shape):
+  // the one subscription primitive serves events AND reduced state.
+  expect(batchStates.length).toBeGreaterThanOrEqual(1);
+  for (const state of batchStates) {
+    expect(state.namespace).toBe(project.id);
+    expect(state.path).toBe(STREAM_PATH);
+  }
+  expect(batchStates.at(-1)!.eventCount).toBeGreaterThanOrEqual(Math.max(...offsets));
+
   await subscription.unsubscribe();
   const countAtUnsubscribe = seen.length;
   await stream.append({ type: EVENT_TYPE, payload: { marker: `after-${RUN_SUFFIX}` } });
@@ -57,6 +68,37 @@ test("subscribe replays history, tails live appends, and unsubscribes", async ()
   // subscription a moment to prove us wrong.
   await new Promise((resolve) => setTimeout(resolve, 750));
   expect(seen.length).toBe(countAtUnsubscribe);
+});
+
+test("onStateChange pushes initial state immediately, then state after appends", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-state` })) as { id: string };
+  createdProjectIds.push(project.id);
+  using projectItx = await itx.projects.get(project.id);
+
+  const stream = projectItx.streams.get(STREAM_PATH);
+  await stream.append({ type: EVENT_TYPE, payload: { marker: `seed-${RUN_SUFFIX}` } });
+
+  const states: { eventCount: number; namespace: string; path: string }[] = [];
+  const subscription = await stream.onStateChange((state) => {
+    states.push(state);
+  });
+
+  // The initial push: state arrives with NO post-subscribe append, so the
+  // first render needs no separate getState call.
+  await waitFor(() => states.length >= 1, "initial state push");
+  expect(states[0]!.namespace).toBe(project.id);
+  expect(states[0]!.path).toBe(STREAM_PATH);
+  const initialEventCount = states[0]!.eventCount;
+  expect(initialEventCount).toBeGreaterThanOrEqual(3); // created + woken + seed
+
+  await stream.append({ type: EVENT_TYPE, payload: { marker: `bump-${RUN_SUFFIX}` } });
+  await waitFor(
+    () => (states.at(-1)?.eventCount ?? 0) > initialEventCount,
+    `a state delivery after the append; saw ${JSON.stringify(states)}`,
+  );
+
+  await subscription.unsubscribe();
 });
 
 async function waitFor(predicate: () => boolean, label: string, timeoutMs = 8_000) {

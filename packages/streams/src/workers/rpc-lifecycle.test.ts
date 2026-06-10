@@ -11,9 +11,16 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { ProcessEventBatch } from "../types.ts";
+import { CoreProcessorContract } from "../processors/core/contract.ts";
 import { retainProcessEventBatch } from "./rpc-lifecycle.ts";
 
-const batch = { namespace: "test", path: "/p", events: [], streamMaxOffset: 0 };
+const batch = {
+  namespace: "test",
+  path: "/p",
+  events: [],
+  streamMaxOffset: 0,
+  state: CoreProcessorContract.stateSchema.parse(CoreProcessorContract.initialState),
+};
 
 describe("retainProcessEventBatch onRpcBroken wiring (M1)", () => {
   it("wires onRpcBroken exposed only through a proxy get trap (Cap'n Web stub shape)", () => {

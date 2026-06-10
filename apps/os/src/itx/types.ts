@@ -490,6 +490,16 @@ export type StreamEventInput = {
   idempotencyKey?: string;
 };
 
+/** The public state of one stream — what `getState()` returns and what every
+ * subscription batch carries as `state`. */
+export type StreamState = {
+  namespace: string;
+  path: string;
+  eventCount: number;
+  childPaths: string[];
+  metadata: Record<string, unknown>;
+};
+
 /** A handle pinned to one stream. */
 export interface ItxStream {
   describe(): { namespace: string; path: string };
@@ -501,6 +511,24 @@ export interface ItxStream {
   }): Promise<StreamEvent[]>;
   getState(): Promise<unknown>;
   listChildren(): Promise<unknown>;
+  /**
+   * The ONE reactive primitive. Catch-up from `afterOffset`, then every
+   * committed batch, pushed until unsubscribed. Every batch carries `state`
+   * (the `getState()` shape as of `streamMaxOffset`), and every subscription
+   * receives an immediate first batch so the first render needs no separate
+   * getState call. `events: false` = state-only: batches with `events: []`
+   * on every state change, implicitly live-from-now (`afterOffset` ignored).
+   */
+  subscribe(
+    onEventBatch: (batch: {
+      events: StreamEvent[];
+      state: StreamState;
+      streamMaxOffset: number;
+    }) => unknown,
+    opts: { afterOffset: number | "start" | "end"; events?: boolean },
+  ): Promise<{ unsubscribe(): void }>;
+  /** Sugar: subscribe(batch => onState(batch.state), { events: false, afterOffset: "end" }). */
+  onStateChange(onState: (state: StreamState) => unknown): Promise<{ unsubscribe(): void }>;
 }
 
 /** The streams collection, namespace-bound by the handle. */

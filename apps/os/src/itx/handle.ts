@@ -18,7 +18,11 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import { typeid } from "@iterate-com/shared/typeid";
-import type { StreamCursor, Event as StreamEvent } from "@iterate-com/shared/streams/types";
+import type {
+  StreamCursor,
+  Event as StreamEvent,
+  StreamState,
+} from "@iterate-com/shared/streams/types";
 import { createD1Client } from "sqlfu";
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { PathProxyRpcTarget } from "./path-proxy.ts";
@@ -533,10 +537,22 @@ export class ItxStream extends RpcTarget {
    * the subscription is torn down on the next failed delivery — offline means
    * offline; durability is the stream itself, re-subscribe from the last
    * offset you saw.
+   *
+   * The ONE reactive primitive: every batch also carries `state` — the same
+   * public shape `getState()` returns, as of `streamMaxOffset` — and every
+   * subscription gets an immediate first batch (current state plus any
+   * replayed events), so a subscriber paints its first render from the
+   * subscription alone. `events: false` is state-only mode: batches arrive
+   * with `events: []` on every state change, implicitly live-from-now
+   * (`afterOffset` is ignored — replay without events is meaningless).
    */
   async subscribe(
-    onEventBatch: (batch: { events: StreamEvent[]; streamMaxOffset: number }) => unknown,
-    opts: { afterOffset: StreamCursor },
+    onEventBatch: (batch: {
+      events: StreamEvent[];
+      state: StreamState;
+      streamMaxOffset: number;
+    }) => unknown,
+    opts: { afterOffset: StreamCursor; events?: boolean },
   ): Promise<ItxStreamSubscription> {
     // Callback retention lives in StreamsCapability.subscribe: RPC layers
     // implicitly dispose stubs received as parameters when the call
@@ -544,8 +560,30 @@ export class ItxStream extends RpcTarget {
     // — without that, replay (delivered in-call) works but the first LIVE
     // batch hits a disposed stub. Verified both ways by
     // itx-subscribe.e2e.test.ts against a live deployment.
-    const handle = await this.client().subscribe({ afterOffset: opts.afterOffset }, onEventBatch);
+    const handle = await this.client().subscribe(
+      { afterOffset: opts.afterOffset, events: opts.events },
+      onEventBatch,
+    );
     return new ItxStreamSubscription(handle);
+  }
+
+  /**
+   * Reactive sugar over {@link subscribe}: a state-only subscription that
+   * calls `onState` with the stream's public state (the `getState()` shape)
+   * once immediately on open — the first render — and again after every
+   * append. `stream.onStateChange(setState)` is the whole browser story.
+   */
+  async onStateChange(onState: (state: StreamState) => unknown): Promise<ItxStreamSubscription> {
+    // `onState` is an RPC parameter stub disposed when THIS call returns, but
+    // deliveries (including the initial push) arrive later through the local
+    // wrapper below. dup() it (no-op for plain functions) and hand the
+    // wrapper a Symbol.dispose so the capability's unsubscribe/teardown
+    // releases the retained stub with everything else.
+    const retained = (onState as { dup?(): typeof onState }).dup?.() ?? onState;
+    const forwardState = Object.assign((batch: { state: StreamState }) => retained(batch.state), {
+      [Symbol.dispose]: () => (retained as Partial<Disposable>)[Symbol.dispose]?.(),
+    });
+    return await this.subscribe(forwardState, { afterOffset: "end", events: false });
   }
 
   private client(): StreamsClient {

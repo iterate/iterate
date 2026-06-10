@@ -34,10 +34,10 @@ export type BrowserReplSessionFactory = () => BrowserReplSession | Promise<Brows
 /**
  * Connect to a context: the global one by default, or a project's.
  *
- * Deliberately NOT the app's shared itx client (~/itx/react): the repl
- * disposes and recreates its session on its own schedule, which must never
- * tear down app-level queries and stream subscriptions. The cost is a second
- * itx socket on pages that show both — converging them is follow-up work.
+ * Deliberately NOT the app's useItx singleton (~/itx/use-itx.ts): the repl
+ * disposes and recreates its session on its own schedule (close() on every
+ * connect-effect teardown), semantics the per-context singleton deliberately
+ * lacks. Multiple sockets per tab are fine — see DECISIONS D21.
  */
 export function createBrowserReplSession(context?: string): BrowserReplSession {
   const wsUrl = new URL(

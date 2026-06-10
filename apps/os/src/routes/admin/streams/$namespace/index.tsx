@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeftIcon, RadioTowerIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import { StreamState, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
 import { useAdminItx } from "~/lib/admin-itx.ts";
 
@@ -15,11 +15,7 @@ function AdminStreamNamespacePage() {
   const itx = useAdminItx();
   const navigate = useNavigate();
   const source = useMemo(
-    () => ({
-      key: ["admin", "streams", namespace] as const,
-      getState: async (streamPath: StreamPathType) =>
-        StreamState.parse(await itx.streams.namespace(namespace).get(streamPath).getState()),
-    }),
+    () => (streamPath: StreamPathType) => itx.streams.namespace(namespace).get(streamPath),
     [itx, namespace],
   );
 

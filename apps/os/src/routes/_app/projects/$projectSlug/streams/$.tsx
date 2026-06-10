@@ -1,8 +1,8 @@
-import { useMemo } from "react";
-import { StreamState, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { Suspense, useMemo } from "react";
+import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
-import { useItxClient } from "~/itx/react/index.ts";
+import { useItx } from "~/itx/use-itx.ts";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { createBrowserOpenApiClient } from "~/orpc/client.ts";
@@ -36,18 +36,21 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
 });
 
 function ProjectStreamDetailPage() {
+  return (
+    <Suspense
+      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
+    >
+      <ProjectStreamDetailContent />
+    </Suspense>
+  );
+}
+
+function ProjectStreamDetailContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const itxClient = useItxClient();
   const { project, streamPath } = Route.useLoaderData();
-  const source = useMemo(
-    () => ({
-      key: ["project", project.id, "streams"] as const,
-      getState: async (path: StreamPathType) =>
-        StreamState.parse(await (await itxClient.project(project.id)).streams.get(path).getState()),
-    }),
-    [itxClient, project.id],
-  );
+  const itx = useItx(project.id);
+  const source = useMemo(() => (path: StreamPathType) => itx.streams.get(path), [itx]);
 
   async function submitMessage(message: string) {
     await createBrowserOpenApiClient().project.streams.appendBatch({

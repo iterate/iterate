@@ -12,6 +12,11 @@ const e2eItFails = process.env.STREAM_STAGING_E2E === "true" ? it.fails : it.ski
 class TestSubscriptionCallback extends RpcTarget {
   readonly batches: StreamEvent[][] = [];
 
+  /** All delivered events, flattened — initial/state-only batches are empty. */
+  get events(): StreamEvent[] {
+    return this.batches.flat();
+  }
+
   processEventBatch(args: { events: StreamEvent[]; streamMaxOffset: number }): undefined {
     this.batches.push(args.events);
   }
@@ -454,8 +459,9 @@ describe("stream capnweb protocol", () => {
         payload: { path },
       },
     });
-    // Each subscribe also appends a subscriber-connected presence fact, so
-    // batch counts are not stable here — wait for the content instead.
+    // Each subscribe also appends a subscriber-connected presence fact, and
+    // every subscription gets an initial state push — batch counts are not
+    // stable here, so wait for the content instead.
     const delivered = (callback: TestSubscriptionCallback, offset: number) =>
       callback.batches.flat().some((event) => event.offset === offset);
     await waitFor(
@@ -575,9 +581,13 @@ describe("stream capnweb protocol", () => {
       payload: { path },
     };
     const appended = await publisher.stream.append({ event: input });
-    // Batch 1 is the subscriber's own subscriber-connected presence fact
-    // (offset 3, appended during subscribe); batch 2 is the published event.
-    await waitFor(() => callback.batches.length === 2, 1_000);
+    // Deliveries before the published event: the subscription's initial state
+    // push (events: []) and/or the subscriber's own subscriber-connected
+    // presence fact (offset 3, appended during subscribe) — wait for content.
+    await waitFor(
+      () => callback.batches.flat().some((event) => event.offset === appended.offset),
+      1_000,
+    );
 
     expect(appended).toMatchObject({
       type: input.type,
@@ -585,14 +595,16 @@ describe("stream capnweb protocol", () => {
       offset: 4,
       createdAt: expect.any(String),
     });
-    expect(callback.batches).toEqual([
-      [
-        expect.objectContaining({
-          type: "events.iterate.com/stream/subscriber-connected",
-          offset: 3,
-        }),
-      ],
-      [appended],
+    // Batch boundaries race (initial push, presence fact commit timing), but
+    // the delivered EVENTS are exact: the subscriber's own connected fact,
+    // then the published event — each exactly once, in offset order.
+    expect(callback.batches.at(-1)).toEqual([appended]);
+    expect(callback.batches.flat()).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/stream/subscriber-connected",
+        offset: 3,
+      }),
+      appended,
     ]);
     expect(outboundFrames(frames, afterSubscribe)).toEqual([]);
 
@@ -600,11 +612,11 @@ describe("stream capnweb protocol", () => {
       .slice(afterSubscribe)
       .filter((frame) => frame.direction === "in");
     expect(inbound.every((frame) => isPushOrReleaseFrame(frame.data))).toBe(true);
-    // The subscriber-connected fact's push frame may land during the subscribe
-    // round trip (before `afterSubscribe`) or after it, depending on network
-    // timing — so the captured push frames are the published event's frame,
-    // optionally preceded by the connected fact's. Assert the last exactly and
-    // any earlier ones loosely.
+    // Earlier push frames race the `afterSubscribe` snapshot and each other:
+    // the subscription's initial state push (events: []) and the
+    // subscriber-connected fact's delivery. Assert the last frame (the
+    // published event's) exactly; earlier ones are push frames by the
+    // `isPushOrReleaseFrame` check above.
     const pushFrames = inbound.filter((frame) => isPushFrame(frame.data));
     expect(pushFrames.length).toBeGreaterThanOrEqual(1);
     expect(pushFrames.at(-1)).toMatchObject({
@@ -632,31 +644,6 @@ describe("stream capnweb protocol", () => {
         ],
       ],
     });
-    for (const frame of pushFrames.slice(0, -1)) {
-      expect(frame).toMatchObject({
-        direction: "in",
-        data: [
-          "push",
-          [
-            "pipeline",
-            expect.any(Number),
-            [],
-            [
-              {
-                events: [
-                  [
-                    expect.objectContaining({
-                      type: "events.iterate.com/stream/subscriber-connected",
-                      offset: 3,
-                    }),
-                  ],
-                ],
-              },
-            ],
-          ],
-        ],
-      });
-    }
   });
 });
 
