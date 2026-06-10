@@ -44,6 +44,10 @@ function useLiveStreamState(input: {
   const [epoch, setEpoch] = useState(0);
 
   useEffect(() => {
+    // Back to "loading" on every (re)subscribe — refresh() exists to recover
+    // from a silently stalled subscription, so it must not keep painting the
+    // stale live state while the new subscription connects.
+    setNode({ status: "loading" });
     if (!enabled) return;
     let disposed = false;
     let release: (() => void) | null = null;

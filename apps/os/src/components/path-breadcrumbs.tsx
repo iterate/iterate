@@ -151,6 +151,10 @@ function useStreamChildPaths(input: {
   const { enabled, projectId, streamPath } = input;
 
   useEffect(() => {
+    // Reset on every input change INCLUDING close: a reopened popover (or a
+    // navigation to another stream) must show "Loading…", never the previous
+    // stream's siblings/children.
+    setChildPaths(undefined);
     if (!enabled) return;
     let cancelled = false;
     void getBrowserItx(projectId)
