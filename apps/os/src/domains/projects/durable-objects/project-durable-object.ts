@@ -59,13 +59,15 @@ import {
   EXAMPLE_EGRESS_SECRET_METADATA,
 } from "~/domains/secrets/example-secret.ts";
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
+import { platformProjectContext } from "~/itx/code-contexts.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
-import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
+import { ITX_AUDIT_STREAM_PATH, resolveDialableTargets } from "~/itx/protocol.ts";
 import type {
   CapInvoke,
   CapMeta,
   CapSource,
   PathCall,
+  PathCallTarget,
   SerializableCapTarget,
 } from "~/itx/protocol.ts";
 
@@ -185,10 +187,10 @@ type ProjectDynamicWorkerLoader = {
     name: string,
     getCode: () => ProjectDynamicWorkerCode,
   ): {
-    getEntrypoint(): unknown;
+    getEntrypoint(name?: string, options?: { props?: Record<string, unknown> }): unknown;
   };
   load(code: ProjectDynamicWorkerCode): {
-    getEntrypoint(): unknown;
+    getEntrypoint(name?: string, options?: { props?: Record<string, unknown> }): unknown;
   };
 };
 
@@ -459,6 +461,10 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       // Gated on DIALABLE_BINDINGS inside the registry before this is called.
       binding: (name) => (this.env as unknown as Record<string, unknown>)[name],
       contextId: projectId,
+      // The code-defined parent context: platform defaults every project
+      // falls through to, shadowable by this project's own rows (§8).
+      defaults: platformProjectContext,
+      dialable: resolveDialableTargets(parseConfig(this.env).itx),
       facets: durableObjectFacetsHook(this.ctx),
       loader: projectRuntimeEnv(this.env).LOADER as unknown as ConstructorParameters<
         typeof ContextRegistry
@@ -638,6 +644,37 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return await replayPathCall(entrypoint, { args: input.args ?? [], path: input.path });
   }
 
+  /**
+   * itx `{ type: "project-worker" }` refs dispatch here: a named export of
+   * the project's OWN worker (built from the project repo) is the capability
+   * target — user space, same shape as first-party. The whole call arrives
+   * as data because loader entrypoints cannot cross an RPC boundary; the
+   * entrypoint is instantiated per call with the registry-merged props
+   * (definer parameterization + { cap, context, projectId } attribution).
+   */
+  async itxProjectWorkerCall(input: {
+    call: PathCall;
+    entrypoint?: string;
+    invoke: CapInvoke;
+    props: Record<string, unknown>;
+  }): Promise<unknown> {
+    await this.ensureStarted();
+    const summary = this.requireSummary();
+    const checkout = await this.buildFreshProjectDynamicWorker(summary);
+    const worker = this.loadProjectDynamicWorker({ checkout, projectId: summary.id });
+    const entrypoint = worker.getEntrypoint(input.entrypoint, {
+      props: input.props,
+    }) as unknown;
+    try {
+      if (input.invoke === "path-call") {
+        return await (entrypoint as PathCallTarget).call(input.call);
+      }
+      return await replayPathCall(entrypoint, input.call);
+    } finally {
+      (entrypoint as Partial<Disposable>)?.[Symbol.dispose]?.();
+    }
+  }
+
   async getConfigWorker(): Promise<ProjectDynamicWorkerEntrypoint> {
     await this.ensureStarted();
     const summary = this.requireSummary();
@@ -773,15 +810,7 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
     return this.loadProjectDynamicWorkerEntrypoint({ checkout, projectId: summary.id });
   }
 
-  private loadProjectDynamicWorkerEntrypoint(input: {
-    checkout: ProjectConfigCheckout;
-    projectId: string;
-  }): ProjectDynamicWorkerEntrypoint {
-    const { checkout } = input;
-    if (this.#dynamicWorkerEntrypoint?.commitOid === checkout.commitOid) {
-      return this.#dynamicWorkerEntrypoint.entrypoint;
-    }
-
+  private loadProjectDynamicWorker(input: { checkout: ProjectConfigCheckout; projectId: string }) {
     const loader = projectRuntimeEnv(this.env).LOADER;
     const exports = readLoopbackExports(this.ctx);
     const workerCode = projectDynamicWorkerCodeWithBindings({
@@ -798,15 +827,27 @@ export class ProjectDurableObject extends ProjectLifecycleBase<ProjectEnv> {
       streams: exports.StreamsCapability({
         props: { projectId: input.projectId },
       }),
-      workerCode: checkout.workerCode,
+      workerCode: input.checkout.workerCode,
     });
-    const worker = loader.get(
+    return loader.get(
       projectDynamicWorkerId({
-        commitOid: checkout.commitOid,
+        commitOid: input.checkout.commitOid,
         projectId: input.projectId,
       }),
       () => workerCode,
     );
+  }
+
+  private loadProjectDynamicWorkerEntrypoint(input: {
+    checkout: ProjectConfigCheckout;
+    projectId: string;
+  }): ProjectDynamicWorkerEntrypoint {
+    const { checkout } = input;
+    if (this.#dynamicWorkerEntrypoint?.commitOid === checkout.commitOid) {
+      return this.#dynamicWorkerEntrypoint.entrypoint;
+    }
+
+    const worker = this.loadProjectDynamicWorker({ checkout, projectId: input.projectId });
     const entrypoint = worker.getEntrypoint();
 
     if (!isProjectDynamicWorkerEntrypoint(entrypoint)) {

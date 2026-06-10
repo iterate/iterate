@@ -86,11 +86,12 @@ export function capSourceCacheKey(source: CapSource): string {
   return key;
 }
 
-/** Where an rpc target's worker lives (design of record: types.ts). */
+/** Where an rpc target's worker lives (design of record: types.ts). The
+ * project worker is NOT a kind: it is the `ProjectWorker` loopback
+ * forwarder (user export + inner invoke mode ride in props). */
 export type WorkerRef =
   | { type: "binding"; binding: string }
   | { type: "loopback" }
-  | { type: "project-worker" }
   | { type: "durable-object"; binding: string; name: string }
   | { type: "source"; source: CapSource };
 
@@ -110,15 +111,23 @@ export type SerializableCapTarget =
        * `{ cap, context }` attribution at dial time. */
       props?: Record<string, unknown>;
     }
-  | { type: "url"; url: string; headers?: Record<string, string> };
+  | {
+      /** A remote Cap'n Web server. The dial terminates in the UrlDial
+       * stateless worker (Law 7); `headers` ride the WebSocket handshake and
+       * pass through egress getSecret() substitution (Law 5). */
+      type: "url";
+      url: string;
+      headers?: Record<string, string>;
+    };
 
 /**
- * Which env bindings / loopback exports an rpc target may dial. Deliberately
- * hardcoded constants for now (config-driven later — itx-next.md §2):
- * binding and loopback refs reach PLATFORM resources, so an open list would
- * let any project handle reach e.g. the deployment D1, or mint itx handles
- * on arbitrary projects via ItxEntrypoint props. Checked at define time
- * (fail fast) and again at dial time (authoritative).
+ * Which env bindings / loopback exports an rpc target may dial. Binding and
+ * loopback refs reach PLATFORM resources, so an open list would let any
+ * project handle reach e.g. the deployment D1, or mint itx handles on
+ * arbitrary projects via ItxEntrypoint props. Checked at define time (fail
+ * fast) and again at dial time (authoritative). A deployment widens the
+ * lists via config (`APP_CONFIG_ITX` → {@link DialableTargets}); the
+ * hardcoded defaults always apply.
  */
 export const DIALABLE_BINDINGS: ReadonlySet<string> = new Set(["AI"]);
 /**
@@ -134,8 +143,38 @@ export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "GmailCapability",
   "McpClient",
   "OrpcCapability",
+  "ProjectWorker",
   "SlackCapability",
 ]);
+
+/** The dial allowlists a host resolves once (defaults ∪ deployment config). */
+export type DialableTargets = {
+  bindings: ReadonlySet<string>;
+  loopbacks: ReadonlySet<string>;
+};
+
+export const DEFAULT_DIALABLE_TARGETS: DialableTargets = {
+  bindings: DIALABLE_BINDINGS,
+  loopbacks: DIALABLE_LOOPBACKS,
+};
+
+/**
+ * Merge the hardcoded defaults with a deployment's config additions
+ * (`APP_CONFIG_ITX`). Config can only WIDEN — the defaults always apply, so
+ * a misconfigured deployment never loses first-party caps.
+ */
+export function resolveDialableTargets(config?: {
+  dialableBindings?: readonly string[];
+  dialableLoopbacks?: readonly string[];
+}): DialableTargets {
+  if (!config?.dialableBindings?.length && !config?.dialableLoopbacks?.length) {
+    return DEFAULT_DIALABLE_TARGETS;
+  }
+  return {
+    bindings: new Set([...DIALABLE_BINDINGS, ...(config.dialableBindings ?? [])]),
+    loopbacks: new Set([...DIALABLE_LOOPBACKS, ...(config.dialableLoopbacks ?? [])]),
+  };
+}
 
 /**
  * Normalize a define() input to a serializable target. Legacy callers pass
@@ -167,20 +206,32 @@ export function normalizeCapTarget(input: {
  * again at dial time inside the registry; this exists so misconfigured
  * targets fail at define() with a useful error instead of at first call.
  */
-export function assertDefinableCapTarget(name: string, target: SerializableCapTarget): void {
+export function assertDefinableCapTarget(
+  name: string,
+  target: SerializableCapTarget,
+  dialable: DialableTargets = DEFAULT_DIALABLE_TARGETS,
+): void {
   if (target.type === "url") {
-    throw new Error(
-      `Capability "${name}": url targets are not implemented yet (Law 7: Cap'n Web must terminate ` +
-        `in a stateless worker, never a DO — the dial path for url refs is a follow-up).`,
-    );
+    let protocol: string;
+    try {
+      protocol = new URL(target.url).protocol;
+    } catch {
+      throw new Error(`Capability "${name}": ${JSON.stringify(target.url)} is not a valid URL.`);
+    }
+    if (!["http:", "https:", "ws:", "wss:"].includes(protocol)) {
+      throw new Error(
+        `Capability "${name}": url targets must be http(s) or ws(s), got ${JSON.stringify(target.url)}.`,
+      );
+    }
+    return;
   }
   const worker = target.worker;
   switch (worker.type) {
     case "binding":
-      if (!DIALABLE_BINDINGS.has(worker.binding)) {
+      if (!dialable.bindings.has(worker.binding)) {
         throw new Error(
           `Capability "${name}": binding "${worker.binding}" is not dialable. ` +
-            `Dialable bindings: ${[...DIALABLE_BINDINGS].join(", ") || "(none)"}.`,
+            `Dialable bindings: ${[...dialable.bindings].join(", ") || "(none)"}.`,
         );
       }
       if (target.entrypoint) {
@@ -195,10 +246,10 @@ export function assertDefinableCapTarget(name: string, target: SerializableCapTa
           `Capability "${name}": loopback refs need an entrypoint (the export name).`,
         );
       }
-      if (!DIALABLE_LOOPBACKS.has(target.entrypoint)) {
+      if (!dialable.loopbacks.has(target.entrypoint)) {
         throw new Error(
           `Capability "${name}": loopback export "${target.entrypoint}" is not dialable. ` +
-            `Dialable exports: ${[...DIALABLE_LOOPBACKS].join(", ") || "(none)"}.`,
+            `Dialable exports: ${[...dialable.loopbacks].join(", ") || "(none)"}.`,
         );
       }
       return;
@@ -214,7 +265,6 @@ export function assertDefinableCapTarget(name: string, target: SerializableCapTa
       capSourceCacheKey(worker.source);
       return;
     case "durable-object":
-    case "project-worker":
       throw new Error(
         `Capability "${name}": ${worker.type} refs are not implemented yet (itx-next.md §1).`,
       );
