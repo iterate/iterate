@@ -342,10 +342,10 @@ describe("CodemodeSession", () => {
     subPath: "bob",
 	  });
 	  const procedures = await ctx.os.listProcedures();
-	  const rootStreamState = await ctx.os.streams.read({ streamPath: "/" });
+	  const rootStreamRead = await ctx.os.streams.read({ streamPath: "/" });
 	  const sessions = await ctx.os.codemode.listSessions({});
 
-	  return { ai, repos, workspace, agent, procedures, sessions, rootStreamState };
+	  return { ai, repos, workspace, agent, procedures, sessions, rootStreamRead };
 	}`,
     });
     const scriptExecutionId = scriptExecutionIdFromEvent(created.scriptExecutionEvent);
@@ -358,7 +358,7 @@ describe("CodemodeSession", () => {
           agent: expect.objectContaining({ message: "hi", subPath: "bob" }),
           procedures: expect.stringContaining("interface CodemodeExecutionContext"),
           repos: [],
-          rootStreamState: expect.objectContaining({ events: expect.any(Array) }),
+          rootStreamRead: expect.objectContaining({ events: expect.any(Array) }),
           sessions: expect.objectContaining({ sessions: expect.any(Array) }),
           workspace: "workspace from test\n",
         },
@@ -372,7 +372,7 @@ describe("CodemodeSession", () => {
         functionCallRequested(["workspace", "writeFile"], ["workspace"], ["writeFile"]),
         functionCallRequested(["workspace", "readFile"], ["workspace"], ["readFile"]),
         functionCallRequested(["agents", "create"], ["agents", "create"], []),
-        functionCallRequested(["os", "streams", "list"], ["os"], ["streams", "list"]),
+        functionCallRequested(["os", "streams", "read"], ["os"], ["streams", "read"]),
         functionCallRequested(
           ["os", "codemode", "listSessions"],
           ["os"],

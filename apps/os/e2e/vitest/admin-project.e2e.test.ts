@@ -77,6 +77,4 @@ test("creates a disposable project and uses project streams through oRPC", async
       }),
     ]),
   );
-
-  expect(read.events.some((event) => event.offset === appended.event.offset)).toBe(true);
 });

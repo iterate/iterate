@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { StreamState } from "@iterate-com/shared/streams/types";
-import { parseStreamNavigationState } from "./stream-navigation-state.ts";
+import { StreamNavigationState } from "./stream-navigation-state.ts";
 
-describe("parseStreamNavigationState", () => {
+describe("StreamNavigationState", () => {
   test("ignores processor state that is irrelevant to stream navigation", () => {
     const state = {
       namespace: "project-id",
@@ -37,8 +37,10 @@ describe("parseStreamNavigationState", () => {
       },
     };
 
+    // Captured real-world state: StreamState rejects it (processors mismatch),
+    // which is the bug StreamNavigationState exists to sidestep.
     expect(StreamState.safeParse(state).success).toBe(false);
-    expect(parseStreamNavigationState(state)).toEqual({
+    expect(StreamNavigationState.parse(state)).toEqual({
       namespace: "project-id",
       path: "/",
       eventCount: 42,

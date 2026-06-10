@@ -5,7 +5,7 @@
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { itxKey, useItxQuery } from "~/itx/react/index.ts";
 import { PROJECT_CHILD_ROUTE_STALE_TIME } from "~/lib/project-route-query.ts";
-import { parseStreamNavigationState } from "~/lib/stream-navigation-state.ts";
+import { StreamNavigationState } from "~/lib/stream-navigation-state.ts";
 
 export function projectStreamStateKey(projectId: string, streamPath: StreamPathType) {
   return itxKey.project(projectId, "streams", "state", streamPath);
@@ -16,7 +16,7 @@ export function useProjectStreamState(input: { projectId: string; streamPath: St
     project: input.projectId,
     queryKey: projectStreamStateKey(input.projectId, input.streamPath),
     queryFn: async (itx) =>
-      parseStreamNavigationState(await itx.streams.get(input.streamPath).getState()),
+      StreamNavigationState.parse(await itx.streams.get(input.streamPath).getState()),
     staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
   });
 }

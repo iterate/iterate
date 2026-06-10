@@ -223,35 +223,34 @@ function StreamTerminalApp() {
           vars: { streamPath: resolveStreamPath(input.streamPath) },
         }),
       listChildren: async (input = {}) => {
-        const basePath = resolveStreamPath(input.streamPath);
-        const readState = async (streamPath: string) =>
-          (await runItxScript({
-            functionSource:
-              "async ({ itx, vars }) => await itx.streams.get(vars.streamPath).getState()",
-            vars: { streamPath },
-          })) as { childPaths?: string[] };
+        // Walk the tree inside ONE itx script: each getState is a Durable
+        // Object hop, but running the loop server-side costs a single dynamic
+        // worker load instead of one per stream.
+        const descendantPaths = (await runItxScript({
+          functionSource: `async ({ itx, vars }) => {
+            const seen = new Set();
+            const queue = [vars.basePath];
+            while (queue.length > 0) {
+              const path = queue.shift();
+              if (seen.has(path)) continue;
+              seen.add(path);
+              const state = await itx.streams.get(path).getState();
+              queue.push(...(state.childPaths ?? []));
+            }
+            seen.delete(vars.basePath);
+            return [...seen].sort();
+          }`,
+          vars: { basePath: resolveStreamPath(input.streamPath) },
+        })) as string[];
 
-        const summaries: StreamSummary[] = [];
-        const seen = new Set<string>();
-        const queue = [...((await readState(basePath)).childPaths ?? [])].sort((left, right) =>
-          left.localeCompare(right),
+        // Stream state carries no creation time; epoch matches what the
+        // removed streams.list returned.
+        return descendantPaths.map(
+          (path): StreamSummary => ({
+            path: StreamPath.parse(path),
+            createdAt: new Date(0).toISOString(),
+          }),
         );
-
-        for (let index = 0; index < queue.length; index += 1) {
-          const path = queue[index];
-          if (path == null || seen.has(path)) continue;
-          seen.add(path);
-          summaries.push({ path: StreamPath.parse(path), createdAt: new Date(0).toISOString() });
-
-          const state = await readState(path);
-          for (const childPath of [...(state.childPaths ?? [])].sort((left, right) =>
-            left.localeCompare(right),
-          )) {
-            if (!seen.has(childPath)) queue.push(childPath);
-          }
-        }
-
-        return summaries;
       },
       resolvePath: resolveStreamPath,
     }),

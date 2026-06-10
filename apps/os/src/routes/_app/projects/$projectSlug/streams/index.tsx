@@ -3,7 +3,7 @@ import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/t
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { StreamTreeBrowser } from "~/components/stream-tree-browser.tsx";
 import { useItxClient } from "~/itx/react/index.ts";
-import { parseStreamNavigationState } from "~/lib/stream-navigation-state.ts";
+import { StreamNavigationState } from "~/lib/stream-navigation-state.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
   loader: ({ context }) => ({
@@ -22,7 +22,7 @@ function ProjectStreamsIndexPage() {
     () => ({
       key: ["project", project.id, "streams"] as const,
       getState: async (streamPath: StreamPathType) =>
-        parseStreamNavigationState(
+        StreamNavigationState.parse(
           await (await itxClient.project(project.id)).streams.get(streamPath).getState(),
         ),
     }),
