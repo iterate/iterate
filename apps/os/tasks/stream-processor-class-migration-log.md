@@ -174,6 +174,51 @@ with a `hasRegisteredCurrentVersion` state flag) is replaced by the host
 appending one idempotency-keyed `processor-registered` event per slug+version
 after each successful subscription handshake.
 
+### D12. LLM execution is background work, not a checkpoint blocker
+
+The openai-ws and cloudflare-ai processors initially ran the provider call
+under `blockProcessorWhile` (D6's default mapping for `afterAppend` async
+work). That held the serialized batch queue for the whole LLM round-trip, so
+an event waiting in the next batch — a cancellation, a superseding user
+message, a config change — could not even be REDUCED until the request it was
+supposed to affect had finished. Both providers already re-read stream history
+and check `#isAgentLlmRequestStillCurrent` before appending agent-visible
+output, a staleness check designed for exactly this async raciness, so the
+blocking bought nothing except crash recovery via checkpoint-held redelivery.
+
+Resolution: `agent/llm-request-requested` now routes through
+`runInBackground` (keep-alive-backed via the host's `ctx.waitUntil`), and
+crash recovery moves from redelivery to reconciliation:
+
+- Each provider tracks the llmRequestIds it has begun executing in an
+  instance-level Set. The DO instance is the execution scope, so a fresh
+  instance after a crash/wake starts with an empty set. Ids are retained after
+  the terminal events are appended (never re-execute, even while the completed
+  event is still in delivery flight) and removed only on an unhandled
+  execution failure so a later batch can retry.
+- A `processEventBatch` override runs after `super.processEventBatch`: any
+  post-batch state entry stuck in `"started"` whose id is not in the set was
+  abandoned by a previous incarnation. The original
+  `agent/llm-request-requested` event is recovered from
+  `deps.readStreamEvents()` history (its offset === llmRequestId) and
+  re-executed through the same background path. Stale recoveries finish
+  gracefully: the still-current check skips agent output and the terminal
+  completed events flip the entry out of `started`. History is only read when
+  a dangling entry exists, so the common path stays cheap.
+- The skip-only-completed guard from c00cf7231 is unchanged — it still covers
+  checkpoint-not-advanced replays, and now also dedupes reconciliation
+  retries.
+- openai-ws additionally serializes executions per instance on a promise
+  chain: two concurrent requests must not interleave reads on the shared
+  Responses WebSocket iterator. Only executions queue behind each other; the
+  batch queue never does. cloudflare-ai's `ai.run` calls are independent, so
+  they run genuinely concurrent.
+
+Known residual edge (accepted): if execution fails before the
+`llm-request-started` append lands (e.g. the stream stub is broken), there is
+no `started` entry to reconcile and the request is dropped — the same class of
+connection failure I8 documents for batch ingest generally.
+
 ## Issues encountered
 
 ### I1. Atomic-checkpoint/shutdown commit broke the virtualized-scroll e2e

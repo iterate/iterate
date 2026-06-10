@@ -4,10 +4,14 @@
 // All appended events keep their legacy types, payload shapes, and
 // idempotency-key derivations (`cloudflare-ai/<key>@<sourceOffset>`).
 //
-// The LLM request runs under `blockProcessorWhile`: the checkpoint must not
-// advance past a request whose terminal events have not been appended, so a
-// failed request is re-delivered and retried (the `requests` state map dedupes
-// already-started/completed ones).
+// The LLM request runs as keep-alive-backed background work
+// (`runInBackground`): the serialized batch queue stays free while the
+// provider call is in flight, so cancellations, superseding inputs, and config
+// changes keep reducing instead of waiting behind the request they should
+// affect. The still-current check before agent-visible appends
+// (`#isAgentLlmRequestStillCurrent`) absorbs the resulting raciness. Crash
+// recovery no longer rides on checkpoint-held redelivery; see
+// `#reconcileDanglingStartedRequests`.
 
 import { z } from "zod";
 import {
@@ -73,6 +77,18 @@ export class CloudflareAiProcessor extends StreamProcessor<
 > {
   readonly contract = CloudflareAiProcessorContract;
 
+  /**
+   * Requests this instance has taken responsibility for executing. The DO
+   * instance is the execution scope: a fresh instance after a crash/wake
+   * starts empty, which is what lets `#reconcileDanglingStartedRequests`
+   * recognize requests a previous incarnation abandoned. Ids stay in the set
+   * after a request reaches its terminal appends (re-execution is never
+   * needed then, even while the completed event is still being delivered
+   * back); they are removed only when execution fails before the terminal
+   * appends landed, so a later batch's reconciliation can retry.
+   */
+  #executedLlmRequestIds = new Set<number>();
+
   protected override reduce(
     args: Parameters<StreamProcessor<CloudflareAiProcessorContract>["reduce"]>[0],
   ): CloudflareAiState {
@@ -110,10 +126,95 @@ export class CloudflareAiProcessor extends StreamProcessor<
       case "events.iterate.com/cloudflare-ai/llm-request-completed":
         return;
       case "events.iterate.com/agent/llm-request-requested":
-        args.blockProcessorWhile(() => this.#executeCloudflareAiRequest({ event, state }));
+        this.#startLlmRequest({ event, state, runInBackground: args.runInBackground });
         return;
       default:
         return assertNever(event);
+    }
+  }
+
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<CloudflareAiProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    await super.processEventBatch(args);
+    await this.#reconcileDanglingStartedRequests({
+      state: args.state,
+      runInBackground: args.runInBackground,
+    });
+  }
+
+  /**
+   * Kicks off LLM execution as background work so the batch queue is never
+   * blocked on a provider call. Failures before the terminal events landed
+   * release the id so dangling-started reconciliation can retry on a later
+   * batch (the `started` append is idempotency-keyed, so a retry cannot
+   * duplicate it).
+   */
+  #startLlmRequest(args: {
+    event: LlmRequestRequestedEvent;
+    state: CloudflareAiState;
+    runInBackground: (work: () => Promise<unknown>) => void;
+  }) {
+    const llmRequestId = args.event.offset;
+    this.#executedLlmRequestIds.add(llmRequestId);
+    args.runInBackground(async () => {
+      try {
+        await this.#executeCloudflareAiRequest({ event: args.event, state: args.state });
+      } catch (error) {
+        this.#executedLlmRequestIds.delete(llmRequestId);
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Crash recovery for background LLM execution. With `runInBackground` the
+   * checkpoint advances past `agent/llm-request-requested` immediately, so a
+   * crash mid-request is no longer healed by redelivery. A `started` entry
+   * whose id this instance never executed can only come from a previous
+   * incarnation, so re-execute it from the original requested event in stream
+   * history (its offset is the llmRequestId). Stale recoveries finish
+   * gracefully: the still-current check skips agent-visible output and the
+   * terminal completed event flips the entry out of `started`. History is only
+   * read when a dangling entry exists, keeping the common path cheap.
+   */
+  async #reconcileDanglingStartedRequests(args: {
+    state: CloudflareAiState;
+    runInBackground: (work: () => Promise<unknown>) => void;
+  }) {
+    const danglingIds = Object.entries(args.state.requests)
+      .filter(
+        ([id, request]) =>
+          request.status === "started" && !this.#executedLlmRequestIds.has(Number(id)),
+      )
+      .map(([id]) => Number(id));
+    if (danglingIds.length === 0) return;
+
+    const events = await this.deps.readStreamEvents();
+    for (const llmRequestId of danglingIds) {
+      const requestedEvent = events.find(
+        (event) =>
+          event.offset === llmRequestId &&
+          event.type === "events.iterate.com/agent/llm-request-requested",
+      );
+      const reduction =
+        requestedEvent === undefined
+          ? undefined
+          : this.reduceRawEvent({ event: requestedEvent, state: args.state });
+      if (reduction?.event.type !== "events.iterate.com/agent/llm-request-requested") {
+        // The entry cannot be tied back to a requested event, so it is
+        // unrecoverable; claim it so it stops triggering history reads.
+        this.#executedLlmRequestIds.add(llmRequestId);
+        console.warn(
+          `cloudflare-ai: no agent/llm-request-requested event found at offset ${llmRequestId} for dangling started request`,
+        );
+        continue;
+      }
+      this.#startLlmRequest({
+        event: reduction.event,
+        state: args.state,
+        runInBackground: args.runInBackground,
+      });
     }
   }
 
@@ -123,9 +224,11 @@ export class CloudflareAiProcessor extends StreamProcessor<
   }): Promise<void> {
     const llmRequestId = args.event.offset;
     // Skip only finished requests: a "started" entry means a previous
-    // incarnation crashed mid-request, and the redelivered event must retry it
-    // (the started append is idempotency-keyed, so the retry cannot duplicate
-    // it). Mirrors the OpenAI WebSocket processor.
+    // incarnation died mid-request, and the request must be retried — whether
+    // it arrives here via a checkpoint-not-advanced replay or via
+    // dangling-started reconciliation (the started append is
+    // idempotency-keyed, so a retry cannot duplicate it). Mirrors the OpenAI
+    // WebSocket processor.
     if (args.state.requests[String(llmRequestId)]?.status === "completed") return;
 
     const ai = this.deps.ai;

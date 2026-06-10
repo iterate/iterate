@@ -7,10 +7,18 @@
 // Connection lifecycle: the WebSocket connection is a lazy instance field on
 // the class. The hosting Durable Object instance is the connection scope —
 // sequential agent requests reuse the same socket until OpenAI or the runtime
-// closes it, exactly like the old runner DO's closure state. The LLM request
-// itself runs under `blockProcessorWhile`: the checkpoint must not advance past
-// a request whose terminal events have not been appended, so a failed request
-// is re-delivered and retried (the `requests` state map dedupes completed ones).
+// closes it, exactly like the old runner DO's closure state.
+//
+// The LLM request itself runs as keep-alive-backed background work
+// (`runInBackground`): the serialized batch queue stays free while the request
+// is in flight, so cancellations, superseding inputs, and config changes keep
+// reducing instead of waiting behind the request they should affect. Executions
+// themselves are serialized per instance (`#executionChain`) because concurrent
+// requests must not interleave reads on the shared Responses WebSocket
+// iterator. The still-current check before agent-visible appends
+// (`#isAgentLlmRequestStillCurrent`) absorbs the resulting raciness. Crash
+// recovery no longer rides on checkpoint-held redelivery; see
+// `#reconcileDanglingStartedRequests`.
 
 import { z } from "zod";
 import {
@@ -102,6 +110,25 @@ export class OpenAiWsProcessor extends StreamProcessor<
   #connection: OpenAiWsConnection | null = null;
   #previousResponseId: string | null = null;
 
+  /**
+   * Requests this instance has taken responsibility for executing. The DO
+   * instance is the execution scope: a fresh instance after a crash/wake
+   * starts empty, which is what lets `#reconcileDanglingStartedRequests`
+   * recognize requests a previous incarnation abandoned. Ids stay in the set
+   * after a request reaches its terminal appends (re-execution is never
+   * needed then, even while the completed event is still being delivered
+   * back); they are removed only when execution fails before the terminal
+   * appends landed, so a later batch's reconciliation can retry.
+   */
+  #executedLlmRequestIds = new Set<number>();
+
+  /**
+   * Serializes LLM executions on this instance. Only executions queue behind
+   * each other — never the batch queue — because two concurrent requests would
+   * steal each other's frames off the single Responses WebSocket iterator.
+   */
+  #executionChain: Promise<unknown> = Promise.resolve();
+
   protected override reduce(
     args: Parameters<StreamProcessor<OpenAiWsProcessorContract>["reduce"]>[0],
   ): OpenAiWsState {
@@ -142,10 +169,100 @@ export class OpenAiWsProcessor extends StreamProcessor<
       case "events.iterate.com/openai-ws/llm-request-completed":
         return;
       case "events.iterate.com/agent/llm-request-requested":
-        args.blockProcessorWhile(() => this.#executeOpenAiWsRequest({ event, state }));
+        this.#startLlmRequest({ event, state, runInBackground: args.runInBackground });
         return;
       default:
         return assertNever(event);
+    }
+  }
+
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<OpenAiWsProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    await super.processEventBatch(args);
+    await this.#reconcileDanglingStartedRequests({
+      state: args.state,
+      runInBackground: args.runInBackground,
+    });
+  }
+
+  /**
+   * Kicks off LLM execution as background work so the batch queue is never
+   * blocked on a provider call; the execution itself queues on
+   * `#executionChain` (see field doc). Failures before the terminal events
+   * landed release the id so dangling-started reconciliation can retry on a
+   * later batch (the `started` append is idempotency-keyed, so a retry cannot
+   * duplicate it).
+   */
+  #startLlmRequest(args: {
+    event: LlmRequestRequestedEvent;
+    state: OpenAiWsState;
+    runInBackground: (work: () => Promise<unknown>) => void;
+  }) {
+    const llmRequestId = args.event.offset;
+    this.#executedLlmRequestIds.add(llmRequestId);
+    const execution = this.#executionChain.then(() =>
+      this.#executeOpenAiWsRequest({ event: args.event, state: args.state }),
+    );
+    this.#executionChain = execution.catch(() => undefined);
+    args.runInBackground(async () => {
+      try {
+        await execution;
+      } catch (error) {
+        this.#executedLlmRequestIds.delete(llmRequestId);
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Crash recovery for background LLM execution. With `runInBackground` the
+   * checkpoint advances past `agent/llm-request-requested` immediately, so a
+   * crash mid-request is no longer healed by redelivery. A `started` entry
+   * whose id this instance never executed can only come from a previous
+   * incarnation, so re-execute it from the original requested event in stream
+   * history (its offset is the llmRequestId). Stale recoveries finish
+   * gracefully: the still-current check skips agent-visible output and the
+   * terminal completed event flips the entry out of `started`. History is only
+   * read when a dangling entry exists, keeping the common path cheap.
+   */
+  async #reconcileDanglingStartedRequests(args: {
+    state: OpenAiWsState;
+    runInBackground: (work: () => Promise<unknown>) => void;
+  }) {
+    const danglingIds = Object.entries(args.state.requests)
+      .filter(
+        ([id, request]) =>
+          request.status === "started" && !this.#executedLlmRequestIds.has(Number(id)),
+      )
+      .map(([id]) => Number(id));
+    if (danglingIds.length === 0) return;
+
+    const events = await this.deps.readStreamEvents();
+    for (const llmRequestId of danglingIds) {
+      const requestedEvent = events.find(
+        (event) =>
+          event.offset === llmRequestId &&
+          event.type === "events.iterate.com/agent/llm-request-requested",
+      );
+      const reduction =
+        requestedEvent === undefined
+          ? undefined
+          : this.reduceRawEvent({ event: requestedEvent, state: args.state });
+      if (reduction?.event.type !== "events.iterate.com/agent/llm-request-requested") {
+        // The entry cannot be tied back to a requested event, so it is
+        // unrecoverable; claim it so it stops triggering history reads.
+        this.#executedLlmRequestIds.add(llmRequestId);
+        console.warn(
+          `openai-ws: no agent/llm-request-requested event found at offset ${llmRequestId} for dangling started request`,
+        );
+        continue;
+      }
+      this.#startLlmRequest({
+        event: reduction.event,
+        state: args.state,
+        runInBackground: args.runInBackground,
+      });
     }
   }
 

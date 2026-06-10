@@ -49,6 +49,11 @@ describe("OpenAiWsProcessor", () => {
     await waitFor(() => sockets[0]?.sent.length === 2);
     completeResponse(sockets[0], { delta: "SECOND", responseId: "resp_second" });
     await secondRequest;
+    await waitFor(
+      () =>
+        appended.filter((event) => event.type === "events.iterate.com/agent/llm-request-completed")
+          .length === 2,
+    );
 
     expect(sockets).toHaveLength(1);
     expect(sockets[0]?.closed).toBe(false);
@@ -96,9 +101,53 @@ describe("OpenAiWsProcessor", () => {
     completeResponse(sockets[0], { delta: "STALE", responseId: "resp_cancelled" });
     await request;
 
-    expect(eventTypes(appended)).toContain("events.iterate.com/openai-ws/llm-request-completed");
+    // The provider completion is the stale path's final append; once it lands
+    // the absence of agent-visible events is conclusive.
+    await waitFor(() =>
+      eventTypes(appended).includes("events.iterate.com/openai-ws/llm-request-completed"),
+    );
     expect(eventTypes(appended)).not.toContain("events.iterate.com/agent/output-added");
     expect(eventTypes(appended)).not.toContain("events.iterate.com/agent/llm-request-completed");
+  });
+
+  it("processes the next batch to completion while a request is still in flight", async () => {
+    const { stream, appended } = memoryStream();
+    const sockets: FakeOpenAiResponsesWebSocket[] = [];
+    const processor = newProcessor({
+      stream,
+      appended,
+      sockets,
+      snapshot: { offset: 0, state: testState() },
+    });
+
+    const firstBatch = processor.ingest({
+      events: [llmRequestRequestedEvent({ content: "slow", offset: 11 })],
+      streamMaxOffset: 11,
+    });
+    // The batch resolves (reduce + checkpoint) while the LLM request is still
+    // running in the background — this is the point of not blocking the queue.
+    await firstBatch;
+    expect(processor.checkpointOffset).toBe(11);
+    await waitFor(() => sockets.length === 1);
+    sockets[0]?.open();
+    await waitFor(() => sockets[0]?.sent.length === 1);
+
+    // With the request awaiting its socket response, a later batch (e.g. a
+    // config change, a cancellation) still reduces and checkpoints.
+    await processor.ingest({
+      events: [configUpdatedEvent({ offset: 12, model: "gpt-superseding" })],
+      streamMaxOffset: 12,
+    });
+    expect(processor.checkpointOffset).toBe(12);
+    expect(processor.state.model).toBe("gpt-superseding");
+    expect(eventTypes(appended)).not.toContain(
+      "events.iterate.com/openai-ws/llm-request-completed",
+    );
+
+    completeResponse(sockets[0], { delta: "SLOW", responseId: "resp_slow" });
+    await waitFor(() =>
+      eventTypes(appended).includes("events.iterate.com/openai-ws/llm-request-completed"),
+    );
   });
 
   it("opens a fresh Responses WebSocket after the host instance wakes without warm state", async () => {
@@ -171,9 +220,52 @@ describe("OpenAiWsProcessor", () => {
     completeResponse(sockets[0], { delta: "RETRIED", responseId: "resp_retried" });
     await request;
 
+    await waitFor(() =>
+      eventTypes(appended).includes("events.iterate.com/agent/llm-request-completed"),
+    );
     expect(eventTypes(appended)).toContain("events.iterate.com/openai-ws/websocket-connected");
     expect(eventTypes(appended)).toContain("events.iterate.com/openai-ws/llm-request-started");
-    expect(eventTypes(appended)).toContain("events.iterate.com/agent/llm-request-completed");
+  });
+
+  it("re-executes a dangling started request from a previous incarnation", async () => {
+    const { stream, appended } = memoryStream();
+    const sockets: FakeOpenAiResponsesWebSocket[] = [];
+    const processor = newProcessor({
+      stream,
+      appended,
+      sockets,
+      // A previous incarnation checkpointed past the requested event (33) and
+      // its started append (34), then died mid-request. This fresh instance's
+      // executed set is empty, so nothing but reconciliation can retry it.
+      snapshot: {
+        offset: 34,
+        state: { ...testState(), requests: { "33": { status: "started" } } },
+      },
+      // History holds the original requested event at offset === llmRequestId
+      // and the agent's reduced phase still points at it (current request).
+      readStreamEvents: async () => [
+        llmRequestRequestedEvent({ content: "recover me", offset: 33 }),
+      ],
+    });
+
+    // Ingest any consumed event — it neither redelivers nor completes request
+    // 33; only the post-batch reconciliation can re-execute it.
+    const ingested = processor.ingest({
+      events: [configUpdatedEvent({ offset: 35, model: "gpt-test" })],
+      streamMaxOffset: 35,
+    });
+    await waitFor(() => sockets.length === 1);
+    sockets[0]?.open();
+    await waitFor(() => sockets[0]?.sent.length === 1);
+    completeResponse(sockets[0], { delta: "RECOVERED", responseId: "resp_recovered" });
+    await ingested;
+
+    await waitFor(() =>
+      eventTypes(appended).includes("events.iterate.com/agent/llm-request-completed"),
+    );
+    expect(eventTypes(appended)).toContain("events.iterate.com/openai-ws/llm-request-started");
+    // The recovered request is still current, so agent output lands too.
+    expect(eventTypes(appended)).toContain("events.iterate.com/agent/output-added");
   });
 
   it("skips a request its reduced state already marks completed", async () => {
@@ -248,6 +340,15 @@ function llmRequestRequestedEvent(args: { content: string; offset: number }): St
       },
       runOpts: {},
     },
+    offset: args.offset,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+function configUpdatedEvent(args: { offset: number; model: string }): StreamEvent {
+  return {
+    type: "events.iterate.com/openai-ws/config-updated",
+    payload: { model: args.model },
     offset: args.offset,
     createdAt: "2026-01-01T00:00:00.000Z",
   };
