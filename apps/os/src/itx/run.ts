@@ -3,7 +3,7 @@
 // One function runs a script in a loader isolate against a context and
 // leaves a durable two-event record on the owning project's /itx stream:
 //
-//   events.iterate.com/itx/execution-requested   { executionId, code, vars, context }
+//   events.iterate.com/itx/execution-requested   { executionId, code, context }
 //   events.iterate.com/itx/execution-completed   { executionId, ok, result|error, durationMs, context }
 //
 // The events are the RECORD, not the transport: callers get the outcome from
@@ -59,8 +59,14 @@ export async function runItxScript(input: {
   executionId?: string;
   /** Skip the execution-requested append (the caller already recorded one). */
   recordRequested?: boolean;
+  /**
+   * ONE script shape: `async (itx) => …` — the single argument is the live
+   * handle (the parameter name is the author's business; agent scripts call
+   * it ctx, that changes nothing). Parameterization is the CALLER's concern:
+   * bake values into the source before handing it over (the /api/itx/run
+   * endpoint does exactly this for its `vars` API).
+   */
   functionSource: string;
-  vars?: Record<string, unknown>;
 }): Promise<ItxScriptOutcome> {
   const loader = input.env.LOADER;
   if (!loader) throw new Error("LOADER binding not available");
@@ -78,7 +84,6 @@ export async function runItxScript(input: {
         code: input.functionSource,
         context: input.props.context,
         executionId,
-        vars: input.vars ?? {},
       },
     });
 
@@ -88,9 +93,7 @@ export async function runItxScript(input: {
   >;
 
   let outcome: ItxScriptOutcome;
-  let entrypoint:
-    | ({ run(vars: Record<string, unknown>): Promise<string> } & Partial<Disposable>)
-    | undefined;
+  let entrypoint: ({ run(): Promise<string> } & Partial<Disposable>) | undefined;
   // One try/catch from loading through running: a loader failure must still
   // produce an ok:false outcome (and the matching completed event) — never a
   // throw that leaves a dangling execution-requested record.
@@ -115,10 +118,10 @@ export async function runItxScript(input: {
     });
 
     entrypoint = worker.getEntrypoint() as unknown as {
-      run(vars: Record<string, unknown>): Promise<string>;
+      run(): Promise<string>;
     } & Partial<Disposable>;
 
-    const raw = JSON.parse(await entrypoint.run(input.vars ?? {})) as { logs?: string[] } & (
+    const raw = JSON.parse(await entrypoint.run()) as { logs?: string[] } & (
       | { ok: true; result: unknown }
       | { code?: string; error: string; ok: false; stack?: string }
     );
@@ -178,10 +181,10 @@ function itxRunWorkerSource(functionSource: string) {
     }
 
     export default class extends WorkerEntrypoint {
-      async run(vars) {
+      async run() {
         try {
           const itx = await this.env.ITERATE.context;
-          const result = await script({ itx, vars });
+          const result = await script(itx);
           return JSON.stringify({ logs, ok: true, result });
         } catch (error) {
           return JSON.stringify({

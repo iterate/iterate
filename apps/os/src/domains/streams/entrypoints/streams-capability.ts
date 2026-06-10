@@ -7,8 +7,8 @@ import {
   type StreamCursor,
   StreamPath,
 } from "@iterate-com/shared/streams/types";
-import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
 import { ItxError } from "~/itx/errors.ts";
+import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import {
   getStreamDurableObjectName,
   getInitializedStreamStub,

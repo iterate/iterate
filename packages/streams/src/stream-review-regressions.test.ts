@@ -1,19 +1,19 @@
 // Regression tests from the June 2026 packages/streams review.
 // See tasks/streams-review-fixes.md — each test is tagged with its finding id.
 //
-// Tests for bugs that are not yet fixed use `it.fails`: they PASS today because
-// the asserted (correct) behavior currently throws/mismatches, and they will
-// START FAILING the moment the bug is fixed — at which point flip `it.fails`
-// back to `it`. This keeps `pnpm test` green while pinning the bug precisely.
+// Tests for bugs that are still unfixed use `it.fails`: they PASS today because
+// the asserted (correct) behavior currently throws/mismatches, and they START
+// FAILING the moment the bug is fixed — at which point flip `it.fails` back to
+// `it`. This keeps `pnpm test` green while pinning the bug precisely.
 //
-// T3/T4/T7/T8 from the plan exercise the Stream Durable Object (SQL storage) and
-// need a vitest-pool-workers harness that this package does not have yet; they
-// are tracked in Stage 0 of the task and land with that harness.
+// Status: C1 (T1/T1b) and C2 (T2) are fixed in Stage 1 and now pass as `it`.
+// M3 (T5) and M4 (T6) remain `it.fails` until Stage 3. The Stream DO tests
+// (T3/T4/T7/T8) live in workers/durable-objects/stream.workers.test.ts.
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { defineProcessorContract } from "./shared/stream-processors.ts";
-import type { StreamEvent } from "./shared/event.ts";
+import type { StreamEvent, StreamEventInput } from "./shared/event.ts";
 import type { StreamEventBatch } from "./types.ts";
 import { StreamProcessor, type StreamProcessorSnapshot } from "./stream-processor.ts";
 import { createStreamProcessorHost } from "./workers/stream-processor-host.ts";
@@ -39,7 +39,7 @@ const CounterContract = defineProcessorContract({
   emits: [],
 });
 type CounterContract = typeof CounterContract;
-type CounterDeps = { onBatch?: () => void };
+type CounterDeps = { onBatch?: (args: { events: readonly StreamEvent[] }) => void };
 
 class CounterProcessor extends StreamProcessor<CounterContract, CounterDeps> {
   readonly contract = CounterContract;
@@ -49,7 +49,7 @@ class CounterProcessor extends StreamProcessor<CounterContract, CounterDeps> {
   protected override async processEventBatch(
     args: Parameters<StreamProcessor<CounterContract>["processEventBatch"]>[0],
   ): Promise<void> {
-    this.deps.onBatch?.();
+    this.deps.onBatch?.({ events: args.events });
     await super.processEventBatch(args);
   }
 }
@@ -59,7 +59,8 @@ function add(offset: number, amount: number): StreamEvent {
 }
 
 // An in-memory DurableObjectState stub: just the kv + waitUntil surface the host
-// touches. waitUntil work is collected so tests can await it.
+// touches. `settle()` drains the collected waitUntil work, including the chains
+// spawned by recovery, until it goes quiet.
 function fakeDurableObjectCtx() {
   const map = new Map<string, unknown>();
   const pending: Promise<unknown>[] = [];
@@ -72,84 +73,231 @@ function fakeDurableObjectCtx() {
     },
     waitUntil: (work: Promise<unknown>) => void pending.push(work),
   };
-  return { ctx: ctx as unknown as DurableObjectState, settle: () => Promise.allSettled(pending) };
-}
-
-// A fake stream stub + pump that faithfully mimics the Stream DO delivery path
-// (stream.ts #openConnection): the cursor advances to the last offset BEFORE
-// delivery, and the batch result is fire-and-forget — a failed batch is never
-// re-delivered on a live connection.
-function fakeStreamWithPump() {
-  let processEventBatch: ((batch: StreamEventBatch) => unknown) | undefined;
-  const delivered: Promise<unknown>[] = [];
-  const stream = {
-    subscribeOutbound(args: { processEventBatch: (batch: StreamEventBatch) => unknown }) {
-      processEventBatch = args.processEventBatch;
-      return { subscriptionKey: "k", streamMaxOffset: 0, unsubscribe() {} };
-    },
-    append: (input: unknown) => input,
-    appendBatch: (input: unknown) => input,
-  };
-  function pump(events: StreamEvent[]) {
-    if (processEventBatch === undefined) throw new Error("not subscribed");
-    // cursor would advance here; we just hand the batch over and never await it.
-    const result = processEventBatch({
-      namespace: "stream",
-      path: "/r",
-      events,
-      streamMaxOffset: 0,
-    });
-    if (result instanceof Promise) delivered.push(result.catch(() => undefined));
+  async function settle() {
+    let idleFlushes = 0;
+    for (let i = 0; i < 500 && idleFlushes < 3; i += 1) {
+      await tick(); // flush microtasks + queued pumps
+      if (pending.length === 0) {
+        idleFlushes += 1;
+        continue;
+      }
+      idleFlushes = 0;
+      await Promise.allSettled(pending.splice(0));
+    }
   }
-  return { stream, pump, settle: () => Promise.allSettled(delivered) };
+  return { ctx: ctx as unknown as DurableObjectState, settle };
 }
 
-describe("T1 — a swallowed ingest failure permanently drops events (C1)", () => {
-  // FAILS until C1 is fixed (host must resubscribe from the checkpoint on
-  // ingest failure). Flip `it.fails` -> `it` once Stage 1 lands.
-  it.fails("redelivers a failed batch instead of skipping past it", async () => {
-    const { ctx, settle: settleCtx } = fakeDurableObjectCtx();
-    const { stream, pump, settle: settlePump } = fakeStreamWithPump();
+// A faithful in-memory stream: an append log plus one live subscriber whose pump
+// mirrors stream.ts #openConnection — it advances the cursor and fire-and-forgets
+// each batch, and `subscribeOutbound({ replayAfterOffset })` replays everything
+// past that offset. This is what makes the host's resubscribe-from-checkpoint
+// recovery actually redeliver. `append` (used by the host for processor-registered
+// / error-occurred events) is recorded so tests can assert on it.
+function fakeStream() {
+  const log: StreamEvent[] = [];
+  const hostAppends: StreamEventInput[] = [];
+  let deliver: ((batch: StreamEventBatch) => unknown) | undefined;
+  let cursor = 0;
+  let subscribeFailures = 0; // make the next N subscribeOutbound calls throw
+
+  const pump = () => {
+    if (deliver === undefined) return;
+    const batch = log.filter((event) => event.offset > cursor);
+    if (batch.length === 0) return;
+    cursor = batch.at(-1)!.offset;
+    void Promise.resolve(
+      deliver({
+        namespace: "stream",
+        path: "/r",
+        events: batch,
+        streamMaxOffset: log.at(-1)?.offset ?? 0,
+      }),
+    ).catch(() => undefined);
+  };
+
+  const push = (input: StreamEventInput): StreamEvent => {
+    const event: StreamEvent = {
+      ...input,
+      offset: (log.at(-1)?.offset ?? 0) + 1,
+      createdAt: iso(),
+    };
+    log.push(event);
+    pump();
+    return event;
+  };
+
+  const stream = {
+    subscribeOutbound(args: {
+      subscriptionKey?: string;
+      replayAfterOffset?: number;
+      processEventBatch: (batch: StreamEventBatch) => unknown;
+    }) {
+      if (subscribeFailures > 0) {
+        subscribeFailures -= 1;
+        throw new Error("subscribeOutbound boom");
+      }
+      deliver = args.processEventBatch;
+      cursor = args.replayAfterOffset ?? 0;
+      queueMicrotask(pump);
+      return {
+        subscriptionKey: args.subscriptionKey ?? "k",
+        streamMaxOffset: log.at(-1)?.offset ?? 0,
+        unsubscribe() {
+          if (deliver === args.processEventBatch) deliver = undefined;
+        },
+      };
+    },
+    append(args: { event: StreamEventInput }) {
+      hostAppends.push(args.event);
+      return push(args.event);
+    },
+    appendBatch(args: { events: StreamEventInput[] }) {
+      return args.events.map(push);
+    },
+  };
+
+  // External producer: append a user event to the stream (drives delivery).
+  const produce = (input: StreamEventInput) => push(input);
+  return {
+    stream,
+    produce,
+    hostAppends,
+    failNextSubscribes: (count: number) => {
+      subscribeFailures = count;
+    },
+  };
+}
+
+const subscribeArgs = (stream: ReturnType<typeof fakeStream>["stream"]) => ({
+  stream: stream as never,
+  subscriptionKey: "k",
+  streamMaxOffset: 0,
+  subscriptionConfiguredEvent: { offset: 0 } as never,
+  streamRuntimeState: { coreProcessorState: { namespace: "stream", path: "/r" } as never },
+});
+
+describe("T1 — a failed batch must not drop events under continued delivery (C1)", () => {
+  // Fixed in Stage 1: on ingest failure the host re-handshakes from the durable
+  // checkpoint and the stream replays the batch; batches delivered on the
+  // superseded connection are dropped so a later one can't advance the
+  // checkpoint past the gap.
+  it("recovers a transient failure even while later events keep arriving", async () => {
+    const { ctx, settle } = fakeDurableObjectCtx();
+    const { stream, produce } = fakeStream();
     const host = createStreamProcessorHost(ctx);
 
-    let failNextBatch = true;
+    let failOnAdd = true;
     host.add(
       "counter",
       (deps) =>
         new CounterProcessor({
           ...deps,
-          onBatch: () => {
-            if (failNextBatch) {
-              failNextBatch = false;
+          onBatch: ({ events }) => {
+            // Fail the first delivery that carries a user add, once.
+            if (failOnAdd && events.some((event) => event.type === "test/add")) {
+              failOnAdd = false;
               throw new Error("transient ingest failure");
             }
           },
         }),
     );
 
-    await host.requestStreamSubscription({
-      stream: stream as never,
-      subscriptionKey: "k",
-      streamMaxOffset: 0,
-      subscriptionConfiguredEvent: { offset: 0 } as never,
-      streamRuntimeState: { coreProcessorState: { namespace: "stream", path: "/r" } as never },
-    });
+    await host.requestStreamSubscription(subscribeArgs(stream));
+    await settle(); // process the auto-appended processor-registered event
 
-    pump([add(1, 5)]); // fails, swallowed; cursor advances past offset 1
-    await tick();
-    pump([add(2, 7)]); // succeeds
-    await settlePump();
-    await settleCtx();
+    // Two adds arrive close together: the first fails, the second is delivered
+    // on the same (now superseded) connection before recovery completes.
+    produce({ type: "test/add", payload: { amount: 5 } });
+    produce({ type: "test/add", payload: { amount: 7 } });
+    await settle();
 
-    // Both events must end up in reduced state. Today event 1 is lost forever.
+    // Neither add may be lost: 5 + 7.
     expect(host.runtimeState("counter").snapshot?.state).toEqual({ total: 12 });
   });
 });
 
+describe("T1b — a poison batch records an error and disconnects (C1 poison policy)", () => {
+  it("appends stream/error-occurred and stops after repeated failures", async () => {
+    const { ctx, settle } = fakeDurableObjectCtx();
+    const { stream, produce, hostAppends } = fakeStream();
+    const host = createStreamProcessorHost(ctx);
+
+    host.add(
+      "counter",
+      (deps) =>
+        new CounterProcessor({
+          ...deps,
+          onBatch: ({ events }) => {
+            if (events.some((event) => event.type === "test/add")) {
+              throw new Error("poison batch");
+            }
+          },
+        }),
+    );
+
+    await host.requestStreamSubscription(subscribeArgs(stream));
+    await settle();
+
+    produce({ type: "test/add", payload: { amount: 5 } });
+    await settle();
+
+    // The processor never advanced (the add never ingested) ...
+    expect(host.runtimeState("counter").snapshot?.state).toEqual({ total: 0 });
+    // ... and the host recorded the failure on the stream then disconnected.
+    const errorEvents = hostAppends.filter(
+      (event) => event.type === "events.iterate.com/stream/error-occurred",
+    );
+    expect(errorEvents).toHaveLength(1);
+  });
+});
+
+describe("T1c — a failed recovery must not permanently wedge the ingest chain (C1)", () => {
+  // The ingest chain is extended with `.then(...)`; if recovery throws (the
+  // re-handshake or poison append fails) the chain must not stay rejected, or
+  // every later batch's handler would be skipped. A subsequent re-handshake must
+  // still be able to make progress.
+  it("keeps processing after a re-handshake when the first recovery threw", async () => {
+    const { ctx, settle } = fakeDurableObjectCtx();
+    const fake = fakeStream();
+    const host = createStreamProcessorHost(ctx);
+
+    let failOnAdd = true;
+    host.add(
+      "counter",
+      (deps) =>
+        new CounterProcessor({
+          ...deps,
+          onBatch: ({ events }) => {
+            if (failOnAdd && events.some((event) => event.type === "test/add")) {
+              failOnAdd = false;
+              throw new Error("transient ingest failure");
+            }
+          },
+        }),
+    );
+
+    await host.requestStreamSubscription(subscribeArgs(fake.stream));
+    await settle();
+
+    // The add fails, recovery re-handshakes — and that resubscribe throws.
+    fake.failNextSubscribes(1);
+    fake.produce({ type: "test/add", payload: { amount: 5 } });
+    await settle();
+
+    // A fresh handshake (as the stream's reconcile would do) must still recover
+    // the add. If the chain were left rejected, this would never be processed.
+    await host.requestStreamSubscription(subscribeArgs(fake.stream));
+    await settle();
+
+    expect(host.runtimeState("counter").snapshot?.state).toEqual({ total: 5 });
+  });
+});
+
 describe("T2 — writeState failure advances the in-memory checkpoint (C2)", () => {
-  // FAILS until C2 is fixed (assign #state/#checkpointOffset only after
-  // #saveSnapshot succeeds). Flip `it.fails` -> `it` once Stage 1 lands.
-  it.fails("persists a snapshot when a writeState failure is retried", async () => {
+  // Fixed in Stage 1: the snapshot is written before #state/#checkpointOffset
+  // advance, so a failed write leaves the batch retryable.
+  it("persists a snapshot when a writeState failure is retried", async () => {
     const writes: StreamProcessorSnapshot<{ total: number }>[] = [];
     let failNextWrite = true;
     const processor = new CounterProcessor({
@@ -177,9 +325,8 @@ describe("T2 — writeState failure advances the in-memory checkpoint (C2)", () 
 });
 
 describe("T5 — circuit-breaker token bucket on a backwards clock (M3)", () => {
-  // FAILS until M3 is fixed (clamp the refill delta with Math.max(0, ...)).
-  // Flip `it.fails` -> `it` once Stage 1 lands.
-  it.fails("does not drain the bucket when createdAt regresses", () => {
+  // Fixed in Stage 3: the refill delta is clamped with Math.max(0, ...).
+  it("does not drain the bucket when createdAt regresses", () => {
     const next = spendCircuitBreakerToken({
       state: {
         availableTokens: 5,
@@ -196,9 +343,9 @@ describe("T5 — circuit-breaker token bucket on a backwards clock (M3)", () => 
 });
 
 describe("T6 — circuit-breaker misses a flood after tripping during replay (M4)", () => {
-  // FAILS until M4 is fixed (fire the trip when tripped && offset > anchor &&
-  // !pausedYet, not only on the not-tripped->tripped edge). Flip once fixed.
-  it.fails("pauses on live events even when it tripped at/below the anchor", async () => {
+  // Fixed in Stage 3: the trip is level-triggered (fires whenever the bucket is
+  // in deficit on a live event), not edge-triggered on the previous state.
+  it("pauses on live events even when it tripped at/below the anchor", async () => {
     const committed: StreamEvent[] = [];
     const processor = new CircuitBreakerProcessor({
       iterateContext: {

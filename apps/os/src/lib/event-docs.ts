@@ -7,7 +7,6 @@ import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent
 import { CloudflareAiProcessorContract } from "~/domains/agents/stream-processors/cloudflare-ai/contract.ts";
 import { JsonataReactorProcessorContract } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
 import { OpenAiWsProcessorContract } from "~/domains/agents/stream-processors/openai-ws/contract.ts";
-import { CodemodeProcessorContract } from "~/domains/codemode/stream-processors/codemode/contract.ts";
 import { ProjectLifecycleProcessorContract } from "~/domains/projects/stream-processors/project-lifecycle.ts";
 import { RepoStreamProcessorContract } from "~/domains/repos/stream-processors/repo-stream-processor.ts";
 import { SlackAgentProcessorContract } from "~/domains/slack/stream-processors/slack-agent/contract.ts";
@@ -43,7 +42,6 @@ const processorContracts = [
   CloudflareAiProcessorContract,
   JsonataReactorProcessorContract,
   OpenAiWsProcessorContract,
-  CodemodeProcessorContract,
   SlackProcessorContract,
   SlackAgentProcessorContract,
 ] as const satisfies readonly ProcessorContractForDocs[];

@@ -151,12 +151,29 @@ batch retries") is the false claim: the base class is retry-_safe_ but nothing
 retries. The test at `stream-processor-class.test.ts:235` only passes because
 the test redelivers by hand.
 
-- [ ] **Fix:** on delivery/ingest failure, `unsubscribe()` and resubscribe from
-      the durable checkpoint (`snapshot().offset`). Replay is already idempotent
-      (offset filter + trigger `RAISE(IGNORE)`). Apply on both the hosted-host
-      path and the browser store path. Consider centralizing the "redeliver from
-      checkpoint on failure" policy rather than duplicating it per consumer.
-- [ ] Update the `stream-processor.ts:369` comment to describe the real policy.
+- [x] **Fixed (Stage 1) — hosted-processor path.** On ingest failure the host
+      (`createStreamProcessorHost`) re-handshakes from the durable checkpoint and
+      the stream replays the batch. Two subtleties the fix had to handle:
+  - **Continued delivery race:** the pump is fire-and-forget, so while a failed
+    batch recovers the stream keeps delivering _later_ batches; ingesting one
+    would advance the checkpoint past the gap. The host now tags each
+    subscription with a `generation` and runs ingest through a per-processor
+    serial chain that re-checks the generation **between** batches — batches from
+    the superseded connection are dropped, and the post-recovery replay is the
+    single source of truth.
+  - **Poison policy (your call):** after `MAX_CONSECUTIVE_INGEST_FAILURES` (3)
+    consecutive failures the host appends a `stream/error-occurred` event
+    (idempotency-keyed by checkpoint offset) and disconnects, leaving it to the
+    subscriber/processor (or a later re-dial) to decide — no hot loop.
+  - Covered by T1 (transient recovery under continued delivery) + T1b (poison),
+    both passing.
+- [x] Updated the `stream-processor.ts` "batch retries" comment to describe the
+      real host-driven recovery.
+- [ ] **Still TODO — browser-store path** (`stream-browser-store.ts:380-391`).
+      The browser mirror swallows ingest failures the same way and wedges on the
+      SQLite continuity trigger. Apply the same resubscribe-from-checkpoint
+      recovery there (separate consumer; tracked under Stage 4 alongside the
+      other browser-runtime fixes).
 
 ### C2 — `writeState` failure advances in-memory checkpoint, persists nothing (CRITICAL)
 
@@ -174,8 +191,10 @@ returns at line 349 (`if (events.length === 0) return;`) without reaching
 `#saveSnapshot` again — a host trusting "failed ⇒ retries" gets a silent success
 that persisted nothing. (Verified with a runtime repro.)
 
-- [ ] **Fix:** assign `#state` / `#checkpointOffset` only **after**
-      `#saveSnapshot()` succeeds.
+- [x] **Fixed (Stage 1):** `#ingest` now `await this.#writeState({ offset, state })`
+      **before** assigning `#state` / `#checkpointOffset`; the single-use
+      `#saveSnapshot` helper was inlined and removed. T2 flipped to `it` and
+      passes.
 
 ### C3 — `PublicStreamRpcTarget` leaks `protected` methods → state injection → arbitrary callable dispatch (CRITICAL, security)
 
@@ -198,13 +217,14 @@ on the next `#reconcile` → `#connectOutboundConnection` (`stream.ts:769`) the 
 client-reachable RPC into arbitrary same-account binding/DO dispatch. Rolling
 back `maxOffset` also bricks future appends (PK conflicts).
 
-- [ ] **Fix:** make `makeRpcTargetClass` an **allowlist** (explicit set of API
-      methods) instead of a denylist, or pass an `exclude` covering every
-      non-API prototype method. Allowlist is the only safe default for a class
-      with this many internal methods. Re-derive the allowlist from the
-      `StreamRpc` type so it can't drift.
-- [ ] This likely lets `installSubscribeRpcTargetOverride` fold into the
-      allowlisted generator (see E-stream conciseness).
+- [x] **Fixed (Stage 1):** `makeRpcTargetClass` gained an `include` allowlist
+      option; both `StreamRpcTarget` and `PublicStreamRpcTarget` now pass an
+      explicit `STREAM_RPC_METHODS` list (`satisfies readonly (keyof StreamRpc)[]`
+      so it can't drift), plus `subscribeOutbound` on the internal target only.
+      `readCoreProcessorState` / `writeCoreProcessorState` are no longer proxied.
+      T3 flipped to `it` and passes.
+- [ ] Follow-up (Stage 6 E7): fold `installSubscribeRpcTargetOverride` into the
+      allowlisted generator now that the surface is explicit.
 
 ---
 
@@ -288,11 +308,12 @@ trap). Same family: `idempotencyKey` is `z.string()` at input (`event.ts:59`)
 but `.trim().min(1)` in `getEventSchema` — a whitespace key passes input
 validation then explodes in reduce.
 
-- [ ] **Fix (decide):** either add `source` to `getEventSchema` /
-      `getEventInputSchema`, **or** delete `StreamEventSource` + `source`
-      entirely (zero callers — favours conciseness). Pick one and make input
-      and reduce schemas agree.
-- [ ] Align `idempotencyKey` validation between input and event schemas.
+- [x] **Fixed (Stage 3):** kept `source` (the migration note shows OS wants it).
+      Extracted a shared `StreamEventSourceSchema` + `streamEventIdempotencyKeySchema`
+      in `event.ts` and used them in both `getEventSchema` and
+      `getEventInputSchema`, so input and reduce schemas agree. `idempotencyKey`
+      is now `trim().min(1)` on input too (a blank key can no longer pass append
+      and then fail in reduce). T4 flipped to `it` and passes.
 
 ### M3 — Circuit-breaker token bucket subtracts on a backwards clock (MAJOR)
 
@@ -305,7 +326,8 @@ delta drains tokens. `createdAt` is per-event wall clock
 it. At the default refill, −1 s = −100,000 tokens → instant false trip → stream
 paused for no reason.
 
-- [ ] **Fix:** clamp with `Math.max(0, createdAtMs - lastRefillAtMs)`.
+- [x] **Fixed (Stage 3):** `spendCircuitBreakerToken` clamps the elapsed time with
+      `Math.max(0, …)`. T5 flipped to `it` and passes.
 
 ### M4 — Circuit-breaker edge-trigger misses sustained floods after replay (MAJOR)
 
@@ -319,9 +341,14 @@ not-tripped→tripped transition lands at an offset `<= sideEffectsAfterOffset`
 breaker is silently disabled. Also no retry if the background `stream/paused`
 append fails (`stream-processor.ts:324-327` only logs).
 
-- [ ] **Fix:** fire the trip side effect when
-      `tripped(state) && event.offset > anchor && !pausedYet`, not only on the
-      transition edge.
+- [x] **Fixed (Stage 3):** the trip is now level-triggered — `processEvent` fires
+      whenever `shouldTripCircuitBreaker(state)` on a live event (the base class
+      only calls `processEvent` for events past the anchor), dropping the
+      `previousState` edge guard. The pause append is idempotency-keyed per offset
+      and self-limits (once paused, ordinary appends are rejected). T6 flipped to
+      `it` and passes. _(The "failed pause append never retried" sub-point is
+      subsumed by the C1 ingest-failure recovery and is not separately handled
+      here — noted for Stage 3 follow-up if it proves necessary.)_
 
 ### M5 — `eventTypes` is silently dropped by the subscribe override (MAJOR / decision)
 

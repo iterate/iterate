@@ -45,14 +45,13 @@ const ITX_ERROR_CODE_SET: ReadonlySet<string> = new Set(ITX_ERROR_CODES);
  *
  * - The serializer emits `["error", name, message, stack?, props?]` where
  *   `props` is the error's OWN ENUMERABLE properties (everything except
- *   name/message/stack). The receiver reconstructs a plain `Error` (builtin
- *   names like TypeError map to their classes; anything else — including
- *   "ItxError" — becomes `Error`) and copies the props back on, skipping
- *   `name` again. So `name` is DROPPED in transit (Workers RPC preserves it,
- *   capnweb does not), class identity is lost, and the only thing that
- *   reliably survives every boundary is the own enumerable props: `code` and
- *   `details`. Detection is therefore duck-typed on `code` alone via
- *   {@link getItxErrorCode} — NEVER `instanceof ItxError` and never `name`
+ *   name/message/stack). The receiver reconstructs builtin names
+ *   (TypeError, …) as their classes; anything else — including "ItxError" —
+ *   becomes a plain `Error` and the name is DROPPED (the props loop skips
+ *   `name`), then the remaining props are copied back on. Both class and
+ *   name identity are lost in transit, so `code` and `details` are own
+ *   enumerable properties and detection is duck-typed via
+ *   {@link getItxErrorCode} — NEVER `instanceof ItxError` or `.name` checks
  *   on the client.
  * - The stack is only transmitted when the session's `onSendError` hook
  *   returns a rewritten error; see {@link tagOutboundItxError}.

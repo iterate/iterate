@@ -2,13 +2,9 @@ import { env } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { D1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import {
-  getD1ObjectCatalogRecord,
-  listD1ObjectCatalogRecordsByIndex,
-} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { listD1ObjectCatalogRecordsByIndex } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { RequestContext } from "~/request-context.ts";
 import { getProjectById, updateProjectConfig } from "~/db/queries/.generated/index.ts";
-import type { CodemodeSessionStructuredName } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import {
   ensureProjectCustomHostname,
   ensureProjectCustomHostnameStatus,
@@ -22,7 +18,6 @@ import {
 } from "~/lib/project-host-routing.ts";
 import { authenticatedUserMiddleware, os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireAuthorizedProject, requireProjectScope } from "~/orpc/project-access.ts";
-import { projectCodemodeRouter } from "~/orpc/routers/codemode.ts";
 import { projectAgentsRouter } from "~/orpc/routers/agents.ts";
 import { projectReposRouter } from "~/orpc/routers/repos.ts";
 import { projectIntegrationsRouter } from "~/orpc/routers/integrations.ts";
@@ -38,7 +33,6 @@ type ProjectRow = {
   updated_at: string;
 };
 
-type CodemodeSessionCatalogRecord = D1ObjectCatalogRecord<CodemodeSessionStructuredName>;
 type InboundMcpSessionCatalogRecord =
   D1ObjectCatalogRecord<ProjectMcpServerConnectionStructuredName>;
 
@@ -57,16 +51,6 @@ async function toProjectWithIngressUrl(row: ProjectRow) {
   return {
     ...toProject(row),
     ingressUrl: await projectDurableObject(row.id).ingressUrl(),
-  };
-}
-
-function toCodemodeSession(record: CodemodeSessionCatalogRecord) {
-  return {
-    name: record.name,
-    projectId: record.structuredName.projectId,
-    streamPath: StreamPath.parse(record.structuredName.streamPath),
-    createdAt: record.createdAt,
-    lastWokenAt: record.lastWokenAt,
   };
 }
 
@@ -250,41 +234,6 @@ export const projectsRouter = {
         const project = requireProjectScope(context);
         return await projectLifecycleDurableObject(project.id).getProjectLifecycleRunnerState();
       }),
-    codemode: {
-      ...projectCodemodeRouter,
-      listSessions: os.project.codemode.listSessions
-        .use(projectScopeMiddleware)
-        .handler(async ({ context }) => {
-          const project = requireProjectScope(context);
-          const rows = await listD1ObjectCatalogRecordsByIndex<CodemodeSessionStructuredName>(
-            env.DB,
-            {
-              className: "CodemodeSession",
-              indexName: "projectId",
-              indexValue: project.id,
-            },
-          );
-
-          return { sessions: rows.map(toCodemodeSession) };
-        }),
-      findSession: os.project.codemode.findSession
-        .use(projectScopeMiddleware)
-        .handler(async ({ context, input }) => {
-          const project = requireProjectScope(context);
-          const record = await getD1ObjectCatalogRecord<CodemodeSessionStructuredName>(env.DB, {
-            className: "CodemodeSession",
-            name: input.name,
-          });
-
-          if (!record || record.structuredName.projectId !== project.id) {
-            throw new ORPCError("NOT_FOUND", {
-              message: `Codemode Session ${input.name} not found`,
-            });
-          }
-
-          return toCodemodeSession(record);
-        }),
-    },
     agents: projectAgentsRouter,
     repos: projectReposRouter,
     inboundMcpServer: {
