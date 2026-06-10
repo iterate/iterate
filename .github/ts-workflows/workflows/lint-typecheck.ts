@@ -41,6 +41,10 @@ export default workflow({
           name: "Run Typecheck",
           run: "pnpm typecheck",
         },
+        {
+          name: "Run Knip",
+          run: "pnpm knip",
+        },
       ],
     },
   },
