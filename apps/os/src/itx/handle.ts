@@ -74,7 +74,14 @@ export type ItxRuntime = {
   exports: Record<string, (options: { props: Record<string, unknown> }) => unknown>;
 };
 
-const ITX_WORKSPACE_ID = "itx";
+/**
+ * Project contexts share one workspace ("itx"); child contexts each get
+ * their own, derived from the context id — an agent session's repo clones
+ * and files are isolated per context.
+ */
+function itxWorkspaceId(contextId: string): string {
+  return isChildContextId(contextId) ? `itx:${contextId}` : "itx";
+}
 
 export class Itx extends RpcTarget {
   readonly #runtime: ItxRuntime;
@@ -149,7 +156,10 @@ export class Itx extends RpcTarget {
       throw new Error("WorkspaceCapability export is not available.");
     }
     return factory({
-      props: { projectId: this.#requireProjectId(), workspaceId: ITX_WORKSPACE_ID },
+      props: {
+        projectId: this.#requireProjectId(),
+        workspaceId: itxWorkspaceId(this.#runtime.contextId),
+      },
     });
   }
 

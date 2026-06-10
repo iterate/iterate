@@ -7,7 +7,7 @@ import type { CaptunServerShard } from "captun/worker";
 import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
-import type { CodemodeSession } from "./src/domains/codemode/durable-objects/codemode-session.ts";
+import type { CodemodeSession } from "./src/durable-objects/codemode-session-tombstone.ts";
 import type { ContextDO } from "./src/itx/context-do.ts";
 import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-append-chain-subscriber.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/durable-objects/project-durable-object.ts";

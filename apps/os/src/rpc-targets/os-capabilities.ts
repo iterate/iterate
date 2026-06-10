@@ -13,23 +13,17 @@ import {
 } from "@iterate-com/shared/codemode/json-schema-types";
 import { createRequestLogger } from "@iterate-com/shared/request-logging";
 import { createD1Client } from "sqlfu";
-import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
+import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import type { RequestContext } from "~/request-context.ts";
-import type { CodemodeSession } from "~/domains/codemode/durable-objects/codemode-session.ts";
 import type { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import type { StreamDurableObject } from "~/domains/streams/new-stream-runtime.ts";
 import { os } from "~/orpc/orpc.ts";
 import { projectsRouter } from "~/orpc/routers/projects.ts";
-export {
-  createExampleCapabilityProviders,
-  createExampleRpcProviderRegistration,
-} from "./example-provider-registrations.ts";
 
 type ExampleCapabilityEnv = {
   AI?: {
     run(model: string, input: unknown): Promise<unknown>;
   };
-  CODEMODE_SESSION?: DurableObjectNamespace<CodemodeSession>;
   DB?: D1Database;
   DO_CATALOG?: D1Database;
   PROJECT?: DurableObjectNamespace<ProjectDurableObject>;

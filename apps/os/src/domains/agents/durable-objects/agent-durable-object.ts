@@ -17,7 +17,7 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
 import { typeid } from "@iterate-com/shared/typeid";
-import type { ExecuteCodemodeFunctionCallInput } from "~/domains/codemode/stream-processors/codemode/implementation.ts";
+import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import type { ContextDO } from "~/itx/context-do.ts";
 import type { CapInvoke, SerializableCapTarget } from "~/itx/protocol.ts";
 import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
@@ -53,7 +53,6 @@ import {
   type WorkspaceDurableObject,
   type WorkspaceStructuredName,
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
-import { defaultWorkspaceIdForCodemodeSession } from "~/domains/workspaces/entrypoints/workspace-provider-registration.ts";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import {
   DEFAULT_AGENT_LLM_PROVIDER,
@@ -567,10 +566,11 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   private async getAgentWorkspace(params: AgentDurableObjectStructuredName) {
+    const contextId = await this.ensureItxContext(params);
     return await getInitializedDoStub({
       allowCreate: true,
       namespace: this.env.WORKSPACE,
-      name: agentWorkspaceName(params),
+      name: agentWorkspaceName({ contextId, params }),
     });
   }
 
@@ -911,10 +911,15 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
   );
 }
 
-function agentWorkspaceName(params: AgentDurableObjectStructuredName): WorkspaceStructuredName {
+function agentWorkspaceName(input: {
+  contextId: string;
+  params: AgentDurableObjectStructuredName;
+}): WorkspaceStructuredName {
   return {
-    projectId: params.projectId,
-    workspaceId: defaultWorkspaceIdForCodemodeSession({ streamPath: params.agentPath }),
+    projectId: input.params.projectId,
+    // Must match the itx handle's workspace derivation (handle.ts): agent
+    // scripts reach this workspace as ctx.workspace.
+    workspaceId: `itx:${input.contextId}`,
   };
 }
 

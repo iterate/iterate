@@ -10,7 +10,6 @@ import { internalContract } from "@iterate-com/shared/apps/internal-router-contr
 import { z } from "zod";
 
 const JSONObject = z.record(z.string(), z.unknown());
-const CodemodeProviderInput = z.array(z.unknown());
 const ProjectScopedInput = z.object({
   projectSlugOrId: z.string(),
 });
@@ -286,100 +285,6 @@ export const osContract = oc.router({
       })
       .input(ProjectScopedInput)
       .output(z.unknown()),
-    codemode: {
-      listSessions: oc
-        .route({
-          method: "GET",
-          path: "/projects/{projectSlugOrId}/codemode-sessions",
-          description: "List Codemode Sessions for a project",
-          tags: ["/project", "/codemode"],
-        })
-        .input(ProjectScopedInput)
-        .output(z.object({ sessions: z.array(CodemodeSession) })),
-      findSession: oc
-        .route({
-          method: "GET",
-          path: "/projects/{projectSlugOrId}/codemode-sessions/{name}",
-          description: "Get a Codemode Session by catalog name",
-          tags: ["/project", "/codemode"],
-        })
-        .input(ProjectScopedInput.extend({ name: z.string() }))
-        .output(CodemodeSession),
-      createSession: oc
-        .route({
-          method: "POST",
-          path: "/projects/{projectSlugOrId}/codemode-sessions",
-          description:
-            "Create or attach to a Codemode Session, append setup events, and optionally start a Script Execution",
-          tags: ["/project", "/codemode"],
-        })
-        .input(
-          ProjectScopedInput.extend({
-            code: z.string().trim().min(1).optional(),
-            events: z.array(EventInput).default([]),
-            providers: CodemodeProviderInput.default([]),
-            streamPath: StreamPath.optional(),
-          }),
-        )
-        .output(
-          z.object({
-            appendedEvents: z.array(Event),
-            registeredProviderEvents: z.array(Event),
-            scriptExecutionEvent: Event.nullable(),
-            session: CodemodeSession,
-          }),
-        ),
-      executeScript: oc
-        .route({
-          method: "POST",
-          path: "/projects/{projectSlugOrId}/codemode-scripts",
-          description:
-            "Append a Script Execution request to a Codemode Session and return the committed event",
-          tags: ["/project", "/codemode"],
-        })
-        .input(
-          ProjectScopedInput.extend({
-            code: z.string().min(1),
-            events: z.array(EventInput).default([]),
-            providers: CodemodeProviderInput.default([]),
-            streamPath: StreamPath.optional(),
-          }),
-        )
-        .output(
-          z.object({
-            event: Event,
-            streamPath: StreamPath,
-          }),
-        ),
-      streamEvents: oc
-        .route({
-          method: "GET",
-          path: "/projects/{projectSlugOrId}/codemode-events/{+streamPath}",
-          description: "Read events from a Codemode Session's Event Stream Path",
-          tags: ["/project", "/codemode"],
-        })
-        .input(
-          ProjectScopedInput.extend({
-            afterOffset: StreamCursor.optional(),
-            beforeOffset: StreamCursor.optional(),
-            streamPath: StreamPath,
-          }),
-        )
-        .output(eventIterator(Event)),
-      describe: oc
-        .route({
-          method: "POST",
-          path: "/projects/{projectSlugOrId}/codemode-description",
-          description: "Render short instructions from tool provider registrations",
-          tags: ["/project", "/codemode"],
-        })
-        .input(
-          ProjectScopedInput.extend({
-            providers: CodemodeProviderInput,
-          }),
-        )
-        .output(z.object({ instructions: z.string() })),
-    },
     agents: {
       list: oc
         .route({
