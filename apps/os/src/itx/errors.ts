@@ -47,10 +47,13 @@ const ITX_ERROR_CODE_SET: ReadonlySet<string> = new Set(ITX_ERROR_CODES);
  *   `props` is the error's OWN ENUMERABLE properties (everything except
  *   name/message/stack). The receiver reconstructs a plain `Error` (builtin
  *   names like TypeError map to their classes; anything else — including
- *   "ItxError" — becomes `Error` with `name` reattached) and copies the props
- *   back on. Class identity is lost in transit, so `code` and `details` are
- *   own enumerable properties and detection is duck-typed via
- *   {@link getItxErrorCode} — NEVER `instanceof ItxError` on the client.
+ *   "ItxError" — becomes `Error`) and copies the props back on, skipping
+ *   `name` again. So `name` is DROPPED in transit (Workers RPC preserves it,
+ *   capnweb does not), class identity is lost, and the only thing that
+ *   reliably survives every boundary is the own enumerable props: `code` and
+ *   `details`. Detection is therefore duck-typed on `code` alone via
+ *   {@link getItxErrorCode} — NEVER `instanceof ItxError` and never `name`
+ *   on the client.
  * - The stack is only transmitted when the session's `onSendError` hook
  *   returns a rewritten error; see {@link tagOutboundItxError}.
  *
@@ -77,15 +80,17 @@ export class ItxError extends Error {
 
 /**
  * Duck-typed detection (works on both ends of any RPC boundary): an ItxError
- * is anything named "ItxError" carrying one of the five codes. Returns the
- * code, or undefined for everything else — including socket/connection
- * failures, which is what makes "retry only when code-less or INTERNAL"
- * predicates work.
+ * is any object carrying one of the five codes. `name` is deliberately NOT
+ * consulted — capnweb drops it in transit (see {@link ItxError}), so a name
+ * check would reject every error that crossed a capnweb session. The closed
+ * five-code set is what keeps this from false-positiving on other `code`-
+ * bearing errors (Node's ECONNREFUSED etc). Returns the code, or undefined
+ * for everything else — including socket/connection failures, which is what
+ * makes "retry only when code-less or INTERNAL" predicates work.
  */
 export function getItxErrorCode(error: unknown): ItxErrorCode | undefined {
   if (typeof error !== "object" || error === null) return undefined;
-  const candidate = error as { code?: unknown; name?: unknown };
-  if (candidate.name !== "ItxError") return undefined;
+  const candidate = error as { code?: unknown };
   if (typeof candidate.code !== "string" || !ITX_ERROR_CODE_SET.has(candidate.code)) {
     return undefined;
   }
