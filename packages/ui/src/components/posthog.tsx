@@ -1,6 +1,11 @@
-import * as PosthogReact from "posthog-js/react";
-import posthog, { type PostHog, type PostHogInterface } from "posthog-js";
-import { memo, type PropsWithChildren } from "react";
+import { memo, useEffect, useState, type ComponentType, type PropsWithChildren } from "react";
+
+type PostHog = import("posthog-js").PostHog;
+type PostHogInterface = import("posthog-js").PostHogInterface;
+type PostHogProviderComponent = ComponentType<PropsWithChildren<{ client: PostHog }>>;
+const loadPostHogModules = import.meta.env.SSR
+  ? null
+  : async () => Promise.all([import("posthog-js/react"), import("posthog-js")]);
 
 export interface SetupPosthogOptions {
   apiKey?: string;
@@ -71,27 +76,67 @@ function buildPosthogInitOptions(options: SetupPosthogOptions) {
   };
 }
 
-// oxlint-disable-next-line react/only-export-components
-export function setupPosthog(options: SetupPosthogOptions): PostHog {
-  if (!shouldEnablePosthog(options.apiKey) || typeof window === "undefined") return posthog;
+function setupPosthog(client: PostHog, options: SetupPosthogOptions): PostHog {
+  if (!shouldEnablePosthog(options.apiKey) || typeof window === "undefined") return client;
 
   if (window.__iteratePosthogInitialized) {
     if (window.__iteratePosthogApiKey === options.apiKey) {
-      return posthog;
+      return client;
     }
   }
 
-  const client = posthog.init(options.apiKey!, buildPosthogInitOptions(options));
+  const initialized = client.init(options.apiKey!, buildPosthogInitOptions(options));
   window.__iteratePosthogInitialized = true;
   window.__iteratePosthogApiKey = options.apiKey;
-  return client;
+  return initialized;
 }
 
 export const PostHogProvider = memo(
-  ({ children, client, enabled }: PropsWithChildren<{ client: PostHog; enabled: boolean }>) =>
-    enabled ? (
-      <PosthogReact.PostHogProvider client={client}>{children}</PosthogReact.PostHogProvider>
-    ) : (
-      <>{children}</>
-    ),
+  ({
+    children,
+    enabled,
+    options,
+  }: PropsWithChildren<{ enabled: boolean; options: SetupPosthogOptions }>) => {
+    const { apiKey, appStage, bootstrapFromUrl, proxyUrl, sessionRecording, uiHost } = options;
+    const [provider, setProvider] = useState<{
+      ClientProvider: PostHogProviderComponent;
+      client: PostHog;
+    } | null>(null);
+
+    useEffect(() => {
+      const loader = loadPostHogModules;
+      if (!enabled || !shouldEnablePosthog(apiKey) || !loader) {
+        setProvider(null);
+        return;
+      }
+
+      let disposed = false;
+
+      async function loadPosthog() {
+        const [{ PostHogProvider: ClientProvider }, posthogModule] = await loader!();
+        if (disposed) return;
+        setProvider({
+          ClientProvider,
+          client: setupPosthog(posthogModule.default, {
+            apiKey,
+            appStage,
+            bootstrapFromUrl,
+            proxyUrl,
+            sessionRecording,
+            uiHost,
+          }),
+        });
+      }
+
+      void loadPosthog();
+
+      return () => {
+        disposed = true;
+      };
+    }, [apiKey, appStage, bootstrapFromUrl, enabled, proxyUrl, sessionRecording, uiHost]);
+
+    if (!enabled || !provider) return <>{children}</>;
+
+    return <provider.ClientProvider client={provider.client}>{children}</provider.ClientProvider>;
+  },
 );

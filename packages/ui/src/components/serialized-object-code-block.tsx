@@ -2,49 +2,104 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Terminal } from "lucide-react";
-import { basicSetup, EditorView } from "codemirror";
-import { json } from "@codemirror/lang-json";
-import { yaml } from "@codemirror/lang-yaml";
-import { foldService } from "@codemirror/language";
-import { search, searchKeymap } from "@codemirror/search";
-import { keymap } from "@codemirror/view";
-import { vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
 import { toast } from "sonner";
 import { stringify as stringifyYaml } from "yaml";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
 
 type SerializedFormat = "yaml" | "json";
+const loadCodeMirrorModules = import.meta.env.SSR
+  ? null
+  : async () =>
+      Promise.all([
+        import("codemirror"),
+        import("@codemirror/lang-json"),
+        import("@codemirror/lang-yaml"),
+        import("@codemirror/language"),
+        import("@codemirror/search"),
+        import("@codemirror/view"),
+        import("@fsegurai/codemirror-theme-bundle"),
+      ]);
 
 interface CodeMirrorProps {
   value: string;
-  extensions: NonNullable<ConstructorParameters<typeof EditorView>[0]>["extensions"];
+  currentFormat: SerializedFormat;
+  showLineNumbers: boolean;
+  plainChrome: boolean;
 }
 
-function CodeMirror({ value, extensions }: CodeMirrorProps) {
+function CodeMirror({ value, currentFormat, showLineNumbers, plainChrome }: CodeMirrorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const viewRef = useRef<EditorView | null>(null);
+  const viewRef = useRef<any>(null);
 
   useEffect(() => {
-    if (!containerRef.current) {
-      return;
+    const loader = loadCodeMirrorModules;
+    if (!containerRef.current || !loader) return;
+    let disposed = false;
+
+    async function mountEditor() {
+      const [
+        codeMirrorModule,
+        jsonModule,
+        yamlModule,
+        languageModule,
+        searchModule,
+        viewModule,
+        themeModule,
+      ] = await loader!();
+
+      if (disposed || !containerRef.current) return;
+
+      viewRef.current?.destroy();
+
+      const { basicSetup, EditorView } = codeMirrorModule;
+      const { keymap } = viewModule;
+      const extensions = [
+        basicSetup,
+        themeModule.vsCodeLight,
+        (currentFormat === "yaml" ? yamlModule.yaml : jsonModule.json)(),
+        searchModule.search({ top: true }),
+        createFoldPromptBlocks(languageModule.foldService),
+        keymap.of(searchModule.searchKeymap),
+        EditorView.editable.of(false),
+        EditorView.contentAttributes.of({ tabindex: "0" }),
+        EditorView.lineWrapping,
+        !showLineNumbers || plainChrome
+          ? EditorView.theme({
+              ".cm-gutters": {
+                display: "none",
+              },
+            })
+          : [],
+        plainChrome
+          ? EditorView.theme({
+              ".cm-activeLine, .cm-activeLineGutter, .cm-selectionMatch": {
+                backgroundColor: "transparent",
+              },
+              ".cm-focused": {
+                outline: "none",
+              },
+            })
+          : [],
+      ];
+
+      const view = new EditorView({
+        doc: value,
+        extensions,
+        parent: containerRef.current,
+      });
+
+      viewRef.current = view;
     }
 
-    viewRef.current?.destroy();
-
-    const view = new EditorView({
-      doc: value,
-      extensions,
-      parent: containerRef.current,
-    });
-
-    viewRef.current = view;
+    void mountEditor();
 
     return () => {
+      disposed = true;
       viewRef.current?.destroy();
       viewRef.current = null;
     };
-  }, [extensions, value]);
+  }, [currentFormat, plainChrome, showLineNumbers, value]);
 
   return <div ref={containerRef} />;
 }
@@ -77,38 +132,6 @@ export function SerializedObjectCodeBlock({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const code = useMemo(() => serializeData(data, currentFormat), [currentFormat, data]);
-
-  const extensions = useMemo<CodeMirrorProps["extensions"]>(
-    () => [
-      basicSetup,
-      vsCodeLight,
-      (currentFormat === "yaml" ? yaml : json)(),
-      search({ top: true }),
-      foldPromptBlocks(),
-      keymap.of(searchKeymap),
-      EditorView.editable.of(false),
-      EditorView.contentAttributes.of({ tabindex: "0" }),
-      EditorView.lineWrapping,
-      !showLineNumbers || plainChrome
-        ? EditorView.theme({
-            ".cm-gutters": {
-              display: "none",
-            },
-          })
-        : [],
-      plainChrome
-        ? EditorView.theme({
-            ".cm-activeLine, .cm-activeLineGutter, .cm-selectionMatch": {
-              backgroundColor: "transparent",
-            },
-            ".cm-focused": {
-              outline: "none",
-            },
-          })
-        : [],
-    ],
-    [currentFormat, plainChrome, showLineNumbers],
-  );
 
   const handleCopy = async (format: SerializedFormat) => {
     try {
@@ -151,7 +174,12 @@ export function SerializedObjectCodeBlock({
           plainChrome ? "" : "rounded border",
         )}
       >
-        <CodeMirror value={code} extensions={extensions} />
+        <CodeMirror
+          value={code}
+          currentFormat={currentFormat}
+          showLineNumbers={showLineNumbers}
+          plainChrome={plainChrome}
+        />
       </div>
 
       {showToggle || showCopyButton || showDebugConsoleButton ? (
@@ -266,11 +294,11 @@ function serializeData(data: unknown, format: SerializedFormat) {
   }
 }
 
-function foldPromptBlocks() {
-  return foldService.of((state, lineStart, lineEnd) => {
+function createFoldPromptBlocks(foldService: any) {
+  return foldService.of((state: any, lineStart: number, lineEnd: number) => {
     const line = state.doc.lineAt(lineStart);
 
-    const collapseTo = (otherLine: typeof line) => {
+    const collapseTo = (otherLine: any) => {
       const indent = otherLine.text.split(/\S/)[0];
       return { from: lineEnd, to: otherLine.from + indent.length };
     };

@@ -1,29 +1,35 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
-import { basicSetup, EditorView } from "codemirror";
-import { json } from "@codemirror/lang-json";
-import { javascript } from "@codemirror/lang-javascript";
-import { yaml } from "@codemirror/lang-yaml";
-import { foldService } from "@codemirror/language";
-import { search, searchKeymap } from "@codemirror/search";
-import { keymap } from "@codemirror/view";
-import { vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
 
 type SourceCodeLanguage = "typescript" | "json" | "yaml" | "text";
-export type SourceCodeBlockExtension = Exclude<
-  NonNullable<ConstructorParameters<typeof EditorView>[0]>["extensions"],
-  undefined
->;
+export type SourceCodeBlockExtension = unknown;
+const loadCodeMirrorModules = import.meta.env.SSR
+  ? null
+  : async () =>
+      Promise.all([
+        import("codemirror"),
+        import("@codemirror/lang-json"),
+        import("@codemirror/lang-javascript"),
+        import("@codemirror/lang-yaml"),
+        import("@codemirror/language"),
+        import("@codemirror/search"),
+        import("@codemirror/view"),
+        import("@fsegurai/codemirror-theme-bundle"),
+      ]);
 
 interface CodeMirrorProps {
   value: string;
-  extensions: readonly SourceCodeBlockExtension[];
   editable: boolean;
+  language: SourceCodeLanguage;
+  showLineNumbers: boolean;
+  plainChrome: boolean;
+  wrapLongLines: boolean;
+  codeMirrorExtensions?: readonly SourceCodeBlockExtension[];
   selectAllSignal?: number;
   onChange?: (value: string) => void;
   onModEnter?: () => void;
@@ -31,14 +37,18 @@ interface CodeMirrorProps {
 
 function CodeMirror({
   value,
-  extensions,
   editable,
+  language,
+  showLineNumbers,
+  plainChrome,
+  wrapLongLines,
+  codeMirrorExtensions,
   selectAllSignal,
   onChange,
   onModEnter,
 }: CodeMirrorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const viewRef = useRef<EditorView | null>(null);
+  const viewRef = useRef<any>(null);
   const onChangeRef = useRef(onChange);
   const onModEnterRef = useRef(onModEnter);
   const initialSelectAllSignalRef = useRef(selectAllSignal);
@@ -57,79 +67,138 @@ function CodeMirror({
   }, [onModEnter]);
 
   useEffect(() => {
-    if (!containerRef.current) return;
-    viewRef.current?.destroy();
+    const loader = loadCodeMirrorModules;
+    if (!containerRef.current || !loader) return;
+    let disposed = false;
 
-    const view = new EditorView({
-      doc: valueRef.current,
-      extensions: [
-        keymap.of([
-          {
-            key: "Mod-Enter",
-            run: () => {
-              onModEnterRef.current?.();
-              return !!onModEnterRef.current;
+    async function mountEditor() {
+      const [
+        codeMirrorModule,
+        jsonModule,
+        javascriptModule,
+        yamlModule,
+        languageModule,
+        searchModule,
+        viewModule,
+        themeModule,
+      ] = await loader!();
+
+      if (disposed || !containerRef.current) return;
+      viewRef.current?.destroy();
+
+      const { basicSetup, EditorView } = codeMirrorModule;
+      const { keymap } = viewModule;
+      const languageExtension =
+        language === "json"
+          ? jsonModule.json()
+          : language === "yaml"
+            ? yamlModule.yaml()
+            : language === "typescript"
+              ? javascriptModule.javascript({ typescript: true })
+              : [];
+
+      const extensions = [
+        basicSetup,
+        themeModule.vsCodeLight,
+        languageExtension,
+        searchModule.search({ top: true }),
+        createFoldPromptBlocks(languageModule.foldService),
+        keymap.of(searchModule.searchKeymap),
+        EditorView.contentAttributes.of({ tabindex: "0" }),
+        wrapLongLines ? EditorView.lineWrapping : [],
+        !showLineNumbers || plainChrome
+          ? EditorView.theme({
+              ".cm-gutters": {
+                display: "none",
+              },
+            })
+          : [],
+        plainChrome
+          ? EditorView.theme({
+              ".cm-activeLine, .cm-activeLineGutter, .cm-selectionMatch": {
+                backgroundColor: "transparent",
+              },
+              ".cm-focused": {
+                outline: "none",
+              },
+            })
+          : [],
+        codeMirrorExtensions ?? [],
+      ];
+
+      const view = new EditorView({
+        doc: valueRef.current,
+        extensions: [
+          keymap.of([
+            {
+              key: "Mod-Enter",
+              run: () => {
+                onModEnterRef.current?.();
+                return !!onModEnterRef.current;
+              },
             },
-          },
-          {
-            key: "Shift-Enter",
-            run: () => {
-              onModEnterRef.current?.();
-              return !!onModEnterRef.current;
+            {
+              key: "Shift-Enter",
+              run: () => {
+                onModEnterRef.current?.();
+                return !!onModEnterRef.current;
+              },
             },
-          },
-        ]),
-        extensions,
-        EditorView.editable.of(editable),
-        EditorView.updateListener.of((update) => {
-          if (!update.docChanged) {
-            return;
-          }
+          ]),
+          extensions,
+          EditorView.editable.of(editable),
+          EditorView.updateListener.of((update: any) => {
+            if (!update.docChanged) {
+              return;
+            }
 
-          onChangeRef.current?.(update.state.doc.toString());
-        }),
-      ],
-      parent: containerRef.current,
-    });
+            onChangeRef.current?.(update.state.doc.toString());
+          }),
+        ],
+        parent: containerRef.current,
+      });
 
-    viewRef.current = view;
-    if (
-      latestSelectAllSignalRef.current !== undefined &&
-      latestSelectAllSignalRef.current !== initialSelectAllSignalRef.current
-    ) {
-      selectAll(view);
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (!editable || event.key !== "Tab" || event.metaKey || event.ctrlKey || event.altKey) {
-        return;
+      viewRef.current = view;
+      if (
+        latestSelectAllSignalRef.current !== undefined &&
+        latestSelectAllSignalRef.current !== initialSelectAllSignalRef.current
+      ) {
+        selectAll(view);
       }
 
-      event.preventDefault();
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (!editable || event.key !== "Tab" || event.metaKey || event.ctrlKey || event.altKey) {
+          return;
+        }
 
-      const selection = view.state.selection.main;
-      const indent = "\t";
+        event.preventDefault();
 
-      view.dispatch({
-        changes: {
-          from: selection.from,
-          to: selection.to,
-          insert: indent,
-        },
-        selection: {
-          anchor: selection.from + indent.length,
-        },
-      });
-    };
+        const selection = view.state.selection.main;
+        const indent = "\t";
 
-    view.dom.addEventListener("keydown", handleKeyDown);
+        view.dispatch({
+          changes: {
+            from: selection.from,
+            to: selection.to,
+            insert: indent,
+          },
+          selection: {
+            anchor: selection.from + indent.length,
+          },
+        });
+      };
+
+      view.dom.addEventListener("keydown", handleKeyDown);
+    }
+
+    void mountEditor();
 
     return () => {
-      view.dom.removeEventListener("keydown", handleKeyDown);
+      disposed = true;
       viewRef.current?.destroy();
       viewRef.current = null;
     };
-  }, [editable, extensions]);
+  }, [codeMirrorExtensions, editable, language, plainChrome, showLineNumbers, wrapLongLines]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -168,7 +237,7 @@ function CodeMirror({
   return <div ref={containerRef} />;
 }
 
-function selectAll(view: EditorView) {
+function selectAll(view: any) {
   view.focus();
   view.dispatch({
     selection: {
@@ -209,46 +278,6 @@ export function SourceCodeBlock({
 }: SourceCodeBlockProps) {
   const [copied, setCopied] = useState(false);
 
-  const extensions = useMemo<CodeMirrorProps["extensions"]>(() => {
-    const languageExtension =
-      language === "json"
-        ? json()
-        : language === "yaml"
-          ? yaml()
-          : language === "typescript"
-            ? javascript({ typescript: true })
-            : [];
-
-    return [
-      basicSetup,
-      vsCodeLight,
-      languageExtension,
-      search({ top: true }),
-      foldPromptBlocks(),
-      keymap.of(searchKeymap),
-      EditorView.contentAttributes.of({ tabindex: "0" }),
-      wrapLongLines ? EditorView.lineWrapping : [],
-      !showLineNumbers || plainChrome
-        ? EditorView.theme({
-            ".cm-gutters": {
-              display: "none",
-            },
-          })
-        : [],
-      plainChrome
-        ? EditorView.theme({
-            ".cm-activeLine, .cm-activeLineGutter, .cm-selectionMatch": {
-              backgroundColor: "transparent",
-            },
-            ".cm-focused": {
-              outline: "none",
-            },
-          })
-        : [],
-      codeMirrorExtensions ?? [],
-    ];
-  }, [codeMirrorExtensions, language, plainChrome, showLineNumbers, wrapLongLines]);
-
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(code);
@@ -270,8 +299,12 @@ export function SourceCodeBlock({
       >
         <CodeMirror
           value={code}
-          extensions={extensions}
           editable={editable}
+          language={language}
+          showLineNumbers={showLineNumbers}
+          plainChrome={plainChrome}
+          wrapLongLines={wrapLongLines}
+          codeMirrorExtensions={codeMirrorExtensions}
           selectAllSignal={selectAllSignal}
           onChange={onChange}
           onModEnter={onModEnter}
@@ -302,11 +335,11 @@ export function SourceCodeBlock({
   );
 }
 
-function foldPromptBlocks() {
-  return foldService.of((state, lineStart, lineEnd) => {
+function createFoldPromptBlocks(foldService: any) {
+  return foldService.of((state: any, lineStart: number, lineEnd: number) => {
     const line = state.doc.lineAt(lineStart);
 
-    const collapseTo = (otherLine: typeof line) => {
+    const collapseTo = (otherLine: any) => {
       const indent = otherLine.text.split(/\S/)[0];
       return { from: lineEnd, to: otherLine.from + indent.length };
     };

@@ -27,6 +27,14 @@ import type { BrowserReplEntry, BrowserReplExample } from "~/itx/browser-repl.ts
 const REPL_SOURCE_PATH = "/repl.ts";
 const replCodeBlockClassName =
   "min-h-0 [&_.cm-content]:font-mono [&_.cm-line]:px-0 [&_.cm-scroller]:font-mono";
+const loadTypeScriptExtensionModules = import.meta.env.SSR
+  ? null
+  : async () =>
+      Promise.all([
+        import("@codemirror/autocomplete"),
+        import("comlink"),
+        import("@valtown/codemirror-ts"),
+      ]);
 
 export interface ItxReplProps {
   canRun: boolean;
@@ -199,11 +207,9 @@ function useReplTypeScriptExtensions(input: { code: string; path: string }) {
     let disposed = false;
 
     async function initializeTypeScriptExtensions() {
-      const [autocompleteModule, comlinkModule, typeScriptExtensionsModule] = await Promise.all([
-        import("@codemirror/autocomplete"),
-        import("comlink"),
-        import("@valtown/codemirror-ts"),
-      ]);
+      if (!loadTypeScriptExtensionModules) return;
+      const [autocompleteModule, comlinkModule, typeScriptExtensionsModule] =
+        await loadTypeScriptExtensionModules();
 
       if (disposed) return;
 
