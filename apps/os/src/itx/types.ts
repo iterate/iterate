@@ -112,28 +112,22 @@ export interface ItxBuiltins {
    * is no separate "project object"; a narrowed itx IS the project. */
   readonly projects: ItxProjects;
 
-  /** The project's git repos. (Direction: becomes a defined capability
-   * rather than a hardwired built-in; surface unchanged.) */
-  readonly repos: unknown;
-
-  /** The project's workspace: readFile/writeFile and the flat git methods
-   * (gitClone/gitAdd/gitCommit/gitPush/gitStatus — nested RpcTargets do not
-   * survive RPC boundaries). (Same direction as `repos`.) */
-  readonly workspace: unknown;
-
-  /** The project worker. Every public method/getter is reachable at any
-   * depth: `itx.worker.someTool(args)`. */
-  readonly worker: unknown;
-
-  /** The Project Durable Object stub, whole surface ("cap #0"). If your
-   * handle is on this project's context at all, you get all of it. */
-  readonly project: unknown;
+  // repos, workspace, worker, project, egress, and ai are NOT built-ins:
+  // they are ordinary capabilities defined on the platform:project code
+  // context (code-contexts.ts), resolved through the same fallthrough as any
+  // user-defined cap — and therefore SHADOWABLE per context (prototype
+  // semantics; §8). itx.project still reaches the Project Durable Object's
+  // whole surface: its default target is a durable-object ref whose calls
+  // replay server-side, so `await itx.project.processor.snapshot()` keeps
+  // working in one expression.
 
   /**
-   * Explicit project egress. Secret placeholders are substituted inside the
-   * project's egress hop — `'Bearer getSecret({ key: "X_TOKEN" })'` in a
-   * header never sees the material. Isolates the platform loads get this
-   * same pipe bound as their global `fetch`, so inside a capability or itx
+   * Explicit project egress: sugar for `itx.egress.fetch(request)`. The
+   * default pipe substitutes secret placeholders (`'Bearer getSecret({ key:
+   * "X_TOKEN" })'` never sees the material); a live `egress` provider —
+   * `itx.caps.provide({ name: "egress", … })`, the egress-intercept story —
+   * receives placeholders RAW. Isolates the platform loads get the same
+   * dispatch bound as their global `fetch`, so inside a capability or itx
    * script, bare `fetch()` and `itx.fetch()` are the same door.
    */
   fetch(input: Request | string, init?: RequestInit): Promise<Response>;

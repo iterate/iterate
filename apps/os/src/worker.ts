@@ -58,7 +58,6 @@ export { UrlDial } from "~/itx/caps/url-dial.ts";
 export { ContextDO } from "~/itx/context-do.ts";
 export { ItxCapIngress } from "~/itx/http.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
-export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";

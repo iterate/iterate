@@ -15,7 +15,6 @@ type WorkerMainModule = Pick<
     | "ProjectEgress"
     | "OpenApiBridge"
     | "OrpcCapability"
-    | "ProjectCapability"
     | "ProjectIngressEntrypoint"
     | "ProjectMcpServerEntrypoint"
     | "RepoCapability"

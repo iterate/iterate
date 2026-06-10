@@ -25,7 +25,7 @@ import type {
 } from "@iterate-com/shared/streams/types";
 import { createD1Client } from "sqlfu";
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
-import { PathProxyRpcTarget, replayPathCall } from "./path-proxy.ts";
+import { PathProxyRpcTarget } from "./path-proxy.ts";
 import { ItxError } from "./errors.ts";
 import {
   GLOBAL_CONTEXT_ID,
@@ -54,7 +54,6 @@ import {
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { isProjectId, mintProjectId } from "~/domains/projects/project-id.ts";
 import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
-import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 
 /**
  * Everything a handle needs, resolved once by the restorer
@@ -84,15 +83,6 @@ function isAccessor(target: object, prop: PropertyKey): boolean {
     if (descriptor) return descriptor.get !== undefined;
   }
   return false;
-}
-
-/**
- * Project contexts share one workspace ("itx"); child contexts each get
- * their own, derived from the context id — an agent session's repo clones
- * and files are isolated per context.
- */
-function itxWorkspaceId(contextId: string): string {
-  return isChildContextId(contextId) ? `itx:${contextId}` : "itx";
 }
 
 export class Itx extends RpcTarget {
@@ -153,74 +143,13 @@ export class Itx extends RpcTarget {
     return new ItxStreams(this.#runtime, GLOBAL_CONTEXT_ID);
   }
 
-  get repos() {
-    // The repos domain entrypoint is already a clean project-scoped
-    // capability; hand it out directly rather than wrapping it.
-    return getReposCapability({
-      exports: this.#runtime.exports as unknown as Parameters<
-        typeof getReposCapability
-      >[0]["exports"],
-      props: { projectId: this.#requireProjectId() },
-    });
-  }
-
-  get workspace() {
-    // Like itx.repos: the workspace domain entrypoint already exposes the
-    // exact surface we want (readFile/writeFile and the flat
-    // gitClone/gitAdd/gitCommit/gitPush/gitStatus methods), so hand it out
-    // directly rather than re-wrapping it. workspaceId is fixed to "itx" —
-    // one workspace per project context.
-    const factory = this.#runtime.exports.WorkspaceCapability;
-    if (typeof factory !== "function") {
-      throw new Error("WorkspaceCapability export is not available.");
-    }
-    return factory({
-      props: {
-        projectId: this.#requireProjectId(),
-        workspaceId: itxWorkspaceId(this.#runtime.contextId),
-      },
-    });
-  }
-
-  /**
-   * The project's worker. The loaded worker entrypoint itself can never cross
-   * an RPC boundary (workerd forbids transferring loader entrypoints), so the
-   * path is replayed against it INSIDE the Project DO — every public
-   * method/getter is proxied automatically, at any depth:
-   * itx.worker.someTool(args), itx.worker.group.tool(args). `fetch` is the
-   * one special case: the worker's fetch is the project's homepage, served by
-   * the stateless ingress entrypoint (fetch on the PROJECT is egress).
-   */
-  get worker(): unknown {
-    const project = this.#projectStub();
-    return new PathProxyRpcTarget(async ({ path, args }) => {
-      if (path.length === 1 && path[0] === "fetch") {
-        const ingress = this.#runtime.exports.ProjectIngressEntrypoint({
-          props: { projectId: this.#requireProjectId() },
-        }) as { fetch(request: Request): Promise<Response> };
-        return await ingress.fetch(args[0] as Request);
-      }
-      return await project.callWorkerFunction({ args, path });
-    });
-  }
-
-  /**
-   * The project's own (cap #0) surface IS the Project Durable Object —
-   * adding a method/getter to ProjectDurableObject makes it instantly
-   * reachable as itx.project.newMethod() — zero forwarder code, nothing to
-   * keep in sync (the owner-chosen whole-surface posture, DECISIONS D17).
-   *
-   * Wrapped in a path proxy rather than handing out the raw stub: workerd
-   * does not pipeline calls through property accesses, so on a raw stub
-   * `stub.processor.snapshot()` throws. The proxy accumulates the path and
-   * replayPathCall awaits each intermediate segment, so deep traversal works
-   * in one expression: `await itx.project.processor.snapshot()`. Reserved/
-   * prototype path segments stay gated inside replayPathCall.
-   */
-  get project(): ProjectStub {
-    const stub = this.#projectStub();
-    return new PathProxyRpcTarget((call) => replayPathCall(stub, call)) as unknown as ProjectStub;
-  }
+  // repos, workspace, worker, and project are NOT here: they are ordinary
+  // capabilities on platform:project (code-contexts.ts), resolved through
+  // the same fallthrough as itx.slack — and therefore shadowable per
+  // context, which is the §8 point. itx.project still reaches the whole
+  // Project DO surface: its default is a durable-object ref whose calls
+  // replay server-side (replayPathCall awaits intermediate property
+  // segments), so deep one-expression traversal keeps working.
 
   get projects(): ItxProjects {
     return new ItxProjects(this.#runtime);

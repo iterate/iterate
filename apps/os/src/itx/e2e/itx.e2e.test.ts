@@ -746,7 +746,7 @@ test("revoked and offline caps fail with instructive errors", async () => {
       },
     },
   });
-  const projectDo = (projectItx as { project: unknown }).project as {
+  const projectDo = (projectItx as unknown as { project: unknown }).project as {
     itxInvoke(input: { args: unknown[]; name: string; path: string[] }): Promise<unknown>;
   };
   await expect(

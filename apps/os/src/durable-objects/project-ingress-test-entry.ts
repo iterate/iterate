@@ -172,7 +172,6 @@ export class ProjectDurableObject extends RealProjectDurableObject {
 }
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
-export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
@@ -322,7 +321,9 @@ export default {
         exports: ctx.exports as never,
         props: { context: "proj__local__test" },
       });
-      const project = itx.project as unknown as {
+      // itx.project is a capability now (platform:project default) — it
+      // resolves through the fallthrough proxy, not a typed member.
+      const project = (itx as unknown as { project: unknown }).project as {
         processor: { snapshot(): Promise<{ state: { phase: string } }> };
       };
       const snapshot = await project.processor.snapshot();

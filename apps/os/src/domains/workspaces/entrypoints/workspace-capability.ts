@@ -1,5 +1,6 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { isChildContextId } from "~/itx/protocol.ts";
 import {
   type CloudflareShellState,
   type WorkspaceDurableObject,
@@ -12,7 +13,15 @@ type WorkspaceCapabilityEnv = {
 
 export type WorkspaceCapabilityProps = {
   projectId: string;
-  workspaceId: string;
+  /**
+   * Explicit workspace id. When omitted (the registry-dialed `workspace`
+   * default cap), it derives from the dialing context: one workspace ("itx")
+   * per project, an isolated one per child context ("itx:ctx_…").
+   */
+  workspaceId?: string;
+  /** Attribution, injected by the registry at dial time. */
+  context?: string;
+  cap?: string;
 };
 
 type WorkspaceRpcStub = {
@@ -75,9 +84,13 @@ export class WorkspaceCapability extends WorkerEntrypoint<
   }
 
   private workspaceName(): WorkspaceStructuredName {
+    const props = this.ctx.props;
+    const workspaceId =
+      props.workspaceId ??
+      (props.context && isChildContextId(props.context) ? `itx:${props.context}` : "itx");
     return {
-      projectId: this.ctx.props.projectId,
-      workspaceId: this.ctx.props.workspaceId,
+      projectId: props.projectId,
+      workspaceId,
     };
   }
 
