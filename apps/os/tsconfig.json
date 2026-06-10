@@ -15,10 +15,7 @@
     "paths": {
       "~/*": ["./src/*"],
       "@iterate-com/ui/*": ["../../packages/ui/src/*"],
-      "@iterate-com/shared/*": ["../../packages/shared/src/*"],
-      "@iterate-com/shared/posthog/vite-plugin": [
-        "../../packages/shared/src/posthog/sourcemaps-vite-plugin.ts"
-      ]
+      "@iterate-com/shared/*": ["../../packages/shared/src/*"]
     },
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["vite/client", "node", "@cloudflare/workers-types"],
