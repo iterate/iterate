@@ -228,7 +228,7 @@ describe("agent presets", () => {
     const prompt = defaultAgentSystemPrompt("/agents/test");
     expect(prompt).toContain("/agents/test");
     expect(prompt).toContain("return undefined");
-    expect(prompt).toContain("If you're not sure about the shape of the result of a function call");
+    expect(prompt).toContain("If you're not sure about the shape of the result of a call");
     expect(prompt).toContain("Promise.all");
     expect(prompt).toContain("itx.<name>.<method>(args)");
     expect(prompt).toContain("itx.slack.chat.postMessage({ channel, thread_ts, text })");
