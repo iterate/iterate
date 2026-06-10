@@ -1003,10 +1003,16 @@ async function expectComposerAtScrollerBottom(page: Page) {
   await expect.poll(() => composerDistanceFromScrollerBottom(page)).toBeLessThanOrEqual(2);
 }
 
+// The scroll helpers below move the viewport with direct `scrollTop` writes (deterministic,
+// frame-addressable), but the page's initial tail pin deliberately releases only on user
+// *input* events — programmatic scroll deltas are indistinguishable from the virtualizer's
+// own convergence writes (see use-initial-tail-scroll.ts). Each helper therefore dispatches
+// a wheel event first: the same signal a real user reading older rows would produce.
 async function scrollStreamBy(page: Page, delta: number) {
   await page.getByTestId("stream-events").evaluate((element, scrollDelta) => {
     if (!(element instanceof HTMLElement))
       throw new Error("stream scroller must be an HTMLElement");
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: scrollDelta }));
     element.scrollTop += scrollDelta;
   }, delta);
 }
@@ -1018,6 +1024,7 @@ async function jitterScrollAwayFromBottom(
   await page.getByTestId("stream-events").evaluate(async (element, jitterOptions) => {
     if (!(element instanceof HTMLElement))
       throw new Error("stream scroller must be an HTMLElement");
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: -jitterOptions.delta }));
 
     let direction = -1;
     const finishedAt = performance.now() + jitterOptions.durationMs;
@@ -1048,6 +1055,7 @@ async function scrollToMiddle(page: Page) {
   await page.getByTestId("stream-events").evaluate((element) => {
     if (!(element instanceof HTMLElement))
       throw new Error("stream scroller must be an HTMLElement");
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
     element.scrollTop = Math.floor((element.scrollHeight - element.clientHeight) / 2);
   });
 }
@@ -1056,6 +1064,7 @@ async function sampleUpwardScroll(page: Page, options: { stepCount: number; scro
   return await page.getByTestId("stream-events").evaluate(async (element, scrollOptions) => {
     if (!(element instanceof HTMLElement))
       throw new Error("stream scroller must be an HTMLElement");
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: -scrollOptions.scrollDelta }));
 
     function frame() {
       const virtualRows = [...element.querySelectorAll('[data-testid="virtual-row"]')];

@@ -287,6 +287,49 @@ gates unread-badge suppression. Verified: both specs pass under 6x/8x/10x
 throttle (previously failed at 6x on branch _and_ main) and 5x consecutively
 unthrottled; full 26-spec suite green twice.
 
+**Follow-up: CI-only recurrence of the large-streams spec.** After the fix
+above, the large-streams spec kept failing on every streams-e2e CI run
+(`[data-index='1501']` element not found) while passing 10/10 locally —
+including at 10x CPU throttle + 150ms CDP network latency against the
+deployed staging worker, and 4/4 inside the official Linux Playwright Docker
+image over real network. The workflow uploaded no artifacts, so the first
+iteration added (a) an `actions/upload-artifact` step on failure
+(`.github/ts-workflows/workflows/streams-e2e.ts`), (b) a release-transition
+`console.debug` breadcrumb in the tail-pin hook (traces capture console), and
+(c) env-gated CDP throttling in the spec (`E2E_CPU_THROTTLE`,
+`E2E_NET_LATENCY_MS`) for local CI-condition repro.
+
+The captured CI trace was conclusive. ~1.2s into the 1500-row replay the pin
+logged `released: scroll-away {lastScrollTop:28723, nextScrollTop:28711,
+lastDistanceFromEnd:0, nextDistanceFromEnd:3888, scrollHeight:33319}` with no
+preceding input event, and the final DOM snapshot showed the viewport
+stranded at rows ~808–878 of 1502 (scrollTop ~32k). Decoded: the viewport sat
+on the _real_ DOM bottom (28723, pushed there by TanStack's clamped
+`wasAtEnd` grow-adjustments), then TanStack's scroll-reconcile loop snapped
+scrollTop back to _its_ end target (28711) — the virtualizer's end is short
+of the real DOM bottom by the height of non-virtualized chrome inside the
+scroller, and that gap is platform-dependent (~12px on CI Linux font metrics,
+≤2px on macOS, which is why the 2px epsilon hid it locally). One coalesced
+scroll event combined that −12px write with a +3876px append burst, which the
+I6 delta heuristic ("scrollTop down AND distance-from-end up = user left")
+misread as a user scroll-away; the released pin then stranded the viewport
+mid-replay. The heuristic is unfixable in principle: under scroll-event
+coalescing, the virtualizer's own convergence writes are indistinguishable
+from a user scrolling away.
+
+Final fix: the pin releases **only** on user-input signals
+(wheel/pointerdown/touchmove/keydown) or an explicit `markUserLeftTail()`;
+the scroll-delta heuristic is gone. Programmatic scrollers must announce
+intent — the e2e scroll helpers (`scrollStreamBy`, `scrollToMiddle`,
+`sampleUpwardScroll`, `jitterScrollAwayFromBottom`) now dispatch a synthetic
+`wheel` event before writing `scrollTop`, the same signal a real user
+produces, so the heavy-append spec's no-snap-back guarantee is preserved
+through the input path. Verified: full 26-spec suite green locally; the two
+tail-pin specs 5x consecutively green under 6x throttle + 100ms latency; full
+suite 3x against a deployed Linux-built scratch worker from the Linux
+Playwright container (only the two sqlite3-CLI specs fail there — the image
+lacks the `sqlite3` binary).
+
 ### I7. Core side effects ran against pre-commit stream state — ancestors dialed as `uninitialized:*`
 
 Preview e2e `admin-project` failed: `project.streams.list` only ever returned
