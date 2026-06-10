@@ -325,9 +325,8 @@ describe("T2 — writeState failure advances the in-memory checkpoint (C2)", () 
 });
 
 describe("T5 — circuit-breaker token bucket on a backwards clock (M3)", () => {
-  // FAILS until M3 is fixed (clamp the refill delta with Math.max(0, ...)).
-  // Flip `it.fails` -> `it` once Stage 1 lands.
-  it.fails("does not drain the bucket when createdAt regresses", () => {
+  // Fixed in Stage 3: the refill delta is clamped with Math.max(0, ...).
+  it("does not drain the bucket when createdAt regresses", () => {
     const next = spendCircuitBreakerToken({
       state: {
         availableTokens: 5,
@@ -344,9 +343,9 @@ describe("T5 — circuit-breaker token bucket on a backwards clock (M3)", () => 
 });
 
 describe("T6 — circuit-breaker misses a flood after tripping during replay (M4)", () => {
-  // FAILS until M4 is fixed (fire the trip when tripped && offset > anchor &&
-  // !pausedYet, not only on the not-tripped->tripped edge). Flip once fixed.
-  it.fails("pauses on live events even when it tripped at/below the anchor", async () => {
+  // Fixed in Stage 3: the trip is level-triggered (fires whenever the bucket is
+  // in deficit on a live event), not edge-triggered on the previous state.
+  it("pauses on live events even when it tripped at/below the anchor", async () => {
     const committed: StreamEvent[] = [];
     const processor = new CircuitBreakerProcessor({
       iterateContext: {
