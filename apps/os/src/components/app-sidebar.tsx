@@ -235,7 +235,7 @@ function AppSidebarUser() {
               align="end"
               sideOffset={4}
             >
-              <DropdownMenuLabel className="p-0 font-normal">
+              <div className="p-0 font-normal">
                 <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                   <Avatar className="size-8 rounded-lg">
                     <AvatarFallback className="rounded-lg">{initials}</AvatarFallback>
@@ -245,7 +245,7 @@ function AppSidebarUser() {
                     {email ? <span className="truncate text-xs">{email}</span> : null}
                   </div>
                 </div>
-              </DropdownMenuLabel>
+              </div>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
                 <DropdownMenuItem
