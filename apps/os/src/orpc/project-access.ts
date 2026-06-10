@@ -2,6 +2,7 @@ import { ORPCError } from "@orpc/server";
 import type { RequestContext } from "~/request-context.ts";
 import { getProjectById, getProjectBySlug } from "~/db/queries/.generated/index.ts";
 import { isProjectId } from "~/domains/projects/project-id.ts";
+import { principalIsAdmin } from "~/auth/principal.ts";
 
 /**
  * Confirms a caller can access an ownerless project before exposing
@@ -64,7 +65,8 @@ export async function requireProjectScopedAccess(input: {
 
 export function canReadProject(context: Pick<RequestContext, "principal">, projectId: string) {
   return (
-    context.principal?.type === "admin" || context.principal?.can("read", { projectId }) === true
+    (context.principal != null && principalIsAdmin(context.principal)) ||
+    context.principal?.can("read", { projectId }) === true
   );
 }
 

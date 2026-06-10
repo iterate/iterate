@@ -31,10 +31,11 @@ rollback plan.
       CONFLICT, BAD_REQUEST, INTERNAL; `onSendError` tags everything else
       INTERNAL) — **PR #1456**, see `apps/os/src/itx/errors.ts` and
       DECISIONS.md D18. UI conversion of mutating pages is unblocked.
-- [ ] `getServerItx(requestContext, target?)` — in-process handle for SSR
-      loaders (resolveItx + accessForPrincipal); project-narrowed handle in
-      route context under `$projectSlug`; seed QueryClient with the same
-      itxKey keys the browser uses.
+- [x] `getServerItx` — in-process handle for SSR loaders (resolveItx +
+      accessForPrincipal via the shared access.ts boundary); isomorphic
+      `getLoaderItx` + best-effort `prefetchItxQuery` seed the QueryClient
+      with the same itxKey keys the browser uses (streams index wired; itx
+      DECISIONS D19, PR #1457).
 - [ ] Org-membership `itx.projects.create` (org claims on the handle runtime;
       replaces the admin-only path for the dashboard create flow).
 

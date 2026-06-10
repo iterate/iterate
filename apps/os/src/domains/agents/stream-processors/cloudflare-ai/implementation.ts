@@ -95,6 +95,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
     const { event, state } = args;
     switch (event.type) {
       case "events.iterate.com/agent/llm-request-requested":
+      case "events.iterate.com/stream/subscriber-connected":
         return state;
       case "events.iterate.com/cloudflare-ai/llm-request-started":
         return {
@@ -128,19 +129,24 @@ export class CloudflareAiProcessor extends StreamProcessor<
       case "events.iterate.com/agent/llm-request-requested":
         this.#startLlmRequest({ event, state, runInBackground: args.runInBackground });
         return;
+      case "events.iterate.com/stream/subscriber-connected":
+        // The reconcile trigger: a fresh connection means some host's runtime
+        // state was reset. The connected event is always the tail of any batch
+        // it shares (appended after the handshake fixes the replay offset), so
+        // `state` here already reflects every replayed started/completed
+        // event. Blocking holds the checkpoint until the history read and
+        // re-execution scheduling land, so a failure redelivers this event.
+        args.blockProcessorWhile(() =>
+          this.#reconcileDanglingStartedRequests({
+            state,
+            sourceEvent: event,
+            runInBackground: args.runInBackground,
+          }),
+        );
+        return;
       default:
         return assertNever(event);
     }
-  }
-
-  protected override async processEventBatch(
-    args: Parameters<StreamProcessor<CloudflareAiProcessorContract>["processEventBatch"]>[0],
-  ): Promise<void> {
-    await super.processEventBatch(args);
-    await this.#reconcileDanglingStartedRequests({
-      state: args.state,
-      runInBackground: args.runInBackground,
-    });
   }
 
   /**
@@ -172,14 +178,16 @@ export class CloudflareAiProcessor extends StreamProcessor<
    * checkpoint advances past `agent/llm-request-requested` immediately, so a
    * crash mid-request is no longer healed by redelivery. A `started` entry
    * whose id this instance never executed can only come from a previous
-   * incarnation, so re-execute it from the original requested event in stream
-   * history (its offset is the llmRequestId). Stale recoveries finish
-   * gracefully: the still-current check skips agent-visible output and the
-   * terminal completed event flips the entry out of `started`. History is only
-   * read when a dangling entry exists, keeping the common path cheap.
+   * incarnation, so record the dead attempt with an explicit attempt-failed
+   * event and re-execute from the original requested event in stream history
+   * (its offset is the llmRequestId). Stale recoveries finish gracefully: the
+   * still-current check skips agent-visible output and the terminal completed
+   * event flips the entry out of `started`. History is only read when a
+   * dangling entry exists, keeping the common path cheap.
    */
   async #reconcileDanglingStartedRequests(args: {
     state: CloudflareAiState;
+    sourceEvent: { offset: number };
     runInBackground: (work: () => Promise<unknown>) => void;
   }) {
     const danglingIds = Object.entries(args.state.requests)
@@ -190,32 +198,77 @@ export class CloudflareAiProcessor extends StreamProcessor<
       .map(([id]) => Number(id));
     if (danglingIds.length === 0) return;
 
-    const events = await this.deps.readStreamEvents();
-    for (const llmRequestId of danglingIds) {
-      const requestedEvent = events.find(
-        (event) =>
-          event.offset === llmRequestId &&
-          event.type === "events.iterate.com/agent/llm-request-requested",
-      );
-      const reduction =
-        requestedEvent === undefined
-          ? undefined
-          : this.reduceRawEvent({ event: requestedEvent, state: args.state });
-      if (reduction?.event.type !== "events.iterate.com/agent/llm-request-requested") {
-        // The entry cannot be tied back to a requested event, so it is
-        // unrecoverable; claim it so it stops triggering history reads.
-        this.#executedLlmRequestIds.add(llmRequestId);
-        console.warn(
-          `cloudflare-ai: no agent/llm-request-requested event found at offset ${llmRequestId} for dangling started request`,
+    // Claim synchronously, before the first await: one batch routinely
+    // carries several subscriber-connected events (an agent host
+    // re-handshake appends one per co-hosted processor subscription) and
+    // their blocking reconciles run concurrently — without the eager claim
+    // each would observe the same dangling entries and start duplicate LLM
+    // executions. Claims still held by this pass are released on failure so
+    // a later connected event can retry.
+    const heldClaims = new Set(danglingIds);
+    for (const llmRequestId of heldClaims) this.#executedLlmRequestIds.add(llmRequestId);
+
+    try {
+      const events = await this.deps.readStreamEvents();
+      for (const llmRequestId of danglingIds) {
+        const requestedEvent = events.find(
+          (event) =>
+            event.offset === llmRequestId &&
+            event.type === "events.iterate.com/agent/llm-request-requested",
         );
-        continue;
+        const reduction =
+          requestedEvent === undefined
+            ? undefined
+            : this.reduceRawEvent({ event: requestedEvent, state: args.state });
+        if (reduction?.event.type !== "events.iterate.com/agent/llm-request-requested") {
+          // The entry cannot be tied back to a requested event, so it is
+          // unrecoverable; the claim stays so it stops triggering history reads.
+          heldClaims.delete(llmRequestId);
+          await this.#appendAttemptFailed({
+            llmRequestId,
+            reason: "unrecoverable",
+            sourceEvent: args.sourceEvent,
+          });
+          continue;
+        }
+        await this.#appendAttemptFailed({
+          llmRequestId,
+          reason: "host-restarted",
+          sourceEvent: args.sourceEvent,
+        });
+        // Handed to the executor: its own failure handling owns the claim now.
+        heldClaims.delete(llmRequestId);
+        this.#startLlmRequest({
+          event: reduction.event,
+          state: args.state,
+          runInBackground: args.runInBackground,
+        });
       }
-      this.#startLlmRequest({
-        event: reduction.event,
-        state: args.state,
-        runInBackground: args.runInBackground,
-      });
+    } catch (error) {
+      for (const llmRequestId of heldClaims) this.#executedLlmRequestIds.delete(llmRequestId);
+      throw error;
     }
+  }
+
+  /**
+   * Records that a previous execution attempt died before its terminal events
+   * landed. Keyed off the triggering connected event, so a redelivered batch
+   * cannot double-record while each new incarnation's recovery still does.
+   */
+  async #appendAttemptFailed(args: {
+    llmRequestId: number;
+    reason: "host-restarted" | "unrecoverable";
+    sourceEvent: { offset: number };
+  }) {
+    await this.#append({
+      type: "events.iterate.com/cloudflare-ai/llm-request-attempt-failed",
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: CloudflareAiProcessorContract,
+        key: `llm-request-attempt-failed/${args.llmRequestId}`,
+        sourceEvent: args.sourceEvent,
+      }),
+      payload: { llmRequestId: args.llmRequestId, reason: args.reason },
+    });
   }
 
   async #executeCloudflareAiRequest(args: {

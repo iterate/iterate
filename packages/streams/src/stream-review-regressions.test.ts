@@ -92,8 +92,11 @@ function fakeDurableObjectCtx() {
 // mirrors stream.ts #openConnection — it advances the cursor and fire-and-forgets
 // each batch, and `subscribeOutbound({ replayAfterOffset })` replays everything
 // past that offset. This is what makes the host's resubscribe-from-checkpoint
-// recovery actually redeliver. `append` (used by the host for processor-registered
-// / error-occurred events) is recorded so tests can assert on it.
+// recovery actually redeliver. `append` (used by the host for error-occurred
+// events) is recorded so tests can assert on it. Like the real Stream DO, each
+// subscribeOutbound appends a subscriber-connected presence fact, so a fresh
+// subscription always delivers at least one event (and writes the processor's
+// initial checkpoint).
 function fakeStream() {
   const log: StreamEvent[] = [];
   const hostAppends: StreamEventInput[] = [];
@@ -139,6 +142,10 @@ function fakeStream() {
       }
       deliver = args.processEventBatch;
       cursor = args.replayAfterOffset ?? 0;
+      push({
+        type: "events.iterate.com/stream/subscriber-connected",
+        payload: { subscriptionKey: args.subscriptionKey ?? "k", direction: "outbound" },
+      });
       queueMicrotask(pump);
       return {
         subscriptionKey: args.subscriptionKey ?? "k",
@@ -204,7 +211,7 @@ describe("T1 — a failed batch must not drop events under continued delivery (C
     );
 
     await host.requestStreamSubscription(subscribeArgs(stream));
-    await settle(); // process the auto-appended processor-registered event
+    await settle(); // process the auto-appended subscriber-connected event
 
     // Two adds arrive close together: the first fails, the second is delivered
     // on the same (now superseded) connection before recovery completes.

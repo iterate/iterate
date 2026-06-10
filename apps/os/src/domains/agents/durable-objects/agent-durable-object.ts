@@ -41,7 +41,7 @@ import {
   getStreamDurableObjectName,
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 import { parseConfig } from "~/config.ts";
 import {
   type RepoDurableObject,
@@ -277,6 +277,17 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       },
     });
     return { event };
+  }
+
+  /**
+   * Kills the current Durable Object incarnation so crash recovery can be
+   * observed: in-memory state (debounce timers, in-flight LLM executions,
+   * sockets) dies with it. The Stream DO notices the broken delivery RPC,
+   * redials, and the re-handshake's subscriber-connected facts drive every
+   * processor's reconciliation on the fresh instance.
+   */
+  kill(): void {
+    this.ctx.abort("kill requested");
   }
 
   async doThing(input: { label: string; value: number }) {

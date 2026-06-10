@@ -1,5 +1,5 @@
 import type { StreamEvent, StreamEventInput } from "./shared/event.ts";
-import type { CoreProcessorState } from "./processors/core/contract.ts";
+import type { CoreProcessorState, StreamSubscriberDescriptor } from "./processors/core/contract.ts";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -52,6 +52,8 @@ export type StreamRpc = {
     replayAfterOffset?: number;
     /** Only deliver these event types. Omit (or include `"*"`) for everything. */
     eventTypes?: readonly string[];
+    /** Who is subscribing; lands on the stream's presence roster. */
+    subscriber?: StreamSubscriberDescriptor;
   }): MaybePromise<StreamSubscriptionHandle>;
   runtimeState(): MaybePromise<{
     coreProcessorState: StreamCoreProcessorState;

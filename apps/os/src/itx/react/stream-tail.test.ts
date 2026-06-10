@@ -7,7 +7,7 @@
 // tests can push event batches.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
+import type { Event as StreamEvent } from "@iterate-com/shared/streams/types";
 import type { ItxBrowserClient, ItxConnectionStatus } from "./connection.ts";
 import { acquireStreamTailStore } from "./stream-tail.ts";
 
@@ -17,24 +17,21 @@ const RETRY_MAX_MS = 15_000;
 const MAX_BUFFERED_EVENTS = 500;
 const LIVENESS_INTERVAL_MS = 30_000;
 
-function makeEvent(offset: number): StreamLegacyEvent {
+function makeEvent(offset: number): StreamEvent {
   return {
     streamPath: "/itx",
     type: "test:event",
     payload: {},
     offset,
     createdAt: "2026-06-10T00:00:00.000Z",
-  } as StreamLegacyEvent;
+  } as StreamEvent;
 }
 
-function makeEvents(fromOffset: number, toOffset: number): StreamLegacyEvent[] {
+function makeEvents(fromOffset: number, toOffset: number): StreamEvent[] {
   return Array.from({ length: toOffset - fromOffset + 1 }, (_, i) => makeEvent(fromOffset + i));
 }
 
-type SubscribeCallback = (batch: {
-  events: StreamLegacyEvent[];
-  streamMaxOffset: number;
-}) => unknown;
+type SubscribeCallback = (batch: { events: StreamEvent[]; streamMaxOffset: number }) => unknown;
 
 type RecordedSubscribe = {
   callback: SubscribeCallback;

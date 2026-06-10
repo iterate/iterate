@@ -22,7 +22,7 @@ import type { ItxProps } from "./protocol.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
-} from "~/domains/streams/new-stream-runtime.ts";
+} from "~/domains/streams/stream-runtime.ts";
 
 export type ItxScriptOutcome = {
   executionId: string;

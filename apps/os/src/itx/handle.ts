@@ -18,7 +18,7 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import { typeid } from "@iterate-com/shared/typeid";
-import type { StreamCursor, Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
+import type { StreamCursor, Event as StreamEvent } from "@iterate-com/shared/streams/types";
 import { createD1Client } from "sqlfu";
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { PathProxyRpcTarget } from "./path-proxy.ts";
@@ -540,7 +540,7 @@ export class ItxStream extends RpcTarget {
    * offset you saw.
    */
   async subscribe(
-    onEventBatch: (batch: { events: StreamLegacyEvent[]; streamMaxOffset: number }) => unknown,
+    onEventBatch: (batch: { events: StreamEvent[]; streamMaxOffset: number }) => unknown,
     opts: { afterOffset: StreamCursor },
   ): Promise<ItxStreamSubscription> {
     // Callback retention lives in StreamsCapability.subscribe: RPC layers
@@ -716,5 +716,11 @@ export class ItxProjects extends RpcTarget {
 }
 
 function toProjectSummary(row: { id: string; slug: string; [key: string]: unknown }) {
-  return { id: row.id, slug: row.slug };
+  return {
+    id: row.id,
+    slug: row.slug,
+    customHostname: typeof row.custom_hostname === "string" ? row.custom_hostname : null,
+    createdAt: typeof row.created_at === "string" ? row.created_at : null,
+    updatedAt: typeof row.updated_at === "string" ? row.updated_at : null,
+  };
 }

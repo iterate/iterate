@@ -70,7 +70,7 @@ describe("core processor contract", () => {
     });
   });
 
-  it("keeps latest subscription and processor registration events", () => {
+  it("keeps the latest subscription configuration", () => {
     let state = CoreProcessorContract.stateSchema.parse(CoreProcessorContract.initialState);
     state = CoreProcessorContract.stateSchema.parse(
       reduce({
@@ -88,107 +88,164 @@ describe("core processor contract", () => {
         },
       }),
     );
-    state = CoreProcessorContract.stateSchema.parse(
-      reduce({
-        contract: CoreProcessorContract,
-        state,
-        event: {
-          offset: 2,
-          createdAt: "2026-06-01T12:00:02.000Z",
-          type: "events.iterate.com/stream/processor-registered",
-          idempotencyKey: "processor-registered:echo-example:0.1.0",
-          payload: {
-            slug: "echo-example",
-            version: "0.1.0",
-            description:
-              "Counts received inputs and echoes each back as an output carrying the running count.",
-            consumes: ["events.iterate.com/echo-example/input-received"],
-            emits: ["events.iterate.com/echo-example/output-echoed"],
-            ownedEvents: [
-              { type: "events.iterate.com/echo-example/input-received", description: "Input." },
-              { type: "events.iterate.com/echo-example/output-echoed", description: "Output." },
-            ],
-          },
-        },
-      }),
-    );
 
     expect(state.subscriptionsByKey.echo.latestConfiguredEvent.offset).toBe(1);
-    expect(state.processorsBySlug["echo-example"]?.latestRegisteredEvent.payload).toMatchObject({
-      slug: "echo-example",
-      version: "0.1.0",
-      ownedEvents: [
-        { type: "events.iterate.com/echo-example/input-received", description: "Input." },
-        { type: "events.iterate.com/echo-example/output-echoed", description: "Output." },
-      ],
-    });
   });
 
-  it("drops historical outbound subscription transports from reduced state", () => {
-    let state = CoreProcessorContract.stateSchema.parse(CoreProcessorContract.initialState);
-    state = CoreProcessorContract.stateSchema.parse(
-      reduce({
-        contract: CoreProcessorContract,
-        state,
-        event: {
+  it("maintains the presence roster from subscriber connect/disconnect facts", () => {
+    const state = reduceEvents({
+      events: [
+        {
           offset: 1,
-          type: "events.iterate.com/stream/subscription-configured",
+          type: "events.iterate.com/stream/subscriber-connected",
           payload: {
-            subscriptionKey: "echo",
-            subscriber: callableSubscriber("echo-example"),
+            subscriptionKey: "agent-host:agent",
+            direction: "outbound",
+            subscriber: { incarnationId: "host-incarnation-1" },
+          },
+          createdAt: "2026-06-01T12:00:00.000Z",
+        },
+        {
+          offset: 2,
+          type: "events.iterate.com/stream/subscriber-connected",
+          payload: {
+            subscriptionKey: "browser-tab",
+            direction: "inbound",
+            subscriber: { description: "browser" },
           },
           createdAt: "2026-06-01T12:00:01.000Z",
         },
-      }),
-    );
+        {
+          offset: 3,
+          type: "events.iterate.com/stream/subscriber-disconnected",
+          payload: { subscriptionKey: "browser-tab", reason: "unsubscribed" },
+          createdAt: "2026-06-01T12:00:02.000Z",
+        },
+      ],
+    });
 
-    expect(state.subscriptionsByKey.echo?.latestConfiguredEvent.offset).toBe(1);
+    expect(Object.keys(state.connectionsByKey)).toEqual(["agent-host:agent"]);
+    expect(state.connectionsByKey["agent-host:agent"]).toMatchObject({
+      direction: "outbound",
+      connectedAtOffset: 1,
+      subscriber: { incarnationId: "host-incarnation-1" },
+    });
+  });
 
-    // Re-configuring with a historical (pre-callable) subscriber shape replaces
-    // the subscription and drops it from supported runtime state.
-    state = CoreProcessorContract.stateSchema.parse(
-      reduce({
-        contract: CoreProcessorContract,
-        state,
-        event: {
+  it("re-lands a connection on the roster after a disconnect/reconnect cycle", () => {
+    const state = reduceEvents({
+      events: [
+        {
+          offset: 1,
+          type: "events.iterate.com/stream/subscriber-connected",
+          payload: { subscriptionKey: "echo", direction: "outbound" },
+          createdAt: "2026-06-01T12:00:00.000Z",
+        },
+        {
           offset: 2,
-          type: "events.iterate.com/stream/subscription-configured",
+          type: "events.iterate.com/stream/subscriber-disconnected",
+          payload: { subscriptionKey: "echo", reason: "rpc-broken" },
+          createdAt: "2026-06-01T12:00:01.000Z",
+        },
+        {
+          offset: 3,
+          type: "events.iterate.com/stream/subscriber-connected",
           payload: {
             subscriptionKey: "echo",
-            subscriber: {
-              type: "built-in",
-              transport: "workers-rpc",
-              processorSlug: "echo-example",
-            },
+            direction: "outbound",
+            subscriber: { incarnationId: "host-incarnation-2" },
           },
           createdAt: "2026-06-01T12:00:02.000Z",
         },
-      }),
-    );
+      ],
+    });
 
-    expect(state.subscriptionsByKey.echo).toBeUndefined();
+    expect(state.connectionsByKey.echo).toMatchObject({
+      connectedAtOffset: 3,
+      subscriber: { incarnationId: "host-incarnation-2" },
+    });
+  });
 
-    const stored = CoreProcessorContract.stateSchema.parse({
-      ...state,
-      subscriptionsByKey: {
-        external: {
-          latestConfiguredEvent: {
-            offset: 3,
-            type: "events.iterate.com/stream/subscription-configured",
-            payload: {
-              subscriptionKey: "external",
-              subscriber: {
-                type: "external-url",
-                transport: "capnweb-websocket",
-                url: "https://example.com/processor",
+  it("clears the roster when the stream itself re-incarnates", () => {
+    const state = reduceEvents({
+      events: [
+        {
+          offset: 1,
+          type: "events.iterate.com/stream/subscriber-connected",
+          payload: { subscriptionKey: "echo", direction: "outbound" },
+          createdAt: "2026-06-01T12:00:00.000Z",
+        },
+        {
+          offset: 2,
+          type: "events.iterate.com/stream/woken",
+          payload: { incarnationId: "stream-incarnation-2" },
+          createdAt: "2026-06-01T12:00:01.000Z",
+        },
+      ],
+    });
+
+    // Every previous connection died with the old stream incarnation; the
+    // roster only repopulates from fresh connected events.
+    expect(state.connectionsByKey).toEqual({});
+    expect(state.incarnationId).toBe("stream-incarnation-2");
+  });
+
+  it("folds processor contract announcements from connect events", () => {
+    const state = reduceEvents({
+      events: [
+        {
+          offset: 1,
+          type: "events.iterate.com/stream/subscriber-connected",
+          payload: {
+            subscriptionKey: "host:echo-example",
+            direction: "outbound",
+            subscriber: {
+              incarnationId: "host-incarnation-1",
+              processor: {
+                slug: "echo-example",
+                version: "0.1.0",
+                description:
+                  "Counts received inputs and echoes each back as an output carrying the running count.",
+                consumes: ["events.iterate.com/echo-example/input-received"],
+                emits: ["events.iterate.com/echo-example/output-echoed"],
+                ownedEvents: [
+                  { type: "events.iterate.com/echo-example/input-received", description: "Input." },
+                  { type: "events.iterate.com/echo-example/output-echoed", description: "Output." },
+                ],
               },
             },
-            createdAt: "2026-06-01T12:00:03.000Z",
           },
+          createdAt: "2026-06-01T12:00:00.000Z",
         },
+      ],
+    });
+
+    expect(state.processorsBySlug["echo-example"]).toMatchObject({
+      announcedAtOffset: 1,
+      announcement: {
+        slug: "echo-example",
+        version: "0.1.0",
+        ownedEvents: [
+          { type: "events.iterate.com/echo-example/input-received", description: "Input." },
+          { type: "events.iterate.com/echo-example/output-echoed", description: "Output." },
+        ],
       },
     });
-    expect(stored.subscriptionsByKey).toEqual({});
+    // The announcement registry survives the disconnect: it documents what has
+    // run on this stream, not who is currently attached.
+    const after = reduceEvents({
+      state,
+      events: [
+        {
+          offset: 2,
+          type: "events.iterate.com/stream/subscriber-disconnected",
+          payload: { subscriptionKey: "host:echo-example", reason: "rpc-broken" },
+          createdAt: "2026-06-01T12:00:01.000Z",
+        },
+      ],
+    });
+    expect(after.processorsBySlug["echo-example"]).toBeDefined();
+    expect(after.connectionsByKey).toEqual({});
   });
 
   it("owns pause/resume and append validation", () => {

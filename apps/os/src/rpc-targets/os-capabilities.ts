@@ -16,7 +16,7 @@ import { createD1Client } from "sqlfu";
 import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import type { RequestContext } from "~/request-context.ts";
 import type { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
-import type { StreamDurableObject } from "~/domains/streams/new-stream-runtime.ts";
+import type { StreamDurableObject } from "~/domains/streams/stream-runtime.ts";
 import { os } from "~/orpc/orpc.ts";
 import { projectsRouter } from "~/orpc/routers/projects.ts";
 

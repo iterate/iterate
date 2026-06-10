@@ -293,6 +293,15 @@ export class ContextRegistry {
   }
 
   revoke(input: { name: string }): { name: string; ok: true } {
+    // Code-context defaults cannot be revoked, only shadowed — succeeding
+    // here would lie: invoke/describe would keep serving the default. (A
+    // shadowing OWN row is deletable as usual; the default resurfaces.)
+    if (this.row(input.name) === null && this.host.defaults?.caps.has(input.name)) {
+      throw new Error(
+        `Capability "${input.name}" is a platform default (${this.host.defaults.name}); ` +
+          `it cannot be revoked — define your own "${input.name}" to shadow it.`,
+      );
+    }
     this.#live.get(input.name)?.[Symbol.dispose]();
     this.host.sql.exec(`DELETE FROM itx_caps WHERE name = ?`, input.name);
     this.host.audit({ type: ITX_EVENT_TYPES.capRevoked, payload: { name: input.name } });

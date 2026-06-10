@@ -1,5 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { StreamCursor, Event as StreamLegacyEvent } from "@iterate-com/shared/streams/types";
+import type { StreamCursor, Event as StreamEvent } from "@iterate-com/shared/streams/types";
 import { ItxStream, type ItxRuntime } from "~/itx/handle.ts";
 import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 
@@ -20,12 +20,12 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
   async append(input: {
     path: string;
     event: { type: string; payload: Record<string, unknown> };
-  }): Promise<StreamLegacyEvent> {
-    return (await this.#stream(input.path).append(input.event)) as StreamLegacyEvent;
+  }): Promise<StreamEvent> {
+    return (await this.#stream(input.path).append(input.event)) as StreamEvent;
   }
 
-  async read(input: { path: string }): Promise<StreamLegacyEvent[]> {
-    return (await this.#stream(input.path).read()) as StreamLegacyEvent[];
+  async read(input: { path: string }): Promise<StreamEvent[]> {
+    return (await this.#stream(input.path).read()) as StreamEvent[];
   }
 
   async getState(input: { path: string }): Promise<unknown> {
@@ -34,7 +34,7 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
 
   async subscribe(
     input: { afterOffset: StreamCursor; path: string },
-    onEventBatch: (batch: { events: StreamLegacyEvent[]; streamMaxOffset: number }) => unknown,
+    onEventBatch: (batch: { events: StreamEvent[]; streamMaxOffset: number }) => unknown,
   ) {
     return await this.#stream(input.path).subscribe(onEventBatch, {
       afterOffset: input.afterOffset,

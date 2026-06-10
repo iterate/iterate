@@ -190,3 +190,28 @@ comments. The compact version:
 - Verified by the worker harness (`pnpm test:itx-stream-subscribe`) that
   `code`/`details` also survive plain Workers RPC hops, so kernel throws
   born inside `StreamsCapability` keep their codes on the way to capnweb.
+
+## D19: SSR reaches itx in-process; loader prefetch is best-effort
+
+Three pieces, one seam each:
+
+- **`getServerItx` (server.ts)** builds a handle inside the OS worker from the
+  request context: `accessForPrincipal` → `resolveAccessibleContextId` →
+  `resolveItx` — the SAME chain `/api/itx` connect runs, now shared via
+  access.ts so the two auth boundaries cannot drift. No socket, no Cap'n Web:
+  the handle is a plain RpcTarget and each built-in call is one Workers RPC to
+  the owning DO, which is exactly what SSR latency budgets want.
+- **`getLoaderItx` (loader.ts)** is the isomorphic accessor (the orpc/client.ts
+  shape): server → getServerItx (dynamically imported, so cloudflare:workers
+  and the db layer never enter the browser graph); browser → the per-tab
+  socket singleton, moved to react/browser-client.ts so loaders share the
+  hooks' socket and project-handle cache without importing React.
+- **`prefetchItxQuery` (loader.ts)** seeds the QueryClient with the same
+  `ItxQueryDefinition` ({key, queryFn, staleTime} defined ONCE in
+  lib/itx-queries.ts) the component's hook consumes, and swallows every
+  failure. Prefetch is an optimization, never a gate — a FORBIDDEN thrown
+  during route loading crashed the streams page into the generic error
+  boundary in prod (2026-06); the component's own useItxQuery re-surfaces the
+  same error inline instead. Only the streams index prefetches today;
+  breadcrumbs stay lazy by choice and are seeded for free through the shared
+  per-path cache keys.

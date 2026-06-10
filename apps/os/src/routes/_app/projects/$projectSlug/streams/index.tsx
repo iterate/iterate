@@ -1,15 +1,31 @@
 import { useMemo } from "react";
-import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
-import { useItxClient } from "~/itx/react/index.ts";
-import { StreamNavigationState } from "~/lib/stream-navigation-state.ts";
+import { itxKey, useItxClient } from "~/itx/react/index.ts";
+import { prefetchItxQuery } from "~/itx/loader.ts";
+import { projectStreamStateQuery } from "~/lib/itx-queries.ts";
+
+const ROOT_STREAM_PATH = StreamPath.parse("/");
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
-  loader: ({ context }) => ({
-    breadcrumb: "Tree",
-    project: context.project,
-  }),
+  loader: async ({ context }) => {
+    // Seed the root stream state — the query that gates the tree's first
+    // paint — so SSR dehydrates it and client navigations land warm. Best
+    // effort: prefetchItxQuery swallows failures, the component's own query
+    // surfaces them inline.
+    await prefetchItxQuery({
+      queryClient: context.queryClient,
+      query: projectStreamStateQuery({
+        projectId: context.project.id,
+        streamPath: ROOT_STREAM_PATH,
+      }),
+    });
+    return {
+      breadcrumb: "Tree",
+      project: context.project,
+    };
+  },
   component: ProjectStreamsIndexPage,
 });
 
@@ -20,10 +36,13 @@ function ProjectStreamsIndexPage() {
   const { project } = Route.useLoaderData();
   const source = useMemo(
     () => ({
-      key: ["project", project.id, "streams"] as const,
+      // StreamTreeBrowser keys node queries as [...key, "state", path], which
+      // lands exactly on projectStreamStateKey(...) — the entry the route
+      // loader seeds and the breadcrumb navigators read.
+      key: itxKey.project(project.id, "streams"),
       getState: async (streamPath: StreamPathType) =>
-        StreamNavigationState.parse(
-          await (await itxClient.project(project.id)).streams.get(streamPath).getState(),
+        await projectStreamStateQuery({ projectId: project.id, streamPath }).queryFn(
+          await itxClient.project(project.id),
         ),
     }),
     [itxClient, project.id],

@@ -1,16 +1,19 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { ChevronDownIcon, ChevronRightIcon, RefreshCwIcon } from "lucide-react";
-import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import {
+  StreamPath,
+  type StreamPath as StreamPathType,
+  type StreamState,
+} from "@iterate-com/shared/streams/types";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { cn } from "@iterate-com/ui/lib/utils";
-import type { StreamNavigationState } from "~/lib/stream-navigation-state.ts";
 
 export type StreamTreeBrowserSource = {
-  getState: (streamPath: StreamPathType) => Promise<StreamNavigationState>;
+  getState: (streamPath: StreamPathType) => Promise<StreamState>;
   key: QueryKey;
 };
 
@@ -116,7 +119,7 @@ function StreamTreeNode({
   onRefreshPath: (streamPath: StreamPathType) => Promise<void>;
   onToggleExpanded: (streamPath: StreamPathType) => void;
   source: StreamTreeBrowserSource;
-  state: StreamNavigationState;
+  state: StreamState;
   streamPath: StreamPathType;
 }) {
   const childPaths = useMemo(
