@@ -150,6 +150,28 @@ describe("Project ingress routing", () => {
       ]),
     );
 
+    // A spoofed create-requested naming another project is ignored: no
+    // reduced-state change, no D1 row for the foreign id.
+    const spoofResponse = await SELF.fetch(
+      "https://os.iterate.localhost/__test/append-spoofed-create",
+    );
+    expect(spoofResponse.ok).toBe(true);
+    const { offset: spoofOffset } = (await spoofResponse.json()) as { offset: number };
+    await vi.waitFor(async () => {
+      const state = await (
+        await SELF.fetch("https://os.iterate.localhost/__test/project-state")
+      ).json();
+      expect((state as { offset: number }).offset).toBeGreaterThanOrEqual(spoofOffset);
+    });
+    const afterSpoof = (await (
+      await SELF.fetch("https://os.iterate.localhost/__test/project-state")
+    ).json()) as { state: { project: { projectId: string } } };
+    expect(afterSpoof.state.project.projectId).toBe("proj__local__test");
+    const evilRow = await env.DB.prepare(`SELECT id FROM projects WHERE id = ?`)
+      .bind("proj__local__evil")
+      .first();
+    expect(evilRow).toBeNull();
+
     // Creation side effects (the processor's create-requested steps) have
     // completed once phase is "ready" — the example secret is one of them.
     const exampleSecret = await env.DB.prepare(

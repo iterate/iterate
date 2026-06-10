@@ -150,6 +150,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
         appConfig: () => this.getAppConfig(),
         env: this.env,
         exports: this.ctx.exports,
+        projectId: () => this.projectId,
         workerHost: this.workerHost,
       }),
   );

@@ -66,6 +66,8 @@ export type ProjectProcessorDeps = {
   };
   /** The hosting DO's `ctx.exports` (loopback entrypoints, e.g. secrets). */
   exports: unknown;
+  /** The hosting DO's own project id — payloads must match (see #ownEvent). */
+  projectId: () => string;
   workerHost: WorkerHost;
   appConfig: () => AppConfig;
 };
@@ -76,16 +78,30 @@ export class ProjectProcessor extends StreamProcessor<
 > {
   readonly contract = ProjectProcessorContract;
 
+  /**
+   * Anyone holding the project's itx handle can append arbitrary events to
+   * its streams, so creation events are only honored when their payload
+   * names THIS project — otherwise a crafted create-requested on project A's
+   * stream could run creation side effects (D1 upsert, repo, secrets) for an
+   * arbitrary project id.
+   */
+  #ownEvent(payload: { projectId: string }): boolean {
+    return payload.projectId === this.deps.projectId();
+  }
+
   protected override reduce(
     args: Parameters<StreamProcessor<ProjectProcessorContract>["reduce"]>[0],
   ): ProjectProcessorState {
     const { event, state } = args;
     switch (event.type) {
       case "events.iterate.com/project/create-requested":
+        if (!this.#ownEvent(event.payload)) return state;
         return { ...state, phase: state.phase === "ready" ? state.phase : "creating" };
       case "events.iterate.com/project/created":
+        if (!this.#ownEvent(event.payload)) return state;
         return { ...state, project: event.payload };
       case "events.iterate.com/project/config-worker-built":
+        if (!this.#ownEvent(event.payload)) return state;
         return {
           ...state,
           worker: {
@@ -95,6 +111,7 @@ export class ProjectProcessor extends StreamProcessor<
           },
         };
       case "events.iterate.com/project/create-completed":
+        if (!this.#ownEvent(event.payload)) return state;
         return { ...state, phase: "ready" };
       default:
         // Wildcard-delivered events (any other type on the root stream) are
@@ -108,6 +125,13 @@ export class ProjectProcessor extends StreamProcessor<
   ): void {
     const { event } = args;
     if (event.type !== "events.iterate.com/project/create-requested") return;
+    if (!this.#ownEvent(event.payload)) {
+      console.warn(
+        `[project] ignoring create-requested for "${event.payload.projectId}" ` +
+          `on project "${this.deps.projectId()}" (offset ${event.offset}).`,
+      );
+      return;
+    }
     const { projectId, slug } = event.payload;
 
     args.blockProcessorWhile(async () => {

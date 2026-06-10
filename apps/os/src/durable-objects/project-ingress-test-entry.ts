@@ -282,6 +282,21 @@ export default {
       return Response.json({ phase: snapshot.state.phase });
     }
 
+    if (url.pathname === "/__test/append-spoofed-create") {
+      // A crafted create-requested naming ANOTHER project: the processor
+      // must ignore it (see ProjectProcessor #ownEvent).
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
+        namespace: "proj__local__test",
+        path: PROJECT_STREAM_PATH,
+      });
+      const appended = await stream.append({
+        type: "events.iterate.com/project/create-requested",
+        payload: { projectId: "proj__local__evil", slug: "evil" },
+      });
+      return Response.json({ offset: appended.offset });
+    }
+
     if (url.pathname === "/__test/project-state") {
       // Raw Workers stub: await the `processor` getter before calling —
       // workerd does not pipeline calls through property accesses. (itx
