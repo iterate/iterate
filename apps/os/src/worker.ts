@@ -37,7 +37,6 @@ import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
 // module so the runtime can find the classes the bindings refer to:
 // https://developers.cloudflare.com/durable-objects/get-started/
 export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
-export { CodemodeSession } from "~/durable-objects/codemode-session-tombstone.ts";
 export { DebugAppendChainSubscriber } from "~/durable-objects/debug-append-chain-subscriber.ts";
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
@@ -54,6 +53,8 @@ export { AiCapability, OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { BindingCapability, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { McpClient } from "~/itx/caps/mcp-client.ts";
+export { ProjectWorker } from "~/itx/caps/project-worker.ts";
+export { UrlDial } from "~/itx/caps/url-dial.ts";
 export { ContextDO } from "~/itx/context-do.ts";
 export { ItxCapIngress } from "~/itx/http.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";

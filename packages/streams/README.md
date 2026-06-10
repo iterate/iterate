@@ -107,7 +107,7 @@ delivery was removed until there is a concrete product need for it again.
 The API stays small and clear by holding to:
 
 - appends are expressed as event batches
-- subscribers consume event batches through a `processEventBatch({ events, streamMaxOffset })` RPC method
+- subscribers consume event batches through a `processEventBatch({ events, streamMaxOffset, state })` RPC method; every batch carries the stream's reduced state as of `streamMaxOffset`, every subscription gets an immediate initial batch, and `events: false` subscriptions receive state-only batches
 - stream delivery does not await each subscriber's `processEventBatch` result
 - stream state is the reduced state of the inline core processor
 - outbound subscribers are reconciled from `subscription-configured` events
@@ -165,10 +165,10 @@ Hosting:
 
 - Workers: `createStreamProcessorHost(this.ctx)` in
   `src/workers/stream-processor-host.ts` hosts named processors inside a
-  Durable Object. The host announces each processor's contract on the stream
-  with an idempotent `events.iterate.com/stream/processor-registered` append —
-  there is no per-processor `standardProcessorBehavior` self-registration
-  anymore.
+  Durable Object. The host passes each processor's contract announcement in
+  its subscribe call; the stream appends it as part of the
+  `events.iterate.com/stream/subscriber-connected` presence fact — there is no
+  per-processor `standardProcessorBehavior` self-registration anymore.
 - Browser: `acquireStreamRuntime` in `src/browser/stream-browser-store.ts`
   hosts a processor over a capnweb connection with a Web Locks writer election
   (see `CONTEXT.md`).

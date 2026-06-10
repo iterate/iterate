@@ -1,5 +1,9 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { StreamCursor, Event as StreamEvent } from "@iterate-com/shared/streams/types";
+import type {
+  StreamCursor,
+  Event as StreamEvent,
+  StreamState,
+} from "@iterate-com/shared/streams/types";
 import { ItxStream, type ItxRuntime } from "~/itx/handle.ts";
 import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 
@@ -33,12 +37,22 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
   }
 
   async subscribe(
-    input: { afterOffset: StreamCursor; path: string },
-    onEventBatch: (batch: { events: StreamEvent[]; streamMaxOffset: number }) => unknown,
+    input: { afterOffset: StreamCursor; events?: boolean; path: string },
+    onEventBatch: (batch: {
+      events: StreamEvent[];
+      state: StreamState;
+      streamMaxOffset: number;
+    }) => unknown,
   ) {
     return await this.#stream(input.path).subscribe(onEventBatch, {
       afterOffset: input.afterOffset,
+      events: input.events,
     });
+  }
+
+  /** The state-only sugar, end-to-end through the same capability loopback. */
+  async onStateChange(input: { path: string }, onState: (state: StreamState) => unknown) {
+    return await this.#stream(input.path).onStateChange(onState);
   }
 
   /**

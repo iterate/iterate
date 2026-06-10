@@ -216,7 +216,83 @@ Three pieces, one seam each:
   breadcrumbs stay lazy by choice and are seeded for free through the shared
   per-path cache keys.
 
-## D20: fetch on the project IS egress; ingress is stateless; creation is events
+## D20: Stream subscriptions carry reduced state — the ONE reactive primitive
+
+`ItxStream.subscribe` is now the single reactive primitive for both events
+and reduced state; getState-polling reactivity is superseded.
+
+- **Every batch carries `state`**: the stream's public state (the exact
+  `getState()` shape — `coreStateToStreamState` in stream-runtime.ts is the
+  one projection both paths share, so subscribe-state === getState-state by
+  construction) as of `streamMaxOffset`. The Stream DO already holds its core
+  reduced state current after each append; the pump attaches it to every
+  delivery in the same synchronous block that reads `streamMaxOffset`, so the
+  two always correspond. During backlog catch-up the state can be ahead of
+  the batch's last event — it is state-at-streamMaxOffset, not
+  state-at-batch-end-of-a-partial-drain.
+- **`events: false` is state-only mode**: the same batches with `events: []`
+  (an empty array, not an omitted key — shape stability), one delivery per
+  state advance with missed appends coalesced. Replay without events is
+  meaningless, so state-only subscriptions are implicitly live-from-now and
+  `afterOffset`/`replayAfterOffset` is ignored.
+- **The initial push**: EVERY subscription (both modes) immediately receives
+  one batch — current state, `streamMaxOffset`, plus the replayed events when
+  events-mode replay yields any. A live-only subscription no longer waits for
+  the next append to hear anything: a subscriber paints its first render from
+  the subscription alone, no separate getState call.
+- **`onStateChange(cb)` sugar** on ItxStream is exactly
+  `subscribe(batch => cb(batch.state), { events: false, afterOffset: "end" })`
+  (with callback-stub retention, since the sugar's wrapper outlives the
+  originating RPC). This serves the upcoming one-hook browser layer: `useItx`
+  - `stream.onStateChange(setState)`, no query cache.
+
+Verified at the pump (packages/streams stream.workers.test.ts), through the
+capability loopback (`pnpm test:itx-stream-subscribe`), and over capnweb
+(itx-subscribe.e2e.test.ts).
+
+## D21: The browser layer is ONE hook — useItx (supersedes D19 and the shared-socket-per-tab decision)
+
+Owner decision: the TanStack-Query-for-itx + SSR + shared-socket architecture
+was too complicated for what the browser actually needs, which is "a connected
+handle, please". `apps/os/src/itx/use-itx.ts` replaces all of it:
+
+- **`useItx(context?)` suspends until connected** (React 19 `use()` on a
+  module-singleton promise per context key) and returns the live
+  `RpcStub<Itx>`. `getBrowserItx(context?)` is the same singleton for
+  non-hook code (event handlers). That's the whole API.
+- **Per-context module-singleton sockets, no refcounting, no teardown on
+  unmount.** The map exists only because Suspense needs a stable promise
+  across render replays — NOT as a pooling layer. Multiple sockets per tab
+  are explicitly fine (the repl keeps its own `createBrowserReplSession`;
+  the admin layout keeps its own session too).
+- **No query cache.** Stream-shaped data subscribes (`onStateChange` /
+  `subscribe` — D20 is the protocol this rides on: every subscription's
+  initial push carries current state, so a subscription alone paints a first
+  render). One-shot lookups are an awaited `getState()` into component state.
+- **No reconnect machinery.** Socket death evicts the map entry and
+  re-renders subscribers (useSyncExternalStore); they find no entry, dial
+  fresh, re-suspend. No backoff, no offset resume, no liveness probes:
+  re-fetching current state via the initial push IS the recovery.
+- **No SSR for itx components — the hook THROWS on the server.** Verified
+  posture: a forever-pending `use()` during streaming SSR keeps the response
+  stream open (React waits for suspended boundaries before closing it),
+  while a server-side throw inside a Suspense boundary streams the fallback
+  and recovers client-side — and outside one it fails loudly instead of
+  hanging the worker. Consumers sit under `ssr: false` routes (the streams
+  pages), behind `<ClientOnly>` (the repl's activity tail), or behind a
+  client-only connect effect (the admin layout).
+
+Deleted with this: `itx/react/` (provider, connection with
+backoff-reconnect, query bridge, stream-tail multiplexer, useStreamEvents),
+`itx/server.ts` (`getServerItx`), `itx/loader.ts`
+(`getLoaderItx`/`prefetchItxQuery`), `lib/itx-queries.ts`, and the
+itx-server-handle worker test harness — D19's SSR/loader-prefetch design and
+the plan's "one global-context WebSocket per tab" decision are superseded.
+`errors.ts` (`getItxErrorCode`/`isItxAccessError`) stays: catch blocks and
+error boundaries still read codes; there is just no retry-predicate layer to
+feed them to.
+
+## D22: fetch on the project IS egress; ingress is stateless; creation is events
 
 The Project DO cleanup (PR #1466) landed three postures the spec/notes had
 been circling:

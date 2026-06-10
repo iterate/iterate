@@ -244,7 +244,7 @@ export type JsonSchemaToolDescriptors = Record<string, JsonSchemaToolDescriptor>
 
 export function generateTypesFromJsonSchema(
   tools: JsonSchemaToolDescriptors,
-  namespace = "codemode",
+  namespace = "tools",
 ): string {
   const { availableTypes, rootName, rootTree } = buildTypesFromJsonSchema({
     tools,
@@ -258,7 +258,7 @@ ${availableTools}
   `.trim();
 }
 
-export function generateCodemodeContextTypesFromJsonSchema(input: {
+export function generateContextTypesFromJsonSchema(input: {
   namespace: string[] | string;
   tools: JsonSchemaToolDescriptors;
 }): string {
@@ -272,17 +272,17 @@ export function generateCodemodeContextTypesFromJsonSchema(input: {
 
   return `
 ${availableTypes}
-interface CodemodeConsole {
+interface ItxConsole {
     log: (...args: unknown[]) => void;
     warn: (...args: unknown[]) => void;
     error: (...args: unknown[]) => void;
 }
-interface CodemodeExecutionContext {
+interface ItxExecutionContext {
     fetch: typeof fetch;
-    console: CodemodeConsole;
+    console: ItxConsole;
 }
-${providerTypes ? `interface CodemodeExecutionContext {\n${providerTypes}\n}` : ""}
-declare const ctx: CodemodeExecutionContext
+${providerTypes ? `interface ItxExecutionContext {\n${providerTypes}\n}` : ""}
+declare const ctx: ItxExecutionContext
   `.trim();
 }
 
@@ -358,7 +358,7 @@ function buildTypesFromJsonSchema(input: { namespace: string; tools: JsonSchemaT
 
   return {
     availableTypes: availableTypes.trim(),
-    rootName: namespacePath[0] ?? "codemode",
+    rootName: namespacePath[0] ?? "tools",
     rootTree,
   };
 }

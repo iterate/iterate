@@ -10,7 +10,11 @@ import type { StreamSubscriptionHandshake } from "../stream-processor-host.ts";
 import { getInitialProcessorState } from "../../shared/stream-processors.ts";
 import type { ProcessEventBatch, StreamCoreProcessorState } from "../../types.ts";
 import { CoreStreamProcessor } from "../../processors/core/implementation.ts";
-import { CoreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
+import {
+  CoreProcessorContract,
+  type CoreProcessorState,
+  type StreamSubscriberDescriptor,
+} from "../../processors/core/contract.ts";
 import type { StreamRpc } from "../../types.ts";
 import { makeRpcTargetClass, type RpcTargetClass } from "../../shared/rpc-target.ts";
 import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecycle.ts";
@@ -39,10 +43,16 @@ const textEncoder = new TextEncoder();
 // - 1 (implicit; no "stateVersion" key in KV): pre-descendantPaths state.
 // - 2: childPaths gained a sibling descendantPaths (full announced paths).
 // - 3: descendantPaths removed; callers should walk immediate childPaths.
-const CORE_STATE_VERSION = 3;
+// - 4: subscriber presence — connectionsByKey roster added; processorsBySlug
+//      reshaped to fold contract announcements from subscriber-connected
+//      events instead of the removed processor-registered event.
+const CORE_STATE_VERSION = 4;
 
 export class Stream extends DurableObject<Env> implements StreamRpc {
   #coreProcessorState: StreamCoreProcessorState;
+  // The core processor owns the live delivery connections and reconciles them
+  // against reduced state; this DO supplies the storage and RPC mechanics it
+  // needs (committed-event reads, the live state, Callable dispatch).
   coreProcessor = new CoreStreamProcessor({
     iterateContext: {
       stream: {
@@ -50,14 +60,11 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         appendBatch: (args) => this.appendBatch(args),
       },
     },
+    keepAliveWhile: (work) => void this.ctx.waitUntil(work()),
+    getEvents: (args) => this.getEvents(args),
+    currentState: () => this.#coreProcessorState,
+    dial: (args) => this.#connectOutboundConnection(args),
   });
-
-  // Live delivery connections, keyed by subscriptionKey. Runtime-only: outbound
-  // connections are recreated from reduced state, inbound from a fresh subscribe().
-  #connections = new Map<string, Connection>();
-  // subscriptionKeys with an outbound handshake in flight, so concurrent
-  // reconciliation runs never dial the same runner twice.
-  #connecting = new Set<string>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -69,7 +76,10 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     // events.iterate.com/stream/created event to the stream.
     //
     // And every time it's woken up for any reason (inbound fetch, rpc or alarm),
-    // we append a "woken" event to the stream.
+    // we append a "woken" event to the stream. The woken fact is also what
+    // restores outbound connections: the core processor's reconciler runs as
+    // its post-commit side effect, so a stream that wakes with configured
+    // subscriptions but no new appends still reconnects.
     if (this.#coreProcessorState.eventCount === 0) {
       // stream durable objects have names like "namespace:/some/stream/path"
       if (!ctx.id.name) throw new Error("ctx.id.name is falsey - this should never happen");
@@ -88,10 +98,6 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         payload: { incarnationId: crypto.randomUUID() },
       },
     });
-
-    // Restore outbound connections this stream should have. Without this, a stream
-    // that wakes with configured subscriptions but no new appends never reconnects.
-    this.#reconcile();
   }
 
   #ensureStorageSchema(): void {
@@ -466,14 +472,11 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
       this.coreProcessor.processReducedEvent(reduced);
     }
 
-    // 3. Wake live delivery; reconcile only when subscription topology changed.
-    // Append success is already decided above — this is pure post-commit fan-out.
-    for (const connection of this.#connections.values()) connection.wake();
-    if (
-      newEvents.some((event) => event.type === "events.iterate.com/stream/subscription-configured")
-    ) {
-      this.#reconcile();
-    }
+    // 3. Wake live delivery. Append success is already decided above — this is
+    // pure post-commit fan-out. (Connection reconciliation is not triggered
+    // here: it is the core processor's side effect for the woken and
+    // subscription-configured facts, which ran in the loop above.)
+    this.coreProcessor.wakeConnections();
 
     return events;
   }
@@ -531,6 +534,17 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
    * the old connection. Omit `subscriptionKey` for an anonymous subscription; the stream
    * assigns a random key and returns it. Call the returned `unsubscribe()` to stop
    * delivery.
+   *
+   * Every batch carries the stream's core reduced `state` as of
+   * `streamMaxOffset` (see {@link StreamEventBatch}), and every subscription —
+   * with or without replay — immediately receives one batch on open so the
+   * subscriber can paint its first render without a separate getState call:
+   * the replay batch when there is one, otherwise a batch with `events: []`.
+   *
+   * Pass `events: false` for a state-only subscription: same batches, but
+   * `events` is always `[]` and consecutive appends coalesce into one state
+   * delivery. Replay is meaningless without events, so state-only
+   * subscriptions are implicitly live-from-now (`replayAfterOffset` ignored).
    */
   subscribe(args: {
     subscriptionKey?: string;
@@ -538,9 +552,13 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     replayAfterOffset?: number;
     /** Only deliver these event types. Omit (or include `"*"`) for everything. */
     eventTypes?: readonly string[];
+    /** `false` = state-only batches (`events: []`, live-from-now). Default `true`. */
+    events?: boolean;
+    /** Who is subscribing; lands on the stream's presence roster. */
+    subscriber?: StreamSubscriberDescriptor;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
-    return this.#openConnection({ ...args, subscriptionKey, direction: "inbound" });
+    return this.coreProcessor.openConnection({ ...args, subscriptionKey, direction: "inbound" });
   }
 
   subscribeOutbound(args: {
@@ -549,27 +567,17 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     replayAfterOffset?: number;
     /** Only deliver these event types. Omit (or include `"*"`) for everything. */
     eventTypes?: readonly string[];
+    /** Who is subscribing; lands on the stream's presence roster. */
+    subscriber?: StreamSubscriberDescriptor;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
-    return this.#openConnection({ ...args, direction: "outbound" });
+    return this.coreProcessor.openConnection({ ...args, direction: "outbound" });
   }
 
   runtimeState() {
     return {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
-        connections: Object.fromEntries(
-          [...this.#connections].map(([subscriptionKey, connection]) => [
-            subscriptionKey,
-            {
-              direction: connection.direction,
-              startedAt: connection.startedAt,
-              cursor: connection.cursor,
-              batchesSent: connection.batchesSent,
-              eventsSent: connection.eventsSent,
-              lastDeliveredAt: connection.lastDeliveredAt,
-            },
-          ]),
-        ),
+        connections: this.coreProcessor.connectionsRuntimeState(),
       },
     };
   }
@@ -587,190 +595,6 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
   /** Kills the current Durable Object incarnation so experiments can observe restart behavior. */
   kill(): void {
     this.ctx.abort("kill requested");
-  }
-
-  /**
-   * Opens (or replaces) a live delivery connection for one subscriptionKey.
-   *
-   * A connection is just a pump: it delivers everything after `cursor` in offset
-   * order, then parks. There is no catch-up-vs-live distinction — replay and live
-   * are the same `getEvents(afterOffset: cursor)` loop. `appendBatch` re-arms the
-   * pump via `wake()`; the `draining` guard makes that idempotent and race-free.
-   *
-   * What actually happens (stream has offsets 1..3, subscribe with `replayAfterOffset: 0`):
-   * - open: `cursor = 0`, `wake()` -> pump reads `(>0)` -> delivers `[1, 2, 3]`,
-   *   `cursor = 3` → reads `(>3)` → empty → parks.
-   * - append offset 4 → `wake()` → pump reads `(>3)` → delivers `[4]`, `cursor = 4`
-   *   → empty → parks. One batch per append while the subscriber keeps up.
-   *
-   * The `draining` guard is what removes the old catch-up/live race. If an append's
-   * `wake()` lands while a slow pump is still mid-drain, it early-returns; the
-   * in-flight loop's next `getEvents` sees the just-committed rows (commit happens
-   * before `wake()`), so the event is delivered exactly once — never dropped, never
-   * doubled, no matter the interleaving. A backlog (subscriber fell behind, or first
-   * replay of 10k events) drains 100 at a time, yielding between batches so other
-   * connections and incoming appends still make progress.
-   */
-  #openConnection(args: {
-    direction: "inbound" | "outbound";
-    subscriptionKey: string;
-    processEventBatch: ProcessEventBatch;
-    replayAfterOffset?: number;
-    eventTypes?: readonly string[];
-    onClose?: () => void;
-  }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
-    const subscriptionKey = args.subscriptionKey.trim();
-    if (subscriptionKey.length === 0) throw new Error("subscriptionKey must not be blank.");
-
-    // Replacing any existing connection for this key.
-    this.#connections.get(subscriptionKey)?.close();
-
-    // Optional event-type filter (processor hosts pass their contract's
-    // `consumes`). The cursor still advances past non-matching events — they
-    // are skipped, not deferred — so a subscriber's resume offset can sit on a
-    // filtered-out event without ever re-delivering it.
-    const eventTypeFilter =
-      args.eventTypes === undefined || args.eventTypes.includes("*")
-        ? undefined
-        : new Set(args.eventTypes);
-
-    // Workers RPC disposes parameter stubs when an RPC method returns unless the
-    // callee duplicates them. Keep a retained callback because this stream calls
-    // it later from the pump, after subscribe() has returned:
-    // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
-    const processEventBatch = retainProcessEventBatch(args.processEventBatch);
-    let cursor = args.replayAfterOffset ?? this.#coreProcessorState.maxOffset;
-    let draining = false;
-    let open = true;
-
-    // The single delivery path: drain committed events to the callback, then park.
-    //
-    // FUTURE OPTIMIZATION (Proposal B): the live path currently pays one indexed
-    // `getEvents` read per batch even when the subscriber has caught up to maxOffset.
-    // `appendBatch` already has the freshly-committed events array in memory, so when
-    // `cursor === firstNewOffset - 1` it could hand that array straight to the callback and
-    // skip the SQL round-trip — a pure fast path that can't desync because `cursor`
-    // stays the source of truth (a behind/draining connection just falls back to this
-    // loop). Not worth it until a benchmark shows the per-batch read in the hot path;
-    // keeping one delivery path is the simpler default.
-    const pump = async () => {
-      if (draining) return;
-      draining = true;
-      try {
-        while (open) {
-          const readEvents = this.getEvents({ afterOffset: cursor, limit: 100 }); // limit hardcoded for now
-          const lastOffset = readEvents.at(-1)?.offset;
-          if (lastOffset === undefined) return; // caught up; the next append wakes us again
-          cursor = lastOffset;
-          const events =
-            eventTypeFilter === undefined
-              ? readEvents
-              : readEvents.filter((event) => eventTypeFilter.has(event.type));
-          if (events.length === 0) continue; // whole batch filtered out; keep draining
-          connection.batchesSent += 1;
-          connection.eventsSent += events.length;
-          connection.lastDeliveredAt = new Date().toISOString();
-          // Batch-first, fire-and-forget: never await the remote result. Both
-          // Workers RPC and Cap'n Web return disposable thenables for remote calls;
-          // dispose ignored results so we do not retain return capabilities.
-          // https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/
-          // https://github.com/cloudflare/capnweb#memory-management
-          const pendingBatch = processEventBatch({
-            namespace: this.#coreProcessorState.namespace,
-            path: this.#coreProcessorState.path,
-            events,
-            streamMaxOffset: this.#coreProcessorState.maxOffset,
-          });
-          disposeIgnoredRpcResult(pendingBatch);
-          await Promise.resolve();
-        }
-      } finally {
-        draining = false;
-      }
-    };
-
-    const connection: Connection = {
-      direction: args.direction,
-      startedAt: new Date().toISOString(),
-      get cursor() {
-        return cursor;
-      },
-      batchesSent: 0,
-      eventsSent: 0,
-      wake: () => void pump(),
-      close: () => {
-        if (!open) return;
-        open = false;
-        if (this.#connections.get(subscriptionKey) === connection) {
-          this.#connections.delete(subscriptionKey);
-        }
-        processEventBatch[Symbol.dispose]();
-        args.onClose?.();
-      },
-    };
-
-    this.#connections.set(subscriptionKey, connection);
-    processEventBatch.onRpcBroken?.(() => {
-      connection.close();
-      if (args.direction === "outbound") this.#reconcile();
-    });
-    connection.wake();
-
-    return {
-      subscriptionKey,
-      streamMaxOffset: this.#coreProcessorState.maxOffset,
-      unsubscribe: () => connection.close(),
-    };
-  }
-
-  /** Fire-and-forget outbound reconciliation; never blocks the append path. */
-  #reconcile() {
-    try {
-      this.#reconcileOutboundConnections();
-    } catch (error) {
-      console.error("Stream outbound reconciliation failed", error);
-    }
-  }
-
-  /**
-   * Makes runtime outbound connections match the persisted subscription config:
-   * closes connections whose config disappeared, dials a runner for each configured
-   * subscription that has none. Triggered on boot, on subscription-configured
-   * appends, and on outbound connection loss — never per-append.
-   *
-   * Built-in processors use same-account Workers RPC: the stream wakes the runner
-   * DO, and the runner calls back into subscribeOutbound({ processEventBatch }).
-   * Cloudflare recommends Worker/DO RPC methods for same-account Worker entrypoints:
-   * https://developers.cloudflare.com/workers/runtime-apis/rpc/
-   * https://developers.cloudflare.com/durable-objects/best-practices/create-durable-object-stubs-and-send-requests/
-   */
-  #reconcileOutboundConnections() {
-    for (const [subscriptionKey, connection] of this.#connections) {
-      if (
-        connection.direction === "outbound" &&
-        this.#coreProcessorState.subscriptionsByKey[subscriptionKey] === undefined
-      ) {
-        connection.close();
-      }
-    }
-
-    for (const [subscriptionKey, configured] of Object.entries(
-      this.#coreProcessorState.subscriptionsByKey,
-    )) {
-      if (this.#connections.has(subscriptionKey) || this.#connecting.has(subscriptionKey)) continue;
-
-      // Reserve the key before any await so a concurrent reconcile can't dial twice.
-      this.#connecting.add(subscriptionKey);
-      this.ctx.waitUntil(
-        this.#connectOutboundConnection({ configured, subscriptionKey })
-          .catch((error: unknown) => {
-            console.error("Stream outbound connection failed", { error, subscriptionKey });
-          })
-          .finally(() => {
-            this.#connecting.delete(subscriptionKey);
-          }),
-      );
-    }
   }
 
   /**
@@ -857,6 +681,9 @@ function installSubscribeRpcTargetOverride(target: RpcTargetClass<StreamRpc, Str
         const subscription = await this.source.subscribe({
           subscriptionKey: args.subscriptionKey,
           replayAfterOffset: args.replayAfterOffset,
+          eventTypes: args.eventTypes,
+          events: args.events,
+          subscriber: args.subscriber,
           processEventBatch,
         });
 
@@ -931,22 +758,3 @@ function decodeChunks(chunks: ArrayBuffer[]): string {
   for (const chunk of chunks) value += textDecoder.decode(chunk, { stream: true });
   return value + textDecoder.decode();
 }
-
-/**
- * A live delivery connection from this stream to one subscriber callback. Not persisted;
- * the callback and pump state live in the `#openConnection` closure, so this is just the
- * metrics counters plus the two control verbs the stream calls.
- */
-type Connection = {
-  readonly direction: "inbound" | "outbound";
-  readonly startedAt: string;
-  /** Highest offset delivered to the callback; also the pump's resume cursor. */
-  readonly cursor: number;
-  batchesSent: number;
-  eventsSent: number;
-  lastDeliveredAt?: string;
-  /** Re-arm the delivery pump after events are committed. Idempotent while draining. */
-  wake(): void;
-  /** Stop the pump, dispose the callback, run teardown, drop from the map. Idempotent. */
-  close(): void;
-};

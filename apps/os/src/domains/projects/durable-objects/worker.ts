@@ -93,12 +93,12 @@ export type WorkerCheckout = {
 };
 
 export type WorkerLoaderBinding = {
-  get(
-    name: string,
-    getCode: () => RunnableWorkerCode | Promise<RunnableWorkerCode>,
-  ): {
-    getEntrypoint(): unknown;
-  };
+  get(name: string, getCode: () => RunnableWorkerCode | Promise<RunnableWorkerCode>): LoadedWorker;
+};
+
+/** The loader's handle on a loaded worker (named exports reachable). */
+export type LoadedWorker = {
+  getEntrypoint(name?: string, options?: { props?: Record<string, unknown> }): unknown;
 };
 
 export type WorkerGit = {
@@ -270,22 +270,30 @@ export class WorkerHost {
       return this.#entrypoint.entrypoint;
     }
 
-    const worker = this.#deps.loader.get(
-      workerCacheKey({ commitOid: checkout.commitOid, projectId: input.projectId }),
-      () =>
-        withWorkerEnv({
-          exports: readLoopbackExports(this.#deps.ctx.exports),
-          projectId: input.projectId,
-          workerCode: checkout.workerCode,
-        }),
-    );
-    const entrypoint = worker.getEntrypoint();
+    const entrypoint = this.loadWorker(input).getEntrypoint();
     if (!isLoadedWorkerEntrypoint(entrypoint)) {
       throw new Error("Loaded worker entrypoint is missing fetch.");
     }
 
     this.#entrypoint = { commitOid: checkout.commitOid, entrypoint };
     return entrypoint;
+  }
+
+  /**
+   * The loader's worker handle, for callers that need NAMED exports — itx
+   * `{ type: "project-worker" }` refs instantiate a user export per call
+   * with registry-merged props (itxProjectWorkerCall).
+   */
+  loadWorker(input: { checkout: WorkerCheckout; projectId: string }): LoadedWorker {
+    return this.#deps.loader.get(
+      workerCacheKey({ commitOid: input.checkout.commitOid, projectId: input.projectId }),
+      () =>
+        withWorkerEnv({
+          exports: readLoopbackExports(this.#deps.ctx.exports),
+          projectId: input.projectId,
+          workerCode: input.checkout.workerCode,
+        }),
+    );
   }
 
   #startBackgroundBuild(project: WorkerProject) {

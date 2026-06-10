@@ -70,13 +70,14 @@ import {
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
+import { platformProjectContext } from "~/itx/code-contexts.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
-import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
+import { ITX_AUDIT_STREAM_PATH, resolveDialableTargets } from "~/itx/protocol.ts";
 import type {
   CapInvoke,
   CapMeta,
-  CapSource,
   PathCall,
+  PathCallTarget,
   SerializableCapTarget,
 } from "~/itx/protocol.ts";
 
@@ -253,9 +254,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
 
   async itxDefine(input: {
     name: string;
-    target?: SerializableCapTarget;
-    source?: CapSource;
-    kind?: "worker" | "facet";
+    target: SerializableCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {
@@ -297,6 +296,10 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
       // Gated on DIALABLE_BINDINGS inside the registry before this is called.
       binding: (name) => (this.env as unknown as Record<string, unknown>)[name],
       contextId: projectId,
+      // The code-defined parent context: platform defaults every project
+      // falls through to, shadowable by this project's own rows (§8).
+      defaults: platformProjectContext,
+      dialable: resolveDialableTargets(parseConfig(this.env).itx),
       facets: durableObjectFacetsHook(this.ctx),
       loader: projectRuntimeEnv(this.env).LOADER as unknown as ConstructorParameters<
         typeof ContextRegistry
@@ -363,6 +366,35 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     const checkout = await this.workerHost.buildFresh(summary);
     const entrypoint = this.workerHost.load({ checkout, projectId: summary.id });
     return await replayPathCall(entrypoint, { args: input.args ?? [], path: input.path });
+  }
+
+  /**
+   * itx `{ type: "project-worker" }` refs dispatch here (via the
+   * ProjectWorker loopback forwarder, itx/caps/project-worker.ts): a named
+   * export of the project's OWN worker is the capability target — user
+   * space, same shape as first-party. The whole call arrives as data because
+   * loader entrypoints cannot cross an RPC boundary; the entrypoint is
+   * instantiated per call with the registry-merged props (definer
+   * parameterization + { cap, context, projectId } attribution).
+   */
+  async itxProjectWorkerCall(input: {
+    call: PathCall;
+    entrypoint?: string;
+    invoke: CapInvoke;
+    props: Record<string, unknown>;
+  }): Promise<unknown> {
+    const summary = await this.requireSummary();
+    const checkout = await this.workerHost.buildFresh(summary);
+    const worker = this.workerHost.loadWorker({ checkout, projectId: summary.id });
+    const entrypoint = worker.getEntrypoint(input.entrypoint, { props: input.props }) as unknown;
+    try {
+      if (input.invoke === "path-call") {
+        return await (entrypoint as PathCallTarget).call(input.call);
+      }
+      return await replayPathCall(entrypoint, input.call);
+    } finally {
+      (entrypoint as Partial<Disposable>)?.[Symbol.dispose]?.();
+    }
   }
 
   protected async cloneWorkerRepo(input: WorkerWorkspace & { repo: RepoInfo }) {

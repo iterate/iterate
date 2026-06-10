@@ -1,14 +1,9 @@
-// Connect-time access resolution, shared by every server-side door that turns
+// Connect-time access resolution for the server-side door that turns
 // credentials into an itx handle (Law 3: auth happens at the boundary,
-// nowhere deeper). Two doors use this vocabulary today:
-//
-//   - /api/itx connect + /api/itx/run (fetch.ts) — credentials arrive over
-//     HTTP/WebSocket, Cap'n Web terminates in the stateless worker;
-//   - the SSR in-process handle (server.ts) — the same principal arrives via
-//     the request context, no socket involved.
-//
-// Keeping the access check in ONE module means the two doors cannot drift:
-// a context id a principal may not hold is unreachable through either.
+// nowhere deeper): /api/itx connect + /api/itx/run (fetch.ts) — credentials
+// arrive over HTTP/WebSocket, Cap'n Web terminates in the stateless worker.
+// (The SSR in-process handle that also used this module is gone — itx never
+// SSRs anymore, DECISIONS D21.)
 
 import type { Client } from "sqlfu";
 import { isChildContextId, type ProjectAccess } from "./protocol.ts";
@@ -26,7 +21,7 @@ export function accessForPrincipal(principal: Principal): ProjectAccess {
 }
 
 /**
- * Resolve a connect/run/SSR target to a context id the caller may hold. The
+ * Resolve a connect/run target to a context id the caller may hold. The
  * access check happens HERE (auth boundary) and nowhere deeper: a child
  * context is accessible iff its owning project is.
  */

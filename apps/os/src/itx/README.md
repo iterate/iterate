@@ -72,10 +72,10 @@ browser ──capnweb/WebSocket──► OS worker /api/itx        (auth happene
               └─► Workers RPC: ProjectDO.itxInvoke({name:"todo", path:["add"], args})
                     └─► ContextRegistry.invoke   ◄── THE one dispatch (supervisor)
                           ├─ live   → replay path on provider's stub
-                          ├─ worker → LOADER.get(codeId) → entrypoint, replay path
+                          ├─ rpc/source → LOADER.get(cacheKey) → entrypoint, replay
                           │            env.ITERATE = ItxEntrypoint({context})  ┐
                           │            globalOutbound = ProjectEgress         ┤ Law 5
-                          └─ facet  → ctx.facets.get("cap:todo") → RPC call   ┘
+                          └─ …durable-object → ctx.facets.get("cap:todo")     ┘
 ```
 
 Egress, both doors:
@@ -110,6 +110,7 @@ https://{cap}--{project}.{base}/…
 | `fetch.ts`             | connect + run            | `/api/itx[/:context]`, `/api/itx/run`, project-host `/__itx`                                                                      |
 | `http.ts`              | routable caps            | hostname rule, `ItxCapIngress`, share tokens                                                                                      |
 | `client.ts`            | tier-3 clients           | `connectItx` for Node (browser uses `browser-repl.ts`/the REPL routes)                                                            |
+| `use-itx.ts`           | the browser hook         | `useItx`/`getBrowserItx`: per-context singleton sockets, Suspense until connected, never SSRs (DECISIONS D21)                     |
 | `browser-repl.ts`      | dev tooling              | the REPL snippet compiler (not part of the kernel)                                                                                |
 | `admin-auth-cookie.ts` | test bridge              | browser-WebSocket admin auth (cookies, since WS can't set headers)                                                                |
 
@@ -136,21 +137,33 @@ exactly like @slack/web-api" and that's the whole tool description.
 await itx.caps.define({
   invoke: "path-call",
   name: "slack",
-  source: { codeId, mainModule: "cap.js", modules: { "cap.js": `
-    import { WorkerEntrypoint } from "cloudflare:workers";
-    export default class extends WorkerEntrypoint {
-      async call({ path, args }) {
-        // bare fetch() here IS project egress: the Slack token lives in
-        // project secrets and is substituted server-side (Law 5)
-        return await (await fetch("https://slack.com/api/" + path.join("."), {
-          body: JSON.stringify(args[0]),
-          headers: { authorization: 'Bearer getSecret({ key: "SLACK_TOKEN" })',
-                     "content-type": "application/json" },
-          method: "POST",
-        })).json();
+  target: {
+    type: "rpc",
+    worker: {
+      type: "source",
+      source: {
+        cacheKey,
+        mainModule: "cap.js",
+        modules: {
+          "cap.js": `
+      import { WorkerEntrypoint } from "cloudflare:workers";
+      export default class extends WorkerEntrypoint {
+        async call({ path, args }) {
+          // bare fetch() here IS project egress: the Slack token lives in
+          // project secrets and is substituted server-side (Law 5)
+          return await (await fetch("https://slack.com/api/" + path.join("."), {
+            body: JSON.stringify(args[0]),
+            headers: { authorization: 'Bearer getSecret({ key: "SLACK_TOKEN" })',
+                       "content-type": "application/json" },
+            method: "POST",
+          })).json();
+        }
       }
-    }
-  ` },
+    `,
+        },
+      },
+    },
+  },
 });
 
 await itx.slack.chat.postMessage({ channel: "C123", text: "hi" });
@@ -161,14 +174,27 @@ The class must be a **named** export (D12):
 
 ```ts
 await itx.caps.define({
-  kind: "facet",
   name: "todo",
-  source: { codeId, entrypoint: "Todo", mainModule: "cap.js", modules: { "cap.js": `
-    import { DurableObject } from "cloudflare:workers";
-    export class Todo extends DurableObject {
-      async add({ text }) { /* this.ctx.storage is YOURS alone */ }
-    }
-  ` },
+  target: {
+    type: "rpc",
+    worker: {
+      type: "source",
+      source: {
+        cacheKey,
+        entrypoint: "Todo",
+        exportType: "durable-object",
+        mainModule: "cap.js",
+        modules: {
+          "cap.js": `
+      import { DurableObject } from "cloudflare:workers";
+      export class Todo extends DurableObject {
+        async add({ text }) { /* this.ctx.storage is YOURS alone */ }
+      }
+    `,
+        },
+      },
+    },
+  },
 });
 ```
 

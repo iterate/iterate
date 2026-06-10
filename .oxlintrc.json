@@ -111,6 +111,7 @@
     "use-isnan": "error",
     "valid-typeof": "error",
     "@tanstack/router/create-route-property-order": "warn",
+    "iterate/no-capnweb-http-batch": "error",
     "iterate/import-rules": "warn",
     "iterate/relative-import-extensions": "error",
     "iterate/zod-schema-naming": "error",

@@ -116,8 +116,9 @@ export interface ItxBuiltins {
    * rather than a hardwired built-in; surface unchanged.) */
   readonly repos: unknown;
 
-  /** The project's workspace: readFile/writeFile and a nested git surface.
-   * (Same direction as `repos`.) */
+  /** The project's workspace: readFile/writeFile and the flat git methods
+   * (gitClone/gitAdd/gitCommit/gitPush/gitStatus — nested RpcTargets do not
+   * survive RPC boundaries). (Same direction as `repos`.) */
   readonly workspace: unknown;
 
   /** The project worker. Every public method/getter is reachable at any
@@ -290,15 +291,17 @@ export interface ItxCaps {
  *   worker, a Durable Object, or a dynamic worker materialized from stored
  *   source — see {@link WorkerRef}.
  * - `url` — outbound, across the internet: a Cap'n Web server somewhere.
- *   Headers travel through project egress, so they may carry
- *   `getSecret(...)` placeholders.
+ *   The dial is ONE WebSocket session per call, terminating in the
+ *   stateless `UrlDial` worker (Law 7; HTTP batch sessions are banned
+ *   repo-wide). Headers ride the handshake and pass through egress secret
+ *   substitution, so they may carry `getSecret(...)` placeholders.
  *
  * Deliberately NOT here: MCP and OpenAPI. Those are not transports — they
  * are client implementations, i.e. ordinary RPC targets. The platform ships
  * `McpClient` / `OpenApiClient` entrypoints (reach them via
  * `worker: { type: "loopback" }`, parameterized by `props`), and nothing
  * stops you from shipping your own version as an export of your project
- * worker (`worker: { type: "project-worker" }`). If a first-party client
+ * worker (the `ProjectWorker` loopback forwarder). If a first-party client
  * needs to be special, the design has failed.
  *
  * (Possible later kind, deliberately absent until needed: a re-export of a
@@ -337,16 +340,12 @@ export type WorkerRef =
    * is the target (`itx.ai.run(...)` replays straight onto `env.AI`). */
   | { type: "binding"; binding: string }
   /** The platform worker's own exports (ctx.exports) — first-party code:
-   * `McpClient`, `OpenApiClient`, thin policy wrappers around bindings. */
+   * `McpClient`, thin policy wrappers around bindings, and `ProjectWorker`,
+   * the forwarder that makes YOUR repo's worker exports dialable (user
+   * space: `entrypoint: "ProjectWorker", props: { export: "MyClass" }` —
+   * the call replays inside the Project DO because loader entrypoints
+   * cannot cross an RPC boundary). */
   | { type: "loopback" }
-  /** The project worker — user space: export a class from your repo's
-   * worker entry and point a cap at it. Already runs behind the egress
-   * pipe; no new trust surface. NOT a primitive: this is strict sugar for
-   * reaching the first-party `ProjectWorker` loopback forwarder with this
-   * project's id, normalized at define time — the spelling exists so
-   * `entrypoint` always names the export YOU call and `describe()` stays
-   * informative. */
-  | { type: "project-worker" }
   /** A Durable Object, addressed by namespace binding + instance name. */
   | { type: "durable-object"; binding: string; name: string }
   /** A dynamic worker materialized on demand from stored source — code that
@@ -491,6 +490,16 @@ export type StreamEventInput = {
   idempotencyKey?: string;
 };
 
+/** The public state of one stream — what `getState()` returns and what every
+ * subscription batch carries as `state`. */
+export type StreamState = {
+  namespace: string;
+  path: string;
+  eventCount: number;
+  childPaths: string[];
+  metadata: Record<string, unknown>;
+};
+
 /** A handle pinned to one stream. */
 export interface ItxStream {
   describe(): { namespace: string; path: string };
@@ -502,6 +511,24 @@ export interface ItxStream {
   }): Promise<StreamEvent[]>;
   getState(): Promise<unknown>;
   listChildren(): Promise<unknown>;
+  /**
+   * The ONE reactive primitive. Catch-up from `afterOffset`, then every
+   * committed batch, pushed until unsubscribed. Every batch carries `state`
+   * (the `getState()` shape as of `streamMaxOffset`), and every subscription
+   * receives an immediate first batch so the first render needs no separate
+   * getState call. `events: false` = state-only: batches with `events: []`
+   * on every state change, implicitly live-from-now (`afterOffset` ignored).
+   */
+  subscribe(
+    onEventBatch: (batch: {
+      events: StreamEvent[];
+      state: StreamState;
+      streamMaxOffset: number;
+    }) => unknown,
+    opts: { afterOffset: number | "start" | "end"; events?: boolean },
+  ): Promise<{ unsubscribe(): void }>;
+  /** Sugar: subscribe(batch => onState(batch.state), { events: false, afterOffset: "end" }). */
+  onStateChange(onState: (state: StreamState) => unknown): Promise<{ unsubscribe(): void }>;
 }
 
 /** The streams collection, namespace-bound by the handle. */
@@ -519,10 +546,16 @@ export interface ItxStreams {
  * a NEW project-scoped handle. */
 export interface ItxProjects {
   get(projectIdOrSlug: string): Promise<Itx>;
-  list(input?: {
-    limit?: number;
-    offset?: number;
-  }): Promise<{ projects: { id: string; slug: string }[]; total: number }>;
+  list(input?: { limit?: number; offset?: number }): Promise<{
+    projects: {
+      id: string;
+      slug: string;
+      customHostname: string | null;
+      createdAt: string | null;
+      updatedAt: string | null;
+    }[];
+    total: number;
+  }>;
   /** Admin principals only. */
   create(input: { id?: string; slug: string }): Promise<{ id: string; slug: string }>;
   /** Admin principals only. */

@@ -286,12 +286,20 @@ RPC stubs have no `onRpcBroken` at all. If confirmed:
   DO connection for the incarnation lifetime and shows phantom connections in
   `runtimeState()`.
 
-- [ ] **Verify:** test whether `onRpcBroken` fires for (a) a capnweb stub and
+- [x] **Verify:** test whether `onRpcBroken` fires for (a) a capnweb stub and
       (b) a native RPC stub. Drop the `Object.hasOwn` guard and use
-      `typeof retained.onRpcBroken === "function"`.
-- [ ] **For the native outbound path** (no `onRpcBroken`): add liveness — observe
+      `typeof retained.onRpcBroken === "function"`. _Fixed: `Object.hasOwn`
+      guard dropped; the wiring is defensive because property access on a
+      native RPC stub can fabricate a pipelined method (`rpc-lifecycle.ts`,
+      unit tests in `rpc-lifecycle.test.ts`)._
+- [x] **For the native outbound path** (no `onRpcBroken`): add liveness — observe
       the delivery result and `connection.close()` + `#reconcile()` on rejection.
-      Note this overlaps with the C1 fix; design them together.
+      Note this overlaps with the C1 fix; design them together. _Fixed:
+      `retainProcessEventBatch` takes `onDeliveryError`; the Stream DO drops the
+      connection and re-dials on a rejected delivery, and the subscriber
+      re-handshakes from its checkpoint (C1's generation gate drops stragglers).
+      End-to-end abort/re-dial regression tests in
+      `stream-redial.workers.test.ts`._
 
 ### M2 — Any event with a `source` field crashes the whole `appendBatch` (MAJOR)
 

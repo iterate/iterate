@@ -18,7 +18,11 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import { typeid } from "@iterate-com/shared/typeid";
-import type { StreamCursor, Event as StreamEvent } from "@iterate-com/shared/streams/types";
+import type {
+  StreamCursor,
+  Event as StreamEvent,
+  StreamState,
+} from "@iterate-com/shared/streams/types";
 import { createD1Client } from "sqlfu";
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { PathProxyRpcTarget, replayPathCall } from "./path-proxy.ts";
@@ -29,7 +33,6 @@ import {
   RESERVED_CAP_NAMES,
   type CapInvoke,
   type CapMeta,
-  type CapSource,
   type ProjectAccess,
   type SerializableCapTarget,
 } from "./protocol.ts";
@@ -163,10 +166,10 @@ export class Itx extends RpcTarget {
 
   get workspace() {
     // Like itx.repos: the workspace domain entrypoint already exposes the
-    // exact surface we want (readFile/writeFile and a nested git with
-    // add/clone/commit/push/status), so hand it out directly rather than
-    // re-wrapping it. workspaceId is fixed to "itx" — one workspace per
-    // project context.
+    // exact surface we want (readFile/writeFile and the flat
+    // gitClone/gitAdd/gitCommit/gitPush/gitStatus methods), so hand it out
+    // directly rather than re-wrapping it. workspaceId is fixed to "itx" —
+    // one workspace per project context.
     const factory = this.#runtime.exports.WorkspaceCapability;
     if (typeof factory !== "function") {
       throw new Error("WorkspaceCapability export is not available.");
@@ -385,11 +388,7 @@ export class ItxCaps extends RpcTarget {
     name: string;
     /** The capability's target (types.ts). Serializable kinds only — for a
      * live stub use provide(). */
-    target?: SerializableCapTarget;
-    /** Legacy: sugar for target { type: "rpc", worker: { type: "source" } }. */
-    source?: CapSource;
-    /** Legacy: "facet" maps to source.exportType "durable-object". */
-    kind?: "worker" | "facet";
+    target: SerializableCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {
@@ -450,18 +449,33 @@ export class ItxStreams extends RpcTarget {
     super();
   }
 
-  get(path: string): ItxStream {
-    return new ItxStream(this.runtime, this.projectId, path);
+  /**
+   * Relative or absolute (itx-next.md §3). `"/path"` resolves in this
+   * handle's namespace; `"ns:/path"` and `{ namespace, path }` are absolute
+   * refs. Sugar rule: absolute forms construct the narrowed collection and
+   * call through — ONE code path, so the access check never forks.
+   */
+  get(ref: string | { namespace?: string; path: string }): ItxStream {
+    const { namespace, path } = parseStreamRef(ref);
+    if (namespace === undefined || namespace === this.projectId) {
+      return new ItxStream(this.runtime, this.projectId, path);
+    }
+    return this.namespace(namespace).get(path);
   }
 
   namespace(namespace: string): ItxStreams {
-    if (this.runtime.access !== "all") {
+    const parsed = StreamNamespace.parse(namespace);
+    // Resolution checks access (§3 rule 2): refs are pure names, restoring
+    // them is the capability. Masked as NOT_FOUND like projects.get — a
+    // caller can never probe which namespaces exist. A project handle
+    // cannot fully-qualify its way out of its access set.
+    if (this.runtime.access !== "all" && !this.runtime.access.includes(parsed)) {
       throw new ItxError({
-        code: "FORBIDDEN",
-        message: "Selecting an arbitrary stream namespace requires admin access.",
+        code: "NOT_FOUND",
+        message: `No stream namespace ${JSON.stringify(parsed)} for this handle.`,
       });
     }
-    return new ItxStreams(this.runtime, StreamNamespace.parse(namespace));
+    return new ItxStreams(this.runtime, parsed);
   }
 
   async create(input: { streamPath: string }) {
@@ -476,6 +490,30 @@ export class ItxStreams extends RpcTarget {
       props: { appendPolicy: { mode: "any" }, projectId: this.projectId },
     });
   }
+}
+
+/**
+ * The two absolute StreamRef spellings, plus the relative one:
+ * `"/path"` (relative), `"ns:/path"` (absolute string), and
+ * `{ namespace?, path }` (absolute structured). Refs are unauthenticated
+ * names — authority comes from who restores them, never from their content.
+ */
+function parseStreamRef(ref: string | { namespace?: string; path: string }): {
+  namespace?: string;
+  path: string;
+} {
+  if (typeof ref !== "string") {
+    return { namespace: ref.namespace, path: ref.path };
+  }
+  if (ref.startsWith("/")) return { path: ref };
+  const colon = ref.indexOf(":");
+  if (colon > 0 && ref[colon + 1] === "/") {
+    return { namespace: ref.slice(0, colon), path: ref.slice(colon + 1) };
+  }
+  throw new ItxError({
+    code: "BAD_REQUEST",
+    message: `Stream ref ${JSON.stringify(ref)} must be "/path", "namespace:/path", or { namespace?, path }.`,
+  });
 }
 
 export class ItxStream extends RpcTarget {
@@ -521,10 +559,22 @@ export class ItxStream extends RpcTarget {
    * the subscription is torn down on the next failed delivery — offline means
    * offline; durability is the stream itself, re-subscribe from the last
    * offset you saw.
+   *
+   * The ONE reactive primitive: every batch also carries `state` — the same
+   * public shape `getState()` returns, as of `streamMaxOffset` — and every
+   * subscription gets an immediate first batch (current state plus any
+   * replayed events), so a subscriber paints its first render from the
+   * subscription alone. `events: false` is state-only mode: batches arrive
+   * with `events: []` on every state change, implicitly live-from-now
+   * (`afterOffset` is ignored — replay without events is meaningless).
    */
   async subscribe(
-    onEventBatch: (batch: { events: StreamEvent[]; streamMaxOffset: number }) => unknown,
-    opts: { afterOffset: StreamCursor },
+    onEventBatch: (batch: {
+      events: StreamEvent[];
+      state: StreamState;
+      streamMaxOffset: number;
+    }) => unknown,
+    opts: { afterOffset: StreamCursor; events?: boolean },
   ): Promise<ItxStreamSubscription> {
     // Callback retention lives in StreamsCapability.subscribe: RPC layers
     // implicitly dispose stubs received as parameters when the call
@@ -532,8 +582,30 @@ export class ItxStream extends RpcTarget {
     // — without that, replay (delivered in-call) works but the first LIVE
     // batch hits a disposed stub. Verified both ways by
     // itx-subscribe.e2e.test.ts against a live deployment.
-    const handle = await this.client().subscribe({ afterOffset: opts.afterOffset }, onEventBatch);
+    const handle = await this.client().subscribe(
+      { afterOffset: opts.afterOffset, events: opts.events },
+      onEventBatch,
+    );
     return new ItxStreamSubscription(handle);
+  }
+
+  /**
+   * Reactive sugar over {@link subscribe}: a state-only subscription that
+   * calls `onState` with the stream's public state (the `getState()` shape)
+   * once immediately on open — the first render — and again after every
+   * append. `stream.onStateChange(setState)` is the whole browser story.
+   */
+  async onStateChange(onState: (state: StreamState) => unknown): Promise<ItxStreamSubscription> {
+    // `onState` is an RPC parameter stub disposed when THIS call returns, but
+    // deliveries (including the initial push) arrive later through the local
+    // wrapper below. dup() it (no-op for plain functions) and hand the
+    // wrapper a Symbol.dispose so the capability's unsubscribe/teardown
+    // releases the retained stub with everything else.
+    const retained = (onState as { dup?(): typeof onState }).dup?.() ?? onState;
+    const forwardState = Object.assign((batch: { state: StreamState }) => retained(batch.state), {
+      [Symbol.dispose]: () => (retained as Partial<Disposable>)[Symbol.dispose]?.(),
+    });
+    return await this.subscribe(forwardState, { afterOffset: "end", events: false });
   }
 
   private client(): StreamsClient {
@@ -699,5 +771,11 @@ export class ItxProjects extends RpcTarget {
 }
 
 function toProjectSummary(row: { id: string; slug: string; [key: string]: unknown }) {
-  return { id: row.id, slug: row.slug };
+  return {
+    id: row.id,
+    slug: row.slug,
+    customHostname: typeof row.custom_hostname === "string" ? row.custom_hostname : null,
+    createdAt: typeof row.created_at === "string" ? row.created_at : null,
+    updatedAt: typeof row.updated_at === "string" ? row.updated_at : null,
+  };
 }

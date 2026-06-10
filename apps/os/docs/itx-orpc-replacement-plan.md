@@ -39,14 +39,18 @@ oRPC"). auth and semaphore keep their own oRPC stacks — out of scope.
   D1-backed domains (projects, secrets, repos, integrations) move to itx as
   typed built-ins consumed via the thin query bridge — they are NOT
   event-sourced as part of this work. New domains are born stream-shaped.
-- **One global-context WebSocket per tab.** Project handles are derived
-  in-session via `itx.projects.get()` (narrowing is construction, Law 4) and
-  cached per connection epoch; reconnect rebuilds them (Law 1).
+- **The browser layer is ONE hook** (itx DECISIONS D21, supersedes the
+  earlier "one global-context WebSocket per tab" decision): `useItx(context?)`
+  suspends until a per-context module-singleton WebSocket to
+  `/api/itx[/<ctx>]` is connected and returns the handle stub. No query
+  cache, no reconnect machinery, no multiplexer, no SSR — socket death means
+  re-suspend and repaint from the subscription's initial state push (D20).
+  Multiple sockets per tab are fine.
 - **Never capnweb HTTP-batch.** A batch session is one-directional — the
   client can't pass callbacks or provide capabilities, which kills the whole
-  point. Browser = WebSocket always; server = in-process handle.
-- **Stream filtering is client-side.** One unfiltered subscription per stream
-  path per tab, multiplexed to N views; raw mode is the same data. No
+  point. Browser = WebSocket always.
+- **Stream filtering is client-side.** Views subscribe to the unfiltered
+  stream and filter what they render; raw mode is the same data. No
   filter-predicates-as-data in the kernel (composition-as-data died in
   itx-spec §9). Escape hatch for chatty streams: a derived stream
   server-side, not filter params.
@@ -68,8 +72,7 @@ oRPC"). auth and semaphore keep their own oRPC stacks — out of scope.
 ## Architecture: one handle, four transports
 
 ```text
-React components ── reactive views (reduced state + streams) ── capnweb WS /api/itx (session cookie)
-SSR loaders ─────── in-process handle: resolveItx() inside the OS worker (no HTTP at all)
+React components ── useItx(context) → capnweb WS /api/itx[/<ctx>] (session cookie; never SSRs)
 CLI / curl / MCP ── run code: POST /api/itx/run (or connectItx WS for live sessions)
 scripts/agents ──── env.ITERATE (unchanged)
 ```
@@ -83,41 +86,42 @@ infra routes (captun, debug, health) → project-host ingress (incl. `/__itx`)
 a TanStack API route; the three oRPC route files, the OpenAPI handler, and
 the crossws/`NitroWebSocketResponse` upgrade dance all disappear.
 
-### SSR: the in-process handle
+### SSR: there is none for itx components
 
-**Done** (itx DECISIONS D18). TanStack Start loaders run inside the OS
-worker, so the server render never opens a socket: `getServerItx`
-(`src/itx/server.ts`) calls `resolveItx` directly with `accessForPrincipal`
-applied — the same access.ts chain `/api/itx` connect runs. Handle
-construction is in-process (~zero cost); each built-in call is exactly one
-Workers RPC to the owning DO — the same hop today's oRPC routers make.
-Loaders reach it through the isomorphic `getLoaderItx` (`src/itx/loader.ts`;
-browser side reuses the per-tab socket singleton) and seed the QueryClient
-via `prefetchItxQuery` with the same `ItxQueryDefinition` the component's
-hook consumes (`lib/itx-queries.ts`), best-effort — prefetch failures never
-crash a route. SSR of a project page must complete with a handful of DO
-round trips and no fetch to our own hostname.
+**Superseded** (itx DECISIONS D21). The D19 design — `getServerItx` building
+an in-process handle for loaders, `getLoaderItx` isomorphism,
+`prefetchItxQuery` seeding the QueryClient — was built, shipped, and then
+deleted: itx components never SSR. `useItx` throws on the server (a
+forever-suspending `use()` would hold the streaming response open), so itx
+views live under `ssr: false` routes or `<ClientOnly>` and paint from their
+subscription's initial state push once the socket connects. Routes that need
+server-rendered itx data don't exist; if one ever does, that's a new
+decision, not a revival of D19.
 
 ## Status
 
-Done (PR #1423):
+Done:
 
 - Dead oRPC surface deleted: `ping`, `test.*`, `streams.getState`, the
-  `/debug` and `/log-stream` demo pages.
-- The browser client library exists at `apps/os/src/itx/react/`:
-  `ItxProvider` (one lazy socket per tab, session-cookie auth, reconnect),
-  `useItxQuery`/`useItxMutation`/`itxKey`, and the stream-tail layer —
-  `ItxStream.subscribe(callback)` in the kernel, a refcounted multiplexer,
-  `useStreamEvents`, and `ItxActivityTail` (live `/itx` audit tail on the
-  project repl page).
-- First route conversion: project streams index reads through the handle.
+  `/debug` and `/log-stream` demo pages (PR #1423).
+- The browser layer is `useItx`/`getBrowserItx` (`src/itx/use-itx.ts`,
+  DECISIONS D21, PR #1472): per-context singleton sockets, Suspense until
+  connected, no SSR. Converted consumers: the streams index + detail trees
+  (live via `onStateChange`), the breadcrumb stream navigators
+  (fetch-on-popover-open), and `ItxActivityTail` (kernel
+  `ItxStream.subscribe` from "start"). The earlier react client library
+  (provider, query bridge, stream-tail multiplexer, `useStreamEvents`; PR
+  #1423) was superseded and deleted.
+- Stream subscriptions carry reduced state (DECISIONS D20, PR #1472):
+  `subscribe` batches include `state`, `events: false` is state-only mode,
+  every subscription gets an immediate initial push, and
+  `ItxStream.onStateChange(cb)` is the reactive sugar the views ride.
 - `ItxError { code, message, details? }` (`src/itx/errors.ts`): five codes
   riding capnweb as own enumerable props, duck-typed client detection
   (`getItxErrorCode`/`isItxAccessError`), and `onSendError` tagging every
   other outbound error INTERNAL with its stack — see DECISIONS.md D18.
-- SSR/loader prefetch: `getServerItx` + `getLoaderItx` + `prefetchItxQuery`
-  (DECISIONS D19); the streams index loader seeds the root stream state so
-  first paint skips the spinner.
+- SSR/loader prefetch (`getServerItx` + `getLoaderItx` + `prefetchItxQuery`,
+  DECISIONS D19, PR #1457) — built, then superseded by D21 and deleted.
 
 Happening separately: codemode is deleted and replaced by the **itx
 processor** (`events.iterate.com/itx/execution-requested` /
@@ -135,21 +139,18 @@ Remaining: see `tasks/os-orpc-teardown.md`.
   wide-event log before prod cutover.
 - **`run` is powerful**: rate limiting / approval policy is explicitly punted
   to the egress/approval work.
-- **Silent stall after Stream DO eviction** — _addressed client-side_:
-  inbound DO subscriptions are runtime-only and not restored on wake, and a
-  dead DO produces no status transition on the healthy browser↔worker
-  socket. The stream-tail multiplexer now runs a 30s liveness probe per live
-  tail: compare the server's `eventCount` (offsets are dense, so it IS the
-  highest offset) against the last delivered offset, and restart from
-  `lastOffset` when the server is ahead with no delivery progress during the
-  probe roundtrip. Residual shape: a stalled stream with NO new events is
-  indistinguishable from an idle one — and equally harmless, since nothing
-  was missed; detection latency is up to one probe interval.
-- **Two live-tail stacks**: `~/itx/react` (stream-tail multiplexer over the
-  shared itx socket) and `ProjectStreamView`'s browser SQLite mirror over
-  `/api/project-streams`. The itx stack is the strategic one; port
-  `ProjectStreamView` onto `useStreamEvents` (or give it the itx transport)
-  and delete the second stack as part of the conversion sweep. Similarly,
-  the repl still opens its own isolated itx socket (`createBrowserReplSession`)
-  next to the shared client — converge once repl session resets can be scoped
-  to a sub-session.
+- **Silent stall after Stream DO eviction**: inbound DO subscriptions are
+  runtime-only and not restored on wake, and a dead DO produces no status
+  transition on the healthy browser↔worker socket. The one-hook layer
+  deliberately has no liveness probe (the multiplexer's was deleted with it,
+  D21); the exposure is a live view that quietly stops updating until the
+  user refreshes (the tree's per-node refresh button re-subscribes). If this
+  bites in practice, the fix belongs server-side (DO restores or closes
+  subscriptions on wake), not in another client watchdog.
+- **Two live-tail stacks**: `useItx` + kernel `ItxStream.subscribe`
+  (ItxActivityTail, the live stream tree) and `ProjectStreamView`'s browser
+  SQLite mirror over `/api/project-streams`. The itx stack is the strategic
+  one; port `ProjectStreamView` onto an itx subscription and delete the
+  second stack as part of the conversion sweep. The repl keeps its own
+  isolated socket (`createBrowserReplSession`) by design — it needs
+  dispose/reconnect-on-demand, and multiple sockets are fine (D21).

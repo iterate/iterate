@@ -119,6 +119,16 @@ describe("Project ingress routing", () => {
     });
     expect(projectState.offset).toBeGreaterThanOrEqual(4);
 
+    // itx.project deep-traverses in one expression (path proxy; regression
+    // for "value.bind is not a function" when the fallthrough Proxy bound
+    // getter results).
+    const phaseResponse = await SELF.fetch(
+      "https://os.iterate.localhost/__test/itx-project-processor-phase",
+    );
+    expect(phaseResponse.ok).toBe(true);
+    const { phase } = (await phaseResponse.json()) as { phase: string };
+    expect(["none", "creating", "ready"]).toContain(phase);
+
     // Creation cross-posts create-requested onto the deployment-wide global
     // audit stream (namespace "global", path /projects).
     const globalResponse = await SELF.fetch(

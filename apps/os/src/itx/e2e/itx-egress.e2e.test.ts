@@ -92,21 +92,27 @@ test("bare fetch() inside a worker cap goes through egress (implicit door)", asy
 
   await projectItx.caps.define({
     name: "egressProbe",
-    source: {
-      codeId: crypto.randomUUID(),
-      mainModule: "cap.js",
-      modules: {
-        "cap.js": `
-          import { WorkerEntrypoint } from "cloudflare:workers";
-          export default class extends WorkerEntrypoint {
-            async probe({ echoUrl, echoAuth, header, secretReference }) {
-              const response = await fetch(echoUrl, {
-                headers: { authorization: echoAuth, [header]: secretReference },
-              });
-              return { body: await response.json(), status: response.status };
-            }
-          }
-        `,
+    target: {
+      type: "rpc",
+      worker: {
+        type: "source",
+        source: {
+          cacheKey: crypto.randomUUID(),
+          mainModule: "cap.js",
+          modules: {
+            "cap.js": `
+              import { WorkerEntrypoint } from "cloudflare:workers";
+              export default class extends WorkerEntrypoint {
+                async probe({ echoUrl, echoAuth, header, secretReference }) {
+                  const response = await fetch(echoUrl, {
+                    headers: { authorization: echoAuth, [header]: secretReference },
+                  });
+                  return { body: await response.json(), status: response.status };
+                }
+              }
+            `,
+          },
+        },
       },
     },
   });

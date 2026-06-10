@@ -17,7 +17,6 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
 import { typeid } from "@iterate-com/shared/typeid";
-import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import type { ContextDO } from "~/itx/context-do.ts";
 import type { CapInvoke, SerializableCapTarget } from "~/itx/protocol.ts";
 import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
@@ -279,6 +278,17 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     return { event };
   }
 
+  /**
+   * Kills the current Durable Object incarnation so crash recovery can be
+   * observed: in-memory state (debounce timers, in-flight LLM executions,
+   * sockets) dies with it. The Stream DO notices the broken delivery RPC,
+   * redials, and the re-handshake's subscriber-connected facts drive every
+   * processor's reconciliation on the fresh instance.
+   */
+  kill(): void {
+    this.ctx.abort("kill requested");
+  }
+
   async doThing(input: { label: string; value: number }) {
     await this.ensureStartedAndCaughtUp();
     return {
@@ -289,21 +299,25 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     };
   }
 
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
+  async callAgentTool(input: {
+    args: unknown[];
+    callId: string;
+    path: string[];
+    tool: "chat" | "debug";
+  }) {
     await this.ensureStartedAndCaughtUp();
-    const providerName = input.providerPath.join(".");
-    if (providerName === "debug") {
+    if (input.tool === "debug") {
       return await this.createDebugSnapshot();
     }
 
-    const functionName = input.functionPath.join(".");
+    const functionName = input.path.join(".");
     if (functionName !== "sendMessage") {
       throw new Error(`Unknown agent chat tool function chat.${functionName}`);
     }
 
     const message = parseChatToolMessage(input.args[0]);
     const event = await this.appendAssistantResponse({
-      idempotencyKey: `agent-chat-tool:send-message:${input.functionCallId}`,
+      idempotencyKey: `agent-chat-tool:send-message:${input.callId}`,
       message,
     });
     return { event };

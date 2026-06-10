@@ -19,6 +19,7 @@ import {
   normalizeIngressHost,
 } from "~/ingress/host-routing.ts";
 import { lookupIngressRule } from "~/ingress/lookup.ts";
+import { resolveItx } from "~/itx/entrypoint.ts";
 
 const PROJECT_CONFIG_DIR = "/iterate-config";
 const MOCK_ARTIFACT_REMOTE_BASE = "https://artifacts.example.test/";
@@ -164,7 +165,6 @@ export {
   MockArtifactAgentDurableObject as AgentDurableObject,
   MockArtifactsBinding,
 } from "./mock-artifacts-binding.ts";
-export { CodemodeSession } from "~/durable-objects/codemode-session-tombstone.ts";
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
 export { PROJECT_STREAM_PATH } from "~/domains/projects/stream-processors/project/contract.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
@@ -206,23 +206,14 @@ export default {
     if (url.pathname === "/__test/upsert-secret") {
       const secret = await ctx.exports
         .OrpcCapability({ props: { projectId: "proj__local__test" } })
-        .executeCodemodeFunctionCall({
+        .call({
           args: [
             {
               key: url.searchParams.get("key") ?? "openai",
               material: url.searchParams.get("material") ?? "mvp-secret-value",
             },
           ],
-          codemodeSessionCapability: {
-            async callFunction() {
-              throw new Error("Project ingress tests do not route nested codemode calls.");
-            },
-          },
-          functionCallId: crypto.randomUUID(),
-          functionPath: ["secrets", "upsert"],
-          invocationKind: "rpc",
-          path: ["PROJECT", "orpc", "secrets", "upsert"],
-          providerPath: ["PROJECT", "orpc"],
+          path: ["secrets", "upsert"],
         });
       return Response.json(secret);
     }
@@ -271,6 +262,24 @@ export default {
       });
 
       return Response.json({ events: await stream.history({ before: "end" }) });
+    }
+
+    if (url.pathname === "/__test/itx-project-processor-phase") {
+      // Regression: itx.project is a path proxy, so deep property traversal
+      // works in ONE expression — including through the handle's fallthrough
+      // Proxy, which must NOT bind getter results (the path proxy reserves
+      // "bind" as a path segment; binding it produced "value.bind is not a
+      // function").
+      const itx = await resolveItx({
+        env: env as never,
+        exports: ctx.exports as never,
+        props: { context: "proj__local__test" },
+      });
+      const project = itx.project as unknown as {
+        processor: { snapshot(): Promise<{ state: { phase: string } }> };
+      };
+      const snapshot = await project.processor.snapshot();
+      return Response.json({ phase: snapshot.state.phase });
     }
 
     if (url.pathname === "/__test/project-state") {

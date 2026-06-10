@@ -1,6 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createD1Client } from "sqlfu";
-import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import { parseConfig } from "~/config.ts";
 import { getFreshGoogleAccessToken } from "~/domains/secrets/oauth.ts";
 
@@ -21,20 +20,6 @@ type GmailRequestInput = {
 };
 
 export class GmailCapability extends WorkerEntrypoint<GmailCapabilityEnv, GmailCapabilityProps> {
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    if (input.functionPath.join(".") !== "request") {
-      throw new Error(
-        `GmailCapability only implements gmail.request, not gmail.${input.functionPath.join(".")}`,
-      );
-    }
-    if (input.args.length !== 1) {
-      throw new Error(`gmail.request expects exactly one argument; received ${input.args.length}.`);
-    }
-
-    const request = parseGmailRequestInput(input.args[0]);
-    return await this.request(request);
-  }
-
   async request(request: GmailRequestInput) {
     const token = await this.readToken();
     return await callGmailApi({ request, token });
@@ -105,71 +90,6 @@ function gmailUrl(input: GmailRequestInput) {
   }
 
   return url;
-}
-
-function parseGmailRequestInput(value: unknown): GmailRequestInput {
-  if (value == null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("gmail.request requires an object argument.");
-  }
-  const record = value as Record<string, unknown>;
-  if (typeof record.path !== "string") {
-    throw new Error("gmail.request requires a string path.");
-  }
-
-  return {
-    path: record.path,
-    ...(record.method == null ? {} : { method: requireString(record.method, "method") }),
-    ...(record.body === undefined ? {} : { body: record.body }),
-    ...(record.headers == null ? {} : { headers: parseStringRecord(record.headers, "headers") }),
-    ...(record.query == null ? {} : { query: parseQueryRecord(record.query) }),
-  };
-}
-
-function requireString(value: unknown, field: string) {
-  if (typeof value !== "string") {
-    throw new Error(`gmail.request ${field} must be a string.`);
-  }
-  return value;
-}
-
-function parseStringRecord(value: unknown, field: string): Record<string, string> {
-  if (value == null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`gmail.request ${field} must be an object.`);
-  }
-
-  const output: Record<string, string> = {};
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof item !== "string") {
-      throw new Error(`gmail.request ${field}.${key} must be a string.`);
-    }
-    output[key] = item;
-  }
-  return output;
-}
-
-function parseQueryRecord(
-  value: unknown,
-): Record<string, boolean | number | string | null | undefined> {
-  if (value == null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("gmail.request query must be an object.");
-  }
-
-  const output: Record<string, boolean | number | string | null | undefined> = {};
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    if (
-      item !== null &&
-      item !== undefined &&
-      typeof item !== "boolean" &&
-      typeof item !== "number" &&
-      typeof item !== "string"
-    ) {
-      throw new Error(
-        `gmail.request query.${key} must be a string, number, boolean, null, or undefined.`,
-      );
-    }
-    output[key] = item;
-  }
-  return output;
 }
 
 function formatErrorData(value: unknown) {

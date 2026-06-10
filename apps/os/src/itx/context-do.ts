@@ -13,12 +13,11 @@
 import { DurableObject } from "cloudflare:workers";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "./registry.ts";
-import { ITX_AUDIT_STREAM_PATH, ITX_EVENT_TYPES } from "./protocol.ts";
+import { ITX_AUDIT_STREAM_PATH, ITX_EVENT_TYPES, resolveDialableTargets } from "./protocol.ts";
 import type {
   CapDescription,
   CapInvoke,
   CapMeta,
-  CapSource,
   PathCall,
   SerializableCapTarget,
 } from "./protocol.ts";
@@ -27,6 +26,7 @@ import {
   type StreamDurableObjectNamespace,
 } from "~/domains/streams/stream-runtime.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { parseConfig } from "~/config.ts";
 
 export type ContextDescriptor = {
   id: string;
@@ -93,9 +93,7 @@ export class ContextDO extends DurableObject<Env> {
 
   itxDefine(input: {
     name: string;
-    target?: SerializableCapTarget;
-    source?: CapSource;
-    kind?: "worker" | "facet";
+    target: SerializableCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {
@@ -141,6 +139,7 @@ export class ContextDO extends DurableObject<Env> {
       // Gated on DIALABLE_BINDINGS inside the registry before this is called.
       binding: (name) => (this.env as unknown as Record<string, unknown>)[name],
       contextId: descriptor.id,
+      dialable: resolveDialableTargets(parseConfig(this.env).itx),
       facets: durableObjectFacetsHook(this.ctx),
       loader: this.env.LOADER as unknown as ConstructorParameters<
         typeof ContextRegistry

@@ -12,7 +12,7 @@ type TestEnv = {
 const projectId = "proj__test__inboundmcp";
 
 describe("ProjectMcpServerConnection inbound MCP", () => {
-  test("runs code through CodemodeSession and appends events to the MCP session stream", async () => {
+  test("runs code through the itx runner and appends events to the MCP session stream", async () => {
     const transport = new StreamableHTTPClientTransport(
       new URL("https://mcp-project.iterate-preview-test.app/mcp"),
       {

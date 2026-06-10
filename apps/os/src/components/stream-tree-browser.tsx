@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
-import { useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDownIcon, ChevronRightIcon, RefreshCwIcon } from "lucide-react";
 import {
   StreamPath,
+  StreamState,
   type StreamPath as StreamPathType,
-  type StreamState,
+  type StreamState as StreamStateType,
 } from "@iterate-com/shared/streams/types";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
@@ -12,10 +12,73 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { cn } from "@iterate-com/ui/lib/utils";
 
-export type StreamTreeBrowserSource = {
-  getState: (streamPath: StreamPathType) => Promise<StreamState>;
-  key: QueryKey;
+/**
+ * Where tree nodes get their state: path → stream handle. Project pages pass
+ * `(path) => itx.streams.get(path)`, the admin explorer
+ * `(path) => itx.streams.namespace(ns).get(path)`. Each loaded node holds one
+ * live `onStateChange` subscription (DECISIONS D20: the first push carries
+ * current state, later pushes follow every append), so the tree is LIVE — no
+ * query cache, plain component state.
+ */
+export type StreamTreeSource = (streamPath: StreamPathType) => {
+  onStateChange(onState: (state: StreamStateType) => void): Promise<{ unsubscribe(): unknown }>;
 };
+
+type NodeState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "live"; state: StreamStateType };
+
+/**
+ * Live state of one stream path. The subscription's initial push paints the
+ * node; refresh() tears down and re-subscribes (a fresh initial push) — the
+ * manual recovery path if a Stream DO was evicted under a silent stream.
+ */
+function useLiveStreamState(input: {
+  enabled: boolean;
+  source: StreamTreeSource;
+  streamPath: StreamPathType;
+}): { node: NodeState; refresh: () => void } {
+  const { enabled, source, streamPath } = input;
+  const [node, setNode] = useState<NodeState>({ status: "loading" });
+  const [epoch, setEpoch] = useState(0);
+
+  useEffect(() => {
+    // Back to "loading" on every (re)subscribe — refresh() exists to recover
+    // from a silently stalled subscription, so it must not keep painting the
+    // stale live state while the new subscription connects.
+    setNode({ status: "loading" });
+    if (!enabled) return;
+    let disposed = false;
+    let release: (() => void) | null = null;
+    source(streamPath)
+      .onStateChange((next) => {
+        if (disposed) return;
+        setNode({ status: "live", state: StreamState.parse(next) });
+      })
+      .then((subscription) => {
+        // The far end may already be gone when we unsubscribe — never let
+        // that reject unhandled.
+        const releaseSubscription = () =>
+          void Promise.resolve(subscription.unsubscribe()).catch(() => {});
+        if (disposed) releaseSubscription();
+        else release = releaseSubscription;
+      })
+      .catch((error: unknown) => {
+        if (disposed) return;
+        setNode({
+          status: "error",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return () => {
+      disposed = true;
+      release?.();
+    };
+  }, [enabled, source, streamPath, epoch]);
+
+  return { node, refresh: () => setEpoch((current) => current + 1) };
+}
 
 export function StreamTreeBrowser({
   currentPath,
@@ -24,13 +87,12 @@ export function StreamTreeBrowser({
 }: {
   currentPath?: StreamPathType;
   onOpenPath: (streamPath: StreamPathType) => void;
-  source: StreamTreeBrowserSource;
+  source: StreamTreeSource;
 }) {
-  const queryClient = useQueryClient();
   const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<StreamPathType>>(
     () => new Set<StreamPathType>(["/"]),
   );
-  const rootStateQuery = useStreamStateQuery({ source, streamPath: StreamPath.parse("/") });
+  const root = useLiveStreamState({ enabled: true, source, streamPath: StreamPath.parse("/") });
 
   function toggleExpanded(path: StreamPathType) {
     setExpandedPaths((previous) => {
@@ -44,24 +106,16 @@ export function StreamTreeBrowser({
     });
   }
 
-  async function refreshPath(path: StreamPathType) {
-    await queryClient.invalidateQueries({ queryKey: streamStateQueryKey(source.key, path) });
-  }
-
-  if (rootStateQuery.isPending) {
+  if (root.node.status === "loading") {
     return <div className="p-4 text-sm text-muted-foreground">Loading stream tree...</div>;
   }
 
-  if (rootStateQuery.isError) {
+  if (root.node.status === "error") {
     return (
       <Empty className="border">
         <EmptyHeader>
           <EmptyTitle>Could not load stream tree</EmptyTitle>
-          <EmptyDescription>
-            {rootStateQuery.error instanceof Error
-              ? rootStateQuery.error.message
-              : "The root stream state could not be read."}
-          </EmptyDescription>
+          <EmptyDescription>{root.node.message}</EmptyDescription>
         </EmptyHeader>
       </Empty>
     );
@@ -79,7 +133,7 @@ export function StreamTreeBrowser({
           variant="ghost"
           size="icon-sm"
           aria-label="Refresh root stream"
-          onClick={() => void refreshPath(StreamPath.parse("/"))}
+          onClick={root.refresh}
         >
           <RefreshCwIcon aria-hidden="true" data-icon="icon" />
         </Button>
@@ -90,10 +144,10 @@ export function StreamTreeBrowser({
           depth={0}
           expandedPaths={expandedPaths}
           onOpenPath={onOpenPath}
-          onRefreshPath={refreshPath}
+          onRefresh={root.refresh}
           onToggleExpanded={toggleExpanded}
           source={source}
-          state={rootStateQuery.data}
+          state={root.node.state}
           streamPath={StreamPath.parse("/")}
         />
       </div>
@@ -106,7 +160,7 @@ function StreamTreeNode({
   depth,
   expandedPaths,
   onOpenPath,
-  onRefreshPath,
+  onRefresh,
   onToggleExpanded,
   source,
   state,
@@ -116,10 +170,11 @@ function StreamTreeNode({
   depth: number;
   expandedPaths: ReadonlySet<StreamPathType>;
   onOpenPath: (streamPath: StreamPathType) => void;
-  onRefreshPath: (streamPath: StreamPathType) => Promise<void>;
+  /** Re-subscribes THIS node's live state. */
+  onRefresh: () => void;
   onToggleExpanded: (streamPath: StreamPathType) => void;
-  source: StreamTreeBrowserSource;
-  state: StreamState;
+  source: StreamTreeSource;
+  state: StreamStateType;
   streamPath: StreamPathType;
 }) {
   const childPaths = useMemo(
@@ -175,7 +230,7 @@ function StreamTreeNode({
           size="icon-xs"
           className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
           aria-label={`Refresh ${streamPath}`}
-          onClick={() => void onRefreshPath(streamPath)}
+          onClick={onRefresh}
         >
           <RefreshCwIcon aria-hidden="true" data-icon="icon" />
         </Button>
@@ -189,7 +244,6 @@ function StreamTreeNode({
               depth={depth + 1}
               expandedPaths={expandedPaths}
               onOpenPath={onOpenPath}
-              onRefreshPath={onRefreshPath}
               onToggleExpanded={onToggleExpanded}
               source={source}
               streamPath={childPath}
@@ -209,20 +263,19 @@ function StreamTreeChild(props: {
   depth: number;
   expandedPaths: ReadonlySet<StreamPathType>;
   onOpenPath: (streamPath: StreamPathType) => void;
-  onRefreshPath: (streamPath: StreamPathType) => Promise<void>;
   onToggleExpanded: (streamPath: StreamPathType) => void;
-  source: StreamTreeBrowserSource;
+  source: StreamTreeSource;
   streamPath: StreamPathType;
 }) {
   const shouldLoad =
     props.expandedPaths.has(props.streamPath) || props.currentPath === props.streamPath;
-  const stateQuery = useStreamStateQuery({
+  const { node, refresh } = useLiveStreamState({
     enabled: shouldLoad,
     source: props.source,
     streamPath: props.streamPath,
   });
 
-  if (stateQuery.isError) {
+  if (node.status === "error") {
     return (
       <div
         className="flex h-8 min-w-0 items-center gap-2 rounded-md pr-2 text-sm text-destructive"
@@ -233,7 +286,7 @@ function StreamTreeChild(props: {
     );
   }
 
-  if (stateQuery.data == null) {
+  if (node.status === "loading") {
     const selected = props.currentPath === props.streamPath;
     return (
       <div
@@ -268,24 +321,7 @@ function StreamTreeChild(props: {
     );
   }
 
-  return <StreamTreeNode {...props} state={stateQuery.data} />;
-}
-
-function useStreamStateQuery(input: {
-  enabled?: boolean;
-  source: StreamTreeBrowserSource;
-  streamPath: StreamPathType;
-}) {
-  return useQuery({
-    enabled: input.enabled ?? true,
-    queryKey: streamStateQueryKey(input.source.key, input.streamPath),
-    queryFn: () => input.source.getState(input.streamPath),
-    staleTime: 10_000,
-  });
-}
-
-function streamStateQueryKey(sourceKey: QueryKey, streamPath: StreamPathType) {
-  return [...sourceKey, "state", streamPath] as const;
+  return <StreamTreeNode {...props} onRefresh={refresh} state={node.state} />;
 }
 
 function streamPathSegment(path: StreamPathType) {

@@ -1,6 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createD1Client } from "sqlfu";
-import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import { parseConfig } from "~/config.ts";
 import {
   deleteProjectSecretById,
@@ -38,30 +37,6 @@ export class SecretsCapability extends WorkerEntrypoint<
   SecretsCapabilityEnv,
   SecretsCapabilityProps
 > {
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    const [request] = input.args as [Record<string, unknown> | undefined];
-    const body = request ?? {};
-    switch (input.functionPath.join(".")) {
-      case "getSecret":
-      case "get":
-        return await this.getSecret({ key: readKey(body) });
-      case "create":
-      case "update":
-      case "set":
-        return await this.setSecret({
-          key: readKey(body),
-          material: readMaterial(body),
-          metadata: readMetadata(body),
-        });
-      case "delete":
-        return await this.deleteSecret({ key: readKey(body) });
-      case "list":
-        return await listProjectSecrets(this.db(), { projectId: this.projectId() });
-      default:
-        throw new Error(`SecretsCapability does not implement ${input.functionPath.join(".")}`);
-    }
-  }
-
   async getSecret(input: { key: string }) {
     const secret = await getProjectSecret(this.db(), {
       key: input.key,
@@ -169,29 +144,4 @@ export function getSecretsCapability(input: {
   }) => SecretsCapabilityClient;
 
   return secretsCapability({ props: input.props });
-}
-
-function readKey(input: Record<string, unknown>) {
-  const key = input.key;
-  if (typeof key !== "string" || key.trim() === "") {
-    throw new Error("Secret key is required.");
-  }
-  return key.trim();
-}
-
-function readMaterial(input: Record<string, unknown>) {
-  const material = input.material ?? input.value;
-  if (typeof material !== "string" || material.length === 0) {
-    throw new Error("Secret material is required.");
-  }
-  return material;
-}
-
-function readMetadata(input: Record<string, unknown>) {
-  const metadata = input.metadata;
-  if (metadata == null) return {};
-  if (typeof metadata !== "object" || Array.isArray(metadata)) {
-    throw new Error("Secret metadata must be an object.");
-  }
-  return metadata as Record<string, unknown>;
 }

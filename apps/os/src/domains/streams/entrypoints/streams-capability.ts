@@ -5,11 +5,12 @@ import {
   type Event,
   type EventInput,
   type StreamCursor,
+  type StreamState,
   StreamPath,
 } from "@iterate-com/shared/streams/types";
 import { ItxError } from "~/itx/errors.ts";
-import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import {
+  coreStateToStreamState,
   getStreamDurableObjectName,
   getInitializedStreamStub,
   withStreamPath,
@@ -59,8 +60,25 @@ type StreamEventsInput = StreamPathInput & {
 };
 
 export type StreamSubscribeInput = StreamPathInput & {
-  /** "start" replays everything, a number replays after it, "end" is live-only. */
+  /**
+   * "start" replays everything, a number replays after it, "end" is
+   * live-only. Ignored when `events` is false — state-only subscriptions are
+   * implicitly live-from-now (replay without events is meaningless).
+   */
   afterOffset: StreamCursor;
+  /**
+   * `false` = state-only mode: every batch carries `state` and
+   * `streamMaxOffset` but `events` is always `[]`. Defaults to true.
+   */
+  events?: boolean;
+};
+
+/** What every subscription delivery carries; `state` is the same public
+ * {@link StreamState} shape `getState()` returns. */
+export type StreamSubscribeBatch = {
+  events: Event[];
+  state: StreamState;
+  streamMaxOffset: number;
 };
 
 export type StreamListChildrenInput = StreamPathInput;
@@ -91,28 +109,6 @@ export class StreamsCapability extends WorkerEntrypoint<
   StreamsCapabilityEnv,
   StreamsCapabilityProps
 > {
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
-    const [request] = input.args;
-    const options =
-      request != null && typeof request === "object" ? (request as Record<string, unknown>) : {};
-    switch (input.functionPath.join(".")) {
-      case "append":
-        return await this.append(options as StreamAppendInput);
-      case "appendBatch":
-        return await this.appendBatch(options as StreamAppendBatchInput);
-      case "create":
-        return await this.create(options as StreamPathInput);
-      case "read":
-        return await this.read(options as StreamReadInput);
-      case "getState":
-        return await this.getState(options as StreamPathInput);
-      case "listChildren":
-        return await this.listChildren(options as StreamListChildrenInput);
-      default:
-        throw new Error(`StreamsCapability does not implement ${input.functionPath.join(".")}`);
-    }
-  }
-
   async append(input: StreamAppendInput): Promise<Event> {
     const path = this.resolveNamespacePath(input);
     this.assertMayAppend(path);
@@ -204,10 +200,17 @@ export class StreamsCapability extends WorkerEntrypoint<
    * callback's far end goes away, the subscription is torn down on the next
    * failed delivery — durability is the stream itself, re-subscribe from the
    * last offset you saw.
+   *
+   * Every batch carries `state`: the stream's public {@link StreamState} as
+   * of `streamMaxOffset`, projected by the exact mapping `getState()` uses.
+   * Every subscription receives an immediate first batch (current state plus
+   * any replayed events), so subscribers paint their first render without a
+   * separate getState call. `events: false` selects state-only mode — same
+   * batches with `events: []`, implicitly live-from-now.
    */
   async subscribe(
     input: StreamSubscribeInput,
-    onEventBatch: (batch: { events: Event[]; streamMaxOffset: number }) => unknown,
+    onEventBatch: (batch: StreamSubscribeBatch) => unknown,
   ): Promise<{ unsubscribe(): void }> {
     const path = this.resolveNamespacePath(input);
     const streamStub = (this.env.STREAM as unknown as StreamDurableObjectNamespace).getByName(
@@ -216,9 +219,12 @@ export class StreamsCapability extends WorkerEntrypoint<
 
     // "end" is live-only — replayAfterOffset must be ABSENT for that
     // (toAfterOffset's MAX_SAFE_INTEGER sentinel would filter live
-    // batches out forever; it has history-read semantics).
+    // batches out forever; it has history-read semantics). State-only
+    // subscriptions never replay: replay without events is meaningless.
     const replayAfterOffset =
-      input.afterOffset === "end" ? undefined : toAfterOffset(input.afterOffset);
+      input.events === false || input.afterOffset === "end"
+        ? undefined
+        : toAfterOffset(input.afterOffset);
 
     // RPC param stubs are implicitly disposed when this call completes; the
     // wrapper below outlives it, so retain the callback with dup() (no-op
@@ -242,13 +248,20 @@ export class StreamsCapability extends WorkerEntrypoint<
       releaseCallback();
     };
     handle = await streamStub.subscribe({
+      events: input.events,
       processEventBatch: (batch) => {
-        void Promise.resolve(
-          callback({
-            events: batch.events.map((event) => withStreamPath(event, path)),
-            streamMaxOffset: batch.streamMaxOffset,
-          }),
-        ).catch(teardown);
+        // The state projection runs inside the promise chain so a mapping
+        // failure tears the subscription down like a broken callback would,
+        // instead of rejecting the DO's fire-and-forget delivery call.
+        void Promise.resolve()
+          .then(() =>
+            callback({
+              events: batch.events.map((event) => withStreamPath(event, path)),
+              state: coreStateToStreamState(batch.state),
+              streamMaxOffset: batch.streamMaxOffset,
+            }),
+          )
+          .catch(teardown);
       },
       replayAfterOffset,
     });
@@ -486,6 +499,7 @@ async function* liveNamespaceStreamEvents(args: {
   handle = await streamStub.subscribe({
     processEventBatch: subscription.processEventBatch,
     replayAfterOffset: toAfterOffset(args.afterOffset),
+    subscriber: { description: "streams-capability" },
   });
 
   for await (const batch of subscription) {

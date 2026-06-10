@@ -102,6 +102,15 @@ export const AppConfig = z.object({
         .optional(),
     })
     .default({}),
+  // Extra itx dial allowlist entries for this deployment, merged with the
+  // hardcoded DIALABLE_BINDINGS / DIALABLE_LOOPBACKS defaults (itx-next.md
+  // §2). Config can only WIDEN the lists — the defaults always apply.
+  itx: z
+    .object({
+      dialableBindings: publicValue(z.array(z.string().trim().min(1)).default([])),
+      dialableLoopbacks: publicValue(z.array(z.string().trim().min(1)).default([])),
+    })
+    .optional(),
   slackBotToken: redacted(z.string().trim().min(1)).optional(),
   typeIdPrefix: z
     .string()

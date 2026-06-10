@@ -18,6 +18,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "../../shared/event.ts";
+import type { StreamEventBatch } from "../../types.ts";
 import { PublicStreamRpcTarget, type Stream } from "./stream.ts";
 
 const STREAM = (env as unknown as { STREAM: DurableObjectNamespace<Stream> }).STREAM;
@@ -172,6 +173,192 @@ describe("T8 — Stream DO smoke (coverage)", () => {
       } finally {
         subscription.unsubscribe();
       }
+    });
+  });
+});
+
+describe("subscription protocol — every batch carries state, every subscribe gets an initial push", () => {
+  // Drain helper: the pump delivers through microtasks/timers in the same
+  // isolate, so a few timer ticks are enough for it to park.
+  async function settlePump(until: () => boolean, ticks = 20) {
+    for (let i = 0; i < ticks && !until(); i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+
+  it("attaches state matching the stream's own reduced state (the getState source) to each batch", async () => {
+    await runInDurableObject(freshStream(), async (stream) => {
+      await stream.append({ event: { type: "test.state", payload: { n: 1 } } });
+
+      const batches: StreamEventBatch[] = [];
+      const subscription = await stream.subscribe({
+        replayAfterOffset: 0,
+        processEventBatch: (batch) => void batches.push(batch),
+      });
+
+      try {
+        // Subscribing itself appends a subscriber-connected presence fact;
+        // appending again afterwards gives a known final offset to settle on.
+        const appended = await stream.append({ event: { type: "test.state", payload: { n: 2 } } });
+        await settlePump(() => batches.at(-1)?.events.at(-1)?.offset === appended.offset);
+
+        // state is read in the same synchronous block as streamMaxOffset, so
+        // the two always correspond — on every batch, replay and live alike.
+        for (const batch of batches) {
+          expect(batch.state.maxOffset).toBe(batch.streamMaxOffset);
+        }
+
+        // The exact object getState projections are built from — at the live
+        // edge, the last batch's state IS the current core processor state.
+        const runtime = await stream.runtimeState();
+        const live = batches.at(-1)!;
+        expect(live.state).toEqual(runtime.coreProcessorState);
+        expect(live.events.at(-1)?.offset).toBe(appended.offset);
+        expect(live.state.maxOffset).toBe(appended.offset);
+        expect(live.state.eventCount).toBe(appended.offset);
+      } finally {
+        subscription.unsubscribe();
+      }
+    });
+  });
+
+  it("delivers an immediate state-bearing batch on a live-only subscription (no replay)", async () => {
+    await runInDurableObject(freshStream(), async (stream) => {
+      const batches: StreamEventBatch[] = [];
+      const subscription = await stream.subscribe({
+        // No replayAfterOffset: live-only. Before this protocol existed, this
+        // subscription heard nothing until the next append.
+        processEventBatch: (batch) => void batches.push(batch),
+      });
+
+      try {
+        await settlePump(() => batches.length >= 1);
+        const first = batches[0]!;
+        // The initial push — either the `events: []` snapshot or the
+        // subscriber-connected presence fact this very subscribe appended
+        // (delivery order races the fact's commit); both carry current state
+        // and nothing from before the subscription.
+        expect(first.state.maxOffset).toBe(first.streamMaxOffset);
+        expect(first.streamMaxOffset).toBeGreaterThanOrEqual(subscription.streamMaxOffset);
+        expect(
+          first.events.every(
+            (event) => event.type === "events.iterate.com/stream/subscriber-connected",
+          ),
+        ).toBe(true);
+      } finally {
+        subscription.unsubscribe();
+      }
+    });
+  });
+
+  it("folds the initial push into the replay batch when replayAfterOffset yields events", async () => {
+    await runInDurableObject(freshStream(), async (stream) => {
+      const appended = await stream.append({ event: { type: "test.replay-state", payload: {} } });
+
+      const batches: StreamEventBatch[] = [];
+      const subscription = await stream.subscribe({
+        replayAfterOffset: 0,
+        processEventBatch: (batch) => void batches.push(batch),
+      });
+
+      try {
+        await settlePump(() => batches.length >= 1);
+        // The FIRST batch is the replay — no separate empty initial batch
+        // precedes it. (The subscriber-connected presence fact may ride the
+        // same batch or a later one, so only containment is exact.)
+        const first = batches[0]!;
+        const firstOffsets = first.events.map((event) => event.offset);
+        expect(firstOffsets[0]).toBe(1);
+        expect(firstOffsets).toContain(appended.offset);
+        expect(first.state.maxOffset).toBe(first.streamMaxOffset);
+      } finally {
+        subscription.unsubscribe();
+      }
+    });
+  });
+
+  it("events: false delivers state-bearing batches with no events, coalescing appends", async () => {
+    await runInDurableObject(freshStream(), async (stream) => {
+      await stream.append({ event: { type: "test.history", payload: {} } });
+
+      const batches: StreamEventBatch[] = [];
+      const subscription = await stream.subscribe({
+        events: false,
+        // Ignored: state-only subscriptions are implicitly live-from-now.
+        replayAfterOffset: 0,
+        processEventBatch: (batch) => void batches.push(batch),
+      });
+
+      try {
+        await settlePump(() => batches.length >= 1);
+        // Initial push, events-free — replayAfterOffset: 0 must NOT replay
+        // history into a state-only subscription.
+        expect(batches[0]!.events).toEqual([]);
+        expect(batches[0]!.state.maxOffset).toBe(batches[0]!.streamMaxOffset);
+
+        const last = (await stream.appendBatch({
+          events: [
+            { type: "test.state-only", payload: { n: 1 } },
+            { type: "test.state-only", payload: { n: 2 } },
+          ],
+        }))!.at(-1)!;
+        await settlePump(() => (batches.at(-1)?.state.maxOffset ?? 0) >= last.offset);
+
+        // Every delivery is events-free; the latest carries the latest state.
+        expect(batches.every((batch) => batch.events.length === 0)).toBe(true);
+        expect(batches.at(-1)!.state.maxOffset).toBe(last.offset);
+        expect(batches.at(-1)!.streamMaxOffset).toBe(last.offset);
+      } finally {
+        subscription.unsubscribe();
+      }
+    });
+  });
+});
+
+describe("stale-version KV snapshots rebuild from the event log", () => {
+  // The persisted core state's shape changed in v4 (subscriber presence:
+  // connectionsByKey roster, reshaped processorsBySlug). A snapshot written by
+  // an older deploy must be discarded by the version gate and rebuilt by
+  // replaying SQL — parsing it against the current schema would throw and
+  // brick the stream on boot.
+  it("boots over a v3-shaped snapshot without throwing", async () => {
+    await runInDurableObject(freshStream(), async (stream, state) => {
+      const before = await stream.runtimeState();
+
+      // Plant what an old deploy would have left behind: a snapshot with the
+      // pre-presence processorsBySlug shape and no connectionsByKey, marked
+      // with the previous state version.
+      state.storage.kv.put("state", {
+        ...before.coreProcessorState,
+        connectionsByKey: undefined,
+        processorsBySlug: {
+          echo: {
+            latestRegisteredEvent: {
+              offset: 3,
+              type: "events.iterate.com/stream/processor-registered",
+              payload: {
+                slug: "echo",
+                version: "0.1.0",
+                description: "",
+                consumes: [],
+                emits: [],
+                ownedEvents: [],
+              },
+              createdAt: new Date().toISOString(),
+            },
+          },
+        },
+      });
+      state.storage.kv.put("stateVersion", 3);
+
+      const rebuilt = (
+        stream as unknown as { readCoreProcessorState(): { namespace: string; maxOffset: number } }
+      ).readCoreProcessorState();
+
+      // Rebuilt from the log, not parsed from the stale snapshot.
+      expect(rebuilt.namespace).toBe(before.coreProcessorState.namespace);
+      expect(rebuilt.maxOffset).toBe(before.coreProcessorState.maxOffset);
+      expect(state.storage.kv.get("stateVersion")).toBe(4);
     });
   });
 });

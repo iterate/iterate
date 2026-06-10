@@ -5,7 +5,7 @@
 // flows through `invoke()` here, which is the single audit/policy point in
 // the system (DECISIONS.md D4). The registry owns:
 //
-//   - durable entries in the host's SQLite (worker/facet source, live-cap
+//   - durable entries in the host's SQLite (serializable targets, live-cap
 //     records) — the authoritative state (D1),
 //   - the in-memory live connection table — runtime-only by design; live
 //     stubs die with their session and providers reconnect (Law 1),
@@ -19,20 +19,20 @@ import {
   assertDefinableCapTarget,
   assertValidCapName,
   capSourceCacheKey,
-  DIALABLE_BINDINGS,
-  DIALABLE_LOOPBACKS,
+  DEFAULT_DIALABLE_TARGETS,
   ITX_EVENT_TYPES,
-  normalizeCapTarget,
   type CapDescription,
   type CapInvoke,
   type CapKind,
   type CapMeta,
   type CapSource,
+  type DialableTargets,
   type PathCall,
   type PathCallTarget,
   type SerializableCapTarget,
 } from "./protocol.ts";
 import { replayPathCall } from "./path-proxy.ts";
+import type { CodeContext } from "./code-contexts.ts";
 
 const DEFAULT_CAP_COMPATIBILITY_DATE = "2026-04-27";
 const DEFAULT_CAP_COMPATIBILITY_FLAGS = ["nodejs_compat"];
@@ -100,18 +100,24 @@ export type ContextRegistryHost = {
     name: string,
     getClass: () => { class: unknown } | Promise<{ class: unknown }>,
   ) => unknown;
+  /**
+   * A code-defined parent context (itx-next.md §8): the final fallthrough
+   * link of cap lookup, resolved in-process. Own SQLite rows shadow it;
+   * describe() reports its caps with the code context's name as owner.
+   */
+  defaults?: CodeContext;
+  /**
+   * The dial allowlists for binding/loopback refs — hardcoded defaults plus
+   * the deployment's config additions (resolveDialableTargets). Absent means
+   * defaults only.
+   */
+  dialable?: DialableTargets;
 };
 
-/**
- * `kind` is stored raw: new rows carry a CapKind ("live" | "rpc" | "url"),
- * rows written before CapTarget landed carry the legacy "worker"/"facet".
- * `targetOf()` is the single place legacy rows normalize.
- */
 type CapRow = {
   name: string;
-  kind: CapKind | "worker" | "facet";
+  kind: CapKind;
   invoke: CapInvoke;
-  source_json: string | null;
   target_json: string | null;
   meta_json: string;
   updated_at_ms: number;
@@ -177,16 +183,10 @@ export class ContextRegistry {
       name TEXT PRIMARY KEY,
       kind TEXT NOT NULL,
       invoke TEXT NOT NULL,
-      source_json TEXT,
+      target_json TEXT,
       meta_json TEXT NOT NULL,
       updated_at_ms INTEGER NOT NULL
     )`);
-    // CapTarget storage; rows from before this column exist with NULL and
-    // normalize from kind + source_json on read (targetOf).
-    const columns = host.sql.exec(`PRAGMA table_info(itx_caps)`).toArray() as { name: string }[];
-    if (!columns.some((column) => column.name === "target_json")) {
-      host.sql.exec(`ALTER TABLE itx_caps ADD COLUMN target_json TEXT`);
-    }
   }
 
   /**
@@ -239,22 +239,19 @@ export class ContextRegistry {
 
   /**
    * Register a durable capability: a name plus a serializable target
-   * (types.ts is the design of record). Legacy callers pass `source`
-   * (+ optional kind "worker"/"facet"); both normalize to an rpc/source
-   * target. Targets are validated here so misconfiguration fails at
-   * define(), and again at dial time (the authoritative gate).
+   * (types.ts is the design of record). Targets are validated here so
+   * misconfiguration fails at define(), and again at dial time (the
+   * authoritative gate).
    */
   define(input: {
     name: string;
-    target?: SerializableCapTarget;
-    source?: CapSource;
-    kind?: "worker" | "facet";
+    target: SerializableCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
   }): { name: string; ok: true } {
     assertValidCapName(input.name);
-    const target = normalizeCapTarget(input);
-    assertDefinableCapTarget(input.name, target);
+    const target = input.target;
+    assertDefinableCapTarget(input.name, target, this.dialable());
     const invoke = input.invoke ?? "members";
 
     this.upsertRow({
@@ -280,6 +277,15 @@ export class ContextRegistry {
   }
 
   revoke(input: { name: string }): { name: string; ok: true } {
+    // Code-context defaults cannot be revoked, only shadowed — succeeding
+    // here would lie: invoke/describe would keep serving the default. (A
+    // shadowing OWN row is deletable as usual; the default resurfaces.)
+    if (this.row(input.name) === null && this.host.defaults?.caps.has(input.name)) {
+      throw new Error(
+        `Capability "${input.name}" is a platform default (${this.host.defaults.name}); ` +
+          `it cannot be revoked — define your own "${input.name}" to shadow it.`,
+      );
+    }
     this.#live.get(input.name)?.[Symbol.dispose]();
     this.host.sql.exec(`DELETE FROM itx_caps WHERE name = ?`, input.name);
     this.host.audit({ type: ITX_EVENT_TYPES.capRevoked, payload: { name: input.name } });
@@ -287,28 +293,49 @@ export class ContextRegistry {
   }
 
   describe(): CapDescription[] {
-    return this.rows().map((row) => {
+    const own = this.rows().map((row): CapDescription => {
       const meta = JSON.parse(row.meta_json) as CapMeta;
       return {
         connected: row.kind === "live" ? this.#live.has(row.name) : undefined,
         instructions: typeof meta.instructions === "string" ? meta.instructions : undefined,
         invoke: row.invoke,
-        kind: normalizeKind(row.kind),
+        kind: row.kind,
         meta,
         name: row.name,
         owner: this.host.contextId,
         updatedAtMs: row.updated_at_ms,
       };
     });
+    const defaults = this.host.defaults;
+    if (!defaults) return own;
+    // Code-context defaults appear with their context's name as owner, own
+    // rows shadow by name — the same merged-chain semantics itxDescribe()
+    // gives parent DOs, one link earlier and without the hop.
+    const shadowed = new Set(own.map((description) => description.name));
+    const inherited = [...defaults.caps]
+      .filter(([name]) => !shadowed.has(name))
+      .map(
+        ([name, cap]): CapDescription => ({
+          instructions:
+            typeof cap.meta.instructions === "string" ? cap.meta.instructions : undefined,
+          invoke: cap.invoke,
+          kind: cap.target.type,
+          meta: cap.meta,
+          name,
+          owner: defaults.name,
+          updatedAtMs: 0,
+        }),
+      );
+    return [...own, ...inherited];
   }
 
   has(name: string): boolean {
-    return this.row(name) !== null;
+    return this.row(name) !== null || (this.host.defaults?.caps.has(name) ?? false);
   }
 
   /** The only dispatch in the system (spec §4.4). */
   async invoke(name: string, call: PathCall): Promise<unknown> {
-    const row = this.row(name);
+    const row = this.row(name) ?? this.defaultRow(name);
     if (!row) {
       throw new Error(`No capability named "${name}" in context ${this.host.contextId}.`);
     }
@@ -320,8 +347,11 @@ export class ContextRegistry {
     //             concurrent / back-to-back calls never share or close it),
     //  - worker → the fresh per-call entrypoint stub,
     //  - facet  → the per-call facet stub.
-    const { target, dispose } = this.borrowTarget(row);
+    // project-worker refs return a custom dispatch instead of a target: the
+    // call crosses to the Project DO as data and is replayed there.
+    const { dispatch, target, dispose } = this.borrowTarget(row);
     try {
+      if (dispatch) return await dispatch(call);
       if (row.invoke === "path-call") {
         // One RPC: the provider implements call({ path, args }) and owns its
         // own method-tree semantics (e.g. forwarding to the Slack web API).
@@ -347,7 +377,11 @@ export class ContextRegistry {
    * The two-case shape (types.ts): a capability is either held up by a live
    * connection, or its serializable target is resolved at invoke time.
    */
-  private borrowTarget(row: CapRow): { target: unknown; dispose: () => void } {
+  private borrowTarget(row: CapRow): {
+    target?: unknown;
+    dispose: () => void;
+    dispatch?: (call: PathCall) => Promise<unknown>;
+  } {
     if (row.kind === "live") {
       const connection = this.#live.get(row.name);
       if (!connection) throw new CapOfflineError(row.name);
@@ -358,24 +392,45 @@ export class ContextRegistry {
       const target = connection.target.dup ? connection.target.dup() : connection.target;
       return { target, dispose: () => disposeIfPossible(target) };
     }
-    return this.resolveTarget(row.name, targetOf(row));
+    return this.resolveTarget(row.name, targetOf(row), row.invoke);
   }
 
   private resolveTarget(
     name: string,
     target: SerializableCapTarget,
-  ): { target: unknown; dispose: () => void } {
+    invoke: CapInvoke,
+  ): {
+    target?: unknown;
+    dispose: () => void;
+    dispatch?: (call: PathCall) => Promise<unknown>;
+  } {
     if (target.type === "url") {
-      throw new Error(
-        `Capability "${name}": url targets are not implemented yet (Law 7 — the dial must ` +
-          `terminate in a stateless worker, never this DO).`,
-      );
+      // Law 7: the Cap'n Web session must terminate in a stateless worker,
+      // never this DO — so the call crosses to the UrlDial entrypoint as
+      // data (a custom dispatch, like ProjectWorker), and UrlDial applies
+      // the cap's invoke mode against the REMOTE main. `invoke` here would
+      // otherwise be interpreted against the UrlDial stub itself.
+      const stub = this.host.loopback("UrlDial", {
+        props: {
+          headers: target.headers,
+          invoke,
+          url: target.url,
+          // Attribution + secret scope; same spoof-proofing as loopback refs.
+          cap: name,
+          context: this.host.contextId,
+          projectId: this.host.projectId,
+        },
+      }) as { call(call: PathCall): Promise<unknown> };
+      return {
+        dispatch: async (call) => await stub.call(call),
+        dispose: () => disposeIfPossible(stub),
+      };
     }
     const worker = target.worker;
     switch (worker.type) {
       case "binding": {
         // Authoritative allowlist gate (define-time check is fail-fast only).
-        if (!DIALABLE_BINDINGS.has(worker.binding)) {
+        if (!this.dialable().bindings.has(worker.binding)) {
           throw new Error(`Capability "${name}": binding "${worker.binding}" is not dialable.`);
         }
         const binding = this.host.binding?.(worker.binding);
@@ -389,7 +444,7 @@ export class ContextRegistry {
         return { target: binding, dispose: () => {} };
       }
       case "loopback": {
-        if (!target.entrypoint || !DIALABLE_LOOPBACKS.has(target.entrypoint)) {
+        if (!target.entrypoint || !this.dialable().loopbacks.has(target.entrypoint)) {
           throw new Error(
             `Capability "${name}": loopback export "${target.entrypoint}" is not dialable.`,
           );
@@ -437,7 +492,6 @@ export class ContextRegistry {
         return { target: entrypoint, dispose: () => disposeIfPossible(entrypoint) };
       }
       case "durable-object":
-      case "project-worker":
         throw new Error(
           `Capability "${name}": ${worker.type} refs are not implemented yet (itx-next.md §1).`,
         );
@@ -480,23 +534,17 @@ export class ContextRegistry {
     meta: CapMeta;
   }) {
     this.host.sql.exec(
-      `INSERT INTO itx_caps (name, kind, invoke, source_json, target_json, meta_json, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO itx_caps (name, kind, invoke, target_json, meta_json, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET
          kind = excluded.kind,
          invoke = excluded.invoke,
-         source_json = excluded.source_json,
          target_json = excluded.target_json,
          meta_json = excluded.meta_json,
          updated_at_ms = excluded.updated_at_ms`,
       input.name,
       input.kind,
       input.invoke,
-      // source_json kept in sync for source targets so a rollback to the
-      // pre-CapTarget code can still read rows written by this version.
-      input.target?.type === "rpc" && input.target.worker.type === "source"
-        ? JSON.stringify(input.target.worker.source)
-        : null,
       input.target ? JSON.stringify(input.target) : null,
       JSON.stringify(input.meta),
       Date.now(),
@@ -506,16 +554,34 @@ export class ContextRegistry {
   private rows(): CapRow[] {
     return this.host.sql
       .exec<CapRow>(
-        `SELECT name, kind, invoke, source_json, target_json, meta_json, updated_at_ms FROM itx_caps ORDER BY name`,
+        `SELECT name, kind, invoke, target_json, meta_json, updated_at_ms FROM itx_caps ORDER BY name`,
       )
       .toArray();
+  }
+
+  private dialable(): DialableTargets {
+    return this.host.dialable ?? DEFAULT_DIALABLE_TARGETS;
+  }
+
+  /** A code-context default, shaped as the row it would be if it were data. */
+  private defaultRow(name: string): CapRow | null {
+    const cap = this.host.defaults?.caps.get(name);
+    if (!cap) return null;
+    return {
+      invoke: cap.invoke,
+      kind: cap.target.type,
+      meta_json: JSON.stringify(cap.meta),
+      name,
+      target_json: JSON.stringify(cap.target),
+      updated_at_ms: 0,
+    };
   }
 
   private row(name: string): CapRow | null {
     return (
       this.host.sql
         .exec<CapRow>(
-          `SELECT name, kind, invoke, source_json, target_json, meta_json, updated_at_ms FROM itx_caps WHERE name = ?`,
+          `SELECT name, kind, invoke, target_json, meta_json, updated_at_ms FROM itx_caps WHERE name = ?`,
           name,
         )
         .toArray()[0] ?? null
@@ -523,30 +589,9 @@ export class ContextRegistry {
   }
 }
 
-/** Legacy stored kinds ("worker"/"facet") report as "rpc" — their targets
- * normalize to rpc/source refs in targetOf(). */
-function normalizeKind(kind: CapRow["kind"]): CapKind {
-  return kind === "worker" || kind === "facet" ? "rpc" : kind;
-}
-
-/**
- * The single place a stored row becomes a serializable target. Rows written
- * before target_json existed (kind "worker"/"facet" + source_json) normalize
- * here; "facet" becomes exportType "durable-object".
- */
+/** The single place a stored row becomes a serializable target. Only live
+ * rows store NULL — dispatch handles those before reaching here. */
 function targetOf(row: CapRow): SerializableCapTarget {
-  if (row.target_json) return JSON.parse(row.target_json) as SerializableCapTarget;
-  const source = JSON.parse(row.source_json ?? "null") as CapSource | null;
-  if (!source) throw new Error(`Capability "${row.name}" has no stored target.`);
-  return {
-    type: "rpc",
-    worker: {
-      source: {
-        ...source,
-        exportType:
-          source.exportType ?? (row.kind === "facet" ? "durable-object" : "worker-entrypoint"),
-      },
-      type: "source",
-    },
-  };
+  if (!row.target_json) throw new Error(`Capability "${row.name}" has no stored target.`);
+  return JSON.parse(row.target_json) as SerializableCapTarget;
 }

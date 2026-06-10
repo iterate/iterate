@@ -6,11 +6,35 @@
 // browser, since WebSockets cannot send Authorization headers. Until then the
 // layout shows an unlock form instead of its children.
 
-import { useEffect, useState } from "react";
-import { createFileRoute, Link, Outlet } from "@tanstack/react-router";
+import { useEffect, useState, type CSSProperties } from "react";
+import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 import type { RpcStub } from "capnweb";
+import { FolderKanbanIcon, RadioTowerIcon, ShieldIcon, WaypointsIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
+import { Separator } from "@iterate-com/ui/components/separator";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+} from "@iterate-com/ui/components/sidebar";
 import type { Itx } from "~/itx/handle.ts";
 import { AdminItxContext } from "~/lib/admin-itx.ts";
 import { createBrowserReplSession } from "~/routes/_app/itx-repl.tsx";
@@ -63,37 +87,43 @@ function AdminLayout() {
   }, [epoch]);
 
   return (
-    <div className="flex h-svh flex-col">
-      <header className="flex h-14 shrink-0 items-center gap-4 border-b px-4">
-        <span className="font-semibold">Iterate Admin</span>
-        <nav className="flex items-center gap-3 text-sm text-muted-foreground">
-          <Link to="/admin" className="hover:text-foreground [&.active]:text-foreground">
-            Global stream
-          </Link>
-          <Link to="/admin/streams" className="hover:text-foreground [&.active]:text-foreground">
-            Stream explorer
-          </Link>
-        </nav>
-        <div className="ml-auto text-sm">
-          <Link to="/" className="text-muted-foreground hover:text-foreground">
-            Back to app
-          </Link>
-        </div>
-      </header>
-      <main className="min-h-0 flex-1 overflow-auto p-4">
-        {state.status === "connecting" && (
-          <p className="text-sm text-muted-foreground">Connecting to the root itx context…</p>
-        )}
-        {state.status === "locked" && (
-          <AdminUnlockForm reason={state.reason} onUnlocked={() => setEpoch((e) => e + 1)} />
-        )}
-        {state.status === "ready" && (
-          <AdminItxContext.Provider value={state.itx}>
-            <Outlet />
-          </AdminItxContext.Provider>
-        )}
-      </main>
-    </div>
+    <SidebarProvider
+      className="h-svh"
+      style={
+        {
+          "--sidebar-width": "17rem",
+        } as CSSProperties
+      }
+    >
+      <AdminSidebar />
+      <SidebarInset className="min-w-0 overflow-hidden">
+        <header className="flex h-16 shrink-0 items-center gap-2 border-b">
+          <div className="flex items-center gap-2 px-4">
+            <SidebarTrigger className="-ml-1" />
+            <Separator
+              orientation="vertical"
+              className="mr-2 data-vertical:h-4 data-vertical:self-auto"
+            />
+            <span className="text-sm font-medium">Admin</span>
+          </div>
+        </header>
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {state.status === "connecting" && (
+            <div className="p-4 text-sm text-muted-foreground">
+              Connecting to the root itx context...
+            </div>
+          )}
+          {state.status === "locked" && (
+            <AdminUnlockForm reason={state.reason} onUnlocked={() => setEpoch((e) => e + 1)} />
+          )}
+          {state.status === "ready" && (
+            <AdminItxContext.Provider value={state.itx}>
+              <Outlet />
+            </AdminItxContext.Provider>
+          )}
+        </main>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }
 
@@ -123,31 +153,109 @@ function AdminUnlockForm({ reason, onUnlocked }: { reason: string; onUnlocked: (
   }
 
   return (
-    <div className="mx-auto mt-16 flex max-w-md flex-col gap-3">
-      <h1 className="text-lg font-semibold">Admin access required</h1>
-      <p className="text-sm text-muted-foreground">
-        This area uses a root itx context with global authority. Paste the admin API secret for this
-        deployment to set the admin cookie.
-      </p>
-      <p className="text-xs text-muted-foreground">({reason})</p>
+    <div className="mx-auto mt-16 flex w-full max-w-md flex-col gap-5 px-4">
+      <div className="flex flex-col gap-1">
+        <h1 className="text-lg font-semibold">Admin access required</h1>
+        <p className="text-sm text-muted-foreground">
+          Paste the admin API secret for this deployment to set the admin cookie.
+        </p>
+      </div>
       <form
-        className="flex gap-2"
+        className="flex flex-col gap-3"
         onSubmit={(event) => {
           event.preventDefault();
           void unlock();
         }}
       >
-        <Input
-          type="password"
-          placeholder="Admin API secret"
-          value={secret}
-          onChange={(event) => setSecret(event.target.value)}
-        />
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="admin-api-secret">Admin API secret</FieldLabel>
+            <Input
+              id="admin-api-secret"
+              type="password"
+              placeholder="Secret"
+              value={secret}
+              onChange={(event) => setSecret(event.target.value)}
+            />
+            <FieldDescription>{reason}</FieldDescription>
+          </Field>
+        </FieldGroup>
         <Button type="submit" disabled={submitting || secret.trim() === ""}>
-          {submitting ? "Unlocking…" : "Unlock"}
+          {submitting ? "Unlocking..." : "Unlock"}
         </Button>
       </form>
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      <FieldError>{error}</FieldError>
     </div>
+  );
+}
+
+function AdminSidebar() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+
+  return (
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton size="lg" tooltip="Iterate Admin" render={<Link to="/admin" />}>
+              <div className="flex aspect-square size-8 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
+                <ShieldIcon aria-hidden="true" />
+              </div>
+              <div className="grid flex-1 text-left text-sm leading-tight">
+                <span className="truncate font-medium">Iterate Admin</span>
+                <span className="truncate text-xs text-sidebar-foreground/70">Platform tools</span>
+              </div>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel>Admin</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  tooltip="Streams explorer"
+                  isActive={pathname.startsWith("/admin/streams")}
+                  render={<Link to="/admin/streams" />}
+                >
+                  <WaypointsIcon aria-hidden="true" />
+                  <span>Streams explorer</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  tooltip="Projects"
+                  isActive={pathname.startsWith("/admin/projects")}
+                  render={<Link to="/admin/projects" />}
+                >
+                  <FolderKanbanIcon aria-hidden="true" />
+                  <span>Projects</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup>
+          <SidebarGroupLabel>Shortcuts</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  tooltip="Global streams"
+                  isActive={pathname.startsWith("/admin/streams/global")}
+                  render={<Link to="/admin/streams/$namespace" params={{ namespace: "global" }} />}
+                >
+                  <RadioTowerIcon aria-hidden="true" />
+                  <span>Global streams</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarRail />
+    </Sidebar>
   );
 }

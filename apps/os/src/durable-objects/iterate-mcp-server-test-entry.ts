@@ -1,10 +1,6 @@
 import { McpAgent } from "agents/mcp";
-import { WorkerEntrypoint } from "cloudflare:workers";
-import { createCodemodeContext } from "@iterate-com/shared/codemode/context-proxy";
-import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 import type { ProjectMcpServerConnectionProps } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 
-export { CodemodeSession } from "~/durable-objects/codemode-session-tombstone.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export {
   MockArtifactAgentDurableObject as AgentDurableObject,
@@ -24,61 +20,6 @@ export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/wor
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 
 const mcpHandler = McpAgent.serve("/mcp", { binding: "PROJECT_MCP_SERVER_CONNECTION" });
-
-type ToolFunctionInput = {
-  codemodeSessionCapability: Parameters<
-    typeof createCodemodeContext
-  >[0]["codemodeSessionCapability"];
-  args: Record<string, unknown>[];
-  functionPath: string[];
-};
-
-export class TestBuiltinMatrixProvider extends WorkerEntrypoint {
-  async executeCodemodeFunctionCall(input: ToolFunctionInput & ExecuteCodemodeFunctionCallInput) {
-    const path = input.functionPath.join(".");
-    if (path !== "compose") {
-      throw new Error(`TestBuiltinMatrixProvider does not implement ${path}`);
-    }
-
-    const ctx = createCodemodeContext({
-      codemodeSessionCapability: input.codemodeSessionCapability,
-    });
-    const [request] = input.args;
-    const pet = await ctx.integrations.http.catalog.getPet({
-      include: "owner",
-      petId: request?.petId,
-    });
-    const echo = await ctx.mcp.cloudflareDocs["echo.text"]({
-      text: `provider saw ${String(request?.text)}`,
-    });
-    const leaf = await ctx.leaf({
-      value: request?.value,
-    });
-
-    return {
-      echo,
-      leaf,
-      pet,
-      provider: "builtin-matrix",
-      route: "codemode-session-capability",
-    };
-  }
-}
-
-export class TestLeafProvider extends WorkerEntrypoint {
-  async executeCodemodeFunctionCall(input: ToolFunctionInput & ExecuteCodemodeFunctionCallInput) {
-    if (input.functionPath.length > 0) {
-      throw new Error(`TestLeafProvider expected leaf call, got ${input.functionPath.join(".")}`);
-    }
-
-    const [request] = input.args;
-    return {
-      provider: "leaf",
-      toolFunctionPath: input.functionPath,
-      value: Number(request?.value) * 2,
-    };
-  }
-}
 
 export default {
   fetch(request, env, ctx) {

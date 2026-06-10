@@ -6,7 +6,7 @@ export interface OpenApiBridgeProps {
 
 export type OpenApiBridgeInput = {
   args: unknown[];
-  functionPath: string[];
+  path: string[];
   providerProps?: OpenApiBridgeProps;
 };
 
@@ -34,11 +34,9 @@ export async function executeOpenApiToolFunction(input: OpenApiBridgeInput) {
   if (!providerProps) throw new Error("OpenAPI provider props are required");
 
   const spec = await fetchOpenApiSpec(providerProps);
-  const operationId = input.functionPath[0];
+  const operationId = input.path[0];
   if (!operationId)
-    throw new Error(
-      "executeCodemodeFunctionCall requires a path with at least one segment (operationId)",
-    );
+    throw new Error("OpenApiBridge call requires a path with at least one segment (operationId)");
   if (operationId === "listOperations") {
     return listOpenApiOperations(spec).map((operation) => ({
       operationId: operation.operationId,

@@ -56,7 +56,6 @@ export const orpcOpenApiHandler = new OpenAPIHandler(appRouter, {
         tags: [
           "/projects",
           "/streams",
-          "/codemode",
           "/agents",
           "/repos",
           "/integrations",

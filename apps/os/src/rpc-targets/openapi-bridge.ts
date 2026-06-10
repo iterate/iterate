@@ -1,6 +1,6 @@
 /**
- * OpenAPI bridge — a stateless WorkerEntrypoint that translates
- * codemode Function Calls into HTTP calls against an OpenAPI spec.
+ * OpenAPI bridge — a stateless WorkerEntrypoint that translates itx path-calls
+ * into HTTP calls against an OpenAPI spec.
  *
  * Deployed as a named export from the os worker. Same-worker callables can
  * reach it via loopback-binding with props containing the spec URL and base URL:
@@ -8,26 +8,23 @@
  *   { type: "loopback-binding", bindingType: "service",
  *     exportName: "OpenApiBridge", props: { specUrl, baseUrl } }
  *
- * Use createOpenApiProviderRegistration() from
- * `openapi-provider-registration.ts` to build the codemode registration. Rich
- * discovery is an ordinary function call: `ctx.petstore.listOperations()`.
+ * Rich discovery is an ordinary function call: `ctx.petstore.listOperations()`.
  */
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { executeOpenApiToolFunction, type OpenApiBridgeProps } from "./openapi-bridge-core.ts";
-import type { ExecuteCodemodeFunctionCallInput } from "~/rpc-targets/legacy-codemode-call.ts";
 
 export class OpenApiBridge extends WorkerEntrypoint<Record<string, unknown>, OpenApiBridgeProps> {
   /**
-   * Execute a codemode function call against the OpenAPI spec.
+   * Execute an itx path-call against the OpenAPI spec.
    *
-   * `functionPath[0]` is either `listOperations` or an operationId. The first
+   * `path[0]` is either `listOperations` or an operationId. The first
    * positional arg is used as request body/query/path params.
    */
-  async executeCodemodeFunctionCall(input: ExecuteCodemodeFunctionCallInput) {
+  async call(input: { args: unknown[]; path: string[] }): Promise<unknown> {
     return await executeOpenApiToolFunction({
       args: input.args,
-      functionPath: input.functionPath,
+      path: input.path,
       providerProps: this.resolveProviderProps(),
     });
   }

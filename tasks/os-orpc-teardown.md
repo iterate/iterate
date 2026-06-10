@@ -15,10 +15,17 @@ rollback plan.
 ## Done
 
 - **PR #1423** — dead surface deleted (`ping`, `test.*`, `streams.getState`,
-  demo routes); itx react client library (`apps/os/src/itx/react/`: provider,
-  query bridge, stream-tail multiplexer, `useStreamEvents`,
-  `ItxActivityTail`); kernel `ItxStream.subscribe`; streams index page
-  converted.
+  demo routes); kernel `ItxStream.subscribe`; streams index page converted.
+  (Its react client library — provider, query bridge, stream-tail
+  multiplexer, `useStreamEvents` — was superseded by the one-hook layer and
+  deleted in PR #1472.)
+- **PR #1472** — subscriptions carry reduced state (`events: false`
+  state-only mode, initial push, `ItxStream.onStateChange`; DECISIONS D20)
+  and the browser layer collapsed to ONE hook: `useItx(context?)` /
+  `getBrowserItx` (`apps/os/src/itx/use-itx.ts`, DECISIONS D21 — per-context
+  singleton sockets, Suspense until connected, no query cache, no SSR, no
+  reconnect machinery). Streams tree/detail, breadcrumb navigators, and
+  `ItxActivityTail` converted.
 - Codemode → itx processor is `tasks/os-codemode-to-itx-processor.md`
   (separate effort; its oRPC procedures die there).
 
@@ -31,11 +38,11 @@ rollback plan.
       CONFLICT, BAD_REQUEST, INTERNAL; `onSendError` tags everything else
       INTERNAL) — **PR #1456**, see `apps/os/src/itx/errors.ts` and
       DECISIONS.md D18. UI conversion of mutating pages is unblocked.
-- [x] `getServerItx` — in-process handle for SSR loaders (resolveItx +
-      accessForPrincipal via the shared access.ts boundary); isomorphic
-      `getLoaderItx` + best-effort `prefetchItxQuery` seed the QueryClient
-      with the same itxKey keys the browser uses (streams index wired; itx
-      DECISIONS D19, PR #1457).
+- [x] ~~`getServerItx` — in-process handle for SSR loaders~~ (built in PR
+      #1457, itx DECISIONS D19) — **superseded by the one-hook
+      simplification (PR #1472, DECISIONS D21)**: itx components never SSR,
+      so the SSR door, the isomorphic loader accessor, and the query-cache
+      prefetch were deleted.
 - [ ] Org-membership `itx.projects.create` (org claims on the handle runtime;
       replaces the admin-only path for the dashboard create flow).
 
@@ -55,8 +62,11 @@ rollback plan.
 
 - [ ] Remaining dashboard routes (~12 routes + `create-project-form` +
       `lib/project-route-query.ts` / `cache-created-project-queries.ts`)
-      onto `useItxQuery`/`useItxMutation`/`useStreamEvents`; form zod moves
-      into the form components
+      onto `useItx` (DECISIONS D21): `ssr: false` (or `<ClientOnly>`), a
+      Suspense boundary, then call the handle directly — subscriptions
+      (`onStateChange`/`subscribe`) for live data, awaited calls into
+      component state for one-shots, no query cache; form zod moves into the
+      form components
 - [ ] e2e `test-support/os-client.ts` helpers (`createProject`,
       `readProjectStreamUntil`, `streamProjectEventsUntil`) onto `connectItx`
       / `ItxStream.subscribe`; migrate the e2e files
