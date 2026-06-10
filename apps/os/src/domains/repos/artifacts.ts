@@ -1,6 +1,6 @@
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
-export { repoArtifactName } from "~/domains/repos/repo-artifact-name.ts";
+export { repoArtifactName } from "./repo-artifact-name.ts";
 
 export type CloudflareArtifactTokenScope = "read" | "write";
 

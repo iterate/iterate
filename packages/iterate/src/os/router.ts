@@ -6,7 +6,9 @@ import { os } from "@orpc/server";
 import { z } from "zod";
 
 import { claudeMcpScript } from "./claude-mcp.ts";
-import { seedIterateConfigBaseRepoScript } from "./seed-iterate-config-base-repo.ts";
+// This router is only ever loaded from a repo checkout (via iterateAppCli.localRouterPaths),
+// so it can reach into apps/os for the seed script, which depends on OS domain internals.
+import { seedIterateConfigBaseRepoScript } from "../../../../apps/os/scripts/seed-iterate-config-base-repo.ts";
 
 const DEFAULT_APP_CONFIG_BASE_URL = "https://os.iterate.com";
 

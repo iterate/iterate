@@ -889,6 +889,9 @@ importers:
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../shared
+      '@iterate-com/streams':
+        specifier: workspace:*
+        version: link:../streams
       '@iterate-com/ui':
         specifier: workspace:*
         version: link:../ui
