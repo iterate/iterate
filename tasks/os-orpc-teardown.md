@@ -33,7 +33,7 @@ rollback plan.
       accessForPrincipal via the shared access.ts boundary); isomorphic
       `getLoaderItx` + best-effort `prefetchItxQuery` seed the QueryClient
       with the same itxKey keys the browser uses (streams index wired; itx
-      DECISIONS D18, PR #itx-server-handle).
+      DECISIONS D18, PR #1457).
 - [ ] Org-membership `itx.projects.create` (org claims on the handle runtime;
       replaces the admin-only path for the dashboard create flow).
 
