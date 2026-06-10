@@ -1,6 +1,6 @@
-# Stream Staging Area
+# Streams
 
-This context defines the language for stream event storage and browser stream viewing in the staging experiment.
+This context defines the language for stream event storage and browser stream viewing in `@iterate-com/streams`.
 
 ## Language
 
@@ -25,18 +25,18 @@ The browser SQLite table written by the **browser-raw-events** processor. It mir
 _Avoid_: derived projection (it is a raw mirror, just produced by a processor like any other table)
 
 **Browser Stream Processor**:
-A stream processor that runs **in the browser**, built on the same `createProcessorRunner` shape as the `StreamProcessorRunner` Durable Object (`processor + deps + storage + stream` ports; the runner is the subscription sink). Each one is selected by its own `view` query param and hosted/run by its own React sub-view component (mounting the sub-view starts the processor). Two to start — **browser-raw-events** (→ `events` table) and **browser-event-feed** (→ `feed_items` table) — many later.
+A stream processor that runs **in the browser**: the same class-based `StreamProcessor` model that `createStreamProcessorHost` hosts in Workers, hosted here by `acquireStreamRuntime` (`src/browser/stream-browser-store.ts`); the processor's `ingest` is the subscription sink. Each one is selected by its own `view` query param and hosted/run by its own React sub-view component (mounting the sub-view starts the processor). Two exist — **browser-raw-events** (→ `events` table) and **browser-event-feed** (→ `feed_items` table) — many later.
 _Avoid_: projector-only mirror, shared connection (each processor has its own connection, even across tabs on the same stream)
 
 **Processor Snapshot (browser)**:
-The runner storage value for one **Browser Stream Processor**: `{ state, offset }`. `browser-raw-events` deliberately uses its output `events` table as the checkpoint (`storage.save` is a no-op); reducing processors such as `browser-event-feed` may use a dedicated runner storage port when their reduced state cannot be recovered cheaply from output rows.
-_Avoid_: Processor state without offset; assuming every browser processor needs a `processor_state` table
+The checkpoint value for one **Browser Stream Processor**: `{ state, offset }`, persisted through the `readState`/`writeState` storage port. In the browser that port is `browserProcessorStateStorage` (`src/browser/processor-state-storage.ts`), backed by the shared `processor_state` table in the **Browser Mirror** — including for `browser-raw-events`, whose schema resets clear its checkpoint row together with the `events` table.
+_Avoid_: Processor state without offset
 
 **Processor Stem**:
 The single kebab-case name that identifies a **Browser Stream Processor** and deterministically generates its identity surfaces: query param value = stem; processor slug + folder = `browser-` + stem; processor name = Title Case(stem); React component = Pascal(stem) + `View`. Tables are NOT derived from the stem — a processor declares its own table(s), free-form snake_case, and may own several. The two stems:
 
 - `raw-events` → slug/folder `browser-raw-events`, name "Raw events", table `events`. BUILT and wired into the default raw-events view.
-- `event-feed` → slug/folder `browser-event-feed`, name "Event feed", table `feed_items` (more tables possible later). BUILT and wired into the event-feed view; grouping lives in pure `planFeedOps`, with browser writes committed through `afterAppendBatch` + `sql.batch(transaction)`.
+- `event-feed` → slug/folder `browser-event-feed`, name "Event feed", table `feed_items` (more tables possible later). BUILT and wired into the event-feed view; grouping lives in pure `planFeedOps`, with browser writes committed through `processEventBatch` + `sql.batch(transaction)`.
   _Avoid_: pretty (renamed to event-feed); the `-browser` suffix form (slug is `browser-` prefix, matching the `processors/<slug>/` folder); deriving a table name from the stem
 
 **Feed Item**:
@@ -56,7 +56,7 @@ _Avoid_: deciding components/props in React; reading anything but the row to ren
 - A **Stream Offset** starts at `1` for the first committed event in a stream.
 - A **Stream Offset** is the durable resume cursor for browser subscriptions.
 - A **Local Index** starts at `0` and maps to exactly one locally stored stream event.
-- In the current experiment, a **Local Index** is always `Stream Offset - 1`; SQLite rejects any gap in **Stream Offset**.
+- Currently a **Local Index** is always `Stream Offset - 1`; SQLite rejects any gap in **Stream Offset**.
 - **Local Index** is separate from **Stream Offset** so the browser can eventually keep a dense local list even if the server later ages out events by TTL.
 - A **Stream View Runtime** writes delivered server batches directly into the **Events Table** in one transaction.
 - Replayed events with already-stored **Stream Offsets** are valid only when the JSON payload is identical; identical replays are ignored and keep the original `inserted_at`.
@@ -75,16 +75,15 @@ _Avoid_: deciding components/props in React; reading anything but the row to ren
 - Same-stream split views share one within-tab runtime per `(namespace, path, slug)` and therefore report the same leader/follower state for that processor. Cross-tab handoff is unaffected because separate JS contexts still elect independently.
 - Connection count = number of distinct `(path, slug)` runtimes mounted in a tab. Two streams × two processors = 4 connections; a 5th view reusing an existing `(path, slug)` adds 0. The first view for a key creates the runtime; the last to unmount tears it down.
 - The SQLite connection (wa-sqlite worker / `Browser Mirror`) is shared per `(namespace, path)` (one worker per stream per tab), via a ref-counted registry beneath the `(path, slug)` runtime registry. Both registries use one small generic ref-count helper; a stream's multiple processors share one DB worker (no intra-tab OPFS handle contention).
-- `createStreamBrowserStore` is RETIRED as the wrong abstraction (it fused the per-stream DB with the per-processor connection/runner and hardcoded raw-events). Replaced by a view-owned decomposition that mirrors `StreamProcessorRunner.requestSubscription`:
-  - `useStreamDatabase(namespace, path)` — the shared `Browser Mirror` connection, ref-counted per `(namespace, path)`.
-  - `useStreamProcessor({ namespace, path, view })` — ONE hook per view component (option (i)): internally acquires the shared DB + a ref-counted `(path, slug)` runtime that ALWAYS opens a capnweb connection (so a follower can append / read `runtimeState`), elects the Web Lock on the subscription key, and ONLY if leader runs the processor: `createProcessorRunner({ processor, deps: { sql }, storage, stream })` → `createStreamSubscription({ subscriptionKey })` → `runner.run(...)` → `stream.subscribe({ subscriptionKey, sink, replayAfterOffset })`. The hook is parametrized by the view's processor descriptor; the ref-counting/dedup is hidden beneath it.
+- `acquireStreamRuntime` (`src/browser/stream-browser-store.ts`) is the live browser surface, used by `apps/os`'s `project-stream-view.tsx` and the example-app views. A view passes its `BrowserProcessorConfig` — `slug`, `schemaVersion` (folded into the writer-lock name), `tables` (cleared on mirror discard), and `createProcessor({ stream, sql, subscriptionKey })` constructing the class-based processor. The returned `StreamBrowserStore` ALWAYS opens a capnweb connection (so a follower can still `appendBatch` / read `runtimeState`), elects the Web Lock on the subscription key, and ONLY as leader hosts the processor: it reads the processor's `snapshot()` for the replay cursor, subscribes, and pumps delivered batches into `processor.ingest`. Ref-counting/dedup per `(namespace, path, slug)` is hidden inside `acquireStreamRuntime`; the shared **Browser Mirror** DB is ref-counted one level up per `(namespace, path)`.
+- Reactive reads go through `useStreamQuery(db, sql, params)` (`src/browser/hooks/use-stream-query.ts`), an ordinary SQL query over the **Browser Mirror** re-run on committed changes.
 - Identity keys carry the namespace: `subscriptionKey = ${namespace}:${browserSubscriberId}:${slug}`; the Web Lock name = `${namespace}:${path}:${subscriptionKey}`, versioned by browser DB schema. Leadership and the stream subscription are both keyed on the subscription key.
 - The namespace is the constant `"default"` for now (renamed from `"stream"` to avoid confusion with the stream concept), threaded explicitly from the route as part of `(namespace, path)`; browser libs never hardcode it. Requires `example-app/src/worker.ts` to name the DO `default:${path}` (was `stream:${path}`).
-- The browser `browser-raw-events` processor owns the `events` table schema and writes each delivered batch with `sql.batch(..., { transaction: true })`. `afterAppendBatch` calls `blockProcessorUntil` so the runner checkpoint stays behind committed rows; write errors surface through the wrapped `SqlClient`. On leader election the store also calls `ensureBrowserRawEventsSchema(sql)` so reconcile/count queries work before the first event arrives.
+- The browser `browser-raw-events` processor owns the `events` table schema and writes each delivered batch with `sql.batch(..., { transaction: true })` from its `processEventBatch` override; the base class only checkpoints after that hook resolves, so the checkpoint stays behind committed rows. Write errors surface through the wrapped `SqlClient`. The processor's one-time `prepare()` runs `ensureBrowserRawEventsSchema(sql)` (including version resets) before the checkpoint is first read.
 - Checkpoint (as built for `browser-raw-events`): resume from the `events` table's max offset; `storage.save` is a no-op; there is NO `processor_state` row for raw events (its output table IS its checkpoint). Because offset only advances as rows commit, replay is safe (the events trigger ignores identical re-inserts).
-- Checkpointing is the RUNNER's job, not the processor's. After `afterAppend` returns (awaiting the `blockProcessorUntil` promise if one was registered), the runner persists `{ reduced state, offset }` via its `storage` port. The storage port may be a dedicated state row, Durable Object KV, or a table-derived checkpoint like `browser-raw-events`.
-- A processor's `deps` is just a plain SQLite client; `afterAppend`/`afterAppendBatch` mutates whatever tables it owns directly (`sql.exec(...)` / `sql.batch(...)`), no debounced/buffered wrapper.
-- To keep its own writes consistent with the checkpoint, a reducing processor wraps them: `blockProcessorUntil(() => sql.exec(...))`. The runner awaits that before saving `{state, offset}`, so the checkpoint never advances ahead of the processor's committed rows. The processor's own tables hold the rendered rows (processor-written); the runner storage holds or derives the reduced state and offset; `blockProcessorUntil` orders the two. Replay from the saved offset is idempotent.
+- Checkpointing is the BASE CLASS's job, not the subclass's. After `processEventBatch` resolves (and any `blockProcessorWhile` work completes), `StreamProcessor` persists `{ reduced state, offset }` via its `readState`/`writeState` storage port. The storage port may be a dedicated state row (browser `processor_state`), Durable Object storage, or in-memory for tests.
+- A browser processor's `deps` is just a plain SQLite client; `processEvent`/`processEventBatch` mutates whatever tables it owns directly (`sql.exec(...)` / `sql.batch(...)`), no debounced/buffered wrapper.
+- Because the base class awaits `processEventBatch` (and registered `blockProcessorWhile` work) before saving `{state, offset}`, the checkpoint never advances ahead of the processor's committed rows. The processor's own tables hold the rendered rows (processor-written); the storage port holds the reduced state and offset. Replay from the saved offset is idempotent.
 
 ## Example Dialogue
 
