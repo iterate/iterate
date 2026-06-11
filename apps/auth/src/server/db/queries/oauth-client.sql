@@ -48,6 +48,18 @@ SET referenceId = :referenceId,
   updatedAt = :updatedAt
 WHERE clientId = :clientId;
 
+/** @name overwriteOAuthClientByClientId */
+UPDATE oauthClient
+SET clientId = :newClientId,
+  clientSecret = :clientSecret,
+  name = :name,
+  redirectUris = :redirectUris,
+  referenceId = :referenceId,
+  skipConsent = :skipConsent,
+  disabled = 0,
+  updatedAt = :updatedAt
+WHERE clientId = :clientId;
+
 /** @name listSystemOAuthClients */
 SELECT clientId,
   name,

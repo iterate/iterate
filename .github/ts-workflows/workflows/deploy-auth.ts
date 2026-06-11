@@ -49,5 +49,29 @@ export default workflow({
         },
       ],
     },
+    // The dev-global auth at auth.iterate-dev.com is the shared issuer for all
+    // local dev environments. It deploys from main alongside prd and reseeds
+    // its OAuth clients (AUTH_SEED_OAUTH_CLIENTS) on every deploy — see
+    // apps/auth/scripts/seed-oauth-clients.ts.
+    "deploy-dev-global": {
+      ...utils.runsOnDepotUbuntu,
+      steps: [
+        ...utils.getSetupRepo({
+          ref: "${{ inputs.ref || github.sha }}",
+        }),
+        ...utils.setupDoppler({
+          config: "dev_global",
+          project: "auth",
+        }),
+        {
+          name: "Deploy apps/auth (dev-global)",
+          "working-directory": "apps/auth",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: "doppler run -- pnpm alchemy:up",
+        },
+      ],
+    },
   },
 });
