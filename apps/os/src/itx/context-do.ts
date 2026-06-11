@@ -94,7 +94,7 @@ export class ContextDO extends DurableObject<Env> {
     return {
       id: row.id,
       name: row.name,
-      parent: JSON.parse(row.parent) as ContextDescriptor["parent"],
+      parent: parseParent(row.parent, row.id),
       projectId: row.project_id,
     };
   }
@@ -121,9 +121,14 @@ export class ContextDO extends DurableObject<Env> {
   /** Merged chain view: own caps first, then parents', shadowed names marked. */
   async itxDescribe(): Promise<CapabilityDescription[]> {
     const own = this.registry().describe();
-    const ownNames = new Set(own.map((cap) => cap.name));
-    const parentCaps = await this.parentStub().itxDescribe();
-    return [...own, ...parentCaps.filter((cap) => !ownNames.has(cap.name))];
+    // Suppression is deliberately EXACT-match only: a path define (own row
+    // "sdk.chat.postMessage") shadows just its subtree — the parent's "sdk"
+    // stays live for every other path, so hiding it here would lie about
+    // what longest-prefix dispatch actually resolves. Both entries showing,
+    // each with its owner, IS the truthful merged view.
+    const ownNames = new Set(own.map((capability) => capability.name));
+    const parentCapabilities = await this.parentStub().itxDescribe();
+    return [...own, ...parentCapabilities.filter((capability) => !ownNames.has(capability.name))];
   }
 
   async itxInvoke(input: PathCall & { origin?: string }): Promise<unknown> {
@@ -186,4 +191,23 @@ export class ContextDO extends DurableObject<Env> {
       }),
     );
   }
+}
+
+/**
+ * Parent pointers are stored as JSON { id, address } since the address
+ * unification. Rows written BEFORE it hold a bare id string — there is no
+ * migration on purpose (no-backcompat posture; contexts are erasable): fail
+ * with a named error instead of a mystery JSON.parse throw.
+ */
+function parseParent(raw: string, contextId: string): ContextDescriptor["parent"] {
+  try {
+    const parsed = JSON.parse(raw) as ContextDescriptor["parent"];
+    if (parsed && typeof parsed === "object" && parsed.address) return parsed;
+  } catch {
+    // fall through to the named error below
+  }
+  throw new Error(
+    `Context ${contextId} predates the address unification (parent ${JSON.stringify(raw)}); ` +
+      `recreate it — pre-unification contexts are not migrated.`,
+  );
 }
