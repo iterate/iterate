@@ -11,9 +11,9 @@
 //    worker itself and only asks this DO for the checkout.
 //
 // 3. EGRESS AUTHORITY — `egressFetch` is the project's one pipe to the
-//    outside world (Law 5): secret placeholder substitution, the egress
-//    intercept tunnel, and (future) human-in-the-loop approval live here.
-//    It is the TERMINAL pipe behind the `fetch` CAPABILITY (platform:project
+//    outside world (Law 5): secret placeholder substitution and (future)
+//    human-in-the-loop approval live here. It is the TERMINAL pipe behind
+//    the `fetch` CAPABILITY (platform:project
 //    default, dialed via ProjectEgress.call): itx.fetch and bare fetch() in
 //    loaded isolates dispatch registry-first, so a defined `fetch` shadow
 //    intercepts egress and this method is what the default resolves to.
@@ -29,12 +29,12 @@
 // table and no lifecycle mixin: the DO is addressed by the plain project id.
 //
 // Endgame for egress (itx-next.md §9, out of scope here): a stateless egress
-// capability with policy cached outside the DO, and the captun intercept
-// tunnel replaced by a live egress-shadowing capability provided over
-// capnweb-with-WebSockets.
+// capability with policy cached outside the DO. Egress interception is a
+// live `fetch` capability shadow (code-contexts.ts) — it dispatches in the
+// registry BEFORE this pipe, so an interceptor sees getSecret() placeholders
+// unsubstituted and drops with its session.
 
 import { DurableObject, env } from "cloudflare:workers";
-import { acceptCaptunTunnel, type Fetcher } from "captun";
 import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
 import type { StreamEvent } from "@iterate-com/streams/shared/event";
 import {
@@ -48,7 +48,6 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
 import { parseConfig } from "~/config.ts";
-import { authenticateAdminBearer } from "~/auth/admin.ts";
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import {
   PROJECT_STREAM_PATH,
@@ -92,8 +91,6 @@ import type {
   PathCallTarget,
   SerializableCapTarget,
 } from "~/itx/protocol.ts";
-
-type CaptunServerTunnel = Fetcher & Disposable;
 
 /** Project DOs are addressed by the plain project id. */
 export function getProjectDurableObjectName(projectId: string) {
@@ -218,8 +215,6 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   get processor() {
     return this.#projectProcessor;
   }
-
-  #projectEgressInterceptTunnel: CaptunServerTunnel | null = null;
 
   /** Subscription callables on the project's root stream dial this. */
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
@@ -493,15 +488,8 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
 
   // ---- egress --------------------------------------------------------------
 
-  /**
-   * `fetch` on the project IS egress (the worker's `fetch` is the homepage).
-   * The one exception is the egress intercept tunnel's WebSocket handshake,
-   * which must ride the fetch path — upgrades cannot cross RPC methods.
-   */
+  /** `fetch` on the project IS egress (the worker's `fetch` is the homepage). */
   async fetch(request: Request): Promise<Response> {
-    if (new URL(request.url).pathname === "/__iterate/intercept-project-egress") {
-      return this.acceptProjectEgressInterceptTunnel(request);
-    }
     return await this.egressFetch(request);
   }
 
@@ -515,13 +503,9 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
       props: { projectId: this.projectId },
     });
 
-    // Use one request-level intercept decision for both secret substitution and
-    // routing so a newly connected tunnel cannot see real secret material.
-    const egressInterceptTunnel = this.#projectEgressInterceptTunnel;
     const [secretSubstitutionError, substitutedHeaders] =
       await substituteProjectEgressSecretHeaders({
         headers: request.headers,
-        projectEgressInterceptActive: !!egressInterceptTunnel,
         secrets,
       });
     if (secretSubstitutionError) return secretSubstitutionError;
@@ -530,58 +514,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     for (const [header, value] of Object.entries(substitutedHeaders)) {
       outboundHeaders.set(header, value);
     }
-    const outboundRequest = new Request(request, { headers: outboundHeaders });
-
-    if (egressInterceptTunnel) {
-      return await egressInterceptTunnel.fetch(outboundRequest);
-    }
-
-    return await fetch(outboundRequest);
-  }
-
-  private acceptProjectEgressInterceptTunnel(request: Request): Response {
-    const expectedToken = this.getAppConfig().adminApiSecret?.exposeSecret();
-    if (!expectedToken) {
-      return Response.json(
-        { error: "Project Egress Intercept Tunnel is disabled." },
-        { status: 404 },
-      );
-    }
-
-    if (
-      !authenticateAdminBearer({
-        authorizationHeader: request.headers.get("authorization"),
-        config: this.getAppConfig(),
-      })
-    ) {
-      return Response.json({ error: "Unauthorized." }, { status: 401 });
-    }
-
-    if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
-      return Response.json(
-        { error: "Project Egress Intercept Tunnel requires a WebSocket upgrade." },
-        { status: 400 },
-      );
-    }
-
-    const { response, tunnel } = acceptCaptunTunnel({
-      onDisconnect: () => {
-        if (this.#projectEgressInterceptTunnel === tunnel) {
-          this.#projectEgressInterceptTunnel = null;
-        }
-      },
-    });
-
-    this.replaceProjectEgressInterceptTunnel(tunnel);
-    return response;
-  }
-
-  protected replaceProjectEgressInterceptTunnel(tunnel: CaptunServerTunnel) {
-    if (this.#projectEgressInterceptTunnel) {
-      console.warn("Replacing active Project Egress Intercept Tunnel.");
-      this.#projectEgressInterceptTunnel[Symbol.dispose]();
-    }
-    this.#projectEgressInterceptTunnel = tunnel;
+    return await fetch(new Request(request, { headers: outboundHeaders }));
   }
 
   // ---- plumbing ------------------------------------------------------------

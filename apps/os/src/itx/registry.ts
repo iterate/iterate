@@ -293,7 +293,14 @@ export class ContextRegistry {
 
     this.#live.get(input.name)?.[Symbol.dispose]();
     this.#live.set(input.name, connection);
-    target.onRpcBroken?.(() => connection[Symbol.dispose]());
+    // Best-effort teardown registration: capnweb stubs implement onRpcBroken
+    // locally, but Workers-RPC stubs proxy EVERY property as a remote method,
+    // so on a provider that doesn't implement it the call rejects with "does
+    // not implement" instead of reading undefined — swallow that; the
+    // connection still dies with the session either way.
+    void Promise.resolve(target.onRpcBroken?.(() => connection[Symbol.dispose]()) as unknown).catch(
+      () => {},
+    );
 
     this.upsertRow({
       invoke: input.invoke,
@@ -551,7 +558,10 @@ export class ContextRegistry {
             `Capability "${name}": "${worker.binding}" is not a Durable Object namespace on this host.`,
           );
         }
-        const stub = namespace.getByName(worker.name);
+        // Names are scoped under the owning project, so two projects naming
+        // the same instance get DISJOINT objects — an allowlisted namespace
+        // never lets one project dial another's instances.
+        const stub = namespace.getByName(`itx:${this.host.projectId}:${worker.name}`);
         return { target: stub, dispose: () => disposeIfPossible(stub) };
       }
     }

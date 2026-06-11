@@ -18,8 +18,8 @@
 // via the SecretsCapability loopback — so a definer writes
 // `authorization: 'Bearer getSecret({ key: "REMOTE_TOKEN" })'` and the
 // secret material never appears in any registry row or describe() output.
-// Known gap: these dials bypass the egress intercept tunnel (it cannot
-// carry WebSocket upgrades today).
+// Known gap: these dials bypass fetch-cap shadowing (the UrlDial → Project
+// DO hop is Workers jsrpc, which cannot carry a WebSocket-bearing Response).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
@@ -54,7 +54,6 @@ export class UrlDial extends WorkerEntrypoint<Env, UrlDialProps> {
     const headers = new Headers(props.headers ?? {});
     const [substitutionError, substitutedHeaders] = await substituteProjectEgressSecretHeaders({
       headers,
-      projectEgressInterceptActive: false,
       secrets: getSecretsCapability({
         exports: this.ctx.exports as unknown as Pick<Cloudflare.Exports, "SecretsCapability">,
         props: { projectId: props.projectId },

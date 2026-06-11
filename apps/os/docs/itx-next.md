@@ -81,15 +81,17 @@ docstrings live in `apps/os/src/itx/types.ts`, which is the design of
 record.)
 
 `durable-object` refs SHIPPED, config-gated: the registry resolves
-`{ type: "durable-object", binding, name }` via `env[binding].getByName(name)`
-with members/path-call dispatch like any rpc target. The namespace
-allowlist (`DIALABLE_DURABLE_OBJECTS`) is EMPTY by default — every
-platform namespace is keyed across all projects, so allowlisting one
-would let any project handle dial any other project's objects by name.
-Deployments opt namespaces in via `APP_CONFIG_ITX.dialableDurableObjects`
-once they have a namespace whose instances are safe to reach by name;
-per-project name scoping is the open design before any platform
-namespace can join the defaults.
+`{ type: "durable-object", binding, name }` with members/path-call
+dispatch like any rpc target, dialing
+`env[binding].getByName(`itx:<projectId>:<name>`)` — names are scoped
+under the owning project, so an allowlisted namespace's itx-reachable
+instances are disjoint per project. The namespace allowlist
+(`DIALABLE_DURABLE_OBJECTS`) is still EMPTY by default: namespaces whose
+EXISTING instances matter (PROJECT, STREAM, …) must not be allowlisted,
+since itx dials would only ever reach fresh/empty objects under the
+scoped names. Deployments opt namespaces in via
+`APP_CONFIG_ITX.dialableDurableObjects` once they have one designed to
+be reached this way.
 
 `url` refs SHIPPED: the registry hands the call as data to the `UrlDial`
 loopback entrypoint (`src/itx/caps/url-dial.ts`), which opens ONE
@@ -102,8 +104,8 @@ credentials never appear in registry rows. Always a WebSocket session,
 never an HTTP batch: `newHttpBatchRpcSession` is banned repo-wide by the
 `iterate/no-capnweb-http-batch` lint rule (batch would silently break
 pipelining across awaits; stateless workers hold sockets for a request's
-duration just fine). Known gap: url dials bypass the egress intercept
-tunnel (it cannot carry WebSocket upgrades).
+duration just fine). Known gap: url dials bypass fetch-cap shadowing
+(see New debts).
 
 **Inbound vs. outbound is a derived direction, not API surface.** `live` is
 inbound (something holds a connection to me; the cap exists because the
@@ -750,6 +752,26 @@ sugar (`fetch`, `cap()`). Follow-up debt: the captun egress intercept
 tunnel is now expressible as fetch-cap shadowing and should be deleted (see
 New debts).
 
+## Follow-ups pass (2026-06-11)
+
+- **`streams` joined the platform defaults.** The collection/stream classes
+  moved to `src/itx/caps/streams.ts`; the `StreamsCap` loopback is the
+  platform:project definition, pinned to the owning project's namespace by
+  registry-injected props. The GLOBAL namespace stays kernel — it is gated
+  on the connect-time access set ("all" = admin), which no cap definition
+  can express; the handle getter branches. Chained calls
+  (`itx.streams.get("/x").append(e)`) ride RPC promise pipelining in every
+  real execution mode (capnweb and jsrpc both pipeline onto returned
+  targets); the subscribe path through the extra registry hop is e2e-proven.
+- **The egress intercept tunnel is DELETED** — fetch-cap shadowing is the
+  intercept mechanism (the e2e fixture's `egressFetch` option survives,
+  reimplemented as a live `fetch` cap on a dedicated itx session).
+- **Durable-object dials are name-scoped**: the registry dials
+  `itx:<projectId>:<name>`, so an allowlisted namespace's itx-reachable
+  instances are disjoint per project by construction.
+- **The REPL editor consumes types.ts verbatim** (?raw into the TS virtual
+  FS); the hand-maintained ambient shrank to a prelude of session globals.
+
 ## Resolved (was open, now decided)
 
 - ~~Script calling convention?~~ → ONE shape: `async (itx) => …`, the single
@@ -843,13 +865,18 @@ origin })`, set by the first delegating hop, preserved upward; the
 
 ## New debts (2026-06-10 evening)
 
-- The captun egress intercept tunnel
+- ~~The captun egress intercept tunnel
   (`acceptProjectEgressInterceptTunnel`, the DO `fetch` WS exception, the
   intercept-aware branch of `substituteProjectEgressSecretHeaders`) is now
   expressible as cap shadowing — a live `fetch` cap intercepts both egress
   doors with session-bound semantics for free (consolidation pass, §9 step
   2 shipped). Delete the tunnel machinery in a follow-up once its remaining
-  users move over.
+  users move over.~~ → DELETED, replaced by fetch-cap shadowing: the DO's
+  tunnel accept/route, the ingress forward, the
+  `projectEgressInterceptActive` substitution branch, and the e2e fixture's
+  captun tunnel are gone (the fixture's `egressFetch` option now defines a
+  live `fetch` cap over an itx session). captun itself stays for the
+  public-tunnel relay (`/__iterate/captun/`).
 - ~~`itx.workspace.git.*` nested RpcTarget broken~~ → DELETED. The flat
   `gitClone`/`gitAdd`/`gitCommit`/`gitPush`/`gitStatus` methods are the
   surface; nested RpcTargets returned from entrypoint getters do not
@@ -862,12 +889,11 @@ origin })`, set by the first delegating hop, preserved upward; the
   subscriber events, then namespace deletion (mechanically proven safe).
 - Legacy `executeCodemodeFunctionCall` methods on capability entrypoints —
   delete once nothing dials them; `packages/shared/src/codemode/*` rename.
-- The egress intercept tunnel never sees UrlDial's WebSocket handshakes
-  (it cannot carry upgrades); url-cap traffic is invisible to a connected
-  intercept session. The capnweb fork (#1474) makes WS-bearing Responses
-  cross CAPNWEB hops (the captun tunnel itself), but the UrlDial → Project
+- Fetch-cap shadowing never sees UrlDial's WebSocket handshakes; url-cap
+  traffic is invisible to a live `fetch` shadow. The capnweb fork (#1474)
+  makes WS-bearing Responses cross CAPNWEB hops, but the UrlDial → Project
   DO hop is Workers jsrpc, which still cannot carry one — routing url dials
-  through `egressFetch` stays blocked on that, not on the tunnel.
+  through `egressFetch` (and thus the `fetch` cap) stays blocked on that.
 - §5's REPL-consumes-types.ts is still open: the editor's ambient typings
   (`itx-repl-types.ts`) are maintained by hand next to a "keep in sync"
   note; deriving them from `src/itx/types.ts` is a tooling exercise nobody

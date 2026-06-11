@@ -30,7 +30,7 @@
  * ever touches, identical in the browser, Node, the REPL, the project
  * worker (the worker built from the project's own repo), itx scripts, and
  * capabilities themselves. Built-in
- * members (`caps`, `streams`, `fork`, `projects`, …) are the trust kernel;
+ * members (`caps`, `fork`, `projects`, …) are the trust kernel;
  * every other property falls through to the context's capability registry.
  * Authority is the handle itself: auth happens once at connect, and which
  * context you hold — plus the principal it was minted for — is the whole
@@ -101,10 +101,12 @@ export interface ItxBuiltins {
   readonly caps: ItxCaps;
 
   /**
-   * Event streams. Streams are keyed by `(namespace, path)`; this handle's
-   * binding picks the default namespace (the project id on a project
-   * handle; `"global"` on a global handle). See {@link StreamRef} for the
-   * relative/absolute addressing forms.
+   * Event streams, keyed by `(namespace, path)`. On a PROJECT handle this
+   * is a platform default cap (StreamsCap loopback, shadowable) pinned to
+   * the project's namespace; on a GLOBAL handle it is kernel — the
+   * deployment-wide `"global"` namespace gated on the connect-time access
+   * set, which no cap definition can express. See {@link StreamRef} for
+   * the relative/absolute addressing forms.
    */
   readonly streams: ItxStreams;
 
@@ -365,7 +367,10 @@ export type WorkerRef =
    * the call replays inside the Project DO because loader entrypoints
    * cannot cross an RPC boundary). */
   | { type: "loopback" }
-  /** A Durable Object, addressed by namespace binding + instance name. */
+  /** A Durable Object, addressed by namespace binding + instance name. The
+   * registry scopes the dial under the owning project —
+   * `getByName(\`itx:<projectId>:<name>\`)` — so a name only ever reaches
+   * instances belonging to this project, never a sibling's. */
   | { type: "durable-object"; binding: string; name: string }
   /** A dynamic worker materialized on demand from stored source — code that
    * lives in the registry itself rather than in any deployed artifact. */

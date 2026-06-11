@@ -240,8 +240,8 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
       target: { type: "rcp", worker: { binding: "AI", type: "binding" } } as never,
     }),
   ).rejects.toThrow(/unknown target type/);
-  // Durable Object refs name arbitrary instances across ALL projects, so the
-  // namespace allowlist defaults to empty — config has to opt in.
+  // Durable Object dials are name-scoped per project (itx:<projectId>:<name>),
+  // but the namespace allowlist still defaults to empty — config has to opt in.
   await expect(
     projectItx.caps.define({
       name: "sneakyDo",
@@ -450,7 +450,7 @@ test("platform defaults arrive from the platform:project code context, and own r
     owner: "platform:project",
   });
   // The whole migrated kernel arrives the same way (§8: cap #0 disappears).
-  for (const name of ["repos", "workspace", "worker"]) {
+  for (const name of ["repos", "streams", "workspace", "worker"]) {
     expect(before.caps.find((cap) => cap.name === name)).toMatchObject({
       owner: "platform:project",
     });

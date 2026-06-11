@@ -19,15 +19,10 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import { typeid } from "@iterate-com/shared/typeid";
-import type {
-  StreamCursor,
-  Event as StreamEvent,
-  StreamState,
-} from "@iterate-com/shared/streams/types";
 import { createD1Client } from "sqlfu";
-import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { PathProxyRpcTarget, replayPathCall } from "./path-proxy.ts";
 import { ItxError } from "./errors.ts";
+import { ItxStreams } from "./caps/streams.ts";
 import {
   GLOBAL_CONTEXT_ID,
   isChildContextId,
@@ -54,7 +49,6 @@ import {
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { isProjectId, mintProjectId } from "~/domains/projects/project-id.ts";
-import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 
 /**
  * Everything a handle needs, resolved once by the restorer
@@ -125,15 +119,19 @@ export class Itx extends RpcTarget {
   }
 
   get streams(): ItxStreams {
-    // Project handles read/write their project's namespace. A GLOBAL handle
-    // gets the deployment-wide "global" namespace instead — but only with
-    // access "all" (the admin API secret / admin cookie); a user's global
-    // handle must narrow to a project first, otherwise any logged-in user
-    // could read platform-level streams through /api/itx.
+    // Project handles resolve `streams` like any capability — it is a
+    // platform:project default (StreamsCap loopback), so a context can
+    // shadow it. The chained calls (get("/x").append(e)) ride RPC promise
+    // pipelining across whichever boundary the caller came in over.
     const projectId = this.#projectId();
     if (projectId !== null) {
-      return new ItxStreams(this.#runtime, projectId);
+      return this.cap("streams") as ItxStreams;
     }
+    // The deployment-wide "global" namespace stays KERNEL: it is gated on
+    // the connect-time access set ("all" = the admin API secret / admin
+    // cookie), which no cap definition can express — a user's global handle
+    // must narrow to a project first, otherwise any logged-in user could
+    // read platform-level streams through /api/itx.
     if (this.#runtime.access !== "all") {
       throw new ItxError({
         code: "FORBIDDEN",
@@ -141,7 +139,10 @@ export class Itx extends RpcTarget {
           "Global streams need admin access. Narrow to a project first: itx.projects.get(idOrSlug).",
       });
     }
-    return new ItxStreams(this.#runtime, GLOBAL_CONTEXT_ID);
+    return new ItxStreams(
+      { access: this.#runtime.access, exports: this.#runtime.exports as never },
+      GLOBAL_CONTEXT_ID,
+    );
   }
 
   /**
@@ -400,208 +401,6 @@ export class ItxCaps extends RpcTarget {
     url.pathname = input.path ?? "/";
     url.searchParams.set(SHARE_TOKEN_PARAM, token);
     return url.toString();
-  }
-}
-
-// ---- streams --------------------------------------------------------------
-
-type StreamsClient = ReturnType<typeof getStreamsCapability>;
-
-/**
- * Project-scoped streams. Thin: every method resolves the streams domain
- * entrypoint with this project's id in props and forwards. The append
- * policies are decided here (collection-level appends may target any path in
- * the project; a single stream handle is pinned to its path).
- */
-export class ItxStreams extends RpcTarget {
-  constructor(
-    private readonly runtime: ItxRuntime,
-    private readonly projectId: string,
-  ) {
-    super();
-  }
-
-  /**
-   * Relative or absolute (itx-next.md §3). `"/path"` resolves in this
-   * handle's namespace; `"ns:/path"` and `{ namespace, path }` are absolute
-   * refs. Sugar rule: absolute forms construct the narrowed collection and
-   * call through — ONE code path, so the access check never forks.
-   */
-  get(ref: string | { namespace?: string; path: string }): ItxStream {
-    const { namespace, path } = parseStreamRef(ref);
-    if (namespace === undefined || namespace === this.projectId) {
-      return new ItxStream(this.runtime, this.projectId, path);
-    }
-    return this.namespace(namespace).get(path);
-  }
-
-  namespace(namespace: string): ItxStreams {
-    const parsed = StreamNamespace.parse(namespace);
-    // Resolution checks access (§3 rule 2): refs are pure names, restoring
-    // them is the capability. Masked as NOT_FOUND like projects.get — a
-    // caller can never probe which namespaces exist. A project handle
-    // cannot fully-qualify its way out of its access set.
-    if (this.runtime.access !== "all" && !this.runtime.access.includes(parsed)) {
-      throw new ItxError({
-        code: "NOT_FOUND",
-        message: `No stream namespace ${JSON.stringify(parsed)} for this handle.`,
-      });
-    }
-    return new ItxStreams(this.runtime, parsed);
-  }
-
-  async create(input: { streamPath: string }) {
-    return await this.client().create(input);
-  }
-
-  private client(): StreamsClient {
-    return getStreamsCapability({
-      exports: this.runtime.exports as unknown as Parameters<
-        typeof getStreamsCapability
-      >[0]["exports"],
-      props: { appendPolicy: { mode: "any" }, projectId: this.projectId },
-    });
-  }
-}
-
-/**
- * The two absolute StreamRef spellings, plus the relative one:
- * `"/path"` (relative), `"ns:/path"` (absolute string), and
- * `{ namespace?, path }` (absolute structured). Refs are unauthenticated
- * names — authority comes from who restores them, never from their content.
- */
-function parseStreamRef(ref: string | { namespace?: string; path: string }): {
-  namespace?: string;
-  path: string;
-} {
-  if (typeof ref !== "string") {
-    return { namespace: ref.namespace, path: ref.path };
-  }
-  if (ref.startsWith("/")) return { path: ref };
-  const colon = ref.indexOf(":");
-  if (colon > 0 && ref[colon + 1] === "/") {
-    return { namespace: ref.slice(0, colon), path: ref.slice(colon + 1) };
-  }
-  throw new ItxError({
-    code: "BAD_REQUEST",
-    message: `Stream ref ${JSON.stringify(ref)} must be "/path", "namespace:/path", or { namespace?, path }.`,
-  });
-}
-
-export class ItxStream extends RpcTarget {
-  constructor(
-    private readonly runtime: ItxRuntime,
-    private readonly projectId: string,
-    private readonly path: string,
-  ) {
-    super();
-  }
-
-  describe() {
-    return { namespace: this.projectId, path: this.path };
-  }
-
-  async append(event: unknown) {
-    return await this.client().append({ event } as never);
-  }
-
-  async appendBatch(events: unknown[]) {
-    return await this.client().appendBatch({ events } as never);
-  }
-
-  async read(input: Record<string, unknown> = {}) {
-    return await this.client().read(input as never);
-  }
-
-  async getState() {
-    return await this.client().getState({} as never);
-  }
-
-  async listChildren() {
-    return await this.client().listChildren({} as never);
-  }
-
-  /**
-   * Live tail: catch-up from `afterOffset` ("start" replays everything,
-   * "end" is live-only), then every committed batch, pushed to `onEventBatch`
-   * until unsubscribed. The callback crosses whatever boundary the caller
-   * came in over (capnweb from a browser/Node session, Workers RPC from a cap
-   * isolate); the streams capability holds the actual DO subscription, so the
-   * same append-policy props gate it. If the callback's far end goes away,
-   * the subscription is torn down on the next failed delivery — offline means
-   * offline; durability is the stream itself, re-subscribe from the last
-   * offset you saw.
-   *
-   * The ONE reactive primitive: every batch also carries `state` — the same
-   * public shape `getState()` returns, as of `streamMaxOffset` — and every
-   * subscription gets an immediate first batch (current state plus any
-   * replayed events), so a subscriber paints its first render from the
-   * subscription alone. `events: false` is state-only mode: batches arrive
-   * with `events: []` on every state change, implicitly live-from-now
-   * (`afterOffset` is ignored — replay without events is meaningless).
-   */
-  async subscribe(
-    onEventBatch: (batch: {
-      events: StreamEvent[];
-      state: StreamState;
-      streamMaxOffset: number;
-    }) => unknown,
-    opts: { afterOffset: StreamCursor; events?: boolean },
-  ): Promise<ItxStreamSubscription> {
-    // Callback retention lives in StreamsCapability.subscribe: RPC layers
-    // implicitly dispose stubs received as parameters when the call
-    // completes, so the capability dup()s the callback its wrapper outlives
-    // — without that, replay (delivered in-call) works but the first LIVE
-    // batch hits a disposed stub. Verified both ways by
-    // itx-subscribe.e2e.test.ts against a live deployment.
-    const handle = await this.client().subscribe(
-      { afterOffset: opts.afterOffset, events: opts.events },
-      onEventBatch,
-    );
-    return new ItxStreamSubscription(handle);
-  }
-
-  /**
-   * Reactive sugar over {@link subscribe}: a state-only subscription that
-   * calls `onState` with the stream's public state (the `getState()` shape)
-   * once immediately on open — the first render — and again after every
-   * append. `stream.onStateChange(setState)` is the whole browser story.
-   */
-  async onStateChange(onState: (state: StreamState) => unknown): Promise<ItxStreamSubscription> {
-    // `onState` is an RPC parameter stub disposed when THIS call returns, but
-    // deliveries (including the initial push) arrive later through the local
-    // wrapper below. dup() it (no-op for plain functions) and hand the
-    // wrapper a Symbol.dispose so the capability's unsubscribe/teardown
-    // releases the retained stub with everything else.
-    const retained = (onState as { dup?(): typeof onState }).dup?.() ?? onState;
-    const forwardState = Object.assign((batch: { state: StreamState }) => retained(batch.state), {
-      [Symbol.dispose]: () => (retained as Partial<Disposable>)[Symbol.dispose]?.(),
-    });
-    return await this.subscribe(forwardState, { afterOffset: "end", events: false });
-  }
-
-  private client(): StreamsClient {
-    return getStreamsCapability({
-      exports: this.runtime.exports as unknown as Parameters<
-        typeof getStreamsCapability
-      >[0]["exports"],
-      props: {
-        appendPolicy: { mode: "stream" },
-        projectId: this.projectId,
-        streamPath: this.path,
-      },
-    });
-  }
-}
-
-/** Disposer for ItxStream.subscribe — callable from any execution mode. */
-export class ItxStreamSubscription extends RpcTarget {
-  constructor(private readonly handle: { unsubscribe(): void }) {
-    super();
-  }
-
-  unsubscribe() {
-    this.handle.unsubscribe();
   }
 }
 

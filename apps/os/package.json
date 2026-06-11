@@ -35,7 +35,6 @@
     "example:workspace-itx-preview": "tsx ./e2e/workspace-itx-preview-example.ts",
     "auth:sync-clients": "tsx ./scripts/sync-auth-clients.ts",
     "benchmark:agent-stream": "tsx ./scripts/benchmark-agent-stream.ts",
-    "benchmark:intercept-tunnel": "tsx ./scripts/benchmark-project-egress-intercept-tunnel.ts",
     "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
     "test:watch": "vitest"
   },

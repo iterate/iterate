@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { EventInput } from "@iterate-com/shared/streams/types";
-import type { Project } from "@iterate-com/os-contract";
 import { createCaptunTunnel } from "captun";
+import { RpcTarget } from "capnweb";
 import { expect } from "vitest";
 import { slugify } from "@iterate-com/shared/slug";
 import type { ProcessorContractShape } from "@iterate-com/streams/shared/stream-processors";
@@ -11,6 +11,7 @@ import {
   uniqueSuffix,
   requireAdminBearerToken,
 } from "./os-client.ts";
+import { connectItx, type ItxClient } from "~/itx/client.ts";
 
 type Fetch = Parameters<typeof createCaptunTunnel>[0]["fetch"];
 
@@ -43,12 +44,17 @@ export async function createTestProjectFixture<
   const { egressFetch } = params || {};
   const slugPrefix = params?.slugPrefix || streamPathParts.at(-1)!;
   const project = await createTestProject({ slugPrefix });
-  let tunnel: Awaited<ReturnType<typeof createProjectEgressInterceptTunnel>> | null = null;
+  let egressItx: ItxClient | null = null;
   try {
-    tunnel = egressFetch
-      ? await createProjectEgressInterceptTunnel({ project: project.project, fetch: egressFetch })
-      : null;
+    if (egressFetch) {
+      egressItx = await defineLiveEgressFetchCap({
+        baseUrl: project.baseUrl,
+        fetch: egressFetch,
+        projectId: project.project.id,
+      });
+    }
   } catch (error) {
+    egressItx?.[Symbol.dispose]?.();
     await project[Symbol.asyncDispose]();
     throw error;
   }
@@ -73,7 +79,8 @@ export async function createTestProjectFixture<
       }),
     async [Symbol.asyncDispose]() {
       try {
-        tunnel?.[Symbol.dispose]();
+        // The fetch shadow is a LIVE cap: dropping the itx session revokes it.
+        egressItx?.[Symbol.dispose]?.();
       } finally {
         await project[Symbol.asyncDispose]();
       }
@@ -131,16 +138,39 @@ export async function createTestProject(opts: { slugPrefix: string }) {
   };
 }
 
-/** creates a captun tunnel to the project's worker to capture its egress */
-export async function createProjectEgressInterceptTunnel(input: {
-  project: Project & { ingressUrl: string };
+/**
+ * Shadows the project's `fetch` capability with a LIVE cap backed by the
+ * given fetch implementation: every project egress request dispatches to it
+ * (with getSecret() placeholders unsubstituted) for as long as the returned
+ * itx session stays open. Dispose the session to drop the shadow.
+ */
+async function defineLiveEgressFetchCap(input: {
+  baseUrl: string;
   fetch: Fetch;
-}) {
-  return createCaptunTunnel({
-    url: `${input.project.ingressUrl}/__iterate/intercept-project-egress`,
-    headers: { Authorization: `Bearer ${requireAdminBearerToken()}` },
-    fetch: input.fetch,
+  projectId: string;
+}): Promise<ItxClient> {
+  class LiveEgressFetch extends RpcTarget {
+    async call({ args }: { path: string[]; args: unknown[] }) {
+      return await input.fetch(args[0] as Request);
+    }
+  }
+
+  const itx = connectItx({
+    baseUrl: input.baseUrl,
+    context: input.projectId,
+    token: requireAdminBearerToken(),
   });
+  try {
+    await itx.caps.define({
+      invoke: "path-call",
+      name: "fetch",
+      target: new LiveEgressFetch() as never,
+    });
+  } catch (error) {
+    itx[Symbol.dispose]?.();
+    throw error;
+  }
+  return itx;
 }
 
 /** creates a public OS-hosted captun tunnel for test-defined HTTP servers */
