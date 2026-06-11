@@ -2,12 +2,14 @@
 state: backlog
 priority: medium
 size: medium
-dependsOn: [streams-core-processor-host-homogenization]
+dependsOn: []
 ---
 
 # Streams: core-owned clock / durable timers as stream facts
 
-Background: `tasks/agents-system-audit-and-reconciler-design.md` §6 and §2.2.
+Background: the agents-system audit (June 2026) and the subscriber-presence /
+reconciler homogenization that shipped in
+https://github.com/iterate/iterate/pull/1460.
 
 ## Problem
 
@@ -16,8 +18,8 @@ are used anywhere. Even after connect-triggered reconciliation (the
 homogenization task), there is a residual hole: if a host crashes and _nothing_
 ever pokes the stream or the host again, in-flight work stays dangling and
 scheduled work never fires. Time-based behavior today is warm-instance
-`setTimeout` only (the agent debounce timer,
-`apps/os/src/domains/agents/stream-processors/agent/implementation.ts:343-358`).
+`setTimeout` only (the agent debounce timer in
+`apps/os/src/domains/agents/stream-processors/agent/implementation.ts`).
 
 ## Idea
 
