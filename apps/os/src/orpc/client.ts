@@ -104,7 +104,7 @@ function getForwardedOpenApiHeaders(request: Request | undefined) {
 function getServerOpenApiBaseUrl() {
   const context = requireRequestContext();
   const requestUrl = context.rawRequest ? new URL(context.rawRequest.url) : undefined;
-  const baseUrl = context.config.baseUrl ?? requestUrl?.origin;
+  const baseUrl = requestUrl?.origin ?? context.config.baseUrl;
   if (!baseUrl) throw new Error("Cannot create server oRPC client without a base URL.");
   return baseUrl.replace(/\/+$/, "");
 }
