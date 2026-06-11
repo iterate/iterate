@@ -13,6 +13,10 @@
 // 3. EGRESS AUTHORITY — `egressFetch` is the project's one pipe to the
 //    outside world (Law 5): secret placeholder substitution, the egress
 //    intercept tunnel, and (future) human-in-the-loop approval live here.
+//    It is the TERMINAL pipe behind the `fetch` CAPABILITY (platform:project
+//    default, dialed via ProjectEgress.call): itx.fetch and bare fetch() in
+//    loaded isolates dispatch registry-first, so a defined `fetch` shadow
+//    intercepts egress and this method is what the default resolves to.
 //    Calling `fetch` on the project worker gets the project's homepage;
 //    calling `fetch` on the project gets egress — matching itx vocabulary,
 //    where `itx.fetch` IS project egress.
@@ -76,10 +80,11 @@ import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/r
 import { readRemoteBranchOid } from "~/domains/repos/repo-git.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
-import { ContextRegistry, durableObjectFacetsHook, type LiveCapTarget } from "~/itx/registry.ts";
+import { ContextRegistry, type LiveCapTarget } from "~/itx/registry.ts";
+import { createContextRegistryHost } from "~/itx/registry-host.ts";
 import { platformProjectContext } from "~/itx/code-contexts.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
-import { ITX_AUDIT_STREAM_PATH, resolveDialableTargets } from "~/itx/protocol.ts";
+import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
 import type {
   CapInvoke,
   CapMeta,
@@ -288,23 +293,14 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   //
   // The Project DO hosts the PROJECT CONTEXT: it embeds the registry and is
   // the supervisor for every capability invocation in this project. These
-  // five methods are the entire registry surface; itx handles (src/itx/) call
+  // four methods are the entire registry surface; itx handles (src/itx/) call
   // them over Workers RPC and never reach the registry any other way.
 
   #itxRegistry: ContextRegistry | null = null;
 
-  async itxProvide(input: {
-    name: string;
-    target: LiveCapTarget;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
-  }) {
-    return this.itxRegistry().provide(input);
-  }
-
   async itxDefine(input: {
     name: string;
-    target: SerializableCapTarget;
+    target: SerializableCapTarget | LiveCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {
@@ -330,48 +326,33 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   private itxRegistry(): ContextRegistry {
     if (this.#itxRegistry) return this.#itxRegistry;
     const projectId = this.projectId;
-    this.#itxRegistry = new ContextRegistry({
-      // Best-effort audit trail on the project's /itx stream; the registry's
-      // SQLite table is the authoritative state (itx DECISIONS.md D1).
-      audit: (event) => {
-        this.ctx.waitUntil(
-          (async () => {
-            const stream = await getInitializedStreamStub({
-              durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-              namespace: projectId,
-              path: StreamPath.parse(ITX_AUDIT_STREAM_PATH),
-            });
-            await stream.append({ payload: event.payload, type: event.type });
-          })().catch((error) => {
-            console.error(`[itx] audit append failed for ${projectId}:`, error);
-          }),
-        );
-      },
-      // Gated on DIALABLE_BINDINGS inside the registry before this is called.
-      binding: (name) => (this.env as unknown as Record<string, unknown>)[name],
-      contextId: projectId,
-      // The code-defined parent context: platform defaults every project
-      // falls through to, shadowable by this project's own rows (§8).
-      defaults: platformProjectContext,
-      dialable: resolveDialableTargets(parseConfig(this.env).itx),
-      facets: durableObjectFacetsHook(this.ctx),
-      loader: projectRuntimeEnv(this.env).LOADER as unknown as ConstructorParameters<
-        typeof ContextRegistry
-      >[0]["loader"],
-      loopback: (exportName, options) => {
-        const exports = this.ctx.exports as unknown as Record<
-          string,
-          (options: Record<string, unknown>) => unknown
-        >;
-        const factory = exports[exportName];
-        if (typeof factory !== "function") {
-          throw new Error(`Loopback export ${exportName} is not available.`);
-        }
-        return factory(options);
-      },
-      projectId,
-      sql: this.ctx.storage.sql,
-    });
+    this.#itxRegistry = new ContextRegistry(
+      createContextRegistryHost({
+        // Best-effort audit trail on the project's /itx stream; the registry's
+        // SQLite table is the authoritative state (itx DECISIONS.md D1).
+        audit: (event) => {
+          this.ctx.waitUntil(
+            (async () => {
+              const stream = await getInitializedStreamStub({
+                durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+                namespace: projectId,
+                path: StreamPath.parse(ITX_AUDIT_STREAM_PATH),
+              });
+              await stream.append({ payload: event.payload, type: event.type });
+            })().catch((error) => {
+              console.error(`[itx] audit append failed for ${projectId}:`, error);
+            }),
+          );
+        },
+        contextId: projectId,
+        ctx: this.ctx,
+        // The code-defined parent context: platform defaults every project
+        // falls through to, shadowable by this project's own rows (§8).
+        defaults: platformProjectContext,
+        env: this.env,
+        projectId,
+      }),
+    );
     return this.#itxRegistry;
   }
 

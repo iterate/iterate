@@ -3,7 +3,7 @@
 // wires into isolates it loads:
 //
 //   env.ITERATE      = ctx.exports.ItxEntrypoint({ props: { context } })
-//   globalOutbound   = ctx.exports.ProjectEgress({ props: { project } })
+//   globalOutbound   = ctx.exports.ProjectEgress({ props: { projectId } })
 //
 // Props are sturdy refs (Law 2). The conversion from data back to authority
 // happens HERE and at connect-time auth (fetch.ts) — nowhere else.
@@ -76,26 +76,63 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxProps> {
 }
 
 export type ProjectEgressProps = {
-  project: string;
+  /** The owning project. Registry-injected at dial time (never definer
+   * props), so a `fetch` cap can only ever scope to its own project. */
+  projectId: string;
   /** Attribution only: which context/cap is fetching (audit + future policy). */
   context?: string;
   cap?: string;
 };
 
 /**
- * One pipe, two doors (Law 5). This is the implicit door: bound as
- * `globalOutbound` for every isolate the platform loads, so bare fetch() —
- * including fetches made by npm dependencies the loaded code bundles — IS
- * project egress: secret placeholder substitution, the egress intercept
- * tunnel, and (future) human approval all happen inside the Project DO.
- * The explicit door is itx.fetch(), which lands on the same DO method.
+ * One pipe, two doors (Law 5) — and the pipe itself is the project's `fetch`
+ * CAPABILITY (a platform:project default), so any handle holder can shadow
+ * it with a live provider and intercept ALL project egress.
+ *
+ * - `fetch` is the implicit door: bound as `globalOutbound` for every isolate
+ *   the platform loads, so bare fetch() — including fetches made by npm
+ *   dependencies the loaded code bundles — routes REGISTRY-FIRST through the
+ *   `fetch` cap, same as itx.fetch() (the explicit door).
+ * - `call` is the TERMINAL pipe the DEFAULT `fetch` cap dials: it lands on
+ *   the Project DO's egressFetch, where secret placeholder substitution and
+ *   (future) approval policy live. The default dials `call`, never `fetch` —
+ *   that is what breaks the loop.
+ *
+ * A live shadow provider receives requests with getSecret(...) placeholders
+ * UNSUBSTITUTED — substitution only happens in the default pipe inside the
+ * Project DO. That is the security property: an interceptor never sees
+ * secret material.
  */
 export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
   async fetch(request: Request): Promise<Response> {
-    const props = this.ctx.props;
-    return await this.env.PROJECT.getByName(getProjectDurableObjectName(props.project)).egressFetch(
-      request,
-    );
+    // Dispatch at the ORIGINATING context node, not the project: a child
+    // context's `fetch` shadow must catch its isolates' bare fetch() too —
+    // the chain (child → project → defaults) is what resolves the cap.
+    const context = this.ctx.props.context;
+    const node =
+      context && isChildContextId(context)
+        ? (this.env.ITX_CONTEXT.getByName(context) as unknown as {
+            itxInvoke(input: PathCall & { name: string }): Promise<unknown>;
+          })
+        : this.#project();
+    return (await node.itxInvoke({
+      args: [request],
+      name: "fetch",
+      path: [],
+    })) as Response;
+  }
+
+  async call({ args }: PathCall): Promise<Response> {
+    const [input, init] = args;
+    if (!(input instanceof Request) && typeof input !== "string") {
+      throw new Error("The fetch capability expects call({ path: [], args: [request] }).");
+    }
+    const request = input instanceof Request ? input : new Request(input, init as RequestInit);
+    return await this.#project().egressFetch(request);
+  }
+
+  #project() {
+    return this.env.PROJECT.getByName(getProjectDurableObjectName(this.ctx.props.projectId));
   }
 }
 

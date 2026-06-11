@@ -477,15 +477,15 @@ const persisted = answer();
     }
   });
 
-  test("caps.provide example registers and calls a session-owned target", async () => {
-    // Mirrors a PROJECT-scoped itx handle: caps.provide registers a live
-    // target, and unknown names on the handle fall through to it.
+  test("live-capability example registers and calls a session-owned target", async () => {
+    // Mirrors a PROJECT-scoped itx handle: caps.define with a live target
+    // registers it, and unknown names on the handle fall through to it.
     const providedTargets = new Map<string, { run(): unknown }>();
     const alert = vi.fn();
     const itx = new Proxy(
       {
         caps: {
-          provide(input: { name: string; target: { run(): unknown } }) {
+          define(input: { name: string; target: { run(): unknown } }) {
             providedTargets.set(input.name, input.target);
             return { name: input.name, ok: true };
           },

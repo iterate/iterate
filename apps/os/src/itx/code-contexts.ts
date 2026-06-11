@@ -69,8 +69,8 @@ export function defineCodeContext(
 /**
  * The defaults every project context delegates to (§8's "cap #0 disappears"
  * direction). What was hardwired into the handle is now ordinary capability
- * definitions: ai, repos, workspace, and the project worker. The remaining
- * kernel — caps, streams, fetch, fork, project, projects, describe — is
+ * definitions: ai, fetch, repos, workspace, and the project worker. The
+ * remaining kernel — caps, streams, fork, project, projects, describe — is
  * composition the registry cannot express (access checks, narrowing, the
  * registry itself).
  */
@@ -86,6 +86,30 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
     target: {
       entrypoint: "BindingCapability",
       props: { binding: "AI" },
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    // The DEFAULT egress pipe: itx.fetch(...) and bare fetch() in every
+    // platform-loaded isolate dispatch through THIS registry entry. The
+    // target is the terminal ProjectEgress.call (path: [], args: [request])
+    // → the Project DO's egressFetch — dialing .call, not .fetch, is what
+    // breaks the loop, because ProjectEgress.fetch routes registry-first.
+    invoke: "path-call",
+    meta: {
+      instructions:
+        "Project egress: itx.fetch(request) and bare fetch() inside platform-loaded " +
+        "isolates both flow through this cap. Shadow it with your own `fetch` (e.g. a " +
+        "live provider whose call({ path: [], args: [request] }) returns a Response) to " +
+        "intercept ALL project egress while connected; revoke the shadow and this " +
+        "default resurfaces. A shadow provider receives getSecret(...) placeholders " +
+        "UNSUBSTITUTED — secret material only exists in the default pipe inside the " +
+        "Project DO.",
+    },
+    name: "fetch",
+    target: {
+      entrypoint: "ProjectEgress",
       type: "rpc",
       worker: { type: "loopback" },
     },

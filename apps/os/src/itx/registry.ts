@@ -11,6 +11,9 @@
 //     stubs die with their session and providers reconnect (Law 1),
 //   - dispatch: members-replay or one path-call, per entry (Law 6).
 //
+// Registration is ONE verb: define() takes any target — a live stub is just
+// another target kind, routed to the in-memory table instead of a stored row.
+//
 // The host stays in charge of identity and wiring via ContextRegistryHost;
 // the registry never touches authority — by the time a call reaches it, the
 // caller already held a handle on this context.
@@ -47,6 +50,29 @@ export type LiveCapTarget = {
   onRpcBroken?: (callback: (error: unknown) => void) => void;
   [Symbol.dispose]?: () => void;
 } & Record<string, unknown>;
+
+/**
+ * A SERIALIZABLE target is plain data: an object whose prototype is
+ * Object.prototype (or null) carrying `type: "rpc" | "url"`. Everything else
+ * — capnweb RpcStubs (callable function-proxies), workers-RPC stubs,
+ * RpcTarget instances, plain functions — is a LIVE provider. The plainness
+ * check MUST come before any `.type` probe: property access on a capnweb
+ * stub returns a truthy pipelined stub, so reading `.type` first would
+ * misclassify every live target.
+ */
+function isSerializableCapTarget(
+  target: SerializableCapTarget | LiveCapTarget,
+): target is SerializableCapTarget {
+  if (!isPlainObject(target)) return false;
+  const type = (target as { type?: unknown }).type;
+  return type === "rpc" || type === "url";
+}
+
+function isPlainObject(target: unknown): boolean {
+  if (typeof target !== "object" || target === null) return false;
+  const proto = Object.getPrototypeOf(target);
+  return proto === Object.prototype || proto === null;
+}
 
 type WorkerLoaderLike = {
   get(
@@ -190,17 +216,63 @@ export class ContextRegistry {
   }
 
   /**
-   * Register a live capability. Session-bound: the entry survives in SQLite
-   * (so describe() can report "registered but offline") but the stub lives
-   * only in memory and is torn down when the provider's session breaks.
+   * Register a capability: ONE verb for every target kind (types.ts is the
+   * design of record). A serializable target is stored durably and validated
+   * here so misconfiguration fails at define(), and again at dial time (the
+   * authoritative gate). Any other target is a LIVE provider stub —
+   * session-bound: the entry survives in SQLite (so describe() can report
+   * "registered but offline") but the stub lives only in memory and is torn
+   * down when the provider's session breaks.
    */
-  provide(input: { name: string; target: LiveCapTarget; invoke?: CapInvoke; meta?: CapMeta }): {
+  define(input: {
     name: string;
-    ok: true;
-  } {
+    target: SerializableCapTarget | LiveCapTarget;
+    invoke?: CapInvoke;
+    meta?: CapMeta;
+  }): { name: string; ok: true } {
     assertValidCapName(input.name);
     const invoke = input.invoke ?? "members";
+    const target = input.target;
 
+    if (!isSerializableCapTarget(target)) {
+      // A PLAIN object carrying a string `type` is a malformed serializable
+      // target (typo, unknown kind), not a live provider — fail loudly
+      // instead of registering something that looks like an offline live cap.
+      const type = isPlainObject(target) ? (target as { type?: unknown }).type : undefined;
+      if (typeof type === "string") {
+        throw new Error(
+          `Capability "${input.name}": unknown target type ${JSON.stringify(type)} — ` +
+            `serializable targets are "rpc" or "url"; anything else must be a live provider stub.`,
+        );
+      }
+      this.#registerLive({ invoke, meta: input.meta ?? {}, name: input.name, target });
+      return { name: input.name, ok: true };
+    }
+
+    assertDefinableCapTarget(input.name, target, this.dialable());
+    this.upsertRow({
+      invoke,
+      kind: target.type,
+      meta: input.meta ?? {},
+      name: input.name,
+      target,
+    });
+    this.host.audit({
+      type: ITX_EVENT_TYPES.capDefined,
+      payload: {
+        invoke,
+        kind: target.type,
+        name: input.name,
+        ...(target.type === "rpc" ? { worker: target.worker.type } : {}),
+        ...(target.type === "rpc" && target.worker.type === "source"
+          ? { cacheKey: capSourceCacheKey(target.worker.source) }
+          : {}),
+      },
+    });
+    return { name: input.name, ok: true };
+  }
+
+  #registerLive(input: { name: string; target: LiveCapTarget; invoke: CapInvoke; meta: CapMeta }) {
     // RPC disposes argument stubs when the call returns; keep a duplicate
     // (and hand further dups to borrowers) — both directions of the dup()
     // discipline from the original capnweb learnings.
@@ -224,56 +296,16 @@ export class ContextRegistry {
     target.onRpcBroken?.(() => connection[Symbol.dispose]());
 
     this.upsertRow({
-      invoke,
+      invoke: input.invoke,
       kind: "live",
-      meta: input.meta ?? {},
+      meta: input.meta,
       name: input.name,
       target: null,
     });
     this.host.audit({
       type: ITX_EVENT_TYPES.capProvided,
-      payload: { invoke, name: input.name },
+      payload: { invoke: input.invoke, name: input.name },
     });
-    return { name: input.name, ok: true };
-  }
-
-  /**
-   * Register a durable capability: a name plus a serializable target
-   * (types.ts is the design of record). Targets are validated here so
-   * misconfiguration fails at define(), and again at dial time (the
-   * authoritative gate).
-   */
-  define(input: {
-    name: string;
-    target: SerializableCapTarget;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
-  }): { name: string; ok: true } {
-    assertValidCapName(input.name);
-    const target = input.target;
-    assertDefinableCapTarget(input.name, target, this.dialable());
-    const invoke = input.invoke ?? "members";
-
-    this.upsertRow({
-      invoke,
-      kind: target.type,
-      meta: input.meta ?? {},
-      name: input.name,
-      target,
-    });
-    this.host.audit({
-      type: ITX_EVENT_TYPES.capDefined,
-      payload: {
-        invoke,
-        kind: target.type,
-        name: input.name,
-        ...(target.type === "rpc" ? { worker: target.worker.type } : {}),
-        ...(target.type === "rpc" && target.worker.type === "source"
-          ? { cacheKey: capSourceCacheKey(target.worker.source) }
-          : {}),
-      },
-    });
-    return { name: input.name, ok: true };
   }
 
   revoke(input: { name: string }): { name: string; ok: true } {
@@ -545,7 +577,7 @@ export class ContextRegistry {
         // and (future) policy live in the Project DO, and the cap's isolate
         // never sees secret material (Law 5).
         globalOutbound: this.host.loopback("ProjectEgress", {
-          props: { cap: name, context: this.host.contextId, project: this.host.projectId },
+          props: { cap: name, context: this.host.contextId, projectId: this.host.projectId },
         }),
         mainModule: source.mainModule,
         modules: source.modules,
