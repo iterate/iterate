@@ -41,6 +41,9 @@ export type McpClientProps = {
   serverUrl: string;
   /** Sent on every request; values pass through egress secret substitution. */
   headers?: Record<string, string>;
+  /** Per-request deadline forwarded to the MCP SDK (its default is 60s);
+   * raise it for genuinely slow servers. Provider-supplied. */
+  timeoutMs?: number;
   /** Attribution, injected by the dial. */
   capabilityPath?: string;
   context?: string;
@@ -71,41 +74,43 @@ export class McpClient extends WorkerEntrypoint<Env, McpClientProps> {
       props: { capabilityPath: props.capabilityPath, context: props.context },
     });
 
+    const options = props.timeoutMs ? { timeout: props.timeoutMs } : undefined;
     const client = await connectMcp({
       // ALL transport HTTP rides the project egress pipe — this is where
       // getSecret() placeholders in headers become real credentials. Build a
       // real Request first: the SDK may pass a URL (which itx.fetch would not
       // stringify) or a Request plus separate init (whose headers must merge
-      // before egress sees them). The SDK also attaches an AbortSignal to
-      // every request, and a signal cannot cross the RPC hop to the egress
-      // pipe (DataCloneError: AbortSignal serialization is not enabled) —
-      // rebuild WITHOUT it; per-request aborts don't survive egress, the
-      // pipe's own timeouts do the bounding.
+      // before egress sees them). The handle's fetch — the one egress door —
+      // strips the SDK's per-request AbortSignal; nothing transport-specific
+      // is handled here.
       fetch: (fetchInput: Request | string | URL, init?: RequestInit) => {
         const request =
           fetchInput instanceof Request
             ? new Request(fetchInput, init)
             : new Request(String(fetchInput), init);
-        return itx.fetch(
-          new Request(request.url, {
-            body: request.body,
-            headers: request.headers,
-            method: request.method,
-            redirect: request.redirect,
-          }),
-        );
+        // The transport's standalone GET (the server-push SSE channel) is
+        // useless in this stateless connect → call → close client and would
+        // pin a long-lived stream through the egress chain for every call —
+        // answer it locally with the spec's "not offered" status, which the
+        // SDK handles as the expected no-stream case.
+        if (request.method === "GET") {
+          return Promise.resolve(new Response(null, { status: 405 }));
+        }
+        return itx.fetch(request);
       },
       headers: props.headers,
+      requestOptions: options,
       serverUrl: props.serverUrl,
     });
 
     try {
       if (input.path.join(".") === "listTools") {
-        return await listMcpTools(client);
+        return await listMcpTools(client, options);
       }
       return await executeMcpToolCall({
         args: input.args,
         client,
+        options,
         path: input.path,
       });
     } finally {

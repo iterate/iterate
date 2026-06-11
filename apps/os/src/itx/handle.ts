@@ -269,7 +269,13 @@ export class ItxHandle extends RpcTarget {
    * Isolates the platform loads get this same dispatch as global fetch.
    */
   async fetch(input: Request | string, init?: RequestInit): Promise<Response> {
-    const request = typeof input === "string" ? new Request(input, init) : input;
+    // The explicit egress door — and where any AbortSignal is detached: a
+    // signal cannot cross the RPC hop to the context node ("AbortSignal
+    // serialization is not enabled"), so the door strips it once for every
+    // caller (the MCP SDK attaches one to each request, for example).
+    // Per-request aborts don't survive egress; the pipe's bounds do.
+    const built = typeof input === "string" ? new Request(input, init) : input;
+    const request = new Request(built, { signal: null });
     return (await this.#itx().invoke({ args: [request], path: ["fetch"] })) as Response;
   }
 

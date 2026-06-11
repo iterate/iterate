@@ -127,7 +127,11 @@ export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
       (this.ctx.props.contextAddress as CapabilityAddress | null | undefined) ??
       projectContextAddress(this.ctx.props.projectId);
     const node = dialContext(this.env, address);
-    return (await node.itx().invoke({ args: [request], path: ["fetch"] })) as Response;
+    // The implicit door's signal strip — same reason as ItxHandle.fetch (the
+    // explicit door): an AbortSignal cannot cross the RPC hop to the node.
+    return (await node
+      .itx()
+      .invoke({ args: [new Request(request, { signal: null })], path: ["fetch"] })) as Response;
   }
 }
 
