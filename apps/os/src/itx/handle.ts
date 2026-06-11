@@ -138,18 +138,10 @@ export class ItxHandle extends RpcTarget {
   // ---- the trust kernel ---------------------------------------------------
 
   /**
-   * Provide a capability on this handle's context — THE verb: the capability
-   * kind carries everything else (durable or live). A bare function or a
-   * live stub is session-bound (dies with your connection); an rpc/url
-   * address is durable. The entry lives at a PATH: `name` is the 1-segment
-   * sugar, `path` shadows one subtree of an inherited cap (longest-prefix
-   * dispatch) — exactly one of the two.
-   *
-   * Returns a provision handle: `revoke()` removes the entry, and
-   * `Symbol.dispose` auto-revokes ONLY live provides — dropping the session
-   * would have killed those anyway, while a durable provide must outlive the
-   * session that created it (session teardown disposes every returned
-   * handle), so its disposer is deliberately a no-op.
+   * Provide a capability on this handle's context — THE verb for every
+   * capability kind, live or durable. Full semantics: Itx.provideCapability
+   * (itx.ts); surface docs: types.ts. Returns a {@link CapabilityProvision}
+   * (its class doc explains the live-vs-durable dispose asymmetry).
    */
   async provideCapability(input: {
     name?: string;
@@ -240,7 +232,7 @@ export class ItxHandle extends RpcTarget {
       // The node's `itx()` core is node-to-node machinery: chain
       // delegation passes a TRUSTED `origin`. Reachable here, it would let
       // any handle holder
-      // spoof another context's identity (e.g. read a sibling fork's
+      // spoof another context's identity (e.g. read a sibling extension's
       // workspace by faking origin). The proper doors are the root verbs
       // (provideCapability/revokeCapability) and the caps themselves.
       const head = call.path[0] ?? "";

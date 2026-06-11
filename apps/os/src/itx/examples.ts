@@ -394,7 +394,7 @@ return { current: await itx.counter.current() };   // 2, and it persists
   },
   {
     id: "extend-child-context",
-    title: "Extend the context (a session) with its own caps",
+    title: "Extend the context with its own caps",
     description:
       "itx.extend() makes a cheap, disposable child context under the project — an agent session or scratchpad. Its caps SHADOW the parent's; names it doesn't provide delegate up the chain. describe() shows the merged view with provenance.",
     context: "project",

@@ -259,11 +259,9 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    * is live by nature and auto-wraps with asPathCallable semantics (empty
    * remainder calls the function; a deeper remainder errors).
    *
-   * Returns the provision handle: `revoke()` removes the entry;
-   * `Symbol.dispose` auto-revokes ONLY live provides — a live capability
-   * dies with its session anyway, while a durable provide must outlive the
-   * session that created it (session teardown disposes every returned
-   * handle, so a revoking disposer would silently undo it on disconnect).
+   * Returns the provision handle: `revoke()` plus the live-only disposer —
+   * the dispose asymmetry is explained once, on handle.ts's
+   * CapabilityProvision.
    */
   async provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision> {
     await this.#materialize();
@@ -608,10 +606,10 @@ export function resolveLongestProvidedPrefix<Entry>(
 /**
  * Names that may never be FIRST path segments: a cap must not shadow the
  * trust kernel (it is reachable as `itx.<name>`, so it competes with the
- * handle's built-ins). `fetch` is deliberately NOT here: project egress is a
- * platform default capability and providing your own `fetch` is how egress
- * interception works — the handle's real `fetch` method still wins property
- * lookup; it routes through the core anyway.
+ * handle's built-ins). `fetch` and `streams` are deliberately NOT here:
+ * both are shadowable platform default capabilities (providing your own
+ * `fetch` is how egress interception works) — the handle's real members
+ * still win property lookup; they route through the core anyway.
  */
 const ITX_BUILTIN_NAMES = [
   "capability",
@@ -622,6 +620,7 @@ const ITX_BUILTIN_NAMES = [
   "projects",
   "provideCapability",
   "revokeCapability",
+  "shareUrl",
   "super",
 ] as const;
 

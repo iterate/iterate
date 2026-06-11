@@ -11,9 +11,11 @@ chain, addresses — are an appendix, because you don't need them to act.
 ```ts
 // What am I holding? What can I call?
 await itx.describe();
-// → [{ name: "slack", kind: "rpc", instructions: "Use itx.slack.<Slack Web
-//      API method path>(args), e.g. itx.slack.chat.postMessage({ channel,
-//      thread_ts, text })…" }, …]
+// → { context: "prj_…", access: ["prj_…"],
+//     capabilities: [{ name: "slack", kind: "rpc", instructions: "Use
+//       itx.slack.<Slack Web API method path>(args), e.g.
+//       itx.slack.chat.postMessage({ channel, thread_ts, text })…" }, …],
+//     project: { … } }
 
 await itx.slack.chat.postMessage({ channel: "C123", text: "hi" });
 ```
@@ -340,7 +342,7 @@ Every chain roots in code: **everything WRITABLE is durable; the root of
 every chain is code.**
 
 ```text
-itx_session → project → platform:project (PlatformContext, read-only code)
+itx_a1b2 → project → platform:project (PlatformContext, read-only code)
 ```
 
 **`PlatformContext`** is a loopback `WorkerEntrypoint` answering the same

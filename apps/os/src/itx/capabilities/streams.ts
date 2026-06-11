@@ -99,7 +99,7 @@ export class ItxStreams extends RpcTarget {
    * collection's namespace; `"ns:/path"` and `{ namespace, path }` are
    * absolute refs. Sugar rule: absolute forms construct the narrowed
    * collection and call through — ONE code path, so the access check never
-   * forks.
+   * diverges.
    */
   get(ref: string | { namespace?: string; path: string }): ItxStream {
     const { namespace, path } = parseStreamRef(ref);

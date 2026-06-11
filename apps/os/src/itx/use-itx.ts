@@ -42,7 +42,7 @@ import type { ItxHandle } from "./handle.ts";
  * fresh. Eviction is identity-guarded: a stale connection's death never
  * removes the entry of a newer connection under the same key.
  */
-export function createConnectionPool<T>(input: {
+export function createSocketSuspenseCache<T>(input: {
   connect: (context: string | undefined, onDead: () => void) => Promise<T>;
 }) {
   type Entry = { promise: Promise<T> };
@@ -103,7 +103,7 @@ function dialItx(context: string | undefined, onDead: () => void): Promise<RpcSt
   return promise;
 }
 
-const pool = createConnectionPool<RpcStub<ItxHandle>>({ connect: dialItx });
+const pool = createSocketSuspenseCache<RpcStub<ItxHandle>>({ connect: dialItx });
 
 function assertBrowser(caller: string): void {
   if (typeof window === "undefined") {

@@ -167,7 +167,7 @@ export async function replayPathCall(target: unknown, call: PathCall): Promise<u
  * stub, and the replay then runs back in the provider's process. Providers
  * that implement `call` themselves (the SDK-shaped FakeSlackSdk pattern)
  * don't need it. (The dial wraps the concrete objects it resolves itself with
- * plain in-process wrappers — durable-itx.ts.)
+ * plain in-process wrappers — dial.ts.)
  */
 export function asPathCallable(target: unknown): PathCallable {
   return new ClientPathCallable(target);

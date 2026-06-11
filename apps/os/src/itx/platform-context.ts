@@ -2,7 +2,7 @@
 // capability chain (itx-next.md, "LOCKED: the final shape" — "Defaults live
 // on the parent chain; the root of every chain is code").
 //
-//   itx_session → project → platform:project (THIS, code)
+//   itx_a1b2 → project → platform:project (THIS, code)
 //
 // There is exactly ONE capability map per context; the platform defaults are
 // not a layer inside any instance — they are this context's provides,

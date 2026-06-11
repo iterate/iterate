@@ -13,7 +13,7 @@
  * Contexts form a prototype chain: capability lookup walks child → parent
  * with shadowing, writes land on the node your handle points at, and
  * `extend()` is `Object.create(parent)`. A context MAY be durable (a project's
- * context lives in its Durable Object; a forked child gets its own node so
+ * context lives in its Durable Object; an extended child gets its own node so
  * others can address it later) — but durability is not part of the concept:
  * a context that nothing else needs to re-address can live entirely in a
  * connection, like the global handle does today.
@@ -65,9 +65,9 @@
  *   capability: { type: "rpc", worker: { type: "binding", binding: "AI" } },
  * });
  *
- * using session = await itx.extend({ name: "agent-run-42" });
+ * using child = await itx.extend({ name: "agent-run-42" });
  * // a cheap, disposable child context: its caps shadow the project's,
- * // misses delegate up the chain. (This is what a "codemode session" is.)
+ * // misses delegate up the chain.
  * ```
  *
  * One honest caveat on typing: there is ONE `ItxHandle` type, but a live
@@ -136,7 +136,7 @@ export type ItxHandle = ItxBuiltins & KnownCapabilities;
  * The built-in surface of every handle — the trust kernel. Everything else
  * you see on an `itx` is a capability that fell through to the capability table.
  *
- * Child contexts inherit all of this: a forked session's `repos`,
+ * Child contexts inherit all of this: an extended child's `repos`,
  * `workspace`, and `streams` resolve through its owning project — the child
  * adds a capability table of its own, not a different kernel.
  */
@@ -182,8 +182,8 @@ export interface ItxBuiltins {
    *   },
    * });
    *
-   * // Shadow one method of an inherited cap on a session (an extension):
-   * await session.provideCapability({
+   * // Shadow one method of an inherited cap on an extension:
+   * await extension.provideCapability({
    *   path: ["workspace", "gitPush"],
    *   capability: approvalGate,
    * });
@@ -245,7 +245,7 @@ export interface ItxBuiltins {
   /** PLATFORM DEFAULT, not kernel: workspace readFile/writeFile and the
    * flat git methods (gitClone/gitAdd/gitCommit/gitPush/gitStatus — nested
    * RpcTargets do not survive RPC boundaries). Context-scoped: chain
-   * delegation carries the ORIGINATING context, so a forked child context
+   * delegation carries the ORIGINATING context, so an extended child context
    * gets its own isolated workspace even though the definition lives on
    * `platform:project`. */
   readonly workspace: unknown;
@@ -386,7 +386,7 @@ export type ItxDescription = {
  *
  * Deliberately NOT here: MCP and OpenAPI. Those are not transports — they
  * are client implementations, i.e. ordinary RPC targets. The platform ships
- * `McpClient` / `OpenApiClient` entrypoints (reach them via
+ * an `McpClient` entrypoint (reach it via
  * `worker: { type: "loopback" }`, parameterized by `props`), and nothing
  * stops you from shipping your own version as a module in your project's
  * repo (an ordinary `{ type: "repo" }` source). If a first-party client
@@ -503,8 +503,9 @@ export type WorkerSource = (
  * concrete object lives, never by core data:
  *
  * - The dial wraps the objects it resolves itself — env bindings, loader
- *   entrypoints, facets — with `asPathCallable`, so a source cap just
- *   exports methods and its whole public surface is replayed:
+ *   entrypoints, facets — with its own plain in-process wrapper (dial.ts),
+ *   so a source cap just exports methods and its whole public surface is
+ *   replayed:
  *
  * ```ts
  * // source worker: class extends WorkerEntrypoint { add({a,b}) { … } }

@@ -3,7 +3,7 @@
 //
 // Why a forwarder instead of a durable-object ref: DO names are
 // definer-controlled, so a raw ref could address another project's agent.
-// Here the registry force-injects props.projectId at dial time and the DO
+// Here the dial force-injects props.projectId at dial time and the DO
 // name is derived from (projectId, agentPath) — a definer can only ever
 // reach agents inside the context's own project.
 
@@ -13,7 +13,7 @@ import type { AgentDurableObject } from "../durable-objects/agent-durable-object
 import type { PathCall } from "~/itx/itx.ts";
 
 export type AgentToolsCapabilityProps = {
-  /** Injected by the registry at dial time — never definer-supplied. */
+  /** Injected by the dial — never definer-supplied. */
   projectId?: string;
   /** Which agent stream this tool cap is bound to. Definer-supplied. */
   agentPath: string;
@@ -27,7 +27,7 @@ export class AgentToolsCapability extends WorkerEntrypoint<Env, AgentToolsCapabi
   async call(input: PathCall): Promise<unknown> {
     const props = this.ctx.props;
     if (!props.projectId) {
-      throw new Error("AgentToolsCapability needs registry-injected projectId props.");
+      throw new Error("AgentToolsCapability needs dial-injected projectId props.");
     }
     const name = getAgentDurableObjectName({
       agentPath: props.agentPath as never,

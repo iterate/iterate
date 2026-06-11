@@ -1,5 +1,5 @@
 // The Project Durable Object: the durable home of one PROJECT CONTEXT
-// (apps/os/docs/itx-spec.md). It has exactly one job: ITX CORE HOST — it
+// (apps/os/docs/itx-next.md). It has exactly one job: ITX CORE HOST — it
 // embeds the capability core (itx()) and is the dispatch point for every
 // capability invocation in this project.
 //
@@ -22,9 +22,9 @@
 // ProjectProcessor (stream-processors/project-processor.ts), which also owns
 // every creation side effect — including the one D1 `projects` projection.
 // The project CONTEXT's state folds from its journal stream (/itx); this
-// DO's storage holds only that fold's checkpoint plus the worker checkout
-// cache. There is no bespoke project table and no lifecycle mixin: the DO is
-// addressed by the plain project id.
+// DO's storage holds only that fold's checkpoint. There is no bespoke
+// project table and no lifecycle mixin: the DO is addressed by the plain
+// project id.
 
 import { DurableObject, env } from "cloudflare:workers";
 import { type Event } from "@iterate-com/shared/streams/types";

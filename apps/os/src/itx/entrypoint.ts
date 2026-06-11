@@ -141,7 +141,7 @@ export type EgressPipeProps = {
 
 /**
  * The TERMINAL egress pipe: the default target of the `fetch` capability
- * (PLATFORM_PROJECT_CAPABILITIES, durable-itx.ts). Stateless: secrets are D1 rows
+ * (PLATFORM_PROJECT_CAPABILITIES, platform-context.ts). Stateless: secrets are D1 rows
  * (domains/secrets), scoped by the dial-injected projectId, so
  * substitution and the real fetch happen here in a plain isolate — the
  * Project DO supervises dispatch (its capability table is where live shadows live)
