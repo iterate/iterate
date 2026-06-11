@@ -4,12 +4,19 @@
 // (reachability) errors surface HERE — at the capability's first call —
 // never at provide time (provide is structural only, itx.ts).
 
-import { type CapabilityDial, type PathCallable, type WorkerSource } from "./itx.ts";
+import {
+  disposeIfPossible,
+  type CapabilityDial,
+  type PathCallable,
+  type WorkerSource,
+} from "./itx.ts";
 import { replayPathCall } from "./path-proxy.ts";
 import { wireIsolateEnv } from "./isolate.ts";
 import { resolveWorkerSource, type SourceBuildEnv } from "./source-build.ts";
 
-type WorkerLoaderLike = {
+/** The Worker Loader binding as every itx load site uses it — the dial here
+ * and the project worker's non-dial loaders (project-worker-runtime.ts). */
+export type WorkerLoaderBinding = {
   get(
     id: string,
     getCode: () => {
@@ -21,7 +28,7 @@ type WorkerLoaderLike = {
       modules: Record<string, unknown>;
     },
   ): {
-    getEntrypoint(name?: string): unknown;
+    getEntrypoint(name?: string, options?: { props?: Record<string, unknown> }): unknown;
     getDurableObjectClass?(name?: string): unknown;
   };
 };
@@ -44,7 +51,7 @@ export type DialHost = {
   /** The hosting worker's loopback exports (ctx.exports). */
   exports: Record<string, (options: { props: Record<string, unknown> }) => unknown>;
   /** Worker Loader for source-ref caps; absent in environments without it. */
-  loader?: WorkerLoaderLike;
+  loader?: WorkerLoaderBinding;
   /** Durable Object facet instantiation (durableObjectFacetsHook). */
   facets?: (
     name: string,
@@ -239,11 +246,6 @@ function inProcessPathCallable(target: unknown, dispose?: () => void): PathCalla
     call: (input) => replayPathCall(target, input),
     ...(dispose ? { [Symbol.dispose]: dispose } : {}),
   };
-}
-
-function disposeIfPossible(target: unknown): void {
-  const dispose = (target as Partial<Disposable> | null)?.[Symbol.dispose];
-  if (typeof dispose === "function") Reflect.apply(dispose, target, []);
 }
 
 /**

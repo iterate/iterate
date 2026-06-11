@@ -1,4 +1,4 @@
-// The restorer (spec §5.2): the single function that turns serializable
+// The restorer: the single function that turns serializable
 // ItxProps into a live handle, plus the two WorkerEntrypoints the platform
 // wires into isolates it loads:
 //

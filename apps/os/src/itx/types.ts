@@ -94,6 +94,8 @@
  * call STARTED at): nodes set it; handles never forward it.
  */
 export interface Itx {
+  /** The journaled write; the HANDLE builds the CapabilityProvision its
+   * callers hold. */
   provideCapability(input: {
     name?: string;
     path?: string[];
@@ -101,7 +103,7 @@ export interface Itx {
     instructions?: string;
     types?: string;
     meta?: CapabilityMeta;
-  }): CapabilityProvision | Promise<CapabilityProvision>;
+  }): void | Promise<void>;
   revokeCapability(input: { name?: string; path?: string[] }): void | Promise<void>;
   describe(): Promise<CapabilityDescription[]>;
   invoke(input: { path: string[]; args: unknown[]; origin?: ItxOrigin }): Promise<unknown>;

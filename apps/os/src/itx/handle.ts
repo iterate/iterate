@@ -1,6 +1,6 @@
 // The itx handle: the ONE thing user code ever touches, identical in the
 // browser, Node, the REPL, the project worker, itx scripts, and caps
-// themselves (spec §5).
+// themselves (design of record: types.ts).
 //
 // A handle is a cheap, ephemeral VIEW over a durable context node. Authority
 // is "which context this handle points at" (Law 3) — by construction there
@@ -391,7 +391,7 @@ export class ItxHandle extends RpcTarget {
   /**
    * "Let me show you something real quick": a signed, expiring URL for one
    * HTTP-exposed cap. Possession grants exactly that cap's fetch surface
-   * until expiry — nothing else (spec §8).
+   * until expiry — nothing else (itx/http.ts).
    */
   async shareUrl(input: { name: string; path?: string; ttlSeconds?: number }): Promise<string> {
     const secret = this.#runtime.config.adminApiSecret?.exposeSecret();

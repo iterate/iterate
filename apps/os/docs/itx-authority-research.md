@@ -8,7 +8,7 @@ durable object) or from the USER that connects to it. Also: GuardCapability
 seems pretty fucking complicated — find better options."
 
 Companions: `itx-next.md` (esp. "The address unification" and its LOCKED
-sections), `itx-spec.md` (the Laws), `src/itx/itx.ts` / `handle.ts` /
+sections), `src/itx/itx.ts` / `handle.ts` /
 `access.ts` / `entrypoint.ts` / `fetch.ts`, `DECISIONS.md` (D17),
 `docs/domain-objects-and-stream-processors.md`.
 
@@ -766,7 +766,7 @@ gets back.
   Decentralized Authorization in the Cloud" (NDSS 2014) —
   theory.stanford.edu/~ataly/Papers/macaroons.pdf
 - Biscuit tokens — biscuitsec.org
-- In-repo: `apps/os/docs/itx-spec.md` (Laws), `apps/os/docs/itx-next.md`
+- In-repo: `apps/os/docs/itx-next.md`
   (address unification, LOCKED sections), `apps/os/src/itx/{itx,handle,access,entrypoint,fetch,refs}.ts`,
   `apps/os/src/itx/DECISIONS.md` (D7, D16–D18),
   `packages/shared/src/auth-claims.ts`,

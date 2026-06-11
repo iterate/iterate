@@ -220,7 +220,7 @@ view, and the create mutation's invalidation misses the breadcrumbs' cache entir
 used by `project-stream-view.tsx`. Two live-tail stacks, two transports, two status vocabularies.
 
 - **a (recommended):** accept short-term, but record convergence intent + winner in
-  `apps/os/docs/itx-orpc-replacement-plan.md` and file the ProjectStreamView port.
+  `apps/os/docs/itx-next.md` and file the ProjectStreamView port.
 - b: port `ProjectStreamView` onto `useStreamEvents` now (bigger; it has its own SQLite mirror).
 
 ### C9 — Cast smell concentrated but uncentralized
@@ -321,5 +321,5 @@ disposes parameter stubs when the call completes) — fixed and proven by the lo
    unsubscribe-once); integration test against a real Stream DO; e2e DO-kill test (B2 doc);
    e2e project cleanup + shared env helpers (14a); authed smoke assertion (12a); wire
    `e2e:itx` into CI.
-5. **Docs**: B2 known gap + C8 convergence intent in `apps/os/docs/itx-orpc-replacement-plan.md`.
+5. **Docs**: B2 known gap + C8 convergence intent in `apps/os/docs/itx-next.md`.
 6. Full `pnpm typecheck && pnpm lint && pnpm format && pnpm test` at the end.

@@ -1,4 +1,4 @@
-// HTTP routing to capabilities (spec §8): any cap whose surface includes
+// HTTP routing to capabilities: any cap whose surface includes
 // fetch(Request) is routable at its own hostname:
 //
 //     https://{cap}--{projectSlugOrId}.{projectHostnameBase}/…

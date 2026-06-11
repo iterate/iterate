@@ -49,25 +49,13 @@ export type StreamsCapabilityProps = {
 
 /**
  * The platform:project `streams` default: get/namespace/create against a
- * project-pinned collection, reached through the one calling convention via
- * the self-replaying `call` below.
+ * project-pinned collection. Only ever reached through the one calling
+ * convention (the dial), so `call` replays straight onto the collection —
+ * its surface IS this capability's surface, no forwarders.
  */
 export class StreamsCapability extends WorkerEntrypoint<Env, StreamsCapabilityProps> {
-  /** The kernel's one calling convention; replay walks this entrypoint's own members. */
   call(input: PathCall): Promise<unknown> {
-    return replayPathCall(this, input);
-  }
-
-  get(ref: string | { namespace?: string; path: string }): ItxStream {
-    return this.#collection().get(ref);
-  }
-
-  namespace(namespace: string): ItxStreams {
-    return this.#collection().namespace(namespace);
-  }
-
-  async create(input: { streamPath: string }) {
-    return await this.#collection().create(input);
+    return replayPathCall(this.#collection(), input);
   }
 
   #collection(): ItxStreams {

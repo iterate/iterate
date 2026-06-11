@@ -1,4 +1,4 @@
-// Facet caps + HTTP routing (spec §8, phase 5):
+// Facet caps + HTTP routing (itx/http.ts):
 //
 //   facet caps   stored source exporting `extends DurableObject`, instantiated
 //                as a Durable Object Facet of the hosting context node — its

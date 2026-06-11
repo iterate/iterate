@@ -239,7 +239,7 @@ describe("chain delegation", () => {
         { kind: "rpc" as const, meta: {}, name: "inherited", owner: "prj_1", updatedAtMs: 1 },
       ]),
       invoke: vi.fn(async () => "from-parent"),
-      provideCapability: vi.fn(async () => ({})),
+      provideCapability: vi.fn(async () => {}),
       revokeCapability: vi.fn(async () => {}),
     } satisfies ItxStub;
   }
@@ -407,34 +407,6 @@ describe("bare-function capabilities", () => {
   });
 });
 
-describe("the provision handle", () => {
-  test("revoke() removes the entry", async () => {
-    const itx = makeItx();
-    const provision = await itx.provideCapability({ capability: AI_ADDRESS, name: "extra" });
-    await provision.revoke();
-    expect(await itx.describe()).toEqual([]);
-  });
-
-  test("Symbol.dispose auto-revokes LIVE provides only (a durable disposer is a no-op)", async () => {
-    const itx = makeItx();
-    // Durable: `using` must NOT undo the provide — session teardown disposes
-    // every returned handle, and durable means surviving the session.
-    {
-      using _durable = await itx.provideCapability({ capability: AI_ADDRESS, name: "durable" });
-    }
-    expect((await itx.describe()).map((entry) => entry.name)).toEqual(["durable"]);
-
-    // Live: dropping the session would have killed it anyway — dispose makes
-    // that explicit and removes the entry.
-    {
-      using _live = await itx.provideCapability({ capability: async () => "hi", name: "live" });
-    }
-    await vi.waitFor(async () => {
-      expect((await itx.describe()).map((entry) => entry.name)).toEqual(["durable"]);
-    });
-  });
-});
-
 describe("processor-mode execution", () => {
   test("an enqueued script-execution-requested runs through the host runner; completed dedupes", async () => {
     const runScript = vi.fn(async () => "ran");
@@ -508,6 +480,6 @@ describe("structural validation (provide time)", () => {
         capability: { type: "rpc", worker: { binding: "DB", type: "binding" } },
         name: "db",
       }),
-    ).resolves.toBeDefined();
+    ).resolves.toBeUndefined();
   });
 });

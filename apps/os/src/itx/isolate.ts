@@ -44,8 +44,6 @@ export function wireIsolateEnv(input: {
   /** The owning project — egress (and its secrets) are scoped to it. */
   projectId: string;
   code: IsolateCode;
-  /** Extra named bindings (e.g. the project worker's STREAMS). */
-  extraEnv?: Record<string, unknown>;
 }) {
   return {
     compatibilityDate: input.code.compatibilityDate ?? ISOLATE_COMPATIBILITY_DATE,
@@ -65,7 +63,6 @@ export function wireIsolateEnv(input: {
       STREAMS: input.loopback("StreamsBackend", {
         props: { projectId: input.projectId },
       }),
-      ...input.extraEnv,
     },
     globalOutbound: input.loopback("ProjectEgress", {
       props: {

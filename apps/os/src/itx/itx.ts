@@ -38,7 +38,6 @@ import type {
   CapabilityDescription,
   CapabilityKind,
   CapabilityMeta,
-  CapabilityProvision,
   CapabilityTarget,
   ItxOrigin,
   WorkerRef,
@@ -120,7 +119,7 @@ export type CapabilityDial = (
  * return their core from `itx()`; the platform context (platform-context.ts)
  * answers the same protocol from code. */
 export type ItxStub = {
-  provideCapability(input: ProvideCapabilityInput): Promise<unknown>;
+  provideCapability(input: ProvideCapabilityInput): Promise<void>;
   revokeCapability(input: { name?: string; path?: string[] }): Promise<void>;
   describe(): Promise<CapabilityDescription[]>;
   invoke(input: { path: string[]; args: unknown[]; origin?: ItxOrigin }): Promise<unknown>;
@@ -259,11 +258,10 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    * is live by nature and auto-wraps with asPathCallable semantics (empty
    * remainder calls the function; a deeper remainder errors).
    *
-   * Returns the provision handle: `revoke()` plus the live-only disposer —
-   * the dispose asymmetry is explained once, on handle.ts's
-   * CapabilityProvision.
+   * Returns nothing: the HANDLE (handle.ts) builds the CapabilityProvision
+   * its callers hold — the core's provide is just the journaled write.
    */
-  async provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision> {
+  async provideCapability(input: ProvideCapabilityInput): Promise<void> {
     await this.#materialize();
     const path = capabilityPathFrom(input);
     assertValidCapabilityPath(path);
@@ -312,16 +310,6 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       if (kind === "live") this.#dropLiveStub(name, { record: false });
       throw error;
     }
-
-    const revoke = async () => {
-      await this.revokeCapability({ path });
-    };
-    return {
-      revoke,
-      [Symbol.dispose]: () => {
-        if (kind === "live") void revoke().catch(() => {});
-      },
-    };
   }
 
   /**
@@ -787,7 +775,7 @@ function assertWellFormedCapabilityAddress(name: string, address: CapabilityAddr
 }
 
 /** Dispose a borrowed RPC stub if it is disposable (in-process targets aren't). */
-function disposeIfPossible(target: unknown): void {
+export function disposeIfPossible(target: unknown): void {
   const dispose = (target as Partial<Disposable> | null)?.[Symbol.dispose];
   if (typeof dispose === "function") Reflect.apply(dispose, target, []);
 }

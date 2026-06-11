@@ -2,8 +2,7 @@
 
 Status: NOODLING. This is the running list of things we want to fix or build in
 the itx layer, with positions and open questions. Nothing here is committed;
-when an item graduates it gets its own task/PR and the spec
-(`itx-spec.md`) gets amended. Companion docs: `apps/os/src/itx/README.md`
+when an item graduates it gets its own task/PR. Companion docs: `apps/os/src/itx/README.md`
 (what exists), `apps/os/src/itx/DECISIONS.md` (what changed on contact with
 reality).
 

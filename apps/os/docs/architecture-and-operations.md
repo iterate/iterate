@@ -84,7 +84,7 @@ itx — the capability handle system — has its own endpoints: `/api/itx`
 (global handle), `/api/itx/:projectIdOrSlug` (project handle, capnweb over
 WebSocket), and `POST /api/itx/run` (run an itx script in a loader isolate).
 See [`../src/itx/README.md`](../src/itx/README.md) and
-[itx-spec.md](./itx-spec.md).
+[itx-next.md](./itx-next.md).
 
 ## Project Ingress
 

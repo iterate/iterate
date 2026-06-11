@@ -115,7 +115,7 @@ function pathNode(callPath: PathProxyCall, path: string[]): Function {
 /**
  * Receiver-preserving path replay — the server-side counterpart of the
  * proxy, and the only other place paths are interpreted (inside the
- * supervisor's invoke, spec §4.4).
+ * supervisor's invoke, itx.ts).
  *
  * Walks `path` segments on `target` and calls the terminal method ON ITS
  * PARENT (`parent[method](...args)`), never pulling the function off first:

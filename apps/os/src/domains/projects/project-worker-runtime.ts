@@ -6,7 +6,7 @@
 // machinery: building is the generic repo → R2 memo, owned by no one.
 
 import type { Event } from "@iterate-com/shared/streams/types";
-import { sourceIsolateKey } from "~/itx/dial.ts";
+import { sourceIsolateKey, type WorkerLoaderBinding } from "~/itx/dial.ts";
 import { wireIsolateEnv, type IsolateLoopback } from "~/itx/isolate.ts";
 import { projectContextAddress } from "~/itx/journal.ts";
 import { PROJECT_WORKER_SOURCE } from "~/itx/platform-context.ts";
@@ -25,13 +25,8 @@ export type ProjectWorkerEntrypoint = {
   processEvent?(input: { event: Event; streamPath: string }): unknown | Promise<unknown>;
 };
 
-/** The Worker Loader binding as these loaders use it. */
-export type WorkerLoaderBinding = {
-  get(
-    name: string,
-    getCode: () => unknown | Promise<unknown>,
-  ): { getEntrypoint(name?: string, options?: { props?: Record<string, unknown> }): unknown };
-};
+// The shared loader-binding shape lives in ~/itx/dial.ts (WorkerLoaderBinding).
+export type { WorkerLoaderBinding } from "~/itx/dial.ts";
 
 /**
  * Resolve (build or memo-hit) and load the project's worker, returning its

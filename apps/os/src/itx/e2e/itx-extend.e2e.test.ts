@@ -1,4 +1,4 @@
-// Child contexts (spec §3): itx.extend() creates a cheap, disposable context
+// Child contexts: itx.extend() creates a cheap, disposable context
 // under a project — same anatomy, own capability table, parent chain for misses.
 // This is the container an agent session or REPL scratchpad lives in.
 
