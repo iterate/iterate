@@ -560,6 +560,20 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
 
     let tokenResponse: oauth.TokenEndpointResponse;
     try {
+      // TEMP DEBUG: log the exact token request oauth4webapi makes
+      const debugFetch: typeof fetch = async (input, init) => {
+        const headers = new Headers(init?.headers);
+        const auth = headers.get("authorization") ?? "";
+        const basicUser = auth.startsWith("Basic ") ? atob(auth.slice(6)).split(":")[0] : "(none)";
+        console.error("[token-debug] url:", String(input));
+        console.error("[token-debug] basic client_id:", JSON.stringify(basicUser));
+        console.error("[token-debug] content-type:", headers.get("content-type"));
+        console.error("[token-debug] body:", String(init?.body));
+        const res = await fetch(input, init);
+        const clone = res.clone();
+        console.error("[token-debug] status:", res.status, "response:", await clone.text());
+        return res;
+      };
       const response = await oauth.authorizationCodeGrantRequest(
         as,
         oauthClient,
@@ -570,6 +584,7 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
         {
           ...httpOptions(),
           additionalParameters: { resource: infra.resource() },
+          [oauth.customFetch]: debugFetch,
         },
       );
       tokenResponse = await oauth.processAuthorizationCodeResponse(as, oauthClient, response, {

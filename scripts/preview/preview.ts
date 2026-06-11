@@ -565,6 +565,7 @@ async function deployPreviewApp(input: {
 
   const readiness = await waitForPreviewAppReadiness({
     publicUrl: appConfig.baseUrl,
+    readyUrlPath: input.app.previewReadyUrlPath,
     signal: input.signal,
     timeoutMs: defaultPreviewReadyTimeoutMs,
   });
@@ -863,11 +864,13 @@ async function mapWithConcurrency<T, Result>(
 
 async function waitForPreviewAppReadiness(params: {
   publicUrl: string;
+  readyUrlPath?: string;
   signal?: AbortSignal;
   timeoutMs: number;
 }) {
   const urls = resolvePreviewReadinessUrls({
     publicUrl: params.publicUrl,
+    readyUrlPath: params.readyUrlPath,
   });
 
   for (const url of urls) {
@@ -885,10 +888,11 @@ async function waitForPreviewAppReadiness(params: {
 export function resolvePreviewReadinessUrls(params: {
   projectHostnameBases?: readonly string[];
   publicUrl: string;
+  readyUrlPath?: string;
 }) {
   // Project hostname bases are routed by app data and wildcard DNS, so a
   // synthetic host like project.<base> is not a reliable app-health signal.
-  return [new URL(defaultPreviewReadyUrlPath, params.publicUrl)];
+  return [new URL(params.readyUrlPath ?? defaultPreviewReadyUrlPath, params.publicUrl)];
 }
 
 async function waitForHttpReadiness(params: { signal?: AbortSignal; timeoutMs: number; url: URL }) {

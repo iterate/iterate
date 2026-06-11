@@ -13,12 +13,16 @@ import {
 } from "./preview.ts";
 
 describe("preview app dependency expansion", () => {
+  it("expands os to include its auth dependency", () => {
+    expect(expandPreviewDependencies(["os"])).toEqual(["os", "auth"]);
+  });
+
   it("keeps independent apps as-is", () => {
-    expect(expandPreviewDependencies(["os"])).toEqual(["os"]);
+    expect(expandPreviewDependencies(["semaphore"])).toEqual(["semaphore"]);
   });
 
   it("deduplicates dependencies", () => {
-    expect(expandPreviewDependencies(["os", "os"])).toEqual(["os"]);
+    expect(expandPreviewDependencies(["os", "os", "auth"])).toEqual(["os", "auth"]);
   });
 });
 
@@ -108,7 +112,7 @@ describe("preview retry selection", () => {
         },
         pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
-    ).toEqual(["os"]);
+    ).toEqual(["os", "auth"]);
   });
 
   it("does not retry previously failed apps from older commits", () => {
