@@ -9,6 +9,16 @@
 //                                  dedicated browser test (alert capture)
 //   egress-with-secret-substitution depends on an external echo service;
 //                                  covered by itx-egress.e2e.test.ts
+//   fetch-middleware               depends on the same external echo service;
+//                                  the middleware behavior itself (shadow +
+//                                  itx.super delegation, both egress doors) is
+//                                  the locked acceptance e2e in
+//                                  itx-extend.e2e.test.ts ("MIDDLEWARE — …")
+//   repo-sourced-capability        a real git push + per-commit build + the
+//                                  ~10s "latest" probe window — too slow/flaky
+//                                  for the per-runtime matrix; proven end to
+//                                  end by the litmus e2e in itx.e2e.test.ts
+//                                  ("user-space caps: repo-sourced code …")
 
 import { expect } from "vitest";
 
@@ -26,7 +36,9 @@ export type ExampleCase = {
 /** Example ids that intentionally have no matrix case (see header). */
 export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "egress-with-secret-substitution",
+  "fetch-middleware",
   "provide-live-capability",
+  "repo-sourced-capability",
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
@@ -41,6 +53,14 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     assert: (result, { marker }) => {
       expect(result).toMatchObject({ appended: { payload: { note: marker } } });
       expect((result as { count: number }).count).toBeGreaterThan(0);
+    },
+  },
+  "provide-plain-object": {
+    assert: (result) => {
+      expect(result).toEqual({
+        deep: { answer: 42, question: "life, the universe, everything" },
+        ultimate: 42,
+      });
     },
   },
   "provide-path-call-sdk": {
@@ -82,7 +102,21 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   },
   "extend-child-context": {
     assert: (result) => {
-      expect(result).toMatchObject({ fromChild: { from: "child", method: "ping" } });
+      expect(result).toMatchObject({ fromChild: "child" });
+      const capabilities = (result as { capabilities: Array<{ from?: string; name: string }> })
+        .capabilities;
+      // The shadow is the child's OWN entry (no provenance field); platform
+      // defaults arrive through the chain labeled from: "platform".
+      const shared = capabilities.filter((entry) => entry.name === "shared");
+      expect(shared).toHaveLength(1);
+      expect(shared[0]!.from).toBeUndefined();
+      expect(capabilities.find((entry) => entry.name === "fetch")?.from).toBe("platform");
+    },
+  },
+  "journal-is-the-record": {
+    vars: ({ marker }) => ({ capName: `journal_${marker.replace(/-/g, "_")}` }),
+    assert: (result) => {
+      expect(result).toEqual({ record: ["capability-provided", "capability-revoked"] });
     },
   },
   "http-cap-and-share-url": {

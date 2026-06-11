@@ -125,6 +125,38 @@ return await itx.answer.run();
 `.trim(),
   },
   {
+    id: "provide-plain-object",
+    title: "Provide a plain object — it IS the capability",
+    description:
+      "You pass your object; there is no client library between you and the capability table. A plain object of functions (nested at any depth) is a live capability: dotted calls replay onto its members, back in the provider's process. Session-bound, like every live cap.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+// No wrapper, no base class, no registration ceremony — the object you
+// already have is the capability.
+const answer = {
+  ultimate: () => 42,
+  deep: {
+    thought: async (question) => ({ answer: 42, question }),
+  },
+};
+
+await itx.provideCapability({
+  name: "answer",
+  instructions:
+    "The answer to everything: itx.answer.ultimate(), or itx.answer.deep.thought(question).",
+  capability: answer,
+});
+
+// Methods are reachable at ANY depth through the fallthrough; each call
+// runs back here, where the object lives.
+return {
+  ultimate: await itx.answer.ultimate(),
+  deep: await itx.answer.deep.thought("life, the universe, everything"),
+};
+`.trim(),
+  },
+  {
     id: "provide-path-call-sdk",
     title: "Provide a live SDK-shaped capability (path-call)",
     description:
@@ -194,6 +226,63 @@ return {
   greeting: await itx.greeter.hello({ name: "world" }),
   sum: await itx.greeter.add({ a: 2, b: 3 }),
 };
+`.trim(),
+  },
+  {
+    id: "repo-sourced-capability",
+    title: "Code in your repo as a capability, built per commit",
+    description:
+      "The project's own git repo is a capability source: commit a module, then provide a { type: 'repo' } address pointing at the file. The platform builds it per COMMIT (memoized), never per call — 'latest' tracks pushes; a pinned sha makes the journal entry fully determine behavior. The platform `worker` default is exactly this pattern.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// (1) Commit a capability module into the project's own repo (the shared
+// workspace speaks git; repo.token authenticates the push).
+const { project } = await itx.describe();
+const repo = await itx.repos.ensureProjectRepoInfo({ projectSlug: project.slug });
+const url = new URL(repo.remote);
+url.username = "x";
+url.password = repo.token.split("?")[0];
+const dir = "/repo-cap-demo";
+await itx.workspace.gitClone({ branch: repo.defaultBranch, depth: 1, dir, url: url.toString() });
+await itx.workspace.writeFile(dir + "/caps/greeter.js", \`
+import { WorkerEntrypoint } from "cloudflare:workers";
+export class Greeter extends WorkerEntrypoint {
+  hello({ name }) { return "hello from the repo, " + name; }
+}
+\`);
+await itx.workspace.gitAdd({ dir, filepath: "caps/greeter.js" });
+await itx.workspace.gitCommit({
+  author: { email: "examples@iterate.com", name: "itx example" },
+  dir,
+  message: "add greeter capability",
+});
+await itx.workspace.gitPush({ dir, ref: repo.defaultBranch, remote: "origin" });
+
+// (2) The address points at the FILE; "latest" tracks pushes. (A fresh
+// push can take ~10s to be picked up by the "latest" probe.)
+await itx.provideCapability({
+  name: "repoGreeter",
+  instructions:
+    "Greeter built from caps/greeter.js in the project repo: itx.repoGreeter.hello({ name }).",
+  capability: {
+    type: "rpc",
+    worker: {
+      type: "source",
+      source: {
+        type: "repo",
+        repo: "project",
+        commit: "latest",
+        path: "caps/greeter.js",
+        entrypoint: "Greeter",
+        bundle: {},
+      },
+    },
+  },
+});
+
+// (3) Call it like any other capability.
+return await itx.repoGreeter.hello({ name: "world" });
 `.trim(),
   },
   {
@@ -396,34 +485,86 @@ return { current: await itx.counter.current() };   // 2, and it persists
     id: "extend-child-context",
     title: "Extend the context with its own caps",
     description:
-      "itx.extend() makes a cheap, disposable child context under the project — an agent session or scratchpad. Its caps SHADOW the parent's; names it doesn't provide delegate up the chain. describe() shows the merged view with provenance.",
+      "itx.extend() makes a cheap, disposable child context under the project — an agent session or scratchpad. Its caps SHADOW the parent's; names it doesn't provide delegate up the chain. describe() shows the merged view: own entries plain, inherited ones labeled from: <context>.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
-// A cap on the project — visible to every child through the chain.
+// A cap on the project — visible to every child through the chain. A plain
+// object is all a live capability takes.
 await itx.provideCapability({
   name: "shared",
-  capability: new (class extends RpcTarget {
-    async call({ path }) { return { from: "project", method: path.join(".") }; }
-  })(),
+  capability: { whoami: () => "project" },
 });
 
 // Extend a child. It's a full itx handle on a new itx_… context.
 const child = await itx.extend({ name: "repl-scratch" });
 
-// The child can shadow 'shared' with its own definition...
+// The child can shadow 'shared' with its own object...
 await child.provideCapability({
   name: "shared",
-  capability: new (class extends RpcTarget {
-    async call({ path }) { return { from: "child", method: path.join(".") }; }
-  })(),
+  capability: { whoami: () => "child" },
 });
 
 // ...so the child sees its own, while the project still sees its own.
+// In the merged describe(), the child's entries carry no provenance field;
+// inherited ones say from: <context> ("platform" for the defaults).
 return {
-  fromChild: await child.shared.ping(),
+  fromChild: await child.shared.whoami(),
   capabilities: (await child.describe()).capabilities, // merged chain, child entries first
 };
+`.trim(),
+  },
+  {
+    id: "fetch-middleware",
+    title: "Middleware: shadow fetch, delegate via itx.super",
+    description:
+      "The middleware story in five lines: shadow `fetch` on an extended child with a plain function that stamps a header, then delegates to the parent chain's unshadowed pipe via itx.super.fetch. Bare fetch() inside the child's isolates flows through the same shadow; the parent is untouched.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const session = await itx.extend({ name: "traced" });
+
+// The shadow is a PLAIN FUNCTION; itx.super is "call next()" — the parent
+// chain, where fetch is still the real egress pipe.
+await session.provideCapability({
+  name: "fetch",
+  instructions: "Project egress with an x-trace-id header stamped on every request.",
+  capability: async (request) => {
+    const traced = new Request(request.url ?? String(request), request);
+    traced.headers.set("x-trace-id", "itx-example-trace");
+    return await session.super.fetch(traced);
+  },
+});
+
+// Every egress on the session now carries the header. Revoke the shadow
+// and the real pipe resurfaces — middleware is just shadowing plus super.
+const echoed = await (await session.fetch("https://postman-echo.com/get")).json();
+return { traceHeaderSeen: echoed.headers["x-trace-id"] };
+`.trim(),
+  },
+  {
+    id: "journal-is-the-record",
+    title: "The journal IS the record: provide, revoke, read it back",
+    description:
+      "A context's capability table is a fold of an ordinary event stream — its journal at /itx. provideCapability and revokeCapability are appends; read the stream back and watch the record happen. There is no hidden registry to drift from it.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Use a unique name so the journal slice below is unambiguous.
+const name = vars.capName ?? "ephemeral";
+
+await itx.provideCapability({
+  name,
+  capability: { type: "rpc", worker: { type: "binding", binding: "AI" } },
+});
+await itx.revokeCapability({ name });
+
+// The context's journal is an ordinary stream — same read API as anything.
+const journal = await itx.streams.get("/itx").read();
+const record = journal
+  .filter((e) => Array.isArray(e.payload?.path) && e.payload.path.join(".") === name)
+  .map((e) => e.type.split("/").pop());
+return { record }; // ["capability-provided", "capability-revoked"]
 `.trim(),
   },
   {
