@@ -103,8 +103,7 @@ export function ItxActivityTail({ projectId }: { projectId: string }) {
           <p className="py-2 font-mono text-xs text-destructive">{error}</p>
         ) : rows.length === 0 ? (
           <p className="py-2 text-xs text-muted-foreground">
-            Nothing yet — provide a capability from the repl (itx.caps.provide) and watch it land
-            here.
+            Nothing yet — define a capability from the repl (itx.define) and watch it land here.
           </p>
         ) : (
           <ol className="space-y-1">

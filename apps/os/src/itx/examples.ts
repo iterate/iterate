@@ -114,8 +114,8 @@ class AnswerCapability extends RpcTarget {
 
 // define() is THE verb: a live stub is just another target. A live cap
 // disappears when this tab disconnects; reconnect and define() again to
-// restore it. (caps.provide still works as an alias.)
-await itx.caps.define({ name: "answer", target: new AnswerCapability() });
+// restore it.
+await itx.define({ name: "answer", target: new AnswerCapability() });
 
 // Unknown names on the handle fall through to the registry, so the cap is
 // callable as if it were built in.
@@ -140,7 +140,7 @@ class FakeSlackSdk extends RpcTarget {
 
 // invoke: "path-call" tells the registry to deliver { path, args } in one
 // shot rather than replaying property access.
-await itx.caps.define({
+await itx.define({
   name: "fakeSlack",
   invoke: "path-call",
   target: new FakeSlackSdk(),
@@ -164,7 +164,7 @@ return await itx.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" });
 // a content version: keep it stable while the source is unchanged (re-running
 // this snippet reuses the loaded worker) and bump it whenever you edit the
 // module text.
-await itx.caps.define({
+await itx.define({
   name: "greeter",
   target: {
     type: "rpc",
@@ -202,7 +202,7 @@ return {
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-await itx.caps.define({
+await itx.define({
   name: "todo",
   target: {
     type: "rpc",
@@ -248,7 +248,7 @@ return await itx.todo.list();
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-await itx.caps.define({
+await itx.define({
   name: "kit",
   target: {
     type: "rpc",
@@ -288,7 +288,7 @@ return {
     runtimes: ALL_RUNTIMES,
     code: `
 // Provider cap.
-await itx.caps.define({
+await itx.define({
   name: "inventory",
   target: {
     type: "rpc",
@@ -313,7 +313,7 @@ await itx.caps.define({
 });
 
 // Consumer cap — a different dynamic worker that calls the first via itx.
-await itx.caps.define({
+await itx.define({
   name: "report",
   target: {
     type: "rpc",
@@ -351,7 +351,7 @@ return await itx.report.build({ sku: "ABC" });
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-await itx.caps.define({
+await itx.define({
   name: "counter",
   target: {
     type: "rpc",
@@ -394,7 +394,7 @@ return { current: await itx.counter.current() };   // 2, and it persists
     runtimes: ["browser", "node", "cli"],
     code: `
 // A cap on the project — visible to every child through the chain.
-await itx.caps.define({
+await itx.define({
   name: "shared",
   invoke: "path-call",
   target: new (class extends RpcTarget {
@@ -406,7 +406,7 @@ await itx.caps.define({
 const child = await itx.fork({ name: "repl-scratch" });
 
 // The child can shadow 'shared' with its own definition...
-await child.caps.define({
+await child.define({
   name: "shared",
   invoke: "path-call",
   target: new (class extends RpcTarget {
@@ -417,7 +417,7 @@ await child.caps.define({
 // ...so the child sees its own, while the project still sees its own.
 return {
   fromChild: await child.shared.ping(),
-  caps: await child.caps.describe(),   // merged chain, child entries first
+  caps: (await child.describe()).caps, // merged chain, child entries first
 };
 `.trim(),
   },
@@ -443,11 +443,11 @@ return { status: response.status, sawSubstitutedHeader: body.headers };
     id: "http-cap-and-share-url",
     title: "Serve a capability over HTTP + a shareable link",
     description:
-      "A cap whose fetch() is exposed (meta.http.expose) gets its own hostname: {cap}--{project}.<base>. Routable ≠ public — it's admin-gated by default. caps.shareUrl() mints a signed, expiring link: 'let me show you something real quick.'",
+      "A cap whose fetch() is exposed (meta.http.expose) gets its own hostname: {cap}--{project}.<base>. Routable ≠ public — it's admin-gated by default. itx.shareUrl() mints a signed, expiring link: 'let me show you something real quick.'",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-await itx.caps.define({
+await itx.define({
   name: "hello",
   meta: { http: { expose: true } },   // routable; still admin-gated
   target: {
@@ -474,7 +474,7 @@ await itx.caps.define({
 });
 
 // A signed link anyone can open for the next hour (no further auth needed).
-return { shareUrl: await itx.caps.shareUrl({ name: "hello", path: "/demo", ttlSeconds: 3600 }) };
+return { shareUrl: await itx.shareUrl({ name: "hello", path: "/demo", ttlSeconds: 3600 }) };
 `.trim(),
   },
   {

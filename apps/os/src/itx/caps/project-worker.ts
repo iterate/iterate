@@ -2,7 +2,7 @@
 // (built from the project repo) a capability target — user space, same shape
 // as first-party (the §1 litmus test's second half).
 //
-//   await itx.caps.define({
+//   await itx.define({
 //     invoke: "path-call",
 //     name: "petstore",
 //     target: {

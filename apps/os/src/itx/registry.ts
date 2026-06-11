@@ -20,7 +20,8 @@
 
 import {
   assertDefinableCapTarget,
-  assertValidCapName,
+  assertValidCapPath,
+  capPathFrom,
   capSourceCacheKey,
   DEFAULT_DIALABLE_TARGETS,
   ITX_EVENT_TYPES,
@@ -217,20 +218,25 @@ export class ContextRegistry {
 
   /**
    * Register a capability: ONE verb for every target kind (types.ts is the
-   * design of record). A serializable target is stored durably and validated
-   * here so misconfiguration fails at define(), and again at dial time (the
-   * authoritative gate). Any other target is a LIVE provider stub —
-   * session-bound: the entry survives in SQLite (so describe() can report
-   * "registered but offline") but the stub lives only in memory and is torn
-   * down when the provider's session breaks.
+   * design of record). The entry lives at a PATH — `name` is the 1-segment
+   * sugar, `path` the multi-segment form (exactly one of the two); the
+   * dot-joined path is the storage key. A serializable target is stored
+   * durably and validated here so misconfiguration fails at define(), and
+   * again at dial time (the authoritative gate). Any other target is a LIVE
+   * provider stub — session-bound: the entry survives in SQLite (so
+   * describe() can report "registered but offline") but the stub lives only
+   * in memory and is torn down when the provider's session breaks.
    */
   define(input: {
-    name: string;
+    name?: string;
+    path?: string[];
     target: SerializableCapTarget | LiveCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
   }): { name: string; ok: true } {
-    assertValidCapName(input.name);
+    const path = capPathFrom(input);
+    assertValidCapPath(path);
+    const name = path.join(".");
     const invoke = input.invoke ?? "members";
     const target = input.target;
 
@@ -241,20 +247,20 @@ export class ContextRegistry {
       const type = isPlainObject(target) ? (target as { type?: unknown }).type : undefined;
       if (typeof type === "string") {
         throw new Error(
-          `Capability "${input.name}": unknown target type ${JSON.stringify(type)} — ` +
+          `Capability "${name}": unknown target type ${JSON.stringify(type)} — ` +
             `serializable targets are "rpc" or "url"; anything else must be a live provider stub.`,
         );
       }
-      this.#registerLive({ invoke, meta: input.meta ?? {}, name: input.name, target });
-      return { name: input.name, ok: true };
+      this.#registerLive({ invoke, meta: input.meta ?? {}, name, target });
+      return { name, ok: true };
     }
 
-    assertDefinableCapTarget(input.name, target, this.dialable());
+    assertDefinableCapTarget(name, target, this.dialable());
     this.upsertRow({
       invoke,
       kind: target.type,
       meta: input.meta ?? {},
-      name: input.name,
+      name,
       target,
     });
     this.host.audit({
@@ -262,14 +268,14 @@ export class ContextRegistry {
       payload: {
         invoke,
         kind: target.type,
-        name: input.name,
+        name,
         ...(target.type === "rpc" ? { worker: target.worker.type } : {}),
         ...(target.type === "rpc" && target.worker.type === "source"
           ? { cacheKey: capSourceCacheKey(target.worker.source) }
           : {}),
       },
     });
-    return { name: input.name, ok: true };
+    return { name, ok: true };
   }
 
   #registerLive(input: { name: string; target: LiveCapTarget; invoke: CapInvoke; meta: CapMeta }) {
@@ -315,20 +321,22 @@ export class ContextRegistry {
     });
   }
 
-  revoke(input: { name: string }): { name: string; ok: true } {
+  /** Exact entry match (never prefix), addressed by `name` or `path` like define. */
+  revoke(input: { name?: string; path?: string[] }): { name: string; ok: true } {
+    const name = capPathFrom(input).join(".");
     // Code-context defaults cannot be revoked, only shadowed — succeeding
     // here would lie: invoke/describe would keep serving the default. (A
     // shadowing OWN row is deletable as usual; the default resurfaces.)
-    if (this.row(input.name) === null && this.host.defaults?.caps.has(input.name)) {
+    if (this.row(name) === null && this.host.defaults?.caps.has(name)) {
       throw new Error(
-        `Capability "${input.name}" is a platform default (${this.host.defaults.name}); ` +
-          `it cannot be revoked — define your own "${input.name}" to shadow it.`,
+        `Capability "${name}" is a platform default (${this.host.defaults.name}); ` +
+          `it cannot be revoked — define your own "${name}" to shadow it.`,
       );
     }
-    this.#live.get(input.name)?.[Symbol.dispose]();
-    this.host.sql.exec(`DELETE FROM itx_caps WHERE name = ?`, input.name);
-    this.host.audit({ type: ITX_EVENT_TYPES.capRevoked, payload: { name: input.name } });
-    return { name: input.name, ok: true };
+    this.#live.get(name)?.[Symbol.dispose]();
+    this.host.sql.exec(`DELETE FROM itx_caps WHERE name = ?`, name);
+    this.host.audit({ type: ITX_EVENT_TYPES.capRevoked, payload: { name } });
+    return { name, ok: true };
   }
 
   describe(): CapDescription[] {
@@ -368,22 +376,46 @@ export class ContextRegistry {
     return [...own, ...inherited];
   }
 
-  has(name: string): boolean {
-    return this.row(name) !== null || (this.host.defaults?.caps.has(name) ?? false);
+  /** True iff some entry path (own row or code-context default) is a prefix
+   * of `path` — i.e. invoke() here would dispatch instead of missing. */
+  resolves(path: string[]): boolean {
+    return this.resolveEntry(path) !== null;
   }
 
   /**
-   * The only dispatch in the system (spec §4.4). `origin` is the context the
-   * call STARTED at when it arrived via chain delegation (child → parent
-   * lookup misses) — context-scoped caps like the workspace must resolve
-   * against the caller's context, not the node the definition lives on.
-   * Absent means the call originated here.
+   * Longest-prefix resolution (itx-next.md §4): among this registry's entries
+   * — own rows and the code-context defaults, both keyed by dot-joined path —
+   * the longest one prefixing the call path wins; the REMAINDER becomes the
+   * dispatched call path. One exact lookup per candidate depth, longest
+   * first, so resolution stays deterministic and never traverses targets.
    */
-  async invoke(name: string, call: PathCall, origin?: string): Promise<unknown> {
-    const row = this.row(name) ?? this.defaultRow(name);
-    if (!row) {
-      throw new Error(`No capability named "${name}" in context ${this.host.contextId}.`);
+  private resolveEntry(path: string[]): { row: CapRow; remainder: string[] } | null {
+    for (let depth = path.length; depth >= 1; depth--) {
+      const name = path.slice(0, depth).join(".");
+      const row = this.row(name) ?? this.defaultRow(name);
+      if (row) return { remainder: path.slice(depth), row };
     }
+    return null;
+  }
+
+  /**
+   * The only dispatch in the system (spec §4.4). `call.path` is the FULL call
+   * path (entry path + member path); resolveEntry splits it. `origin` is the
+   * context the call STARTED at when it arrived via chain delegation (child →
+   * parent lookup misses) — context-scoped caps like the workspace must
+   * resolve against the caller's context, not the node the definition lives
+   * on. Absent means the call originated here.
+   */
+  async invoke(call: PathCall, origin?: string): Promise<unknown> {
+    const resolved = this.resolveEntry(call.path);
+    if (!resolved) {
+      throw new Error(
+        `No capability named "${call.path[0] ?? ""}" in context ${this.host.contextId}` +
+          (call.path.length > 1 ? ` (call path "${call.path.join(".")}").` : `.`),
+      );
+    }
+    const { row, remainder } = resolved;
+    const name = row.name;
 
     // Every dispatch works on a BORROW that is disposed when the call ends,
     // never on a long-lived object:
@@ -394,22 +426,23 @@ export class ContextRegistry {
     //  - facet  → the per-call facet stub.
     // project-worker refs return a custom dispatch instead of a target: the
     // call crosses to the Project DO as data and is replayed there.
+    const entryCall: PathCall = { args: call.args, path: remainder };
     const { dispatch, target, dispose } = this.borrowTarget(row, origin ?? this.host.contextId);
     try {
-      if (dispatch) return await dispatch(call);
+      if (dispatch) return await dispatch(entryCall);
       if (row.invoke === "path-call") {
         // One RPC: the provider implements call({ path, args }) and owns its
         // own method-tree semantics (e.g. forwarding to the Slack web API).
-        return await (target as PathCallTarget).call(call);
+        return await (target as PathCallTarget).call(entryCall);
       }
-      return await replayPathCall(target, call);
+      return await replayPathCall(target, entryCall);
     } catch (error) {
       // Log at the supervisor: errors crossing the RPC boundary back to the
       // caller can be masked as "internal error; reference = …", so the only
       // place the real failure is visible is here.
       console.error(
         `[itx] cap "${name}" (${row.kind}/${row.invoke}) failed in ${this.host.contextId} ` +
-          `at path ${call.path.join(".") || "<call>"}:`,
+          `at path ${remainder.join(".") || "<call>"}:`,
         error,
       );
       throw error;

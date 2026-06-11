@@ -90,7 +90,7 @@ test("bare fetch() inside a worker cap goes through egress (implicit door)", asy
   using projectItx = await itx.projects.get(project.id);
   await waitForProjectReady(projectItx);
 
-  await projectItx.caps.define({
+  await projectItx.define({
     name: "egressProbe",
     target: {
       type: "rpc",

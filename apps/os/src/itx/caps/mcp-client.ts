@@ -6,7 +6,7 @@
 // parameterized per server by props, it must have NO powers a user-space
 // equivalent (the same class exported from a project worker) couldn't have.
 //
-//   await itx.caps.define({
+//   await itx.define({
 //     invoke: "path-call",
 //     name: "docs",
 //     target: {

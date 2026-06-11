@@ -3,6 +3,7 @@
 // This is the container an agent session or REPL scratchpad lives in.
 
 import { expect, test } from "vitest";
+import { RpcTarget } from "capnweb";
 import { connectItx } from "../client.ts";
 import {
   adminApiSecret,
@@ -20,7 +21,7 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   using projectItx = await itx.projects.get(project.id);
 
   // A project-level cap every child should see through the chain.
-  await projectItx.caps.define({
+  await projectItx.define({
     invoke: "path-call",
     name: "shared",
     target: pathCallTarget("project-level"),
@@ -39,7 +40,7 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
 
   // (2) Child defines its own cap under the SAME name → shadows the parent,
   // visibly (describe reports the owner).
-  await child.caps.define({
+  await child.define({
     invoke: "path-call",
     name: "shared",
     target: pathCallTarget("child-level"),
@@ -49,7 +50,7 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   })) as { marker: string };
   expect(viaShadow.marker).toBe("child-level");
 
-  const merged = (await child.caps.describe()) as Array<{ name: string; owner: string }>;
+  const merged = (await child.describe()).caps as Array<{ name: string; owner: string }>;
   const shared = merged.filter((cap) => cap.name === "shared");
   expect(shared).toHaveLength(1);
   expect(String(shared[0]!.owner)).toMatch(/^ctx_/);
@@ -72,6 +73,76 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
     text: "hi again",
   })) as { marker: string };
   expect(reconnectedShadow.marker).toBe("child-level");
+});
+
+test("fork: a path define shadows ONE subtree of an inherited cap (longest-prefix dispatch)", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `itx-fork-path-${suffix()}` })) as {
+    id: string;
+  };
+  createdProjectIds.push(project.id);
+  using projectItx = await itx.projects.get(project.id);
+
+  // A live SDK-shaped cap at the root name: ONE call({ path, args }) method
+  // that reports where it ran and which dotted path arrived.
+  class MarkedSdk extends RpcTarget {
+    constructor(private readonly from: string) {
+      super();
+    }
+    async call({ path }: { path: string[]; args: unknown[] }) {
+      return { from: this.from, method: path.join(".") };
+    }
+  }
+  await projectItx.define({
+    invoke: "path-call",
+    name: "sdk",
+    target: new MarkedSdk("base") as never,
+  });
+
+  // The fork overrides exactly one method via a PATH define; the entry path
+  // is consumed by resolution, so the override target sees the remainder.
+  using child = await projectItx.fork({ name: "e2e-path-shadow" });
+  await child.define({
+    invoke: "path-call",
+    path: ["sdk", "chat", "postMessage"],
+    target: new MarkedSdk("override") as never,
+  });
+
+  const handle = (target: unknown) => target as never as Record<string, any>;
+
+  // (1) The shadowed subtree hits the override (remainder is empty: the
+  // whole call path matched the entry path).
+  expect(await handle(child).sdk.chat.postMessage({ text: "hi" })).toMatchObject({
+    from: "override",
+    method: "",
+  });
+
+  // (2) Every other sdk.* call misses the child's registry entirely and
+  // falls through the chain to the base cap, remainder intact.
+  expect(await handle(child).sdk.users.list()).toMatchObject({
+    from: "base",
+    method: "users.list",
+  });
+  // …including a SIBLING method under the shadowed prefix's parent.
+  expect(await handle(child).sdk.chat.update({ ts: "1" })).toMatchObject({
+    from: "base",
+    method: "chat.update",
+  });
+
+  // (3) The parent handle is untouched.
+  expect(await handle(projectItx).sdk.chat.postMessage({ text: "hi" })).toMatchObject({
+    from: "base",
+    method: "chat.postMessage",
+  });
+
+  // (4) Reserved segments are rejected per-segment at define time.
+  await expect(
+    child.define({
+      invoke: "path-call",
+      path: ["sdk", "constructor"],
+      target: new MarkedSdk("nope") as never,
+    }),
+  ).rejects.toThrow(/reserved/);
 });
 
 test("fork: the inherited workspace default is isolated per child context", async () => {
@@ -129,7 +200,7 @@ test("fork: child worker caps run with the owning project's authority", async ()
   using child = await projectItx.fork();
 
   // The child-scoped cap's own itx writes to the project's streams.
-  await child.caps.define({
+  await child.define({
     name: "noter",
     target: {
       type: "rpc",

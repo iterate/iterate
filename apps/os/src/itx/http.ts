@@ -88,7 +88,7 @@ export type ItxCapIngressProps = {
 
 /**
  * The router target for cap hosts. Auth gate, then one registry dispatch:
- * itxInvoke({ name, path: ["fetch"], args: [request] }) — a members cap
+ * itxInvoke({ path: [...capPath, "fetch"], args: [request] }) — a members cap
  * exposes fetch() directly; a path-call cap sees { path: ["fetch"] } and can
  * implement HTTP however it likes.
  */
@@ -126,9 +126,9 @@ export class ItxCapIngress extends WorkerEntrypoint<Env, ItxCapIngressProps> {
 
     return (await project.itxInvoke({
       args: [request],
-      // Use the registry's exact name, not the lowercased host label.
-      name: cap.name,
-      path: ["fetch"],
+      // The registry's exact name (not the lowercased host label) is the
+      // dot-joined entry path; the full call path is entry path + "fetch".
+      path: [...cap.name.split("."), "fetch"],
     })) as Response;
   }
 }

@@ -45,7 +45,7 @@ These invariants ARE the architecture. Every file here serves one of them.
 | **itx**             | A live handle on a context — the only thing user code touches.                                                                                                          |
 | **itx script**      | A function `(itx) => result`, runnable identically from every execution mode (vars are baked in client-side).                                                           |
 | **connect**         | credential → handle (`/api/itx`). The only auth point.                                                                                                                  |
-| **define**          | Register a capability — ONE verb; a live stub is just another target (`provide` survives as an alias).                                                                  |
+| **define**          | Register a capability — ONE verb; a live stub is just another target. Entries live at PATHS (`name` is the 1-segment sugar); dispatch is longest-prefix per context.    |
 | **fork**            | Create a child context.                                                                                                                                                 |
 | **restorer**        | `resolveItx`: serializable props → live handle.                                                                                                                         |
 
@@ -69,8 +69,9 @@ global                                   (no node yet; "projects" is built-in)
 browser ──capnweb/WebSocket──► OS worker /api/itx        (auth happened at connect)
    itx (handle.ts) — fallthrough Proxy misses "todo"
         └─► PathProxyRpcTarget accumulates ["add"], one terminal call
-              └─► Workers RPC: ProjectDO.itxInvoke({name:"todo", path:["add"], args})
+              └─► Workers RPC: ProjectDO.itxInvoke({path:["todo","add"], args})
                     └─► ContextRegistry.invoke   ◄── THE one dispatch (supervisor)
+                          longest entry-path prefix wins; the REMAINDER is the call
                           ├─ live   → replay path on provider's stub
                           ├─ rpc/source → LOADER.get(cacheKey) → entrypoint, replay
                           │            env.ITERATE = ItxEntrypoint({context})  ┐
@@ -97,7 +98,7 @@ https://{cap}--{project}.{base}/…
    └─► worker.ts lookupRule → getItxCapHostIngressRule
          └─► ItxCapIngress.fetch: 404 unless meta.http.expose
                gate: admin bearer │ signed share URL │ meta.http.public
-               └─► ProjectDO.itxInvoke({name, path:["fetch"], args:[request]})
+               └─► ProjectDO.itxInvoke({path:[...cap, "fetch"], args:[request]})
 ```
 
 ## Files (the whole kernel)
@@ -108,7 +109,7 @@ https://{cap}--{project}.{base}/…
 | `path-proxy.ts`        | Law 6, both halves       | `PathProxyRpcTarget` (consumer), `replayPathCall` (supervisor)                                                |
 | `registry.ts`          | the supervisor           | `ContextRegistry`: define/revoke/describe/invoke, live table, loader/facet wiring                             |
 | `registry-host.ts`     | the one node shape       | `createContextRegistryHost`: the host wiring both the Project DO and `ContextDO` embed                        |
-| `handle.ts`            | the handle               | `Itx` + built-ins (`caps`, `streams`, `project`, `projects`, `fetch`, `fork`), `ItxFn`, `Stubify`             |
+| `handle.ts`            | the handle               | `Itx` + built-ins (`define`, `revoke`, `streams`, `project`, `projects`, `fetch`, `fork`), `ItxFn`, `Stubify` |
 | `entrypoint.ts`        | the restorer + egress    | `resolveItx`, `ItxEntrypoint` (env.ITERATE), `ProjectEgress` (globalOutbound)                                 |
 | `context-do.ts`        | child contexts           | `ContextDO`: descriptor, registry host, chain delegation                                                      |
 | `fetch.ts`             | connect + run            | `/api/itx[/:context]`, `/api/itx/run`, project-host `/__itx`                                                  |
@@ -124,14 +125,13 @@ _on top of_ this layer or beside it — never underneath it.
 ## Writing capabilities
 
 **Live** (session-bound — your laptop, a browser tab, another service). The
-target IS the stub; `define` discriminates structurally (`caps.provide` is a
-one-line alias):
+target IS the stub; `define` discriminates structurally:
 
 ```ts
 import { connectItx } from "~/itx/client.ts";
 
 const itx = connectItx({ baseUrl, token, context: "my-project" });
-await itx.caps.define({ name: "runSwiftOnMyMac", target: async (src) => runSwift(src) });
+await itx.define({ name: "runSwiftOnMyMac", target: async (src) => runSwift(src) });
 // stays callable as itx.runSwiftOnMyMac(...) until this connection drops
 ```
 
@@ -140,7 +140,7 @@ means public SDK docs become your tool docs: tell an agent "`itx.slack` works
 exactly like @slack/web-api" and that's the whole tool description.
 
 ```ts
-await itx.caps.define({
+await itx.define({
   invoke: "path-call",
   name: "slack",
   target: {
@@ -179,7 +179,7 @@ await itx.slack.chat.postMessage({ channel: "C123", text: "hi" });
 The class must be a **named** export (D12):
 
 ```ts
-await itx.caps.define({
+await itx.define({
   name: "todo",
   target: {
     type: "rpc",

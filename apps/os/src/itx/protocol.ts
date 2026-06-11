@@ -316,7 +316,7 @@ export type CapDescription = {
  * is how egress interception works. The handle's real `fetch` method still
  * wins property lookup; it routes through the registry anyway.
  */
-const ITX_BUILTIN_NAMES = ["caps", "describe", "fork", "project", "projects"] as const;
+const ITX_BUILTIN_NAMES = ["define", "describe", "fork", "project", "projects", "revoke"] as const;
 
 /**
  * Names that must never traverse a dynamic surface — prototype-pollution
@@ -357,10 +357,9 @@ export const RESERVED_CAP_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Cap names must be flat JS identifiers so `itx.<name>` works via the
- * fallthrough proxy. No dots: nesting belongs to the provided object
- * (`provide("tools", { slack, github })`), not to the registry — nested
- * *names* would reintroduce path resolution into the platform (spec §4.5).
+ * Every path segment must be a flat JS identifier so `itx.<a>.<b>` works via
+ * the fallthrough proxy, and the dot-joined form stays unambiguous as the
+ * registry's storage key.
  */
 export function assertValidCapName(name: string): void {
   if (!/^[A-Za-z_$][\w$]*$/.test(name)) {
@@ -371,6 +370,42 @@ export function assertValidCapName(name: string): void {
   if (RESERVED_CAP_NAMES.has(name)) {
     throw new Error(`Capability name ${JSON.stringify(name)} is reserved.`);
   }
+}
+
+/**
+ * Definitions live at PATHS (itx-next.md §4): a name is a 1-segment path.
+ * The two reserved sets split by position: the FIRST segment must not shadow
+ * the trust kernel (it is reachable as `itx.<name>`, so it competes with the
+ * built-ins), deeper segments only need the protocol-level path filter — the
+ * built-in names are perfectly good method names there.
+ */
+export function assertValidCapPath(path: string[]): void {
+  if (path.length === 0) {
+    throw new Error("A capability path needs at least one segment.");
+  }
+  assertValidCapName(path[0]!);
+  for (const segment of path.slice(1)) {
+    if (!/^[A-Za-z_$][\w$]*$/.test(segment)) {
+      throw new Error(
+        `Capability path segment ${JSON.stringify(segment)} must be a plain JavaScript identifier.`,
+      );
+    }
+    if (RESERVED_PATH_SEGMENTS.has(segment)) {
+      throw new Error(`Capability path segment ${JSON.stringify(segment)} is reserved.`);
+    }
+  }
+}
+
+/**
+ * define/revoke address an entry by `name` (the common case — one segment)
+ * OR `path` (multi-segment). Exactly one must be present; both normalize to
+ * segments here.
+ */
+export function capPathFrom(input: { name?: string; path?: string[] }): string[] {
+  if ((input.name === undefined) === (input.path === undefined)) {
+    throw new Error("Provide exactly one of `name` or `path`.");
+  }
+  return input.path ? [...input.path] : [input.name!];
 }
 
 /** Stream path (inside the context's namespace) for registry audit events. */

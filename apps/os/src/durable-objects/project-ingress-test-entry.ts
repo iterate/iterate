@@ -254,7 +254,7 @@ export default {
         exports: ctx.exports as never,
         props: { context: "proj__local__test" },
       });
-      await itx.caps.define({
+      await itx.define({
         invoke: "path-call",
         name: "fetch",
         target: new EchoEgressShadow() as never,
@@ -264,7 +264,7 @@ export default {
         const response = await itx.fetch(new Request(target, { headers: request.headers }));
         return Response.json(await response.json());
       } finally {
-        await itx.caps.revoke({ name: "fetch" });
+        await itx.revoke({ name: "fetch" });
       }
     }
 

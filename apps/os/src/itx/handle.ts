@@ -9,9 +9,10 @@
 // (which IS the access check), or by the platform wiring a cap's isolate.
 //
 // Anatomy:
-//   - typed built-ins (the trust kernel): caps, streams, project, projects,
-//     fork, describe — plus `fetch`, which is sugar dispatching through the
-//     registry's `fetch` capability (a shadowable platform default)
+//   - typed built-ins (the trust kernel): the four verbs define, revoke,
+//     fork, describe — plus streams, project, projects, and `fetch`, which is
+//     sugar dispatching through the registry's `fetch` capability (a
+//     shadowable platform default)
 //   - a fallthrough Proxy: any unknown name becomes a PathProxy whose
 //     terminal call dispatches to the context node's registry. itx.slack
 //     works because someone provided "slack", not because anything here
@@ -114,8 +115,28 @@ export class Itx extends RpcTarget {
 
   // ---- the trust kernel ---------------------------------------------------
 
-  get caps(): ItxCaps {
-    return new ItxCaps(this.#registryStub(), this.#runtime, () => this.#projectStub());
+  /**
+   * Register a capability on this handle's context — THE verb: the target
+   * kind carries everything else. A live stub is session-bound (dies with
+   * your connection), an rpc/url target is durable. The entry lives at a
+   * PATH: `name` is the 1-segment sugar, `path` shadows one subtree of an
+   * inherited cap (longest-prefix dispatch) — exactly one of the two.
+   */
+  async define(input: {
+    name?: string;
+    path?: string[];
+    /** The capability's target (types.ts): serializable rpc/url data, or
+     * anything live — a stub, an RpcTarget, a function. */
+    target: SerializableCapTarget | LiveCapTarget;
+    invoke?: CapInvoke;
+    meta?: CapMeta;
+  }) {
+    return await this.#registryStub().itxDefine(input);
+  }
+
+  /** Remove an entry (exact path match, never prefix; defaults can only be shadowed). */
+  async revoke(input: { name?: string; path?: string[] }) {
+    return await this.#registryStub().itxRevoke(input);
   }
 
   get streams(): ItxStreams {
@@ -166,12 +187,12 @@ export class Itx extends RpcTarget {
       // and the forwarder passes registry-merged props. Reachable here,
       // they would let any handle holder spoof another context's identity
       // (e.g. read a sibling fork's workspace by faking origin). The proper
-      // doors are itx.caps and the caps themselves.
+      // doors are the root verbs (define/revoke) and the caps themselves.
       const head = call.path[0] ?? "";
       if (/^itx[A-Z]/.test(head)) {
         throw new ItxError({
           code: "FORBIDDEN",
-          message: `${head} is internal registry plumbing, not part of the project surface — use itx.caps / itx.<cap> instead.`,
+          message: `${head} is internal registry plumbing, not part of the project surface — use itx.define / itx.<cap> instead.`,
         });
       }
       // Same reasoning for the raw egress doors: now that `fetch` is a
@@ -205,8 +226,7 @@ export class Itx extends RpcTarget {
     const request = typeof input === "string" ? new Request(input, init) : input;
     return (await this.#registryStub().itxInvoke({
       args: [request],
-      name: "fetch",
-      path: [],
+      path: ["fetch"],
     })) as Response;
   }
 
@@ -225,7 +245,7 @@ export class Itx extends RpcTarget {
   cap(name: string): unknown {
     const registry = this.#registryStub();
     return new PathProxyRpcTarget(async ({ path, args }) => {
-      return await registry.itxInvoke({ args, name, path });
+      return await registry.itxInvoke({ args, path: [name, ...path] });
     });
   }
 
@@ -259,6 +279,33 @@ export class Itx extends RpcTarget {
       contextId: childId,
       projectId,
     });
+  }
+
+  /**
+   * "Let me show you something real quick": a signed, expiring URL for one
+   * HTTP-exposed cap. Possession grants exactly that cap's fetch surface
+   * until expiry — nothing else (spec §8).
+   */
+  async shareUrl(input: { name: string; path?: string; ttlSeconds?: number }): Promise<string> {
+    const secret = this.#runtime.config.adminApiSecret?.exposeSecret();
+    if (!secret) throw new Error("Share URLs need an admin API secret configured.");
+    const projectId = this.#runtime.projectId;
+    if (!projectId) {
+      throw new ItxError({
+        code: "BAD_REQUEST",
+        message: "Share URLs are project-scoped; narrow to a project first.",
+      });
+    }
+
+    const ingress = new URL(await this.#projectStub().ingressUrl());
+    const expiresAtMs = Date.now() + (input.ttlSeconds ?? 3600) * 1000;
+    const token = await createShareToken({ cap: input.name, expiresAtMs, projectId, secret });
+
+    const url = new URL(ingress);
+    url.hostname = `${input.name}--${ingress.hostname}`;
+    url.pathname = input.path ?? "/";
+    url.searchParams.set(SHARE_TOKEN_PARAM, token);
+    return url.toString();
   }
 
   // ---- wiring -------------------------------------------------------------
@@ -326,82 +373,6 @@ function projectStub(env: Env, projectId: string): ProjectStub {
 
 function contextStub(env: Env, contextId: string): ContextStub {
   return env.ITX_CONTEXT.getByName(contextId) as unknown as ContextStub;
-}
-
-// ---- caps -----------------------------------------------------------------
-
-/**
- * Registry verbs. define is THE verb: the target kind carries everything
- * else — a live stub is session-bound (dies with your connection), an
- * rpc/url target is durable. Promotion from a REPL is `define` with the
- * source you just wrote — durable means the code moved server-side, which
- * is physics, not API design.
- */
-export class ItxCaps extends RpcTarget {
-  constructor(
-    private readonly registry: RegistryStub,
-    private readonly runtime: ItxRuntime,
-    private readonly project: () => ProjectStub,
-  ) {
-    super();
-  }
-
-  async define(input: {
-    name: string;
-    /** The capability's target (types.ts): serializable rpc/url data, or
-     * anything live — a stub, an RpcTarget, a function. */
-    target: SerializableCapTarget | LiveCapTarget;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
-  }) {
-    return await this.registry.itxDefine(input);
-  }
-
-  /** Alias for {@link define} (REPL muscle memory) — define is the verb; a
-   * live stub is just another target. */
-  async provide(input: {
-    name: string;
-    target: LiveCapTarget;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
-  }) {
-    return await this.define(input);
-  }
-
-  async revoke(input: { name: string }) {
-    return await this.registry.itxRevoke(input);
-  }
-
-  async describe() {
-    return await this.registry.itxDescribe();
-  }
-
-  /**
-   * "Let me show you something real quick": a signed, expiring URL for one
-   * HTTP-exposed cap. Possession grants exactly that cap's fetch surface
-   * until expiry — nothing else (spec §8).
-   */
-  async shareUrl(input: { name: string; path?: string; ttlSeconds?: number }): Promise<string> {
-    const secret = this.runtime.config.adminApiSecret?.exposeSecret();
-    if (!secret) throw new Error("Share URLs need an admin API secret configured.");
-    const projectId = this.runtime.projectId;
-    if (!projectId) {
-      throw new ItxError({
-        code: "BAD_REQUEST",
-        message: "Share URLs are project-scoped; narrow to a project first.",
-      });
-    }
-
-    const ingress = new URL(await this.project().ingressUrl());
-    const expiresAtMs = Date.now() + (input.ttlSeconds ?? 3600) * 1000;
-    const token = await createShareToken({ cap: input.name, expiresAtMs, projectId, secret });
-
-    const url = new URL(ingress);
-    url.hostname = `${input.name}--${ingress.hostname}`;
-    url.pathname = input.path ?? "/";
-    url.searchParams.set(SHARE_TOKEN_PARAM, token);
-    return url.toString();
-  }
 }
 
 // ---- projects -------------------------------------------------------------

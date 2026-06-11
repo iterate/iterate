@@ -128,9 +128,9 @@ test("the five-step capability flow: provide live, call, promote durable, call f
 
   // (2) define() it as a live cap on the project context — ONE verb: a live
   // stub is just another target, discriminated structurally from the
-  // serializable rpc/url kinds. (caps.provide remains as a thin alias.)
+  // serializable rpc/url kinds.
   using projectItx = await itx.projects.get(project.id);
-  await projectItx.caps.define({
+  await projectItx.define({
     invoke: "path-call",
     name: "slack",
     target: new FakeSlackSdk() as never,
@@ -147,7 +147,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
   // server-side (define with an rpc/source target), not a flag on the live
   // stub.
   const marker = `durable-${RUN_SUFFIX}`;
-  await projectItx.caps.define({
+  await projectItx.define({
     invoke: "path-call",
     name: "slackDurable",
     target: {
@@ -177,7 +177,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
 
   // Own rows only — platform defaults (e.g. `ai` from platform:project)
   // also appear in describe() with their code context as owner.
-  const description = (await projectItx.caps.describe()) as Array<{ owner: string }>;
+  const description = (await projectItx.describe()).caps as Array<{ owner: string }>;
   expect(description.filter((cap) => cap.owner === project.id)).toMatchObject([
     { connected: true, invoke: "path-call", kind: "live", name: "slack" },
     { invoke: "path-call", kind: "rpc", name: "slackDurable" },
@@ -192,7 +192,7 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
 
   // (1) Raw binding ref: env.AI itself is the target; members replay applies
   // the dotted path straight onto it. models() is a free catalog read.
-  await projectItx.caps.define({
+  await projectItx.define({
     meta: { instructions: "Workers AI. Use like the env.AI binding." },
     name: "ai",
     target: { type: "rpc", worker: { binding: "AI", type: "binding" } },
@@ -203,7 +203,7 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
 
   // (2) Wrapped via the BindingCapability loopback (path-call): same binding,
   // reached through the thin policy entrypoint — the §2 pattern.
-  await projectItx.caps.define({
+  await projectItx.define({
     invoke: "path-call",
     name: "aiWrapped",
     target: {
@@ -221,13 +221,13 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   // (3) Allowlist: a non-dialable binding refuses at define time, and a
   // loopback export outside DIALABLE_LOOPBACKS refuses too.
   await expect(
-    projectItx.caps.define({
+    projectItx.define({
       name: "db",
       target: { type: "rpc", worker: { binding: "DB", type: "binding" } },
     }),
   ).rejects.toThrow(/not dialable/);
   await expect(
-    projectItx.caps.define({
+    projectItx.define({
       name: "sneaky",
       target: { entrypoint: "ItxEntrypoint", type: "rpc", worker: { type: "loopback" } },
     }),
@@ -235,7 +235,7 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   // A typo'd serializable target must fail at define, not register as a
   // dead live cap.
   await expect(
-    projectItx.caps.define({
+    projectItx.define({
       name: "typoed",
       target: { type: "rcp", worker: { binding: "AI", type: "binding" } } as never,
     }),
@@ -243,7 +243,7 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   // Durable Object dials are name-scoped per project (itx:<projectId>:<name>),
   // but the namespace allowlist still defaults to empty — config has to opt in.
   await expect(
-    projectItx.caps.define({
+    projectItx.define({
       name: "sneakyDo",
       target: {
         type: "rpc",
@@ -254,7 +254,7 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
 
   // describe() reports the new kinds and lifts instructions (own rows only —
   // inherited platform defaults carry their code context as owner).
-  const caps = (await projectItx.caps.describe()) as Array<{ owner: string }>;
+  const caps = (await projectItx.describe()).caps as Array<{ owner: string }>;
   expect(caps.filter((cap) => cap.owner === project.id)).toMatchObject([
     { instructions: "Workers AI. Use like the env.AI binding.", kind: "rpc", name: "ai" },
     { invoke: "path-call", kind: "rpc", name: "aiWrapped" },
@@ -277,7 +277,7 @@ test.skipIf(!MCP_TEST_SERVER_URL)(
     createdProjectIds.push(project.id);
     using projectItx = await itx.projects.get(project.id);
 
-    await projectItx.caps.define({
+    await projectItx.define({
       invoke: "path-call",
       meta: { instructions: "Test MCP server. Call listTools() first." },
       name: "mcptest",
@@ -349,7 +349,7 @@ export class PetstoreClient extends WorkerEntrypoint {
 
   // (2) Point a cap at the user's export via the ProjectWorker forwarder —
   // props.export names THEIR class, props.invoke how to call it.
-  await projectItx.caps.define({
+  await projectItx.define({
     invoke: "path-call",
     meta: { instructions: "Petstore API. Call listOperations() first." },
     name: "petstore",
@@ -408,7 +408,7 @@ test("url caps dial a remote Cap'n Web server over a WebSocket session", async (
   // WebSocket handshake headers, which is exactly what url-ref headers are
   // for. (In production these would be getSecret() placeholders, substituted
   // by the same egress path McpClient headers use.)
-  await projectItx.caps.define({
+  await projectItx.define({
     meta: { instructions: "This deployment's own itx, dialed back over the network." },
     name: "remoteItx",
     target: {
@@ -458,7 +458,7 @@ test("platform defaults arrive from the platform:project code context, and own r
 
   // Defaults cannot be revoked — succeeding would lie (the default keeps
   // serving). Shadowing is the override mechanism.
-  await expect(projectItx.caps.revoke({ name: "ai" })).rejects.toThrow(/platform default/);
+  await expect(projectItx.revoke({ name: "ai" })).rejects.toThrow(/platform default/);
 
   // Shadowing is prototype semantics: a row of this context's own wins, and
   // describe() shows exactly one `ai` with the project as owner.
@@ -467,7 +467,7 @@ test("platform defaults arrive from the platform:project code context, and own r
       return { method: path.join("."), provider: "shadow" };
     }
   }
-  await projectItx.caps.provide({
+  await projectItx.define({
     invoke: "path-call",
     name: "ai",
     target: new ShadowAi() as never,
@@ -510,7 +510,7 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
       });
     }
   }
-  await projectItx.caps.define({
+  await projectItx.define({
     invoke: "path-call",
     name: "fetch",
     target: new EgressInterceptor() as never,
@@ -548,7 +548,7 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   // (5) Revoke the shadow: the default egress pipe resurfaces — a real
   // network fetch to the NXDOMAIN host now fails instead of returning the
   // canned response.
-  await projectItx.caps.revoke({ name: "fetch" });
+  await projectItx.revoke({ name: "fetch" });
   const after = (await projectItx.describe()) as DescribedCaps;
   expect(after.caps.find((cap) => cap.name === "fetch")).toMatchObject({
     owner: "platform:project",
@@ -561,7 +561,7 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   // fetch(), while the project context stays on the real pipe.
   using child = await projectItx.fork({ name: "fetch-shadow" });
   const childDescription = await child.describe();
-  await child.caps.define({
+  await child.define({
     invoke: "path-call",
     name: "fetch",
     target: new EgressInterceptor() as never,
@@ -689,7 +689,7 @@ test("worker caps hold a correctly scoped itx of their own", async () => {
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
-  await projectItx.caps.define({
+  await projectItx.define({
     name: "todo",
     target: {
       type: "rpc",
@@ -731,7 +731,7 @@ test("members caps auto-proxy every public method/getter at any depth", async ()
 
   // No method list anywhere: the WorkerEntrypoint just exports methods (and a
   // getter returning a nested surface), and they are all instantly callable.
-  await projectItx.caps.define({
+  await projectItx.define({
     name: "kit",
     target: {
       type: "rpc",
@@ -771,7 +771,7 @@ test("one dynamic worker cap calls another's methods through its own itx", async
 
   // Provider cap: a plain WorkerEntrypoint exporting a method + a nested
   // getter. No method list — the whole public surface is proxied.
-  await projectItx.caps.define({
+  await projectItx.define({
     name: "inventory",
     target: {
       type: "rpc",
@@ -798,7 +798,7 @@ test("one dynamic worker cap calls another's methods through its own itx", async
   // Consumer cap: a DIFFERENT dynamic worker that reaches the first one
   // purely through env.ITERATE.context — itx.inventory.count() and the nested
   // itx.inventory.skus.priceOf(...) are proxied worker→worker, no wiring.
-  await projectItx.caps.define({
+  await projectItx.define({
     name: "report",
     target: {
       type: "rpc",
@@ -867,7 +867,7 @@ test("revoked and offline caps fail with instructive errors", async () => {
   );
 
   await expect(
-    projectItx.caps.define({
+    projectItx.define({
       name: "then",
       target: {
         type: "rpc",
@@ -890,15 +890,10 @@ test("revoked and offline caps fail with instructive errors", async () => {
   // The proxy masks them; the registry's reserved-segment gate stays as
   // defense in depth for paths arriving over the real chain.
   const projectDo = (projectItx as { project: unknown }).project as {
-    itxInvoke(input: {
-      args: unknown[];
-      name: string;
-      origin?: string;
-      path: string[];
-    }): Promise<unknown>;
+    itxInvoke(input: { args: unknown[]; origin?: string; path: string[] }): Promise<unknown>;
   };
   await expect(
-    projectDo.itxInvoke({ args: [], name: "workspace", origin: "ctx_spoofed", path: ["readFile"] }),
+    projectDo.itxInvoke({ args: [], origin: "ctx_spoofed", path: ["workspace", "readFile"] }),
   ).rejects.toThrow(/internal registry plumbing/);
 });
 

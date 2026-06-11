@@ -294,7 +294,8 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   #itxRegistry: ContextRegistry | null = null;
 
   async itxDefine(input: {
-    name: string;
+    name?: string;
+    path?: string[];
     target: SerializableCapTarget | LiveCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
@@ -302,7 +303,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     return this.itxRegistry().define(input);
   }
 
-  async itxRevoke(input: { name: string }) {
+  async itxRevoke(input: { name?: string; path?: string[] }) {
     return this.itxRegistry().revoke(input);
   }
 
@@ -310,12 +311,8 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     return this.itxRegistry().describe();
   }
 
-  async itxInvoke(input: PathCall & { name: string; origin?: string }) {
-    return await this.itxRegistry().invoke(
-      input.name,
-      { args: input.args, path: input.path },
-      input.origin,
-    );
+  async itxInvoke(input: PathCall & { origin?: string }) {
+    return await this.itxRegistry().invoke({ args: input.args, path: input.path }, input.origin);
   }
 
   private itxRegistry(): ContextRegistry {

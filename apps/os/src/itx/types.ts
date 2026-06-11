@@ -29,9 +29,10 @@
  * **An itx** is a live handle on one context — the only thing user code
  * ever touches, identical in the browser, Node, the REPL, the project
  * worker (the worker built from the project's own repo), itx scripts, and
- * capabilities themselves. Built-in
- * members (`caps`, `fork`, `projects`, …) are the trust kernel;
- * every other property falls through to the context's capability registry.
+ * capabilities themselves. An itx is an address, an access set, and four
+ * verbs: `define`, `revoke`, `describe`, `fork` (plus a few built-in
+ * members — `projects`, `streams`, `fetch`); every other property falls
+ * through to the context's capability registry.
  * Authority is the handle itself: auth happens once at connect, and which
  * context you hold — plus the principal it was minted for — is the whole
  * permission model. Narrowing is construction: a weaker handle is a new
@@ -54,7 +55,7 @@
  * });                                      // egress: the secret is substituted
  *                                          // server-side; this code never sees it
  *
- * await itx.caps.define({                  // teach this context a new trick:
+ * await itx.define({                       // teach this context a new trick:
  *   name: "ai",                            // itx.ai.run(model, input)
  *   target: { type: "rpc", worker: { type: "binding", binding: "AI" } },
  * });
@@ -97,8 +98,70 @@ export type Itx = ItxBuiltins & KnownCaps;
  * adds a capability registry of its own, not a different kernel.
  */
 export interface ItxBuiltins {
-  /** Register, revoke, inspect, and share capabilities on this context. */
-  readonly caps: ItxCaps;
+  /**
+   * Register a capability on this handle's context — THE verb for every
+   * target kind: live targets are session-bound (re-define on reconnect);
+   * rpc/url targets are durable. The entry lives at a PATH: `name` is the
+   * common 1-segment case, `path` the multi-segment form (exactly one of
+   * the two). Dispatch is longest-prefix per context: `define({ path:
+   * ["slack", "chat", "postMessage"], … })` shadows ONE method of an
+   * inherited cap while every other `slack.*` call falls through the chain.
+   *
+   * ```ts
+   * // From a laptop/sandbox (inbound, lives while connected): a live
+   * // target is the stub itself — a function, object, or RpcTarget.
+   * await itx.define({
+   *   name: "runSwiftOnMyMac",
+   *   target: async (src) => runSwift(src),
+   *   meta: { instructions: "Compile-and-run Swift on Jonas's Mac." },
+   * });
+   *
+   * // A raw platform binding (outbound, durable):
+   * await itx.define({
+   *   name: "ai",
+   *   target: { type: "rpc", worker: { type: "binding", binding: "AI" } },
+   * });
+   *
+   * // First-party MCP client, parameterized per server (see CapTarget):
+   * await itx.define({
+   *   name: "docs",
+   *   invoke: "path-call",
+   *   target: {
+   *     type: "rpc",
+   *     worker: { type: "loopback" },
+   *     entrypoint: "McpClient",
+   *     props: {
+   *       serverUrl: "https://docs.example.com/mcp",
+   *       headers: { authorization: 'Bearer getSecret({ key: "DOCS_TOKEN" })' },
+   *     },
+   *   },
+   * });
+   *
+   * // Shadow one method of an inherited cap on a session (a fork):
+   * await session.define({
+   *   path: ["workspace", "gitPush"],
+   *   target: approvalGate,
+   * });
+   * ```
+   */
+  define(input: {
+    name?: string;
+    path?: string[];
+    target: CapTarget;
+    invoke?: CapInvoke;
+    meta?: CapMeta;
+  }): Promise<{ name: string; ok: true }>;
+
+  /** Remove an entry — exact path match, never prefix; `name`/`path` as in
+   * {@link define}. Platform defaults cannot be revoked, only shadowed. */
+  revoke(input: { name?: string; path?: string[] }): Promise<{ name: string; ok: true }>;
+
+  /**
+   * "Let me show you something real quick": a signed, expiring URL for one
+   * HTTP-exposed cap. Possession grants exactly that cap's fetch surface
+   * until expiry — the realm's one deliberate bearer-token edge case.
+   */
+  shareUrl(input: { name: string; path?: string; ttlSeconds?: number }): Promise<string>;
 
   /**
    * Event streams, keyed by `(namespace, path)`. On a PROJECT handle this
@@ -216,86 +279,6 @@ export type ItxDescription = {
 // ---------------------------------------------------------------------------
 // Capabilities
 // ---------------------------------------------------------------------------
-
-/** Registry verbs. All registration is `define`; the target kind carries
- * everything else (direction, durability, statefulness). */
-export interface ItxCaps {
-  /**
-   * Register a capability on this handle's context: a flat-identifier name
-   * plus a target. Live targets are session-bound (re-define on reconnect);
-   * rpc/url targets are durable. Nested names are not a thing — nesting
-   * belongs to the provided object, not the registry.
-   *
-   * ```ts
-   * // From a laptop/sandbox (inbound, lives while connected): a live
-   * // target is the stub itself — a function, object, or RpcTarget.
-   * await itx.caps.define({
-   *   name: "runSwiftOnMyMac",
-   *   target: async (src) => runSwift(src),
-   *   meta: { instructions: "Compile-and-run Swift on Jonas's Mac." },
-   * });
-   *
-   * // A raw platform binding (outbound, durable):
-   * await itx.caps.define({
-   *   name: "ai",
-   *   target: { type: "rpc", worker: { type: "binding", binding: "AI" } },
-   * });
-   *
-   * // First-party MCP client, parameterized per server (see CapTarget):
-   * await itx.caps.define({
-   *   name: "docs",
-   *   invoke: "path-call",
-   *   target: {
-   *     type: "rpc",
-   *     worker: { type: "loopback" },
-   *     entrypoint: "McpClient",
-   *     props: {
-   *       serverUrl: "https://docs.example.com/mcp",
-   *       headers: { authorization: 'Bearer getSecret({ key: "DOCS_TOKEN" })' },
-   *     },
-   *   },
-   * });
-   *
-   * // User-space: a class YOU export from your project worker:
-   * await itx.caps.define({
-   *   name: "petstore",
-   *   target: {
-   *     type: "rpc",
-   *     worker: { type: "project-worker" },
-   *     entrypoint: "OpenApiClient",
-   *     props: { specUrl: "https://petstore.example.com/openapi.json" },
-   *   },
-   * });
-   * ```
-   */
-  define(input: {
-    name: string;
-    target: CapTarget;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
-  }): Promise<{ name: string; ok: true }>;
-
-  /** Alias for {@link define} (REPL muscle memory) — define is the verb; a
-   * live stub is just another target. */
-  provide(input: {
-    name: string;
-    target: LiveStub;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
-  }): Promise<{ name: string; ok: true }>;
-
-  revoke(input: { name: string }): Promise<{ name: string; ok: true }>;
-
-  /** The merged chain view — same data `itx.describe()` embeds. */
-  describe(): Promise<CapDescription[]>;
-
-  /**
-   * "Let me show you something real quick": a signed, expiring URL for one
-   * HTTP-exposed cap. Possession grants exactly that cap's fetch surface
-   * until expiry — the realm's one deliberate bearer-token edge case.
-   */
-  shareUrl(input: { name: string; path?: string; ttlSeconds?: number }): Promise<string>;
-}
 
 /**
  * THE capability target. Three kinds:

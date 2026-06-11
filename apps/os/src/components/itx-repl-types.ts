@@ -66,7 +66,6 @@ declare global {
   type ItxBuiltins = itxTypes.ItxBuiltins;
   type KnownCaps = itxTypes.KnownCaps;
   type ItxDescription = itxTypes.ItxDescription;
-  type ItxCaps = itxTypes.ItxCaps;
   type CapTarget = itxTypes.CapTarget;
   type WorkerRef = itxTypes.WorkerRef;
   type CapSource = itxTypes.CapSource;

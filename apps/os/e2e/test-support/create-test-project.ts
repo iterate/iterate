@@ -161,7 +161,7 @@ async function defineLiveEgressFetchCap(input: {
     token: requireAdminBearerToken(),
   });
   try {
-    await itx.caps.define({
+    await itx.define({
       invoke: "path-call",
       name: "fetch",
       target: new LiveEgressFetch() as never,

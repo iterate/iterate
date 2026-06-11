@@ -139,7 +139,7 @@ export class ProjectMcpServerConnection extends McpAgent<
         "",
         "exec_js runs JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async (itx) => { ... }` — the one argument is your iterate context handle.",
         "",
-        "The `itx` object is a handle on this session's iterate context: built-ins (itx.fetch, itx.streams, itx.caps) plus every capability on the context, called as `itx.<cap>.<method>(args)`. Available capabilities are listed in the exec_js tool description.",
+        "The `itx` object is a handle on this session's iterate context: built-ins (itx.fetch, itx.streams, itx.define) plus every capability on the context, called as `itx.<cap>.<method>(args)`. Available capabilities are listed in the exec_js tool description.",
         "",
         "Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP requests (it rides project egress with secret substitution). The return value is sent back as the result. Do NOT write bare statements — always wrap in `async (itx) => { ... }`.",
       ].join("\n"),

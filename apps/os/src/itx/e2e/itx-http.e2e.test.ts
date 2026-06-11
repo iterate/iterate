@@ -17,7 +17,7 @@ test("facet caps keep private durable state across invocations", async () => {
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
-  await projectItx.caps.define({
+  await projectItx.define({
     name: "counter",
     target: {
       type: "rpc",
@@ -63,7 +63,7 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
-  await projectItx.caps.define({
+  await projectItx.define({
     meta: { http: { expose: true } },
     name: "hello",
     target: {
@@ -112,7 +112,7 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
   await expect(admin.text()).resolves.toContain("hello from a routable cap");
 
   // (3) …and a share URL admits whoever holds it, for one cap, until expiry.
-  const shareUrl = String(await projectItx.caps.shareUrl({ name: "hello", path: "/demo" }));
+  const shareUrl = String(await projectItx.shareUrl({ name: "hello", path: "/demo" }));
   const shared = await fetch(shareUrl);
   expect(shared.status).toBe(200);
   await expect(shared.text()).resolves.toContain("/demo");
@@ -123,7 +123,7 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
   expect((await fetch(tampered)).status).toBe(401);
 
   // (5) public: true opens the cap to anyone, knowingly.
-  await projectItx.caps.define({
+  await projectItx.define({
     meta: { http: { expose: true, public: true } },
     name: "hello",
     target: {
@@ -152,7 +152,7 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
   await expect(publicResponse.text()).resolves.toBe("hello, public internet");
 
   // (6) Unexposed caps do not exist as hostnames, even with admin auth.
-  await projectItx.caps.define({
+  await projectItx.define({
     name: "internal",
     target: {
       type: "rpc",

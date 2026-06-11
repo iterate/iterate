@@ -112,13 +112,12 @@ export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
     const node =
       context && isChildContextId(context)
         ? (this.env.ITX_CONTEXT.getByName(context) as unknown as {
-            itxInvoke(input: PathCall & { name: string }): Promise<unknown>;
+            itxInvoke(input: PathCall): Promise<unknown>;
           })
         : this.#project();
     return (await node.itxInvoke({
       args: [request],
-      name: "fetch",
-      path: [],
+      path: ["fetch"],
     })) as Response;
   }
 

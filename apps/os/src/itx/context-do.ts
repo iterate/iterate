@@ -40,7 +40,7 @@ export type ContextDescriptor = {
 /** The registry surface a context host exposes; chain calls use this shape. */
 type RegistryHostStub = {
   itxDescribe(): Promise<CapDescription[]>;
-  itxInvoke(input: PathCall & { name: string; origin?: string }): Promise<unknown>;
+  itxInvoke(input: PathCall & { origin?: string }): Promise<unknown>;
 };
 
 export class ContextDO extends DurableObject<Env> {
@@ -88,7 +88,8 @@ export class ContextDO extends DurableObject<Env> {
   }
 
   itxDefine(input: {
-    name: string;
+    name?: string;
+    path?: string[];
     target: SerializableCapTarget | LiveCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
@@ -96,7 +97,7 @@ export class ContextDO extends DurableObject<Env> {
     return this.registry().define(input);
   }
 
-  itxRevoke(input: { name: string }) {
+  itxRevoke(input: { name?: string; path?: string[] }) {
     return this.registry().revoke(input);
   }
 
@@ -108,18 +109,15 @@ export class ContextDO extends DurableObject<Env> {
     return [...own, ...parentCaps.filter((cap) => !ownNames.has(cap.name))];
   }
 
-  async itxInvoke(input: PathCall & { name: string; origin?: string }): Promise<unknown> {
+  async itxInvoke(input: PathCall & { origin?: string }): Promise<unknown> {
     const registry = this.registry();
-    if (registry.has(input.name)) {
-      return await registry.invoke(
-        input.name,
-        { args: input.args, path: input.path },
-        input.origin,
-      );
+    if (registry.resolves(input.path)) {
+      return await registry.invoke({ args: input.args, path: input.path }, input.origin);
     }
-    // Chain delegation: one extra hop per parent level, no cache to
-    // invalidate. The ORIGIN context rides along so context-scoped caps
-    // resolved at an ancestor still bind to the caller's context.
+    // Chain delegation: the WHOLE call path moves up, one extra hop per
+    // parent level, no cache to invalidate. The ORIGIN context rides along so
+    // context-scoped caps resolved at an ancestor still bind to the caller's
+    // context.
     return await this.parentStub().itxInvoke({
       ...input,
       origin: input.origin ?? this.descriptor().id,
