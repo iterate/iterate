@@ -1,5 +1,5 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
-// Regression tests for tasks/streams-review-fixes.md M1: a subscriber DO that
+// Regression tests for streams review finding M1: a subscriber DO that
 // dies (eviction, deploy, abort) leaves the Stream DO holding a dead outbound
 // connection. Before the fix, batch delivery rejections were swallowed, the
 // dead connection stayed in the stream's connection map, and reconcile skipped
