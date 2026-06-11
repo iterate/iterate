@@ -10,10 +10,12 @@
 
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
-import type { Itx } from "./handle.ts";
+import type { ItxHandle } from "./handle.ts";
 
 // The client-side half of the one calling convention: wrap a plain
-// object-of-methods before provideCapability()ing it as a live target.
+// object-of-methods before provideCapability()ing it as a live provider.
+// (From path-proxy.ts, not itx.ts: this module runs in Node, and itx.ts —
+// the core — imports cloudflare:workers.)
 export { asPathCallable } from "./path-proxy.ts";
 
 export type ConnectItxInput = {
@@ -31,7 +33,7 @@ export type ConnectItxInput = {
   handshakeTimeoutMs?: number;
 };
 
-export type ItxClient = RpcStub<Itx>;
+export type ItxClient = RpcStub<ItxHandle>;
 
 export function connectItx(input: ConnectItxInput): ItxClient {
   const url = new URL(
@@ -46,7 +48,7 @@ export function connectItx(input: ConnectItxInput): ItxClient {
     handshakeTimeout: input.handshakeTimeoutMs ?? 15_000,
     headers: { authorization: `Bearer ${input.token}` },
   });
-  return newWebSocketRpcSession<Itx>(
+  return newWebSocketRpcSession<ItxHandle>(
     socket as unknown as Parameters<typeof newWebSocketRpcSession>[0],
   );
 }

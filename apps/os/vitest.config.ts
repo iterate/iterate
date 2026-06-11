@@ -9,6 +9,9 @@ export default defineConfig({
     // Vitest does not apply tsconfig `paths` for `~/` reliably; mirror `~/*` -> `./src/*`.
     alias: {
       "~": resolve(appRoot, "src"),
+      // The pure itx core's only platform import is RpcTarget; the shim lets
+      // its no-workerd unit test (src/itx/itx.test.ts) run in plain Node.
+      "cloudflare:workers": resolve(appRoot, "src/test/cloudflare-workers-shim.ts"),
     },
   },
   test: {

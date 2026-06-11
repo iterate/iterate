@@ -10,7 +10,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { getAgentDurableObjectName } from "../agent-stream-subscriptions.ts";
 import type { AgentDurableObject } from "../durable-objects/agent-durable-object.ts";
-import type { PathCall } from "~/itx/protocol.ts";
+import type { PathCall } from "~/itx/itx.ts";
 
 export type AgentToolsCapabilityProps = {
   /** Injected by the registry at dial time — never definer-supplied. */

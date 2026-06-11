@@ -23,7 +23,7 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
-import { RESERVED_PATH_SEGMENTS, type PathCall } from "../protocol.ts";
+import { RESERVED_PATH_SEGMENTS, type PathCall } from "../itx.ts";
 import type { WorkerInvokeMode } from "./project-worker.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";

@@ -23,7 +23,7 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   // A project-level cap every child should see through the chain.
   await projectItx.provideCapability({
     name: "shared",
-    target: chatPostTarget("project-level"),
+    provider: chatPostTarget("project-level"),
   });
 
   // The node's own ADDRESS is a cap target (itx-next.md, address
@@ -52,7 +52,7 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   // visibly (describe reports the owner).
   await child.provideCapability({
     name: "shared",
-    target: chatPostTarget("child-level"),
+    provider: chatPostTarget("child-level"),
   });
   const viaShadow = (await (child as never as Record<string, any>).shared.chat.post({
     text: "hi",
@@ -104,7 +104,7 @@ test("fork: a path define shadows ONE subtree of an inherited cap (longest-prefi
   }
   await projectItx.provideCapability({
     name: "sdk",
-    target: new MarkedSdk("base") as never,
+    provider: new MarkedSdk("base") as never,
   });
 
   // The fork overrides exactly one method via a PATH define; the entry path
@@ -112,7 +112,7 @@ test("fork: a path define shadows ONE subtree of an inherited cap (longest-prefi
   using child = await projectItx.fork({ name: "e2e-path-shadow" });
   await child.provideCapability({
     path: ["sdk", "chat", "postMessage"],
-    target: new MarkedSdk("override") as never,
+    provider: new MarkedSdk("override") as never,
   });
 
   const handle = (target: unknown) => target as never as Record<string, any>;
@@ -146,7 +146,7 @@ test("fork: a path define shadows ONE subtree of an inherited cap (longest-prefi
   await expect(
     child.provideCapability({
       path: ["sdk", "constructor"],
-      target: new MarkedSdk("nope") as never,
+      provider: new MarkedSdk("nope") as never,
     }),
   ).rejects.toThrow(/reserved/);
 });
@@ -208,7 +208,7 @@ test("fork: child worker caps run with the owning project's authority", async ()
   // The child-scoped cap's own itx writes to the project's streams.
   await child.provideCapability({
     name: "noter",
-    target: {
+    provider: {
       type: "rpc",
       worker: {
         type: "source",

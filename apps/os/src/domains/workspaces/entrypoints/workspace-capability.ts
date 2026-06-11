@@ -6,7 +6,8 @@ import {
   type WorkspaceStructuredName,
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
-import { isChildContextId, type PathCall } from "~/itx/protocol.ts";
+import type { PathCall } from "~/itx/itx.ts";
+import { isChildContextId } from "~/itx/refs.ts";
 
 type WorkspaceCapabilityEnv = {
   WORKSPACE?: DurableObjectNamespace<WorkspaceDurableObject>;

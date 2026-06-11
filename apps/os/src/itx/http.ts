@@ -15,8 +15,7 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
-import type { CapabilityDescription } from "./protocol.ts";
-import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { contextAddressOf, dialContext } from "./itx.ts";
 import { normalizeIngressHost } from "~/ingress/host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
@@ -87,23 +86,23 @@ export type ItxCapabilityIngressProps = {
 };
 
 /**
- * The router target for cap hosts. Auth gate, then one registry dispatch:
- * itxInvoke({ path: [...capPath, "fetch"], args: [request] }) — a members cap
- * exposes fetch() directly; a path-call cap sees { path: ["fetch"] } and can
- * implement HTTP however it likes.
+ * The router target for cap hosts. Auth gate, then one core dispatch:
+ * itx().invoke({ path: [...capPath, "fetch"], args: [request] }) — a members
+ * cap exposes fetch() directly; a path-call cap sees { path: ["fetch"] } and
+ * can implement HTTP however it likes.
  */
 export class ItxCapabilityIngress extends WorkerEntrypoint<Env, ItxCapabilityIngressProps> {
   async fetch(request: Request): Promise<Response> {
     const props = this.ctx.props;
     const config = parseConfig(this.env);
-    const project = this.env.PROJECT.getByName(getProjectDurableObjectName(props.projectId));
+    const node = dialContext(this.env, contextAddressOf(props.projectId));
 
     // The host label was lowercased by normalizeIngressHost, but cap names
     // may contain uppercase — match case-insensitively so `myCap` is routable
     // at `mycap--{project}`. (Collisions that differ only by case are the
     // owner's problem; first exposed match wins.)
     const wanted = props.capability.toLowerCase();
-    const caps = (await project.itxDescribe()) as CapabilityDescription[];
+    const caps = await node.itx().describe();
     const cap = caps.find((candidate) => candidate.name.toLowerCase() === wanted);
     if (!cap || cap.meta.http?.expose !== true) {
       return new Response("Not Found", { status: 404 });
@@ -124,9 +123,9 @@ export class ItxCapabilityIngress extends WorkerEntrypoint<Env, ItxCapabilityIng
       if (!authorized) return new Response("Unauthorized", { status: 401 });
     }
 
-    return (await project.itxInvoke({
+    return (await node.itx().invoke({
       args: [request],
-      // The registry's exact name (not the lowercased host label) is the
+      // The core's exact name (not the lowercased host label) is the
       // dot-joined entry path; the full call path is entry path + "fetch".
       path: [...cap.name.split("."), "fetch"],
     })) as Response;

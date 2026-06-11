@@ -35,7 +35,7 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@iterate-com/ui/components/sidebar";
-import type { Itx } from "~/itx/handle.ts";
+import type { ItxHandle } from "~/itx/handle.ts";
 import { AdminItxContext } from "~/lib/admin-itx.ts";
 import { createBrowserReplSession } from "~/routes/_app/itx-repl.tsx";
 
@@ -49,7 +49,7 @@ type AdminItxState =
   // cookie yet) — or the connection failed outright. Either way the fix is
   // the same: unlock with the admin API secret.
   | { status: "locked"; reason: string }
-  | { status: "ready"; itx: RpcStub<Itx> };
+  | { status: "ready"; itx: RpcStub<ItxHandle> };
 
 function AdminLayout() {
   const [state, setState] = useState<AdminItxState>({ status: "connecting" });

@@ -13,7 +13,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { commands } from "vitest/browser";
 import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
-import type { Itx } from "../handle.ts";
+import type { ItxHandle } from "../handle.ts";
 import {
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
@@ -134,7 +134,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
 
     await projectItx.provideCapability({
       name: "browserSlack",
-      target: new BrowserSdk() as never,
+      provider: new BrowserSdk() as never,
     });
 
     const result = (await (
@@ -149,14 +149,14 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
 
 // ---- connection -------------------------------------------------------------
 
-async function connectFromBrowser(context?: string): Promise<RpcStub<Itx>> {
+async function connectFromBrowser(context?: string): Promise<RpcStub<ItxHandle>> {
   await installAdminCookie();
   const wsUrl = new URL(
     context ? `/api/itx/${encodeURIComponent(context)}` : "/api/itx",
     baseUrl(),
   );
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-  return newWebSocketRpcSession<Itx>(new WebSocket(wsUrl));
+  return newWebSocketRpcSession<ItxHandle>(new WebSocket(wsUrl));
 }
 
 async function installAdminCookie() {

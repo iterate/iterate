@@ -33,7 +33,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { resolveItx } from "../entrypoint.ts";
 import type { ItxRuntime } from "../handle.ts";
-import type { PathCall } from "../protocol.ts";
+import type { PathCall } from "../itx.ts";
 import { connectMcp, executeMcpToolCall, listMcpTools } from "./mcp-client-core.ts";
 
 export type McpClientProps = {

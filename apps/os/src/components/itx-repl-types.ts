@@ -71,6 +71,7 @@ declare global {
   // The design-of-record types, exposed globally so snippets can annotate
   // with them without an import. Shapes live in ./itx-types.ts only.
   type Itx = itxTypes.Itx;
+  type ItxHandle = itxTypes.ItxHandle;
   type ItxBuiltins = itxTypes.ItxBuiltins;
   type KnownCapabilities = itxTypes.KnownCapabilities;
   type ItxDescription = itxTypes.ItxDescription;
@@ -96,7 +97,7 @@ declare global {
   type ItxProps = itxTypes.ItxProps;
 
   /** The connected Iterate context handle for this REPL session. */
-  const itx: Itx;
+  const itx: ItxHandle;
   /** Environment-style values injected into this REPL session. */
   const env: Record<string, unknown>;
   /**

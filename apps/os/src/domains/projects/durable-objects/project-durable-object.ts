@@ -1,7 +1,7 @@
 // The Project Durable Object: the durable home of one PROJECT CONTEXT
 // (apps/os/docs/itx-spec.md). It has exactly three jobs:
 //
-// 1. ITX REGISTRY SUPERVISOR — it embeds the capability registry and is the
+// 1. ITX CORE HOST — it embeds the capability core (itx()) and is the
 //    dispatch point for every capability invocation in this project.
 //
 // 2. WORKER SOURCE-OF-TRUTH — it owns the build pipeline for the project's
@@ -10,19 +10,19 @@
 //    dispatched by the stateless ProjectIngressEntrypoint, which loads the
 //    worker itself and only asks this DO for the checkout.
 //
-// Egress does NOT live here anymore: it is the `fetch` capability on
-// platform:project (itx/code-contexts.ts). This DO still supervises every
-// egress dispatch (job 1 — live shadows resolve in its registry), but the
+// Egress does NOT live here anymore: it is the `fetch` capability among the
+// platform defaults (itx/durable-itx.ts). This DO still supervises every
+// egress dispatch (job 1 — live shadows resolve in its core), but the
 // terminal pipe is the stateless EgressPipe: secrets are D1 rows, so
 // substitution + the real fetch happen in a plain isolate and secret
 // material never enters this DO. The old captun intercept tunnel is reborn
-// as `itx.provideCapability({ name: "fetch", target: liveStub })`. This DO has NO
-// fetch surface at all.
+// as `itx.provideCapability({ name: "fetch", provider: liveStub })`. This DO
+// has NO fetch surface at all.
 //
 // State lives in the project's root event stream, projected by
 // ProjectProcessor (stream-processors/project-processor.ts), which also owns
 // every creation side effect — including the one D1 `projects` projection.
-// The DO's own SQLite holds only the itx registry's capability table; the
+// The DO's own SQLite holds only the itx core's capability table; the
 // worker checkout cache is plain DO storage. There is no bespoke project
 // table and no lifecycle mixin: the DO is addressed by the plain project id.
 
@@ -68,18 +68,22 @@ import {
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { readRemoteBranchOid } from "~/domains/repos/repo-git.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
-import { ContextRegistry, type LiveCapabilityTarget } from "~/itx/registry.ts";
-import { createContextRegistryHost } from "~/itx/registry-host.ts";
-import { platformProjectContext } from "~/itx/code-contexts.ts";
-import { replayPathCall } from "~/itx/path-proxy.ts";
-import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
-import { contextAddressOf, type ContextAddress } from "~/itx/addresses.ts";
-import type {
-  CapabilityMeta,
-  PathCall,
-  PathCallTarget,
-  SerializableCapabilityTarget,
-} from "~/itx/protocol.ts";
+import {
+  contextAddressOf,
+  replayPathCall,
+  resolveDialableTargets,
+  type CapabilityAddress,
+  type Itx,
+  type PathCall,
+  type PathCallable,
+} from "~/itx/itx.ts";
+import {
+  DurableItx,
+  durableObjectFacetsHook,
+  makeDial,
+  PLATFORM_PROJECT_CAPABILITIES,
+} from "~/itx/durable-itx.ts";
+import { ITX_AUDIT_STREAM_PATH } from "~/itx/refs.ts";
 import type { WorkerInvokeMode } from "~/itx/caps/project-worker.ts";
 
 /** Project DOs are addressed by the plain project id. */
@@ -274,74 +278,63 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     return new URL(`${protocol}//${host}`).origin;
   }
 
-  // ---- itx capability registry (apps/os/docs/itx-spec.md §4) --------------
+  // ---- the itx core (apps/os/docs/itx-spec.md §4) --------------------------
   //
-  // The Project DO hosts the PROJECT CONTEXT: it embeds the registry and is
-  // the supervisor for every capability invocation in this project. These
-  // four methods are the entire registry surface; itx handles (src/itx/) call
-  // them over Workers RPC and never reach the registry any other way.
+  // The Project DO hosts the PROJECT CONTEXT: itx() is the node's entire
+  // capability surface — handles, ingress, and chain delegation all go
+  // through the core it returns (a method, not a property, so
+  // `node.itx().invoke(...)` pipelines in one round trip — workerd does not
+  // pipeline calls through property accesses, see `processor` above).
 
-  #itxRegistry: ContextRegistry | null = null;
+  #itx: DurableItx | null = null;
 
-  async itxProvideCapability(input: {
-    name?: string;
-    path?: string[];
-    target: SerializableCapabilityTarget | LiveCapabilityTarget;
-    types?: string;
-    meta?: CapabilityMeta;
-  }) {
-    return this.itxRegistry().provideCapability(input);
-  }
-
-  async itxRevokeCapability(input: { name?: string; path?: string[] }) {
-    return this.itxRegistry().revokeCapability(input);
-  }
-
-  async itxDescribe() {
-    return this.itxRegistry().describe();
-  }
-
-  async itxInvoke(input: PathCall & { origin?: string }) {
-    return await this.itxRegistry().invoke({ args: input.args, path: input.path }, input.origin);
+  /** The project context's capability core. DurableItx = the pure Itx plus
+   * interim SQLite persistence + audit (wave f replaces it with the
+   * ItxProcessor journal). */
+  itx(): Itx {
+    if (this.#itx) return this.#itx;
+    const projectId = this.projectId;
+    this.#itx = new DurableItx({
+      // Best-effort audit trail on the project's /itx stream; the SQLite
+      // table is the authoritative state until wave (f) inverts that.
+      audit: (event) => {
+        this.ctx.waitUntil(
+          (async () => {
+            const stream = await getInitializedStreamStub({
+              durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+              namespace: projectId,
+              path: StreamPath.parse(ITX_AUDIT_STREAM_PATH),
+            });
+            await stream.append({ payload: event.payload, type: event.type });
+          })().catch((error) => {
+            console.error(`[itx] audit append failed for ${projectId}:`, error);
+          }),
+        );
+      },
+      // The platform defaults, applied at construction — own rows (loaded
+      // after) shadow them; child contexts inherit them via the chain (§8).
+      capabilities: PLATFORM_PROJECT_CAPABILITIES,
+      contextId: projectId,
+      dial: makeDial({
+        allowlists: resolveDialableTargets(parseConfig(this.env).itx),
+        contextId: projectId,
+        env: this.env,
+        exports: this.ctx.exports as unknown as Parameters<typeof makeDial>[0]["exports"],
+        facets: durableObjectFacetsHook(this.ctx),
+        loader: (this.env as { LOADER?: unknown }).LOADER as Parameters<
+          typeof makeDial
+        >[0]["loader"],
+        projectId,
+      }),
+      sql: this.ctx.storage.sql,
+    });
+    return this.#itx;
   }
 
   /** This node's own context address — the save() half of the SturdyRef
    * story (itx-next.md, address unification): dial it back with dialContext. */
-  address(): ContextAddress {
+  address(): CapabilityAddress {
     return contextAddressOf(this.projectId);
-  }
-
-  private itxRegistry(): ContextRegistry {
-    if (this.#itxRegistry) return this.#itxRegistry;
-    const projectId = this.projectId;
-    this.#itxRegistry = new ContextRegistry(
-      createContextRegistryHost({
-        // Best-effort audit trail on the project's /itx stream; the registry's
-        // SQLite table is the authoritative state (itx DECISIONS.md D1).
-        audit: (event) => {
-          this.ctx.waitUntil(
-            (async () => {
-              const stream = await getInitializedStreamStub({
-                durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-                namespace: projectId,
-                path: StreamPath.parse(ITX_AUDIT_STREAM_PATH),
-              });
-              await stream.append({ payload: event.payload, type: event.type });
-            })().catch((error) => {
-              console.error(`[itx] audit append failed for ${projectId}:`, error);
-            }),
-          );
-        },
-        contextId: projectId,
-        ctx: this.ctx,
-        // The code-defined parent context: platform defaults every project
-        // falls through to, shadowable by this project's own rows (§8).
-        defaults: platformProjectContext,
-        env: this.env,
-        projectId,
-      }),
-    );
-    return this.#itxRegistry;
   }
 
   // ---- the worker ----------------------------------------------------------
@@ -398,7 +391,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     const entrypoint = worker.getEntrypoint(input.entrypoint, { props: input.props }) as unknown;
     try {
       if (input.invoke === "path-call") {
-        return await (entrypoint as PathCallTarget).call(input.call);
+        return await (entrypoint as PathCallable).call(input.call);
       }
       return await replayPathCall(entrypoint, input.call);
     } finally {

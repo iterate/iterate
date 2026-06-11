@@ -6,7 +6,7 @@ import {
   getAgentDurableObjectName,
 } from "../durable-objects/agent-durable-object.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
-import type { PathCall } from "~/itx/protocol.ts";
+import type { PathCall } from "~/itx/itx.ts";
 
 type AgentCapabilityEnv = {
   AGENT?: DurableObjectNamespace<AgentDurableObject>;

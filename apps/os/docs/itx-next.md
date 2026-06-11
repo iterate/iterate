@@ -1063,11 +1063,17 @@ addresses, delete prefix-sniffing — SHIPPED (ContextDO stores `parent:
 remain classify ids — workspace scoping, untrusted connect strings — never
 pick a route); (c) extract the pure `Itx` core from
 ContextRegistry (constructor-defined defaults replace the code-context
-mechanism; global becomes `GlobalItx` with literal defines); (d) root
-verbs replace itx.caps; (e) path defines with longest-prefix dispatch;
-(f) ItxProcessor adapter: journal writes + replay + processor-mode
-execution, delete the SQLite caps table and ContextDO. Each lands
-independently green.
+mechanism; global becomes `GlobalItx` with literal defines) — SHIPPED
+for the node-hosted contexts (src/itx/itx.ts is the core, the handle
+class is `ItxHandle`, both DOs expose `itx()`, provide takes `provider:`,
+the wire verbs and protocol/registry/registry-host/addresses/
+code-contexts modules are gone; `DurableItx` in durable-itx.ts is the
+interim SQLite+audit wrapper wave (f) replaces; the stateless
+`GlobalItx` node is still open — global handles stay connect-minted);
+(d) root verbs replace itx.caps; (e) path defines with longest-prefix
+dispatch; (f) ItxProcessor adapter: journal writes + replay +
+processor-mode execution, delete the SQLite caps table and ContextDO.
+Each lands independently green.
 
 ### Queued from review (2026-06-11 afternoon), not yet implemented
 

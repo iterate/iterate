@@ -11,30 +11,32 @@
 // Anatomy:
 //   - typed built-ins (the trust kernel): the verbs provideCapability,
 //     revokeCapability, describe, fork, invoke — plus streams, project,
-//     projects, and `fetch`, which is sugar dispatching through the
-//     registry's `fetch` capability (a shadowable platform default)
+//     projects, and `fetch`, which is sugar dispatching through the core's
+//     `fetch` capability (a shadowable platform default)
 //   - a fallthrough Proxy: any unknown name becomes a PathProxy whose
-//     terminal call dispatches to the context node's registry. itx.slack
-//     works because someone provided "slack", not because anything here
-//     knows about Slack.
+//     terminal call dispatches to the context node's core (node.itx()).
+//     itx.slack works because someone provided "slack", not because anything
+//     here knows about Slack.
 
 import { RpcTarget } from "cloudflare:workers";
 import { typeid } from "@iterate-com/shared/typeid";
 import { createD1Client } from "sqlfu";
-import { PathProxyRpcTarget, replayPathCall } from "./path-proxy.ts";
+import { PathProxy } from "./path-proxy.ts";
 import { ItxError } from "./errors.ts";
 import { ItxStreams } from "./caps/streams.ts";
 import {
-  GLOBAL_CONTEXT_ID,
+  contextAddressOf,
+  dialContext,
+  replayPathCall,
   RESERVED_CAPABILITY_NAMES,
+  type CapabilityAddress,
   type CapabilityMeta,
-  type ProjectAccess,
-  type SerializableCapabilityTarget,
-} from "./protocol.ts";
-import { contextAddressOf, dialContext } from "./addresses.ts";
+  type ItxStub,
+  type LiveProvider,
+} from "./itx.ts";
+import { GLOBAL_CONTEXT_ID, type ProjectAccess } from "./refs.ts";
 import type { ContextDO } from "./context-do.ts";
 import { createShareToken, SHARE_TOKEN_PARAM } from "./http.ts";
-import type { LiveCapabilityTarget } from "./registry.ts";
 import type { AppConfig } from "~/config.ts";
 import {
   countAllProjects,
@@ -81,16 +83,16 @@ function isAccessor(target: object, prop: PropertyKey): boolean {
   return false;
 }
 
-export class Itx extends RpcTarget {
+export class ItxHandle extends RpcTarget {
   readonly #runtime: ItxRuntime;
 
   constructor(runtime: ItxRuntime) {
     super();
     this.#runtime = runtime;
-    // Unknown names fall through to the context's capability registry. The
+    // Unknown names fall through to the context's capability core. The
     // Proxy wraps the RpcTarget instance (workerd supports this since
     // workerd#3184); real members always win, and registration-time name
-    // validation (protocol.ts) guarantees caps cannot shadow them.
+    // validation (itx.ts) guarantees caps cannot shadow them.
     return new Proxy(this, {
       get(target, prop, _receiver) {
         if (prop === "then") return undefined;
@@ -116,9 +118,9 @@ export class Itx extends RpcTarget {
   // ---- the trust kernel ---------------------------------------------------
 
   /**
-   * Provide a capability on this handle's context — THE verb: the target
+   * Provide a capability on this handle's context — THE verb: the provider
    * kind carries everything else (durable or live). A live stub is
-   * session-bound (dies with your connection), an rpc/url target is durable.
+   * session-bound (dies with your connection), an rpc/url address is durable.
    * The entry lives at a PATH: `name` is the 1-segment sugar, `path` shadows
    * one subtree of an inherited cap (longest-prefix dispatch) — exactly one
    * of the two.
@@ -126,30 +128,35 @@ export class Itx extends RpcTarget {
   async provideCapability(input: {
     name?: string;
     path?: string[];
-    /** The capability's target (types.ts): serializable rpc/url data, or
-     * anything live — a stub implementing call({ path, args }) itself, or a
-     * plain object/function wrapped client-side with asPathCallable. */
-    target: SerializableCapabilityTarget | LiveCapabilityTarget;
+    /** The capability's provider (types.ts): a serializable rpc/url address,
+     * or anything live — a stub implementing call({ path, args }) itself, or
+     * a plain object/function wrapped client-side with asPathCallable. */
+    provider: CapabilityAddress | LiveProvider;
+    /** A sentence for the human/agent who finds this cap (the
+     * meta.instructions convention field, lifted by describe()). */
+    instructions?: string;
     /** TypeScript declarations for the cap's surface — the machine-facing
-     * counterpart of meta.instructions; lifted by describe(). */
+     * counterpart of `instructions`; lifted by describe(). */
     types?: string;
     meta?: CapabilityMeta;
   }) {
-    return await this.#registryStub().itxProvideCapability(input);
+    return await this.#itx().provideCapability(input);
   }
 
   /** Remove an entry (exact path match, never prefix; defaults can only be shadowed). */
   async revokeCapability(input: { name?: string; path?: string[] }) {
-    return await this.#registryStub().itxRevokeCapability(input);
+    return await this.#itx().revokeCapability(input);
   }
 
   /**
-   * The explicit dispatch form of the fallthrough: one registry dispatch with
+   * The explicit dispatch form of the fallthrough: one core dispatch with
    * the full call path. `itx.invoke({ path: ["slack", "chat", "postMessage"],
-   * args: [msg] })` ≡ `itx.slack.chat.postMessage(msg)`.
+   * args: [msg] })` ≡ `itx.slack.chat.postMessage(msg)`. The handle never
+   * forwards an origin: that field is the chain's trusted identity channel,
+   * set by delegating NODES only.
    */
   async invoke(input: { path: string[]; args: unknown[] }): Promise<unknown> {
-    return await this.#registryStub().itxInvoke({ args: input.args, path: input.path });
+    return await this.#itx().invoke({ args: input.args, path: input.path });
   }
 
   get streams(): ItxStreams {
@@ -194,16 +201,16 @@ export class Itx extends RpcTarget {
    */
   get project(): ProjectStub {
     const stub = this.#projectStub();
-    return new PathProxyRpcTarget((call) => {
-      // The itx* verbs (itxInvoke, itxProvideCapability, itxProjectWorkerCall, …) are
-      // node-to-node plumbing: chain delegation passes a TRUSTED `origin`
-      // and the forwarder passes registry-merged props. Reachable here,
-      // they would let any handle holder spoof another context's identity
-      // (e.g. read a sibling fork's workspace by faking origin). The proper
-      // doors are the root verbs (provideCapability/revokeCapability) and the
-      // caps themselves.
+    return new PathProxy((call) => {
+      // The node's `itx()` core (and the remaining itx*-prefixed forwarder
+      // plumbing, e.g. itxProjectWorkerCall) is node-to-node machinery:
+      // chain delegation passes a TRUSTED `origin` and the forwarder passes
+      // core-merged props. Reachable here, they would let any handle holder
+      // spoof another context's identity (e.g. read a sibling fork's
+      // workspace by faking origin). The proper doors are the root verbs
+      // (provideCapability/revokeCapability) and the caps themselves.
       const head = call.path[0] ?? "";
-      if (/^itx[A-Z]/.test(head)) {
+      if (head === "itx" || /^itx[A-Z]/.test(head)) {
         throw new ItxError({
           code: "FORBIDDEN",
           message: `${head} is internal registry plumbing, not part of the project surface — use itx.provideCapability / itx.<cap> instead.`,
@@ -238,10 +245,7 @@ export class Itx extends RpcTarget {
    */
   async fetch(input: Request | string, init?: RequestInit): Promise<Response> {
     const request = typeof input === "string" ? new Request(input, init) : input;
-    return (await this.#registryStub().itxInvoke({
-      args: [request],
-      path: ["fetch"],
-    })) as Response;
+    return (await this.#itx().invoke({ args: [request], path: ["fetch"] })) as Response;
   }
 
   async describe() {
@@ -249,7 +253,7 @@ export class Itx extends RpcTarget {
     return {
       access: this.#runtime.access,
       capability: this.#runtime.capability,
-      caps: projectId === null ? [] : await this.#registryStub().itxDescribe(),
+      caps: projectId === null ? [] : await this.#itx().describe(),
       context: this.#runtime.contextId,
       project: projectId === null ? null : await this.#projectStub().describe(),
     };
@@ -257,9 +261,8 @@ export class Itx extends RpcTarget {
 
   /** Fallthrough target — also reachable explicitly as itx.capability("name"). */
   capability(name: string): unknown {
-    const registry = this.#registryStub();
-    return new PathProxyRpcTarget(async ({ path, args }) => {
-      return await registry.itxInvoke({ args, path: [name, ...path] });
+    return new PathProxy(async ({ path, args }) => {
+      return await this.#itx().invoke({ args, path: [name, ...path] });
     });
   }
 
@@ -269,7 +272,7 @@ export class Itx extends RpcTarget {
    * scratchpad. Returns a handle, because narrowing is construction (Law 4).
    * Child caps shadow this context's; misses delegate up the chain.
    */
-  async fork(opts: { name?: string } = {}): Promise<Itx> {
+  async fork(opts: { name?: string } = {}): Promise<ItxHandle> {
     const projectId = this.#requireProjectId();
     const childId = typeid({
       env: { TYPEID_PREFIX: this.#runtime.config.typeIdPrefix },
@@ -291,7 +294,7 @@ export class Itx extends RpcTarget {
     // off an admin (access "all") handle still cannot reach sibling projects
     // via itx.projects — same access a reconnect through /api/itx/ctx_… would
     // resolve. (Matches the cursor/bugbot finding on fork scope.)
-    return new Itx({
+    return new ItxHandle({
       ...this.#runtime,
       access: [projectId],
       capability: undefined,
@@ -339,18 +342,17 @@ export class Itx extends RpcTarget {
   }
 
   /**
-   * The context node that owns this handle's registry: the Project DO for
-   * project contexts, a ContextDO for children. Both speak the same itx*
-   * registry surface; a child node delegates misses up the chain itself.
-   * The id→address mapping (addresses.ts) picks the node — no prefix
-   * sniffing here; global handles get the narrow-first error.
+   * The core of the context node this handle points at: the Project DO for
+   * project contexts, a ContextDO for children. Both expose it via itx() —
+   * a method, so `node.itx().invoke(...)` pipelines in ONE round trip
+   * (workerd does not pipeline calls through property accesses); a child
+   * node's core delegates misses up the chain itself. The id→address mapping
+   * (itx.ts) picks the node — no prefix sniffing here; global handles get
+   * the narrow-first error.
    */
-  #registryStub(): RegistryStub {
+  #itx(): ItxStub {
     this.#requireProjectId();
-    return dialContext(
-      this.#runtime.env,
-      contextAddressOf(this.#runtime.contextId),
-    ) as unknown as RegistryStub;
+    return dialContext(this.#runtime.env, contextAddressOf(this.#runtime.contextId)).itx();
   }
 
   #requireProjectId(): string {
@@ -373,7 +375,7 @@ export class Itx extends RpcTarget {
 /** Itx scripts are plain functions of the handle: `async (itx) => …`.
  * Parameterization is the caller's concern — bake values into the source
  * (the /api/itx/run endpoint does this for its `vars` API). */
-export type ItxFn<R = unknown> = (itx: Itx) => Promise<R> | R;
+export type ItxFn<R = unknown> = (itx: ItxHandle) => Promise<R> | R;
 
 /**
  * Map an SDK's type surface onto its itx stub: every function becomes async,
@@ -390,12 +392,6 @@ export type Stubify<T> = T extends (...args: infer A) => infer R
 
 type ProjectStub = DurableObjectStub<ProjectDurableObject>;
 type ContextStub = DurableObjectStub<ContextDO>;
-
-/** The registry verbs every context node (project or child) exposes. */
-type RegistryStub = Pick<
-  ProjectStub,
-  "itxDescribe" | "itxInvoke" | "itxProvideCapability" | "itxRevokeCapability"
->;
 
 function projectStub(env: Env, projectId: string): ProjectStub {
   return env.PROJECT.getByName(getProjectDurableObjectName(projectId)) as unknown as ProjectStub;
@@ -418,9 +414,9 @@ export class ItxProjects extends RpcTarget {
     super();
   }
 
-  async get(projectIdOrSlug: string): Promise<Itx> {
+  async get(projectIdOrSlug: string): Promise<ItxHandle> {
     const row = await this.requireProjectRow(projectIdOrSlug);
-    return new Itx({ ...this.runtime, contextId: row.id, projectId: row.id });
+    return new ItxHandle({ ...this.runtime, contextId: row.id, projectId: row.id });
   }
 
   async list(input: { limit?: number; offset?: number } = {}) {

@@ -6,8 +6,8 @@
 // SSRs anymore, DECISIONS D21.)
 
 import type { Client } from "sqlfu";
-import { isChildContextId, type ProjectAccess } from "./protocol.ts";
-import { contextAddressOf, dialContext } from "./addresses.ts";
+import { contextAddressOf, dialContext } from "./itx.ts";
+import { isChildContextId, type ProjectAccess } from "./refs.ts";
 import type { ItxRuntime } from "./handle.ts";
 import type { Principal } from "~/auth/principal.ts";
 import type { RequestContext } from "~/request-context.ts";
@@ -33,7 +33,7 @@ export async function resolveAccessibleContextId(input: {
 }): Promise<{ contextId: string; projectId: string } | null> {
   // The prefix check CLASSIFIES the untrusted connect string (child context
   // id vs project id-or-slug, like isProjectId below) — the dial itself goes
-  // through the central id→address mapping (addresses.ts).
+  // through the central id→address mapping (itx.ts).
   if (isChildContextId(input.idOrSlug)) {
     const node = dialContext(input.env, contextAddressOf(input.idOrSlug));
     try {

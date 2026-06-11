@@ -1,33 +1,75 @@
-// The ONE consumer-side adapter for dynamic capability surfaces (Law 6).
+// The client-safe half of the ONE calling convention (Law 6).
 //
-// A PathProxy turns real JavaScript property access into a single terminal
-// call: `proxy.chat.postMessage(args)` accumulates ["chat", "postMessage"]
-// locally (zero round trips) and then invokes the supplied callback once.
-// The kernel knows exactly ONE calling convention — `target.call({ path,
-// args })` — and this module owns both halves of bridging real objects onto
-// it: `replayPathCall` (data → dots, receiver-preserving) and
-// `asPathCallable` (wrap a member-shaped object so it speaks the
-// convention, replaying in the process where the object is concrete).
+// The kernel (itx.ts) dispatches every capability as `target.call({ path,
+// args })`. This module owns the three pure pieces of that convention that
+// must load OUTSIDE workerd — connectItx providers in Node and the browser
+// REPL import them at runtime, so nothing here may touch cloudflare:workers
+// (itx.ts re-exports all of it for server-side imports):
+//
+//   - PathProxy        dots → data (consumer side, zero round trips)
+//   - replayPathCall   data → dots (receiver-preserving replay)
+//   - asPathCallable   wrap a concrete object so it speaks the convention
 //
 // This is the only place in the codebase that plays reserved-name games.
-// Capability *names* are validated at registration time instead
-// (protocol.ts), so the proxy only needs to protect protocol-level names on
-// intermediate path segments.
+// Capability *names* are validated at registration time instead (itx.ts), so
+// the proxy only needs to protect protocol-level names on intermediate path
+// segments.
 
 import { RpcTarget } from "capnweb";
-import { RESERVED_PATH_SEGMENTS, type PathCall, type PathCallTarget } from "./protocol.ts";
+
+/** The ONE calling convention (Law 6): every capability target is dispatched
+ * as `call({ path, args })`. Whether a path is replayed onto a real member
+ * tree is decided at the EDGE where the concrete object lives. */
+export type PathCall = { path: string[]; args: unknown[] };
+
+/** The full shape every dispatched capability target speaks. */
+export type PathCallable = { call(input: PathCall): unknown };
+
+/**
+ * Names that must never traverse a dynamic surface — prototype-pollution
+ * vectors, capnweb stub controls, and thenable/`Function.prototype` traps.
+ * The single source of truth for BOTH the consumer-side path proxy and the
+ * server-side path replay (`replayPathCall`), so a hand-built `path` reaching
+ * `invoke` directly is filtered identically.
+ */
+export const RESERVED_PATH_SEGMENTS: ReadonlySet<string> = new Set([
+  "__defineGetter__",
+  "__defineSetter__",
+  "__lookupGetter__",
+  "__lookupSetter__",
+  "__proto__",
+  "apply",
+  "bind",
+  "call",
+  "catch",
+  "constructor",
+  "dup",
+  "finally",
+  "hasOwnProperty",
+  "isPrototypeOf",
+  "map",
+  "onRpcBroken",
+  "propertyIsEnumerable",
+  "prototype",
+  "then",
+  "toLocaleString",
+  "toString",
+  "valueOf",
+]);
 
 export type PathProxyCall = (input: PathCall) => unknown;
 
 /**
- * Class-shaped constructor that actually returns a callable Proxy. The class
- * wrapper exists so call sites read as "this is an RPC-able object"; workerd
- * supports Proxy-wrapped functions/targets across RPC since the
- * DataCloneError limitation was fixed (workerd#3184).
+ * Class-shaped constructor that actually returns a callable Proxy: real
+ * JavaScript property access accumulates a path locally (zero round trips)
+ * and the terminal call invokes the supplied callback once. The class wrapper
+ * exists so call sites read as "this is an RPC-able object"; workerd supports
+ * Proxy-wrapped functions/targets across RPC since the DataCloneError
+ * limitation was fixed (workerd#3184).
  */
-export class PathProxyRpcTarget {
+export class PathProxy {
   constructor(callPath: PathProxyCall) {
-    return pathNode(callPath, []) as unknown as PathProxyRpcTarget;
+    return pathNode(callPath, []) as unknown as PathProxy;
   }
 }
 
@@ -84,9 +126,9 @@ function pathNode(callPath: PathProxyCall, path: string[]): Function {
  * (capnweb LEARNINGS, "Preserve Receivers").
  */
 export async function replayPathCall(target: unknown, call: PathCall): Promise<unknown> {
-  // Filter the path here too, not just in the consumer proxy: `itxInvoke` is
-  // a public DO method, so a caller can hand-build a `path` and reach this
-  // directly. This is the authoritative reserved-name gate.
+  // Filter the path here too, not just in the consumer proxy: `invoke` is a
+  // public verb, so a caller can hand-build a `path` and reach this directly.
+  // This is the authoritative reserved-name gate.
   for (const segment of call.path) {
     if (RESERVED_PATH_SEGMENTS.has(segment)) {
       throw new Error(`Capability path segment "${segment}" is reserved.`);
@@ -121,20 +163,19 @@ export async function replayPathCall(target: unknown, call: PathCall): Promise<u
  * `asPathCallable(obj).call({ path, args })` replays the path on `obj` via
  * {@link replayPathCall} — in THIS process, where `obj` is concrete.
  *
- * Two homes, one helper:
- * - Server-side, the registry wraps the concrete objects it dials itself
- *   (env bindings, loader entrypoints, facets) so dispatch never branches.
- * - Client-side, a live provider wraps a plain object-of-methods (or a bare
- *   function) before provideCapability(): the wrapper extends capnweb's
- *   RpcTarget so it crosses the session as a stub, and the replay then runs
- *   back in the provider's process. Providers that implement `call`
- *   themselves (the SDK-shaped FakeSlackSdk pattern) don't need it.
+ * This is the CLIENT-side wrapper: a live provider wraps a plain
+ * object-of-methods (or a bare function) before provideCapability()ing it —
+ * the wrapper extends capnweb's RpcTarget so it crosses the session as a
+ * stub, and the replay then runs back in the provider's process. Providers
+ * that implement `call` themselves (the SDK-shaped FakeSlackSdk pattern)
+ * don't need it. (The dial wraps the concrete objects it resolves itself with
+ * plain in-process wrappers — durable-itx.ts.)
  */
-export function asPathCallable(target: unknown): PathCallTarget {
-  return new PathCallable(target);
+export function asPathCallable(target: unknown): PathCallable {
+  return new ClientPathCallable(target);
 }
 
-class PathCallable extends RpcTarget {
+class ClientPathCallable extends RpcTarget {
   readonly #target: unknown;
 
   constructor(target: unknown) {

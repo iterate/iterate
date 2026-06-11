@@ -33,7 +33,7 @@
 
 import { use, useCallback, useSyncExternalStore } from "react";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { Itx } from "./handle.ts";
+import type { ItxHandle } from "./handle.ts";
 
 /**
  * The map/evict core, framework-free for testability. `connect` dials and
@@ -84,15 +84,15 @@ export function createConnectionPool<T>(input: {
   };
 }
 
-function dialItx(context: string | undefined, onDead: () => void): Promise<RpcStub<Itx>> {
+function dialItx(context: string | undefined, onDead: () => void): Promise<RpcStub<ItxHandle>> {
   const url = new URL(
     context ? `/api/itx/${encodeURIComponent(context)}` : "/api/itx",
     window.location.href,
   );
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(url);
-  const { promise, resolve, reject } = Promise.withResolvers<RpcStub<Itx>>();
-  socket.addEventListener("open", () => resolve(newWebSocketRpcSession<Itx>(socket)));
+  const { promise, resolve, reject } = Promise.withResolvers<RpcStub<ItxHandle>>();
+  socket.addEventListener("open", () => resolve(newWebSocketRpcSession<ItxHandle>(socket)));
   // `close` fires both for a failed dial (reject the pending promise; no-op
   // once resolved) and for a later death of an established socket — either
   // way the entry is dead and must go.
@@ -103,7 +103,7 @@ function dialItx(context: string | undefined, onDead: () => void): Promise<RpcSt
   return promise;
 }
 
-const pool = createConnectionPool<RpcStub<Itx>>({ connect: dialItx });
+const pool = createConnectionPool<RpcStub<ItxHandle>>({ connect: dialItx });
 
 function assertBrowser(caller: string): void {
   if (typeof window === "undefined") {
@@ -120,7 +120,7 @@ function assertBrowser(caller: string): void {
  * outside the suspense path). Same singleton map as {@link useItx}; same
  * browser-only contract.
  */
-export function getBrowserItx(context?: string): Promise<RpcStub<Itx>> {
+export function getBrowserItx(context?: string): Promise<RpcStub<ItxHandle>> {
   assertBrowser("getBrowserItx");
   return pool.get(context).promise;
 }
@@ -132,7 +132,7 @@ export function getBrowserItx(context?: string): Promise<RpcStub<Itx>> {
  * for the full contract. Wrap consumers in a Suspense boundary and keep them
  * out of SSR.
  */
-export function useItx(context?: string): RpcStub<Itx> {
+export function useItx(context?: string): RpcStub<ItxHandle> {
   assertBrowser("useItx");
   // Socket death evicts the pool entry; this store subscription is what turns
   // that into a re-render, so the component below re-dials and re-suspends.

@@ -25,8 +25,8 @@ import type {
 } from "@iterate-com/shared/streams/types";
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { ItxError } from "../errors.ts";
-import { replayPathCall } from "../path-proxy.ts";
-import type { PathCall, ProjectAccess } from "../protocol.ts";
+import { replayPathCall, type PathCall } from "../itx.ts";
+import type { ProjectAccess } from "../refs.ts";
 import { getStreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 
 type StreamsClient = ReturnType<typeof getStreamsBackend>;

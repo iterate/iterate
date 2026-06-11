@@ -17,8 +17,8 @@
 
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { ItxRuntime } from "./handle.ts";
-import { ITX_AUDIT_STREAM_PATH, ITX_EVENT_TYPES } from "./protocol.ts";
-import type { ItxProps } from "./protocol.ts";
+import { ITX_EVENT_TYPES } from "./itx.ts";
+import { ITX_AUDIT_STREAM_PATH, type ItxProps } from "./refs.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,

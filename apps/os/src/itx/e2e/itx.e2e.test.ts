@@ -133,7 +133,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
   using projectItx = await itx.projects.get(project.id);
   await projectItx.provideCapability({
     name: "slack",
-    target: new FakeSlackSdk() as never,
+    provider: new FakeSlackSdk() as never,
   });
 
   // (3) Anyone holding a handle calls it through the fallthrough — zero
@@ -154,7 +154,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
   await projectItx.provideCapability({
     name: "slackDurable",
     types: slackDurableTypes,
-    target: {
+    provider: {
       type: "rpc",
       worker: {
         type: "source",
@@ -200,7 +200,7 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   await projectItx.provideCapability({
     meta: { instructions: "Workers AI. Use like the env.AI binding." },
     name: "ai",
-    target: { type: "rpc", worker: { binding: "AI", type: "binding" } },
+    provider: { type: "rpc", worker: { binding: "AI", type: "binding" } },
   });
   const models = (await (projectItx as never as Record<string, any>).ai.models()) as unknown[];
   expect(Array.isArray(models)).toBe(true);
@@ -211,7 +211,7 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   // pattern.
   await projectItx.provideCapability({
     name: "aiWrapped",
-    target: {
+    provider: {
       entrypoint: "BindingCapability",
       props: { binding: "AI" },
       type: "rpc",
@@ -223,46 +223,50 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   ).aiWrapped.models()) as unknown[];
   expect(Array.isArray(wrapped)).toBe(true);
 
-  // (3) Allowlist: a non-dialable binding refuses at define time, and a
-  // loopback export outside DIALABLE_LOOPBACKS refuses too.
-  await expect(
-    projectItx.provideCapability({
-      name: "db",
-      target: { type: "rpc", worker: { binding: "DB", type: "binding" } },
-    }),
-  ).rejects.toThrow(/not dialable/);
-  await expect(
-    projectItx.provideCapability({
-      name: "sneaky",
-      target: { entrypoint: "ItxEntrypoint", type: "rpc", worker: { type: "loopback" } },
-    }),
-  ).rejects.toThrow(/not dialable/);
-  // A typo'd serializable target must fail at define, not register as a
-  // dead live cap.
+  // (3) Allowlist: providing is STRUCTURAL only (the provide-time fail-fast
+  // was deliberately dropped with the core extraction) — reachability is the
+  // dial's authority, so a non-dialable binding/loopback/namespace refuses at
+  // FIRST CALL instead.
+  const handle = projectItx as never as Record<string, any>;
+  await projectItx.provideCapability({
+    name: "db",
+    provider: { type: "rpc", worker: { binding: "DB", type: "binding" } },
+  });
+  await expect(handle.db.prepare("SELECT 1")).rejects.toThrow(/not dialable/);
+  await projectItx.provideCapability({
+    name: "sneaky",
+    provider: { entrypoint: "ItxEntrypoint", type: "rpc", worker: { type: "loopback" } },
+  });
+  await expect(handle.sneaky.context()).rejects.toThrow(/not dialable/);
+  // A typo'd serializable address still fails at define (structural check) —
+  // it must not register as a dead live cap.
   await expect(
     projectItx.provideCapability({
       name: "typoed",
-      target: { type: "rcp", worker: { binding: "AI", type: "binding" } } as never,
+      provider: { type: "rcp", worker: { binding: "AI", type: "binding" } } as never,
     }),
   ).rejects.toThrow(/unknown target type/);
   // Durable Object dials are name-scoped per project (itx:<projectId>:<name>),
   // but the namespace allowlist still defaults to empty — config has to opt in.
-  await expect(
-    projectItx.provideCapability({
-      name: "sneakyDo",
-      target: {
-        type: "rpc",
-        worker: { binding: "PROJECT", name: "someone-elses-project", type: "durable-object" },
-      },
-    }),
-  ).rejects.toThrow(/not dialable/);
+  await projectItx.provideCapability({
+    name: "sneakyDo",
+    provider: {
+      type: "rpc",
+      worker: { binding: "PROJECT", name: "someone-elses-project", type: "durable-object" },
+    },
+  });
+  await expect(handle.sneakyDo.anything()).rejects.toThrow(/not dialable/);
 
   // describe() reports the new kinds and lifts instructions (own rows only —
-  // inherited platform defaults carry their code context as owner).
+  // inherited platform defaults carry their code context as owner). The
+  // unreachable-but-provided rows from (3) appear too: provide is structural.
   const caps = (await projectItx.describe()).caps as Array<{ owner: string }>;
   expect(caps.filter((cap) => cap.owner === project.id)).toMatchObject([
     { instructions: "Workers AI. Use like the env.AI binding.", kind: "rpc", name: "ai" },
     { kind: "rpc", name: "aiWrapped" },
+    { kind: "rpc", name: "db" },
+    { kind: "rpc", name: "sneaky" },
+    { kind: "rpc", name: "sneakyDo" },
   ]);
 });
 
@@ -285,7 +289,7 @@ test.skipIf(!MCP_TEST_SERVER_URL)(
     await projectItx.provideCapability({
       meta: { instructions: "Test MCP server. Call listTools() first." },
       name: "mcptest",
-      target: {
+      provider: {
         entrypoint: "McpClient",
         props: { serverUrl: MCP_TEST_SERVER_URL },
         type: "rpc",
@@ -357,7 +361,7 @@ export class PetstoreClient extends WorkerEntrypoint {
   await projectItx.provideCapability({
     meta: { instructions: "Petstore API. Call listOperations() first." },
     name: "petstore",
-    target: {
+    provider: {
       entrypoint: "ProjectWorker",
       props: {
         export: "PetstoreClient",
@@ -415,7 +419,7 @@ test("url caps dial a remote Cap'n Web server over a WebSocket session", async (
   await projectItx.provideCapability({
     meta: { instructions: "This deployment's own itx, dialed back over the network." },
     name: "remoteItx",
-    target: {
+    provider: {
       headers: { authorization: `Bearer ${adminApiSecret()}` },
       type: "url",
       url: new URL(`/api/itx/${project.id}`, baseUrl()).toString(),
@@ -472,7 +476,7 @@ test("platform defaults arrive from the platform:project code context, and own r
   }
   await projectItx.provideCapability({
     name: "ai",
-    target: new ShadowAi() as never,
+    provider: new ShadowAi() as never,
   });
   const after = (await projectItx.describe()) as DescribedCaps;
   const aiCaps = after.caps.filter((cap) => cap.name === "ai");
@@ -513,7 +517,7 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   }
   await projectItx.provideCapability({
     name: "fetch",
-    target: new EgressInterceptor() as never,
+    provider: new EgressInterceptor() as never,
   });
 
   // (3) The explicit door: itx.fetch now lands on the provider, not the
@@ -563,7 +567,7 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   const childDescription = await child.describe();
   await child.provideCapability({
     name: "fetch",
-    target: new EgressInterceptor() as never,
+    provider: new EgressInterceptor() as never,
   });
   const childScriptResponse = await fetch(new URL("/api/itx/run", baseUrl()), {
     body: JSON.stringify({
@@ -690,7 +694,7 @@ test("worker caps hold a correctly scoped itx of their own", async () => {
 
   await projectItx.provideCapability({
     name: "todo",
-    target: {
+    provider: {
       type: "rpc",
       worker: {
         type: "source",
@@ -732,7 +736,7 @@ test("members caps auto-proxy every public method/getter at any depth", async ()
   // getter returning a nested surface), and they are all instantly callable.
   await projectItx.provideCapability({
     name: "kit",
-    target: {
+    provider: {
       type: "rpc",
       worker: {
         type: "source",
@@ -772,7 +776,7 @@ test("one dynamic worker cap calls another's methods through its own itx", async
   // getter. No method list — the whole public surface is proxied.
   await projectItx.provideCapability({
     name: "inventory",
-    target: {
+    provider: {
       type: "rpc",
       worker: {
         type: "source",
@@ -799,7 +803,7 @@ test("one dynamic worker cap calls another's methods through its own itx", async
   // itx.inventory.skus.priceOf(...) are proxied worker→worker, no wiring.
   await projectItx.provideCapability({
     name: "report",
-    target: {
+    provider: {
       type: "rpc",
       worker: {
         type: "source",
@@ -868,7 +872,7 @@ test("revoked and offline caps fail with instructive errors", async () => {
   await expect(
     projectItx.provideCapability({
       name: "then",
-      target: {
+      provider: {
         type: "rpc",
         worker: {
           type: "source",
@@ -882,18 +886,19 @@ test("revoked and offline caps fail with instructive errors", async () => {
     }),
   ).rejects.toThrow(/reserved/);
 
-  // itx.project IS the full Project DO surface (D17) — except the itx*
-  // registry verbs, which are node-to-node plumbing: itxInvoke carries the
-  // trusted chain-delegation `origin`, so exposing it would let any handle
-  // holder spoof another context's identity (a sibling fork's workspace).
-  // The proxy masks them; the registry's reserved-segment gate stays as
-  // defense in depth for paths arriving over the real chain.
+  // itx.project IS the full Project DO surface (D17) — except the node's
+  // `itx()` core (and the residual itx*-prefixed forwarder plumbing), which
+  // is node-to-node machinery: invoke carries the trusted chain-delegation
+  // `origin`, so exposing it would let any handle holder spoof another
+  // context's identity (a sibling fork's workspace). The proxy masks the
+  // `itx` head; the core's reserved-segment gate stays as defense in depth
+  // for paths arriving over the real chain.
   const projectDo = (projectItx as { project: unknown }).project as {
-    itxInvoke(input: { args: unknown[]; origin?: string; path: string[] }): Promise<unknown>;
+    itx(): Promise<unknown>;
+    itxProjectWorkerCall(input: Record<string, unknown>): Promise<unknown>;
   };
-  await expect(
-    projectDo.itxInvoke({ args: [], origin: "ctx_spoofed", path: ["workspace", "readFile"] }),
-  ).rejects.toThrow(/internal registry plumbing/);
+  await expect(projectDo.itx()).rejects.toThrow(/internal registry plumbing/);
+  await expect(projectDo.itxProjectWorkerCall({})).rejects.toThrow(/internal registry plumbing/);
 });
 
 function authHeaders() {

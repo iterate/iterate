@@ -12,9 +12,8 @@ import {
 } from "~/domains/streams/entrypoints/streams-backend.ts";
 import { parseConfig } from "~/config.ts";
 import type { ContextDO } from "~/itx/context-do.ts";
-import { contextAddressOf } from "~/itx/addresses.ts";
+import { contextAddressOf, type CapabilityAddress, type ItxStub } from "~/itx/itx.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
-import type { SerializableCapabilityTarget } from "~/itx/protocol.ts";
 import { runItxScript } from "~/itx/run.ts";
 
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
@@ -98,25 +97,25 @@ const MCP_CONTEXT_CAPS_VERSION = "1";
 const SEEDED_CAPS: Array<{
   name: string;
   instructions: string;
-  target: SerializableCapabilityTarget;
+  provider: CapabilityAddress;
 }> = [
   {
     instructions:
       "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
     name: "ai",
-    target: { type: "rpc", worker: { binding: "AI", type: "binding" } },
+    provider: { type: "rpc", worker: { binding: "AI", type: "binding" } },
   },
   {
     instructions:
       "Project-bound OS API. Call itx.os.listProcedures() for the TypeScript surface, then itx.os.<path.to.procedure>({ …input }).",
     name: "os",
-    target: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
+    provider: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
   },
   {
     instructions:
       "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }) against the Gmail REST API.",
     name: "gmail",
-    target: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
+    provider: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
   },
 ];
 
@@ -340,11 +339,12 @@ export class ProjectMcpServerConnection extends McpAgent<
       parent: { id: projectId, address: contextAddressOf(projectId) },
       projectId,
     });
+    const contextItx = (await contextStub.itx()) as unknown as ItxStub;
     for (const cap of SEEDED_CAPS) {
-      await contextStub.itxProvideCapability({
-        meta: { instructions: cap.instructions },
+      await contextItx.provideCapability({
+        instructions: cap.instructions,
         name: cap.name,
-        target: cap.target,
+        provider: cap.provider,
       });
     }
     await this.ctx.storage.put(storageKey, contextId);

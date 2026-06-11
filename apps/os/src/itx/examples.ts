@@ -112,12 +112,12 @@ const answer = {
   },
 };
 
-// provideCapability() is THE verb: a live stub is just another target.
+// provideCapability() is THE verb: a live stub is just another provider.
 // asPathCallable() makes a plain object-of-methods speak the one calling
 // convention (call({ path, args }) replayed back here on your object). A
 // live cap disappears when this tab disconnects; reconnect and
 // provideCapability() again to restore it.
-await itx.provideCapability({ name: "answer", target: asPathCallable(answer) });
+await itx.provideCapability({ name: "answer", provider: asPathCallable(answer) });
 
 // Unknown names on the handle fall through to the registry, so the cap is
 // callable as if it were built in.
@@ -144,7 +144,7 @@ class FakeSlackSdk extends RpcTarget {
 
 await itx.provideCapability({
   name: "fakeSlack",
-  target: new FakeSlackSdk(),
+  provider: new FakeSlackSdk(),
 });
 
 // Call any depth — the path is accumulated locally and sent once.
@@ -155,7 +155,7 @@ return await itx.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" });
     id: "provide-durable-worker-cap",
     title: "Provide a durable worker capability from source",
     description:
-      "A serializable target stores source code as a DURABLE capability (a stateless dynamic worker), loaded on demand. Unlike a live stub target, it survives this session. Every public method on the WorkerEntrypoint is auto-proxied — add a method, call it instantly.",
+      "A serializable address stores source code as a DURABLE capability (a stateless dynamic worker), loaded on demand. Unlike a live provider stub, it survives this session. Every public method on the WorkerEntrypoint is auto-proxied — add a method, call it instantly.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -167,7 +167,7 @@ return await itx.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" });
 // module text.
 await itx.provideCapability({
   name: "greeter",
-  target: {
+  provider: {
     type: "rpc",
     worker: {
       type: "source",
@@ -205,7 +205,7 @@ return {
     code: `
 await itx.provideCapability({
   name: "todo",
-  target: {
+  provider: {
     type: "rpc",
     worker: {
       type: "source",
@@ -251,7 +251,7 @@ return await itx.todo.list();
     code: `
 await itx.provideCapability({
   name: "kit",
-  target: {
+  provider: {
     type: "rpc",
     worker: {
       type: "source",
@@ -291,7 +291,7 @@ return {
 // Provider cap.
 await itx.provideCapability({
   name: "inventory",
-  target: {
+  provider: {
     type: "rpc",
     worker: {
       type: "source",
@@ -316,7 +316,7 @@ await itx.provideCapability({
 // Consumer cap — a different dynamic worker that calls the first via itx.
 await itx.provideCapability({
   name: "report",
-  target: {
+  provider: {
     type: "rpc",
     worker: {
       type: "source",
@@ -354,7 +354,7 @@ return await itx.report.build({ sku: "ABC" });
     code: `
 await itx.provideCapability({
   name: "counter",
-  target: {
+  provider: {
     type: "rpc",
     worker: {
       type: "source",
@@ -397,7 +397,7 @@ return { current: await itx.counter.current() };   // 2, and it persists
 // A cap on the project — visible to every child through the chain.
 await itx.provideCapability({
   name: "shared",
-  target: new (class extends RpcTarget {
+  provider: new (class extends RpcTarget {
     async call({ path }) { return { from: "project", method: path.join(".") }; }
   })(),
 });
@@ -408,7 +408,7 @@ const child = await itx.fork({ name: "repl-scratch" });
 // The child can shadow 'shared' with its own definition...
 await child.provideCapability({
   name: "shared",
-  target: new (class extends RpcTarget {
+  provider: new (class extends RpcTarget {
     async call({ path }) { return { from: "child", method: path.join(".") }; }
   })(),
 });
@@ -449,7 +449,7 @@ return { status: response.status, sawSubstitutedHeader: body.headers };
 await itx.provideCapability({
   name: "hello",
   meta: { http: { expose: true } },   // routable; still admin-gated
-  target: {
+  provider: {
     type: "rpc",
     worker: {
       type: "source",

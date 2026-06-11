@@ -1,32 +1,29 @@
 // ContextDO: hosts one CHILD context (spec §3) — the durable container behind
 // itx.fork(). An agent session, a REPL scratchpad, a notebook-to-be: each is
 // one ContextDO instance with the same anatomy as the project context it
-// hangs under (registry + parent pointer + stream + live connections), just
-// cheaper and more disposable.
+// hangs under (capability core + parent pointer + stream + live connections),
+// just cheaper and more disposable.
 //
 // Capability resolution walks the chain child → project (→ global, when the
-// global registry exists): a miss here delegates to the parent per call
+// global node exists): the core delegates a miss to `parentItx` per call
 // (DECISIONS.md D2 — no name index until latency says otherwise). Shadowing
-// is allowed and VISIBLE: itxDescribe() returns the merged chain with each
+// is allowed and VISIBLE: describe() returns the merged chain with each
 // entry's owner, child entries first.
 
 import { DurableObject } from "cloudflare:workers";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { ContextRegistry, type LiveCapabilityTarget } from "./registry.ts";
-import { createContextRegistryHost } from "./registry-host.ts";
-import { ITX_AUDIT_STREAM_PATH, ITX_EVENT_TYPES } from "./protocol.ts";
-import type {
-  CapabilityDescription,
-  CapabilityMeta,
-  PathCall,
-  SerializableCapabilityTarget,
-} from "./protocol.ts";
 import {
   contextAddressOf,
   dialContext,
-  type ContextAddress,
-  type ContextNodeStub,
-} from "./addresses.ts";
+  ITX_EVENT_TYPES,
+  resolveDialableTargets,
+  type CapabilityAddress,
+  type Itx,
+  type ItxStub,
+} from "./itx.ts";
+import { DurableItx, durableObjectFacetsHook, makeDial } from "./durable-itx.ts";
+import { ITX_AUDIT_STREAM_PATH } from "./refs.ts";
+import { parseConfig } from "~/config.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -37,13 +34,13 @@ export type ContextDescriptor = {
   name: string | null;
   /** The parent context: its identity (a project id or another ctx_… id, for
    * audit) plus its ADDRESS — how chain delegation dials the parent node. */
-  parent: { id: string; address: ContextAddress };
+  parent: { id: string; address: CapabilityAddress };
   /** The owning project — every child context lives under exactly one. */
   projectId: string;
 };
 
 export class ContextDO extends DurableObject<Env> {
-  #registry: ContextRegistry | null = null;
+  #itx: DurableItx | null = null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -60,7 +57,7 @@ export class ContextDO extends DurableObject<Env> {
   initialize(input: {
     id: string;
     name?: string;
-    parent: { id: string; address: ContextAddress };
+    parent: { id: string; address: CapabilityAddress };
     projectId: string;
   }) {
     const cursor = this.ctx.storage.sql.exec(
@@ -99,72 +96,47 @@ export class ContextDO extends DurableObject<Env> {
   }
 
   /** This node's own address — the save() half of the SturdyRef story. */
-  address(): ContextAddress {
+  address(): CapabilityAddress {
     return contextAddressOf(this.descriptor().id);
   }
 
-  itxProvideCapability(input: {
-    name?: string;
-    path?: string[];
-    target: SerializableCapabilityTarget | LiveCapabilityTarget;
-    types?: string;
-    meta?: CapabilityMeta;
-  }) {
-    return this.registry().provideCapability(input);
-  }
-
-  itxRevokeCapability(input: { name?: string; path?: string[] }) {
-    return this.registry().revokeCapability(input);
-  }
-
-  /** Merged chain view: own caps first, then parents', shadowed names marked. */
-  async itxDescribe(): Promise<CapabilityDescription[]> {
-    const own = this.registry().describe();
-    // Suppression is deliberately EXACT-match only: a path define (own row
-    // "sdk.chat.postMessage") shadows just its subtree — the parent's "sdk"
-    // stays live for every other path, so hiding it here would lie about
-    // what longest-prefix dispatch actually resolves. Both entries showing,
-    // each with its owner, IS the truthful merged view.
-    const ownNames = new Set(own.map((capability) => capability.name));
-    const parentCapabilities = await this.parentStub().itxDescribe();
-    return [...own, ...parentCapabilities.filter((capability) => !ownNames.has(capability.name))];
-  }
-
-  async itxInvoke(input: PathCall & { origin?: string }): Promise<unknown> {
-    const registry = this.registry();
-    if (registry.resolves(input.path)) {
-      return await registry.invoke({ args: input.args, path: input.path }, input.origin);
-    }
-    // Chain delegation: the WHOLE call path moves up, one extra hop per
-    // parent level, no cache to invalidate. The ORIGIN context rides along so
-    // context-scoped caps resolved at an ancestor still bind to the caller's
-    // context.
-    return await this.parentStub().itxInvoke({
-      ...input,
-      origin: input.origin ?? this.descriptor().id,
-    });
-  }
-
-  private parentStub(): ContextNodeStub {
-    return dialContext(this.env, this.descriptor().parent.address);
-  }
-
-  private registry(): ContextRegistry {
-    if (this.#registry) return this.#registry;
+  /**
+   * This child context's capability core. Its `parentItx` is a stub of the
+   * parent NODE's core — re-dialed per call (Workers RPC stubs are
+   * request-scoped in a DO, so a held stub would go stale), with each verb
+   * pipelining through the node's itx() in one round trip. No constructor
+   * defaults here, deliberately: a child's misses delegate up the real chain
+   * to the parent node, which is where the platform defaults (and any
+   * shadowing project rows) live.
+   */
+  itx(): Itx {
+    if (this.#itx) return this.#itx;
     const descriptor = this.descriptor();
-    this.#registry = new ContextRegistry(
-      // No `defaults` here, deliberately: a child context's misses delegate
-      // up the real chain (itxInvoke below) to the parent node, which is
-      // where the platform:project code-context link lives.
-      createContextRegistryHost({
-        audit: (event) => this.audit(event.type, event.payload),
+    const parentNode = () => dialContext(this.env, descriptor.parent.address);
+    const parentItx: ItxStub = {
+      describe: () => parentNode().itx().describe(),
+      invoke: (input) => parentNode().itx().invoke(input),
+      provideCapability: (input) => parentNode().itx().provideCapability(input),
+      revokeCapability: (input) => parentNode().itx().revokeCapability(input),
+    };
+    this.#itx = new DurableItx({
+      audit: (event) => this.audit(event.type, event.payload),
+      contextId: descriptor.id,
+      dial: makeDial({
+        allowlists: resolveDialableTargets(parseConfig(this.env).itx),
         contextId: descriptor.id,
-        ctx: this.ctx,
         env: this.env,
+        exports: this.ctx.exports as unknown as Parameters<typeof makeDial>[0]["exports"],
+        facets: durableObjectFacetsHook(this.ctx),
+        loader: (this.env as { LOADER?: unknown }).LOADER as Parameters<
+          typeof makeDial
+        >[0]["loader"],
         projectId: descriptor.projectId,
       }),
-    );
-    return this.#registry;
+      parentItx,
+      sql: this.ctx.storage.sql,
+    });
+    return this.#itx;
   }
 
   /**

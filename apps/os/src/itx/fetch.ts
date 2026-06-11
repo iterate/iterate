@@ -17,7 +17,7 @@ import {
 import { resolveItx } from "./entrypoint.ts";
 import { tagOutboundItxError } from "./errors.ts";
 import { runItxScript } from "./run.ts";
-import { GLOBAL_CONTEXT_ID, type ItxProps, type ProjectAccess } from "./protocol.ts";
+import { GLOBAL_CONTEXT_ID, type ItxProps, type ProjectAccess } from "./refs.ts";
 import type { ItxRuntime } from "./handle.ts";
 import { authenticateCapnwebAdmin, handleCapnwebAdminCookieRequest } from "./admin-auth-cookie.ts";
 import { accessForPrincipal, requireWorkerExports, resolveAccessibleContextId } from "./access.ts";

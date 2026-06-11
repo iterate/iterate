@@ -32,7 +32,7 @@ import type { Event } from "@iterate-com/shared/streams/types";
 import type { RepoInfo } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
-import type { ItxProps } from "~/itx/protocol.ts";
+import type { ItxProps } from "~/itx/refs.ts";
 import type { ProjectEgressProps } from "~/itx/entrypoint.ts";
 import type { StreamsBackendProps } from "~/domains/streams/entrypoints/streams-backend.ts";
 import { wireIsolateEnv, type IsolateLoopback } from "~/itx/isolate.ts";

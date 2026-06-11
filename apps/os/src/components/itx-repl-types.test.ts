@@ -73,7 +73,7 @@ describe("itx REPL TypeScript declarations", () => {
     const code = [
       'const projectScoped: string = projectId ?? "global";',
       "const target: object = new RpcTarget();",
-      "const fn: ItxFn<StreamEvent[]> = (handle: Itx) =>",
+      "const fn: ItxFn<StreamEvent[]> = (handle: ItxHandle) =>",
       '  handle.streams.get({ path: "/chat" }).read();',
       "const previous: unknown[] = [$_, _, vars.anything, env.anything];",
       "[projectScoped, target, fn, previous];",

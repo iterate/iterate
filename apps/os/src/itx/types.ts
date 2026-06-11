@@ -26,17 +26,22 @@
  * names that grant nothing by possession and are restored to live objects
  * on demand.
  *
- * **An itx** is a live handle on one context — the only thing user code
- * ever touches, identical in the browser, Node, the REPL, the project
- * worker (the worker built from the project's own repo), itx scripts, and
- * capabilities themselves. An itx is an address, an access set, and five
- * verbs: `provideCapability`, `revokeCapability`, `describe`, `fork`,
- * `invoke` (plus a few built-in members — `projects`, `streams`, `fetch`);
- * every other property falls through to the context's capability registry.
- * Authority is the handle itself: auth happens once at connect, and which
- * context you hold — plus the principal it was minted for — is the whole
- * permission model. Narrowing is construction: a weaker handle is a new
- * handle on a narrower context, never a flag on a wider one.
+ * **An Itx** is the capability CORE a context node embeds — "an Itx holds
+ * capabilities; everything else holds a stub of one". It owns the path-keyed
+ * entry map, the live-stub table, longest-prefix dispatch, and parent-chain
+ * delegation, with exactly four verbs: `provideCapability`,
+ * `revokeCapability`, `describe`, `invoke` (see {@link Itx}).
+ *
+ * **An itx HANDLE** ({@link ItxHandle}) is the live view user code touches —
+ * identical in the browser, Node, the REPL, the project worker (the worker
+ * built from the project's own repo), itx scripts, and capabilities
+ * themselves. A handle is an address, an access set, and five verbs: the
+ * core's four plus `fork` (and a few built-in members — `projects`,
+ * `streams`, `fetch`); every other property falls through to the context's
+ * core. Authority is the handle itself: auth happens once at connect, and
+ * which context you hold — plus the principal it was minted for — is the
+ * whole permission model. Narrowing is construction: a weaker handle is a
+ * new handle on a narrower context, never a flag on a wider one.
  *
  * ## Thirty seconds of itx
  *
@@ -57,7 +62,7 @@
  *
  * await itx.provideCapability({            // teach this context a new trick:
  *   name: "ai",                            // itx.ai.run(model, input)
- *   target: { type: "rpc", worker: { type: "binding", binding: "AI" } },
+ *   provider: { type: "rpc", worker: { type: "binding", binding: "AI" } },
  * });
  *
  * const session = await itx.fork({ name: "agent-run-42" });
@@ -65,30 +70,58 @@
  * // misses delegate up the chain. (This is what a "codemode session" is.)
  * ```
  *
- * One honest caveat on typing: there is ONE `Itx` type, but a live handle is
- * bound to something — a project, a child context, or nothing (a global
- * handle). Members that need a project (`repos`, `workspace`, `worker`,
- * `project`, `fetch`) throw on a global handle until you narrow via
- * `itx.projects.get(...)`. The type system does not yet encode that split;
- * `describe()` is the runtime truth. (Splitting `GlobalItx` / `ProjectItx`
- * is an open design question — see itx-next.md.)
+ * One honest caveat on typing: there is ONE `ItxHandle` type, but a live
+ * handle is bound to something — a project, a child context, or nothing (a
+ * global handle). Members that need a project (`repos`, `workspace`,
+ * `worker`, `project`, `fetch`) throw on a global handle until you narrow
+ * via `itx.projects.get(...)`. The type system does not yet encode that
+ * split; `describe()` is the runtime truth. (Splitting `GlobalItx` /
+ * `ProjectItx` is an open design question — see itx-next.md.)
  */
+
+// ---------------------------------------------------------------------------
+// The core
+// ---------------------------------------------------------------------------
+
+/**
+ * The capability CORE a context node embeds (src/itx/itx.ts): pure
+ * structure — entries, live stubs, longest-prefix dispatch, chain
+ * delegation — with every effect injected as one `dial` function. Each
+ * context node (the Project DO for a project context, a ContextDO for a
+ * forked child) exposes its core via an `itx()` method; handles, ingress,
+ * and chain delegation all speak to a stub of it. `invoke`'s `origin` is the
+ * chain's trusted identity channel (the context a delegated call STARTED
+ * at): nodes set it; handles never forward it.
+ */
+export interface Itx {
+  provideCapability(input: {
+    name?: string;
+    path?: string[];
+    provider: CapabilityTarget;
+    instructions?: string;
+    types?: string;
+    meta?: CapabilityMeta;
+  }): void | Promise<void>;
+  revokeCapability(input: { name?: string; path?: string[] }): void | Promise<void>;
+  describe(): Promise<CapabilityDescription[]>;
+  invoke(input: { path: string[]; args: unknown[]; origin?: string }): Promise<unknown>;
+}
 
 // ---------------------------------------------------------------------------
 // The handle
 // ---------------------------------------------------------------------------
 
 /**
- * A live handle on a context.
+ * A live handle on a context — a cheap view over the context node's core.
  *
- * Unknown property names fall through to the context's capability registry
- * at runtime: `itx.slack.chat.postMessage(...)` works because someone
- * provided `slack`. Property access accumulates a path locally (zero round
- * trips); the terminal call dispatches once. Type known caps via
+ * Unknown property names fall through to the context's core at runtime:
+ * `itx.slack.chat.postMessage(...)` works because someone provided `slack`.
+ * Property access accumulates a path locally (zero round trips); the
+ * terminal call dispatches once. Type known caps via
  * {@link KnownCapabilities} merging, or reach anything untyped via
  * `itx.capability(name)`.
  */
-export type Itx = ItxBuiltins & KnownCapabilities;
+export type ItxHandle = ItxBuiltins & KnownCapabilities;
 
 /**
  * The built-in surface of every handle — the trust kernel. Everything else
@@ -101,8 +134,8 @@ export type Itx = ItxBuiltins & KnownCapabilities;
 export interface ItxBuiltins {
   /**
    * Provide a capability on this handle's context — THE verb for every
-   * target kind, durable or live: live targets are session-bound (provide
-   * again on reconnect); rpc/url targets are durable. The entry lives at a
+   * provider kind, durable or live: live providers are session-bound
+   * (provide again on reconnect); rpc/url addresses are durable. The entry lives at a
    * PATH: `name` is the common 1-segment case, `path` the multi-segment form
    * (exactly one of the two). Dispatch is longest-prefix per context:
    * `provideCapability({ path: ["slack", "chat", "postMessage"], … })`
@@ -111,23 +144,23 @@ export interface ItxBuiltins {
    *
    * ```ts
    * // From a laptop/sandbox (inbound, lives while connected): a live
-   * // target is the stub itself — a function, object, or RpcTarget.
+   * // provider is the stub itself — a function, object, or RpcTarget.
    * await itx.provideCapability({
    *   name: "runSwiftOnMyMac",
-   *   target: async (src) => runSwift(src),
-   *   meta: { instructions: "Compile-and-run Swift on Jonas's Mac." },
+   *   provider: async (src) => runSwift(src),
+   *   instructions: "Compile-and-run Swift on Jonas's Mac.",
    * });
    *
    * // A raw platform binding (outbound, durable):
    * await itx.provideCapability({
    *   name: "ai",
-   *   target: { type: "rpc", worker: { type: "binding", binding: "AI" } },
+   *   provider: { type: "rpc", worker: { type: "binding", binding: "AI" } },
    * });
    *
    * // First-party MCP client, parameterized per server (see CapabilityTarget):
    * await itx.provideCapability({
    *   name: "docs",
-   *   target: {
+   *   provider: {
    *     type: "rpc",
    *     worker: { type: "loopback" },
    *     entrypoint: "McpClient",
@@ -141,28 +174,31 @@ export interface ItxBuiltins {
    * // Shadow one method of an inherited cap on a session (a fork):
    * await session.provideCapability({
    *   path: ["workspace", "gitPush"],
-   *   target: approvalGate,
+   *   provider: approvalGate,
    * });
    * ```
    */
   provideCapability(input: {
     name?: string;
     path?: string[];
-    target: CapabilityTarget;
+    provider: CapabilityTarget;
+    /** A sentence for the human/agent who finds this cap. Stored as the
+     * `instructions` meta convention field and lifted by describe(). */
+    instructions?: string;
     /** TypeScript declarations for the cap's surface — the machine/editor
-     * counterpart of `meta.instructions`. Stored as the `types` meta
-     * convention field and lifted by describe(). */
+     * counterpart of `instructions`. Stored as the `types` meta convention
+     * field and lifted by describe(). */
     types?: string;
     meta?: CapabilityMeta;
-  }): Promise<{ name: string; ok: true }>;
+  }): Promise<void>;
 
   /** Remove an entry — exact path match, never prefix; `name`/`path` as in
    * {@link provideCapability}. Platform defaults cannot be revoked, only
-   * shadowed. */
-  revokeCapability(input: { name?: string; path?: string[] }): Promise<{ name: string; ok: true }>;
+   * shadowed (revoking a shadow resurfaces the default). */
+  revokeCapability(input: { name?: string; path?: string[] }): Promise<void>;
 
   /**
-   * The explicit dispatch form of the fallthrough: one registry dispatch
+   * The explicit dispatch form of the fallthrough: one core dispatch
    * with the full call path. `itx.invoke({ path: ["slack", "chat",
    * "postMessage"], args: [msg] })` ≡ `itx.slack.chat.postMessage(msg)`.
    * Useful when the path is computed.
@@ -250,7 +286,7 @@ export interface ItxBuiltins {
    * shadow this context's; misses delegate up the chain. The child's
    * authority is exactly its owning project, even if this handle was wider.
    */
-  fork(opts?: { name?: string }): Promise<Itx>;
+  fork(opts?: { name?: string }): Promise<ItxHandle>;
 }
 
 /**
@@ -409,9 +445,9 @@ export type CapabilitySource = {
  * The kernel knows exactly ONE calling convention: every capability is
  * dispatched as `target.call({ path, args })`. Whether a dotted path is
  * replayed onto a real member tree is decided at the EDGE where the
- * concrete object lives, never by registry data:
+ * concrete object lives, never by core data:
  *
- * - The registry wraps the objects it dials itself — env bindings, loader
+ * - The dial wraps the objects it resolves itself — env bindings, loader
  *   entrypoints, facets — with `asPathCallable`, so a source cap just
  *   exports methods and its whole public surface is replayed:
  *
@@ -429,7 +465,7 @@ export type CapabilitySource = {
  * // provider: class { call({ path, args }) { return slackApi(path.join("."), args[0]); } }
  * itx.slack.chat.postMessage({ … })   // → ONE call: call({ path: ["chat","postMessage"], … })
  *
- * await itx.provideCapability({ name: "mac", target: asPathCallable({ run(src) { … } }) });
+ * await itx.provideCapability({ name: "mac", provider: asPathCallable({ run(src) { … } }) });
  * ```
  *
  * - Forwarders keep their INNER mode as their own props: ProjectWorker's
@@ -578,7 +614,7 @@ export interface ItxStreams {
 /** Narrowing lives here: `get()` checks the principal's grants and returns
  * a NEW project-scoped handle. */
 export interface ItxProjects {
-  get(projectIdOrSlug: string): Promise<Itx>;
+  get(projectIdOrSlug: string): Promise<ItxHandle>;
   list(input?: { limit?: number; offset?: number }): Promise<{
     projects: {
       id: string;
@@ -607,7 +643,7 @@ export interface ItxProjects {
  * (helpers that take a `vars` object bake it into the source before
  * submitting, which is exactly what the /api/itx/run endpoint does).
  */
-export type ItxFn<R = unknown> = (itx: Itx) => Promise<R> | R;
+export type ItxFn<R = unknown> = (itx: ItxHandle) => Promise<R> | R;
 
 /**
  * Map an SDK's type surface onto its itx stub: every function becomes

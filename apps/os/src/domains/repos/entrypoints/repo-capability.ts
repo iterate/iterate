@@ -26,7 +26,7 @@ import type {
   ReadRepoLogInput,
 } from "~/domains/repos/repo-git.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
-import type { PathCall } from "~/itx/protocol.ts";
+import type { PathCall } from "~/itx/itx.ts";
 
 export type ReposCapabilityEnv = {
   DO_CATALOG?: D1Database;

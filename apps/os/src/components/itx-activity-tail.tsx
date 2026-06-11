@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import type { Event as StreamEvent } from "@iterate-com/shared/streams/types";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
+import { ITX_AUDIT_STREAM_PATH } from "~/itx/refs.ts";
 import { useItx } from "~/itx/use-itx.ts";
 
 const MAX_BUFFERED_EVENTS = 500;

@@ -3,7 +3,7 @@ import { createD1Client } from "sqlfu";
 import { parseConfig } from "~/config.ts";
 import { getFreshGoogleAccessToken } from "~/domains/secrets/oauth.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
-import type { PathCall } from "~/itx/protocol.ts";
+import type { PathCall } from "~/itx/itx.ts";
 
 type GmailCapabilityEnv = {
   DB?: D1Database;

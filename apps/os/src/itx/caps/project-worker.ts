@@ -23,7 +23,7 @@
 // props.projectId is registry-injected (spoof-proof).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { PathCall } from "../protocol.ts";
+import type { PathCall } from "../itx.ts";
 import {
   getProjectDurableObjectName,
   type ProjectDurableObject,

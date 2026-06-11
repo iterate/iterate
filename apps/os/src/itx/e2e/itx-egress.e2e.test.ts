@@ -92,7 +92,7 @@ test("bare fetch() inside a worker cap goes through egress (implicit door)", asy
 
   await projectItx.provideCapability({
     name: "egressProbe",
-    target: {
+    provider: {
       type: "rpc",
       worker: {
         type: "source",

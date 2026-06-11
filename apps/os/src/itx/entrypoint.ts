@@ -9,15 +9,16 @@
 // happens HERE and at connect-time auth (fetch.ts) — nowhere else.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { Itx, type ItxRuntime } from "./handle.ts";
+import { ItxHandle, type ItxRuntime } from "./handle.ts";
 import {
-  GLOBAL_CONTEXT_ID,
+  contextAddressOf,
+  dialContext,
+  isChildContextAddress,
+  replayPathCall,
   resolveDialableTargets,
-  type ItxProps,
   type PathCall,
-} from "./protocol.ts";
-import { contextAddressOf, dialContext, isChildContextAddress } from "./addresses.ts";
-import { replayPathCall } from "./path-proxy.ts";
+} from "./itx.ts";
+import { GLOBAL_CONTEXT_ID, type ItxProps } from "./refs.ts";
 import { parseConfig } from "~/config.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
@@ -33,7 +34,7 @@ export async function resolveItx(input: {
   env: Env;
   exports: ItxRuntime["exports"];
   props: ItxProps;
-}): Promise<Itx> {
+}): Promise<ItxHandle> {
   const config = parseConfig(input.env);
   const contextId = input.props.context;
 
@@ -51,7 +52,7 @@ export async function resolveItx(input: {
       : contextId;
   }
 
-  return new Itx({
+  return new ItxHandle({
     access: contextId === GLOBAL_CONTEXT_ID ? (input.props.access ?? []) : [projectId!],
     capability: input.props.capability,
     config,
@@ -68,7 +69,7 @@ export async function resolveItx(input: {
  * returns a promise so the restorer can resolve child-context descriptors.
  */
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxProps> {
-  get context(): Promise<Itx> {
+  get context(): Promise<ItxHandle> {
     return resolveItx({
       env: this.env,
       exports: this.ctx.exports as unknown as ItxRuntime["exports"],
@@ -111,10 +112,7 @@ export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
     // the chain (child → project → defaults) is what resolves the cap.
     const context = this.ctx.props.context ?? this.ctx.props.projectId;
     const node = dialContext(this.env, contextAddressOf(context));
-    return (await node.itxInvoke({
-      args: [request],
-      path: ["fetch"],
-    })) as Response;
+    return (await node.itx().invoke({ args: [request], path: ["fetch"] })) as Response;
   }
 }
 
@@ -128,7 +126,7 @@ export type EgressPipeProps = {
 
 /**
  * The TERMINAL egress pipe: the default target of the `fetch` capability
- * (platform:project, code-contexts.ts). Stateless: secrets are D1 rows
+ * (PLATFORM_PROJECT_CAPABILITIES, durable-itx.ts). Stateless: secrets are D1 rows
  * (domains/secrets), scoped by the registry-injected projectId, so
  * substitution and the real fetch happen here in a plain isolate — the
  * Project DO supervises dispatch (its registry is where live shadows live)
