@@ -9,41 +9,42 @@ done-condition and the doc that specifies it. Design docs of record:
 
 ## A. In flight (PR #1493, must land)
 
-1. **Repo-sourced workers wave** (agent running): `WorkerSource =
-inline | repo`, R2 build memo (`ITX_BUILD_CACHE`, key =
-   hash(repo, sha, path, bundleConfig)), @cloudflare/worker-bundler
-   in workerd (repo DO readFiles → vfs → esbuild-wasm; NO workspace),
-   `worker` default = ordinary repo provide, DELETE ProjectWorker
-   forwarder + itxProjectWorkerCall + workerHost build machinery.
-   Done: `grep -rn "ProjectWorker\|workerHost" apps/os/src` → nothing;
-   litmus e2e proves user repo code is a first-class capability through
-   the generic source dial. Spec: itx-later.md §"no longer special".
-2. **Land the PR**: CI green (preview rerun in progress — last failure
-   was a 9-second route-propagation 530, not code), Bugbot loop, merge.
+1. ~~Repo-sourced workers wave~~ DONE (2026-06-11): `WorkerSource =
+inline | repo`, R2 build memo (`ITX_BUILD_CACHE`), worker-bundler on
+   the repo DO's `readTree` (one checkout: head oid + files), `worker`
+   default an ordinary repo provide, ProjectWorker/WorkerHost deleted.
+   Litmus green on preview: a repo-sourced, bundler-built capability
+   through the generic source dial.
+2. **Land the PR**: every wave so far is CI-green; merge after the
+   final cycle.
 3. **Production proof across ALL runtimes**: after prd deploy, run the
    full e2e suite set + the example matrix (browser/node/cli runtimes)
    against os.iterate.com; include the middleware + indirection
    acceptance tests and a repo-sourced bundler-built capability dialed
    live in prd.
 
-## B. Punch list (small, decided — one sweep each)
+Known environment issue (recorded, not blocking): the itx e2e suite
+fails against LOCAL vite dev only — capnweb-fork RpcTarget identity
+under the dev module graph hides handle methods over RPC; deployed
+environments are unaffected. Verify suspicious local failures against
+a preview slot before treating them as regressions.
 
-4. `ctx_` → `itx_` context id prefix (typeid prefix, isChildContextId,
-   e2e regexes).
-5. `connectItx` → `withItx` (already sync + disposable; rename only).
-6. `provideCapability` returns `{ revoke }` ONLY — no url. URLs are
-   derived projections (`urlFor(path)` / describe entries). Decided.
-7. `parent` → `super`: owner leaning super (`super.fetch(req)` reads as
-   override-call); reserved-word papercuts priced (no destructuring).
-   CONFIRM then sweep.
-8. Repo slug `iterate-config` → `project` (owner leaned `project`;
-   confirm). One rename + seed/docs sweep.
-9. README rewrite, use-case-first: the three scenes (use a capability /
-   offer one from your laptop / override per-method with extend+super),
-   mechanics as appendix. The current build-order narrative is judged
-   too abstract. Self-description threaded throughout (instructions +
-   types at every provide; "what does describe() say" as the review
-   question — see doctrine doc).
+## B. Punch list — DONE (2026-06-11, all on the PR)
+
+4. ~~`ctx_` → `itx_`~~ · 5. ~~`connectItx` → `withItx`~~ ·
+5. ~~`{ revoke }`-only provide returns~~ (the core returns void; the
+   handle's `CapabilityProvision` is the one provision object) ·
+6. ~~`parent` → `super`~~ (the journal's `parent` payload field stays —
+   that is data) · 8. ~~repo slug → `project`~~ (base template artifact
+   `iterate-config-base` kept: pre-provisioned remote) ·
+7. ~~README use-case-first rewrite~~ (three scenes + appendix).
+   Also landed: the oRPC capability surface (`OrpcCapability`/itx.os)
+   deleted; the adversarial review applied — unreachable surfaces
+   deleted (OpenApiBridge, AiCapability, url-dial path-call), types.ts
+   is the IMPORTED record (drift is now a type error), catch-up
+   observes its own appends, typed missing-worker errors, memo key
+   carries compatibilityDate, vocabulary converged (extend, the dial,
+   no sessions).
 
 ## C. Designed and specced, not yet built (each its own PR)
 
