@@ -1,10 +1,10 @@
-import { z } from "zod";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 import { cloudflarePreviewApps } from "./apps.ts";
 import {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   parseEnvironmentConfigLeaseData,
 } from "./preview-inventory.ts";
+import { z } from "zod";
 
 type EnvironmentConfigLeaseResourceRecord = {
   slug: string;

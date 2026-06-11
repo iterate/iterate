@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
 import {
   evaluateCloudflareZoneCheck,
   reconcileEnvironmentConfigLeaseResources,
 } from "./reconcile-environment-config-leases.ts";
 import { ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE } from "./preview-inventory.ts";
+import { describe, expect, it } from "vitest";
 
 describe("reconcileEnvironmentConfigLeaseResources", () => {
   it("checks live Semaphore leases against Doppler projects and Cloudflare zones", async () => {

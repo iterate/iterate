@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import { splitRepositoryFullName } from "./repository-full-name.ts";
+import { describe, expect, it } from "vitest";
 
 describe("splitRepositoryFullName", () => {
   it("parses owner/repo", () => {

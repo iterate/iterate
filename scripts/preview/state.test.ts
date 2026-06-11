@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
 import {
   CloudflarePreviewAppEntry,
   EnvironmentConfigLease,
   parseCloudflarePreviewState,
   renderCloudflarePreviewPullRequestBody,
 } from "./state.ts";
+import { describe, expect, it } from "vitest";
 
 describe("cloudflare preview state helpers", () => {
   it("round-trips rendered preview state from the managed PR body section", () => {

@@ -1,4 +1,3 @@
-import { describe, expect, it } from "vitest";
 import {
   cloudflarePreviewApps,
   cloudflarePreviewAdditionalTriggerPaths,
@@ -11,6 +10,7 @@ import {
   resolvePreviewCompareBaseSha,
   selectPreviewAppsNeedingRetry,
 } from "./preview.ts";
+import { describe, expect, it } from "vitest";
 
 describe("preview app dependency expansion", () => {
   it("keeps independent apps as-is", () => {

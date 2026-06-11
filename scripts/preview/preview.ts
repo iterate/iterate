@@ -3,7 +3,6 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { resolve } from "node:path";
 import { Octokit } from "@octokit/rest";
-import { z } from "zod";
 import { stripAnsi } from "../../packages/shared/src/dev/strip-ansi.ts";
 import { runCommand } from "../../packages/shared/src/node/run-command.ts";
 import {
@@ -24,6 +23,7 @@ import {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   parseEnvironmentConfigLeaseData,
 } from "./preview-inventory.ts";
+import { z } from "zod";
 
 const defaultSemaphoreBaseUrl = "https://semaphore.iterate.com";
 const defaultPreviewLeaseMs = 60 * 60 * 1000;

@@ -1,10 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
 import {
   ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
   environmentConfigLeaseInventory,
   parseEnvironmentConfigLeaseData,
   syncPreviewInventory,
 } from "./preview-inventory.ts";
+import { describe, expect, it, vi } from "vitest";
 
 describe("environmentConfigLeaseInventory", () => {
   it("matches the currently provisioned preview slot range", () => {
