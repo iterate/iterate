@@ -74,6 +74,13 @@ export function buildProjectWorkerUrl(input: {
   projectSlug: string;
   customHostname?: string | null;
   projectHostnameBases: readonly string[];
+  /**
+   * The app's own base URL. For loopback project bases (local dev:
+   * `os.localhost`) the project URL inherits its scheme and port —
+   * `http://myproj.os.localhost:51234` — since there is no DNS/TLS for
+   * loopback hosts.
+   */
+  appBaseUrl?: string;
 }) {
   if (!projectSlugPattern.test(input.projectSlug)) return null;
   const customHostname = normalizeCustomHostname(input.customHostname);
@@ -87,6 +94,13 @@ export function buildProjectWorkerUrl(input: {
 
   const normalizedBase = normalizeProjectHostnameBase(projectHostnameBase);
   if (!hostnamePattern.test(normalizedBase)) return null;
+
+  const baseIsLoopback = normalizedBase === "localhost" || normalizedBase.endsWith(".localhost");
+  if (baseIsLoopback && input.appBaseUrl && URL.canParse(input.appBaseUrl)) {
+    const appUrl = new URL(input.appBaseUrl);
+    const port = appUrl.port ? `:${appUrl.port}` : "";
+    return `${appUrl.protocol}//${input.projectSlug}.${normalizedBase}${port}`;
+  }
 
   return `https://${input.projectSlug}.${normalizedBase}`;
 }

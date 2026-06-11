@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const CloudflarePreviewAppSlug = z.enum(["os", "semaphore"]);
+export const CloudflarePreviewAppSlug = z.enum(["os", "semaphore", "auth"]);
 
 export type CloudflarePreviewAppSlug = z.infer<typeof CloudflarePreviewAppSlug>;
 
@@ -12,6 +12,8 @@ export type CloudflarePreviewApp = {
   paths: string[];
   deploymentDependencies?: CloudflarePreviewAppSlug[];
   previewDependencies?: CloudflarePreviewAppSlug[];
+  /** Readiness probe path on the app's public URL (default /api/__internal/health). */
+  previewReadyUrlPath?: string;
   previewTestBaseUrlEnvVar: string;
   previewTestCommandArgs: readonly [string, ...string[]];
 };
@@ -53,7 +55,9 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       // apps/os compiles in @iterate-com/streams (see apps/os/src/worker.ts).
       "packages/streams/**",
     ],
-    previewDependencies: [],
+    // The slot's auth deploys before OS so OS's deploy-time JWKS bake (issuer
+    // keys + forge pubkey) can fetch from auth.iterate-preview-N.com.
+    previewDependencies: ["auth"],
     previewTestBaseUrlEnvVar: "OS_BASE_URL",
     // The itx e2e (node project only — the browser project needs a Playwright
     // chromium install the preview e2e job doesn't have) reads
@@ -81,5 +85,25 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     paths: ["apps/semaphore/**"],
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     previewTestCommandArgs: ["pnpm", "test:e2e:preview"],
+  },
+  // Every preview slot runs its own auth deployment (auth.iterate-preview-N.com)
+  // so e2e starts from a completely clean, controlled slate. OAuth client
+  // credentials are constants in Doppler (provision-auth-preview-configs.ts);
+  // the auth deploy reseeds them into its database on every run, so auth and
+  // OS deploy concurrently with nothing minted at deploy time.
+  auth: {
+    slug: "auth",
+    displayName: "Auth",
+    appPath: "apps/auth",
+    dopplerProject: "auth",
+    paths: ["apps/auth/**", "apps/auth-contract/**"],
+    // better-auth's liveness endpoint; auth has no /api/__internal/health.
+    previewReadyUrlPath: "/api/auth/ok",
+    previewTestBaseUrlEnvVar: "AUTH_BASE_URL",
+    previewTestCommandArgs: [
+      "bash",
+      "-c",
+      'curl -fsS "$AUTH_BASE_URL/api/auth/.well-known/openid-configuration" | grep -q \'"authorization_endpoint"\'',
+    ],
   },
 };

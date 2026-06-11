@@ -94,3 +94,4 @@ overrides:
 
 patchedDependencies:
   "alchemy@0.83.3": "patches/alchemy@0.83.3.patch"
+  "@better-auth/oauth-provider@1.6.9": "patches/@better-auth__oauth-provider@1.6.9.patch"

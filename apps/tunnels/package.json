@@ -1,0 +1,23 @@
+{
+  "name": "@iterate-com/tunnels",
+  "version": "0.0.0-dev",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "alchemy:up": "tsx ./alchemy.run.ts",
+    "alchemy:down": "tsx ./alchemy.run.ts --destroy",
+    "deploy:prd": "doppler run --project tunnels --config prd -- pnpm alchemy:up",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@iterate-com/shared": "workspace:*",
+    "alchemy": "^0.83.3",
+    "captun": "https://pkg.pr.new/captun@27",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

@@ -17,6 +17,7 @@ import {
   insertProjectReturning,
   insertUser,
   listMembersByOrganizationId,
+  overwriteOAuthClientByClientId,
   updateOAuthClientById,
   updateOAuthClientReferenceByClientId,
   updateVerifiedUserById,
@@ -417,6 +418,73 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
     };
   });
 
+// The oauth-provider plugin stores client secrets as unsalted SHA-256
+// base64url (its `defaultHasher` with storeClientSecret: "hashed") and
+// compares hashes at the token endpoint — seeded secrets must be stored in
+// the same format.
+async function hashOAuthClientSecret(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  const bytes = new Uint8Array(digest);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+// Declarative upsert with caller-provided credentials. Unlike ensureClient
+// (which generates/rotates secrets server-side), the caller's Doppler config is
+// the source of truth: re-running with the same input is a no-op, and nothing
+// in the auth app ever rotates a seeded client. Used by the OAuth client seed
+// (apps/auth/scripts/seed-oauth-clients.ts) after each deploy.
+const setOAuthClient = os.internal.oauth.setClient
+  .use(serviceMiddleware)
+  .handler(async ({ context, input }) => {
+    const redirectURIs = [...new Set(input.redirectURIs.map((uri) => uri.trim()))].sort();
+    const overwrite = {
+      newClientId: input.clientId,
+      clientSecret: await hashOAuthClientSecret(input.clientSecret),
+      name: input.clientName,
+      redirectUris: JSON.stringify(redirectURIs),
+      referenceId: input.referenceId ?? null,
+      skipConsent: input.skipConsent ? 1 : 0,
+      updatedAt: Date.now(),
+    };
+
+    const existing = await getOAuthClientByClientId(context.db, { clientId: input.clientId });
+    if (existing) {
+      await overwriteOAuthClientByClientId(context.db, overwrite, { clientId: input.clientId });
+    } else {
+      // Create through the admin API so the row gets the plugin's defaults
+      // (token endpoint auth method, grant/response types, …), then overwrite
+      // the generated credentials with the caller-provided constants.
+      const serviceAuthToken = context.env.SERVICE_AUTH_TOKEN?.trim();
+      if (!serviceAuthToken) {
+        throw new ORPCError("INTERNAL_SERVER_ERROR", {
+          message: "SERVICE_AUTH_TOKEN is required for OAuth client provisioning",
+        });
+      }
+      const headers = await getBootstrapAdminAuthHeaders({ serviceAuthToken });
+      const created = await auth.api.adminCreateOAuthClient({
+        headers,
+        body: {
+          client_name: input.clientName,
+          redirect_uris: redirectURIs,
+        },
+      });
+      await overwriteOAuthClientByClientId(context.db, overwrite, {
+        clientId: created.client_id,
+      });
+    }
+
+    return {
+      clientId: input.clientId,
+      clientName: input.clientName,
+      clientSecret: input.clientSecret,
+      redirectURIs,
+    };
+  });
+
 const createProjectIngressToken = os.internal.session.createProjectIngressToken
   .use(protectedMiddleware)
   .handler(async ({ context }) => {
@@ -455,6 +523,7 @@ const exchangeProjectIngressToken = os.internal.session.exchangeProjectIngressTo
 export const internal = os.internal.router({
   oauth: {
     ensureClient: ensureOAuthClient,
+    setClient: setOAuthClient,
   },
   user: {
     upsertVerifiedEmail,

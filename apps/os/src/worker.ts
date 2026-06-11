@@ -3,8 +3,8 @@
  *
  * One worker serves three kinds of traffic, dispatched on hostname and path:
  *
- * 1. Infrastructure routes that bypass the app entirely (captun tunnel,
- *    admin-token debug endpoints).
+ * 1. Infrastructure routes that bypass the app entirely (admin-token debug
+ *    endpoints).
  * 2. Project ingress: requests to project hosts (`<slug>.iterate.app`,
  *    custom hostnames) are routed to the project's durable object / callable.
  * 3. The OS dashboard itself: a TanStack Start app (SSR + oRPC API), handled
@@ -18,7 +18,6 @@ import handler from "@tanstack/react-start/server-entry";
 import { withEvlog } from "@iterate-com/shared/evlog";
 import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
 import { Stream as PackageStream } from "@iterate-com/streams/workers/durable-objects/stream";
-import captunWorker, { CaptunServerShard } from "captun/worker";
 import crossws from "crossws/adapters/cloudflare";
 import { createD1Client } from "sqlfu";
 import { AppConfig, parseConfig } from "~/config.ts";
@@ -44,7 +43,6 @@ export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-
 export { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
 export { SlackIntegrationDurableObject } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
-export { CaptunServerShard };
 export { PackageStream as StreamDurableObject };
 
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
@@ -67,8 +65,6 @@ export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 
-const CAPTUN_TUNNEL_ROUTE_PREFIX = "/__iterate/captun";
-
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     // Parse config per request, not at module scope: workerd may reuse an
@@ -77,9 +73,7 @@ export default {
     // https://developers.cloudflare.com/workers/runtime-apis/bindings/#how-bindings-work
     const config = parseConfig(env);
 
-    const earlyResponse =
-      (await handleCaptunTunnelFetch(request, env, config)) ??
-      (await handleDebugRoutes({ request, env, config }));
+    const earlyResponse = await handleDebugRoutes({ request, env, config });
     if (earlyResponse) return earlyResponse;
 
     // Everything below emits one structured "wide event" log line per request.
@@ -192,22 +186,3 @@ export default {
     });
   },
 };
-
-/** Serve the captun tunnel relay mounted under /__iterate/captun. */
-async function handleCaptunTunnelFetch(request: Request, env: Env, config: AppConfig) {
-  const url = new URL(request.url);
-  if (
-    url.pathname !== CAPTUN_TUNNEL_ROUTE_PREFIX &&
-    !url.pathname.startsWith(`${CAPTUN_TUNNEL_ROUTE_PREFIX}/`)
-  ) {
-    return null;
-  }
-
-  url.pathname = url.pathname.slice(CAPTUN_TUNNEL_ROUTE_PREFIX.length) || "/";
-
-  return await captunWorker.fetch(new Request(url, request), {
-    CAPTUN_SECRET: config.adminApiSecret?.exposeSecret(),
-    CaptunServerShard: env.CaptunServerShard,
-    SHARD_COUNT: "1",
-  });
-}

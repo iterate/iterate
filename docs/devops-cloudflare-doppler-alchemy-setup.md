@@ -116,6 +116,14 @@ pnpm install
 pnpm dev
 ```
 
+The default config is the shared root `dev`: a **fully-local** environment
+(miniflare D1/DOs in the worktree, random free port at
+`http://os.localhost:<port>`, no tunnel, no Cloudflare resources) whose only
+external dependency is the dev-global auth at `auth.iterate-dev.com`. Any
+number of worktrees/agents run this concurrently without contention. See
+[Dev environments](dev-environments.md). Tunnel-backed per-user configs
+(`dev_<user>`) below remain for webhook/third-party-OAuth work.
+
 For an explicit app/config:
 
 ```bash

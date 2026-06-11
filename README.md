@@ -56,7 +56,7 @@ More: [apps/os README](apps/os/AGENTS.md).
 
 ```bash
 pnpm install
-pnpm dev          # local auth + OS dev servers
+pnpm dev          # fully-local OS dev server (http://os.localhost:<port>)
 ```
 
 Before PRs:
@@ -82,13 +82,17 @@ Other Cloudflare apps (`semaphore`, …) are supporting services — see `docs/a
 ## Common commands
 
 ```bash
-pnpm dev                      # apps/auth + apps/os together, OS pointed at local auth (localhost:7101)
-pnpm --dir apps/auth dev      # auth app only
-pnpm os dev                   # apps/os only, against the auth issuer from your Doppler config
+pnpm dev                      # fully-local OS dev server at http://os.localhost:<port> (see docs/dev-environments.md)
+pnpm auth:mint                # mint a session as any user/admin (dev/preview; wrap in doppler run)
+pnpm --dir apps/auth dev      # auth app only (when working on auth itself)
 pnpm test && pnpm typecheck && pnpm lint && pnpm format
 ```
 
-Dev server, Doppler, Cloudflare, previews, and deploys:
+How do I…? — **[Dev environments](docs/dev-environments.md)** answers: run
+local dev (fully local, random port, `os.localhost`), be any user or an admin
+(minting), point a browser (headless golden path) at local dev or a preview,
+create a preview environment from your machine, and when you actually need a
+tunnel. Doppler/Cloudflare/deploy details:
 `docs/devops-cloudflare-doppler-alchemy-setup.md`.
 
 ## Documentation
@@ -101,6 +105,7 @@ Dev server, Doppler, Cloudflare, previews, and deploys:
 
 ### Development
 
+- [Dev environments](docs/dev-environments.md) — local dev, minting identities/admin sessions, browsers for agents, preview-from-local
 - [Coding style](docs/coding-style.md)
 - [TypeScript conventions](docs/typescript-conventions.md)
 - [Design system & React](docs/design-system.md)

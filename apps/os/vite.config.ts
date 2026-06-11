@@ -3,10 +3,21 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
 import viteReact from "@vitejs/plugin-react";
 import alchemy from "alchemy/cloudflare/tanstack-start";
+import captunVite from "captun/vite";
 import { defineConfig } from "vite";
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = process.env.PORT ? Number(process.env.PORT) : 5173;
+
+// Public tunnel for the dev server, driven entirely by env vars (Doppler):
+// CAPTUN_ENABLED=true gives a random tunnel name on the default gateway;
+// CAPTUN_TUNNEL_NAME pins a stable name (implies enabled); CAPTUN_GATEWAY +
+// CAPTUN_TOKEN target a self-hosted gateway. Plain HTTP only (webhooks,
+// previews, e2e) — HMR and WebSockets stay on the local URL. See
+// docs/dev-environments.md.
+const captunEnabled =
+  ["1", "true", "yes"].includes((process.env.CAPTUN_ENABLED ?? "").trim().toLowerCase()) ||
+  !!process.env.CAPTUN_TUNNEL_NAME?.trim();
 
 export default defineConfig({
   // wa-sqlite ships an Emscripten `.mjs` + `.wasm` pair that must stay together.
@@ -42,6 +53,15 @@ export default defineConfig({
     tanstackStart(),
     viteReact(),
     tailwindcss(),
+    ...(captunEnabled
+      ? [
+          captunVite({
+            gateway: process.env.CAPTUN_GATEWAY?.trim() || undefined,
+            name: process.env.CAPTUN_TUNNEL_NAME?.trim() || undefined,
+            token: process.env.CAPTUN_TOKEN?.trim() || undefined,
+          }),
+        ]
+      : []),
   ],
 });
 

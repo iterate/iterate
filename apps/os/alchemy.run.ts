@@ -10,7 +10,7 @@ import {
 import { Artifacts } from "@iterate-com/shared/alchemy/artifacts";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
-import type { CaptunServerShard } from "captun/worker";
+import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-server";
 import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
@@ -47,7 +47,7 @@ async function resolveStaticAuthJwks(issuer: string | undefined) {
   const issuerIsLoopback = ["localhost", "127.0.0.1", "::1"].includes(issuerUrl.hostname);
 
   const explicit = process.env.APP_CONFIG_ITERATE_AUTH__JWKS ?? process.env.ITERATE_AUTH_JWKS;
-  if (explicit && !issuerIsLoopback) return explicit;
+  if (explicit && !issuerIsLoopback) return withForgePublicKey(explicit);
 
   try {
     const response = await fetch(`${issuer.replace(/\/+$/, "")}/jwks`, {
@@ -58,18 +58,70 @@ async function resolveStaticAuthJwks(issuer: string | undefined) {
     if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) {
       throw new Error("JWKS response has no keys");
     }
-    return JSON.stringify(jwks);
+    return withForgePublicKey(JSON.stringify(jwks));
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // A forge-enabled env (dev/preview) needs the forge pubkey in a baked
+    // static JWKS — the runtime remote fetch only returns issuer keys, never
+    // the forge key, so silently falling back would leave minting broken.
+    // Fail the deploy loudly instead. (Loopback issuers — local auth dev —
+    // legitimately may be down at deploy and use runtime fetch, so skip them.)
+    if (process.env.AUTH_FORGE_PRIVATE_JWK?.trim() && !issuerIsLoopback) {
+      throw new Error(
+        `[alchemy.run] Forge key is set but the deploy-time JWKS fetch from ${issuer} failed ` +
+          `(${message}). The forge pubkey can only be trusted via a baked static JWKS, so this ` +
+          `would deploy a worker where minted tokens fail to verify. Aborting — retry the deploy.`,
+      );
+    }
     console.warn(
       `[alchemy.run] Could not fetch JWKS from ${issuer} at deploy time; ` +
         `the worker will fetch it at runtime instead.`,
-      error instanceof Error ? error.message : error,
+      message,
     );
     return undefined;
   }
 }
 
-const env = {
+// Dev/preview identity forging: when the Doppler config carries the forge
+// private JWK (`AUTH_FORGE_PRIVATE_JWK`, from `_shared/dev` / `_shared/preview`),
+// its PUBLIC half joins the worker's trusted JWKS so locally-minted JWTs
+// (scripts/auth/mint-session.ts) verify exactly like issuer-signed ones.
+// Placement rule: the forge key must never exist in any prd config — enforced
+// here as a hard error rather than a silent skip.
+function withForgePublicKey(jwksJson: string) {
+  const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+  if (!forgePrivateJwk) return jwksJson;
+  // Two independent backstops so the forge pubkey can never reach a
+  // production-serving worker: the stage name AND the issuer identity. A
+  // prod-serving deploy under a non-"prd" stage name (hotfix stage, custom
+  // hostname) is still caught by the issuer check.
+  const isProdStage = process.env.ALCHEMY_STAGE?.trim() === "prd";
+  const isProdIssuer = (resolvedAuthIssuer ?? "").includes("auth.iterate.com");
+  if (isProdStage || isProdIssuer) {
+    throw new Error(
+      "AUTH_FORGE_PRIVATE_JWK must never be present in a production config " +
+        `(stage=${process.env.ALCHEMY_STAGE}, issuer=${resolvedAuthIssuer}) — remove it from Doppler.`,
+    );
+  }
+  try {
+    const jwks = JSON.parse(jwksJson) as { keys: Record<string, unknown>[] };
+    const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<
+      string,
+      unknown
+    > & { d?: string };
+    if (!publicJwk.kid || !publicJwk.kty) {
+      throw new Error("AUTH_FORGE_PRIVATE_JWK must be a JWK with kid and kty");
+    }
+    if (!jwks.keys.some((key) => key.kid === publicJwk.kid)) {
+      jwks.keys.push(publicJwk);
+    }
+    return JSON.stringify(jwks);
+  } catch (error) {
+    throw new Error(`Invalid AUTH_FORGE_PRIVATE_JWK: ${error}`);
+  }
+}
+
+const env: Record<string, string | undefined> = {
   ...process.env,
   APP_CONFIG_ITERATE_AUTH__ISSUER: resolvedAuthIssuer,
   APP_CONFIG_ITERATE_AUTH__CLIENT_ID:
@@ -80,6 +132,25 @@ const env = {
   APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
     process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
 };
+
+// Fully-local default dev (config `dev`): no tunnel, no per-user domain. Picks
+// a free port, bakes APP_CONFIG_BASE_URL=http://os.localhost:<port>, and
+// writes .alchemy/dev-server.json so CLIs can find the running server. No-op
+// for configs that set APP_CONFIG_BASE_URL (tunnel-backed dev_<user>,
+// dev_localhost, deploys).
+const localDevServer = await prepareLocalDevServer(env, { appSlug: "os" });
+if (localDevServer && !env.APP_CONFIG_PROJECT_HOSTNAME_BASES) {
+  // Project hosts resolve as <proj-slug>.os.localhost:<port> in the browser.
+  env.APP_CONFIG_PROJECT_HOSTNAME_BASES = JSON.stringify([
+    new URL(localDevServer.baseUrl).hostname,
+  ]);
+}
+if (localDevServer) {
+  // The OAuth resource (RFC 8707) must be a registered audience at the auth
+  // worker, which can't enumerate arbitrary local ports — use the stable
+  // portless loopback origin (mirrored in auth's getOsResourceBases).
+  env.APP_CONFIG_ITERATE_AUTH__RESOURCE ||= `http://${new URL(localDevServer.baseUrl).hostname}`;
+}
 
 await ensureLocalDevOAuthClient(env);
 
@@ -105,10 +176,6 @@ const artifactsNamespace = `${ctx.workerName}-repos`;
 // Stream namespace for worker-global (non-project-scoped) streams, such as the
 // raw Cloudflare event capture stream at /cloudflare/events.
 const globalStreamNamespace = `${ctx.workerName}-global`;
-const captunServerShard = DurableObjectNamespace<CaptunServerShard>("captun-server-shard", {
-  className: "CaptunServerShard",
-  sqlite: true,
-});
 const stream = DurableObjectNamespace<Stream>("stream", {
   className: "StreamDurableObject",
   sqlite: true,
@@ -191,7 +258,6 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     SLACK_AGENT: slackAgent,
     SLACK_INTEGRATION: slackIntegration,
     REPO: repo,
-    CaptunServerShard: captunServerShard,
     PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
     STREAM: stream,
     WORKSPACE: workspace,

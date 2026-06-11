@@ -172,18 +172,29 @@ async function provideLiveEgressFetchCapability(input: {
   return itx;
 }
 
-/** creates a public OS-hosted captun tunnel for test-defined HTTP servers */
+/**
+ * Creates a public captun tunnel for test-defined HTTP servers, using the
+ * standalone iterate tunnel gateway (apps/tunnels, `<name>.tunnels.iterate.com`).
+ * Configure via env: `CAPTUN_GATEWAY` (default `https://tunnels.iterate.com`)
+ * and `CAPTUN_TOKEN` (the gateway secret).
+ */
 export async function createPublicTunnel(input: { fetch: Fetch; tunnelName?: string }) {
   const tunnelName = input.tunnelName || `e2e-${uniqueSuffix()}`;
-  const url = `${requireBaseUrl()}/__iterate/captun/${encodeURIComponent(tunnelName)}`;
+  const token = process.env.CAPTUN_TOKEN?.trim();
+  if (!token) {
+    throw new Error(
+      "CAPTUN_TOKEN is required to open a public tunnel (apps/tunnels gateway secret).",
+    );
+  }
   const tunnel = await createCaptunTunnel({
-    url: `${url}/__captun-connect`,
-    headers: { Authorization: `Bearer ${requireAdminBearerToken()}` },
+    gateway: process.env.CAPTUN_GATEWAY?.trim() || "https://tunnels.iterate.com",
+    name: tunnelName,
+    token,
     fetch: input.fetch,
   });
 
   return {
-    url,
+    url: tunnel.url,
     [Symbol.dispose]() {
       tunnel[Symbol.dispose]();
     },
