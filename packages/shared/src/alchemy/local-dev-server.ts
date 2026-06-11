@@ -20,7 +20,7 @@ import { join } from "node:path";
  * alive.
  */
 
-export type DevServerInfo = {
+type DevServerInfo = {
   pid: number;
   port: number;
   baseUrl: string;
@@ -58,17 +58,6 @@ function isPidAlive(pid: number) {
   } catch {
     return false;
   }
-}
-
-/**
- * The running dev server for an app directory, or null when none is up.
- * Stale records (dead pid) read as null.
- */
-export function readRunningDevServerInfo(appDir = process.cwd()): DevServerInfo | null {
-  const info = readDevServerInfoFile(appDir);
-  if (!info) return null;
-  if (info.pid !== process.pid && !isPidAlive(info.pid)) return null;
-  return info;
 }
 
 async function isPortFree(port: number) {

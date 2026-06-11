@@ -12,7 +12,7 @@
   "dependencies": {
     "@iterate-com/shared": "workspace:*",
     "alchemy": "^0.83.3",
-    "captun": "https://pkg.pr.new/captun@28",
+    "captun": "https://pkg.pr.new/captun@27",
     "zod": "^4.3.6"
   },
   "devDependencies": {

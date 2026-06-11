@@ -62,7 +62,15 @@ async function waitForAuthDeployment(baseUrl: string, timeoutMs = 120_000) {
   throw new Error(`Auth deployment at ${discoveryUrl} not reachable: ${lastError}`);
 }
 
-export async function seedOAuthClients(env: Record<string, string | undefined>) {
+export async function seedOAuthClients(
+  env: Record<string, string | undefined>,
+  // The reachable URL to seed *through* (API calls + readiness probe). Defaults
+  // to the custom-domain origin, but a fresh deploy passes the worker's
+  // workers.dev URL — it's live instantly, whereas a brand-new custom hostname
+  // can take minutes to issue an edge cert (which previously timed out the
+  // preview deploy). The seeded data (redirect URIs) is unaffected.
+  opts: { baseUrl?: string } = {},
+) {
   const parsed = SeedOAuthClientsEnv.safeParse(env);
   if (!parsed.success) {
     throw new Error(`seed-oauth-clients env invalid: ${z.prettifyError(parsed.error)}`);
@@ -72,11 +80,12 @@ export async function seedOAuthClients(env: Record<string, string | undefined>) 
     SERVICE_AUTH_TOKEN,
     VITE_AUTH_APP_ORIGIN,
   } = parsed.data;
+  const seedThroughUrl = opts.baseUrl?.trim() || VITE_AUTH_APP_ORIGIN;
 
-  await waitForAuthDeployment(VITE_AUTH_APP_ORIGIN);
+  await waitForAuthDeployment(seedThroughUrl);
 
   const authClient = createAuthContractClient({
-    baseUrl: VITE_AUTH_APP_ORIGIN,
+    baseUrl: seedThroughUrl,
     serviceToken: SERVICE_AUTH_TOKEN,
   });
 
@@ -96,7 +105,7 @@ export async function seedOAuthClients(env: Record<string, string | undefined>) 
   }
 
   console.log(
-    `[seed-oauth-clients] done: ${clients.length} client(s) seeded into ${VITE_AUTH_APP_ORIGIN}`,
+    `[seed-oauth-clients] done: ${clients.length} client(s) seeded via ${seedThroughUrl}`,
   );
 }
 

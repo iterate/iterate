@@ -84,6 +84,15 @@ function findRepoRoot(start: string) {
   return start;
 }
 
+function isPidAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function resolveBaseUrl(): string {
   if (args["base-url"]) return args["base-url"].replace(/\/+$/, "");
   const fromEnv = process.env.APP_CONFIG_BASE_URL?.trim();
@@ -92,7 +101,12 @@ function resolveBaseUrl(): string {
   const discovery = join(repoRoot, "apps/os/.alchemy/dev-server.json");
   if (existsSync(discovery)) {
     const info = JSON.parse(readFileSync(discovery, "utf8")) as { baseUrl?: string; pid?: number };
-    if (info.baseUrl) return info.baseUrl.replace(/\/+$/, "");
+    // Ignore a stale discovery file: after a crash or `kill -9` the recorded
+    // port is dead, and minting against it would hand back a browser URL that
+    // points nowhere. Treat a dead pid as "no dev server".
+    if (info.baseUrl && (typeof info.pid !== "number" || isPidAlive(info.pid))) {
+      return info.baseUrl.replace(/\/+$/, "");
+    }
   }
   throw new Error(
     "Could not resolve the OS base URL: pass --base-url, set APP_CONFIG_BASE_URL, " +
