@@ -11,7 +11,7 @@ import {
   RepoDurableObject as RealRepoDurableObject,
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
+import { PROJECT_REPO_SLUG } from "~/domains/repos/project-repo.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import {
   dispatchFetchCallable,
@@ -329,11 +329,11 @@ export default {
       return Response.json(await processor.snapshot());
     }
 
-    if (url.pathname === "/__test/iterate-config-repo") {
+    if (url.pathname === "/__test/project-repo") {
       const repo = await env.REPO.getByName(
         getRepoDurableObjectName({
           projectId: "proj__local__test",
-          repoSlug: ITERATE_CONFIG_REPO_SLUG,
+          repoSlug: PROJECT_REPO_SLUG,
         }),
       ).getInfo();
 

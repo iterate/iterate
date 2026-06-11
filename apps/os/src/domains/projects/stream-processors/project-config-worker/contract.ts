@@ -1,6 +1,6 @@
 // Defines the "project-config-worker" processor contract.
 //
-// The project's config worker (iterate-config/worker.js) is a stream
+// The project's config worker (the project repo's worker.js) is a stream
 // processor: this contract subscribes it to the project root stream ("/") and
 // every committed event is forwarded to its exported `processEvent` hook. That
 // is the project-code composition surface — config workers react to facts and

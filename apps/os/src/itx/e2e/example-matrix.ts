@@ -6,7 +6,7 @@
 //   node            AsyncFunction over a Cap'n Web stub in this process
 //   cli             `iterate-app-cli itx run -e …` (a real spawned CLI)
 //   dynamic-worker  POST /api/itx/run with the body wrapped as a function
-//   config-worker   the body baked into the project's iterate-config
+//   config-worker   the body baked into the project's repo
 //                   worker.js, invoked via itx.worker (env.ITERATE.context)
 
 import { execFile } from "node:child_process";
@@ -154,7 +154,7 @@ async function runInConfigWorker(input: {
 }
 
 /**
- * The iterate-config worker.js for the matrix project: every config-worker
+ * The project-repo worker.js for the matrix project: every config-worker
  * example baked in as `async ({ itx, vars }) => { <body> }`, dispatched by id
  * through ONE exported method. `itx.worker.runItxExample(...)` reaches it via
  * the Project DO's path replay, and the script's handle is the config
@@ -190,11 +190,11 @@ export default class extends WorkerEntrypoint {
 }
 
 /**
- * Commit files into a project's iterate-config repo. The push itself runs
+ * Commit files into a project's repo. The push itself runs
  * as an itx script via /api/itx/run (the in-isolate path agents use); the
  * file contents travel via the endpoint's vars.
  */
-export async function pushIterateConfigWorker(input: {
+export async function pushProjectRepoFiles(input: {
   commitMessage: string;
   files: Record<string, string>;
   projectId: string;
@@ -207,7 +207,7 @@ export async function pushIterateConfigWorker(input: {
     itx: Record<string, any>;
     vars: { dir: string; files: Record<string, string>; message: string; projectSlug: string };
   }) => {
-    const repo = await itx.repos.ensureIterateConfigInfo({ projectSlug: vars.projectSlug });
+    const repo = await itx.repos.ensureProjectRepoInfo({ projectSlug: vars.projectSlug });
     const url = new URL(repo.remote);
     url.username = "x";
     url.password = repo.token.split("?")[0];

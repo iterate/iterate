@@ -17,8 +17,8 @@ import {
 } from "~/domains/repos/repo-errors.ts";
 import {
   ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
-  ITERATE_CONFIG_REPO_SLUG,
-} from "~/domains/repos/iterate-config-repo.ts";
+  PROJECT_REPO_SLUG,
+} from "~/domains/repos/project-repo.ts";
 import type {
   CommitRepoFilesInput,
   ListRepoFilesInput,
@@ -47,10 +47,10 @@ export type RepoCatalogRecord = {
 
 type ReposCapabilityClient = Pick<
   ReposCapability,
-  "create" | "createInfo" | "ensureIterateConfigInfo" | "get" | "getInfo" | "list"
+  "create" | "createInfo" | "ensureProjectRepoInfo" | "get" | "getInfo" | "list"
 >;
 type RepoLifecycleCatalogRecord = D1ObjectCatalogRecord<RepoStructuredName>;
-const iterateConfigInfoPromises = new Map<string, Promise<RepoInfo>>();
+const projectRepoInfoPromises = new Map<string, Promise<RepoInfo>>();
 
 export class RepoHandle extends RpcTarget {
   readonly #repo: DurableObjectStub<RepoDurableObject>;
@@ -149,8 +149,8 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
     return await (await this.get(input)).getInfo();
   }
 
-  async ensureIterateConfigInfo(input: { projectSlug: string | null }): Promise<RepoInfo> {
-    return await ensureIterateConfigInfoForProject({
+  async ensureProjectRepoInfo(input: { projectSlug: string | null }): Promise<RepoInfo> {
+    return await ensureProjectRepoInfoForProject({
       env: this.env,
       projectId: this.ctx.props.projectId,
       projectSlug: input.projectSlug,
@@ -205,27 +205,27 @@ export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposC
 
 export { ReposCapability as RepoCapability };
 
-export async function ensureIterateConfigInfoForProject(input: {
+export async function ensureProjectRepoInfoForProject(input: {
   env: Pick<ReposCapabilityEnv, "REPO">;
   projectId: string;
   projectSlug: string | null;
 }): Promise<RepoInfo> {
-  const key = `${input.projectId}:${ITERATE_CONFIG_REPO_SLUG}`;
-  const existingPromise = iterateConfigInfoPromises.get(key);
+  const key = `${input.projectId}:${PROJECT_REPO_SLUG}`;
+  const existingPromise = projectRepoInfoPromises.get(key);
   if (existingPromise) return await existingPromise;
 
-  const promise = createOrReadIterateConfigInfoForProject(input);
-  iterateConfigInfoPromises.set(key, promise);
+  const promise = createOrReadProjectRepoInfoForProject(input);
+  projectRepoInfoPromises.set(key, promise);
   try {
     return await promise;
   } finally {
-    if (iterateConfigInfoPromises.get(key) === promise) {
-      iterateConfigInfoPromises.delete(key);
+    if (projectRepoInfoPromises.get(key) === promise) {
+      projectRepoInfoPromises.delete(key);
     }
   }
 }
 
-async function createOrReadIterateConfigInfoForProject(input: {
+async function createOrReadProjectRepoInfoForProject(input: {
   env: Pick<ReposCapabilityEnv, "REPO">;
   projectId: string;
   projectSlug: string | null;
@@ -233,7 +233,7 @@ async function createOrReadIterateConfigInfoForProject(input: {
   const namespace = requireRepoNamespace(input.env);
   const name: RepoStructuredName = {
     projectId: input.projectId,
-    repoSlug: ITERATE_CONFIG_REPO_SLUG,
+    repoSlug: PROJECT_REPO_SLUG,
   };
   const existing = await getInitializedDoStub({
     allowCreate: false,
@@ -262,7 +262,7 @@ async function createOrReadIterateConfigInfoForProject(input: {
       projectSlug: input.projectSlug || undefined,
       source: {
         artifactName: ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME,
-        description: `Iterate config repo for ${input.projectSlug || input.projectId}`,
+        description: `Project repo for ${input.projectSlug || input.projectId}`,
         kind: "artifact-fork",
       },
     });

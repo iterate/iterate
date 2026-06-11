@@ -404,10 +404,10 @@ test("project config worker customizes fresh agents by appending events", async 
   ].join("\n");
   const pushScript = [
     "async (itx) => {",
-    `  await itx.workspace.writeFile('/iterate-config/worker.js', ${JSON.stringify(configWorkerSource)});`,
-    "  await itx.workspace.git.add({ dir: '/iterate-config', filepath: 'worker.js' });",
-    "  await itx.workspace.git.commit({ dir: '/iterate-config', message: 'add agent context config', author: { name: 'Agent', email: 'agent@iterate.com' } });",
-    "  await itx.workspace.git.push({ dir: '/iterate-config', remote: 'origin', ref: 'main' });",
+    `  await itx.workspace.writeFile('/project/worker.js', ${JSON.stringify(configWorkerSource)});`,
+    "  await itx.workspace.git.add({ dir: '/project', filepath: 'worker.js' });",
+    "  await itx.workspace.git.commit({ dir: '/project', message: 'add agent context config', author: { name: 'Agent', email: 'agent@iterate.com' } });",
+    "  await itx.workspace.git.push({ dir: '/project', remote: 'origin', ref: 'main' });",
     "}",
   ].join("\n");
   await client.project.streams.append({
@@ -468,7 +468,7 @@ test("project config worker customizes fresh agents by appending events", async 
   );
 }, 240_000);
 
-test("lets agent chat update iterate-config through the prepared workspace", async () => {
+test("lets agent chat update the project repo through the prepared workspace", async () => {
   await using fixture = await createTestProjectFixture({ slugPrefix: "agent-workspace" });
   const { client, project } = fixture;
   const suffix = uniqueSuffix();
@@ -518,7 +518,7 @@ test("lets agent chat update iterate-config through the prepared workspace", asy
   expect(generatedCode).toContain("itx.workspace.writeFile");
   expect(generatedCode).toContain("itx.workspace.gitCommit");
   expect(generatedCode).toContain("itx.workspace.gitPush");
-  expect(generatedCode).toContain("/iterate-config");
+  expect(generatedCode).toContain("/project");
   expect(generatedCode).toContain("folder/banana.txt");
   expect(generatedCode).not.toContain("gitClone");
   expect(generatedCode).not.toContain(".repos");

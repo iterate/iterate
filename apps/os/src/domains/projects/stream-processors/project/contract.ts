@@ -74,7 +74,7 @@ export const ProjectProcessorContract = defineProcessorContract({
       payloadSchema: ProjectFacts,
     },
     "events.iterate.com/project/repo-initialized": {
-      description: "The Project's iterate-config repo exists and is cloneable.",
+      description: "The Project's repo exists and is cloneable.",
       payloadSchema: z.object({
         defaultBranch: z.string().trim().min(1),
         projectId: z.string().trim().min(1),

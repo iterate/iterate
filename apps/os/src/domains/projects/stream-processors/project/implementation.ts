@@ -4,7 +4,7 @@
 // `reduce` projects the lifecycle events into state (the DO keeps no project
 // table of its own — this snapshot IS the project's durable state).
 // `processEvent` owns the creation side effects END TO END: the one D1
-// `projects` projection (platform-host routing reads it), the iterate-config
+// `projects` projection (platform-host routing reads it), the project
 // repo, the example egress secret, the agents root, and a cross-post of
 // create-requested onto the deployment-wide `global` namespace's /projects
 // stream (the global audit surface for project lifecycle). Each step leaves
@@ -38,7 +38,7 @@ import {
   EXAMPLE_EGRESS_SECRET_MATERIAL,
   EXAMPLE_EGRESS_SECRET_METADATA,
 } from "~/domains/secrets/example-secret.ts";
-import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
+import { ensureProjectRepoInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import type { AppConfig } from "~/config.ts";
 
@@ -124,7 +124,7 @@ export class ProjectProcessor extends StreamProcessor<
           payload: facts,
         },
       });
-      await this.#ensureIterateConfigRepo({ projectId, slug });
+      await this.#ensureProjectRepo({ projectId, slug });
       await this.#ensureExampleEgressSecret(projectId);
       await this.#ensureAgentsRoot(projectId);
       await this.#writeAgentsRootRule(projectId);
@@ -176,9 +176,9 @@ export class ProjectProcessor extends StreamProcessor<
     });
   }
 
-  /** The project's iterate-config repo, with its own fact on the stream. */
-  async #ensureIterateConfigRepo(input: { projectId: string; slug: string }) {
-    const repo = await ensureIterateConfigInfoForProject({
+  /** The project's repo (slug `project`), with its own fact on the stream. */
+  async #ensureProjectRepo(input: { projectId: string; slug: string }) {
+    const repo = await ensureProjectRepoInfoForProject({
       env: this.deps.env,
       projectId: input.projectId,
       projectSlug: input.slug,

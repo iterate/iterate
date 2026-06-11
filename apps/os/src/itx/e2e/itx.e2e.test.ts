@@ -21,7 +21,7 @@ import { EXAMPLE_CASES, EXAMPLE_IDS_WITHOUT_CASES } from "./example-cases.ts";
 import {
   configWorkerRunnerSource,
   MATRIX_RUNTIMES,
-  pushIterateConfigWorker,
+  pushProjectRepoFiles,
   runExampleCode,
 } from "./example-matrix.ts";
 import { slackShapedCapabilitySource, todoCapabilitySource } from "./itx-scripts.ts";
@@ -62,7 +62,7 @@ function ensureMatrixProject(): Promise<{ projectId: string }> {
       slug: string;
     };
     createdProjectIds.push(project.id);
-    await pushIterateConfigWorker({
+    await pushProjectRepoFiles({
       commitMessage: "bake catalogue examples into the config worker",
       files: {
         "worker.js": configWorkerRunnerSource(
@@ -346,7 +346,7 @@ test("user-space caps: repo-sourced code is a first-class capability through the
   // memo → Worker Loader. This is the §1 litmus test's user-space half:
   // same address shape as anything else, no forwarder, no special kind.
   const marker = `litmus-${RUN_SUFFIX}`;
-  await pushIterateConfigWorker({
+  await pushProjectRepoFiles({
     commitMessage: "add petstore capability module",
     files: {
       "caps/petstore-data.js":
@@ -383,7 +383,7 @@ export class PetstoreClient extends WorkerEntrypoint {
           commit: "latest",
           entrypoint: "PetstoreClient",
           path: "caps/petstore.js",
-          repo: "iterate-config",
+          repo: "project",
           type: "repo",
         },
       },

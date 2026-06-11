@@ -8,7 +8,7 @@
 //   node            AsyncFunction("itx", "vars", code) on a Cap'n Web stub
 //   cli             `pnpm cli itx run -e <code>` (same Node eval, spawned)
 //   dynamic-worker  POST /api/itx/run with `async ({ itx, vars }) => { code }`
-//   config-worker   the body baked into a project's iterate-config worker.js,
+//   config-worker   the body baked into the project repo's worker.js,
 //                   executed against env.ITERATE.context
 //
 // Almost every example is written against a PROJECT-scoped handle (context:

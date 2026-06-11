@@ -43,7 +43,7 @@ export const PROJECT_WORKER_SOURCE = {
   bundle: {},
   commit: "latest",
   path: "worker.js",
-  repo: "iterate-config",
+  repo: "project",
   type: "repo",
 } as const satisfies import("./itx.ts").WorkerSource;
 
@@ -107,7 +107,7 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
   {
     address: { entrypoint: "ReposCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
-      "The project's git repos: itx.repos.ensureIterateConfigInfo({ projectSlug }), " +
+      "The project's git repos: itx.repos.ensureProjectRepoInfo({ projectSlug }), " +
       "list(), create({ slug }), get({ slug }) — repo handles expose commitFiles/readFiles/readLog.",
     name: "repos",
   },
@@ -135,7 +135,7 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     // config repo with a defined file structure; this entry points at it.
     address: { type: "rpc", worker: { type: "source", source: PROJECT_WORKER_SOURCE } },
     instructions:
-      "The project's own worker — the code in the project's iterate-config repo " +
+      "The project's own worker — the code in the project's repo " +
       "(worker.js), built per commit and tracking pushes: " +
       "itx.worker.someExportedFunction(args) reaches any public method of its default export.",
     name: "worker",

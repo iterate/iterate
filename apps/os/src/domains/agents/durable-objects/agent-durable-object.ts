@@ -93,10 +93,10 @@ export type AgentDurableObjectEnv = {
   WORKSPACE: DurableObjectNamespace<WorkspaceDurableObject>;
 };
 
-const AGENT_ITERATE_CONFIG_DIR = "/iterate-config";
-const AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH = `${AGENT_ITERATE_CONFIG_DIR}/.git/iterate-clone-complete`;
+const AGENT_PROJECT_REPO_DIR = "/project";
+const AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH = `${AGENT_PROJECT_REPO_DIR}/.git/iterate-clone-complete`;
 
-export type CloneIterateConfigRepoInput = {
+export type CloneProjectRepoInput = {
   git: Awaited<ReturnType<WorkspaceDurableObject["cloudflareShellGit"]>>;
   repo: RepoInfo;
   workspace: DurableObjectStub<WorkspaceDurableObject>;
@@ -517,17 +517,17 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   private async ensureAgentWorkspace(params: AgentDurableObjectStructuredName) {
     const workspace = await this.getAgentWorkspace(params);
 
-    if (await workspace.hasFile(AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH)) {
+    if (await workspace.hasFile(AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH)) {
       return;
     }
 
-    const repo = await this.getOrCreateIterateConfigRepo(params);
+    const repo = await this.getOrCreateProjectRepo(params);
     const git = await workspace.cloudflareShellGit();
 
-    if (await workspace.hasFile(`${AGENT_ITERATE_CONFIG_DIR}/.git/HEAD`)) {
+    if (await workspace.hasFile(`${AGENT_PROJECT_REPO_DIR}/.git/HEAD`)) {
       let cloneIsUsable = true;
       try {
-        await git.status({ dir: AGENT_ITERATE_CONFIG_DIR });
+        await git.status({ dir: AGENT_PROJECT_REPO_DIR });
       } catch {
         cloneIsUsable = false;
       }
@@ -535,7 +535,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       if (cloneIsUsable) {
         await workspace.writeFile({
           content: `${repo.slug}\n`,
-          path: AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH,
+          path: AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH,
         });
         return;
       }
@@ -543,35 +543,35 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
     await workspace.removePath({
       force: true,
-      path: AGENT_ITERATE_CONFIG_DIR,
+      path: AGENT_PROJECT_REPO_DIR,
       recursive: true,
     });
-    await this.cloneIterateConfigRepo({ git, repo, workspace });
+    await this.cloneProjectRepo({ git, repo, workspace });
     await workspace.writeFile({
       content: `${repo.slug}\n`,
-      path: AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH,
+      path: AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH,
     });
   }
 
-  protected async cloneIterateConfigRepo(input: CloneIterateConfigRepoInput) {
+  protected async cloneProjectRepo(input: CloneProjectRepoInput) {
     await input.git.clone({
       url: remoteWithToken({
         remote: input.repo.remote,
         token: input.repo.token,
       }),
-      dir: AGENT_ITERATE_CONFIG_DIR,
+      dir: AGENT_PROJECT_REPO_DIR,
       branch: input.repo.defaultBranch,
       depth: 1,
     });
   }
 
-  private async getOrCreateIterateConfigRepo(
+  private async getOrCreateProjectRepo(
     params: AgentDurableObjectStructuredName,
   ): Promise<RepoInfo> {
     return await getReposCapability({
       exports: this.ctx.exports,
       props: { projectId: params.projectId },
-    }).ensureIterateConfigInfo({ projectSlug: null });
+    }).ensureProjectRepoInfo({ projectSlug: null });
   }
 
   private async getAgentWorkspace(params: AgentDurableObjectStructuredName) {
