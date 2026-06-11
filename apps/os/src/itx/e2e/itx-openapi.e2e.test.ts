@@ -37,31 +37,22 @@ test(
     createdProjectIds.push(project.id);
     using projectItx = await itx.projects.get(project.id);
 
-    const provide = async () => {
-      await projectItx.provideCapability({
-        name: "fixture",
-        capability: {
-          entrypoint: "OpenApiClient",
-          props: {
-            headers: { authorization: `Bearer ${adminApiSecret()}` },
-            specUrl: new URL("/api/itx/openapi-fixture/openapi.json", baseUrl()).toString(),
-          },
-          type: "rpc",
-          worker: { type: "loopback" },
+    await projectItx.provideCapability({
+      name: "fixture",
+      capability: {
+        entrypoint: "OpenApiClient",
+        props: {
+          headers: { authorization: `Bearer ${adminApiSecret()}` },
+          specUrl: new URL("/api/itx/openapi-fixture/openapi.json", baseUrl()).toString(),
         },
-      });
-      const description = await projectItx.describe();
-      return description.capabilities.find((entry) => entry.name === "fixture") as
-        | { instructions?: string; types?: string }
-        | undefined;
-    };
+        type: "rpc",
+        worker: { type: "loopback" },
+      },
+    });
 
-    // (2) the provide-time hook fills types + instructions from the spec.
-    // Re-provide until the probe beats its deadline on a cold project chain;
-    // the spec memo makes the next attempt instant.
-    await expect
-      .poll(async () => (await provide())?.types ?? "", { interval: 2_000, timeout: 90_000 })
-      .toContain("declare function getPet");
+    // (2) ONE provide is enough: the loopback probe deadline absorbs the
+    // cold project chain (itx.ts SELF_DESCRIPTION_LOOPBACK_TIMEOUT_MS), so
+    // the journaled meta carries the spec-derived surface immediately.
     const entry = (await projectItx.describe()).capabilities.find(
       (candidate) => candidate.name === "fixture",
     ) as { instructions?: string; types?: string };

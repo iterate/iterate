@@ -240,6 +240,24 @@ describe("provide-time self-description (describeItx)", () => {
     expect(await garbage.describe()).toMatchObject([{ name: "ai", types: undefined }]);
   });
 
+  test("an oversized describeItx answer is truncated before it is journaled", async () => {
+    const { dial } = selfDescribingDial({ types: "x".repeat(80 * 1024) });
+    const { events, journal } = fakeJournal();
+    const itx = makeItx({ dial, journal });
+    await itx.provideCapability({ capability: LOOPBACK_ADDRESS, name: "huge" });
+
+    const journaled = (events[0]!.payload as { meta: { types: string } }).meta.types;
+    expect(journaled.length).toBeLessThan(65 * 1024);
+    expect(journaled).toContain("truncated by the platform");
+    // Caller-supplied values are the caller's business — never truncated.
+    await itx.provideCapability({
+      capability: LOOPBACK_ADDRESS,
+      name: "mine",
+      types: "y".repeat(80 * 1024),
+    });
+    expect((events[1]!.payload as { meta: { types: string } }).meta.types).toHaveLength(80 * 1024);
+  });
+
   test("live provides are never probed", async () => {
     const dial = vi.fn();
     const itx = makeItx({ dial: dial as unknown as CapabilityDial });

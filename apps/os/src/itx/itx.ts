@@ -126,8 +126,16 @@ export type ItxStub = {
   invoke(input: { path: string[]; args: unknown[]; origin?: ItxOrigin }): Promise<unknown>;
 };
 
-/** How long a provide waits for a target's optional describeItx answer. */
+/** How long a provide waits for a target's optional describeItx answer.
+ * Loopback dials get longer: a first-party client's first probe may ride a
+ * cold project chain and fetch real data (OpenApiClient fetches its spec);
+ * everything else stays snappy — a miss just means an unenriched provide. */
 const SELF_DESCRIPTION_TIMEOUT_MS = 3_000;
+const SELF_DESCRIPTION_LOOPBACK_TIMEOUT_MS = 15_000;
+
+/** Probe-derived strings are journaled forever; cap them so a pathological
+ * spec cannot bloat the record. Caller-supplied values are never touched. */
+const SELF_DESCRIPTION_META_BUDGET = 64 * 1024;
 
 export class CapabilityOfflineError extends Error {
   constructor(name: string) {
@@ -314,19 +322,23 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     // knows its own surface best at exactly that moment. An rpc provide
     // with no caller-supplied `types` is dialed ONCE and asked
     // (`describeItx` — a reserved protocol name, so user paths can never
-    // collide); explicit caller values always win. Strictly best-effort:
-    // any failure or the short timeout means the provide proceeds
-    // unenriched. Only call-implementing targets (OpenApiClient, …) can
-    // answer — member-shaped source caps hit replayPathCall's reserved
-    // gate, which is the collision protection doing its job.
+    // collide); explicit caller values always win. The probe is a
+    // best-effort, SIDE-EFFECTFUL call into provider code at provide time
+    // (an OpenApiClient probe fetches its spec). Strictly best-effort:
+    // any failure or the timeout means the provide proceeds unenriched.
+    // Only call-implementing targets (OpenApiClient, …) can answer —
+    // member-shaped source caps hit replayPathCall's reserved gate, which
+    // is the collision protection doing its job.
     if (kind === "rpc" && meta.types === undefined) {
       const described = await this.#dialSelfDescription(
         name,
         input.capability as CapabilityAddress,
       );
-      if (typeof described?.types === "string") meta.types = described.types;
+      if (typeof described?.types === "string") {
+        meta.types = truncateSelfDescription(described.types);
+      }
       if (typeof described?.instructions === "string" && meta.instructions === undefined) {
-        meta.instructions = described.instructions;
+        meta.instructions = truncateSelfDescription(described.instructions);
       }
     }
 
@@ -484,10 +496,14 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       });
       const call = Promise.resolve(borrowed.call({ args: [], path: [SELF_DESCRIPTION_METHOD] }));
       call.catch(() => {});
+      const deadlineMs =
+        address.type === "rpc" && address.worker.type === "loopback"
+          ? SELF_DESCRIPTION_LOOPBACK_TIMEOUT_MS
+          : SELF_DESCRIPTION_TIMEOUT_MS;
       const result = await Promise.race([
         call,
         new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), SELF_DESCRIPTION_TIMEOUT_MS);
+          timer = setTimeout(() => resolve(null), deadlineMs);
         }),
       ]);
       if (result == null || typeof result !== "object") return null;
@@ -792,6 +808,16 @@ export function isLocalBareFunction(
   if (typeof capability !== "function") return false;
   const proto = Object.getPrototypeOf(capability) as object | null;
   return proto === Function.prototype || proto === ASYNC_FUNCTION_PROTOTYPE;
+}
+
+/** Cap one probe-derived string against the journaled-meta budget, with an
+ * honest note where the cut happened. */
+function truncateSelfDescription(value: string): string {
+  if (value.length <= SELF_DESCRIPTION_META_BUDGET) return value;
+  return (
+    value.slice(0, SELF_DESCRIPTION_META_BUDGET) +
+    "\n// … truncated by the platform: the describeItx answer exceeded the 64KB journaled-meta budget."
+  );
 }
 
 /** Wrap a bare local function so it speaks the one calling convention:
