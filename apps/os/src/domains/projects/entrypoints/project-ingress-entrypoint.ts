@@ -4,9 +4,6 @@
 // cache key the DO uses, so warm isolates are shared and the code payload
 // only crosses RPC on a cold isolate — and dispatches. The DO never serves
 // ingress; it is just where the worker's source of truth lives.
-//
-// The one exception is the egress intercept tunnel's WebSocket handshake,
-// which forwards to the DO's fetch path (upgrades cannot cross RPC methods).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { parseConfig } from "~/config.ts";
@@ -42,11 +39,6 @@ export class ProjectIngressEntrypoint extends WorkerEntrypoint<
 > {
   async fetch(request: Request) {
     const project = this.project();
-
-    if (new URL(request.url).pathname === "/__iterate/intercept-project-egress") {
-      return await project.fetch(request);
-    }
-
     const version = await project.getWorkerVersion();
     if (version.status === "building") {
       return workerBuildingResponse();

@@ -607,14 +607,8 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - The **Project Ingress Entry Point** takes only a stable **Project ID** prop in v1, resolves the Project Durable Object stub by using that **Project ID** as the Durable Object name, and delegates the request to the Project Durable Object's ingress RPC.
 - The **Project Ingress Entry Point** does not accept **Project Slug** props in v1; slug-to-ID resolution happens before a request reaches hot ingress.
 - **Project Egress** is future work. Until it is implemented, codemode Script `fetch(...)` calls go through the default **Codemode Fetch Capability** so they are traceable as Function Calls.
-- A **Project Egress Intercept Tunnel** is scoped to exactly one **Project** and is active only while its tunnel connection is connected.
-- A **Project Egress Tunnel** is the short form of **Project Egress Intercept Tunnel**, not a persistent Project configuration record.
-- The **Project Egress Intercept Route** is `/__iterate/intercept-project-egress` on a **Project-Owned Hostname**.
-- At most one **Project Egress Intercept Tunnel** is active for one **Project**; a new tunnel connection replaces and disposes the previous active tunnel.
-- A **Project Egress Intercept Tunnel** is not Project configuration and is not stored in the **Project Listing Projection**.
-- A **Project Egress Intercept Test Helper** connects to the **Project Egress Intercept Route** with the admin API secret and supplies the test's fetch handler over the tunnel.
-- While a **Project Egress Intercept Tunnel** is active, Secret references in Project Egress headers are replaced with explanatory withheld text that includes the full original `getSecret(...)` incantation.
-- Without an active **Project Egress Intercept Tunnel**, Project Egress header Secret references are replaced with raw **Secret Material** before public fetch.
+- The **Project Egress Intercept Tunnel** (and its `/__iterate/intercept-project-egress` route) is deleted; egress interception is a live `fetch` capability shadow on the project's itx context, session-bound and scoped to exactly one **Project**.
+- A live `fetch` shadow dispatches BEFORE the default egress pipe, so it sees `getSecret(...)` references unsubstituted; without a shadow, Project Egress header Secret references are replaced with raw **Secret Material** before public fetch.
 - Project-scoped oRPC Secret CRUD is an adapter over the **D1-backed Secrets Capability**; oRPC must not reimplement Secret storage behavior directly.
 - Project-scoped oRPC Secret reads return redacted Secret summaries and metadata, not raw Secret material.
 - The first Project Egress Secret Injection proof also resolves Secret material through the **D1-backed Secrets Capability**; Secret Durable Objects are not in the immediate substitution path.

@@ -4,7 +4,8 @@ import type {
   Event as StreamEvent,
   StreamState,
 } from "@iterate-com/shared/streams/types";
-import { ItxStream, type ItxRuntime } from "~/itx/handle.ts";
+import type { ItxRuntime } from "~/itx/handle.ts";
+import { ItxStream } from "~/itx/caps/streams.ts";
 import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
@@ -70,7 +71,11 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
   }
 
   #stream(path: string): ItxStream {
-    return new ItxStream(this.#runtime(), projectId, path);
+    return new ItxStream(
+      { access: [projectId], exports: this.#runtime().exports as never },
+      projectId,
+      path,
+    );
   }
 
   #runtime(): ItxRuntime {

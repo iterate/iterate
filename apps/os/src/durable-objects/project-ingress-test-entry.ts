@@ -1,3 +1,4 @@
+import { RpcTarget } from "cloudflare:workers";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import {
   getInitializedStreamStub,
@@ -92,18 +93,6 @@ type TestProjectConfigWorkspace = {
 };
 
 export class ProjectDurableObject extends RealProjectDurableObject {
-  installTestProjectEgressInterceptTunnel() {
-    this.replaceProjectEgressInterceptTunnel({
-      fetch(request: Request) {
-        return Response.json({
-          headers: headersToArrays(request.headers),
-          url: request.url,
-        });
-      },
-      [Symbol.dispose]() {},
-    });
-  }
-
   protected override async cloneWorkerRepo(input: {
     git: TestProjectConfigGit;
     repo: RepoInfo;
@@ -244,12 +233,39 @@ export default {
       );
     }
 
-    if (url.pathname === "/__test/connect-egress-intercept") {
-      const project = env.PROJECT.getByName(
-        getProjectDurableObjectName("proj__local__test"),
-      ) as unknown as ProjectEgressInterceptTestRpc;
-      await project.installTestProjectEgressInterceptTunnel();
-      return Response.json({ ok: true });
+    if (url.pathname === "/__test/egress-with-fetch-shadow") {
+      // The same user story the deleted egress intercept tunnel served:
+      // a LIVE `fetch` cap shadows the project's egress capability and sees
+      // getSecret() placeholders UNSUBSTITUTED (substitution lives in the
+      // default pipe). Live stubs passed over Workers RPC only survive the
+      // defining request, so define → fetch → revoke happen in one go —
+      // exactly the session-bound semantics live caps are designed around.
+      class EchoEgressShadow extends RpcTarget {
+        async call({ args }: { path: string[]; args: unknown[] }) {
+          const request = args[0] as Request;
+          return Response.json({
+            headers: headersToArrays(request.headers),
+            url: request.url,
+          });
+        }
+      }
+      const itx = await resolveItx({
+        env: env as never,
+        exports: ctx.exports as never,
+        props: { context: "proj__local__test" },
+      });
+      await itx.caps.define({
+        invoke: "path-call",
+        name: "fetch",
+        target: new EchoEgressShadow() as never,
+      });
+      try {
+        const target = url.searchParams.get("target") ?? "https://api.example.com/v1/models";
+        const response = await itx.fetch(new Request(target, { headers: request.headers }));
+        return Response.json(await response.json());
+      } finally {
+        await itx.caps.revoke({ name: "fetch" });
+      }
     }
 
     if (url.pathname === "/__test/echo" || url.pathname.startsWith("/__test/proxy/")) {
@@ -384,10 +400,6 @@ export default {
 
 type ProjectStateRpc = {
   processor: { snapshot(): Promise<unknown> };
-};
-
-type ProjectEgressInterceptTestRpc = {
-  installTestProjectEgressInterceptTunnel(): Promise<void>;
 };
 
 async function ensureD1Schema(db: D1Database) {

@@ -6,12 +6,18 @@ import ts from "typescript";
 import { describe, expect, test, vi } from "vitest";
 import { itxReplAutocompleteWorker } from "./itx-repl-autocomplete.ts";
 import { getAutocompletionWithDocs } from "./itx-repl-autocomplete-worker.ts";
-import { itxReplDeclaration, type ItxReplTypeScriptWorker } from "./itx-repl-types.ts";
+import {
+  ITX_TYPES_PATH,
+  itxReplDeclaration,
+  itxTypesDeclaration,
+  type ItxReplTypeScriptWorker,
+} from "./itx-repl-types.ts";
 
 const REPL_SOURCE_PATH = "/repl.ts";
 const REPL_TYPES_PATH = "/iterate-repl-globals.d.ts";
 
 const compilerOptions: ts.CompilerOptions = {
+  allowImportingTsExtensions: true,
   allowSyntheticDefaultImports: true,
   lib: ["es2022", "dom"],
   module: ts.ModuleKind.ESNext,
@@ -38,8 +44,63 @@ describe("itx REPL TypeScript declarations", () => {
       "Who/what am I holding?",
     );
     expect(result?.options.find((option) => option.label === "fetch")?.info).toContain(
-      "Explicit project egress",
+      "explicit project egress",
     );
+  });
+
+  test("completion docs come verbatim from the design-of-record ~/itx/types.ts", async () => {
+    const env = createReplTypeScriptEnv("itx.caps.");
+    const result = await getAutocompletionWithDocs({
+      env,
+      path: REPL_SOURCE_PATH,
+      context: { explicit: true, pos: "itx.caps.".length },
+    });
+
+    // These strings exist only in ~/itx/types.ts, never in the REPL prelude:
+    // the define() doc's runSwiftOnMyMac example and provide()'s alias note.
+    expect(result?.options.find((option) => option.label === "define")?.info).toContain(
+      "runSwiftOnMyMac",
+    );
+    expect(result?.options.find((option) => option.label === "provide")?.info).toContain(
+      "REPL muscle memory",
+    );
+  });
+
+  test("REPL session globals from the prelude type-check in a snippet", () => {
+    // Every global the REPL runtime injects (see ~/itx/browser-repl.ts) must
+    // be declared by the prelude, with the design-of-record types attached.
+    const code = [
+      'const projectScoped: string = projectId ?? "global";',
+      "const target: object = new RpcTarget();",
+      "const fn: ItxFn<StreamEvent[]> = (handle: Itx) =>",
+      '  handle.streams.get({ path: "/chat" }).read();',
+      "const previous: unknown[] = [$_, _, vars.anything, env.anything];",
+      "[projectScoped, target, fn, previous];",
+    ].join("\n");
+    const env = createReplTypeScriptEnv(code);
+
+    const diagnostics = env.languageService
+      .getSemanticDiagnostics(REPL_SOURCE_PATH)
+      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+    expect(diagnostics).toEqual([]);
+  });
+
+  test("handles returned by itx.projects.get carry the capability fallthrough", async () => {
+    const code = 'const project = await itx.projects.get("demo");\nproject.slack.chat.';
+    const env = createReplTypeScriptEnv(code);
+    const result = await getAutocompletionWithDocs({
+      env,
+      path: REPL_SOURCE_PATH,
+      context: { explicit: true, pos: code.length },
+    });
+
+    // The fallthrough index signature offers no named completions, but the
+    // access itself must type-check: no semantic errors on the snippet.
+    expect(result).not.toBeNull();
+    const diagnostics = env.languageService
+      .getSemanticDiagnostics(REPL_SOURCE_PATH)
+      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+    expect(diagnostics).toEqual([]);
   });
 
   test("nested autocomplete options include itx JSDoc as CodeMirror completion info", async () => {
@@ -91,6 +152,7 @@ function createReplTypeScriptEnv(code: string): VirtualTypeScriptEnvironment {
 
 function createReplLanguageService(code: string): ts.LanguageService {
   const files = new Map<string, string>([
+    [ITX_TYPES_PATH, itxTypesDeclaration],
     [REPL_TYPES_PATH, itxReplDeclaration],
     [REPL_SOURCE_PATH, code],
   ]);

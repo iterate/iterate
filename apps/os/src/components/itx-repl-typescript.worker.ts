@@ -7,12 +7,14 @@ import { createWorker } from "@valtown/codemirror-ts/worker";
 import * as Comlink from "comlink";
 import ts from "typescript";
 import { getAutocompletionWithDocs } from "./itx-repl-autocomplete-worker.ts";
-import { itxReplDeclaration } from "./itx-repl-types.ts";
+import { ITX_TYPES_PATH, itxReplDeclaration, itxTypesDeclaration } from "./itx-repl-types.ts";
 
 const REPL_SOURCE_PATH = "/repl.ts";
 const REPL_TYPES_PATH = "/iterate-repl-globals.d.ts";
 
 const compilerOptions: ts.CompilerOptions = {
+  // The prelude imports the design-of-record module as "./itx-types.ts".
+  allowImportingTsExtensions: true,
   allowSyntheticDefaultImports: true,
   lib: ["es2022", "dom"],
   module: ts.ModuleKind.ESNext,
@@ -33,12 +35,13 @@ const IGNORED_DIAGNOSTIC_CODES = new Set([1108]);
 
 const worker = createWorker(async () => {
   const fsMap = await createDefaultMapFromCDN(compilerOptions, ts.version, false, ts);
+  fsMap.set(ITX_TYPES_PATH, itxTypesDeclaration);
   fsMap.set(REPL_TYPES_PATH, itxReplDeclaration);
   fsMap.set(REPL_SOURCE_PATH, "\n");
   const system = createSystem(fsMap);
   const env = createVirtualTypeScriptEnvironment(
     system,
-    [REPL_TYPES_PATH, REPL_SOURCE_PATH],
+    [ITX_TYPES_PATH, REPL_TYPES_PATH, REPL_SOURCE_PATH],
     ts,
     compilerOptions,
   );
