@@ -242,6 +242,11 @@ export const router = os.router({
           slug,
           type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         });
+        if (!lease) {
+          throw new Error(
+            `Could not lease ${slug}: it is already leased or unknown — check \`pnpm preview status\`.`,
+          );
+        }
         return {
           ...lease,
           expiresAt: new Date(lease.expiresAt).toISOString(),
@@ -265,11 +270,16 @@ export const router = os.router({
       .handler(async ({ input }) => {
         const semaphore = createPreviewSemaphoreClient(input);
         const slug = normalizePreviewSlotSlug(input.slot);
-        await semaphore.release({
+        const result = await semaphore.release({
           leaseId: input.leaseId,
           slug,
           type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
         });
+        if (!result.released) {
+          throw new Error(
+            `Semaphore did not release ${slug} — wrong or expired leaseId? Check \`pnpm preview status\`.`,
+          );
+        }
         return { released: true, slug };
       }),
     reconcile: os
