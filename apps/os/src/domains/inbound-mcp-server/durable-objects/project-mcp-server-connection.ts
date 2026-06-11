@@ -4,15 +4,16 @@ import type { Connection } from "agents";
 import { z } from "zod";
 import { StreamPath, type EventInput } from "@iterate-com/shared/streams/types";
 import { upsertD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { typeid } from "@iterate-com/shared/typeid";
+import { createD1Client } from "sqlfu";
 import packageJson from "../../../../package.json" with { type: "json" };
 import {
   getStreamsBackend,
   type StreamsBackendProps,
 } from "~/domains/streams/entrypoints/streams-backend.ts";
 import { parseConfig } from "~/config.ts";
-import type { ContextDO } from "~/itx/context-do.ts";
-import { contextAddressOf, type CapabilityAddress, type ItxStub } from "~/itx/itx.ts";
+import type { ItxDurableObject } from "~/itx/itx-durable-object.ts";
+import type { CapabilityAddress } from "~/itx/itx.ts";
+import { dialContext, extendContext, projectContextAddress } from "~/itx/journal.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
 import { runItxScript } from "~/itx/run.ts";
 
@@ -35,7 +36,7 @@ export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts
 
 interface McpServerEnv {
   DO_CATALOG: D1Database;
-  ITX_CONTEXT: DurableObjectNamespace<ContextDO>;
+  ITX_CONTEXT: DurableObjectNamespace<ItxDurableObject>;
   MOCK_PROVIDER_BASE_URL?: string;
   PROJECT_MCP_SERVER_CONNECTION: DurableObjectNamespace;
 }
@@ -326,20 +327,21 @@ export class ProjectMcpServerConnection extends McpAgent<
     if (existing && seededVersion === MCP_CONTEXT_CAPS_VERSION) return existing;
 
     const config = parseConfig(this.env as unknown as Env);
-    const contextId =
-      existing ??
-      typeid({
-        env: { TYPEID_PREFIX: config.typeIdPrefix },
-        prefix: "ctx",
-      });
-    const contextStub = this.env.ITX_CONTEXT.getByName(contextId);
-    await contextStub.initialize({
-      id: contextId,
+    // Creation is an event: extend the project context — the birth
+    // certificate is the journal's first event; the node materializes
+    // lazily by consuming it. A version bump mints a FRESH context
+    // (contexts are erasable; the session record is the session stream).
+    void existing;
+    const created = await extendContext({
+      base: "/",
+      db: createD1Client(this.env.DO_CATALOG),
+      env: this.env as unknown as Env,
       name: `mcp:${await this.getSessionSlug()}`,
-      parent: { id: projectId, address: contextAddressOf(projectId) },
+      parent: { address: projectContextAddress(projectId), id: projectId },
       projectId,
+      typeIdPrefix: config.typeIdPrefix,
     });
-    const contextItx = (await contextStub.itx()) as unknown as ItxStub;
+    const contextItx = dialContext(this.env as unknown as Env, created.address).itx();
     for (const cap of SEEDED_CAPS) {
       await contextItx.provideCapability({
         instructions: cap.instructions,
@@ -347,9 +349,9 @@ export class ProjectMcpServerConnection extends McpAgent<
         capability: cap.capability,
       });
     }
-    await this.ctx.storage.put(storageKey, contextId);
+    await this.ctx.storage.put(storageKey, created.contextId);
     await this.ctx.storage.put(versionKey, MCP_CONTEXT_CAPS_VERSION);
-    return contextId;
+    return created.contextId;
   }
 
   private async emitLifecycleEvent(slug: string, payload: Record<string, unknown>) {

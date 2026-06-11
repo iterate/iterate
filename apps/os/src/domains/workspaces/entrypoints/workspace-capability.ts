@@ -7,7 +7,6 @@ import {
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
 import type { PathCall } from "~/itx/itx.ts";
-import { isChildContextId } from "~/itx/refs.ts";
 
 type WorkspaceCapabilityEnv = {
   WORKSPACE?: DurableObjectNamespace<WorkspaceDurableObject>;
@@ -15,22 +14,16 @@ type WorkspaceCapabilityEnv = {
 
 export type WorkspaceCapabilityProps = {
   projectId: string;
-  /** Explicit workspace; absent means derive from `context` (see below). */
-  workspaceId?: string;
-  /** Attribution, injected by the registry at dial time — and the workspace
-   * scope: project contexts share one workspace ("itx"), child contexts each
-   * get their own (`itx:ctx_…`), so an agent session's repo clones and files
-   * are isolated per context. Chain delegation carries the ORIGINATING
-   * context, which is what makes this derivation correct for caps inherited
-   * from platform:project. */
+  /** The workspace this capability is bound to — EXPLICIT, decided by
+   * whoever provides the capability: the platform context provides the
+   * project's shared workspace ("project"); an agent host provides one
+   * bound to its own context's identity. Workspaces are not itx's concern —
+   * there is no per-context derivation magic here. */
+  workspaceId: string;
+  /** Attribution, injected at dial time. */
   context?: string;
   capabilityPath?: string;
 };
-
-/** Project contexts share one workspace; child contexts are isolated. */
-export function itxWorkspaceId(contextId: string): string {
-  return isChildContextId(contextId) ? `itx:${contextId}` : "itx";
-}
 
 type WorkspaceRpcStub = {
   cloudflareShellGit(): Promise<Record<string, (...args: unknown[]) => Promise<unknown>>>;
@@ -98,13 +91,12 @@ export class WorkspaceCapability extends WorkerEntrypoint<
 
   private workspaceName(): WorkspaceStructuredName {
     const props = this.ctx.props;
-    const workspaceId = props.workspaceId ?? (props.context ? itxWorkspaceId(props.context) : null);
-    if (!workspaceId) {
-      throw new Error("WorkspaceCapability needs props.workspaceId or props.context.");
+    if (!props.workspaceId) {
+      throw new Error("WorkspaceCapability needs provider props.workspaceId.");
     }
     return {
       projectId: props.projectId,
-      workspaceId,
+      workspaceId: props.workspaceId,
     };
   }
 

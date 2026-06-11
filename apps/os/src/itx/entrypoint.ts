@@ -9,16 +9,12 @@
 // happens HERE and at connect-time auth (fetch.ts) — nowhere else.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { createD1Client } from "sqlfu";
 import { ItxHandle, type ItxRuntime } from "./handle.ts";
-import {
-  contextAddressOf,
-  dialContext,
-  isChildContextAddress,
-  replayPathCall,
-  resolveDialableTargets,
-  type PathCall,
-} from "./itx.ts";
-import { GLOBAL_CONTEXT_ID, type ItxProps } from "./refs.ts";
+import { replayPathCall, type CapabilityAddress, type PathCall } from "./itx.ts";
+import { resolveDialableTargets } from "./dial.ts";
+import { dialContext, lookupContext, projectContextAddress } from "./journal.ts";
+import { GLOBAL_CONTEXT_ID, isChildContextId, type ItxProps } from "./refs.ts";
 import { parseConfig } from "~/config.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
@@ -27,8 +23,9 @@ import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capa
  * restore(): names → live object graph. A project-context handle's access is
  * always exactly its own project, regardless of what props claim — same
  * non-escalation rule the old config-worker scope rewrite enforced (D7).
- * Async because child contexts (ctx_…) resolve their owning project from
- * their ContextDO descriptor — the one lookup a sturdy ref costs.
+ * Child contexts (ctx_…) carry their coordinate in props when platform
+ * wiring minted them; a bare-id restore resolves it through the context
+ * catalog — the one lookup a sturdy ref costs.
  */
 export async function resolveItx(input: {
   env: Env;
@@ -39,23 +36,35 @@ export async function resolveItx(input: {
   const contextId = input.props.context;
 
   let projectId: string | null;
+  let contextAddress: CapabilityAddress | null;
   if (contextId === GLOBAL_CONTEXT_ID) {
     // Global handle minting stays connect-time — the global context has no
-    // node to dial yet (address unification step (c)).
+    // node to dial yet.
     projectId = null;
+    contextAddress = null;
+  } else if (isChildContextId(contextId)) {
+    if (input.props.contextAddress && input.props.projectId) {
+      contextAddress = input.props.contextAddress as CapabilityAddress;
+      projectId = input.props.projectId;
+    } else {
+      const resolved = await lookupContext(createD1Client(input.env.DB), contextId);
+      if (!resolved) {
+        throw new Error(`Context ${contextId} is not in the context catalog.`);
+      }
+      contextAddress = resolved.address;
+      projectId = resolved.projectId;
+    }
   } else {
-    const address = contextAddressOf(contextId);
-    // A project context's identity IS its project; a child node resolves its
-    // owning project from its descriptor — the one lookup a sturdy ref costs.
-    projectId = isChildContextAddress(address)
-      ? (await dialContext(input.env, address).descriptor!()).projectId
-      : contextId;
+    // A project context's identity IS its project.
+    projectId = contextId;
+    contextAddress = projectContextAddress(contextId);
   }
 
   return new ItxHandle({
     access: contextId === GLOBAL_CONTEXT_ID ? (input.props.access ?? []) : [projectId!],
     capabilityPath: input.props.capabilityPath,
     config,
+    contextAddress,
     contextId,
     env: input.env,
     exports: input.exports,
@@ -82,8 +91,10 @@ export type ProjectEgressProps = {
   /** The owning project. Registry-injected at dial time (never provider
    * props), so a `fetch` cap can only ever scope to its own project. */
   projectId: string;
-  /** Attribution only: which context/cap is fetching (audit + future policy). */
+  /** The originating context (id + address): dispatch happens at ITS node so
+   * a child context's `fetch` shadow catches its isolates' bare fetch(). */
   context?: string;
+  contextAddress?: CapabilityAddress | null;
   capabilityPath?: string;
 };
 
@@ -109,9 +120,13 @@ export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
   async fetch(request: Request): Promise<Response> {
     // Dispatch at the ORIGINATING context node, not the project: a child
     // context's `fetch` shadow must catch its isolates' bare fetch() too —
-    // the chain (child → project → defaults) is what resolves the cap.
-    const context = this.ctx.props.context ?? this.ctx.props.projectId;
-    const node = dialContext(this.env, contextAddressOf(context));
+    // the chain (child → project → platform defaults) is what resolves the
+    // cap. The address rides in props so the hot path never needs the
+    // context catalog.
+    const address =
+      (this.ctx.props.contextAddress as CapabilityAddress | null | undefined) ??
+      projectContextAddress(this.ctx.props.projectId);
+    const node = dialContext(this.env, address);
     return (await node.itx().invoke({ args: [request], path: ["fetch"] })) as Response;
   }
 }

@@ -162,6 +162,7 @@ export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capabil
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 export { OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
 export { EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
+export { PlatformContext } from "~/itx/platform-context.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 export {

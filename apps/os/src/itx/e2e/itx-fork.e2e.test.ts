@@ -151,7 +151,7 @@ test("extend: a path define shadows ONE subtree of an inherited cap (longest-pre
   ).rejects.toThrow(/reserved/);
 });
 
-test("extend: the inherited workspace default is isolated per child context", async () => {
+test("extend: workspaces are HOST-provided — plain extensions share the project workspace", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `itx-fork-ws-${suffix()}` })) as {
     id: string;
@@ -159,24 +159,35 @@ test("extend: the inherited workspace default is isolated per child context", as
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
-  // `workspace` is a platform:project default, but it is CONTEXT-scoped:
-  // chain delegation carries the originating context, so a child resolves
-  // its own workspace (itx:ctx_…), not the project's shared one.
+  // Workspaces are not itx's concern (no per-context derivation magic): the
+  // platform context provides the PROJECT workspace explicitly, so a plain
+  // extension inherits that same workspace through the chain…
   using child = await projectItx.extend({ name: "e2e-ws" });
   const handle = (target: unknown) => target as never as Record<string, any>;
 
   const marker = suffix();
-  await handle(child).workspace.writeFile(`/isolation-${marker}.txt`, "child only");
-  await expect(handle(child).workspace.readFile(`/isolation-${marker}.txt`)).resolves.toBe(
-    "child only",
+  await handle(child).workspace.writeFile(`/shared-${marker}.txt`, "written by the child");
+  await expect(handle(projectItx).workspace.readFile(`/shared-${marker}.txt`)).resolves.toBe(
+    "written by the child",
   );
 
-  // The project context's workspace must NOT see the child's file…
-  await expect(handle(projectItx).workspace.readFile(`/isolation-${marker}.txt`)).rejects.toThrow();
-
-  // …and a sibling extension gets its own empty workspace too.
-  using sibling = await projectItx.extend({ name: "e2e-ws-sibling" });
-  await expect(handle(sibling).workspace.readFile(`/isolation-${marker}.txt`)).rejects.toThrow();
+  // …while a context whose HOST provides its own `workspace` capability —
+  // the agent pattern: an explicit workspaceId bound to its own identity —
+  // is isolated from the shared one.
+  using isolated = await projectItx.extend({ name: "e2e-ws-isolated" });
+  await isolated.provideCapability({
+    capability: {
+      entrypoint: "WorkspaceCapability",
+      props: { workspaceId: `e2e-${marker}` },
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+    name: "workspace",
+  });
+  await expect(handle(isolated).workspace.readFile(`/shared-${marker}.txt`)).rejects.toThrow();
+  await handle(isolated).workspace.writeFile(`/own-${marker}.txt`, "isolated");
+  await expect(handle(isolated).workspace.readFile(`/own-${marker}.txt`)).resolves.toBe("isolated");
+  await expect(handle(projectItx).workspace.readFile(`/own-${marker}.txt`)).rejects.toThrow();
 });
 
 test("extend narrows access: a session cannot reach sibling projects", async () => {

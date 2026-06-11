@@ -187,6 +187,24 @@ test("the five-step capability flow: provide live, call, promote durable, call f
     { connected: true, kind: "live", name: "slack" },
     { kind: "rpc", name: "slackDurable", types: slackDurableTypes },
   ]);
+
+  // The journal is the only authority: both provides — the LIVE one
+  // included (the record outlives the session; only the stub is in-memory)
+  // — are capability-provided events on the project context's journal
+  // (/itx), readable like any other stream.
+  const journalEvents = (await projectItx.streams.get("/itx").read()) as Array<{
+    payload: { path?: string[]; kind?: string };
+    type: string;
+  }>;
+  const provided = journalEvents.filter(
+    (event) => event.type === "events.iterate.com/itx/capability-provided",
+  );
+  expect(provided.map((event) => ({ kind: event.payload.kind, path: event.payload.path }))).toEqual(
+    [
+      { kind: "live", path: ["slack"] },
+      { kind: "rpc", path: ["slackDurable"] },
+    ],
+  );
 });
 
 test("platform bindings are dialable capabilities (raw + wrapped)", async () => {

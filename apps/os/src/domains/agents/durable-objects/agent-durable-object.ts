@@ -16,9 +16,10 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
-import { typeid } from "@iterate-com/shared/typeid";
-import type { ContextDO } from "~/itx/context-do.ts";
-import { contextAddressOf, type CapabilityAddress, type ItxStub } from "~/itx/itx.ts";
+import { createD1Client } from "sqlfu";
+import type { ItxDurableObject } from "~/itx/itx-durable-object.ts";
+import type { CapabilityAddress } from "~/itx/itx.ts";
+import { dialContext, extendContext, projectContextAddress } from "~/itx/journal.ts";
 import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
 import { AgentChatProcessor } from "~/domains/agents/stream-processors/agent-chat/implementation.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
@@ -85,7 +86,7 @@ export type AgentDurableObjectEnv = {
   AGENT: DurableObjectNamespace<AgentDurableObject>;
   AI: CloudflareAiBinding;
   APP_CONFIG: string;
-  ITX_CONTEXT: DurableObjectNamespace<ContextDO>;
+  ITX_CONTEXT: DurableObjectNamespace<ItxDurableObject>;
   DO_CATALOG: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
@@ -131,8 +132,10 @@ const AgentLifecycleBase = createIterateDurableObjectBase<
   nameSchema: AgentDurableObjectStructuredName,
 });
 
-/** Bump when agentContextCapabilities changes shape or membership. */
-const AGENT_CONTEXT_CAPABILITIES_VERSION = "2";
+/** Bump when agentContextCapabilities changes shape or membership. A bump
+ * mints a FRESH context (journal, workspace and all) — contexts are
+ * erasable; the agent's durable record is its own stream. */
+const AGENT_CONTEXT_CAPABILITIES_VERSION = "3";
 
 export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv> {
   host = createStreamProcessorHost(this.ctx);
@@ -475,18 +478,21 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     const seededVersion = await this.ctx.storage.get<string>("itxContextCapabilitiesVersion");
     if (existing && seededVersion === AGENT_CONTEXT_CAPABILITIES_VERSION) return existing;
 
+    // Creation is an event: extend the project context with this agent's
+    // path as the journal base, so the agent's whole subtree (its stream,
+    // its context journal at <agentPath>/itx/<id>) reads as one directory.
     const config = this.getAppConfig();
-    const contextId =
-      existing ?? typeid({ env: { TYPEID_PREFIX: config.typeIdPrefix }, prefix: "ctx" });
-    const contextStub = this.env.ITX_CONTEXT.getByName(contextId);
-    await contextStub.initialize({
-      id: contextId,
+    const created = await extendContext({
+      base: params.agentPath,
+      db: createD1Client(this.env.DO_CATALOG),
+      env: this.env as unknown as Env,
       name: `agent:${params.agentPath}`,
-      parent: { id: params.projectId, address: contextAddressOf(params.projectId) },
+      parent: { address: projectContextAddress(params.projectId), id: params.projectId },
       projectId: params.projectId,
+      typeIdPrefix: config.typeIdPrefix,
     });
-    const caps = this.agentContextCapabilities(params);
-    const contextItx = (await contextStub.itx()) as unknown as ItxStub;
+    const caps = this.agentContextCapabilities(params, created.contextId);
+    const contextItx = dialContext(this.env as unknown as Env, created.address).itx();
     for (const cap of caps) {
       await contextItx.provideCapability({
         capability: cap.capability,
@@ -503,9 +509,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         payload: { instructions: cap.instructions, name: cap.name },
       })),
     });
-    await this.ctx.storage.put("itxContextId", contextId);
+    await this.ctx.storage.put("itxContextId", created.contextId);
     await this.ctx.storage.put("itxContextCapabilitiesVersion", AGENT_CONTEXT_CAPABILITIES_VERSION);
-    return contextId;
+    return created.contextId;
   }
 
   private async ensureAgentWorkspace(params: AgentDurableObjectStructuredName) {
@@ -706,7 +712,10 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     });
   }
 
-  private agentContextCapabilities(params: AgentDurableObjectStructuredName): Array<{
+  private agentContextCapabilities(
+    params: AgentDurableObjectStructuredName,
+    contextId: string,
+  ): Array<{
     name: string;
     instructions: string;
     capability: CapabilityAddress;
@@ -763,6 +772,22 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
           "Use itx.agents.create() to get a promise-pipelineable subagent handle, e.g. await itx.agents.create().doThing(args).",
         name: "agents",
         capability: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },
+      },
+      {
+        // Workspaces are not itx's concern: this HOST decides its context
+        // gets a private workspace and provides one bound to the context's
+        // identity. Plain extensions of the project share the project
+        // workspace through the chain instead.
+        instructions:
+          "This agent's private workspace filesystem: itx.workspace.readFile/writeFile plus " +
+          "the flat git methods gitClone/gitAdd/gitCommit/gitPush/gitStatus.",
+        name: "workspace",
+        capability: {
+          entrypoint: "WorkspaceCapability",
+          props: { workspaceId: contextId },
+          type: "rpc",
+          worker: { type: "loopback" },
+        },
       },
     ];
   }
@@ -912,9 +937,9 @@ function agentWorkspaceName(input: {
 }): WorkspaceStructuredName {
   return {
     projectId: input.params.projectId,
-    // Must match the itx handle's workspace derivation (handle.ts): agent
-    // scripts reach this workspace as ctx.workspace.
-    workspaceId: `itx:${input.contextId}`,
+    // Must match the workspace capability this agent provides on its own
+    // context (agentContextCapabilities): the context id IS the workspace id.
+    workspaceId: input.contextId,
   };
 }
 

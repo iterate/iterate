@@ -1,24 +1,27 @@
-// The itx script runner (record-only mode, itx-next.md §4).
+// The itx script runner (the synchronous door).
 //
 // One function runs a script in a loader isolate against a context and
-// leaves a durable two-event record on the owning project's /itx stream:
+// leaves a durable two-event record on the context's JOURNAL stream:
 //
 //   events.iterate.com/itx/script-execution-requested   { executionId, code, context }
 //   events.iterate.com/itx/script-execution-completed   { executionId, ok, result|error, durationMs, context }
 //
 // The events are the RECORD, not the transport: callers get the outcome from
 // the return value; everything between the two events is invisible to the
-// stream. (This pair replaces codemode's six-event execution protocol.)
-// Appends are best-effort, matching the registry's audit posture (D1: the
-// caller-visible outcome is authoritative; the stream is history).
+// stream. The same two events ARE the processor-mode protocol — appending a
+// requested event with `enqueued: true` makes the context's own processor
+// run it (Itx.processEventBatch) and append the completed event; this door
+// writes the identical record around an inline run, so both modes converge
+// on one journal vocabulary.
 //
 // No fetch monkeypatching — when the script runs against a project context,
 // bare fetch() IS project egress via globalOutbound (Law 5).
 
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { ItxRuntime } from "./handle.ts";
-import { ITX_EVENT_TYPES } from "./itx.ts";
-import { ITX_AUDIT_STREAM_PATH, type ItxProps } from "./refs.ts";
+import { ITX_EVENT_TYPES, type CapabilityAddress } from "./itx.ts";
+import { ownJournalPath } from "./journal.ts";
+import type { ItxProps } from "./refs.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -51,9 +54,13 @@ export async function runItxScript(input: {
   /** The owning project; null only for global-context scripts (no egress
    * pipe, no event record — admin-only by construction). */
   projectId: string | null;
-  /** Where the two-event record lands. Defaults to the owning project's
-   * /itx stream; callers whose loop lives on another stream (e.g. an agent
-   * reading completions off its own stream) point this there. */
+  /** The context's address, wired into the isolate's egress so bare fetch()
+   * dispatches at the originating context node (a child's `fetch` shadow
+   * catches it) without a directory lookup. null = the project context. */
+  contextAddress?: CapabilityAddress | null;
+  /** Where the two-event record lands. Defaults to the owning project
+   * context's journal (/itx); callers whose record lives elsewhere — a child
+   * context's journal, an agent stream — point this there. */
   record?: { namespace: string; path: string };
   /** Use a caller-minted id (e.g. when the requested event already exists). */
   executionId?: string;
@@ -75,7 +82,7 @@ export async function runItxScript(input: {
   const startedAtMs = Date.now();
   const record =
     input.record ??
-    (input.projectId === null ? null : { namespace: input.projectId, path: ITX_AUDIT_STREAM_PATH });
+    (input.projectId === null ? null : { namespace: input.projectId, path: ownJournalPath("/") });
 
   if (input.recordRequested !== false)
     await recordExecutionEvent(input.env, record, {
@@ -101,7 +108,13 @@ export async function runItxScript(input: {
     const worker = loader.load({
       compatibilityDate: "2026-04-27",
       env: {
-        ITERATE: exports.ItxEntrypoint!({ props: input.props as Record<string, unknown> }),
+        ITERATE: exports.ItxEntrypoint!({
+          props: {
+            ...(input.props as Record<string, unknown>),
+            contextAddress: input.contextAddress ?? null,
+            projectId: input.projectId,
+          },
+        }),
       },
       // Project scripts get the egress pipe as their global fetch; global
       // scripts inherit the parent's network (they are admin-held by
@@ -109,7 +122,11 @@ export async function runItxScript(input: {
       ...(input.projectId !== null
         ? {
             globalOutbound: exports.ProjectEgress!({
-              props: { context: input.props.context, projectId: input.projectId },
+              props: {
+                context: input.props.context,
+                contextAddress: input.contextAddress ?? null,
+                projectId: input.projectId,
+              },
             }) as Fetcher,
           }
         : {}),

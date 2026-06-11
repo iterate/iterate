@@ -15,6 +15,8 @@
 // registry's host.loopback) and in extra bindings (the project worker also
 // gets env.STREAMS).
 
+import type { CapabilityAddress } from "./itx.ts";
+
 export const ISOLATE_COMPATIBILITY_DATE = "2026-04-27";
 export const ISOLATE_COMPATIBILITY_FLAGS = ["nodejs_compat"];
 
@@ -36,6 +38,10 @@ export function wireIsolateEnv(input: {
   capabilityPath: string;
   /** The isolate's home context — its ITERATE can never reach wider. */
   contextId: string;
+  /** The home context's ADDRESS: how the egress dispatcher and the restorer
+   * dial the context node without a directory lookup on the hot path.
+   * null falls back to the project context. */
+  contextAddress?: CapabilityAddress | null;
   /** The owning project — egress (and its secrets) are scoped to it. */
   projectId: string;
   code: IsolateCode;
@@ -47,7 +53,12 @@ export function wireIsolateEnv(input: {
     compatibilityFlags: input.code.compatibilityFlags ?? ISOLATE_COMPATIBILITY_FLAGS,
     env: {
       ITERATE: input.loopback("ItxEntrypoint", {
-        props: { capabilityPath: input.capabilityPath, context: input.contextId },
+        props: {
+          capabilityPath: input.capabilityPath,
+          context: input.contextId,
+          contextAddress: input.contextAddress ?? null,
+          projectId: input.projectId,
+        },
       }),
       ...input.extraEnv,
     },
@@ -55,6 +66,7 @@ export function wireIsolateEnv(input: {
       props: {
         capabilityPath: input.capabilityPath,
         context: input.contextId,
+        contextAddress: input.contextAddress ?? null,
         projectId: input.projectId,
       },
     }),

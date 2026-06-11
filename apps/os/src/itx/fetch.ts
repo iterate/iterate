@@ -20,7 +20,12 @@ import { runItxScript } from "./run.ts";
 import { GLOBAL_CONTEXT_ID, type ItxProps, type ProjectAccess } from "./refs.ts";
 import type { ItxRuntime } from "./handle.ts";
 import { authenticateCapnwebAdmin, handleCapnwebAdminCookieRequest } from "./admin-auth-cookie.ts";
-import { accessForPrincipal, requireWorkerExports, resolveAccessibleContextId } from "./access.ts";
+import {
+  accessForPrincipal,
+  requireWorkerExports,
+  resolveAccessibleContextId,
+  type ResolvedAccessibleContext,
+} from "./access.ts";
 import type { AppConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
@@ -73,7 +78,11 @@ export async function handleItxFetch(input: {
     if (!resolved) {
       return Response.json({ code: "NOT_FOUND", error: "Context not found" }, { status: 404 });
     }
-    props = { context: resolved.contextId };
+    props = {
+      context: resolved.contextId,
+      contextAddress: (resolved.contextAddress ?? null) as ItxProps["contextAddress"],
+      projectId: resolved.projectId,
+    };
   }
 
   const response = await newItxRpcResponse(
@@ -194,6 +203,8 @@ async function handleItxRun(input: {
 
   let props: ItxProps;
   let scriptProjectId: string | null = null;
+  let scriptContextAddress: ResolvedAccessibleContext["contextAddress"] = null;
+  let scriptRecord: ResolvedAccessibleContext["journal"] = null;
   if (body.context && body.context !== GLOBAL_CONTEXT_ID) {
     const resolved = await resolveAccessibleContextId({
       access: input.access,
@@ -206,8 +217,16 @@ async function handleItxRun(input: {
     if (!resolved) {
       return Response.json({ code: "NOT_FOUND", error: "Context not found" }, { status: 404 });
     }
-    props = { context: resolved.contextId };
+    props = {
+      context: resolved.contextId,
+      contextAddress: (resolved.contextAddress ?? null) as ItxProps["contextAddress"],
+      projectId: resolved.projectId,
+    };
     scriptProjectId = resolved.projectId;
+    scriptContextAddress = resolved.contextAddress;
+    // A child context's record lands on ITS journal; a project's on /itx
+    // (the runner's default).
+    scriptRecord = resolved.journal;
   } else {
     // A global-context script inherits the platform's own egress (no
     // per-project globalOutbound), so it is admin-only — same rule as the
@@ -222,6 +241,7 @@ async function handleItxRun(input: {
   // knows ONE shape, `async (itx) => …`, so vars are baked into the source
   // here — parameterization is the caller's concern, not the runner's.
   const outcome = await runItxScript({
+    contextAddress: scriptContextAddress,
     env: input.env,
     exports: requireWorkerExports(input.context),
     functionSource: `async (itx) => (${body.functionSource})({ itx, vars: ${JSON.stringify(
@@ -229,6 +249,7 @@ async function handleItxRun(input: {
     )} })`,
     projectId: scriptProjectId,
     props,
+    ...(scriptRecord ? { record: scriptRecord } : {}),
   });
   if (!outcome.ok) {
     // The script isolate flattens throws to JSON, so the ItxError code (when

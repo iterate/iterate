@@ -20,26 +20,35 @@
 
 import { RpcTarget } from "cloudflare:workers";
 import { RpcStub } from "capnweb";
-import { typeid } from "@iterate-com/shared/typeid";
 import { createD1Client } from "sqlfu";
 import { PathProxy } from "./path-proxy.ts";
 import { ItxError } from "./errors.ts";
 import { ItxStreams } from "./caps/streams.ts";
 import {
-  contextAddressOf,
-  dialContext,
   isCapabilityAddress,
-  isChildContextAddress,
   isLocalBareFunction,
   replayPathCall,
   RESERVED_CAPABILITY_NAMES,
   type Capability,
+  type CapabilityAddress,
   type CapabilityMeta,
   type ItxStub,
   type PathCall,
 } from "./itx.ts";
+import {
+  dialContext,
+  extendContext,
+  isChildContextAddress,
+  journalBaseOf,
+  parseItxDurableObjectName,
+  projectContextAddress,
+} from "./journal.ts";
+import {
+  getPlatformContext,
+  PLATFORM_PROJECT_CONTEXT_ADDRESS,
+  PLATFORM_PROJECT_CONTEXT_ID,
+} from "./platform-context.ts";
 import { GLOBAL_CONTEXT_ID, type ProjectAccess } from "./refs.ts";
-import type { ContextDO } from "./context-do.ts";
 import { createShareToken, SHARE_TOKEN_PARAM } from "./http.ts";
 import type { AppConfig } from "~/config.ts";
 import {
@@ -68,11 +77,16 @@ export type ItxRuntime = {
    * the dotted route, not a display name. */
   capabilityPath?: string;
   config: AppConfig;
-  /** "global", a project id, or a ctx_… child context id. */
+  /** "global", a project id, a ctx_… child context id, or the
+   * platform:project chain root. */
   contextId: string;
+  /** How to dial the context node — resolved once by the restorer (the
+   * catalog for bare ctx_… refs, derivation for projects); null only on
+   * global handles. */
+  contextAddress: CapabilityAddress | null;
   /** The owning project; null only on global handles. For project contexts
    * this equals contextId; for child contexts the restorer resolved it from
-   * the ContextDO's descriptor. */
+   * the context catalog. */
   projectId: string | null;
   env: Env;
   /** The parent worker's loopback exports (ctx.exports). */
@@ -295,20 +309,22 @@ export class ItxHandle extends RpcTarget {
    */
   async extend(opts: { name?: string } = {}): Promise<ItxHandle> {
     const projectId = this.#requireProjectId();
-    const childId = typeid({
-      env: { TYPEID_PREFIX: this.#runtime.config.typeIdPrefix },
-      prefix: "ctx",
-    });
-    await contextStub(this.#runtime.env, childId).initialize({
-      id: childId,
+    const address = this.#requireContextAddress();
+    // Creation is an event: mint the id, append the birth certificate to the
+    // child's journal (identity AND parentage — the child dials chain
+    // delegation through the parent address recorded there), catalog the
+    // coordinate, return a handle. Nothing touches the new node — it
+    // materializes lazily by consuming its journal.
+    const created = await extendContext({
+      base: isChildContextAddress(address)
+        ? journalBaseOf(parseItxDurableObjectName(addressDoName(address)).path)
+        : "/",
+      db: createD1Client(this.#runtime.env.DB),
+      env: this.#runtime.env,
       name: opts.name,
-      // Identity AND address: the child audits/scopes by the parent's id and
-      // dials chain delegation through the parent's address.
-      parent: {
-        id: this.#runtime.contextId,
-        address: contextAddressOf(this.#runtime.contextId),
-      },
+      parent: { address, id: this.#runtime.contextId },
       projectId,
+      typeIdPrefix: this.#runtime.config.typeIdPrefix,
     });
     // The child is NARROWER than its parent (Law 4): its access is exactly
     // its owning project, never the parent's wider scope. So a session
@@ -319,7 +335,8 @@ export class ItxHandle extends RpcTarget {
       ...this.#runtime,
       access: [projectId],
       capabilityPath: undefined,
-      contextId: childId,
+      contextAddress: created.address,
+      contextId: created.contextId,
       projectId,
     });
   }
@@ -337,22 +354,40 @@ export class ItxHandle extends RpcTarget {
    */
   get parent(): ItxHandle {
     const parentHandle = async (): Promise<ItxHandle> => {
-      const contextId = this.#runtime.contextId;
-      const address = contextId === GLOBAL_CONTEXT_ID ? null : contextAddressOf(contextId);
-      if (!address || !isChildContextAddress(address)) {
+      const address = this.#runtime.contextAddress;
+      if (!address) {
+        throw new ItxError({
+          code: "BAD_REQUEST",
+          message: "The global handle has no parent context.",
+        });
+      }
+      if (isChildContextAddress(address)) {
+        // A generic context's parentage is its birth certificate, folded
+        // from its journal — ask the node.
+        const descriptor = await dialContext(this.#runtime.env, address).descriptor!();
+        return new ItxHandle({
+          ...this.#runtime,
+          capabilityPath: undefined,
+          contextAddress: descriptor.parent.address as CapabilityAddress,
+          contextId: descriptor.parent.id,
+          projectId: descriptor.projectId,
+        });
+      }
+      if (this.#runtime.contextId === PLATFORM_PROJECT_CONTEXT_ID) {
         throw new ItxError({
           code: "BAD_REQUEST",
           message:
-            "This context has no addressable parent yet: the platform defaults context " +
-            "becomes the project's parent when the journal wave lands (itx-next.md).",
+            "The platform context is the chain root — it has no parent (a global code " +
+            "context is a later wave).",
         });
       }
-      const descriptor = await dialContext(this.#runtime.env, address).descriptor!();
+      // The project context's parent IS the platform defaults link: a
+      // read-only code context, dialed in-process.
       return new ItxHandle({
         ...this.#runtime,
         capabilityPath: undefined,
-        contextId: descriptor.parent.id,
-        projectId: descriptor.projectId,
+        contextAddress: PLATFORM_PROJECT_CONTEXT_ADDRESS,
+        contextId: PLATFORM_PROJECT_CONTEXT_ID,
       });
     };
     return new PathProxy(async (call: PathCall) => {
@@ -403,16 +438,33 @@ export class ItxHandle extends RpcTarget {
 
   /**
    * The core of the context node this handle points at: the Project DO for
-   * project contexts, a ContextDO for children. Both expose it via itx() —
-   * a method, so `node.itx().invoke(...)` pipelines in ONE round trip
-   * (workerd does not pipeline calls through property accesses); a child
-   * node's core delegates misses up the chain itself. The id→address mapping
-   * (itx.ts) picks the node — no prefix sniffing here; global handles get
-   * the narrow-first error.
+   * project contexts, an ItxDurableObject for extended children — both
+   * expose it via itx() (a method, so `node.itx().invoke(...)` pipelines in
+   * ONE round trip; workerd does not pipeline calls through property
+   * accesses) — or the in-process platform context at the chain root. The
+   * runtime carries the ADDRESS; global handles get the narrow-first error.
    */
   #itx(): ItxStub {
     this.#requireProjectId();
-    return dialContext(this.#runtime.env, contextAddressOf(this.#runtime.contextId)).itx();
+    if (this.#runtime.contextId === PLATFORM_PROJECT_CONTEXT_ID) {
+      return getPlatformContext({
+        exports: this.#runtime.exports,
+        projectId: this.#requireProjectId(),
+      });
+    }
+    return dialContext(this.#runtime.env, this.#requireContextAddress()).itx();
+  }
+
+  #requireContextAddress(): CapabilityAddress {
+    const address = this.#runtime.contextAddress;
+    if (!address) {
+      throw new ItxError({
+        code: "BAD_REQUEST",
+        message:
+          "This itx handle is on the global context. Narrow to a project first: itx.projects.get(idOrSlug).",
+      });
+    }
+    return address;
   }
 
   #requireProjectId(): string {
@@ -555,15 +607,18 @@ class BareFunctionCapability extends RpcTarget {
   }
 }
 
+/** The DO name inside a child-context address (its journal coordinate). */
+function addressDoName(address: CapabilityAddress): string {
+  if (address.type !== "rpc" || address.worker.type !== "durable-object") {
+    throw new Error("Expected a durable-object context address.");
+  }
+  return address.worker.name;
+}
+
 type ProjectStub = DurableObjectStub<ProjectDurableObject>;
-type ContextStub = DurableObjectStub<ContextDO>;
 
 function projectStub(env: Env, projectId: string): ProjectStub {
   return env.PROJECT.getByName(getProjectDurableObjectName(projectId)) as unknown as ProjectStub;
-}
-
-function contextStub(env: Env, contextId: string): ContextStub {
-  return env.ITX_CONTEXT.getByName(contextId) as unknown as ContextStub;
 }
 
 // ---- projects -------------------------------------------------------------
@@ -581,7 +636,12 @@ export class ItxProjects extends RpcTarget {
 
   async get(projectIdOrSlug: string): Promise<ItxHandle> {
     const row = await this.requireProjectRow(projectIdOrSlug);
-    return new ItxHandle({ ...this.runtime, contextId: row.id, projectId: row.id });
+    return new ItxHandle({
+      ...this.runtime,
+      contextAddress: projectContextAddress(row.id),
+      contextId: row.id,
+      projectId: row.id,
+    });
   }
 
   async list(input: { limit?: number; offset?: number } = {}) {

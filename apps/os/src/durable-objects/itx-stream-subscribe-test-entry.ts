@@ -84,6 +84,7 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
     return {
       access: [projectId],
       config: null as never,
+      contextAddress: null,
       contextId: projectId,
       env: this.env,
       exports: this.ctx.exports as unknown as ItxRuntime["exports"],

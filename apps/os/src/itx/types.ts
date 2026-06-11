@@ -731,12 +731,18 @@ export type ItxPrincipal =
  * - `principal`: honored on global handles only; a project-context handle
  *   is always bound to exactly its own project regardless of what props
  *   claim.
+ * - `contextAddress`/`projectId`: the resolved coordinate, passed by
+ *   platform wiring so a child context's isolates skip the directory
+ *   lookup; bare-id restores resolve through the context catalog instead.
+ *   Addresses are pure names — they grant nothing.
  * - `capabilityPath`: pure attribution — which capability's isolate holds
  *   this handle (the dotted route). It grants nothing; it labels egress and
  *   audit records.
  */
 export type ItxProps = {
   context: ContextRef;
+  contextAddress?: CapabilityTarget | null;
+  projectId?: string | null;
   principal?: ItxPrincipal;
   capabilityPath?: string;
 };

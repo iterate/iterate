@@ -18,8 +18,8 @@ sections), `itx-spec.md` (the Laws), `src/itx/itx.ts` / `handle.ts` /
 
 **The question is a false binary, and the literature says so on both
 sides.** In every serious ocap system — Cap'n Proto, Sandstorm, E — the
-answer is: *between objects*, authority is the reference you hold (pure
-ocap); *at the human boundary*, a trusted edge translates identity into a
+answer is: _between objects_, authority is the reference you hold (pure
+ocap); _at the human boundary_, a trusted edge translates identity into a
 narrowed reference, and that translation is allowed to consult
 identity-keyed data. Kenton's own two systems split exactly this way:
 Cap'n Proto's restore is "itself a capability" whose realm "looks up the
@@ -54,29 +54,29 @@ props, the exact thing Law 2 prohibits; (4) every guarded call pays a
 double dispatch through a deputy that needs a full-authority handle on the
 parent — a confused-deputy generator; (5) N users × M rules of durable
 journal rows that silently drift when auth-side scopes change. The durable
-narrowed-context mechanism (`extend` + provides) stays — for *state*, not
-for *permissions*.
+narrowed-context mechanism (`extend` + provides) stays — for _state_, not
+for _permissions_.
 
 **What the kernel does need from the principal: attribution, not
 authority.** The dial already injects `{capability, context, projectId}`;
 it should also inject the principal (id + claims) so trusted first-party
-providers can apply *resource-level* policy (this stream, that repo) the
-way Sandstorm grains do — and so journal events record *who*. The doctrine
+providers can apply _resource-level_ policy (this stream, that repo) the
+way Sandstorm grains do — and so journal events record _who_. The doctrine
 line to hold: kernel and dispatch never consult the principal; only leaf
 providers may, and only first-party ones. The deputy rule: a capability
-calls with *its own* authority (its home context), never with the authority
+calls with _its own_ authority (its home context), never with the authority
 of whoever provided it; machine-initiated work (agents, processors, cron)
 runs as the project/agent principal, never as "the last user who spoke."
 
 **Recommendation in one sentence:** keep "restore is gated at the edge,
 names carry zero authority" exactly as is; add a principal-compiled path
 mask to `ItxRuntime` enforced at the handle's existing chokepoints (deny
-masked paths as byte-identical NOT_FOUND); inject the principal as dial
+masked paths as byte-identical NOT*FOUND); inject the principal as dial
 attribution for first-party resource policy and journal actor records;
 make the mask trivially `allow-all` until per-project roles exist in
 tokens (they don't today — project claims are `{id, slug, organizationId}`,
 no role); and delete `itx.narrow({scopes})`/GuardCapability from the
-locked design. Until the auth system can even *say* "Alice is read-only on
+locked design. Until the auth system can even \_say* "Alice is read-only on
 prj_X", the only honest implementation is the seam, not the policy.
 
 What we give up, named honestly: no offline attenuation (a holder cannot
@@ -95,7 +95,7 @@ resource. Those are the three sentences to disagree with.
 ### 1.1 Cap'n Proto, `persistent.capnp` (Kenton Varda)
 
 The SturdyRef/save/restore model the itx docs already cite, with the parts
-that matter for *authority*:
+that matter for _authority_:
 
 - "a SturdyRef can be stored to disk, then later used to obtain a new
   reference to the capability on a future connection." The format "depends
@@ -108,10 +108,10 @@ that matter for *authority*:
   owner."
 
 That last sentence is the canonical blessing for identity at the restore
-edge: even in the purest capability protocol Kenton wrote, *who you are*
-may gate *what a name restores to*. itx already implements this ("restore
+edge: even in the purest capability protocol Kenton wrote, _who you are_
+may gate _what a name restores to_. itx already implements this ("restore
 stays gated", itx-next.md, address unification §1) — the open question is
-only whether the *result* of a gated restore can differ per principal.
+only whether the _result_ of a gated restore can differ per principal.
 persistent.capnp's answer is yes: sealing is per-owner by design.
 
 ### 1.2 Kenton on the capnproto list (SturdyRef thread, `d6uPbXf9e4E`)
@@ -126,7 +126,7 @@ persistent.capnp's answer is yes: sealing is per-owner by design.
 
 Restore = database lookup + permission check + live ref. The restorer is
 explicitly allowed to be an ACL-ish component; what makes the system ocap
-is that *after* restore, authority flows only by reference.
+is that _after_ restore, authority flows only by reference.
 
 ### 1.3 Cloudflare Workers RPC blog (the ocap sections)
 
@@ -138,7 +138,7 @@ is that *after* restore, authority flows only by reference.
 - The worked example is precisely our problem in miniature: an
   `AuthService` whose `authenticate(credential)` returns a `User` object —
   "The AuthService API does not provide any other way to obtain a User
-  instance." Per-principal authority = per-principal *returned object*.
+  instance." Per-principal authority = per-principal _returned object_.
 - "Capability-based security is often like this: security can be woven
   naturally into your APIs, rather than feel like an additional concern
   bolted on top."
@@ -153,7 +153,7 @@ is that *after* restore, authority flows only by reference.
 
 The transport itx is built on documents the A-shaped answer as its
 recommended idiom: the authenticated, per-principal API object IS the
-authority. Our `connectItx` does the cookie/token translation *before* the
+authority. Our `connectItx` does the cookie/token translation _before_ the
 session instead of in-band, but the resulting `ItxHandle` plays the same
 role: it is "the authenticated API," and there is nothing heretical about
 that object being narrower for some principals than others.
@@ -161,7 +161,7 @@ that object being narrower for some principals than others.
 ### 1.5 Sandstorm (Kenton's shared-mutable-object platform)
 
 Sandstorm is the closest prior art to "the context is a thing all users
-share, but they each might have different permissions" — a *grain* is a
+share, but they each might have different permissions" — a _grain_ is a
 shared mutable app instance, multiple users open it with different roles:
 
 - The platform injects per-request identity and permissions into the
@@ -173,19 +173,19 @@ shared mutable app instance, multiple users open it with different roles:
   with which permissions" — "permissions are computed on-the-fly every
   time the recipient of the share opens the grain."
 
-So Kenton's own design for exactly our case is: ocap *between* grains
+So Kenton's own design for exactly our case is: ocap _between_ grains
 (powerbox, SturdyRefs), **principal-carried permission bits at the grain
 boundary**, enforcement inside the trusted app against data the platform
-injected. Note two properties we should copy: permissions are *computed at
-open time* (no durable per-user permission rows to drift), and the
-*platform* computes them while the *app* enforces them (split between a
+injected. Note two properties we should copy: permissions are _computed at
+open time_ (no durable per-user permission rows to drift), and the
+_platform_ computes them while the _app_ enforces them (split between a
 generic mechanism and domain meaning).
 
 ### 1.6 Classic ocap literature
 
 - **Capability Myths Demolished** (Miller, Yee, Shapiro 2003,
-  srl.cs.jhu.edu/pubs/SRL2003-02.pdf): ACLs are the *columns* of Lampson's
-  access matrix (each resource lists principals), capabilities the *rows*
+  srl.cs.jhu.edu/pubs/SRL2003-02.pdf): ACLs are the _columns_ of Lampson's
+  access matrix (each resource lists principals), capabilities the _rows_
   (each subject holds refs). The myths: equivalence (they are NOT formally
   equivalent — caps fuse designation with authority and make authority
   flow analyzable), confinement (caps CAN confine), irrevocability (caps
@@ -199,13 +199,13 @@ generic mechanism and domain meaning).
   This is the precise risk in Position B below.
 - **E-lang patterns** (erights.org; site intermittently unreachable during
   this research, patterns cited from the Walnut "Capability Patterns"
-  text): *facets* (a narrow surface object onto a wider composite),
-  *caretakers* (revocable forwarders), *membranes* (transitively wrap
+  text): _facets_ (a narrow surface object onto a wider composite),
+  _caretakers_ (revocable forwarders), _membranes_ (transitively wrap
   every ref crossing a boundary so revocation/attenuation is deep). The
   attenuated handle proposed below is a facet; if it ever needs to wrap
-  refs it *returns*, that's the membrane extension.
+  refs it _returns_, that's the membrane extension.
 - **Macaroons** (Birgisson et al., NDSS 2014): bearer tokens with
-  chained-HMAC *caveats* — "macaroons embed caveats that attenuate and
+  chained-HMAC _caveats_ — "macaroons embed caveats that attenuate and
   contextually confine when, where, by who, and for what purpose a target
   service should authorize requests." Anyone holding a macaroon can mint a
   strictly weaker one offline. **Biscuit** (biscuitsec.org) is the
@@ -222,15 +222,15 @@ Stated as the implementation actually is (`access.ts`, `handle.ts`,
 
 1. **Connect**: cookie/admin-secret → `Principal` → `accessForPrincipal` →
    `"all" | projectId[]`. The access set gates exactly three things:
-   *which contexts you may connect to / narrow to* (`projects.get`,
-   `resolveAccessibleContextId`, existence-masked), *global streams*
-   (`access === "all"`), and *project create/remove*.
+   _which contexts you may connect to / narrow to_ (`projects.get`,
+   `resolveAccessibleContextId`, existence-masked), _global streams_
+   (`access === "all"`), and _project create/remove_.
 2. **Inside a context, authority is binary.** A project handle's access is
    forced to `[projectId]` regardless of props (entrypoint.ts D7 rule).
    From there: every cap on the chain is callable, `provideCapability` /
    `revokeCapability` / `extend` / `invoke` are ambient on every handle,
    `itx.project` exposes the **whole Project DO surface** (D17, owner
-   decision, verbatim rationale: *"you have the project or you don't"*),
+   decision, verbatim rationale: _"you have the project or you don't"_),
    `itx.fetch` is egress **with secret substitution**, and `shareUrl`
    mints bearer tokens. Holding the context = root on the project.
 3. **The principal is not on the handle.** `ItxRuntime` has
@@ -252,7 +252,7 @@ So today the answer to the owner's question is unambiguous: **authority is
 derived from the context** (which handle you could mint), with the
 principal consulted exactly once, at connect, to decide context
 reachability. The question is what happens when two principals may hold
-the *same* context with *different* permissions — which the current model
+the _same_ context with _different_ permissions — which the current model
 cannot express at all.
 
 ---
@@ -261,9 +261,9 @@ cannot express at all.
 
 Shared-mutable-object + per-principal permissions is the ocap-vs-ACL
 tension in its classic form. The matrix framing (Capability Myths): we
-have one *column* (the project context) and want different *cells* per
+have one _column_ (the project context) and want different _cells_ per
 principal. ACL thinking puts the principal list on the column (the context
-stores who-may-what). Cap thinking gives each principal a different *row*
+stores who-may-what). Cap thinking gives each principal a different _row_
 (a different reference). Three coherent positions:
 
 ### Position A — pure ocap: authority IS the context you hold
@@ -281,14 +281,14 @@ How the pieces would work:
   project context itself; restricted principals get their view.
 - **Attenuation mechanism**: the view shadows what the principal must not
   reach. This is where it goes wrong — see the GuardCapability critique
-  (§4): shadowing is *subtractive* (blocklist over a default-allow chain).
-  The honest pure-A alternative is an *additive* view: a context with NO
+  (§4): shadowing is _subtractive_ (blocklist over a default-allow chain).
+  The honest pure-A alternative is an _additive_ view: a context with NO
   parent link and explicit re-export provides for each granted cap — which
   forfeits live chain updates, makes describe() a stale copy, and turns
   every role change into a row-diff migration.
 - **Proliferation & GC**: one durable context per (principal, project)
   that ever connected. The locked "everything durable + idle-TTL +
-  facet-of-the-Project-DO" design makes this *affordable* (in-process
+  facet-of-the-Project-DO" design makes this _affordable_ (in-process
   chain hop, cascade delete), but it is real state: journals, birth
   certificates, TTL alarms — for what is conceptually a pure function of
   the token.
@@ -296,17 +296,17 @@ How the pieces would work:
   agent-friendly (describe = what you can actually call). But provenance
   now leaks structure: a guard-shaped view tells the user exactly what was
   withheld; an additive view hides it (existence masking preserved).
-- **Shared LIVE provides**: a `fetch` shadow provided on the *project*
+- **Shared LIVE provides**: a `fetch` shadow provided on the _project_
   context is inherited by every view (chain) — the "meant for everyone"
   semantics survive. But note the inversion: providing on the project
-  context is now an *elevated* act (it affects other principals'
-  traffic), so A still needs *something* to gate who may provide where —
+  context is now an _elevated_ act (it affects other principals'
+  traffic), so A still needs _something_ to gate who may provide where —
   i.e. A does not eliminate per-principal checks, it relocates exactly one
   of them (write-to-shared-context) and that one still needs the
   principal.
 - **Chain cost**: +1 hop per non-shadowed call; in-process if views are
   facets of the Project DO. Negligible.
-- **Revocation / role change**: the view must be *rebuilt* when auth-side
+- **Revocation / role change**: the view must be _rebuilt_ when auth-side
   scopes change. Durable views minted from a token at time T silently
   drift from the auth system at time T+1 — the same drift class as
   preview OAuth secrets. Mitigation: recompute guards at every connect
@@ -321,8 +321,8 @@ How the pieces would work:
   different views.
 
 Verdict on A: doctrinally pure, mechanically already half-built
-(`extend`), and the right shape for *stateful* per-user things (a user's
-session scratchpad, an agent run). As the *permission* mechanism it makes
+(`extend`), and the right shape for _stateful_ per-user things (a user's
+session scratchpad, an agent run). As the _permission_ mechanism it makes
 durable state out of a pure function and inherits either default-allow
 (subtractive) or staleness (additive). The literature does not actually
 demand it: Kenton's restore-edge "verifies permissions" and Sandstorm's
@@ -349,7 +349,7 @@ and/or inside providers via injected props (resource granularity).
 - **Confused deputy, concretely**: capability P (provided by admin Alice)
   is called by restricted Bob; P internally calls `itx.streams.append`.
   Whose authority? If Bob's principal propagates: P breaks for Bob even
-  when P's *purpose* is to do privileged things safely on Bob's behalf
+  when P's _purpose_ is to do privileged things safely on Bob's behalf
   (the deputy is supposed to use its own license for the billing file);
   every cap author must now reason about every caller's role. If P's
   (or its provider's) principal is used instead: any callable cap is a
@@ -358,12 +358,12 @@ and/or inside providers via injected props (resource granularity).
   trap, rebuilt on purpose. There is no third option; this fork is
   intrinsic to identity-carried authority.
 - **Fetch middleware**: per-project interception still works (the shadow
-  is a cap), but now the shadow *provider* must decide which principals'
+  is a cap), but now the shadow _provider_ must decide which principals'
   traffic it may see — secret-placeholder traffic from an admin flowing
   through a shadow provided by a non-admin is a policy question B forces
   on every provider.
 - **Agents/isolates**: the fatal hole. A processor wake, a cron'd agent
-  turn, a stream subscriber — *there is no user*. B needs a machine
+  turn, a stream subscriber — _there is no user_. B needs a machine
   principal ("the project", "the agent"), and since most calls in an
   agent-native system are machine-initiated, most calls run as the
   most-privileged local principal anyway. B's per-principal enforcement
@@ -377,7 +377,7 @@ and/or inside providers via injected props (resource granularity).
   definitionally: an identity-keyed lookup per resource access, the
   matrix-by-columns. The honest version of B for this codebase is not
   "carry authority on every hop" but its resource-granularity remnant:
-  *trusted leaf providers may consult injected principal data* — which is
+  _trusted leaf providers may consult injected principal data_ — which is
   Sandstorm's split, and survives into the recommendation.
 
 ### Position C — hybrids worth naming
@@ -400,8 +400,8 @@ chokepoints total (`invoke`/fallthrough, the verbs, `fetch`, `project`,
   long-lived sessions can re-check cheaply (the mask is in memory; the
   edge can refresh it on token refresh).
 - Cost: identity-derived data evaluated per call on the handle. It is
-  *carried by the reference* (row, not column) — but a purist will
-  correctly observe it was *derived from identity* one hop earlier. So
+  _carried by the reference_ (row, not column) — but a purist will
+  correctly observe it was _derived from identity_ one hop earlier. So
   was the access set; so is every authenticate() return in Kenton's blog
   example. This is where "ocap vs ACL" stops being a real distinction.
 
@@ -411,7 +411,7 @@ provides written by an edge library** (the GuardCapability steelman —
 the framing is fixable (an edge library CAN write plain provides), but
 three problems are conceptual, not presentational: default-allow
 subtraction, the revocability paradox, and scope drift in durable rows.
-The concept survives only where the view needs *state*.
+The concept survives only where the view needs _state_.
 
 **C3. Sealed/caveated sturdy refs (Macaroons/Biscuit-style).** Make refs
 carry caveats; holders attenuate offline ("only path prefix /reports",
@@ -420,7 +420,7 @@ the platform. What we'd give up: the pure-name posture (Law 2's
 "zero authority by content" — refs become bearer credentials that must be
 treated as secrets), revocation (bearer tokens revoke badly; Macaroons
 need revocation caveats/short TTLs), and key discipline. What we'd gain
-is real: *offline sub-delegation*, the one thing no server-side design
+is real: _offline sub-delegation_, the one thing no server-side design
 provides — an agent spawning a sub-agent with a strictly weaker itx,
 without a round-trip. Position: keep bearer form at the HTTP edge only
 (the share token IS a one-caveat macaroon: `project:cap:expiry`, HMAC —
@@ -429,21 +429,21 @@ needed, add caveats to the share token rather than re-platforming refs.
 
 ### Trade-off table
 
-| | A: per-principal view contexts | B: principal on every call | C1: edge-compiled attenuated handle | C3: caveated refs |
-|---|---|---|---|---|
-| Kernel innocence (Itx knows no principals) | yes | no (dispatch checks) / partial (provider checks) | **yes** (handle-only) | yes (verifier at edge) |
-| "Capabilities grant, names don't" | preserved | inverted | preserved (the handle IS the grant) | weakened (content grants) |
-| Confused deputy | safe | the fork is intrinsic | safe (attenuate the ref, not the flow) | safe-ish (caveats travel with ref) |
-| Multi-user / multi-role same project | by construction | by construction | by construction | by construction |
-| Machine-initiated calls (agents, processors) | clean (home context = authority) | needs machine principals; degrades to ambient | clean (isolate handles get project-authority masks) | clean |
-| Fetch middleware: per-project shadow | inherited via chain; *providing* needs a gate | provider must reason about principals | inherited; provide-verb is masked per principal | n/a |
-| Fetch middleware: per-user shadow | own view (exists today: extend) | hard (shadows are context-level) | own extend (exists today) | n/a |
-| Revocation latency | rebuild views (drift risk) | **immediate** | session-bounded; re-derive on reconnect/refresh | bad (bearer) |
-| Offline attenuation / sub-delegation | no | no | no | **yes** |
-| Journal auditability of grants | grants are rows (auditable, but drifting) | grants live in auth DB | grants derived; journal records *actor*, auth DB records *policy* | token chain |
-| describe() coherence | per-view, fresh (subtractive) or stale (additive) | full table + per-call surprises | **filtered per handle, always fresh** | n/a |
-| State cost | context per (user, project) | none | none | none |
-| Lines of code / 500-line goal | extend exists; guard machinery large | policy engine in kernel or scattered | **~30 lines + 1 pure function** | new token infra |
+|                                              | A: per-principal view contexts                    | B: principal on every call                       | C1: edge-compiled attenuated handle                               | C3: caveated refs                  |
+| -------------------------------------------- | ------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------- | ---------------------------------- |
+| Kernel innocence (Itx knows no principals)   | yes                                               | no (dispatch checks) / partial (provider checks) | **yes** (handle-only)                                             | yes (verifier at edge)             |
+| "Capabilities grant, names don't"            | preserved                                         | inverted                                         | preserved (the handle IS the grant)                               | weakened (content grants)          |
+| Confused deputy                              | safe                                              | the fork is intrinsic                            | safe (attenuate the ref, not the flow)                            | safe-ish (caveats travel with ref) |
+| Multi-user / multi-role same project         | by construction                                   | by construction                                  | by construction                                                   | by construction                    |
+| Machine-initiated calls (agents, processors) | clean (home context = authority)                  | needs machine principals; degrades to ambient    | clean (isolate handles get project-authority masks)               | clean                              |
+| Fetch middleware: per-project shadow         | inherited via chain; _providing_ needs a gate     | provider must reason about principals            | inherited; provide-verb is masked per principal                   | n/a                                |
+| Fetch middleware: per-user shadow            | own view (exists today: extend)                   | hard (shadows are context-level)                 | own extend (exists today)                                         | n/a                                |
+| Revocation latency                           | rebuild views (drift risk)                        | **immediate**                                    | session-bounded; re-derive on reconnect/refresh                   | bad (bearer)                       |
+| Offline attenuation / sub-delegation         | no                                                | no                                               | no                                                                | **yes**                            |
+| Journal auditability of grants               | grants are rows (auditable, but drifting)         | grants live in auth DB                           | grants derived; journal records _actor_, auth DB records _policy_ | token chain                        |
+| describe() coherence                         | per-view, fresh (subtractive) or stale (additive) | full table + per-call surprises                  | **filtered per handle, always fresh**                             | n/a                                |
+| State cost                                   | context per (user, project)                       | none                                             | none                                                              | none                               |
+| Lines of code / 500-line goal                | extend exists; guard machinery large              | policy engine in kernel or scattered             | **~30 lines + 1 pure function**                                   | new token infra                    |
 
 ---
 
@@ -458,8 +458,8 @@ addressable.
 ### Why it is actually complicated (not just framed badly)
 
 1. **Default-allow.** Guards shadow paths; everything unguarded falls
-   through the chain. A cap provided on the project context *tomorrow*
-   appears in every previously-narrowed view *today*. Permission systems
+   through the chain. A cap provided on the project context _tomorrow_
+   appears in every previously-narrowed view _today_. Permission systems
    must fail closed; shadowing-attenuation fails open. To fail closed you
    must enumerate-and-guard the whole surface — at which point you have
    written an allowlist, in the most expensive encoding available.
@@ -467,11 +467,11 @@ addressable.
    `revokeCapability` (every handle does). Revoking a guard row
    resurfaces the parent's unguarded cap — self-escalation in one call.
    So guards need "unrevocable by the context's own holder" — but
-   "holder" vs "grantor" is a *principal* distinction, which the kernel
+   "holder" vs "grantor" is a _principal_ distinction, which the kernel
    would now need to model. The design smuggles principals into the
    kernel through the back door while claiming kernel innocence.
 3. **Law 2 violation by its own admission.** "PROPS are the scope rules
-   (policy as data, Law 2)" — but Law 2 says props carry *identity*,
+   (policy as data, Law 2)" — but Law 2 says props carry _identity_,
    never composition or authority-by-content. Scope rules in props are
    authority-by-content, period. The parenthetical cites the law it
    breaks.
@@ -487,8 +487,8 @@ addressable.
 6. **Double dispatch.** Guarded hot paths (streams!) pay guard-dial +
    re-dial on every call.
 
-The *durable narrowed context* half of the idea is good and already
-exists (`extend`); the *guards-as-provides* half is the problem.
+The _durable narrowed context_ half of the idea is good and already
+exists (`extend`); the _guards-as-provides_ half is the problem.
 
 ### ALT 1 — "the scope IS the path": principal-compiled path mask on the handle
 
@@ -529,23 +529,23 @@ The verbs being ordinary maskable paths is the payoff: "read-only handle"
 = deny `provideCapability|revokeCapability|extend|shareUrl|project`,
 ~one line of policy. Scoring:
 
-- *Kernel innocence*: total — `Itx` (the DO core) unchanged; the mask
+- _Kernel innocence_: total — `Itx` (the DO core) unchanged; the mask
   lives and dies in the handle, which is already the principal-shaped
   layer (it carries `access` today).
-- *Auditability*: grants are not journal rows; compensate by stamping
+- _Auditability_: grants are not journal rows; compensate by stamping
   journal events with the actor (ALT 2's injection). "Who could do what
   when" = auth system history + actor-stamped events. Weaker than rows,
   honest about where policy actually lives.
-- *Revocation*: session-bounded; re-derived every connect/restore. For
+- _Revocation_: session-bounded; re-derived every connect/restore. For
   long-lived sessions, refresh the mask when the edge re-validates the
   token (machinery the session layer needs anyway).
-- *Offline attenuation*: none. Sugar `itx.withMask(narrower)` (intersect,
-  monotone — can only shrink) gives *online* self-attenuation for free:
+- _Offline attenuation_: none. Sugar `itx.withMask(narrower)` (intersect,
+  monotone — can only shrink) gives _online_ self-attenuation for free:
   hand a sub-agent a weaker handle in-process, the caretaker pattern in
   one method.
-- *500-line goal*: ~30 lines + the pure function + tests.
+- _500-line goal_: ~30 lines + the pure function + tests.
 
-Weakness to name: masks speak *capability-path* granularity. "May read
+Weakness to name: masks speak _capability-path_ granularity. "May read
 stream /a but not /b" does not belong in the mask grammar — resist
 growing a policy language here; resource granularity is ALT 2's job.
 
@@ -560,20 +560,20 @@ props: { ...entry.address.props, capabilityPath, context: origin,
          projectId, principal: { userId, isAdmin, orgRole } }
 ```
 
-First-party providers that own *resources* (StreamsCapability,
+First-party providers that own _resources_ (StreamsCapability,
 ReposCapability, WorkspaceCapability, EgressPipe policy verdicts) may
 consult it for resource-level rules — Sandstorm's `X-Sandstorm-Permissions`
 verbatim: platform computes and injects; the trusted leaf enforces domain
 meaning. Doctrine lines that keep this from becoming B:
 
 - The kernel and dispatch never read it. Only dial-injection writes it.
-- Only first-party (allowlisted-loopback) providers may *enforce* on it;
+- Only first-party (allowlisted-loopback) providers may _enforce_ on it;
   for everything else it is attribution (journal actor, egress logs,
   billing).
 - The deputy rule, stated once: a capability executes with **its home
   context's authority**; the injected principal identifies the
-  *originating* human (rides the same trusted channel as `origin`) and a
-  provider may *restrict* on it, never *amplify* by it. Machine-initiated
+  _originating_ human (rides the same trusted channel as `origin`) and a
+  provider may _restrict_ on it, never _amplify_ by it. Machine-initiated
   work (processor wakes, cron, agent turns) carries the machine principal
   `{type: "project" | "agent", id}` — never the last human who spoke.
 
@@ -584,27 +584,27 @@ This also fixes the audit gap: every `capability-provided` /
 
 Keep the durable-narrowed-context mechanism for what it is good at: a
 user's session context, an agent run, a demo sandbox — places that need
-*their own provides* (state), where `extend` + ordinary provides already
+_their own provides_ (state), where `extend` + ordinary provides already
 work and the edge can mint/reuse one per (user, project) when a feature
-wants it. Combined with ALT 1, the view's *handle* carries the mask;
-the view's *rows* carry its state. No guard rows ever; the addressable
+wants it. Combined with ALT 1, the view's _handle_ carries the mask;
+the view's _rows_ carry its state. No guard rows ever; the addressable
 narrowed credential the locked design wanted ("its id IS the sturdy ref")
 still exists when needed — restore stays gated, and the restored handle's
 mask comes from the restoring principal, not from rows.
 
 ### Evaluation
 
-| | GuardCapability (locked) | ALT 1: path mask | ALT 2: principal props | ALT 3: views as extends |
-|---|---|---|---|---|
-| Kernel innocence | claimed; broken by revocability paradox | yes | yes (kernel never reads) | yes |
-| Fail mode | open (default-allow chain) | **closed** (allowlist compile) | provider-defined | open if subtractive |
-| Granularity | path | path | **resource** | whatever its provides say |
-| Journal/audit | rows (drifting) | actor-stamped events | **actor-stamped events** | rows (state, not policy) |
-| Revocation | row surgery + paradox | session re-derive | immediate (provider reads live claims if it wants) | row surgery |
-| Offline attenuation | no | no (online `withMask` only) | no | no |
-| Deputy risk | one deputy per guard | none new | none if amplify-ban holds | none new |
-| 500-line goal | hostile | **~30 lines** | ~10 lines | already built |
-| Hot-path cost | double dispatch | in-memory prefix check | none (props ride existing dial) | +1 in-process hop |
+|                     | GuardCapability (locked)                | ALT 1: path mask               | ALT 2: principal props                             | ALT 3: views as extends   |
+| ------------------- | --------------------------------------- | ------------------------------ | -------------------------------------------------- | ------------------------- |
+| Kernel innocence    | claimed; broken by revocability paradox | yes                            | yes (kernel never reads)                           | yes                       |
+| Fail mode           | open (default-allow chain)              | **closed** (allowlist compile) | provider-defined                                   | open if subtractive       |
+| Granularity         | path                                    | path                           | **resource**                                       | whatever its provides say |
+| Journal/audit       | rows (drifting)                         | actor-stamped events           | **actor-stamped events**                           | rows (state, not policy)  |
+| Revocation          | row surgery + paradox                   | session re-derive              | immediate (provider reads live claims if it wants) | row surgery               |
+| Offline attenuation | no                                      | no (online `withMask` only)    | no                                                 | no                        |
+| Deputy risk         | one deputy per guard                    | none new                       | none if amplify-ban holds                          | none new                  |
+| 500-line goal       | hostile                                 | **~30 lines**                  | ~10 lines                                          | already built             |
+| Hot-path cost       | double dispatch                         | in-memory prefix check         | none (props ride existing dial)                    | +1 in-process hop         |
 
 The complexity of GuardCapability was in the concept (items 1, 2, 4, 5),
 not the framing. ALT 1 + ALT 2 + ALT 3 together cover everything
@@ -638,7 +638,7 @@ authority (or quietly pre-built the other model's channel):
 5. **Live provides affect ALL holders** — a `fetch` shadow provided by
    one user intercepts every principal's egress (placeholders unsubstituted
    — by design the shadow never sees secrets, which limits the blast
-   radius, but traffic *shape* is visible). §9's open question ("apply to
+   radius, but traffic _shape_ is visible). §9's open question ("apply to
    ALL callers or only the providing session?") is this seam by another
    name. Per-principal answer: providing on the shared context is itself
    a masked verb; per-session interception = provide on your own extend
@@ -647,13 +647,13 @@ authority (or quietly pre-built the other model's channel):
    props, the one existing exception to "props carry identity"; project
    handles force-override it (D7 rule). The queued "dial props grow an
    `access` field" item would widen this exception — prefer carrying the
-   *principal* (identity) and deriving, per types.ts's own position.
+   _principal_ (identity) and deriving, per types.ts's own position.
 7. **`describe()` shows the whole chain to any holder** — fine when
    binary; under per-principal it leaks the cap inventory (including
    guard/withheld structure) to restricted users. Mask-filtered describe
    keeps existence masking coherent.
 8. **`shareUrl` mintable by any handle holder** — minting a bearer
-   credential (the one sealed-SturdyRef exception) is an *authority* and
+   credential (the one sealed-SturdyRef exception) is an _authority_ and
    today requires nothing beyond holding the context. Should be a masked
    verb.
 9. **`/api/itx/run` scripts inherit the context's full authority** — the
@@ -715,12 +715,12 @@ Concretely, in order:
    bearer refs. If demanded, extend the share token (it is already a
    one-caveat macaroon) — do not re-platform context refs.
 
-Why this and not pure A: per-principal *permissions* are a pure function
+Why this and not pure A: per-principal _permissions_ are a pure function
 of (principal, project) — the auth system owns that function's inputs and
 its history. Materializing it as durable context rows buys addressability
 we don't need (restore is already gated and can mask at restore time) at
 the price of drift, GC, default-allow-or-staleness, and the revocability
-paradox. Per-principal *state* is a different thing and keeps the
+paradox. Per-principal _state_ is a different thing and keeps the
 `extend` mechanism it already has.
 
 Why this and not pure B: the deputy fork is intrinsic, the kernel loses
@@ -731,7 +731,7 @@ advantage (instant revocation) is recovered well enough by
 session-bounded masks plus re-derive-on-refresh.
 
 Why this is still ocap and not "ACLs with extra steps": the check is
-carried by the *reference* (the handle the edge minted for you — a row),
+carried by the _reference_ (the handle the edge minted for you — a row),
 not looked up per-resource against a principal list (a column). The
 context — the shared durable object — never stores or consults who.
 Attenuation composes the ocap way (`withMask` intersects; extends
@@ -739,7 +739,7 @@ narrow); delegation is handing someone a handle, not editing a list. The
 one identity-keyed lookup in the system remains where Kenton put it in
 every realm he built: at restore. "To restore a sealed capability, you
 must first prove to its host that you are the rightful owner" — our edge
-already proves it; the mask is just the *width* of what a proven owner
+already proves it; the mask is just the _width_ of what a proven owner
 gets back.
 
 ---

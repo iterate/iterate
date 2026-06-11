@@ -15,7 +15,7 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
-import { contextAddressOf, dialContext } from "./itx.ts";
+import { dialContext, projectContextAddress } from "./journal.ts";
 import { normalizeIngressHost } from "~/ingress/host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
@@ -95,7 +95,7 @@ export class ItxCapabilityIngress extends WorkerEntrypoint<Env, ItxCapabilityIng
   async fetch(request: Request): Promise<Response> {
     const props = this.ctx.props;
     const config = parseConfig(this.env);
-    const node = dialContext(this.env, contextAddressOf(props.projectId));
+    const node = dialContext(this.env, projectContextAddress(props.projectId));
 
     // The host label was lowercased by normalizeIngressHost, but cap names
     // may contain uppercase — match case-insensitively so `myCap` is routable
