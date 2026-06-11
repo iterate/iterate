@@ -986,6 +986,43 @@ What this dissolves:
 - ContextDO dissolves: a forked session context is an ItxProcessor on a
   stream, hosted wherever that stream's processing already lives.
 
+Final review round, locked:
+
+- **The core is `protected` inside the processor.** The processor's
+  public define/revoke are APPEND-ONLY facades (same signatures); the
+  core is mutated exclusively by event consumption. The "two initiators"
+  hazard dies by visibility, not discipline — an AgentDurableObject
+  constructor calls `this.itx.define(...)` "like normal" and is really
+  appending.
+- **Write path: append, then SELF-INGEST the same event synchronously.**
+  `ingest` is the one consumption door; its checkpoint-offset bookkeeping
+  makes the later subscription delivery of the same offsets a no-op, so
+  read-your-writes needs no waiting machinery and duplicate handling
+  falls out of the offset model. The subscription remains the recovery
+  path and how you hear about other writers. (No invented `.settled()`.)
+- **Constructor defaults are idempotency-keyed appends** — the streams
+  layer already drops repeat keys, so DO wakes re-issuing defines are
+  no-ops; a deploy changing a default changes the key → one new event →
+  last-write-wins per path, and the journal records the history of
+  platform-default changes per context. Removal needs a reconcile step:
+  diff current defaults against platform-tagged state entries, append
+  revokes for the missing.
+- **Stateful rule: the event stream is the ONLY authority.** Kills the
+  itx_caps SQLite table, the fire-and-forget audit appends ("audit log"
+  stops existing as a concept — record→state is a function, they cannot
+  disagree), and DECISIONS.md D1 itself. The framework checkpoint
+  ({offset, state} via writeState) is a disposable cache of a pure
+  function of the stream — rebuildable by replay, never disagreeing.
+  (Note: capability state never lived in Cloudflare D1 — "D1" in the old
+  decision is the decision-log label; the table is DO-embedded SQLite.
+  Cloudflare D1 remains only as the project directory / secrets / DO
+  catalog; making the GLOBAL context's journal the project directory is
+  a possible later arc.)
+- **Stateless is the rare case and needs no record**: a bare `Itx` with
+  constructor defines, remembering nothing — by design, full stop.
+- Naming follows the repo: `ItxProcessorContract` via
+  `defineProcessorContract`, `readonly contract = ItxProcessorContract`.
+
 Auth note: ctx.props on stateless entrypoints still carries the
 connect-time principal/access; the core's deps include identity+access —
 unchanged from the access model, just relocated.
