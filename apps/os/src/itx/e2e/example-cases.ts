@@ -31,10 +31,10 @@
 //                                  the setSecret → placeholder-fetch flow is
 //                                  the "itx.secrets" e2e in
 //                                  itx-egress.e2e.test.ts
-//   openapi-client                 depends on the live petstore demo server
-//                                  (and the provide-time describeItx probe's
-//                                  cold-start retry); proven end to end by
-//                                  itx-openapi.e2e.test.ts
+//   openapi-client                 the catalogue snippet points at the live
+//                                  petstore demo; the same flow is proven
+//                                  deterministically against the deployment's
+//                                  own fixture in itx-openapi.e2e.test.ts
 
 import { expect } from "vitest";
 

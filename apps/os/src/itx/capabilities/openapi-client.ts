@@ -108,9 +108,10 @@ export class OpenApiClient extends WorkerEntrypoint<Env, OpenApiClientProps> {
 
     const operationId = input.path[0];
     if (!operationId || input.path.length > 1) {
+      const name = props.capabilityPath ?? "<cap>";
       throw new Error(
-        `OpenApiClient dispatches flat operationIds (itx.<cap>.<operationId>(input)); ` +
-          `got path "${input.path.join(".")}". listOperations() lists what exists.`,
+        `Call operations by operationId only: itx.${name}.<operationId>(input) — there are ` +
+          `no nested paths (got "${input.path.join(".")}"). listOperations() lists what exists.`,
       );
     }
     const operation = listOpenApiOperations(spec).find(
@@ -133,7 +134,14 @@ async function fetchSpec(
   const cacheKey = `${props.projectId ?? ""}:${props.specUrl}`;
   const cached = specCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAtMs < SPEC_CACHE_TTL_MS) return cached.spec;
-  const response = await egressFetch(new Request(props.specUrl, { headers: props.headers ?? {} }));
+  // props.headers are API credentials (real material by the time egress has
+  // substituted them) — they ride the spec fetch ONLY when the spec lives on
+  // the API host itself, never to a third-party spec host.
+  const specHost = new URL(props.specUrl).host;
+  const apiHost = props.baseUrl ? new URL(props.baseUrl).host : specHost;
+  const response = await egressFetch(
+    new Request(props.specUrl, { headers: specHost === apiHost ? (props.headers ?? {}) : {} }),
+  );
   if (!response.ok) {
     throw new Error(`Fetching the OpenAPI spec at ${props.specUrl} returned ${response.status}.`);
   }
@@ -142,6 +150,17 @@ async function fetchSpec(
   return spec;
 }
 
+/**
+ * Execute one operation. The input convention (mirrored exactly by the
+ * derived `types` string): args[0] is ONE object whose keys are consumed by
+ * path/query parameter NAME first; whatever remains is the JSON body (a
+ * non-object body schema travels under the single `body` key). Collisions
+ * resolve to the PARAMETER — a body property sharing a name with a path or
+ * query parameter cannot be expressed inline. Query values stringify via
+ * String(): arrays comma-join (style=form, explode=false); repeated query
+ * keys are never emitted. An operation with no request body refuses leftover
+ * keys instead of silently dropping them.
+ */
 async function executeOperation(args: {
   egressFetch: (request: Request) => Promise<Response>;
   input: unknown;
@@ -155,7 +174,6 @@ async function executeOperation(args: {
       ? { ...(args.input as Record<string, unknown>) }
       : {};
 
-  // Path + query parameters are consumed by name; whatever remains is the body.
   let resolvedPath = operation.path;
   const query: Array<[string, string]> = [];
   for (const parameter of operation.parameters) {
@@ -169,9 +187,24 @@ async function executeOperation(args: {
         encodeURIComponent(String(value)),
       );
       delete input[parameter.name];
-    } else if (parameter.in === "query" && value != null) {
-      query.push([parameter.name, String(value)]);
+    } else if (parameter.in === "query") {
+      // Consumed by name even when absent/null — a null query param is
+      // simply not sent, never mistaken for a body property.
+      if (value != null) query.push([parameter.name, String(value)]);
       delete input[parameter.name];
+    }
+  }
+  if (!operation.requestBody) {
+    const leftover = Object.keys(input);
+    if (leftover.length > 0) {
+      const valid = operation.parameters
+        .filter((parameter) => parameter.in === "path" || parameter.in === "query")
+        .map((parameter) => parameter.name);
+      throw new Error(
+        `Operation "${operation.operationId}" has no request body and got unknown input ` +
+          `key${leftover.length > 1 ? "s" : ""} ${leftover.map((key) => JSON.stringify(key)).join(", ")} — ` +
+          (valid.length > 0 ? `valid params: ${valid.join(", ")}.` : `it takes no parameters.`),
+      );
     }
   }
   const url = new URL(resolvedPath.replace(/^\//, ""), requestBase(props, spec));
