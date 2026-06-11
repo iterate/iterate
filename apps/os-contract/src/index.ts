@@ -473,6 +473,69 @@ export const osContract = oc.router({
         })
         .input(ProjectScopedInput)
         .output(z.object({ success: z.boolean() })),
+      // ---- registry-driven integrations (spike) -------------------------------
+      // Generic connect/state for integrations defined in the OS registry
+      // (github, discord). Credentials are supplied directly for the spike;
+      // provider OAuth callbacks converge on the same connect choreography.
+      connect: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/integrations/{integration}/connect",
+          description:
+            "Connect a registry-driven integration: journals provided Secrets, the connection event, and global routing-key claims",
+          tags: ["/project", "/integrations"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            integration: z.string().trim().min(1),
+            ownership: z.enum(["first-party", "customer"]).default("first-party"),
+            externalId: z.string().trim().min(1),
+            displayName: z.string().optional(),
+            routingKeys: z.array(z.string()).default([]),
+            secrets: z
+              .array(
+                z.object({
+                  slug: z.string().trim().min(1),
+                  material: z.string().min(1),
+                  expiresAt: z.string().optional(),
+                }),
+              )
+              .default([]),
+          }),
+        )
+        .output(z.object({ integration: z.string(), projectId: z.string() })),
+      getIntegrationState: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/integrations/{integration}/state",
+          description: "Reduced state of a registry-driven integration's project stream",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput.extend({ integration: z.string().trim().min(1) }))
+        .output(z.unknown()),
+      describeJournaledSecret: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/journaled-secrets/state",
+          description:
+            "Material-free view of a journal-backed Secret (/secrets/{slug}): status, version, audit trail",
+          tags: ["/project", "/secrets"],
+        })
+        .input(ProjectScopedInput.extend({ slug: z.string().trim().min(1) }))
+        .output(z.unknown()),
+      ensureDiscordGateway: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/integrations/discord/gateway",
+          description: "Ensure the Discord gateway websocket is connected for this scope",
+          tags: ["/project", "/integrations"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            ownership: z.enum(["first-party", "customer"]).default("first-party"),
+          }),
+        )
+        .output(z.unknown()),
     },
     secrets: {
       list: oc

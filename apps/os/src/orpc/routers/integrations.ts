@@ -13,10 +13,81 @@ import {
   SLACK_DISCONNECTED_EVENT_TYPE,
 } from "~/domains/secrets/integration-streams.ts";
 import { getProjectConnection, getProjectSecret } from "~/domains/secrets/secrets-store.ts";
+import { connectIntegration } from "~/domains/integrations/connect.ts";
+import { getIntegration } from "~/domains/integrations/registry.ts";
+import {
+  getIntegrationDurableObjectName,
+  getIntegrationStub,
+} from "~/domains/integrations/durable-objects/integration-durable-object.ts";
+import {
+  getDiscordGatewayDurableObjectName,
+  getDiscordGatewayStub,
+} from "~/domains/integrations/durable-objects/discord-gateway-durable-object.ts";
+import {
+  getSecretDurableObjectName,
+  getSecretStub,
+} from "~/domains/secrets/durable-objects/secret-durable-object.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
 
 export const projectIntegrationsRouter = {
+  // ---- registry-driven integrations (spike) -------------------------------
+  connect: os.project.integrations.connect
+    .use(projectScopeMiddleware)
+    .handler(async ({ context, input }) => {
+      const project = requireProjectScope(context);
+      const definition = getIntegration(input.integration);
+      const knownSecretSlugs = new Set(definition.providedSecrets.map((spec) => spec.slug));
+      for (const secret of input.secrets) {
+        if (!knownSecretSlugs.has(secret.slug)) {
+          throw new ORPCError("BAD_REQUEST", {
+            message: `${definition.slug} does not provide a Secret named ${secret.slug}.`,
+          });
+        }
+      }
+      return await connectIntegration({
+        integration: definition.slug,
+        projectId: project.id,
+        ownership: input.ownership,
+        externalId: input.externalId,
+        ...(input.displayName == null ? {} : { displayName: input.displayName }),
+        routingKeys: input.routingKeys,
+        secrets: input.secrets,
+      });
+    }),
+  getIntegrationState: os.project.integrations.getIntegrationState
+    .use(projectScopeMiddleware)
+    .handler(async ({ context, input }) => {
+      const project = requireProjectScope(context);
+      const definition = getIntegration(input.integration);
+      const stub = getIntegrationStub({ integration: definition.slug, projectId: project.id });
+      await stub.initialize({
+        name: getIntegrationDurableObjectName({
+          integration: definition.slug,
+          projectId: project.id,
+        }),
+      });
+      return await stub.ensureReady();
+    }),
+  describeJournaledSecret: os.project.integrations.describeJournaledSecret
+    .use(projectScopeMiddleware)
+    .handler(async ({ context, input }) => {
+      const project = requireProjectScope(context);
+      const stub = getSecretStub({ projectId: project.id, slug: input.slug });
+      await stub.initialize({
+        name: getSecretDurableObjectName({ projectId: project.id, slug: input.slug }),
+      });
+      return await stub.describe();
+    }),
+  ensureDiscordGateway: os.project.integrations.ensureDiscordGateway
+    .use(projectScopeMiddleware)
+    .handler(async ({ context, input }) => {
+      const project = requireProjectScope(context);
+      const scope = input.ownership === "customer" ? `project:${project.id}` : "first-party";
+      const stub = getDiscordGatewayStub(scope);
+      await stub.initialize({ name: getDiscordGatewayDurableObjectName({ scope }) });
+      return await stub.ensureConnected();
+    }),
   getSlackConnection: os.project.integrations.getSlackConnection
     .use(projectScopeMiddleware)
     .handler(async ({ context }) => connectionStatus(context, "slack")),

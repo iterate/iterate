@@ -26,12 +26,20 @@ import {
   requireGoogleConfig,
   requireSlackConfig,
 } from "~/domains/secrets/oauth.ts";
+import { handleIntegrationIngress } from "~/domains/integrations/ingress.ts";
 
 export async function handleIntegrationApiRequest(input: {
   auth: Principal | null | undefined;
   context: RequestContext;
   request: Request;
 }): Promise<Response | null> {
+  // Each registered integration (github, discord, …) is a partial fetch
+  // function from this worker's perspective; the Slack/Google handlers below
+  // predate that convention and migrate into it
+  // (docs/integrations-and-secrets-spike.md).
+  const integrationIngressResponse = await handleIntegrationIngress(input);
+  if (integrationIngressResponse) return integrationIngressResponse;
+
   const url = new URL(input.request.url);
   if (url.pathname === "/api/integrations/slack/callback") {
     return await handleSlackCallback(input);

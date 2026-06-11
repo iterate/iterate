@@ -19,6 +19,10 @@ import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-app
 import type { ProjectDurableObject } from "./src/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnection } from "./src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import type { AgentDurableObject } from "./src/domains/agents/durable-objects/agent-durable-object.ts";
+import type { DiscordGatewayDurableObject } from "./src/domains/integrations/durable-objects/discord-gateway-durable-object.ts";
+import type { IntegrationDurableObject } from "./src/domains/integrations/durable-objects/integration-durable-object.ts";
+import type { IntegrationIngressDurableObject } from "./src/domains/integrations/durable-objects/integration-ingress-durable-object.ts";
+import type { SecretDurableObject } from "./src/domains/secrets/durable-objects/secret-durable-object.ts";
 import type { RepoDurableObject } from "./src/domains/repos/durable-objects/repo-durable-object.ts";
 import type { SlackAgentDurableObject } from "./src/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-objects/slack-integration-durable-object.ts";
@@ -220,6 +224,33 @@ const slackAgent = DurableObjectNamespace<SlackAgentDurableObject>("slack-agent"
   className: "SlackAgentDurableObject",
   sqlite: true,
 });
+// Integrations spike: generic per-(project, integration) lifecycle hosts, the
+// per-integration global ingress router, journal-backed Secrets, and the
+// Discord gateway connection holder.
+const integration = DurableObjectNamespace<IntegrationDurableObject>("integration", {
+  className: "IntegrationDurableObject",
+  sqlite: true,
+});
+const integrationIngress = DurableObjectNamespace<IntegrationIngressDurableObject>(
+  "integration-ingress",
+  {
+    className: "IntegrationIngressDurableObject",
+    sqlite: true,
+  },
+);
+const secret = DurableObjectNamespace<SecretDurableObject>("secret", {
+  className: "SecretDurableObject",
+  sqlite: true,
+});
+const discordGateway = DurableObjectNamespace<DiscordGatewayDurableObject>("discord-gateway", {
+  className: "DiscordGatewayDurableObject",
+  sqlite: true,
+});
+const secretsEncryptionKey = process.env.SECRETS_ENCRYPTION_KEY;
+const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
+const discordPublicKey = process.env.DISCORD_PUBLIC_KEY;
+const discordBotToken = process.env.APP_CONFIG_DISCORD_BOT_TOKEN;
+const githubToken = process.env.APP_CONFIG_GITHUB_TOKEN;
 const artifactEventsQueue = await Queue("artifact-events", {
   name: `${ctx.workerName}-artifact-events`,
   adopt: true,
@@ -257,6 +288,10 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     PROJECT: project,
     SLACK_AGENT: slackAgent,
     SLACK_INTEGRATION: slackIntegration,
+    INTEGRATION: integration,
+    INTEGRATION_INGRESS: integrationIngress,
+    SECRET: secret,
+    DISCORD_GATEWAY: discordGateway,
     REPO: repo,
     PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
     STREAM: stream,
@@ -265,6 +300,17 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
       ? {}
       : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
     ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
+    ...(secretsEncryptionKey == null
+      ? {}
+      : { SECRETS_ENCRYPTION_KEY: alchemy.secret(secretsEncryptionKey) }),
+    ...(githubWebhookSecret == null
+      ? {}
+      : { GITHUB_WEBHOOK_SECRET: alchemy.secret(githubWebhookSecret) }),
+    ...(discordPublicKey == null ? {} : { DISCORD_PUBLIC_KEY: discordPublicKey }),
+    ...(discordBotToken == null
+      ? {}
+      : { APP_CONFIG_DISCORD_BOT_TOKEN: alchemy.secret(discordBotToken) }),
+    ...(githubToken == null ? {} : { APP_CONFIG_GITHUB_TOKEN: alchemy.secret(githubToken) }),
   },
   // OAuth login/refresh/logout, and JWT verification when static JWKS is not
   // configured, can still talk to auth.iterate.com from inside the Worker.

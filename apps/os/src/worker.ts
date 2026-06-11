@@ -37,6 +37,10 @@ import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
 // https://developers.cloudflare.com/durable-objects/get-started/
 export { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 export { DebugAppendChainSubscriber } from "~/durable-objects/debug-append-chain-subscriber.ts";
+export { DiscordGatewayDurableObject } from "~/domains/integrations/durable-objects/discord-gateway-durable-object.ts";
+export { IntegrationDurableObject } from "~/domains/integrations/durable-objects/integration-durable-object.ts";
+export { IntegrationIngressDurableObject } from "~/domains/integrations/durable-objects/integration-ingress-durable-object.ts";
+export { SecretDurableObject } from "~/domains/secrets/durable-objects/secret-durable-object.ts";
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
@@ -48,6 +52,7 @@ export { PackageStream as StreamDurableObject };
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-capability.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
+export { IntegrationsCapability } from "~/domains/integrations/entrypoints/integrations-capability.ts";
 export { BindingCapability, EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { McpClient } from "~/itx/capabilities/mcp-client.ts";
 export { UrlDial } from "~/itx/capabilities/url-dial.ts";

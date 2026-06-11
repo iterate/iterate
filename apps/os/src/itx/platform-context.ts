@@ -96,6 +96,16 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     name: "fetch",
   },
   {
+    address: { entrypoint: "IntegrationsCapability", type: "rpc", worker: { type: "loopback" } },
+    instructions:
+      "This project's connected integrations, each exposing its well-known SDK " +
+      "ready-authenticated from the project's Secrets: " +
+      "itx.integrations.github.octokit.rest.issues.create({...}), " +
+      "itx.integrations.discord.api.channels.createMessage(channelId, {...}). " +
+      "Call itx.integrations() to list what's available.",
+    name: "integrations",
+  },
+  {
     address: { entrypoint: "StreamsCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
       "Event streams in this project's namespace: itx.streams.get('/path') returns a " +
