@@ -21,11 +21,20 @@ type WorkerSource =
 
 - **The built output is the checkpoint of the build-fold.** `build(repo@
   commit, path, bundleConfig) → modules` is a pure function; its output
-  is stored content-addressed BY ITS INPUT TUPLE (CF Artifacts is the
-  store), rebuildable at will, never addressed directly. Same doctrine
-  as processor checkpoints: the stream/repo is the authority, the
-  derived bytes are disposable cache. ("Why are artifact and repo
-  separate?" — they aren't; artifact is the memo table.)
+  is a memo cache, never an address. Terminology corrected on review:
+  in this stack a Cloudflare ARTIFACT IS A HOSTED GIT REPO (the repos
+  domain's backing — `cf.artifacts.repo.*`), NOT a blob store. The memo
+  cache is an **R2 bucket of hash-keyed immutable bundles**
+  (`hash(repo, sha, path, bundleConfig)` → built modules + a sibling
+  meta.json) — the canonical build-cache shape (Nix store, Bazel CAS,
+  Turborepo remote cache). R2's read-after-write consistency makes a
+  provide-time build immediately dialable; eviction is free (TTL/LRU)
+  because every entry is reproducible from its key. Three tiers, one
+  key: repo (authority) → R2 (memo) → loader isolate cache (ephemeral).
+  Builds run at provide time (pinned commits) and push time
+  ("latest" pre-warm); dial-time build is the cold-miss fallback,
+  serialized so concurrent dials don't stampede — per COMMIT, where
+  today's project worker rebuilds per CALL.
 - **The cache key is the address**: `(repo, commit, path, bundleConfig)`.
   The caller-supplied `cacheKey` footgun exists only for `inline`
   (where a content hash can derive it too). `"latest"` resolves to a
