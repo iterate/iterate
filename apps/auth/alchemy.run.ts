@@ -3,6 +3,7 @@ import { D1Database, TanStackStart } from "alchemy/cloudflare";
 import { Exec } from "alchemy/os";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { slugify } from "@iterate-com/shared/slugify";
+import { ensureProxiedDnsForHostnames } from "@iterate-com/shared/alchemy/iterate-app";
 import { z } from "zod/v4";
 import { seedOAuthClients } from "./scripts/seed-oauth-clients.ts";
 
@@ -137,6 +138,15 @@ console.dir(
 );
 
 await app.finalize();
+
+// Worker routes need proxied DNS on the zone to fire; ensure originless
+// records for every routed hostname (e.g. auth.iterate-preview-N.com).
+if (!app.local) {
+  await ensureProxiedDnsForHostnames({
+    hostnames: alchemyEnv.WORKER_ROUTES,
+    comment: `Managed by auth alchemy (${app.stage}).`,
+  });
+}
 
 // Seed declarative OAuth clients (Doppler → DB) after every deployed run, so
 // the database always matches AUTH_SEED_OAUTH_CLIENTS in the selected config.

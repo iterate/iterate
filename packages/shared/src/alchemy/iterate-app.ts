@@ -273,6 +273,39 @@ export async function IterateApp<B extends Bindings>(
   return { worker, afterFinalize };
 }
 
+/**
+ * Ensure proxied originless DNS records exist for worker-route hostnames.
+ *
+ * Worker routes only fire when the hostname has a proxied DNS record on the
+ * zone. IterateApp does this automatically from `baseUrl`; apps that declare
+ * routes directly (apps/auth via WORKER_ROUTES) call this after deploy so new
+ * hostnames like auth.iterate-preview-N.com resolve without manual DNS work.
+ */
+export async function ensureProxiedDnsForHostnames(input: {
+  hostnames: readonly string[];
+  comment: string;
+}) {
+  if (input.hostnames.length === 0) return;
+  const cloudflareApi = await createCloudflareApi({});
+  await Promise.all(
+    input.hostnames.map(async (hostname) => {
+      const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
+      await ensureCloudflareDnsRecord({
+        cloudflareApi,
+        record: {
+          type: "A" as const,
+          name: hostname,
+          content: "192.0.2.1",
+          proxied: true,
+          ttl: 1,
+          comment: input.comment,
+        },
+        zoneId,
+      });
+    }),
+  );
+}
+
 function routeResourceIdForHostname(hostname: string) {
   return hostname.startsWith("*.")
     ? `route-wildcard-${slugify(hostname.slice(2))}`
