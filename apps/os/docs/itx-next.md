@@ -1193,6 +1193,36 @@ Each lands independently green.
   exceptions) vs journaling INTO the domain stream itself (literal
   one-stream-one-record interleaving). Current lean: uniform `/itx`.
 
+### LOCKED (2026-06-11, end of review): the final shape
+
+- **One class**: `Itx extends StreamProcessor` — the core/processor split
+  collapses (the objections died with the stateless host); the pure
+  functions (reduce, resolve, path validation) stay module-level for
+  unit tests and the workshop. Three names, three questions:
+  `Itx` (what), `ItxDurableObject` (where — standalone or facet), a stub
+  (how).
+- **Creation is an event** — the journal begins with its own birth
+  certificate (`context-created` carries parentage); no initialize RPC,
+  no idempotency keys; exactly-once is a property of the fold. Standing
+  doctrine recorded in docs/domain-objects-and-stream-processors.md.
+- **Defaults live on the parent chain — Option 2, locked.** No layers
+  inside the instance: ONE capability map; every entry in the system is
+  a provide; defaults are the PLATFORM CONTEXT's provides, reached by
+  ordinary chain delegation (ctx → project → platform:project (code) →
+  global (code)). Shadowing, revoke-resurfaces-current-default, and
+  deploy updates are consequences of the chain, not rules. The
+  everything-durable invariant refines to its true form: **everything
+  WRITABLE is durable; the root of every chain is code** — the platform
+  context is read-only, code-derived, loopback-addressed
+  ({ type: "rpc", worker: { type: "loopback" }, entrypoint:
+  "PlatformContext" }), dialed in-process so default dispatch pays no
+  DO hop. (§8's original "defaults are a parent context written in
+  code" returns, now expressed through the address system.)
+- **Identity is a stream coordinate**: context DO/facet names ARE
+  structured (namespace, path) records; contextId, journal ref, and
+  self-address are projections of the name. Journals live at
+  `<host base>/itx/<id>` with `itx` a reserved stream path segment.
+
 ## Resolved (was open, now decided)
 
 - ~~Two invoke modes as registry data?~~ → ONE dispatch mode (2026-06-11):
