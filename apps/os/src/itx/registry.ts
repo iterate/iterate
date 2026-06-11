@@ -63,11 +63,15 @@ export type LiveCapTarget = {
 function isSerializableCapTarget(
   target: SerializableCapTarget | LiveCapTarget,
 ): target is SerializableCapTarget {
-  if (typeof target !== "object" || target === null) return false;
-  const proto = Object.getPrototypeOf(target);
-  if (proto !== Object.prototype && proto !== null) return false;
+  if (!isPlainObject(target)) return false;
   const type = (target as { type?: unknown }).type;
   return type === "rpc" || type === "url";
+}
+
+function isPlainObject(target: unknown): boolean {
+  if (typeof target !== "object" || target === null) return false;
+  const proto = Object.getPrototypeOf(target);
+  return proto === Object.prototype || proto === null;
 }
 
 type WorkerLoaderLike = {
@@ -231,6 +235,16 @@ export class ContextRegistry {
     const target = input.target;
 
     if (!isSerializableCapTarget(target)) {
+      // A PLAIN object carrying a string `type` is a malformed serializable
+      // target (typo, unknown kind), not a live provider — fail loudly
+      // instead of registering something that looks like an offline live cap.
+      const type = isPlainObject(target) ? (target as { type?: unknown }).type : undefined;
+      if (typeof type === "string") {
+        throw new Error(
+          `Capability "${input.name}": unknown target type ${JSON.stringify(type)} — ` +
+            `serializable targets are "rpc" or "url"; anything else must be a live provider stub.`,
+        );
+      }
       this.#registerLive({ invoke, meta: input.meta ?? {}, name: input.name, target });
       return { name: input.name, ok: true };
     }

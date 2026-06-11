@@ -232,6 +232,14 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
       target: { entrypoint: "ItxEntrypoint", type: "rpc", worker: { type: "loopback" } },
     }),
   ).rejects.toThrow(/not dialable/);
+  // A typo'd serializable target must fail at define, not register as a
+  // dead live cap.
+  await expect(
+    projectItx.caps.define({
+      name: "typoed",
+      target: { type: "rcp", worker: { binding: "AI", type: "binding" } } as never,
+    }),
+  ).rejects.toThrow(/unknown target type/);
   // Durable Object refs name arbitrary instances across ALL projects, so the
   // namespace allowlist defaults to empty — config has to opt in.
   await expect(
