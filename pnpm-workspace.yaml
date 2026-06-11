@@ -11,49 +11,48 @@ packages:
 
 catalogs:
   cloudflare:
-    '@cloudflare/unenv-preset': ^2.16.0
-    '@cloudflare/vite-plugin': 1.33.2
-    '@cloudflare/vitest-pool-workers': ^0.14.9
-    '@cloudflare/worker-bundler': ^0.1.2
-    '@cloudflare/workers-types': ^4.20260426.1
+    "@cloudflare/unenv-preset": ^2.16.0
+    "@cloudflare/vite-plugin": 1.33.2
+    "@cloudflare/vitest-pool-workers": ^0.14.9
+    "@cloudflare/worker-bundler": ^0.1.2
+    "@cloudflare/workers-types": ^4.20260426.1
     miniflare: 4.20260424.0
     workerd: 1.20260426.1
     wrangler: 4.85.0
 
 minimumReleaseAge: 1440
-
 minimumReleaseAgeExclude:
   - drizzle-kit
   - alchemy
   - miniflare
   - wrangler
   - workerd
-  - '@cloudflare/workerd-darwin-64'
-  - '@cloudflare/workerd-darwin-arm64'
-  - '@cloudflare/workerd-linux-64'
-  - '@cloudflare/workerd-linux-arm64'
-  - '@cloudflare/workerd-windows-64'
-  - '@cloudflare/unenv-preset'
-  - '@cloudflare/vite-plugin'
-  - '@cloudflare/vitest-pool-workers'
-  - '@cloudflare/worker-bundler'
-  - '@cloudflare/workers-types'
-  - '@mmkal/jsonata'
-  - '@mmkal/json-schema-to-typescript'
-  - '@mariozechner/pi-ai'
-  - '@mariozechner/pi-coding-agent'
-  - '@mariozechner/pi-agent-core'
-  - '@mariozechner/pi-tui'
+  - "@cloudflare/workerd-darwin-64"
+  - "@cloudflare/workerd-darwin-arm64"
+  - "@cloudflare/workerd-linux-64"
+  - "@cloudflare/workerd-linux-arm64"
+  - "@cloudflare/workerd-windows-64"
+  - "@cloudflare/unenv-preset"
+  - "@cloudflare/vite-plugin"
+  - "@cloudflare/vitest-pool-workers"
+  - "@cloudflare/worker-bundler"
+  - "@cloudflare/workers-types"
+  - "@mmkal/jsonata"
+  - "@mmkal/json-schema-to-typescript"
+  - "@mariozechner/pi-ai"
+  - "@mariozechner/pi-coding-agent"
+  - "@mariozechner/pi-agent-core"
+  - "@mariozechner/pi-tui"
   - schematch
   - sqlfu
   - trpc-cli
   - hono
-  - '@hono/node-server'
-  - '@hono/node-ws'
+  - "@hono/node-server"
+  - "@hono/node-ws"
   - captun
 
 onlyBuiltDependencies:
-  - '@tailwindcss/oxide'
+  - "@tailwindcss/oxide"
   - better-sqlite3
   - esbuild
   - lightningcss
@@ -62,32 +61,37 @@ onlyBuiltDependencies:
   - workerd
 
 overrides:
-  '@babel/parser': ^7.28.0
-  '@orpc/client': 1.13.14
-  '@orpc/contract': 1.13.14
-  '@orpc/json-schema': 1.13.14
-  '@orpc/openapi': 1.13.14
-  '@orpc/openapi-client': 1.13.14
-  '@orpc/otel': 1.13.14
-  '@orpc/react-query': 1.13.14
-  '@orpc/server': 1.13.14
-  '@orpc/shared': 1.13.14
-  '@orpc/tanstack-query': 1.13.14
-  '@orpc/zod': 1.13.14
-  '@tanstack/query-core': 5.91.0
-  '@tanstack/react-query': 5.91.0
-  agents>viem: '-'
-  agents>x402: '-'
-  axios: 1.13.6
-  baseline-browser-mapping: ^2.9.14
-  better-sqlite3: npm:libsql@0.5.22
-  capnweb: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
-  quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
-  srvx: 0.11.12
-  trpc-cli: 0.14.0
-  wrangler: 4.85.0
-  ws: 8.19.0
+  # Our capnweb fork, which adds WebSocket-over-RPC support (iterate/capnweb#1, not yet
+  # upstreamed). Installed as a prebuilt tarball from the fork's GitHub release, so installs
+  # don't depend on building from source. To update: build + `npm pack` in the fork, upload to
+  # a new release, and point this URL at it.
+  "capnweb": "https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz"
+  # x402,viem are optional peer dependencies of agents sdk, which is source of lot of unnecessary/deprecated packages, removing them is fine
+  "axios": "1.13.6"
+  "agents>x402": "-"
+  "agents>viem": "-"
+  "quicktype-core>readable-stream": "npm:vite-compatible-readable-stream@3.6.1"
+  "better-sqlite3": "npm:libsql@0.5.22"
+  "@orpc/server": "1.13.14"
+  "@orpc/client": "1.13.14"
+  "@orpc/contract": "1.13.14"
+  "@orpc/openapi": "1.13.14"
+  "@orpc/zod": "1.13.14"
+  "@orpc/otel": "1.13.14"
+  "@orpc/openapi-client": "1.13.14"
+  "@orpc/json-schema": "1.13.14"
+  "@orpc/react-query": "1.13.14"
+  "@orpc/tanstack-query": "1.13.14"
+  "@orpc/shared": "1.13.14"
+  "srvx": "0.11.12"
+  "ws": "8.19.0"
+  "baseline-browser-mapping": "^2.9.14"
+  "@babel/parser": "^7.28.0"
+  "@tanstack/query-core": "5.91.0"
+  "@tanstack/react-query": "5.91.0"
+  "trpc-cli": "0.14.0"
+  "wrangler": "4.85.0"
 
 patchedDependencies:
-  '@better-auth/oauth-provider@1.6.9': patches/@better-auth__oauth-provider@1.6.9.patch
-  alchemy@0.83.3: patches/alchemy@0.83.3.patch
+  "alchemy@0.83.3": "patches/alchemy@0.83.3.patch"
+  "@better-auth/oauth-provider@1.6.9": "patches/@better-auth__oauth-provider@1.6.9.patch"
