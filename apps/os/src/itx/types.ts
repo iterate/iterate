@@ -502,29 +502,36 @@ export type WorkerSource = (
  * The kernel knows exactly ONE calling convention: every capability is
  * dispatched as `target.call({ path, args })`. Whether a dotted path is
  * replayed onto a real member tree is decided at the EDGE where the
- * concrete object lives, never by core data:
+ * concrete object lives, never by core data — and the default is always
+ * "your object IS the capability":
  *
- * - The dial wraps the objects it resolves itself — env bindings, loader
- *   entrypoints, facets — with its own plain in-process wrapper (dial.ts),
- *   so a source cap just exports methods and its whole public surface is
- *   replayed:
+ * - A LIVE provider is just the value you pass: a plain object of methods
+ *   (nested as deep as you like) has the dotted path replayed onto its
+ *   members, back in the process where they live; a bare function is called
+ *   directly. No wrapper, no client library:
  *
  * ```ts
- * // source worker: class extends WorkerEntrypoint { add({a,b}) { … } }
- * itx.myCap.add({ a: 1, b: 2 })  // → wrap replays ["add"] on the entrypoint
+ * await itx.provideCapability({
+ *   name: "answer",
+ *   capability: { ultimate: () => 42, deep: { thought: (q) => think(q) } },
+ * });
+ * itx.answer.deep.thought("…")   // replays ["deep","thought"] on YOUR object
  * ```
  *
- * - A LIVE provider either implements `call` itself (the SDK shape — own
- *   your method-tree semantics; the public SDK docs become the tool docs)
- *   or wraps a plain object-of-methods with `asPathCallable` before
- *   providing (the replay then runs back in the provider's process):
+ * - A live provider that implements `call` itself owns its whole
+ *   method-tree semantics instead (the SDK shape — the public SDK docs
+ *   become the tool docs, with a ten-line forwarder):
  *
  * ```ts
  * // provider: class { call({ path, args }) { return slackApi(path.join("."), args[0]); } }
  * itx.slack.chat.postMessage({ … })   // → ONE call: call({ path: ["chat","postMessage"], … })
- *
- * await itx.provideCapability({ name: "mac", capability: asPathCallable({ run(src) { … } }) });
  * ```
+ *
+ * - The dial wraps the objects it resolves itself — env bindings, loader
+ *   entrypoints, facets — with its own plain in-process wrapper (dial.ts),
+ *   so a source cap just exports methods and its whole public surface is
+ *   replayed: `itx.myCap.add({ a: 1, b: 2 })` replays ["add"] on the
+ *   entrypoint.
  *
  * - Forwarders pick their INNER mode themselves: UrlDial always replays
  *   the path as capnweb member pipelining against the remote main.

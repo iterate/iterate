@@ -146,10 +146,10 @@ export class ItxHandle extends RpcTarget {
   async provideCapability(input: {
     name?: string;
     path?: string[];
-    /** The capability (types.ts): a serializable rpc/url address, a bare
-     * function (auto-wrapped: empty remainder calls it, deeper errors), or
-     * anything live — a stub implementing call({ path, args }) itself, or a
-     * plain object-of-methods wrapped client-side with asPathCallable. */
+    /** The capability (types.ts): a serializable rpc/url address, or
+     * anything live — a plain object of methods (dispatch replays the dotted
+     * path onto its members, no wrapper), a bare function (calling the cap
+     * calls it), or a target implementing call({ path, args }) itself. */
     capability: CapabilityTarget;
     /** A sentence for the human/agent who finds this cap (the
      * meta.instructions convention field, lifted by describe()). */
@@ -507,8 +507,10 @@ export class CapabilityProvision extends RpcTarget implements CapabilityProvisio
 
 /**
  * Normalize a live capability before it crosses to the context node. Bare
- * functions auto-wrap with asPathCallable semantics — an empty remainder
- * calls the function, a deeper remainder errors:
+ * functions auto-wrap — an empty remainder calls the function, a deeper
+ * remainder errors. Plain objects pass through UNTOUCHED: they cross every
+ * transport by value (with their functions as stubs), so the core's dispatch
+ * can replay paths onto their members directly — no wrapper exists.
  *
  * - A LOCAL function (prototype Function/AsyncFunction.prototype — never
  *   true of an RPC stub) wraps directly.

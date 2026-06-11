@@ -132,19 +132,24 @@ the RPC transports (capnweb, Workers RPC) separately pipeline CALLS onto
 returned stubs. They compose — `itx.streams.get("/x").append(e)` is one
 PathCall producing a stub the transport then pipelines `append` onto.
 
-## ② Data becomes dots again: `replayPathCall` and `asPathCallable`
+## ② Data becomes dots again: `replayPathCall`
 
 **`replayPathCall(target, { path, args })`** is the receiver-preserving
 replay: walk the segments on a concrete object (re-filtering reserved names —
 this is the authoritative gate, since `invoke` is public and paths can be
 hand-built) and call the terminal method ON ITS PARENT. An empty path calls
-`target` itself as a function. **`asPathCallable(obj)`** wraps a plain
-object-of-methods (or bare function) so it speaks the one calling convention
-from ① — as a capnweb `RpcTarget`, so a live provider's replay runs back in
-the provider's own process.
+`target` itself as a function.
+
+There is deliberately NO callsite wrapper to pair with it: a plain object
+(or bare function) IS a live capability — the core's dispatch notices a
+target that doesn't implement `call` and replays the path onto its members
+itself (③). The replay still runs where the object lives (your functions
+cross the session as stubs), so providing `{ run(src) { … } }` means `run`
+executes in YOUR process.
 
 That is Law 6 in full: the core only ever says `target.call({ path, args })`;
-whoever holds the concrete object decides what a path means there.
+whoever holds the concrete object decides what a path means there — and "I'm
+just an object of methods" is the default, not a wrapper.
 
 ## ③ The core: `Itx` — one map, longest prefix, a chain (`itx.ts`)
 
@@ -168,10 +173,11 @@ Its state is ONE path-keyed capability table; its protocol is four verbs
   chain's trusted identity channel: attribution, and — crucially — dial-back
   (⑤).
 - **What can be provided** (`Capability`): a serializable
-  **`CapabilityAddress`** (durable), or anything live — a stub implementing
-  `call` itself, an `asPathCallable` wrap, or a **bare function** (live by
-  nature; auto-wrapped so calling the capability calls the function and any
-  deeper path errors). Discrimination is structural
+  **`CapabilityAddress`** (durable), or anything live — a **plain object of
+  methods** (dispatch replays the dotted path onto its members; nested
+  objects give depth for free), a **bare function** (calling the capability
+  calls the function), or a stub implementing `call` itself (own your whole
+  method tree). Discrimination is structural
   (`isCapabilityAddress`): an address is a PLAIN object carrying
   `type: "rpc" | "url"`; everything else is live. Live stubs sit in an
   in-memory instance table, dup-retained, torn down with the provider's
@@ -379,7 +385,7 @@ bearer-token edge) | `meta.http.public`; then one core dispatch with
 | ----------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `itx.ts`                | THE CORE              | `Itx` (the four verbs, journal write/consume seam, live table, longest-prefix dispatch, chain), capability data model, validation |
 | `contract.ts`           | the journal contract  | `ItxContract`, `ITX_EVENT_TYPES`, `ItxState` (zod schemas — deliberately loose so old journals never wedge the fold)              |
-| `path-proxy.ts`         | Law 6, client-safe    | `PathProxy`, `replayPathCall`, `asPathCallable`, `RESERVED_PATH_SEGMENTS`                                                         |
+| `path-proxy.ts`         | Law 6, client-safe    | `PathProxy`, `replayPathCall`, `RESERVED_PATH_SEGMENTS`                                                                           |
 | `journal.ts`            | the coordinate system | journal paths, context addresses, `dialContext`, `extendContext`, the D1 catalog, the reserved-segment guard                      |
 | `dial.ts`               | reach                 | `makeDial` (allowlists, loader/facet wiring, prop injection), `durableObjectFacetsHook`, `resolveDialableTargets`                 |
 | `platform-context.ts`   | the chain root        | `PlatformContext` (read-only code context), `PLATFORM_PROJECT_CAPABILITIES`, `getPlatformContext`                                 |
@@ -405,12 +411,12 @@ _on top of_ this layer or beside it — never underneath it.
 ## Writing capabilities
 
 **Live** (session-bound — your laptop, a browser tab, another service; Scene
-2). The capability IS the stub; `provideCapability` discriminates
+2). The capability IS the value you pass; `provideCapability` discriminates
 structurally. A bare function is the simplest provider (calling the
-capability calls it); an object either implements `call({ path, args })`
-itself — the SDK shape: own your whole method tree, the public SDK docs
-become the tool docs — or is wrapped with `asPathCallable` (the replay runs
-back in YOUR process):
+capability calls it); a plain object of methods is the next step up — dotted
+paths replay onto its members, in YOUR process, no wrapper anywhere; and an
+object that implements `call({ path, args })` itself owns its whole method
+tree (the SDK shape: the public SDK docs become the tool docs):
 
 ```ts
 import { withItx } from "~/itx/client.ts";

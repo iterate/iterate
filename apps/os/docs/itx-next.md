@@ -1031,6 +1031,23 @@ commit, entrypoint } }`) — source as a dimension separate from the
 - **The 500-line workshop** as a standalone teaching document; the build
   order now exists as `src/itx/README.md`.
 
+### SHIPPED (2026-06-12): callsite purity — plain objects are capabilities
+
+We're allergic to weird wrappers and helpers that aren't just a capnweb or
+Workers-RPC stub at the itx callsite, so the last one died:
+
+- **`asPathCallable` is DELETED** (the export, the re-exports, the REPL
+  global). Dispatch decides instead: in the core's live-cap borrow
+  (itx.ts), a target that does not implement `call` as a function has the
+  remaining path replayed onto its members via `replayPathCall` — so
+  `provideCapability({ name: "answer", capability: { ultimate: () => 42,
+deep: { thought: (q) => … } } })` works directly, callable at any depth
+  through the fallthrough. Earlier mentions of `asPathCallable` in the
+  dated entries above describe the superseded shape.
+- A CALL-implementing provider keeps its documented semantics (one
+  `call({ path, args })` owns the whole method tree — the SDK shape); a
+  bare function still auto-wraps (empty remainder calls it).
+
 ## Resolved (was open, now decided)
 
 - ~~Two invoke modes as registry data?~~ → ONE dispatch mode (2026-06-11):

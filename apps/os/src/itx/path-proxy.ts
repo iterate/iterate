@@ -1,22 +1,25 @@
 // The client-safe half of the ONE calling convention (Law 6).
 //
 // The kernel (itx.ts) dispatches every capability as `target.call({ path,
-// args })`. This module owns the three pure pieces of that convention that
+// args })`. This module owns the two pure pieces of that convention that
 // must load OUTSIDE workerd — withItx providers in Node and the browser
 // REPL import them at runtime, so nothing here may touch cloudflare:workers
 // (itx.ts re-exports all of it for server-side imports):
 //
 //   - PathProxy        dots → data (consumer side, zero round trips)
 //   - replayPathCall   data → dots (receiver-preserving replay)
-//   - asPathCallable   wrap a concrete object so it speaks the convention
+//
+// There is deliberately NO callsite wrapper here: a plain object (or bare
+// function) IS a live capability — the core's dispatch replays paths onto
+// its members (itx.ts). The only things at an itx callsite are capnweb /
+// Workers RPC stubs and your own objects.
 //
 // This is the only place in the codebase that plays reserved-name games.
 // Capability *names* are validated at registration time instead (itx.ts), so
 // the proxy only needs to protect protocol-level names on intermediate path
 // segments.
 
-import { RpcTarget } from "capnweb";
-import type { PathCall, PathCallable } from "./types.ts";
+import type { PathCall } from "./types.ts";
 
 // The ONE calling convention's shapes (PathCall, PathCallable) are declared
 // in types.ts — the design of record — and re-exported here for runtime
@@ -154,34 +157,4 @@ export async function replayPathCall(target: unknown, call: PathCall): Promise<u
     throw new Error(`Capability path ${call.path.join(".")} did not resolve to a function.`);
   }
   return await holder[method](...call.args);
-}
-
-/**
- * Make a member-shaped object speak the kernel's ONE calling convention:
- * `asPathCallable(obj).call({ path, args })` replays the path on `obj` via
- * {@link replayPathCall} — in THIS process, where `obj` is concrete.
- *
- * This is the CLIENT-side wrapper: a live provider wraps a plain
- * object-of-methods (or a bare function) before provideCapability()ing it —
- * the wrapper extends capnweb's RpcTarget so it crosses the session as a
- * stub, and the replay then runs back in the provider's process. Providers
- * that implement `call` themselves (the SDK-shaped FakeSlackSdk pattern)
- * don't need it. (The dial wraps the concrete objects it resolves itself with
- * plain in-process wrappers — dial.ts.)
- */
-export function asPathCallable(target: unknown): PathCallable {
-  return new ClientPathCallable(target);
-}
-
-class ClientPathCallable extends RpcTarget {
-  readonly #target: unknown;
-
-  constructor(target: unknown) {
-    super();
-    this.#target = target;
-  }
-
-  call(input: PathCall): Promise<unknown> {
-    return replayPathCall(this.#target, input);
-  }
 }

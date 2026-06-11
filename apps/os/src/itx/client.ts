@@ -12,12 +12,6 @@ import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import WebSocket from "ws";
 import type { ItxHandle } from "./handle.ts";
 
-// The client-side half of the one calling convention: wrap a plain
-// object-of-methods before provideCapability()ing it as a live provider.
-// (From path-proxy.ts, not itx.ts: this module runs in Node, and itx.ts —
-// the core — imports cloudflare:workers.)
-export { asPathCallable } from "./path-proxy.ts";
-
 export type WithItxInput = {
   /** OS base url, e.g. https://os.iterate-preview-3.com */
   baseUrl: string;

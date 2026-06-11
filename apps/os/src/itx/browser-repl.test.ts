@@ -11,7 +11,7 @@ import {
   runBrowserReplEntry,
 } from "./browser-repl.ts";
 import { ITX_EXAMPLES } from "./examples.ts";
-import { PathProxy } from "./path-proxy.ts";
+import { PathProxy, replayPathCall } from "./path-proxy.ts";
 
 describe("browser Cap'n Web REPL", () => {
   test("default snippet uses Cap'n Web promise pipelining", async () => {
@@ -480,14 +480,15 @@ const persisted = answer();
 
   test("live-capability example registers and calls a session-owned target", async () => {
     // Mirrors a PROJECT-scoped itx handle: provideCapability() with a live
-    // capability registers it, and unknown names on the handle fall through to
-    // a path proxy whose terminal call dispatches the kernel's one calling
-    // convention — provider.call({ path, args }) — exactly like the core.
-    const providedTargets = new Map<string, { call(input: unknown): unknown }>();
+    // capability registers it, and unknown names on the handle fall through
+    // to a path proxy whose terminal call dispatches exactly like the core:
+    // a call-implementing target receives the path as data; a plain object
+    // (no `call`) has the path replayed onto its members.
+    const providedTargets = new Map<string, Record<string, unknown>>();
     const alert = vi.fn();
     const itx = new Proxy(
       {
-        provideCapability(input: { name: string; capability: { call(input: unknown): unknown } }) {
+        provideCapability(input: { name: string; capability: Record<string, unknown> }) {
           providedTargets.set(input.name, input.capability);
         },
       },
@@ -495,7 +496,11 @@ const persisted = answer();
         get(target, prop: string | symbol) {
           if (typeof prop === "string" && providedTargets.has(prop)) {
             const provided = providedTargets.get(prop)!;
-            return new PathProxy((call) => provided.call(call));
+            return new PathProxy((call) =>
+              typeof provided.call === "function"
+                ? provided.call(call)
+                : replayPathCall(provided, call),
+            );
           }
           return Reflect.get(target, prop);
         },

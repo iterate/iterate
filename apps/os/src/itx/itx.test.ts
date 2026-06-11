@@ -399,11 +399,61 @@ describe("bare-function capabilities", () => {
 
     await expect(itx.invoke({ args: [1, "two"], path: ["probe"] })).resolves.toEqual({ ok: true });
     expect(seen).toEqual([[1, "two"]]);
-    // asPathCallable semantics: a bare function has no member tree.
+    // A bare function has no member tree — a deeper path is a plain miss.
     await expect(itx.invoke({ args: [], path: ["probe", "deeper"] })).rejects.toThrow(
       /did not resolve to a function/,
     );
     expect(await itx.describe()).toMatchObject([{ connected: true, kind: "live", name: "probe" }]);
+  });
+});
+
+describe("plain objects ARE capabilities", () => {
+  test("a plain object-of-methods dispatches by member path, at any depth, with no wrapper", async () => {
+    const itx = makeItx();
+    await itx.provideCapability({
+      capability: {
+        deep: { thought: (question: string) => ({ answer: 42, question }) },
+        ultimate: () => 42,
+      },
+      name: "answer",
+    });
+
+    await expect(itx.invoke({ args: [], path: ["answer", "ultimate"] })).resolves.toBe(42);
+    // Depth: the fallthrough replays ["deep", "thought"] onto the object's
+    // members — itx.answer.deep.thought("…") with zero client-side wrapping.
+    await expect(
+      itx.invoke({
+        args: ["what do you get if you multiply six by nine"],
+        path: ["answer", "deep", "thought"],
+      }),
+    ).resolves.toEqual({ answer: 42, question: "what do you get if you multiply six by nine" });
+    // A member miss inside the object is an instructive path error.
+    await expect(itx.invoke({ args: [], path: ["answer", "nope"] })).rejects.toThrow(
+      /did not resolve to a function/,
+    );
+    expect(await itx.describe()).toMatchObject([{ connected: true, kind: "live", name: "answer" }]);
+  });
+
+  test("a call-implementing provider still receives ONE call({ path, args }) — members are never traversed", async () => {
+    const itx = makeItx();
+    const calls: unknown[] = [];
+    await itx.provideCapability({
+      capability: {
+        call: (input: { path: string[]; args: unknown[] }) => {
+          calls.push(input);
+          return "from-call";
+        },
+        // A decoy member tree: implementing `call` means the provider owns
+        // its whole method-tree semantics, so this must never run.
+        chat: { post: () => "member tree, must not run" },
+      },
+      name: "sdk",
+    });
+
+    await expect(
+      itx.invoke({ args: [{ text: "hi" }], path: ["sdk", "chat", "post"] }),
+    ).resolves.toBe("from-call");
+    expect(calls).toEqual([{ args: [{ text: "hi" }], path: ["chat", "post"] }]);
   });
 });
 

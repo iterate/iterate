@@ -282,7 +282,7 @@ test(
     // genuine default pipe.
     const probeUrl = new URL("/api/itx", baseUrl()).toString();
 
-    // The shadow is a BARE FUNCTION — no RpcTarget, no asPathCallable. It
+    // The shadow is a BARE FUNCTION — no RpcTarget, no wrapper of any kind. It
     // crosses the provide input nested inside a plain object, which is the
     // bare-nested-function-over-capnweb serialization proof: capnweb stubs
     // the function, the platform probes the stub (a pure property pull) and

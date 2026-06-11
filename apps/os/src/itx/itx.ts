@@ -49,7 +49,6 @@ import type {
 // model lives in types.ts (the import-free design of record). Server code
 // imports all of it from here.
 export {
-  asPathCallable,
   replayPathCall,
   RESERVED_PATH_SEGMENTS,
   type PathCall,
@@ -254,9 +253,10 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    * the checkpoint's offset bookkeeping makes any later delivery of the
    * same offsets a no-op). A CapabilityAddress registers durably-shaped;
    * anything else is LIVE — the EVENT is journaled (the record outlives the
-   * session) while the stub stays an instance field. A bare local FUNCTION
-   * is live by nature and auto-wraps with asPathCallable semantics (empty
-   * remainder calls the function; a deeper remainder errors).
+   * session) while the stub stays an instance field. A live target needs no
+   * wrapper: a plain object (or bare function) IS the capability — dispatch
+   * replays paths onto its members; a target that implements `call({ path,
+   * args })` itself owns its whole method-tree semantics instead (#borrow).
    *
    * Returns nothing: the HANDLE (handle.ts) builds the CapabilityProvision
    * its callers hold — the core's provide is just the journaled write.
@@ -562,7 +562,26 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     if (entry.kind === "live") {
       const stub = this.#liveStubs.get(entry.name);
       if (!stub) throw new CapabilityOfflineError(entry.name);
-      return (stub.dup ? stub.dup() : stub) as unknown as PathCallable;
+      const borrowed = (stub.dup ? stub.dup() : stub) as LiveProvider;
+      // Dispatch decides the live target's mode, right here. Probing at
+      // dispatch (not at provide time, and uncached) is deliberate: the
+      // check is a free local property lookup, never a round trip. A LOCAL
+      // target — a plain object, an RpcTarget instance, the bare-function
+      // wrap — answers truthfully; a session-crossed RPC stub materializes
+      // a callable proxy for ANY member name (including `call`), which is
+      // exactly right because the handle normalizes every session-provided
+      // live target to a call-speaking one (handle.ts resolveLiveCapability).
+      //
+      // A target that implements `call` owns its whole method-tree semantics
+      // (the SDK shape: one method receives { path, args } as data). NOT
+      // implementing `call` means the target IS its member tree — a plain
+      // object of methods is a capability with no wrapper at all; replay the
+      // remaining path onto its members, in the process where they live.
+      if (typeof borrowed.call === "function") return borrowed as unknown as PathCallable;
+      return {
+        call: (input: PathCall) => replayPathCall(borrowed, input),
+        [Symbol.dispose]: () => disposeIfPossible(borrowed),
+      } as PathCallable;
     }
     return this.deps.dial(entry.address! as CapabilityAddress, {
       capabilityPath: entry.name,
@@ -690,8 +709,9 @@ export function isLocalBareFunction(
 }
 
 /** Wrap a bare local function so it speaks the one calling convention:
- * empty remainder calls the function, a deeper remainder errors (the
- * asPathCallable semantics, replayed in-process). */
+ * empty remainder calls the function, a deeper remainder errors (replayed
+ * in-process). The wrap exists because a bare function would otherwise look
+ * call-speaking to dispatch — `fn.call` IS a function (Function.prototype). */
 function localFunctionCapability(fn: (...args: never[]) => unknown): LiveProvider {
   return { call: (input: PathCall) => replayPathCall(fn, input) } as LiveProvider;
 }

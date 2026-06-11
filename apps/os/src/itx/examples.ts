@@ -112,12 +112,12 @@ const answer = {
   },
 };
 
-// provideCapability() is THE verb: a live stub is just another capability.
-// asPathCallable() makes a plain object-of-methods speak the one calling
-// convention (call({ path, args }) replayed back here on your object). A
-// live cap disappears when this tab disconnects; reconnect and
-// provideCapability() again to restore it.
-await itx.provideCapability({ name: "answer", capability: asPathCallable(answer) });
+// provideCapability() is THE verb, and you pass your object DIRECTLY —
+// there is no client library between you and the capability table. Dotted
+// calls replay onto its members, back here where they live. A live cap
+// disappears when this tab disconnects; reconnect and provideCapability()
+// again to restore it.
+await itx.provideCapability({ name: "answer", capability: answer });
 
 // Unknown names on the handle fall through to the capability table, so the cap is
 // callable as if it were built in.
