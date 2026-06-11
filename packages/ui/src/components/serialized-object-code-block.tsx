@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Terminal } from "lucide-react";
 import { toast } from "sonner";
 import { stringify as stringifyYaml } from "yaml";
@@ -26,9 +26,16 @@ interface CodeMirrorProps {
   currentFormat: SerializedFormat;
   showLineNumbers: boolean;
   plainChrome: boolean;
+  onReady?: () => void;
 }
 
-function CodeMirror({ value, currentFormat, showLineNumbers, plainChrome }: CodeMirrorProps) {
+function CodeMirror({
+  value,
+  currentFormat,
+  showLineNumbers,
+  plainChrome,
+  onReady,
+}: CodeMirrorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<any>(null);
 
@@ -90,6 +97,7 @@ function CodeMirror({ value, currentFormat, showLineNumbers, plainChrome }: Code
       });
 
       viewRef.current = view;
+      onReady?.();
     }
 
     void mountEditor();
@@ -99,7 +107,7 @@ function CodeMirror({ value, currentFormat, showLineNumbers, plainChrome }: Code
       viewRef.current?.destroy();
       viewRef.current = null;
     };
-  }, [currentFormat, plainChrome, showLineNumbers, value]);
+  }, [currentFormat, onReady, plainChrome, showLineNumbers, value]);
 
   return <div ref={containerRef} />;
 }
@@ -129,9 +137,13 @@ export function SerializedObjectCodeBlock({
 }: SerializedObjectCodeBlockProps) {
   const [currentFormat, setCurrentFormat] = useState<SerializedFormat>(initialFormat);
   const [copiedFormat, setCopiedFormat] = useState<SerializedFormat | null>(null);
+  const [editorReadySignal, setEditorReadySignal] = useState(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   const code = useMemo(() => serializeData(data, currentFormat), [currentFormat, data]);
+  const handleEditorReady = useCallback(() => {
+    setEditorReadySignal((value) => value + 1);
+  }, []);
 
   const handleCopy = async (format: SerializedFormat) => {
     try {
@@ -163,7 +175,7 @@ export function SerializedObjectCodeBlock({
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [code, scrollToBottom]);
+  }, [code, editorReadySignal, scrollToBottom]);
 
   return (
     <div className={cn("relative flex min-h-0 flex-col", className)}>
@@ -179,6 +191,7 @@ export function SerializedObjectCodeBlock({
           currentFormat={currentFormat}
           showLineNumbers={showLineNumbers}
           plainChrome={plainChrome}
+          onReady={handleEditorReady}
         />
       </div>
 
