@@ -177,6 +177,13 @@ const members = os.internal.organization.members
     }));
   });
 
+// Auth is the canonical minter of the prj_ id space. OS calls this for the
+// operator/recovery create path (no owning organization), so even org-less
+// projects get auth-minted ids and OS never mints locally.
+const mintProjectId = os.internal.project.mintProjectId
+  .use(serviceMiddleware)
+  .handler(async () => ({ id: generateId("prj") }));
+
 const createForOrganization = os.internal.project.createForOrganization
   .use(serviceMiddleware)
   .handler(async ({ context, input }) => {
@@ -458,6 +465,7 @@ export const internal = os.internal.router({
   },
   project: {
     createForOrganization,
+    mintProjectId,
   },
   session: {
     createProjectIngressToken,
