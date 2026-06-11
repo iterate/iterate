@@ -207,7 +207,7 @@ export async function deployCloudflarePreviewForPullRequest(
     leaseMs: params.leaseMs,
     previousEnvironmentConfigLease: current.state.environmentConfigLease,
     semaphoreApiToken: requireValue(
-      params.semaphoreApiToken,
+      resolveSemaphoreApiToken(params),
       "SEMAPHORE_API_TOKEN is required to create a preview.",
     ),
     semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
@@ -435,7 +435,7 @@ export async function cleanupCloudflarePreviewForPullRequest(
 
   const semaphore = params.createPreviewSemaphoreResourceClient({
     semaphoreApiToken: requireValue(
-      params.semaphoreApiToken,
+      resolveSemaphoreApiToken(params),
       "SEMAPHORE_API_TOKEN is required to clean up previews.",
     ),
     semaphoreBaseUrl: params.semaphoreBaseUrl ?? defaultSemaphoreBaseUrl,
@@ -1196,8 +1196,22 @@ function optionalBooleanWithEnvDefault(env: NodeJS.ProcessEnv, key: string) {
   return rawDefaultValue ? schema.default(schema.parse(rawDefaultValue)) : schema.optional();
 }
 
-function optionalSemaphoreApiTokenWithEnvDefault(env: NodeJS.ProcessEnv) {
-  return optionalStringWithEnvDefault(env, "SEMAPHORE_API_TOKEN");
+// Never default this from the environment: trpc-cli prints schema defaults
+// verbatim in `--help`, which would echo the shared API secret into terminals
+// and CI logs. Resolution happens at call time via resolveSemaphoreApiToken.
+function optionalSemaphoreApiTokenWithEnvDefault(_env: NodeJS.ProcessEnv) {
+  return z.string().trim().min(1).optional();
+}
+
+function resolveSemaphoreApiToken(params: {
+  semaphoreApiToken?: string;
+  commandEnvironment: NodeJS.ProcessEnv;
+}) {
+  return (
+    params.semaphoreApiToken ??
+    (params.commandEnvironment.SEMAPHORE_API_TOKEN?.trim() ||
+      params.commandEnvironment.APP_CONFIG_SHARED_API_SECRET?.trim())
+  );
 }
 
 function requireValue<T>(value: T | null | undefined, message: string): T {

@@ -28,17 +28,25 @@ key, so you can mint a session as anyone, instantly and offline:
 
 ```bash
 pnpm install
-pnpm dev          # fully-local OS dev server on http://os.localhost:<port>
+DOPPLER_CONFIG=dev pnpm dev   # fully-local OS dev server on http://os.localhost:<port>
 ```
 
-- `pnpm dev` uses your Doppler-selected config if you've run `doppler setup`
-  or set `DOPPLER_CONFIG`; otherwise it defaults to the shared `dev` config,
-  which works out of the box — no per-user provisioning.
+- **Config selection**: `pnpm dev` resolves its Doppler config as
+  `DOPPLER_CONFIG` → `doppler configure` scope (machine _or worktree_) →
+  shared `dev`. A leftover `doppler setup` pointing at `dev_<user>` silently
+  gives you the _tunnel-backed_ legacy dev instead: fixed port 5173, a
+  cloudflared tunnel that claims `os.iterate-dev-<user>.com` (contested
+  across worktrees — agents will steal it from each other). Agents and
+  parallel worktrees should always pass `DOPPLER_CONFIG=dev` explicitly; the
+  startup banner prints `Stage: <config>` — if it doesn't say `dev`, you're
+  not fully local.
 - The chosen port is baked into the env (`APP_CONFIG_BASE_URL`) at startup and
   recorded in **`apps/os/.alchemy/dev-server.json`** (`{pid, port, baseUrl}`).
   Scripts and CLIs that need "the local dev server" read that file — no
   flags, no guessing. One dev server per worktree: a second `pnpm dev` refuses
-  while the first is alive.
+  while the first is alive. The file appears ~10–15s before the port actually
+  accepts connections (Vite is still booting) — poll the base URL until it
+  returns a response before driving it.
 - Project hosts work in the browser as `<proj-slug>.os.localhost:<port>`.
   (curl/Node don't resolve `*.localhost` — use `127.0.0.1:<port>` with a Host
   header, or plain `localhost:<port>`.)
@@ -66,6 +74,10 @@ include the **forge** public key, whose private half is in Doppler
 (`AUTH_FORGE_PRIVATE_JWK`, inherited from `_shared/dev` / `_shared/preview`).
 Minting is offline and instant — no auth worker involved:
 
+`pnpm auth:mint` lives in the **repo root** package (`pnpm cli` lives in
+`apps/os` — don't mix them up; pnpm's "command not found" error when you run
+either from the wrong directory is unhelpful).
+
 ```bash
 # a regular user (defaults shown)
 doppler run --project os --config dev -- pnpm auth:mint --email alice+test@nustom.com
@@ -91,6 +103,31 @@ The output gives you three ways in:
 3. **Claims**: pass `--orgs/--projects/--claims` JSON to mint membership of
    specific orgs/projects, since authorization is claims-driven.
 
+**Minted identities with no org claims dead-end in the browser.** OS routes
+users with zero organizations to the auth worker's `/project-access` page,
+where your forged JWT means nothing (auth wants its own session) — a headless
+agent lands on a Google login and is stuck. `--admin` does not bypass this.
+The working recipe to browse OS as a minted identity:
+
+```bash
+# 1. create a project via the operator path (admin API secret; from apps/os)
+cd apps/os
+doppler run --project os --config dev -- pnpm cli --base-url http://os.localhost:<port> \
+  rpc projects create --slug my-proj      # → note the returned "id"
+
+# 2. mint with BOTH org and project claims (the org can be any made-up id —
+#    OS authorizes from claims; only auth-worker round-trips reject fakes)
+doppler run --project os --config dev -- pnpm auth:mint --email agent+test@nustom.com \
+  --orgs '[{"id":"org_x","slug":"x","name":"X","role":"admin"}]' \
+  --projects '[{"id":"<id from step 1>","slug":"my-proj","organizationId":"org_x"}]' \
+  --browser-url
+# → opens straight onto /projects/my-proj
+```
+
+A signed-in _human_ never hits this: the real OAuth flow walks you through
+creating an org + project on first sign-in (test emails `+...test@` with OTP
+`424242` work for that flow too, fully headless).
+
 The `browserSignInUrl` embeds the (short-lived, dev/preview) tokens as query
 params — treat it as a secret: it can appear in browser history and edge
 request logs, so don't paste it into shared channels.
@@ -110,8 +147,10 @@ replacement.
 
 ```bash
 # one-time: agent-browser install
-BIN="$HOME/.agent-browser/browsers/"*"/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
-nohup "$BIN" --headless=new --remote-debugging-port=9444 --user-data-dir=/tmp/ab-own about:blank >/dev/null 2>&1 & disown
+# pick ONE binary explicitly — the glob matches multiple installed versions
+BIN=$(ls -d "$HOME/.agent-browser/browsers/"*"/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" | sort -V | tail -1)
+PROFILE=$(mktemp -d /tmp/ab-XXXXXX)   # fresh profile per run — see below
+nohup "$BIN" --headless=new --remote-debugging-port=9444 --user-data-dir="$PROFILE" about:blank >/dev/null 2>&1 & disown
 
 AGENT_BROWSER_AUTO_CONNECT=0 agent-browser --cdp 9444 open "$(doppler run --project os --config dev -- pnpm --silent auth:mint --browser-url)"
 AGENT_BROWSER_AUTO_CONNECT=0 agent-browser --cdp 9444 snapshot -i
@@ -120,6 +159,13 @@ AGENT_BROWSER_AUTO_CONNECT=0 agent-browser --cdp 9444 snapshot -i
 (`AGENT_BROWSER_AUTO_CONNECT=0` matters: some machines default agent-browser
 to auto-attaching to the user's real Chrome.) Run agent-browser commands
 serially — concurrent invocations wedge its daemon.
+
+**Identity hygiene**: cookies leak across runs from two directions — a reused
+`--user-data-dir`, and agent-browser's own saved session state
+(`~/.agent-browser/sessions/*.json`), which its daemon can re-inject even
+into a fresh profile. If the browser shows a user you didn't mint, run
+`agent-browser --cdp 9444 cookies clear` before signing in. When testing
+auth flows specifically, always start with a fresh profile + `cookies clear`.
 
 3. Driving the user's actual Chrome (to reuse their session or look at their
    tabs) is allowed **only when the user explicitly asks**; then use the
@@ -147,21 +193,22 @@ CI is just a thin wrapper — everything reproduces locally:
 
 ```bash
 # 1. Lease a slot first (otherwise a PR's cleanup can destroy your deploy):
-doppler run --project _shared --config prd -- pnpm preview status
-# acquire programmatically (3h):
-doppler run --project _shared --config prd -- pnpm tsx -e '...' # see scripts/preview/router.ts; or use the preview CLI with a PR number
+doppler run --project _shared --config prd -- pnpm preview status              # see what's free
+doppler run --project _shared --config prd -- pnpm preview acquire --slot 9    # lease it (3h default)
+# → prints leaseId + the matching release command
 
-# 2. Deploy (same primitive as everything else):
+# 2. Deploy (same primitive as everything else; auth first — OS bakes its JWKS from it):
 cd apps/auth && doppler run --project auth --config preview_9 -- pnpm alchemy:up
-cd ../os    && doppler run --project os   --config preview_9 -- pnpm tsx ./alchemy.run.ts
+cd ../os     && doppler run --project os   --config preview_9 -- pnpm alchemy:up
 
-# 3. Point a browser at it:
+# 3. Point a browser at it (same org-claims requirement as local dev — see
+#    "Acting as users" above; bare --admin lands on the auth login page):
 doppler run --project os --config preview_9 -- pnpm auth:mint --admin --browser-url
-# open the printed URL — you're signed in on https://os.iterate-preview-9.com
 
-# 4. Tear down when done:
-cd apps/os   && doppler run --project os   --config preview_9 -- pnpm tsx ./alchemy.run.ts --destroy
-cd ../auth   && doppler run --project auth --config preview_9 -- pnpm alchemy:up --destroy
+# 4. Tear down and release when done:
+cd apps/os   && doppler run --project os   --config preview_9 -- pnpm alchemy:down
+cd ../auth   && doppler run --project auth --config preview_9 -- pnpm alchemy:down
+doppler run --project _shared --config prd -- pnpm preview release --slot 9 --lease-id <leaseId>
 ```
 
 For the PR-centric flow (managed PR comment, tests, cleanup) use

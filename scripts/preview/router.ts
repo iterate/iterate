@@ -27,22 +27,30 @@ function resolvePreviewSemaphoreApiToken(env: NodeJS.ProcessEnv) {
   return env.SEMAPHORE_API_TOKEN?.trim() || env.APP_CONFIG_SHARED_API_SECRET?.trim();
 }
 
-function createPreviewStatusInputSchema(env: NodeJS.ProcessEnv) {
-  const semaphoreApiToken = resolvePreviewSemaphoreApiToken(env);
+// The semaphore token must never be a schema default: trpc-cli prints schema
+// defaults verbatim in `--help`, which would echo the shared API secret into
+// terminals and CI logs. Keep it optional here and resolve from the
+// environment at call time instead.
+function createPreviewStatusInputSchema(_env: NodeJS.ProcessEnv) {
   return z.object({
-    semaphoreApiToken: semaphoreApiToken
-      ? z.string().trim().min(1).default(semaphoreApiToken)
-      : z.string().trim().min(1),
+    semaphoreApiToken: z.string().trim().min(1).optional(),
     semaphoreBaseUrl: z.string().trim().url().default("https://semaphore.iterate.com"),
   });
 }
 
 function createPreviewSemaphoreClient(input: {
-  semaphoreApiToken: string;
+  semaphoreApiToken?: string;
   semaphoreBaseUrl: string;
 }) {
+  const apiKey = input.semaphoreApiToken ?? resolvePreviewSemaphoreApiToken(env);
+  if (!apiKey) {
+    throw new Error(
+      "SEMAPHORE_API_TOKEN (or APP_CONFIG_SHARED_API_SECRET) is required — run under " +
+        "`doppler run --project _shared --config prd` or pass --semaphore-api-token.",
+    );
+  }
   const semaphore = createSemaphoreClient({
-    apiKey: input.semaphoreApiToken,
+    apiKey,
     baseURL: input.semaphoreBaseUrl,
   });
 
@@ -66,6 +74,11 @@ function createPreviewSemaphoreClient(input: {
       semaphore.resources.release({ leaseId, slug, type }),
     list: ({ type }: { type: string }) => semaphore.resources.list({ type }),
   };
+}
+
+function normalizePreviewSlotSlug(slot: string) {
+  const trimmed = slot.trim().toLowerCase().replaceAll("_", "-");
+  return /^\d+$/.test(trimmed) ? `preview-${trimmed}` : trimmed;
 }
 
 const commonPreviewRuntime = {
@@ -205,6 +218,59 @@ export const router = os.router({
           available,
           leased,
         };
+      }),
+    acquire: os
+      .input(
+        createPreviewStatusInputSchema(previewBoundaryEnv).extend({
+          slot: z
+            .string()
+            .trim()
+            .min(1)
+            .describe("Preview slot: a number (9) or slug (preview-9 / preview_9)"),
+          hours: z.coerce.number().positive().max(24).default(3),
+        }),
+      )
+      .meta({
+        description:
+          "Lease a specific preview slot for manual (non-PR) deploys so PR cleanup cannot destroy them",
+      })
+      .handler(async ({ input }) => {
+        const semaphore = createPreviewSemaphoreClient(input);
+        const slug = normalizePreviewSlotSlug(input.slot);
+        const lease = await semaphore.acquireSpecific({
+          leaseMs: input.hours * 3_600_000,
+          slug,
+          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+        });
+        return {
+          ...lease,
+          expiresAt: new Date(lease.expiresAt).toISOString(),
+          releaseCommand: `pnpm preview release --slot ${slug} --lease-id ${lease.leaseId}`,
+        };
+      }),
+    release: os
+      .input(
+        createPreviewStatusInputSchema(previewBoundaryEnv).extend({
+          slot: z
+            .string()
+            .trim()
+            .min(1)
+            .describe("Preview slot: a number (9) or slug (preview-9 / preview_9)"),
+          leaseId: z.string().trim().min(1),
+        }),
+      )
+      .meta({
+        description: "Release a preview slot lease acquired with `preview acquire`",
+      })
+      .handler(async ({ input }) => {
+        const semaphore = createPreviewSemaphoreClient(input);
+        const slug = normalizePreviewSlotSlug(input.slot);
+        await semaphore.release({
+          leaseId: input.leaseId,
+          slug,
+          type: ENVIRONMENT_CONFIG_LEASE_RESOURCE_TYPE,
+        });
+        return { released: true, slug };
       }),
     reconcile: os
       .input(createPreviewStatusInputSchema(previewBoundaryEnv))

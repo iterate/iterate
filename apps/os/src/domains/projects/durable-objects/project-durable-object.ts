@@ -269,8 +269,13 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
       .bind(summary.id)
       .first<{ custom_hostname: string | null }>();
     const host = row?.custom_hostname?.trim().toLowerCase() || summary.defaultHost;
-    const protocol = config.baseUrl ? new URL(config.baseUrl).protocol : "https:";
-    return new URL(`${protocol}//${host}`).origin;
+    // Local dev serves project hosts on the dev server's port
+    // (<slug>.os.localhost:<port>), so carry the base URL's port, not just
+    // its protocol.
+    const base = config.baseUrl ? new URL(config.baseUrl) : null;
+    const protocol = base?.protocol ?? "https:";
+    const port = base?.port ? `:${base.port}` : "";
+    return new URL(`${protocol}//${host}${port}`).origin;
   }
 
   // ---- itx capability registry (apps/os/docs/itx-spec.md §4) --------------
