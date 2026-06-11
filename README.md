@@ -56,8 +56,14 @@ More: [apps/os README](apps/os/AGENTS.md).
 
 ```bash
 pnpm install
-pnpm dev          # fully-local OS dev server (http://os.localhost:<port>)
+doppler setup --config dev --no-interactive   # once per worktree; doppler.yaml scopes every app dir
+pnpm dev                                      # fully-local OS dev server (http://os.localhost:<port>)
 ```
+
+Use `--config dev_<you>` instead for your personal tunnel-backed dev (claims
+`os.iterate-dev-<you>.com` — one worktree at a time). The shared `dev` config
+is fully local and safe for any number of parallel worktrees/agents. Details:
+[Dev environments](docs/dev-environments.md).
 
 Before PRs:
 
@@ -82,8 +88,9 @@ Other Cloudflare apps (`semaphore`, …) are supporting services — see `docs/a
 ## Common commands
 
 ```bash
+doppler setup --config dev --no-interactive   # once per worktree (or --config dev_<you> for tunnel dev)
 pnpm dev                      # fully-local OS dev server at http://os.localhost:<port> (see docs/dev-environments.md)
-pnpm auth:mint                # mint a session as any user/admin (dev/preview; wrap in doppler run)
+pnpm auth:mint                # mint a session as any user/admin (repo root; dev/preview; wrap in doppler run)
 pnpm --dir apps/auth dev      # auth app only (when working on auth itself)
 pnpm test && pnpm typecheck && pnpm lint && pnpm format
 ```
