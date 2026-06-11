@@ -14,13 +14,12 @@ output is a CACHE, not an address:
 ```ts
 type WorkerSource =
   | { type: "inline"; modules: Record<string, string>; mainModule: string }
-  | { type: "repo"; repo: string; commit: string | "latest"; path: string;
-      bundle?: BundleOptions }   // bundle absent → the path IS the module(s)
+  | { type: "repo"; repo: string; commit: string | "latest"; path: string; bundle?: BundleOptions }; // bundle absent → the path IS the module(s)
 // shared envelope: entrypoint?, exportType?, compatibilityDate?
 ```
 
 - **The built output is the checkpoint of the build-fold.** `build(repo@
-  commit, path, bundleConfig) → modules` is a pure function; its output
+commit, path, bundleConfig) → modules` is a pure function; its output
   is a memo cache, never an address. Terminology corrected on review:
   in this stack a Cloudflare ARTIFACT IS A HOSTED GIT REPO (the repos
   domain's backing — `cf.artifacts.repo.*`), NOT a blob store. The memo
@@ -132,23 +131,35 @@ invoke({ path: […, "fetch"], args: [request] })`.
   the bearer bridge; everything else is cookie → principal → mask (see
   itx-authority-research.md).
 
-## Workers, not apps: lifecycle is the discriminator (revised on review)
+## Workers: ephemeral or durable — LOCKED
 
-- **One-shot dynamic workers** (inline provides, script runs): no domain
-  object, no journal, no identity beyond the loader cache key. Born,
-  used, gone — the vast majority, and they cost nothing.
-- **Repo-tied workers**: a real domain object — a **Worker** — identified
-  by `(repo, name)` (monorepos: one repo, many worker entrypoints, each
-  its own Worker). Each gets the doctrine's standard kit: a stream path
-  (`/repos/<repo>/workers/<name>`) whose journal records its life
-  (worker-created, build events `commit → R2 key`, route bindings), and
-  a **WorkerRunner DO** at that name hosting its durable-object facets
-  and answering its ingress routes. "Where build activity happens" for a
-  repo = listChildren on `/repos/<repo>/workers/`.
-- Stateful SOURCE CAPABILITIES (small, provided by a context, die with
-  it) remain facets of the context host; itx ADDRESSES Workers but never
-  hosts them. Workers for Platforms remains the eventual materialization
-  swap under unchanged addresses.
+**Dynamic workers are either ephemeral or durable. Ephemeral workers
+(inline provides, script runs) have no identity, no journal, no record —
+by design. Durable workers are ALWAYS associated with a repo, and their
+entire life is events in the REPO's stream, folded by the repo
+processor.** (Owner lock, 2026-06-11 night.)
+
+- Identity: declared in the repo manifest (`iterate.toml` at a fixed
+  root path — the platform's one well-known bootstrap name), `(repo,
+  name)`, NEVER path-derived: the runner DO key, facet storage, and
+  routes hang off the name; source bindings `(commit, path, entrypoint,
+  bundleConfig)` are rebindable attributes recorded per build event.
+  Monorepos: many workers per repo, each a manifest entry. The same
+  rule recurses to durable-object classes: the manifest declares stable
+  facet names; export names are rebindable.
+- Journal: the repo's stream carries worker-created (birth certificate
+  in the PARENT's journal — right for an object that cannot outlive its
+  parent), worker-built {sha, r2Key}, route-bound, worker-removed. The
+  repo processor's fold is the workers table. Lifecycle is LAZY: a
+  Worker materializes on first reference; the manifest is the
+  build-time name→entry lookup.
+- Runner: the repo DO hosts durable worker facets initially, addressed
+  by door paths ({binding: "REPO", name, path: ["workers", "api", …]});
+  a hot worker shards to its own runner later as a host swap under an
+  unchanged name.
+- Stateful SOURCE CAPABILITIES (provided by a context, die with it)
+  remain facets of the context host; itx ADDRESSES workers, never hosts
+  them. Workers for Platforms remains the eventual materialization swap.
 
 ## The routing table IS the capability table
 
