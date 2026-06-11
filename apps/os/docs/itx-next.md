@@ -1163,6 +1163,36 @@ Each lands independently green.
   live provide outlives the connection while the stub does not — the
   only intentional record/state divergence, in the safe direction.
 
+### Facets as the embedding mechanism + journal paths (review, 2026-06-11 night)
+
+- **Facets replace class-field composition for hosting** (corrected
+  understanding: this is about embedding the host machinery, not about
+  placing other tenants' contexts). `class Agent { get itx() { return
+  this.ctx.facets.get("itx", () => ({ class: ItxDurableObject })) } }` —
+  the facet has its own private SQLite, so the readState/writeState
+  checkpoint-wiring ceremony evaporates; colocation is identical to a
+  class field (same DO container, same isolate — there was never a
+  placement tradeoff in the embedded case). One `ItxDurableObject`
+  class serves standalone contexts, global, and every rich host; N
+  contexts per host = facet per name. The same move generalizes:
+  `ProcessorDurableObject` as a facet handed processor instances
+  replaces the bespoke processor-host plumbing (recorded direction).
+- **Checkpoint vs journal stays crisp**: the facet's private storage
+  holds the disposable fold ({offset, state}); the JOURNAL is a real
+  stream (Stream DO), which the facet consumes like any processor.
+- **Journal base paths: the hosting DO determines the base; context
+  journals live at `<base>/itx/<child-id>`** — extend the
+  /agents/some-agent context → /agents/some-agent/itx/<id>; extend the
+  project → /itx/<id>. `itx` becomes a RESERVED stream path segment
+  (domain code — subagent paths, user streams — may not claim it),
+  which is what keeps the nesting from being gross. Forensics by
+  directory listing: an agent's whole subtree contains its sessions.
+- **Open (owner to call): journal placement for the host's OWN
+  context** — `/itx` under the base uniformly (no schema entanglement:
+  domain reducers never see capability events; one rule, zero
+  exceptions) vs journaling INTO the domain stream itself (literal
+  one-stream-one-record interleaving). Current lean: uniform `/itx`.
+
 ## Resolved (was open, now decided)
 
 - ~~Two invoke modes as registry data?~~ → ONE dispatch mode (2026-06-11):
