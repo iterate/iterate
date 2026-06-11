@@ -24,10 +24,45 @@ import {
 
 const CLOUDFLARE_API_TOKEN = process.env.CLOUDFLARE_API_TOKEN?.trim() ?? "";
 const MCP_SERVER_URL = "https://bindings.mcp.cloudflare.com/mcp";
+const PUBLIC_MCP_SERVER_URL = "https://docs.mcp.cloudflare.com/mcp";
 const SECRET_KEY = "CLOUDFLARE_API_TOKEN";
 const PLACEHOLDER = `Bearer getSecret({ key: "${SECRET_KEY}" })`;
 
 const createdProjectIds = registerCreatedProjectCleanup();
+
+test(
+  "public MCP: an unauthenticated server via McpClient (the mcp-client catalogue example)",
+  { timeout: 90_000 },
+  async () => {
+    using itx = connectGlobal();
+    const project = (await itx.projects.create({
+      slug: `itx-mcp-pub-${crypto.randomUUID().slice(0, 8)}`,
+    })) as { id: string };
+    createdProjectIds.push(project.id);
+    using projectItx = await itx.projects.get(project.id);
+
+    await projectItx.provideCapability({
+      name: "cfdocs",
+      instructions: "Cloudflare's documentation MCP server. Call listTools() first.",
+      capability: {
+        entrypoint: "McpClient",
+        props: { serverUrl: PUBLIC_MCP_SERVER_URL },
+        type: "rpc",
+        worker: { type: "loopback" },
+      },
+    });
+
+    const handle = projectItx as never as Record<string, any>;
+    const listed = (await handle.cfdocs.listTools()) as { tools: { name: string }[] };
+    expect(listed.tools.map((tool) => tool.name)).toContain("search_cloudflare_documentation");
+    const answer = await handle.cfdocs.search_cloudflare_documentation({
+      query: "durable objects",
+    });
+    expect(
+      String(typeof answer === "string" ? answer : JSON.stringify(answer)).length,
+    ).toBeGreaterThan(0);
+  },
+);
 
 test.skipIf(!CLOUDFLARE_API_TOKEN)(
   "authenticated MCP: the credential is a project secret, substituted on egress, invisible everywhere else",

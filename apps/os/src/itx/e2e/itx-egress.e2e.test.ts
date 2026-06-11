@@ -128,6 +128,41 @@ test("bare fetch() inside a worker cap goes through egress (implicit door)", asy
   expect(echoedHeader(probe.body)).toContain(SECRET_MATERIAL);
 });
 
+test("itx.secrets: set a secret through the platform default, then fetch with its placeholder", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `itx-secrets-${suffix()}` })) as {
+    id: string;
+  };
+  createdProjectIds.push(project.id);
+  using projectItx = await itx.projects.get(project.id);
+  await waitForProjectReady(projectItx);
+
+  // The secrets-and-egress catalogue example's flow: store material once via
+  // the `secrets` platform default, reference it by KEY in an egress header,
+  // and the pipe substitutes server-side.
+  const handle = projectItx as never as Record<string, any>;
+  const material = `lifecycle-${crypto.randomUUID()}`;
+  await handle.secrets.setSecret({ key: "demo.api_key", material });
+
+  const listed = (await handle.secrets.listSecrets()) as Array<{ key: string }>;
+  expect(listed.map((secret) => secret.key)).toContain("demo.api_key");
+  // Summaries are redacted — material never rides the list surface.
+  expect(JSON.stringify(listed)).not.toContain(material);
+
+  const response = await projectItx.fetch(echoUrl(), {
+    headers: {
+      authorization: `Bearer ${adminApiSecret()}`,
+      [HEADER]: 'getSecret({ key: "demo.api_key" })',
+    },
+  });
+  expect(response.status).toBe(200);
+  expect(echoedHeader(await response.json())).toContain(material);
+
+  await handle.secrets.deleteSecret({ key: "demo.api_key" });
+  const afterDelete = (await handle.secrets.listSecrets()) as Array<{ key: string }>;
+  expect(afterDelete.map((secret) => secret.key)).not.toContain("demo.api_key");
+});
+
 // ---- helpers ----------------------------------------------------------------
 
 /**

@@ -19,10 +19,18 @@
 //                                  for the per-runtime matrix; proven end to
 //                                  end by the litmus e2e in itx.e2e.test.ts
 //                                  ("user-space caps: repo-sourced code …")
+//   mcp-client                     depends on Cloudflare's live public docs
+//                                  MCP server; the same flow is the
+//                                  always-running e2e in itx-mcp-auth.e2e.test.ts
+//                                  ("public MCP: …")
 //   mcp-authenticated              needs a real Cloudflare API token stored as
 //                                  a project secret; proven end to end (incl.
 //                                  the placeholder-never-material negative
 //                                  controls) by itx-mcp-auth.e2e.test.ts
+//   secrets-and-egress             depends on the same external echo service;
+//                                  the setSecret → placeholder-fetch flow is
+//                                  the "itx.secrets" e2e in
+//                                  itx-egress.e2e.test.ts
 //   openapi-client                 depends on the live petstore demo server
 //                                  (and the provide-time describeItx probe's
 //                                  cold-start retry); proven end to end by
@@ -46,9 +54,11 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "egress-with-secret-substitution",
   "fetch-middleware",
   "mcp-authenticated",
+  "mcp-client",
   "openapi-client",
   "provide-live-capability",
   "repo-sourced-capability",
+  "secrets-and-egress",
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {

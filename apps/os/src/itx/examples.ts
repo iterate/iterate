@@ -568,6 +568,33 @@ return { record }; // ["capability-provided", "capability-revoked"]
 `.trim(),
   },
   {
+    id: "mcp-client",
+    title: "Connect a public MCP server",
+    description:
+      "Any remote MCP server (streamable HTTP) becomes a capability via the first-party McpClient: listTools() discovers the surface, and every tool is a dotted call. Cloudflare's docs server is public — no credentials needed. All transport HTTP rides the project egress pipe.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+await itx.provideCapability({
+  name: "cfdocs",
+  instructions: "Cloudflare's documentation MCP server. Call listTools() first.",
+  capability: {
+    type: "rpc",
+    worker: { type: "loopback" },
+    entrypoint: "McpClient",
+    props: { serverUrl: "https://docs.mcp.cloudflare.com/mcp" },
+  },
+});
+
+// Tools are dotted calls; listTools() is the discovery door.
+const { tools } = await itx.cfdocs.listTools();
+const answer = await itx.cfdocs.search_cloudflare_documentation({
+  query: "durable objects",
+});
+return { tools: tools.map((tool) => tool.name), snippet: String(answer).slice(0, 200) };
+`.trim(),
+  },
+  {
     id: "mcp-authenticated",
     title: "An authenticated MCP server via a project secret",
     description:
@@ -645,6 +672,28 @@ const response = await itx.fetch("https://postman-echo.com/get", {
 });
 const body = await response.json();
 return { status: response.status, sawSubstitutedHeader: body.headers };
+`.trim(),
+  },
+  {
+    id: "secrets-and-egress",
+    title: "Store a secret, then fetch with it",
+    description:
+      "The full credential lifecycle in one script: itx.secrets.setSecret() stores material in the project's secret store, and from then on a getSecret(...) placeholder in any egress header becomes the real value server-side — the script itself never round-trips the material again. This is how authenticated MCP/OpenAPI capability addresses stay credential-free.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// (1) Store the credential once. listSecrets() shows redacted summaries.
+await itx.secrets.setSecret({ key: "demo.api_key", material: "demo-" + crypto.randomUUID() });
+
+// (2) Use it by KEY: the placeholder substitutes inside the egress pipe.
+const response = await itx.fetch("https://postman-echo.com/get", {
+  headers: { "x-api-key": 'getSecret({ key: "demo.api_key" })' },
+});
+const echoed = await response.json();
+
+// (3) Clean up. The echo saw the real material; this script only saw the key.
+await itx.secrets.deleteSecret({ key: "demo.api_key" });
+return { status: response.status, echoedKeyHeader: echoed.headers["x-api-key"] };
 `.trim(),
   },
   {

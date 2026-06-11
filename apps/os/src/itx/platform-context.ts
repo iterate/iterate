@@ -110,6 +110,20 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     name: "streams",
   },
   {
+    // The project's secret store — the WRITE half of the placeholder design:
+    // store material once (itx.secrets.setSecret), then reference it in any
+    // egress header as getSecret({ key }) and the egress pipe substitutes it
+    // server-side. getSecret here returns material to project-authorized
+    // handle holders; prefer placeholders so connected sessions never hold it.
+    address: { entrypoint: "SecretsCapability", type: "rpc", worker: { type: "loopback" } },
+    instructions:
+      "Project secrets: itx.secrets.setSecret({ key, material }), listSecrets() " +
+      "(redacted summaries), deleteSecret({ key }). Reference a stored secret in any " +
+      'egress header as getSecret({ key: "…" }) — substitution happens server-side ' +
+      "in the egress pipe, so scripts and connected sessions never handle the material.",
+    name: "secrets",
+  },
+  {
     address: { entrypoint: "ReposCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
       "The project's git repos: itx.repos.ensureProjectRepoInfo({ projectSlug }), " +
