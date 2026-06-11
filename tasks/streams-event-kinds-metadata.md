@@ -7,7 +7,8 @@ dependsOn: []
 
 # Streams: event "kinds" metadata in processor contracts (idea, deferred)
 
-Background: `tasks/agents-system-audit-and-reconciler-design.md` §6.2.
+Background: the agents-system audit (June 2026); the presence-fact unification
+shipped in https://github.com/iterate/iterate/pull/1460.
 Explicitly deferred — parked here so it isn't lost.
 
 ## Idea
@@ -38,7 +39,6 @@ presence, `-added`/`-requested`/`-completed` = domain).
 
 ## Why deferred
 
-The homogenization work (`tasks/streams-core-processor-host-homogenization.md`)
-doesn't need it — presence types can be unioned into delivery filters by a
-hardcoded list first. Do kinds once there are ≥2 concrete consumers of the
+The homogenization work (shipped in PR #1460) didn't need it — presence types
+are unioned into delivery filters by a hardcoded list. Do kinds once there are ≥2 concrete consumers of the
 metadata (viewer filtering + framework routing).
