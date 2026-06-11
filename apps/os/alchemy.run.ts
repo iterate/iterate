@@ -53,10 +53,23 @@ async function resolveStaticAuthJwks(issuer: string | undefined) {
     }
     return withForgePublicKey(JSON.stringify(jwks));
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // A forge-enabled env (dev/preview) needs the forge pubkey in a baked
+    // static JWKS — the runtime remote fetch only returns issuer keys, never
+    // the forge key, so silently falling back would leave minting broken.
+    // Fail the deploy loudly instead. (Loopback issuers — local auth dev —
+    // legitimately may be down at deploy and use runtime fetch, so skip them.)
+    if (process.env.AUTH_FORGE_PRIVATE_JWK?.trim() && !issuerIsLoopback) {
+      throw new Error(
+        `[alchemy.run] Forge key is set but the deploy-time JWKS fetch from ${issuer} failed ` +
+          `(${message}). The forge pubkey can only be trusted via a baked static JWKS, so this ` +
+          `would deploy a worker where minted tokens fail to verify. Aborting — retry the deploy.`,
+      );
+    }
     console.warn(
       `[alchemy.run] Could not fetch JWKS from ${issuer} at deploy time; ` +
         `the worker will fetch it at runtime instead.`,
-      error instanceof Error ? error.message : error,
+      message,
     );
     return undefined;
   }

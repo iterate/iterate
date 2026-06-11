@@ -148,8 +148,7 @@ export async function IterateApp<B extends Bindings>(
     (baseUrlHostname === "localhost" ||
       baseUrlHostname.endsWith(".localhost") ||
       baseUrlHostname === "127.0.0.1" ||
-      baseUrlHostname === "::1" ||
-      baseUrlHostname.startsWith("localhost"));
+      baseUrlHostname === "::1");
 
   if (app.local && baseUrlHostname && !baseUrlIsLoopback && worker.url) {
     tunnelVitePort = Number(new URL(worker.url).port || "5173");
