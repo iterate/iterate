@@ -1,4 +1,4 @@
-// connectItx: hold an itx handle from outside the platform (Node programs,
+// withItx: hold an itx handle from outside the platform (Node programs,
 // e2e tests, your laptop daemon). This is "tier 3" hardware we don't load —
 // it gets project egress explicitly via itx.fetch(), and any live target it
 // provideCapability()s is session-bound: gone when this connection drops,
@@ -18,7 +18,7 @@ import type { ItxHandle } from "./handle.ts";
 // the core — imports cloudflare:workers.)
 export { asPathCallable } from "./path-proxy.ts";
 
-export type ConnectItxInput = {
+export type WithItxInput = {
   /** OS base url, e.g. https://os.iterate-preview-3.com */
   baseUrl: string;
   /** Admin API secret (simplified access model: admin = all projects). */
@@ -35,7 +35,7 @@ export type ConnectItxInput = {
 
 export type ItxClient = RpcStub<ItxHandle>;
 
-export function connectItx(input: ConnectItxInput): ItxClient {
+export function withItx(input: WithItxInput): ItxClient {
   const url = new URL(
     input.context && input.context !== "global"
       ? `/api/itx/${encodeURIComponent(input.context)}`

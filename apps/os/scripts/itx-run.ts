@@ -15,7 +15,7 @@ import { os } from "@orpc/server";
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
 
-import { asPathCallable, connectItx } from "../src/itx/client.ts";
+import { asPathCallable, withItx } from "../src/itx/client.ts";
 
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
@@ -67,7 +67,7 @@ export const itxRunScript = os
     // `await` is available throughout — same wrapping as /api/itx/run.
     const script = new AsyncFunction("itx", "vars", "RpcTarget", "asPathCallable", code);
 
-    using itx = connectItx({ baseUrl, context: input.context, token });
+    using itx = withItx({ baseUrl, context: input.context, token });
     const result = await script(itx, vars, RpcTarget, asPathCallable);
 
     // Exactly one JSON document on stdout — scripts and the e2e suite parse it.

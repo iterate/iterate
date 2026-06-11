@@ -2,7 +2,7 @@
 //
 // The kernel (itx.ts) dispatches every capability as `target.call({ path,
 // args })`. This module owns the three pure pieces of that convention that
-// must load OUTSIDE workerd — connectItx providers in Node and the browser
+// must load OUTSIDE workerd — withItx providers in Node and the browser
 // REPL import them at runtime, so nothing here may touch cloudflare:workers
 // (itx.ts re-exports all of it for server-side imports):
 //

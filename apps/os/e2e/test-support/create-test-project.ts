@@ -11,7 +11,7 @@ import {
   uniqueSuffix,
   requireAdminBearerToken,
 } from "./os-client.ts";
-import { connectItx, type ItxClient } from "~/itx/client.ts";
+import { withItx, type ItxClient } from "~/itx/client.ts";
 
 type Fetch = Parameters<typeof createCaptunTunnel>[0]["fetch"];
 
@@ -155,7 +155,7 @@ async function provideLiveEgressFetchCapability(input: {
     }
   }
 
-  const itx = connectItx({
+  const itx = withItx({
     baseUrl: input.baseUrl,
     context: input.projectId,
     token: requireAdminBearerToken(),

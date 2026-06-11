@@ -12,7 +12,7 @@
 //                   executed against env.ITERATE.context
 //
 // Almost every example is written against a PROJECT-scoped handle (context:
-// "project"): the harness — a project REPL, connectItx({ context }), a
+// "project"): the harness — a project REPL, withItx({ context }), a
 // /api/itx/run body with `context`, or a worker's env.ITERATE.context —
 // connects into the project, and the script gets straight to work:
 // itx.streams.get("/some/path").append(...). Only narrowing itself is a

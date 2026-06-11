@@ -4,7 +4,7 @@
 // there via `define` (__ITX_BROWSER_E2E__) instead of importing this file.
 
 import { afterAll } from "vitest";
-import { connectItx, type ItxClient } from "../client.ts";
+import { withItx, type ItxClient } from "../client.ts";
 
 export function adminApiSecret() {
   const secret =
@@ -27,7 +27,7 @@ export function baseUrl() {
 
 /** A global (admin-access) handle on the deployment under test. */
 export function connectGlobal(): ItxClient {
-  return connectItx({ baseUrl: baseUrl(), token: adminApiSecret() });
+  return withItx({ baseUrl: baseUrl(), token: adminApiSecret() });
 }
 
 /**

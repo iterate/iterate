@@ -4,7 +4,7 @@
 
 import { expect, test } from "vitest";
 import { RpcTarget } from "capnweb";
-import { connectItx } from "../client.ts";
+import { withItx } from "../client.ts";
 import {
   adminApiSecret,
   baseUrl,
@@ -73,7 +73,7 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
 
   // (4) A child context is itself connectable by id — same handle, fresh
   // session (this is how a second participant joins an agent session).
-  using reconnected = connectItx({
+  using reconnected = withItx({
     baseUrl: baseUrl(),
     context: String(childDescription.context),
     token: adminApiSecret(),

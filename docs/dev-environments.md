@@ -201,7 +201,7 @@ captun@27's `connectWebSocket` hook:
 captun tunnel http://127.0.0.1:<port> \
   --name <name> --gateway https://tunnels.iterate.com --token "$CAPTUN_TOKEN"
 # → https://<name>.tunnels.iterate.com  (HTTP + WebSockets)
-# then: connectItx({ baseUrl: "https://<name>.tunnels.iterate.com", token: <admin> })
+# then: withItx({ baseUrl: "https://<name>.tunnels.iterate.com", token: <admin> })
 ```
 
 (Wiring `connectWebSocket` into the Vite plugin so `pnpm dev` carries WS too is

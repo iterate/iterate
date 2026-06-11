@@ -251,7 +251,7 @@ Handles are minted in exactly three ways (Law 3/4):
 - **platform wiring**: `wireIsolateEnv` hands isolates a handle scoped to
   their home context, with `capabilityPath` as pure attribution.
 
-Client plumbing: `client.ts` (`connectItx` for Node), `use-itx.ts` (the
+Client plumbing: `client.ts` (`withItx` for Node), `use-itx.ts` (the
 browser hook), `browser-repl.ts` (REPL compiler), `errors.ts` (`ItxError`
 codes that survive capnweb's name-dropping reconstruction, plus
 existence-masking — missing and forbidden are byte-identical NOT_FOUND).
@@ -312,7 +312,7 @@ bearer-token edge) | `meta.http.public`; then one core dispatch with
 | `refs.ts`               | wire refs             | `ItxProps`, `ProjectAccess`, `GLOBAL_CONTEXT_ID`, `isChildContextId` (import-light)                                               |
 | `types.ts`              | design of record      | the handwritten, import-free agent-facing surface (feeds the REPL editor)                                                         |
 | `capabilities/`         | first-party targets   | `StreamsCapability`, `McpClient`, `ProjectWorker` (the user-space forwarder), `UrlDial`                                           |
-| `client.ts`             | tier-3 clients        | `connectItx` for Node                                                                                                             |
+| `client.ts`             | tier-3 clients        | `withItx` for Node                                                                                                                |
 | `use-itx.ts`            | the browser hook      | `useItx`/`getBrowserItx`: singleton sockets, Suspense, never SSRs                                                                 |
 | `browser-repl.ts`       | dev tooling           | the REPL snippet compiler (not part of the kernel)                                                                                |
 | `admin-auth-cookie.ts`  | test bridge           | browser-WebSocket admin auth (cookies, since WS can't set headers)                                                                |
@@ -330,9 +330,9 @@ your whole method tree, the public SDK docs become the tool docs — or is
 wrapped with `asPathCallable` (the replay runs back in YOUR process):
 
 ```ts
-import { connectItx } from "~/itx/client.ts";
+import { withItx } from "~/itx/client.ts";
 
-using itx = connectItx({ baseUrl, token, context: "my-project" });
+using itx = withItx({ baseUrl, token, context: "my-project" });
 const provision = await itx.provideCapability({
   name: "runSwiftOnMyMac",
   capability: async (src) => runSwift(src),
@@ -432,7 +432,7 @@ await slack.chat.postMessage({ channel, text });
 
 | Mode               | How the handle arrives                                      |
 | ------------------ | ----------------------------------------------------------- |
-| Node / laptop      | `connectItx()` → capnweb WebSocket → `/api/itx`             |
+| Node / laptop      | `withItx()` → capnweb WebSocket → `/api/itx`                |
 | browser            | same endpoint; REPL routes put `itx` in scope               |
 | itx script         | `POST /api/itx/run` → loader isolate, `env.ITERATE.context` |
 | project worker     | Project DO loads it with a project-scoped `env.ITERATE`     |

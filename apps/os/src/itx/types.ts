@@ -46,7 +46,7 @@
  * ## Thirty seconds of itx
  *
  * ```ts
- * // You are handed an `itx` — in the REPL, from connectItx(), or inside
+ * // You are handed an `itx` — in the REPL, from withItx(), or inside
  * // any platform-loaded isolate via `await env.ITERATE.context`.
  *
  * await itx.describe();                    // what am I holding? what can I call?
