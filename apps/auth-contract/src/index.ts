@@ -135,6 +135,16 @@ export const InternalEnsureOAuthClientInput = z.object({
 });
 export type InternalEnsureOAuthClientInput = z.infer<typeof InternalEnsureOAuthClientInput>;
 
+export const InternalSetOAuthClientInput = z.object({
+  clientId: z.string().min(1),
+  clientSecret: z.string().min(16),
+  clientName: z.string().min(1),
+  redirectURIs: z.array(z.url()).min(1),
+  referenceId: z.string().min(1).optional(),
+  skipConsent: z.boolean().optional(),
+});
+export type InternalSetOAuthClientInput = z.infer<typeof InternalSetOAuthClientInput>;
+
 export const OAuthProjectSelectionInput = z.object({
   clientId: z.string().min(1),
   projectIds: z.array(z.string().min(1)).min(1),
@@ -416,6 +426,16 @@ export const authContract = oc.router({
           tags: ["internal", "oauth"],
         })
         .input(InternalEnsureOAuthClientInput)
+        .output(OAuthClientRecord),
+      setClient: oc
+        .route({
+          method: "POST",
+          path: "/internal/oauth/set-client",
+          summary:
+            "Declaratively upsert an OAuth client with caller-provided credentials (Doppler is the source of truth; idempotent, never rotates)",
+          tags: ["internal", "oauth"],
+        })
+        .input(InternalSetOAuthClientInput)
         .output(OAuthClientRecord),
     },
     user: {

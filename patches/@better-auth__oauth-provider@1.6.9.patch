@@ -1,0 +1,43 @@
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 4bf5e0b9ef270f1a3ad50cd10d417c05575be3c7..9c700442ba99171f16b06acbf24a4efb58645402 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -3761,7 +3761,7 @@ async function authorizeEndpoint(ctx, opts, settings) {
+ 		try {
+ 			const registered = new URL(url);
+ 			const requested = new URL(query.redirect_uri);
+-			if (isLoopbackIP(registered.hostname) && registered.hostname === requested.hostname && registered.pathname === requested.pathname && registered.protocol === requested.protocol && registered.search === requested.search) return true;
++			if ((isLoopbackIP(registered.hostname) || isLoopbackHost(registered.hostname)) && registered.hostname === requested.hostname && registered.pathname === requested.pathname && registered.protocol === requested.protocol && registered.search === requested.search) return true;
+ 		} catch {}
+ 		return false;
+ 	}) || !query.redirect_uri) return handleRedirect(ctx, getErrorURL(ctx, "invalid_redirect", "invalid redirect uri"));
+diff --git a/dist/utils-B9Pj9EPf.mjs b/dist/utils-B9Pj9EPf.mjs
+index a21cae3fab8cc822e24ef2c392e384b808fd2d34..8948273f28ca313cc1c392653557dfc12281c114 100644
+--- a/dist/utils-B9Pj9EPf.mjs
++++ b/dist/utils-B9Pj9EPf.mjs
+@@ -263,9 +263,23 @@ function basicToClientCredentials(authorization) {
+ 			error_description: "invalid authorization header format",
+ 			error: "invalid_client"
+ 		});
++		// RFC 6749 §2.3.1: client_id and client_secret are application/x-www-form-urlencoded
++		// before being Basic-encoded, so the server must form-urldecode them.
++		// (e.g. oauth4webapi encodes "os-local-dev" as "os%2Dlocal%2Ddev".)
++		let decodedId;
++		let decodedSecret;
++		try {
++			decodedId = decodeURIComponent(id.replaceAll("+", "%20"));
++			decodedSecret = decodeURIComponent(secret.replaceAll("+", "%20"));
++		} catch {
++			throw new APIError$1("BAD_REQUEST", {
++				error_description: "invalid authorization header format",
++				error: "invalid_client"
++			});
++		}
+ 		return {
+-			client_id: id,
+-			client_secret: secret
++			client_id: decodedId,
++			client_secret: decodedSecret
+ 		};
+ 	}
+ }

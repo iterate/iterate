@@ -216,6 +216,65 @@ export namespace updateOAuthClientReferenceByClientId {
   };
 }
 
+const overwriteOAuthClientByClientIdSql = `
+UPDATE oauthClient
+SET clientId = ?,
+  clientSecret = ?,
+  name = ?,
+  redirectUris = ?,
+  referenceId = ?,
+  skipConsent = ?,
+  disabled = 0,
+  updatedAt = ?
+WHERE clientId = ?;
+`.trim();
+const overwriteOAuthClientByClientIdQuery = (
+  data: overwriteOAuthClientByClientId.Data,
+  params: overwriteOAuthClientByClientId.Params,
+) => ({
+  name: "overwriteOAuthClientByClientId",
+  sql: overwriteOAuthClientByClientIdSql,
+  args: [
+    data.newClientId,
+    data.clientSecret,
+    data.name,
+    data.redirectUris,
+    data.referenceId,
+    data.skipConsent,
+    data.updatedAt,
+    params.clientId,
+  ],
+});
+
+export const overwriteOAuthClientByClientId = Object.assign(
+  async function overwriteOAuthClientByClientId(
+    client: Client,
+    data: overwriteOAuthClientByClientId.Data,
+    params: overwriteOAuthClientByClientId.Params,
+  ) {
+    return client.run(overwriteOAuthClientByClientIdQuery(data, params));
+  },
+  {
+    sql: overwriteOAuthClientByClientIdSql,
+    query: overwriteOAuthClientByClientIdQuery,
+  },
+);
+
+export namespace overwriteOAuthClientByClientId {
+  export type Data = {
+    newClientId: string;
+    clientSecret: string | null;
+    name: string | null;
+    redirectUris: string;
+    referenceId: string | null;
+    skipConsent: number | null;
+    updatedAt: number | null;
+  };
+  export type Params = {
+    clientId: string;
+  };
+}
+
 const listSystemOAuthClientsSql = `
 SELECT clientId,
   name,

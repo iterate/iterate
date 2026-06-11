@@ -3,7 +3,9 @@ import { D1Database, TanStackStart } from "alchemy/cloudflare";
 import { Exec } from "alchemy/os";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { slugify } from "@iterate-com/shared/slugify";
+import { ensureProxiedDnsForHostnames } from "@iterate-com/shared/alchemy/iterate-app";
 import { z } from "zod/v4";
+import { seedOAuthClients } from "./scripts/seed-oauth-clients.ts";
 
 const APP_NAME = "auth";
 const ADMIN_SEED_SQL_PATH = "./.alchemy/generated/auth-admin-seed.sql";
@@ -74,6 +76,11 @@ const workerName = slugify(`${APP_NAME}-${app.stage}`);
 const emailOtpEnabled =
   alchemyEnv.VITE_ENABLE_EMAIL_OTP_SIGNIN?.trim() || (app.stage.startsWith("dev") ? "true" : "");
 
+// auth-plugins.ts derives isProduction from import.meta.env.VITE_APP_STAGE at
+// build time; default it from the alchemy stage so prd builds actually report
+// production. An explicit Doppler value still wins.
+process.env.VITE_APP_STAGE ||= app.stage;
+
 await Exec("render-admin-seed", {
   command: `tsx ./scripts/render-admin-seed.ts ${ADMIN_SEED_SQL_PATH}`,
   env: {
@@ -131,5 +138,25 @@ console.dir(
 );
 
 await app.finalize();
+
+// Worker routes need proxied DNS on the zone to fire; ensure originless
+// records for every routed hostname (e.g. auth.iterate-preview-N.com).
+if (!app.local) {
+  await ensureProxiedDnsForHostnames({
+    hostnames: alchemyEnv.WORKER_ROUTES,
+    comment: `Managed by auth alchemy (${app.stage}).`,
+  });
+}
+
+// Seed declarative OAuth clients (Doppler → DB) after every deployed run, so
+// the database always matches AUTH_SEED_OAUTH_CLIENTS in the selected config.
+// Local dev (`alchemy dev`) skips this: the server isn't up until later — run
+// `pnpm seed-oauth-clients` against it manually if needed.
+if (!app.local && process.env.AUTH_SEED_OAUTH_CLIENTS) {
+  // Seed through the workers.dev URL, which is live immediately — a fresh
+  // custom hostname (auth.iterate-preview-N.com on its first deploy) can take
+  // minutes to get an edge cert, which would time out the readiness probe.
+  await seedOAuthClients(process.env, { baseUrl: worker.url });
+}
 
 export { worker };

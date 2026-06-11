@@ -20,3 +20,5 @@ setup:
     path: apps/auth/
   - project: auth
     path: apps/auth-example/
+  - project: tunnels
+    path: apps/tunnels/
