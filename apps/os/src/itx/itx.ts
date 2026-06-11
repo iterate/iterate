@@ -652,20 +652,17 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       const stub = this.#liveStubs.get(entry.name);
       if (!stub) throw new CapabilityOfflineError(entry.name);
       const borrowed = (stub.dup ? stub.dup() : stub) as LiveProvider;
-      // Dispatch decides the live target's mode, right here. Probing at
-      // dispatch (not at provide time, and uncached) is deliberate: the
-      // check is a free local property lookup, never a round trip. A LOCAL
-      // target — a plain object, an RpcTarget instance, the bare-function
-      // wrap — answers truthfully; a session-crossed RPC stub materializes
-      // a callable proxy for ANY member name (including `call`), which is
-      // exactly right because the handle normalizes every session-provided
-      // live target to a call-speaking one (handle.ts resolveLiveCapability).
-      //
-      // A target that implements `call` owns its whole method-tree semantics
-      // (the SDK shape: one method receives { path, args } as data). NOT
-      // implementing `call` means the target IS its member tree — a plain
-      // object of methods is a capability with no wrapper at all; replay the
-      // remaining path onto its members, in the process where they live.
+      // Dispatch decides the live target's mode right here, by a free local
+      // property probe (never a round trip). A target implementing `call`
+      // owns its whole method-tree semantics (the SDK shape: one method
+      // receives { path, args } as data); anything else IS its member tree —
+      // replay the remaining path onto it. Plain objects always take the
+      // member branch: they cross sessions by value (the probe sees their
+      // real, absent `call`), and their retained member stubs are what the
+      // replay calls. Function-shaped targets always probe call-speaking —
+      // bare functions wrap at provide (localFunctionCapability / the
+      // handle's wrapper, live-target.ts), and a session-crossed stub
+      // materializes a callable proxy for any member name, `call` included.
       if (typeof borrowed.call === "function") return borrowed as unknown as PathCallable;
       return {
         call: (input: PathCall) => replayPathCall(borrowed, input),

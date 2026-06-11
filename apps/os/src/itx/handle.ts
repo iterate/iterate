@@ -19,14 +19,12 @@
 //     here knows about Slack.
 
 import { RpcTarget } from "cloudflare:workers";
-import { RpcStub } from "capnweb";
 import { createD1Client } from "sqlfu";
 import { PathProxy } from "./path-proxy.ts";
 import { ItxError } from "./errors.ts";
 import { ItxStreams } from "./capabilities/streams.ts";
 import {
   isCapabilityAddress,
-  isLocalBareFunction,
   replayPathCall,
   RESERVED_CAPABILITY_NAMES,
   type CapabilityAddress,
@@ -35,6 +33,7 @@ import {
   type ItxStub,
   type PathCall,
 } from "./itx.ts";
+import { resolveLiveCapability } from "./live-target.ts";
 import {
   dialContext,
   extendContext,
@@ -502,82 +501,6 @@ export class CapabilityProvision extends RpcTarget implements CapabilityProvisio
 
   [Symbol.dispose](): void {
     if (this.#live) void this.#revoke().catch(() => {});
-  }
-}
-
-/**
- * Normalize a live capability before it crosses to the context node. Bare
- * functions auto-wrap. Plain objects pass through UNTOUCHED: they cross
- * every transport by value (with their functions as stubs), the core
- * dup-retains those member stubs at registration (itx.ts), and dispatch
- * replays paths onto them directly — no wrapper exists.
- *
- * - A LOCAL function (prototype Function/AsyncFunction.prototype — never
- *   true of an RPC stub) wraps directly.
- * - A capnweb stub of a REMOTE function is indistinguishable from an object
- *   stub by type (every capnweb stub is a callable proxy), so it is probed:
- *   `await stub.call` is a pure property pull (no user code runs) that
- *   resolves `undefined` only when the remote target is a bare function —
- *   a call-implementing provider yields its method. Probe failures fall
- *   back to the historical call-convention dispatch.
- */
-async function resolveLiveCapability(capability: CapabilityTarget): Promise<CapabilityTarget> {
-  if (isCapabilityAddress(capability)) return capability;
-  if (isLocalBareFunction(capability)) {
-    return new BareFunctionCapability(capability) as unknown as CapabilityTarget;
-  }
-  if (typeof capability === "function" && (capability as object) instanceof RpcStub) {
-    const callMember = await Promise.resolve(
-      (capability as unknown as { call: unknown }).call,
-    ).then(
-      (value) => value,
-      () => "unprobeable" as const,
-    );
-    if (callMember === undefined) {
-      return new BareFunctionCapability(
-        capability as unknown as (...args: never[]) => unknown,
-      ) as unknown as CapabilityTarget;
-    }
-    (callMember as Partial<Disposable> | null | undefined)?.[Symbol.dispose]?.();
-  }
-  return capability;
-}
-
-/**
- * The wrap for a bare-function capability: speaks the one calling convention
- * (`call({ path, args })`) by invoking the function for an empty remainder
- * and refusing anything deeper. Extends RpcTarget so it crosses the
- * worker → context-node hop as a stub while the function (local or a capnweb
- * stub of the provider's process) stays callable right here.
- */
-class BareFunctionCapability extends RpcTarget {
-  readonly #fn: (...args: never[]) => unknown;
-
-  constructor(fn: (...args: never[]) => unknown) {
-    super();
-    // Retain a dup when the function is itself a session stub: RPC disposes
-    // argument stubs when the provide call returns.
-    const dup = (fn as { dup?: () => (...args: never[]) => unknown }).dup;
-    this.#fn = typeof dup === "function" ? dup.call(fn) : fn;
-  }
-
-  call(input: PathCall): unknown {
-    if (input.path.length > 0) {
-      throw new Error(
-        `This capability is a bare function — it has no member "${input.path.join(".")}"; call it directly.`,
-      );
-    }
-    return this.#fn(...(input.args as never[]));
-  }
-
-  onRpcBroken(callback: (error: unknown) => void): void {
-    (this.#fn as { onRpcBroken?: (callback: (error: unknown) => void) => void }).onRpcBroken?.(
-      callback,
-    );
-  }
-
-  [Symbol.dispose](): void {
-    (this.#fn as Partial<Disposable>)[Symbol.dispose]?.();
   }
 }
 
