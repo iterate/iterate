@@ -459,6 +459,15 @@ export const authContract = oc.router({
         })
         .input(InternalCreateProjectForOrganizationInput)
         .output(ProjectRecord),
+      mintProjectId: oc
+        .route({
+          method: "POST",
+          path: "/internal/project/mint-project-id",
+          summary:
+            "Mint a canonical project id (prj_) without creating an auth-side project — for OS operator/recovery creates with no owning organization",
+          tags: ["internal", "project"],
+        })
+        .output(z.object({ id: z.string() })),
     },
     session: {
       createProjectIngressToken: oc
