@@ -161,16 +161,37 @@ processor.** (Owner lock, 2026-06-11 night.)
   remain facets of the context host; itx ADDRESSES workers, never hosts
   them. Workers for Platforms remains the eventual materialization swap.
 
-## The routing table IS the capability table
+## HTTP: the routing table IS the capability fold (stolen + attacked, v1 scoped)
 
-Owner instinct ("the project DO has a routing table; the processor has
-events that create routes") re-derived the existing mechanism — the
-convergence is the point: the route-creation event IS capability-provided
-with `meta.http`; the routing table IS the fold; the rich object behind
-a route IS the capability, dialed through the table at request time.
-No second mechanism. Human-friendly stable URLs = provides at pretty
-paths; the hostname→project hop may gain a KV cache later (a cache of a
-fold — disposable by doctrine).
+Two concerns, split: **reachability** (may this capability serve HTTP,
+to whom) lives in the provide (`meta.http: { public?: boolean }`);
+**naming** (at which URL) is a BINDING owned by the namespace owner.
+
+- **Derived tier (free, total)**: `{door}--{slug}.iterate.app` + the
+  context's stream coordinate as the URL path:
+  `https://itx--misha.iterate.app/agents/support/itx/itx_a1b2/preview`.
+  The `--` separator is forced by TLS, not taste: wildcard certs cover
+  ONE level (`*.iterate.app` covers `itx--misha.iterate.app`, never
+  `itx.misha.iterate.app`). provideCapability returns the derived `url`
+  on its handle. Context id prefix renames ctx_ → itx_ (punch list).
+- **Bound tier**: a route IS a provide at the reserved `http` subtree:
+  `provideCapability({ path: ["http", "blah.example.com"], capability })`;
+  ingress = `invoke(["http", host, "fetch"], [request])` on the project.
+  Free consequences: journal = route history, describe lists routes,
+  revoke unbinds, and the Capability union means a route can target a
+  LIVE provider — one-line ngrok, auto-unbinding with the session. The
+  root convention (`misha.iterate.app` → the worker capability's fetch)
+  becomes an ordinary, shadowable platform-default route — the last
+  project-worker specialness dissolves.
+- **The attack, priced**: (1) longest-prefix cannot express wildcard
+  hosts / path-prefix / method rules — v1 is EXACT-HOST ONLY, with the
+  escape hatch that routing may graduate to its own processor folding
+  the SAME journal entries (only the fold changes); (2) host binding is
+  an authority question — the edge validates provides under the `http`
+  subtree (the one special-cased subtree, priced as such); (3) hosts
+  contain dots → array-form paths only for this subtree; (4) per-request
+  DO routing eventually wants the KV cache, mediating the fold-is-table
+  purity.
 
 ## Naming the special repo
 
