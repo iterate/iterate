@@ -119,8 +119,13 @@ export async function IterateApp<B extends Bindings>(
     },
     build: buildCommand,
     dev: props.dev ?? {
+      // --strictPort: fail loudly if the port is taken instead of vite silently
+      // falling through to the next one. The local-dev flow bakes a specific
+      // port into APP_CONFIG_BASE_URL + the discovery file, so a silent drift
+      // would leave the running server, base URL, and OAuth resource pointing
+      // at different ports.
       command:
-        "pnpm exec vite dev --config vite.config.ts --host ${HOST:-127.0.0.1} --port ${PORT:-5173}",
+        "pnpm exec vite dev --config vite.config.ts --strictPort --host ${HOST:-127.0.0.1} --port ${PORT:-5173}",
     },
   });
 

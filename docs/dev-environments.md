@@ -91,6 +91,10 @@ The output gives you three ways in:
 3. **Claims**: pass `--orgs/--projects/--claims` JSON to mint membership of
    specific orgs/projects, since authorization is claims-driven.
 
+The `browserSignInUrl` embeds the (short-lived, dev/preview) tokens as query
+params — treat it as a secret: it can appear in browser history and edge
+request logs, so don't paste it into shared channels.
+
 There is intentionally **no forge key in prd** (the deploy fails if one
 appears in a prd config). Production access uses the existing admin API
 secret; an audited mint-endpoint on the auth worker is the planned

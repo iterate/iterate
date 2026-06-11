@@ -71,9 +71,16 @@ async function resolveStaticAuthJwks(issuer: string | undefined) {
 function withForgePublicKey(jwksJson: string) {
   const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
   if (!forgePrivateJwk) return jwksJson;
-  if (process.env.ALCHEMY_STAGE?.trim() === "prd") {
+  // Two independent backstops so the forge pubkey can never reach a
+  // production-serving worker: the stage name AND the issuer identity. A
+  // prod-serving deploy under a non-"prd" stage name (hotfix stage, custom
+  // hostname) is still caught by the issuer check.
+  const isProdStage = process.env.ALCHEMY_STAGE?.trim() === "prd";
+  const isProdIssuer = (resolvedAuthIssuer ?? "").includes("auth.iterate.com");
+  if (isProdStage || isProdIssuer) {
     throw new Error(
-      "AUTH_FORGE_PRIVATE_JWK must never be present in the prd config — remove it from Doppler.",
+      "AUTH_FORGE_PRIVATE_JWK must never be present in a production config " +
+        `(stage=${process.env.ALCHEMY_STAGE}, issuer=${resolvedAuthIssuer}) — remove it from Doppler.`,
     );
   }
   try {
