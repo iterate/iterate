@@ -188,6 +188,10 @@ export class PlatformContext extends WorkerEntrypoint<Env, PlatformContextProps>
       contextId: PLATFORM_PROJECT_CONTEXT_ID,
       env: this.env,
       exports: this.ctx.exports as unknown as Parameters<typeof makeDial>[0]["exports"],
+      // The `worker` default is a repo SOURCE, so the chain's code root must
+      // be able to load isolates (no facets: this entrypoint is stateless,
+      // and no platform default is a durable-object source).
+      loader: (this.env as { LOADER?: unknown }).LOADER as Parameters<typeof makeDial>[0]["loader"],
       projectId,
     });
     const borrowed = dial(resolved.entry.address, {
