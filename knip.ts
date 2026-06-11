@@ -6,8 +6,13 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
   const base = makeCloudflareTanStackAppWorkspace(workerEnvShim);
   return {
     ...base,
-    // Handwritten design-of-record types for the itx protocol; intentionally unreferenced.
-    ignore: ["src/itx/types.ts"],
+    ignore: [
+      // Handwritten design-of-record types for the itx protocol; intentionally unreferenced.
+      "src/itx/types.ts",
+      // Reached only through the vitest.config.ts `cloudflare:workers` alias,
+      // which knip does not traverse.
+      "src/test/cloudflare-workers-shim.ts",
+    ],
     entry: [
       ...(base.entry ?? []).filter((entry) => entry !== "scripts/router.ts"),
       "e2e/vitest.config.ts",

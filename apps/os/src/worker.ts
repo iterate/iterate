@@ -47,22 +47,20 @@ export { PackageStream as StreamDurableObject };
 
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-capability.ts";
-export { AiCapability, OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { BindingCapability, EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
-export { McpClient } from "~/itx/caps/mcp-client.ts";
-export { ProjectWorker } from "~/itx/caps/project-worker.ts";
-export { UrlDial } from "~/itx/caps/url-dial.ts";
-export { StreamsCap } from "~/itx/caps/streams.ts";
-export { ContextDO } from "~/itx/context-do.ts";
-export { ItxCapIngress } from "~/itx/http.ts";
-export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
+export { McpClient } from "~/itx/capabilities/mcp-client.ts";
+export { UrlDial } from "~/itx/capabilities/url-dial.ts";
+export { StreamsCapability } from "~/itx/capabilities/streams.ts";
+export { ItxDurableObject } from "~/itx/itx-durable-object.ts";
+export { PlatformContext } from "~/itx/platform-context.ts";
+export { ItxCapabilityIngress } from "~/itx/http.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
-export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 
 export default {

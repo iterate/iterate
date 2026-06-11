@@ -37,8 +37,8 @@ describe("itx REPL TypeScript declarations", () => {
       context: { explicit: true, pos: "itx.".length },
     });
 
-    expect(result?.options.find((option) => option.label === "caps")?.info).toContain(
-      "Register, revoke, inspect, and share capabilities",
+    expect(result?.options.find((option) => option.label === "provideCapability")?.info).toContain(
+      "Provide a capability",
     );
     expect(result?.options.find((option) => option.label === "describe")?.info).toContain(
       "Who/what am I holding?",
@@ -49,20 +49,21 @@ describe("itx REPL TypeScript declarations", () => {
   });
 
   test("completion docs come verbatim from the design-of-record ~/itx/types.ts", async () => {
-    const env = createReplTypeScriptEnv("itx.caps.");
+    const env = createReplTypeScriptEnv("itx.");
     const result = await getAutocompletionWithDocs({
       env,
       path: REPL_SOURCE_PATH,
-      context: { explicit: true, pos: "itx.caps.".length },
+      context: { explicit: true, pos: "itx.".length },
     });
 
     // These strings exist only in ~/itx/types.ts, never in the REPL prelude:
-    // the define() doc's runSwiftOnMyMac example and provide()'s alias note.
-    expect(result?.options.find((option) => option.label === "define")?.info).toContain(
+    // the provideCapability() doc's runSwiftOnMyMac example and
+    // revokeCapability()'s shadow note.
+    expect(result?.options.find((option) => option.label === "provideCapability")?.info).toContain(
       "runSwiftOnMyMac",
     );
-    expect(result?.options.find((option) => option.label === "provide")?.info).toContain(
-      "REPL muscle memory",
+    expect(result?.options.find((option) => option.label === "revokeCapability")?.info).toContain(
+      "cannot be revoked, only",
     );
   });
 
@@ -72,7 +73,7 @@ describe("itx REPL TypeScript declarations", () => {
     const code = [
       'const projectScoped: string = projectId ?? "global";',
       "const target: object = new RpcTarget();",
-      "const fn: ItxFn<StreamEvent[]> = (handle: Itx) =>",
+      "const fn: ItxFn<StreamEvent[]> = (handle: ItxHandle) =>",
       '  handle.streams.get({ path: "/chat" }).read();',
       "const previous: unknown[] = [$_, _, vars.anything, env.anything];",
       "[projectScoped, target, fn, previous];",
@@ -104,15 +105,16 @@ describe("itx REPL TypeScript declarations", () => {
   });
 
   test("nested autocomplete options include itx JSDoc as CodeMirror completion info", async () => {
-    const env = createReplTypeScriptEnv("itx.caps.");
+    const code = 'const project = await itx.projects.get("demo");\nproject.';
+    const env = createReplTypeScriptEnv(code);
     const result = await getAutocompletionWithDocs({
       env,
       path: REPL_SOURCE_PATH,
-      context: { explicit: true, pos: "itx.caps.".length },
+      context: { explicit: true, pos: code.length },
     });
 
-    expect(result?.options.find((option) => option.label === "define")?.info).toContain(
-      "Register a capability",
+    expect(result?.options.find((option) => option.label === "provideCapability")?.info).toContain(
+      "Provide a capability",
     );
     expect(result?.options.find((option) => option.label === "shareUrl")?.info).toContain(
       "signed, expiring URL",
@@ -122,7 +124,9 @@ describe("itx REPL TypeScript declarations", () => {
   test("CodeMirror completion source delegates to the REPL TypeScript worker", async () => {
     const result = {
       from: 4,
-      options: [{ label: "caps", info: "Register, revoke, inspect, and share capabilities." }],
+      options: [
+        { label: "provideCapability", info: "Provide a capability on this handle's context." },
+      ],
     };
     const worker = {
       getAutocompletionWithDocs: vi.fn().mockResolvedValue(result),

@@ -25,16 +25,20 @@ import {
   stripArtifactTokenQuery,
 } from "~/domains/repos/artifacts.ts";
 import { parseConfig } from "~/config.ts";
+import { RepoNotCreatedError } from "~/domains/repos/repo-errors.ts";
 import {
   CommitRepoFilesInput,
   ListRepoFilesInput,
   ReadRepoFilesInput,
   ReadRepoLogInput,
+  ReadRepoTreeInput,
   commitRepoFiles,
   isGitAuthError,
   listRepoFiles,
+  readRemoteBranchOid,
   readRepoFiles,
   readRepoLog,
+  readRepoTree,
   type CommitRepoFilesResult,
 } from "~/domains/repos/repo-git.ts";
 import {
@@ -195,7 +199,7 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
     await this.waitForRepoProcessorCatchUp();
 
     if ((await this.currentRepo()) === null) {
-      throw new Error(`Repo ${this.structuredName.repoSlug} has not been created.`);
+      throw new RepoNotCreatedError(`Repo ${this.structuredName.repoSlug} has not been created.`);
     }
 
     const artifactName = repoArtifactName(this.structuredName);
@@ -264,6 +268,33 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
     });
   }
 
+  /**
+   * One checkout, one answer: the ref's head commit plus every file on it —
+   * the build input for repo-sourced workers (itx/source-build.ts).
+   */
+  async readTree(input: ReadRepoTreeInput = {}) {
+    const parsed = ReadRepoTreeInput.parse(input);
+    return await this.withRepoGitCredentials((info) =>
+      readRepoTree({
+        branch: parsed.ref ?? info.defaultBranch,
+        remote: info.remote,
+        token: info.token,
+      }),
+    );
+  }
+
+  /** The ref's head commit oid — one HTTP request (ls-remote), no clone.
+   * The cheap freshness probe for "latest" repo sources. */
+  async headOid(input: { ref?: string } = {}) {
+    return await this.withRepoGitCredentials(async (info) => ({
+      oid: await readRemoteBranchOid({
+        branch: input.ref ?? info.defaultBranch,
+        remote: info.remote,
+        token: info.token,
+      }),
+    }));
+  }
+
   /** Read the commit log of a branch (newest first). */
   async readLog(input: ReadRepoLogInput = {}) {
     const parsed = ReadRepoLogInput.parse(input);
@@ -299,7 +330,7 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
     await this.waitForRepoProcessorCatchUp();
 
     if ((await this.currentRepo()) === null) {
-      throw new Error(`Repo ${this.structuredName.repoSlug} has not been created.`);
+      throw new RepoNotCreatedError(`Repo ${this.structuredName.repoSlug} has not been created.`);
     }
 
     return this.requireArtifacts().get(repoArtifactName(this.structuredName));
@@ -348,7 +379,7 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
   private async requireInfo(): Promise<RepoInfo> {
     const repo = await this.currentRepo();
     if (repo === null) {
-      throw new Error(`Repo ${this.structuredName.repoSlug} has not been created.`);
+      throw new RepoNotCreatedError(`Repo ${this.structuredName.repoSlug} has not been created.`);
     }
 
     const token = await this.ctx.storage.get<string>(REPO_WRITE_TOKEN_STORAGE_KEY);

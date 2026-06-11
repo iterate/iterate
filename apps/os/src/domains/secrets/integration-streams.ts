@@ -2,7 +2,7 @@ import { ORPCError } from "@orpc/server";
 import type { EventInput } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { RequestContext } from "~/request-context.ts";
-import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { getStreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 
 export const SLACK_INTEGRATION_PROCESSOR_SLUG = "slack";
 export const GOOGLE_INTEGRATION_PROCESSOR_SLUG = "google-integration";
@@ -35,7 +35,7 @@ export async function appendIntegrationEvent(
 
   const streamPath =
     input.provider === "slack" ? SLACK_INTEGRATION_STREAM_PATH : GOOGLE_INTEGRATION_STREAM_PATH;
-  return await getStreamsCapability({
+  return await getStreamsBackend({
     exports: context.workerExports,
     props: {
       appendPolicy: { mode: "stream" },

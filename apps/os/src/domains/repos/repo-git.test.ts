@@ -210,14 +210,14 @@ describe("readRemoteBranchOid", () => {
     await expect(
       readRemoteBranchOid({
         branch: "main",
-        remote: "https://acc.artifacts.cloudflare.net/git/ns/iterate-config.git/",
+        remote: "https://acc.artifacts.cloudflare.net/git/ns/project.git/",
         token: "tok?expires=123",
       }),
     ).resolves.toBe(OID);
 
     const [url, init] = fetchSpy.mock.calls[0]!;
     expect(String(url)).toBe(
-      "https://acc.artifacts.cloudflare.net/git/ns/iterate-config.git/info/refs?service=git-upload-pack",
+      "https://acc.artifacts.cloudflare.net/git/ns/project.git/info/refs?service=git-upload-pack",
     );
     expect((init as RequestInit).headers).toMatchObject({ authorization: "Bearer tok" });
   });

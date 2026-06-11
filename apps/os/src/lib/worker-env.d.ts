@@ -8,20 +8,17 @@ type WorkerMainModule = Pick<
   Extract<
     keyof WorkerEntryExports,
     | "AgentCapability"
-    | "AiCapability"
     | "GmailCapability"
     | "ItxEntrypoint"
     | "EgressPipe"
     | "ProjectEgress"
-    | "OpenApiBridge"
-    | "OrpcCapability"
     | "ProjectIngressEntrypoint"
     | "ProjectMcpServerEntrypoint"
     | "RepoCapability"
     | "ReposCapability"
     | "SecretsCapability"
     | "SlackCapability"
-    | "StreamsCapability"
+    | "StreamsBackend"
     | "WorkspaceCapability"
   >
 >;

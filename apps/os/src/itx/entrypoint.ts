@@ -1,4 +1,4 @@
-// The restorer (spec §5.2): the single function that turns serializable
+// The restorer: the single function that turns serializable
 // ItxProps into a live handle, plus the two WorkerEntrypoints the platform
 // wires into isolates it loads:
 //
@@ -9,18 +9,13 @@
 // happens HERE and at connect-time auth (fetch.ts) — nowhere else.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { Itx, type ItxRuntime } from "./handle.ts";
-import {
-  GLOBAL_CONTEXT_ID,
-  isChildContextId,
-  resolveDialableTargets,
-  type ItxProps,
-  type PathCall,
-} from "./protocol.ts";
-import { replayPathCall } from "./path-proxy.ts";
-import type { ContextDO } from "./context-do.ts";
+import { createD1Client } from "sqlfu";
+import { ItxHandle, type ItxRuntime } from "./handle.ts";
+import { replayPathCall, type CapabilityAddress, type PathCall } from "./itx.ts";
+import { resolveDialableTargets } from "./dial.ts";
+import { dialContext, lookupContext, projectContextAddress } from "./journal.ts";
+import { GLOBAL_CONTEXT_ID, isChildContextId, type ItxProps } from "./refs.ts";
 import { parseConfig } from "~/config.ts";
-import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 
@@ -28,33 +23,48 @@ import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capa
  * restore(): names → live object graph. A project-context handle's access is
  * always exactly its own project, regardless of what props claim — same
  * non-escalation rule the old config-worker scope rewrite enforced (D7).
- * Async because child contexts (ctx_…) resolve their owning project from
- * their ContextDO descriptor — the one lookup a sturdy ref costs.
+ * Child contexts (itx_…) carry their coordinate in props when platform
+ * wiring minted them; a bare-id restore resolves it through the context
+ * catalog — the one lookup a sturdy ref costs.
  */
 export async function resolveItx(input: {
   env: Env;
   exports: ItxRuntime["exports"];
   props: ItxProps;
-}): Promise<Itx> {
+}): Promise<ItxHandle> {
   const config = parseConfig(input.env);
   const contextId = input.props.context;
 
   let projectId: string | null;
+  let contextAddress: CapabilityAddress | null;
   if (contextId === GLOBAL_CONTEXT_ID) {
+    // Global handle minting stays connect-time — the global context has no
+    // node to dial yet.
     projectId = null;
+    contextAddress = null;
   } else if (isChildContextId(contextId)) {
-    const contextDo = input.env.ITX_CONTEXT.getByName(
-      contextId,
-    ) as unknown as DurableObjectStub<ContextDO>;
-    projectId = (await contextDo.descriptor()).projectId;
+    if (input.props.contextAddress && input.props.projectId) {
+      contextAddress = input.props.contextAddress as CapabilityAddress;
+      projectId = input.props.projectId;
+    } else {
+      const resolved = await lookupContext(createD1Client(input.env.DB), contextId);
+      if (!resolved) {
+        throw new Error(`Context ${contextId} is not in the context catalog.`);
+      }
+      contextAddress = resolved.address;
+      projectId = resolved.projectId;
+    }
   } else {
+    // A project context's identity IS its project.
     projectId = contextId;
+    contextAddress = projectContextAddress(contextId);
   }
 
-  return new Itx({
+  return new ItxHandle({
     access: contextId === GLOBAL_CONTEXT_ID ? (input.props.access ?? []) : [projectId!],
-    cap: input.props.cap,
+    capabilityPath: input.props.capabilityPath,
     config,
+    contextAddress,
     contextId,
     env: input.env,
     exports: input.exports,
@@ -68,7 +78,7 @@ export async function resolveItx(input: {
  * returns a promise so the restorer can resolve child-context descriptors.
  */
 export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxProps> {
-  get context(): Promise<Itx> {
+  get context(): Promise<ItxHandle> {
     return resolveItx({
       env: this.env,
       exports: this.ctx.exports as unknown as ItxRuntime["exports"],
@@ -78,12 +88,14 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxProps> {
 }
 
 export type ProjectEgressProps = {
-  /** The owning project. Registry-injected at dial time (never definer
+  /** The owning project. Dial-injected (never provider
    * props), so a `fetch` cap can only ever scope to its own project. */
   projectId: string;
-  /** Attribution only: which context/cap is fetching (audit + future policy). */
+  /** The originating context (id + address): dispatch happens at ITS node so
+   * a child context's `fetch` shadow catches its isolates' bare fetch(). */
   context?: string;
-  cap?: string;
+  contextAddress?: CapabilityAddress | null;
+  capabilityPath?: string;
 };
 
 /**
@@ -108,40 +120,31 @@ export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
   async fetch(request: Request): Promise<Response> {
     // Dispatch at the ORIGINATING context node, not the project: a child
     // context's `fetch` shadow must catch its isolates' bare fetch() too —
-    // the chain (child → project → defaults) is what resolves the cap.
-    const context = this.ctx.props.context;
-    const node =
-      context && isChildContextId(context)
-        ? (this.env.ITX_CONTEXT.getByName(context) as unknown as {
-            itxInvoke(input: PathCall & { name: string }): Promise<unknown>;
-          })
-        : (this.env.PROJECT.getByName(
-            getProjectDurableObjectName(this.ctx.props.projectId),
-          ) as unknown as {
-            itxInvoke(input: PathCall & { name: string }): Promise<unknown>;
-          });
-    return (await node.itxInvoke({
-      args: [request],
-      name: "fetch",
-      path: [],
-    })) as Response;
+    // the chain (child → project → platform defaults) is what resolves the
+    // cap. The address rides in props so the hot path never needs the
+    // context catalog.
+    const address =
+      (this.ctx.props.contextAddress as CapabilityAddress | null | undefined) ??
+      projectContextAddress(this.ctx.props.projectId);
+    const node = dialContext(this.env, address);
+    return (await node.itx().invoke({ args: [request], path: ["fetch"] })) as Response;
   }
 }
 
 export type EgressPipeProps = {
-  /** Injected by the registry at dial time — never definer-supplied. */
+  /** Injected by the dial — never provider-supplied. */
   projectId?: string;
-  /** Attribution only: which context/cap is fetching (audit + future policy). */
+  /** Attribution only: which context/capability is fetching (records + future policy). */
   context?: string;
-  cap?: string;
+  capabilityPath?: string;
 };
 
 /**
  * The TERMINAL egress pipe: the default target of the `fetch` capability
- * (platform:project, code-contexts.ts). Stateless: secrets are D1 rows
- * (domains/secrets), scoped by the registry-injected projectId, so
+ * (PLATFORM_PROJECT_CAPABILITIES, platform-context.ts). Stateless: secrets are D1 rows
+ * (domains/secrets), scoped by the dial-injected projectId, so
  * substitution and the real fetch happen here in a plain isolate — the
- * Project DO supervises dispatch (its registry is where live shadows live)
+ * Project DO supervises dispatch (its capability table is where live shadows live)
  * but secret material never enters it. Future egress policy (allowlists,
  * human-in-the-loop approval) slots in here.
  */
@@ -155,7 +158,7 @@ export class EgressPipe extends WorkerEntrypoint<Env, EgressPipeProps> {
 
     const projectId = this.ctx.props.projectId;
     if (!projectId) {
-      throw new Error("EgressPipe needs registry-injected projectId props.");
+      throw new Error("EgressPipe needs dial-injected projectId props.");
     }
     if (!isHttpRequestUrl(request.url)) {
       return await fetch(request);
@@ -185,10 +188,10 @@ function isHttpRequestUrl(urlString: string) {
 }
 
 export type BindingCapabilityProps = {
-  /** Which env binding this instance wraps. Definer-supplied. */
+  /** Which env binding this instance wraps. Provider-supplied. */
   binding: string;
-  /** Attribution, injected by the registry at dial time. */
-  cap?: string;
+  /** Attribution, injected by the dial. */
+  capabilityPath?: string;
   context?: string;
 };
 
@@ -196,7 +199,7 @@ export type BindingCapabilityProps = {
  * The thin policy wrapper for platform bindings (itx-next.md §2): a
  * loopback-dialable, path-call capability that applies the dotted path to
  * `env[props.binding]`, receiver-preserving. Today the only policy is the
- * DIALABLE_BINDINGS allowlist — props.binding is definer-controlled, so the
+ * DIALABLE_BINDINGS allowlist — props.binding is provider-controlled, so the
  * check HERE is the authoritative gate for which binding gets wrapped.
  * Gateway selection / attribution headers / quotas slot in here later.
  *

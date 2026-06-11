@@ -6,8 +6,9 @@
 // SSRs anymore, DECISIONS D21.)
 
 import type { Client } from "sqlfu";
-import { isChildContextId, type ProjectAccess } from "./protocol.ts";
-import type { ContextDO } from "./context-do.ts";
+import { lookupContext, type ItxJournalRef } from "./journal.ts";
+import { isChildContextId, type ProjectAccess } from "./refs.ts";
+import type { CapabilityAddress } from "./itx.ts";
 import type { ItxRuntime } from "./handle.ts";
 import type { Principal } from "~/auth/principal.ts";
 import type { RequestContext } from "~/request-context.ts";
@@ -25,23 +26,35 @@ export function accessForPrincipal(principal: Principal): ProjectAccess {
  * access check happens HERE (auth boundary) and nowhere deeper: a child
  * context is accessible iff its owning project is.
  */
+export type ResolvedAccessibleContext = {
+  contextId: string;
+  projectId: string;
+  /** The context node's address; how callers dial it without re-resolving. */
+  contextAddress: CapabilityAddress | null;
+  /** The context's journal coordinate (child contexts only — a project's
+   * journal derives from its id). */
+  journal: ItxJournalRef | null;
+};
+
 export async function resolveAccessibleContextId(input: {
   access: ProjectAccess;
   db: Client;
   env: Env;
   idOrSlug: string;
-}): Promise<{ contextId: string; projectId: string } | null> {
+}): Promise<ResolvedAccessibleContext | null> {
+  // The prefix check CLASSIFIES the untrusted connect string (child context
+  // id vs project id-or-slug, like isProjectId below) — resolution itself
+  // goes through the context catalog (journal.ts).
   if (isChildContextId(input.idOrSlug)) {
-    const contextDo = input.env.ITX_CONTEXT.getByName(
-      input.idOrSlug,
-    ) as unknown as DurableObjectStub<ContextDO>;
-    try {
-      const descriptor = await contextDo.descriptor();
-      if (input.access !== "all" && !input.access.includes(descriptor.projectId)) return null;
-      return { contextId: descriptor.id, projectId: descriptor.projectId };
-    } catch {
-      return null;
-    }
+    const resolved = await lookupContext(input.db, input.idOrSlug);
+    if (!resolved) return null;
+    if (input.access !== "all" && !input.access.includes(resolved.projectId)) return null;
+    return {
+      contextAddress: resolved.address,
+      contextId: input.idOrSlug,
+      journal: resolved.journal,
+      projectId: resolved.projectId,
+    };
   }
 
   // Classify by prefix: auth mints the canonical "prj_" id, "proj_" is the
@@ -53,7 +66,7 @@ export async function resolveAccessibleContextId(input: {
     : await getProjectBySlug(input.db, { slug: input.idOrSlug });
   if (!row) return null;
   if (input.access !== "all" && !input.access.includes(row.id)) return null;
-  return { contextId: row.id, projectId: row.id };
+  return { contextAddress: null, contextId: row.id, journal: null, projectId: row.id };
 }
 
 /**

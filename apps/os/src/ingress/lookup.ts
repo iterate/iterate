@@ -1,13 +1,13 @@
 import { getProjectPlatformHostIngressRule } from "~/ingress/project-platform-host-routing.ts";
 import { getProjectCustomHostnameIngressRule } from "~/ingress/project-custom-hostname-routing.ts";
-import { getItxCapHostIngressRule } from "~/itx/http.ts";
+import { getItxCapabilityHostIngressRule } from "~/itx/http.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
 /**
  * Resolve the ingress rule for a request host. If the host isn't the dashboard
  * itself, it is one of (in priority order):
  *
- * 1. an itx capability host (`{cap}--{project}.{base}` — itx spec §8),
+ * 1. an itx capability host (`{cap}--{project}.{base}` — itx/http.ts),
  * 2. a project platform host (`<slug>.{base}` / `<projectId>.{base}`),
  * 3. a project custom hostname.
  *
@@ -23,7 +23,7 @@ export async function lookupIngressRule(input: {
 }): Promise<ExactHostIngressRule | null> {
   const { appHostname, db, host, projectHostnameBases: bases } = input;
   return (
-    (await getItxCapHostIngressRule({ bases, db, host })) ??
+    (await getItxCapabilityHostIngressRule({ bases, db, host })) ??
     (await getProjectPlatformHostIngressRule({ appHostname, bases, db, host })) ??
     (await getProjectCustomHostnameIngressRule({ appHostname, db, host }))
   );

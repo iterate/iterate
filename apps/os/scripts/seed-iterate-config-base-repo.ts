@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { os as orpc } from "@orpc/server";
 import { z } from "zod";
 
-import { ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME } from "../src/domains/repos/iterate-config-repo.ts";
+import { ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME } from "../src/domains/repos/project-repo.ts";
 import {
   REPO_DEFAULT_BRANCH,
   REPO_WRITE_TOKEN_TTL_SECONDS,

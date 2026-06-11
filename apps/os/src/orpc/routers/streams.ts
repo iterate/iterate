@@ -4,9 +4,9 @@ import { createStreamSubscription } from "@iterate-com/streams/subscription";
 import type { StreamRpc } from "@iterate-com/streams/types";
 import type { RequestContext } from "~/request-context.ts";
 import {
-  getStreamsCapability,
+  getStreamsBackend,
   resolveStreamPath,
-} from "~/domains/streams/entrypoints/streams-capability.ts";
+} from "~/domains/streams/entrypoints/streams-backend.ts";
 import {
   getStreamDurableObjectName,
   withStreamPath,
@@ -21,7 +21,7 @@ export const projectStreamsRouter = {
     .use(projectScopeMiddleware)
     .handler(async ({ context, input }) => {
       const project = requireProjectScope(context);
-      return await getProjectStreamsCapability(context, project.id).create({
+      return await getProjectStreamsBackend(context, project.id).create({
         streamPath: input.streamPath,
       });
     }),
@@ -29,7 +29,7 @@ export const projectStreamsRouter = {
     .use(projectScopeMiddleware)
     .handler(async ({ context, input }) => {
       const project = requireProjectScope(context);
-      const event = await getProjectStreamsCapability(context, project.id).append({
+      const event = await getProjectStreamsBackend(context, project.id).append({
         event: input.event,
         streamPath: input.streamPath,
       });
@@ -39,7 +39,7 @@ export const projectStreamsRouter = {
     .use(projectScopeMiddleware)
     .handler(async ({ context, input }) => {
       const project = requireProjectScope(context);
-      const events = await getProjectStreamsCapability(context, project.id).appendBatch({
+      const events = await getProjectStreamsBackend(context, project.id).appendBatch({
         events: input.events,
         streamPath: input.streamPath,
       });
@@ -47,7 +47,7 @@ export const projectStreamsRouter = {
     }),
   read: os.project.streams.read.use(projectScopeMiddleware).handler(async ({ context, input }) => {
     const project = requireProjectScope(context);
-    const events = await getProjectStreamsCapability(context, project.id).read({
+    const events = await getProjectStreamsBackend(context, project.id).read({
       afterOffset: input.afterOffset,
       beforeOffset: input.beforeOffset,
       streamPath: input.streamPath,
@@ -59,7 +59,7 @@ export const projectStreamsRouter = {
     .handler(async function* ({ context, input, signal }) {
       const project = requireProjectScope(context);
       if (input.beforeOffset != null && input.beforeOffset !== "end") {
-        const events = await getProjectStreamsCapability(context, project.id).read({
+        const events = await getProjectStreamsBackend(context, project.id).read({
           afterOffset: input.afterOffset,
           beforeOffset: input.beforeOffset,
           streamPath: input.streamPath,
@@ -82,14 +82,14 @@ export const projectStreamsRouter = {
     }),
 };
 
-function getProjectStreamsCapability(context: RequestContext, projectId: string) {
+function getProjectStreamsBackend(context: RequestContext, projectId: string) {
   if (!context.workerExports) {
     throw new ORPCError("INTERNAL_SERVER_ERROR", {
       message: "Worker exports are not available.",
     });
   }
 
-  return getStreamsCapability({
+  return getStreamsBackend({
     exports: context.workerExports,
     props: {
       appendPolicy: { mode: "any" },

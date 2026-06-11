@@ -6,10 +6,10 @@ describe("buildArtifactViewerUrl", () => {
     expect(
       buildArtifactViewerUrl({
         appBaseUrl: "https://os.iterate-dev-jonas.com",
-        artifactName: "proj__os__01krnehrkefqdrpxksbm9t4kxy--iterate-config",
+        artifactName: "proj__os__01krnehrkefqdrpxksbm9t4kxy--project",
       }),
     ).toBe(
-      "https://os-artifacts.iterate-dev-jonas.com/proj__os__01krnehrkefqdrpxksbm9t4kxy--iterate-config",
+      "https://os-artifacts.iterate-dev-jonas.com/proj__os__01krnehrkefqdrpxksbm9t4kxy--project",
     );
   });
 

@@ -37,12 +37,12 @@ import type * as itxTypes from "./itx-types.ts";
 declare module "./itx-types.ts" {
   /**
    * The editor's view of the capability fallthrough: unknown property names
-   * complete as callable capability paths. Merging this into KnownCaps means
-   * EVERY handle carries it — including ones returned by \`fork()\` and
+   * complete as callable capability paths. Merging this into KnownCapabilities means
+   * EVERY handle carries it — including ones returned by \`extend()\` and
    * \`itx.projects.get()\`.
    */
-  interface KnownCaps {
-    [capability: string]: CapSurface;
+  interface KnownCapabilities {
+    [capability: string]: CapabilitySurface;
   }
 }
 
@@ -51,31 +51,39 @@ declare global {
   class RpcTarget {}
 
   /**
+   * Wrap a plain object-of-methods (or a bare function) so it speaks the
+   * kernel's one calling convention and can be provided as a LIVE capability:
+   * the wrapper crosses the session as a stub and replays each
+   * call({ path, args }) back here, on your concrete object.
+   */
+  function asPathCallable(target: object): PathCallable;
+
+  /**
    * Anything not declared on the itx builtins resolves through the capability
    * fallthrough. Property access accumulates a path locally, then the
    * terminal call dispatches once: \`itx.slack.chat.postMessage(...)\`.
    */
-  type CapSurface = {
+  type CapabilitySurface = {
     (...args: any[]): Promise<unknown>;
-    [segment: string]: CapSurface;
+    [segment: string]: CapabilitySurface;
   };
 
   // The design-of-record types, exposed globally so snippets can annotate
   // with them without an import. Shapes live in ./itx-types.ts only.
   type Itx = itxTypes.Itx;
+  type ItxHandle = itxTypes.ItxHandle;
   type ItxBuiltins = itxTypes.ItxBuiltins;
-  type KnownCaps = itxTypes.KnownCaps;
+  type KnownCapabilities = itxTypes.KnownCapabilities;
   type ItxDescription = itxTypes.ItxDescription;
-  type ItxCaps = itxTypes.ItxCaps;
-  type CapTarget = itxTypes.CapTarget;
+  type CapabilityTarget = itxTypes.CapabilityTarget;
+  type CapabilityAddress = itxTypes.CapabilityAddress;
   type WorkerRef = itxTypes.WorkerRef;
-  type CapSource = itxTypes.CapSource;
-  type CapInvoke = itxTypes.CapInvoke;
+  type WorkerSource = itxTypes.WorkerSource;
   type PathCall = itxTypes.PathCall;
-  type PathCallTarget = itxTypes.PathCallTarget;
+  type PathCallable = itxTypes.PathCallable;
   type LiveStub = itxTypes.LiveStub;
-  type CapMeta = itxTypes.CapMeta;
-  type CapDescription = itxTypes.CapDescription;
+  type CapabilityMeta = itxTypes.CapabilityMeta;
+  type CapabilityDescription = itxTypes.CapabilityDescription;
   type StreamRef = itxTypes.StreamRef;
   type StreamEvent = itxTypes.StreamEvent;
   type StreamEventInput = itxTypes.StreamEventInput;
@@ -86,11 +94,11 @@ declare global {
   type ItxFn<R = unknown> = itxTypes.ItxFn<R>;
   type Stubify<T> = itxTypes.Stubify<T>;
   type ContextRef = itxTypes.ContextRef;
-  type ItxPrincipal = itxTypes.ItxPrincipal;
+  type ProjectAccess = itxTypes.ProjectAccess;
   type ItxProps = itxTypes.ItxProps;
 
   /** The connected Iterate context handle for this REPL session. */
-  const itx: Itx;
+  const itx: ItxHandle;
   /** Environment-style values injected into this REPL session. */
   const env: Record<string, unknown>;
   /**

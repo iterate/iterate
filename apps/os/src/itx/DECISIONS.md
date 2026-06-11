@@ -1,7 +1,8 @@
 # itx implementation decisions & learnings
 
-Running log of choices made while implementing `apps/os/docs/itx-spec.md`,
-especially where reality diverged from the spec or where the spec left room.
+Running log of choices made while implementing the itx layer (design of
+record: `src/itx/types.ts`; roadmap: `apps/os/docs/itx-next.md`),
+especially where reality diverged from the plan or where it left room.
 Newest entries at the bottom. See also `README.md` (the architecture document)
 once it exists.
 

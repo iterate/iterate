@@ -110,6 +110,7 @@ tunnel. Doppler/Cloudflare/deploy details:
 - [TypeScript conventions](docs/typescript-conventions.md)
 - [Design system & React](docs/design-system.md)
 - [Vitest patterns](docs/vitest-patterns.md)
+- [Domain objects & stream processors](docs/domain-objects-and-stream-processors.md)
 
 ### Tasks & agent docs
 

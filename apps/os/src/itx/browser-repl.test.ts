@@ -11,6 +11,7 @@ import {
   runBrowserReplEntry,
 } from "./browser-repl.ts";
 import { ITX_EXAMPLES } from "./examples.ts";
+import { PathProxy } from "./path-proxy.ts";
 
 describe("browser Cap'n Web REPL", () => {
   test("default snippet uses Cap'n Web promise pipelining", async () => {
@@ -478,23 +479,23 @@ const persisted = answer();
   });
 
   test("live-capability example registers and calls a session-owned target", async () => {
-    // Mirrors a PROJECT-scoped itx handle: caps.define with a live target
-    // registers it, and unknown names on the handle fall through to it.
-    const providedTargets = new Map<string, { run(): unknown }>();
+    // Mirrors a PROJECT-scoped itx handle: provideCapability() with a live
+    // capability registers it, and unknown names on the handle fall through to
+    // a path proxy whose terminal call dispatches the kernel's one calling
+    // convention — provider.call({ path, args }) — exactly like the core.
+    const providedTargets = new Map<string, { call(input: unknown): unknown }>();
     const alert = vi.fn();
     const itx = new Proxy(
       {
-        caps: {
-          define(input: { name: string; target: { run(): unknown } }) {
-            providedTargets.set(input.name, input.target);
-            return { name: input.name, ok: true };
-          },
+        provideCapability(input: { name: string; capability: { call(input: unknown): unknown } }) {
+          providedTargets.set(input.name, input.capability);
         },
       },
       {
         get(target, prop: string | symbol) {
           if (typeof prop === "string" && providedTargets.has(prop)) {
-            return providedTargets.get(prop);
+            const provided = providedTargets.get(prop)!;
+            return new PathProxy((call) => provided.call(call));
           }
           return Reflect.get(target, prop);
         },
@@ -510,7 +511,7 @@ const persisted = answer();
       evalBrowserReplSessionCode({
         code: example.code,
         itx,
-        scope: { alert, RpcTarget, vars: {} },
+        scope: { ...createBrowserReplScope(), alert },
       }),
     ).resolves.toBe("alerted");
     expect(alert).toHaveBeenCalledWith("The answer is 42");

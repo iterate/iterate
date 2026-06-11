@@ -7,9 +7,11 @@
 //
 //   project/create-requested   { projectId, slug }            — the form values
 //   project/created            { projectId, slug, hosts, … }  — registered, hosts assigned
-//   project/config-worker-built{ commitOid, … }               — worker built (also re-fires
-//                                                               on later rebuilds)
 //   project/create-completed   { projectId }                  — registration done
+//
+// The project's worker leaves no events here: it is a repo-sourced
+// capability built through the generic per-commit memo (itx/source-build.ts);
+// worker lifecycle events belong to the REPO's stream (future manifest work).
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
@@ -54,19 +56,10 @@ export const ProjectProcessorContract = defineProcessorContract({
   stateSchema: z.object({
     phase: z.enum(["none", "creating", "ready"]).default("none"),
     project: ProjectFacts.nullable().default(null),
-    worker: z
-      .object({
-        commitOid: z.string().trim().min(1),
-        mainModule: z.string().trim().min(1),
-        repoSlug: z.string().trim().min(1),
-      })
-      .nullable()
-      .default(null),
   }),
   initialState: {
     phase: "none",
     project: null,
-    worker: null,
   },
   events: {
     "events.iterate.com/project/create-requested": {
@@ -81,19 +74,9 @@ export const ProjectProcessorContract = defineProcessorContract({
       payloadSchema: ProjectFacts,
     },
     "events.iterate.com/project/repo-initialized": {
-      description: "The Project's iterate-config repo exists and is cloneable.",
+      description: "The Project's repo exists and is cloneable.",
       payloadSchema: z.object({
         defaultBranch: z.string().trim().min(1),
-        projectId: z.string().trim().min(1),
-        repoSlug: z.string().trim().min(1),
-      }),
-    },
-    // Historical type string ("config worker" is now just "the worker").
-    "events.iterate.com/project/config-worker-built": {
-      description: "The Project's worker was built and cached for dispatch.",
-      payloadSchema: z.object({
-        commitOid: z.string().trim().min(1),
-        mainModule: z.string().trim().min(1),
         projectId: z.string().trim().min(1),
         repoSlug: z.string().trim().min(1),
       }),
@@ -108,13 +91,11 @@ export const ProjectProcessorContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
-    "events.iterate.com/project/config-worker-built",
     "events.iterate.com/project/create-completed",
   ],
   emits: [
     "events.iterate.com/project/created",
     "events.iterate.com/project/repo-initialized",
-    "events.iterate.com/project/config-worker-built",
     "events.iterate.com/project/create-completed",
   ],
 });

@@ -94,11 +94,11 @@ export class AgentHostProcessor extends StreamProcessor<
     }
 
     // Enqueued executions (e.g. Slack bang commands): another processor
-    // appended itx/execution-requested with `enqueued: true`; this host is
+    // appended itx/script-execution-requested with `enqueued: true`; this host is
     // the runner. The flag distinguishes queue entries from the records
     // runItxScript appends about its own runs.
     if (
-      event.type === "events.iterate.com/itx/execution-requested" &&
+      event.type === "events.iterate.com/itx/script-execution-requested" &&
       streamPath !== AGENTS_STREAM_PATH
     ) {
       const payload = event.payload as {
@@ -224,7 +224,7 @@ export async function handleItxExecutionCompletedForAgent(args: {
   streamPath: StreamPath;
 }) {
   if (args.streamPath === AGENTS_STREAM_PATH) return;
-  if (args.event.type !== "events.iterate.com/itx/execution-completed") return;
+  if (args.event.type !== "events.iterate.com/itx/script-execution-completed") return;
 
   const payload = args.event.payload as {
     error?: unknown;
@@ -298,7 +298,7 @@ export function itxCompletionInputBlock(input: {
     "```yaml",
     "event:",
     `  offset: ${input.event.offset}`,
-    "  type: events.iterate.com/itx/execution-completed",
+    "  type: events.iterate.com/itx/script-execution-completed",
     ...(typeof executionId === "string" ? [`  executionId: ${yamlScalar(executionId)}`] : []),
     "  outcome:",
     `    status: ${input.outcome.status}`,

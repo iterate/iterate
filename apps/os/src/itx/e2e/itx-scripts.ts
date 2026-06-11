@@ -4,22 +4,27 @@
 // sources for scenario tests that aren't catalogue material.
 
 /**
- * Worker-cap source: a durable path-call capability. The provider implements
- * ONE method and callers get the whole dotted surface (the Slack SDK trick:
- * public SDK docs become the tool docs).
+ * Worker-cap source: a durable fake-Slack capability. Source caps are
+ * member-shaped — the dial wraps the loader entrypoint with
+ * asPathCallable and replays the dotted path on its real members (nested
+ * RpcTargets included), so the worker just exports the surface.
  */
-export function pathCallCapSource(input: { marker: string }) {
+export function slackShapedCapabilitySource(input: { marker: string }) {
   return `
-    import { WorkerEntrypoint } from "cloudflare:workers";
+    import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 
-    export default class extends WorkerEntrypoint {
-      async call({ path, args }) {
+    class Chat extends RpcTarget {
+      postMessage(...args) {
         return {
           args,
           marker: ${JSON.stringify(input.marker)},
-          method: path.join("."),
+          method: "chat.postMessage",
         };
       }
+    }
+
+    export default class extends WorkerEntrypoint {
+      get chat() { return new Chat(); }
     }
   `;
 }
@@ -29,7 +34,7 @@ export function pathCallCapSource(input: { marker: string }) {
  * their own: a tiny todo tool storing items on a project stream via
  * env.ITERATE.context. Invoked with "members": itx.todo.add({ text }).
  */
-export function todoCapSource() {
+export function todoCapabilitySource() {
   return `
     import { WorkerEntrypoint } from "cloudflare:workers";
 

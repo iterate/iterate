@@ -16,9 +16,10 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
-import { typeid } from "@iterate-com/shared/typeid";
-import type { ContextDO } from "~/itx/context-do.ts";
-import type { CapInvoke, SerializableCapTarget } from "~/itx/protocol.ts";
+import { createD1Client } from "sqlfu";
+import type { ItxDurableObject } from "~/itx/itx-durable-object.ts";
+import type { CapabilityAddress } from "~/itx/itx.ts";
+import { dialContext, extendContext, projectContextAddress } from "~/itx/journal.ts";
 import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
 import { AgentChatProcessor } from "~/domains/agents/stream-processors/agent-chat/implementation.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
@@ -47,7 +48,7 @@ import {
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
-import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-backend.ts";
 import {
   type WorkspaceDurableObject,
   type WorkspaceStructuredName,
@@ -85,17 +86,17 @@ export type AgentDurableObjectEnv = {
   AGENT: DurableObjectNamespace<AgentDurableObject>;
   AI: CloudflareAiBinding;
   APP_CONFIG: string;
-  ITX_CONTEXT: DurableObjectNamespace<ContextDO>;
+  ITX_CONTEXT: DurableObjectNamespace<ItxDurableObject>;
   DO_CATALOG: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
   WORKSPACE: DurableObjectNamespace<WorkspaceDurableObject>;
 };
 
-const AGENT_ITERATE_CONFIG_DIR = "/iterate-config";
-const AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH = `${AGENT_ITERATE_CONFIG_DIR}/.git/iterate-clone-complete`;
+const AGENT_PROJECT_REPO_DIR = "/project";
+const AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH = `${AGENT_PROJECT_REPO_DIR}/.git/iterate-clone-complete`;
 
-export type CloneIterateConfigRepoInput = {
+export type CloneProjectRepoInput = {
   git: Awaited<ReturnType<WorkspaceDurableObject["cloudflareShellGit"]>>;
   repo: RepoInfo;
   workspace: DurableObjectStub<WorkspaceDurableObject>;
@@ -131,8 +132,10 @@ const AgentLifecycleBase = createIterateDurableObjectBase<
   nameSchema: AgentDurableObjectStructuredName,
 });
 
-/** Bump when agentContextCaps changes shape or membership. */
-const AGENT_CONTEXT_CAPS_VERSION = "2";
+/** Bump when agentContextCapabilities changes shape or membership. A bump
+ * mints a FRESH context (journal, workspace and all) — contexts are
+ * erasable; the agent's durable record is its own stream. */
+const AGENT_CONTEXT_CAPABILITIES_VERSION = "3";
 
 export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv> {
   host = createStreamProcessorHost(this.ctx);
@@ -454,9 +457,10 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
   /** The agent's itx child context: its tools live on it as caps, scripts
    * run against it, misses delegate up to the project context. Seeding is
-   * versioned: bump AGENT_CONTEXT_CAPS_VERSION when agentContextCaps
-   * changes so existing agents re-define caps (defines upsert; the
-   * capability-noted idempotency keys dedupe re-appends per cap name). */
+   * versioned: bump AGENT_CONTEXT_CAPABILITIES_VERSION when
+   * agentContextCapabilities changes so existing agents re-provide caps
+   * (provides upsert; the capability-noted idempotency keys dedupe
+   * re-appends per cap name). */
   async ensureItxContext(params: AgentDurableObjectStructuredName): Promise<string> {
     // Single-flight: the wake hook's workspace prep (waitUntil) and script
     // runs can call this concurrently; without memoization the interleaved
@@ -471,26 +475,29 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
   async #ensureItxContextOnce(params: AgentDurableObjectStructuredName): Promise<string> {
     const existing = await this.ctx.storage.get<string>("itxContextId");
-    const seededVersion = await this.ctx.storage.get<string>("itxContextCapsVersion");
-    if (existing && seededVersion === AGENT_CONTEXT_CAPS_VERSION) return existing;
+    const seededVersion = await this.ctx.storage.get<string>("itxContextCapabilitiesVersion");
+    if (existing && seededVersion === AGENT_CONTEXT_CAPABILITIES_VERSION) return existing;
 
+    // Creation is an event: extend the project context with this agent's
+    // path as the journal base, so the agent's whole subtree (its stream,
+    // its context journal at <agentPath>/itx/<id>) reads as one directory.
     const config = this.getAppConfig();
-    const contextId =
-      existing ?? typeid({ env: { TYPEID_PREFIX: config.typeIdPrefix }, prefix: "ctx" });
-    const contextStub = this.env.ITX_CONTEXT.getByName(contextId);
-    await contextStub.initialize({
-      id: contextId,
+    const created = await extendContext({
+      base: params.agentPath,
+      db: createD1Client(this.env.DO_CATALOG),
+      env: this.env as unknown as Env,
       name: `agent:${params.agentPath}`,
-      parent: params.projectId,
+      parent: { address: projectContextAddress(params.projectId), id: params.projectId },
       projectId: params.projectId,
+      typeIdPrefix: config.typeIdPrefix,
     });
-    const caps = this.agentContextCaps(params);
+    const caps = this.agentContextCapabilities(params, created.contextId);
+    const contextItx = dialContext(this.env as unknown as Env, created.address).itx();
     for (const cap of caps) {
-      await contextStub.itxDefine({
-        invoke: cap.invoke,
-        meta: { instructions: cap.instructions },
+      await contextItx.provideCapability({
+        capability: cap.capability,
+        instructions: cap.instructions,
         name: cap.name,
-        target: cap.target,
       });
     }
     // The LLM learns its tools from stream history: one rendered event per
@@ -502,25 +509,25 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         payload: { instructions: cap.instructions, name: cap.name },
       })),
     });
-    await this.ctx.storage.put("itxContextId", contextId);
-    await this.ctx.storage.put("itxContextCapsVersion", AGENT_CONTEXT_CAPS_VERSION);
-    return contextId;
+    await this.ctx.storage.put("itxContextId", created.contextId);
+    await this.ctx.storage.put("itxContextCapabilitiesVersion", AGENT_CONTEXT_CAPABILITIES_VERSION);
+    return created.contextId;
   }
 
   private async ensureAgentWorkspace(params: AgentDurableObjectStructuredName) {
     const workspace = await this.getAgentWorkspace(params);
 
-    if (await workspace.hasFile(AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH)) {
+    if (await workspace.hasFile(AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH)) {
       return;
     }
 
-    const repo = await this.getOrCreateIterateConfigRepo(params);
+    const repo = await this.getOrCreateProjectRepo(params);
     const git = await workspace.cloudflareShellGit();
 
-    if (await workspace.hasFile(`${AGENT_ITERATE_CONFIG_DIR}/.git/HEAD`)) {
+    if (await workspace.hasFile(`${AGENT_PROJECT_REPO_DIR}/.git/HEAD`)) {
       let cloneIsUsable = true;
       try {
-        await git.status({ dir: AGENT_ITERATE_CONFIG_DIR });
+        await git.status({ dir: AGENT_PROJECT_REPO_DIR });
       } catch {
         cloneIsUsable = false;
       }
@@ -528,7 +535,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       if (cloneIsUsable) {
         await workspace.writeFile({
           content: `${repo.slug}\n`,
-          path: AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH,
+          path: AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH,
         });
         return;
       }
@@ -536,35 +543,35 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
     await workspace.removePath({
       force: true,
-      path: AGENT_ITERATE_CONFIG_DIR,
+      path: AGENT_PROJECT_REPO_DIR,
       recursive: true,
     });
-    await this.cloneIterateConfigRepo({ git, repo, workspace });
+    await this.cloneProjectRepo({ git, repo, workspace });
     await workspace.writeFile({
       content: `${repo.slug}\n`,
-      path: AGENT_ITERATE_CONFIG_CLONE_COMPLETE_PATH,
+      path: AGENT_PROJECT_REPO_CLONE_COMPLETE_PATH,
     });
   }
 
-  protected async cloneIterateConfigRepo(input: CloneIterateConfigRepoInput) {
+  protected async cloneProjectRepo(input: CloneProjectRepoInput) {
     await input.git.clone({
       url: remoteWithToken({
         remote: input.repo.remote,
         token: input.repo.token,
       }),
-      dir: AGENT_ITERATE_CONFIG_DIR,
+      dir: AGENT_PROJECT_REPO_DIR,
       branch: input.repo.defaultBranch,
       depth: 1,
     });
   }
 
-  private async getOrCreateIterateConfigRepo(
+  private async getOrCreateProjectRepo(
     params: AgentDurableObjectStructuredName,
   ): Promise<RepoInfo> {
     return await getReposCapability({
       exports: this.ctx.exports,
       props: { projectId: params.projectId },
-    }).ensureIterateConfigInfo({ projectSlug: null });
+    }).ensureProjectRepoInfo({ projectSlug: null });
   }
 
   private async getAgentWorkspace(params: AgentDurableObjectStructuredName) {
@@ -705,13 +712,15 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     });
   }
 
-  private agentContextCaps(params: AgentDurableObjectStructuredName): Array<{
+  private agentContextCapabilities(
+    params: AgentDurableObjectStructuredName,
+    contextId: string,
+  ): Array<{
     name: string;
     instructions: string;
-    invoke: CapInvoke;
-    target: SerializableCapTarget;
+    capability: CapabilityAddress;
   }> {
-    const agentTool = (tool: "chat" | "debug"): SerializableCapTarget => ({
+    const agentTool = (tool: "chat" | "debug"): CapabilityAddress => ({
       entrypoint: "AgentToolsCapability",
       props: { agentPath: params.agentPath, tool },
       type: "rpc",
@@ -724,52 +733,55 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
             {
               instructions:
                 "Use itx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
-              invoke: "path-call" as const,
               name: "chat",
-              target: agentTool("chat"),
+              capability: agentTool("chat"),
             },
           ]),
       {
         instructions:
           "Use itx.debug() to return OS debug information about the current agent stream.",
-        invoke: "path-call" as const,
         name: "debug",
-        target: agentTool("debug"),
+        capability: agentTool("debug"),
       },
       {
         instructions:
           "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
-        invoke: "members" as const,
         name: "ai",
-        target: { type: "rpc", worker: { binding: "AI", type: "binding" } },
-      },
-      {
-        instructions:
-          "Project-bound OS API. Call itx.os.listProcedures() for the TypeScript surface, then itx.os.<path.to.procedure>({ …input }).",
-        invoke: "path-call" as const,
-        name: "os",
-        target: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
+        capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
       },
       {
         instructions:
           "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }).",
-        invoke: "members" as const,
         name: "gmail",
-        target: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
+        capability: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
           "Use itx.slack.<Slack Web API method path>(args), e.g. itx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If no reply is needed, do not call chat.postMessage. For legitimate long-running Slack replies, use Promise.all to send an immediate acknowledgment while doing the real work in parallel, then send the actual result afterwards.",
-        invoke: "path-call" as const,
         name: "slack",
-        target: { entrypoint: "SlackCapability", type: "rpc", worker: { type: "loopback" } },
+        capability: { entrypoint: "SlackCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
           "Use itx.agents.create() to get a promise-pipelineable subagent handle, e.g. await itx.agents.create().doThing(args).",
-        invoke: "members" as const,
         name: "agents",
-        target: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },
+        capability: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },
+      },
+      {
+        // Workspaces are not itx's concern: this HOST decides its context
+        // gets a private workspace and provides one bound to the context's
+        // identity. Plain extensions of the project share the project
+        // workspace through the chain instead.
+        instructions:
+          "This agent's private workspace filesystem: itx.workspace.readFile/writeFile plus " +
+          "the flat git methods gitClone/gitAdd/gitCommit/gitPush/gitStatus.",
+        name: "workspace",
+        capability: {
+          entrypoint: "WorkspaceCapability",
+          props: { workspaceId: contextId },
+          type: "rpc",
+          worker: { type: "loopback" },
+        },
       },
     ];
   }
@@ -919,9 +931,9 @@ function agentWorkspaceName(input: {
 }): WorkspaceStructuredName {
   return {
     projectId: input.params.projectId,
-    // Must match the itx handle's workspace derivation (handle.ts): agent
-    // scripts reach this workspace as ctx.workspace.
-    workspaceId: `itx:${input.contextId}`,
+    // Must match the workspace capability this agent provides on its own
+    // context (agentContextCapabilities): the context id IS the workspace id.
+    workspaceId: input.contextId,
   };
 }
 

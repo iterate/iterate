@@ -63,8 +63,8 @@ export class SlackAgentProcessor extends StreamProcessor<
         };
       }
       case "events.iterate.com/agent/status-updated":
-      case "events.iterate.com/itx/execution-requested":
-      case "events.iterate.com/itx/execution-completed":
+      case "events.iterate.com/itx/script-execution-requested":
+      case "events.iterate.com/itx/script-execution-completed":
         return state;
       default:
         return assertNever(event);
@@ -148,7 +148,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           args.blockProcessorWhile(async () => {
             await this.ctx.stream.append({
               event: {
-                type: "events.iterate.com/itx/execution-requested",
+                type: "events.iterate.com/itx/script-execution-requested",
                 idempotencyKey: buildProcessorIdempotencyKey({
                   processor: this.contract,
                   key: "slack-bang-command-to-codemode-script",
@@ -178,8 +178,8 @@ export class SlackAgentProcessor extends StreamProcessor<
         return;
       }
       case "events.iterate.com/agent/status-updated":
-      case "events.iterate.com/itx/execution-requested":
-      case "events.iterate.com/itx/execution-completed": {
+      case "events.iterate.com/itx/script-execution-requested":
+      case "events.iterate.com/itx/script-execution-completed": {
         const update = slackAgentStatusForEvent(event);
         if (update == null || state.channel == null || state.threadTs == null) return;
         const { channel, latestMessageTs, threadTs } = state;
@@ -457,13 +457,13 @@ function slackAgentStatusForEvent(event: { payload: unknown; type: string }): {
     }
   }
 
-  if (event.type === "events.iterate.com/itx/execution-requested") {
+  if (event.type === "events.iterate.com/itx/script-execution-requested") {
     return {
       clear: false,
       status: { status: "is using tools...", loading_messages: ["Using tools..."] },
     };
   }
-  if (event.type === "events.iterate.com/itx/execution-completed") {
+  if (event.type === "events.iterate.com/itx/script-execution-completed") {
     return { clear: true, status: { status: "" } };
   }
 

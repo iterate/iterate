@@ -3,7 +3,7 @@ import { PublicStreamRpcTarget } from "@iterate-com/streams/workers/durable-obje
 import { getStreamDurableObjectName } from "~/domains/streams/stream-runtime.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import { requireProjectScopedAccess } from "~/orpc/project-access.ts";
-import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-backend.ts";
 import type { RequestContext } from "~/request-context.ts";
 
 const PROJECT_STREAM_RPC_PREFIX = "/api/project-streams";

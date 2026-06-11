@@ -12,13 +12,13 @@
  * **A context** is an addressable node that holds named capabilities.
  * Contexts form a prototype chain: capability lookup walks child → parent
  * with shadowing, writes land on the node your handle points at, and
- * `fork()` is `Object.create(parent)`. A context MAY be durable (a project's
- * context lives in its Durable Object; a forked child gets its own node so
+ * `extend()` is `Object.create(parent)`. A context MAY be durable (a project's
+ * context lives in its Durable Object; an extended child gets its own node so
  * others can address it later) — but durability is not part of the concept:
  * a context that nothing else needs to re-address can live entirely in a
  * connection, like the global handle does today.
  *
- * **A capability** is a name plus a {@link CapTarget}: either a live stub
+ * **A capability** is a name plus a {@link CapabilityTarget}: either a live stub
  * someone connected and handed us (inbound, lives as long as their
  * connection), or a serializable description of where to find the
  * implementation (outbound — an RPC target in some worker, or a URL across
@@ -26,83 +26,208 @@
  * names that grant nothing by possession and are restored to live objects
  * on demand.
  *
- * **An itx** is a live handle on one context — the only thing user code
- * ever touches, identical in the browser, Node, the REPL, the project
- * worker (the worker built from the project's own repo), itx scripts, and
- * capabilities themselves. Built-in
- * members (`caps`, `fork`, `projects`, …) are the trust kernel;
- * every other property falls through to the context's capability registry.
- * Authority is the handle itself: auth happens once at connect, and which
- * context you hold — plus the principal it was minted for — is the whole
- * permission model. Narrowing is construction: a weaker handle is a new
- * handle on a narrower context, never a flag on a wider one.
+ * **An Itx** is the capability CORE a context node embeds — "an Itx holds
+ * capabilities; everything else holds a stub of one". It owns the path-keyed
+ * entry map, the live-stub table, longest-prefix dispatch, and parent-chain
+ * delegation, with exactly four verbs: `provideCapability`,
+ * `revokeCapability`, `describe`, `invoke` (see {@link Itx}).
+ *
+ * **An itx HANDLE** ({@link ItxHandle}) is the live view user code touches —
+ * identical in the browser, Node, the REPL, the project worker (the worker
+ * built from the project's own repo), itx scripts, and capabilities
+ * themselves. A handle is an address, an access set, and five verbs: the
+ * core's four plus `extend` and `super` (and a few built-in members — `projects`,
+ * `streams`, `fetch`); every other property falls through to the context's
+ * core. Authority is the handle itself: auth happens once at connect, and
+ * which context you hold — plus the access set it was minted with — is the
+ * whole permission model. Narrowing is construction: a weaker handle is a
+ * new handle on a narrower context, never a flag on a wider one.
  *
  * ## Thirty seconds of itx
  *
  * ```ts
- * // You are handed an `itx` — in the REPL, from connectItx(), or inside
+ * // You are handed an `itx` — in the REPL, from withItx(), or inside
  * // any platform-loaded isolate via `await env.ITERATE.context`.
  *
  * await itx.describe();                    // what am I holding? what can I call?
  *
- * await itx.slack.chat.postMessage({       // call a capability someone defined —
+ * await itx.slack.chat.postMessage({       // call a capability someone provided —
  *   channel: "C123", text: "hi",           // works because "slack" is in the
- * });                                      // registry, not because itx knows Slack
+ * });                                      // capability table, not because itx knows Slack
  *
  * await itx.fetch("https://api.stripe.com/v1/charges", {
  *   headers: { authorization: 'Bearer getSecret({ key: "STRIPE_KEY" })' },
  * });                                      // egress: the secret is substituted
  *                                          // server-side; this code never sees it
  *
- * await itx.caps.define({                  // teach this context a new trick:
+ * await itx.provideCapability({            // teach this context a new trick:
  *   name: "ai",                            // itx.ai.run(model, input)
- *   target: { type: "rpc", worker: { type: "binding", binding: "AI" } },
+ *   capability: { type: "rpc", worker: { type: "binding", binding: "AI" } },
  * });
  *
- * const session = await itx.fork({ name: "agent-run-42" });
+ * using child = await itx.extend({ name: "agent-run-42" });
  * // a cheap, disposable child context: its caps shadow the project's,
- * // misses delegate up the chain. (This is what a "codemode session" is.)
+ * // misses delegate up the chain.
  * ```
  *
- * One honest caveat on typing: there is ONE `Itx` type, but a live handle is
- * bound to something — a project, a child context, or nothing (a global
- * handle). Members that need a project (`repos`, `workspace`, `worker`,
- * `project`, `fetch`) throw on a global handle until you narrow via
- * `itx.projects.get(...)`. The type system does not yet encode that split;
- * `describe()` is the runtime truth. (Splitting `GlobalItx` / `ProjectItx`
- * is an open design question — see itx-next.md.)
+ * One honest caveat on typing: there is ONE `ItxHandle` type, but a live
+ * handle is bound to something — a project, a child context, or nothing (a
+ * global handle). Members that need a project (`repos`, `workspace`,
+ * `worker`, `project`, `fetch`) throw on a global handle until you narrow
+ * via `itx.projects.get(...)`. The type system does not yet encode that
+ * split; `describe()` is the runtime truth. (Splitting `GlobalItx` /
+ * `ProjectItx` is an open design question — see itx-next.md.)
  */
+
+// ---------------------------------------------------------------------------
+// The core
+// ---------------------------------------------------------------------------
+
+/**
+ * The capability CORE a context node embeds (src/itx/itx.ts): pure
+ * structure — entries, live stubs, longest-prefix dispatch, chain
+ * delegation — with every effect injected as one `dial` function. Each
+ * context node (the Project DO for a project context, an ItxDurableObject
+ * for an extended child) exposes its core via an `itx()` method; handles,
+ * ingress, and chain delegation all speak to a stub of it. `invoke`'s
+ * `origin` is the chain's trusted identity channel (the context a delegated
+ * call STARTED at): nodes set it; handles never forward it.
+ */
+export interface Itx {
+  /** The journaled write; the HANDLE builds the CapabilityProvision its
+   * callers hold. */
+  provideCapability(input: {
+    name?: string;
+    path?: string[];
+    capability: CapabilityTarget;
+    instructions?: string;
+    types?: string;
+    meta?: CapabilityMeta;
+  }): void | Promise<void>;
+  revokeCapability(input: { name?: string; path?: string[] }): void | Promise<void>;
+  describe(): Promise<CapabilityDescription[]>;
+  invoke(input: { path: string[]; args: unknown[]; origin?: ItxOrigin }): Promise<unknown>;
+}
+
+/**
+ * The trusted identity a delegated call carries up the chain: the context
+ * the call STARTED at, as id (attribution, workspace-style scoping) AND
+ * address (origin dial-back: an inherited source capability's isolate is
+ * wired to the ORIGIN, so its bare fetch() climbs the origin's chain).
+ * Set by delegating nodes only — handles never forward it.
+ */
+export type ItxOrigin = { id: string; address: CapabilityAddress };
 
 // ---------------------------------------------------------------------------
 // The handle
 // ---------------------------------------------------------------------------
 
 /**
- * A live handle on a context.
+ * A live handle on a context — a cheap view over the context node's core.
  *
- * Unknown property names fall through to the context's capability registry
- * at runtime: `itx.slack.chat.postMessage(...)` works because someone
- * defined `slack`. Property access accumulates a path locally (zero round
- * trips); the terminal call dispatches once. Type known caps via
- * {@link KnownCaps} merging, or reach anything untyped via `itx.cap(name)`.
+ * Unknown property names fall through to the context's core at runtime:
+ * `itx.slack.chat.postMessage(...)` works because someone provided `slack`.
+ * Property access accumulates a path locally (zero round trips); the
+ * terminal call dispatches once. Type known caps via
+ * {@link KnownCapabilities} merging, or reach anything untyped via
+ * `itx.capability(name)`.
  */
-export type Itx = ItxBuiltins & KnownCaps;
+export type ItxHandle = ItxBuiltins & KnownCapabilities;
 
 /**
  * The built-in surface of every handle — the trust kernel. Everything else
- * you see on an `itx` is a capability that fell through to the registry.
+ * you see on an `itx` is a capability that fell through to the capability table.
  *
- * Child contexts inherit all of this: a forked session's `repos`,
+ * Child contexts inherit all of this: an extended child's `repos`,
  * `workspace`, and `streams` resolve through its owning project — the child
- * adds a capability registry of its own, not a different kernel.
+ * adds a capability table of its own, not a different kernel.
  */
 export interface ItxBuiltins {
-  /** Register, revoke, inspect, and share capabilities on this context. */
-  readonly caps: ItxCaps;
+  /**
+   * Provide a capability on this handle's context — THE verb for every
+   * provider kind, durable or live: live providers are session-bound
+   * (provide again on reconnect); rpc/url addresses are durable. The entry lives at a
+   * PATH: `name` is the common 1-segment case, `path` the multi-segment form
+   * (exactly one of the two). Dispatch is longest-prefix per context:
+   * `provideCapability({ path: ["slack", "chat", "postMessage"], … })`
+   * shadows ONE method of an inherited cap while every other `slack.*` call
+   * falls through the chain.
+   *
+   * ```ts
+   * // From a laptop/sandbox (inbound, lives while connected): a live
+   * // capability is the stub itself — a bare function (auto-wrapped:
+   * // calling the cap calls the function; it has no member tree), an
+   * // object, or an RpcTarget.
+   * await itx.provideCapability({
+   *   name: "runSwiftOnMyMac",
+   *   capability: async (src) => runSwift(src),
+   *   instructions: "Compile-and-run Swift on Jonas's Mac.",
+   * });
+   *
+   * // A raw platform binding (outbound, durable):
+   * await itx.provideCapability({
+   *   name: "ai",
+   *   capability: { type: "rpc", worker: { type: "binding", binding: "AI" } },
+   * });
+   *
+   * // First-party MCP client, parameterized per server (see CapabilityTarget):
+   * await itx.provideCapability({
+   *   name: "docs",
+   *   capability: {
+   *     type: "rpc",
+   *     worker: { type: "loopback" },
+   *     entrypoint: "McpClient",
+   *     props: {
+   *       serverUrl: "https://docs.example.com/mcp",
+   *       headers: { authorization: 'Bearer getSecret({ key: "DOCS_TOKEN" })' },
+   *     },
+   *   },
+   * });
+   *
+   * // Shadow one method of an inherited cap on an extension:
+   * await extension.provideCapability({
+   *   path: ["workspace", "gitPush"],
+   *   capability: approvalGate,
+   * });
+   * ```
+   */
+  provideCapability(input: {
+    name?: string;
+    path?: string[];
+    capability: CapabilityTarget;
+    /** A sentence for the human/agent who finds this cap. Stored as the
+     * `instructions` meta convention field and lifted by describe(). */
+    instructions?: string;
+    /** TypeScript declarations for the cap's surface — the machine/editor
+     * counterpart of `instructions`. Stored as the `types` meta convention
+     * field and lifted by describe(). */
+    types?: string;
+    meta?: CapabilityMeta;
+  }): Promise<CapabilityProvision>;
+
+  /** Remove an entry — exact path match, never prefix; `name`/`path` as in
+   * {@link provideCapability}. Platform defaults cannot be revoked, only
+   * shadowed (revoking a shadow resurfaces the default). */
+  revokeCapability(input: { name?: string; path?: string[] }): Promise<void>;
+
+  /**
+   * The explicit dispatch form of the fallthrough: one core dispatch
+   * with the full call path. `itx.invoke({ path: ["slack", "chat",
+   * "postMessage"], args: [msg] })` ≡ `itx.slack.chat.postMessage(msg)`.
+   * Useful when the path is computed.
+   */
+  invoke(input: { path: string[]; args: unknown[] }): Promise<unknown>;
+
+  /**
+   * "Let me show you something real quick": a signed, expiring URL for one
+   * HTTP-exposed cap. Possession grants exactly that cap's fetch surface
+   * until expiry — the realm's one deliberate bearer-token edge case.
+   */
+  shareUrl(input: { name: string; path?: string; ttlSeconds?: number }): Promise<string>;
 
   /**
    * Event streams, keyed by `(namespace, path)`. On a PROJECT handle this
-   * is a platform default cap (StreamsCap loopback, shadowable) pinned to
+   * is a platform default cap (StreamsCapability loopback, shadowable) pinned to
    * the project's namespace; on a GLOBAL handle it is kernel — the
    * deployment-wide `"global"` namespace gated on the connect-time access
    * set, which no cap definition can express. See {@link StreamRef} for
@@ -122,14 +247,15 @@ export interface ItxBuiltins {
   /** PLATFORM DEFAULT, not kernel: workspace readFile/writeFile and the
    * flat git methods (gitClone/gitAdd/gitCommit/gitPush/gitStatus — nested
    * RpcTargets do not survive RPC boundaries). Context-scoped: chain
-   * delegation carries the ORIGINATING context, so a forked child context
+   * delegation carries the ORIGINATING context, so an extended child context
    * gets its own isolated workspace even though the definition lives on
    * `platform:project`. */
   readonly workspace: unknown;
 
-  /** PLATFORM DEFAULT, not kernel: the project's iterate-config worker via
-   * the ProjectWorker forwarder — `itx.worker.someTool(args)` reaches any
-   * public method of the default export, rebuilt from the repo per call. */
+  /** PLATFORM DEFAULT, not kernel: the project's own worker — an ordinary
+   * `{ type: "repo" }` source provide pointed at the project repo, built
+   * per commit. `itx.worker.someTool(args)` reaches any public method of
+   * its default export. */
   readonly worker: unknown;
 
   /** The Project Durable Object stub, whole surface ("cap #0"). If your
@@ -145,7 +271,7 @@ export interface ItxBuiltins {
    * bound as their global `fetch`, so inside a capability or itx script,
    * bare `fetch()` and `itx.fetch()` are the same door.
    *
-   * Because it is a capability, it is SHADOWABLE: define your own `fetch`
+   * Because it is a capability, it is SHADOWABLE: provide your own `fetch`
    * (e.g. a live provider implementing `call({ path: [], args: [request] })
    * → Response`) and ALL project egress flows through your provider while it
    * is connected; revoke it and the default resurfaces. A shadow provider
@@ -158,23 +284,45 @@ export interface ItxBuiltins {
   /**
    * Who/what am I holding? `describe()` always works, on every handle, and
    * endeavors to return every breadcrumb you need to explore from here:
-   * the context, the principal, and the merged capability chain — each cap
+   * the context, the access set, and the merged capability chain — each cap
    * with its provenance and its provider-supplied `instructions`. When in
    * doubt, describe.
    */
   describe(): Promise<ItxDescription>;
 
-  /** Explicit form of the fallthrough: `itx.cap("slack")` ≡ `itx.slack`.
-   * Useful when the name is computed or shadowed by a built-in. */
-  cap(name: string): unknown;
+  /** Explicit form of the fallthrough: `itx.capability("slack")` ≡
+   * `itx.slack`. Useful when the name is computed or shadowed by a built-in. */
+  capability(name: string): unknown;
 
   /**
-   * Create a child context under this one: same anatomy, cheaper,
-   * disposable — an agent session, a REPL scratchpad. The child's caps
-   * shadow this context's; misses delegate up the chain. The child's
-   * authority is exactly its owning project, even if this handle was wider.
+   * Extend this context with a child: same anatomy, cheaper, disposable —
+   * an agent session, a REPL scratchpad. The child's caps shadow this
+   * context's; misses delegate up the chain (prototype semantics: children
+   * extend parents, resolution climbs upward). The child's authority is
+   * exactly its owning project, even if this handle was wider.
    */
-  fork(opts?: { name?: string }): Promise<Itx>;
+  extend(opts?: { name?: string }): Promise<ItxHandle>;
+
+  /**
+   * A handle on the PARENT context — the "call next()" of middleware: a
+   * `fetch` shadow delegates to the unshadowed pipe via
+   * `itx.super.fetch(request)`. An extension's parent comes from its birth
+   * certificate; the project context's parent is the platform context (the
+   * chain's read-only code root).
+   */
+  readonly super: ItxHandle;
+}
+
+/**
+ * What `provideCapability` returns. `revoke()` removes the entry;
+ * `Symbol.dispose` auto-revokes ONLY live provides — a live capability dies
+ * with its session anyway, while a durable provide must survive the session
+ * that created it (session teardown disposes every returned handle), so a
+ * durable provision's disposer is deliberately a no-op.
+ */
+export interface CapabilityProvision {
+  revoke(): Promise<void>;
+  [Symbol.dispose](): void;
 }
 
 /**
@@ -186,29 +334,30 @@ export interface ItxBuiltins {
  *
  * ```ts
  * declare module "~/itx/types.ts" {
- *   interface KnownCaps {
+ *   interface KnownCapabilities {
  *     slack: Stubify<import("@slack/web-api").WebClient>;
  *   }
  * }
  * ```
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- empty on purpose: this is the declaration-merge point
-export interface KnownCaps {}
+export interface KnownCapabilities {}
 
 /** What `describe()` returns. Aspirational contract: as many breadcrumbs as
  * we can possibly give you — this should always be the best starting point
  * for exploring what exists. */
 export type ItxDescription = {
-  /** "global", a project id, or a ctx_… child context id. */
+  /** "global", a project id, or a itx_… child context id. */
   context: ContextRef;
-  /** Who this handle was minted for. */
-  principal: ItxPrincipal;
-  /** Attribution: which capability's isolate holds this handle, if any. */
-  cap?: string;
+  /** What this handle may narrow to: "all" (admin) or named project ids. */
+  access: ProjectAccess;
+  /** Attribution: which capability's isolate holds this handle, if any
+   * (the dotted route). */
+  capabilityPath?: string;
   /** The merged capability chain (own caps first, ancestors' after,
    * shadowed names carry `owner` provenance), including each cap's
    * `instructions`. */
-  caps: CapDescription[];
+  capabilities: CapabilityDescription[];
   /** The bound project's own description, if this handle has one. */
   project: unknown | null;
 };
@@ -216,86 +365,6 @@ export type ItxDescription = {
 // ---------------------------------------------------------------------------
 // Capabilities
 // ---------------------------------------------------------------------------
-
-/** Registry verbs. All registration is `define`; the target kind carries
- * everything else (direction, durability, statefulness). */
-export interface ItxCaps {
-  /**
-   * Register a capability on this handle's context: a flat-identifier name
-   * plus a target. Live targets are session-bound (re-define on reconnect);
-   * rpc/url targets are durable. Nested names are not a thing — nesting
-   * belongs to the provided object, not the registry.
-   *
-   * ```ts
-   * // From a laptop/sandbox (inbound, lives while connected): a live
-   * // target is the stub itself — a function, object, or RpcTarget.
-   * await itx.caps.define({
-   *   name: "runSwiftOnMyMac",
-   *   target: async (src) => runSwift(src),
-   *   meta: { instructions: "Compile-and-run Swift on Jonas's Mac." },
-   * });
-   *
-   * // A raw platform binding (outbound, durable):
-   * await itx.caps.define({
-   *   name: "ai",
-   *   target: { type: "rpc", worker: { type: "binding", binding: "AI" } },
-   * });
-   *
-   * // First-party MCP client, parameterized per server (see CapTarget):
-   * await itx.caps.define({
-   *   name: "docs",
-   *   invoke: "path-call",
-   *   target: {
-   *     type: "rpc",
-   *     worker: { type: "loopback" },
-   *     entrypoint: "McpClient",
-   *     props: {
-   *       serverUrl: "https://docs.example.com/mcp",
-   *       headers: { authorization: 'Bearer getSecret({ key: "DOCS_TOKEN" })' },
-   *     },
-   *   },
-   * });
-   *
-   * // User-space: a class YOU export from your project worker:
-   * await itx.caps.define({
-   *   name: "petstore",
-   *   target: {
-   *     type: "rpc",
-   *     worker: { type: "project-worker" },
-   *     entrypoint: "OpenApiClient",
-   *     props: { specUrl: "https://petstore.example.com/openapi.json" },
-   *   },
-   * });
-   * ```
-   */
-  define(input: {
-    name: string;
-    target: CapTarget;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
-  }): Promise<{ name: string; ok: true }>;
-
-  /** Alias for {@link define} (REPL muscle memory) — define is the verb; a
-   * live stub is just another target. */
-  provide(input: {
-    name: string;
-    target: LiveStub;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
-  }): Promise<{ name: string; ok: true }>;
-
-  revoke(input: { name: string }): Promise<{ name: string; ok: true }>;
-
-  /** The merged chain view — same data `itx.describe()` embeds. */
-  describe(): Promise<CapDescription[]>;
-
-  /**
-   * "Let me show you something real quick": a signed, expiring URL for one
-   * HTTP-exposed cap. Possession grants exactly that cap's fetch surface
-   * until expiry — the realm's one deliberate bearer-token edge case.
-   */
-  shareUrl(input: { name: string; path?: string; ttlSeconds?: number }): Promise<string>;
-}
 
 /**
  * THE capability target. Three kinds:
@@ -319,17 +388,24 @@ export interface ItxCaps {
  *
  * Deliberately NOT here: MCP and OpenAPI. Those are not transports — they
  * are client implementations, i.e. ordinary RPC targets. The platform ships
- * `McpClient` / `OpenApiClient` entrypoints (reach them via
+ * an `McpClient` entrypoint (reach it via
  * `worker: { type: "loopback" }`, parameterized by `props`), and nothing
- * stops you from shipping your own version as an export of your project
- * worker (the `ProjectWorker` loopback forwarder). If a first-party client
+ * stops you from shipping your own version as a module in your project's
+ * repo (an ordinary `{ type: "repo" }` source). If a first-party client
  * needs to be special, the design has failed.
  *
  * (Possible later kind, deliberately absent until needed: a re-export of a
  * cap registered on another context.)
  */
-export type CapTarget =
-  | LiveStub
+export type CapabilityTarget = LiveStub | CapabilityAddress;
+
+/**
+ * The serializable kinds of {@link CapabilityTarget} — this realm's sturdy
+ * refs, and (per the address unification) also how context nodes themselves
+ * are addressed. The non-serializable live kind never appears here: live
+ * stubs exist only in the core's in-memory table.
+ */
+export type CapabilityAddress =
   | {
       type: "rpc";
       worker: WorkerRef;
@@ -338,7 +414,7 @@ export type CapTarget =
       entrypoint?: string;
       /** Instantiation props for the entrypoint (the ProjectEgress
        * pattern): serializable parameterization like a server URL or a
-       * gateway choice. The registry adds `{ context, cap }` attribution at
+       * gateway choice. The dial adds `{ context, capabilityPath }` attribution at
        * dial time. */
       props?: Record<string, unknown>;
     }
@@ -361,38 +437,51 @@ export type WorkerRef =
    * is the target (`itx.ai.run(...)` replays straight onto `env.AI`). */
   | { type: "binding"; binding: string }
   /** The platform worker's own exports (ctx.exports) — first-party code:
-   * `McpClient`, thin policy wrappers around bindings, and `ProjectWorker`,
-   * the forwarder that makes YOUR repo's worker exports dialable (user
-   * space: `entrypoint: "ProjectWorker", props: { export: "MyClass" }` —
-   * the call replays inside the Project DO because loader entrypoints
-   * cannot cross an RPC boundary). */
+   * `McpClient` and thin policy wrappers around bindings, parameterized
+   * per provide via `props`. */
   | { type: "loopback" }
   /** A Durable Object, addressed by namespace binding + instance name. The
-   * registry scopes the dial under the owning project —
+   * dial scopes the instance name under the owning project —
    * `getByName(\`itx:<projectId>:<name>\`)` — so a name only ever reaches
    * instances belonging to this project, never a sibling's. */
   | { type: "durable-object"; binding: string; name: string }
-  /** A dynamic worker materialized on demand from stored source — code that
-   * lives in the registry itself rather than in any deployed artifact. */
-  | { type: "source"; source: CapSource };
+  /** A dynamic worker materialized on demand from a stored source: code
+   * carried inline in the record itself, or code living in one of the
+   * project's repos. The project's own worker is exactly this — a repo
+   * source — not a special kind. */
+  | { type: "source"; source: WorkerSource };
 
 /**
  * Stored source for a `{ type: "source" }` worker. The platform materializes
  * it into an isolate on demand. Inside it: bare `fetch()` IS project egress
  * (secrets substituted server-side, never visible to this code), and
  * `env.ITERATE` is an itx scoped to the cap's home context — a capability
- * can never reach wider than where it is defined.
+ * can never reach wider than where it is provided.
  */
-export type CapSource = {
-  /**
-   * The loader caches the materialized isolate by this string, so it MUST
-   * change whenever `modules` change; a content hash is the ideal value.
-   * (Replaces the old `codeId` field — it was never an id, and "id" in this
-   * codebase means typeid.)
-   */
-  cacheKey: string;
-  mainModule: string;
-  modules: Record<string, string>;
+export type WorkerSource = (
+  | {
+      /** The code travels in the capability record itself. The loader
+       * caches the materialized isolate by `cacheKey`, so it MUST change
+       * whenever `modules` change; a content hash is the ideal value. */
+      type: "inline";
+      cacheKey: string;
+      mainModule: string;
+      modules: Record<string, string>;
+    }
+  | {
+      /** The code lives in one of the project's repos. Built per COMMIT —
+       * never per call — through @cloudflare/worker-bundler, memoized in R2
+       * by hash(repo, sha, path, bundle). A pinned commit sha makes the
+       * journal entry fully determine behavior; "latest" tracks pushes
+       * (the platform `worker` default uses it). With no `bundle`, the
+       * file at `path` IS the worker, verbatim. */
+      type: "repo";
+      repo: string;
+      commit: string | "latest";
+      path: string;
+      bundle?: { minify?: boolean; externals?: string[] };
+    }
+) & {
   /** Named export to load; defaults to the default export. */
   entrypoint?: string;
   /**
@@ -410,68 +499,88 @@ export type CapSource = {
 };
 
 /**
- * How a capability is called once the supervisor holds its target.
+ * The kernel knows exactly ONE calling convention: every capability is
+ * dispatched as `target.call({ path, args })`. Whether a dotted path is
+ * replayed onto a real member tree is decided at the EDGE where the
+ * concrete object lives, never by core data:
  *
- * `"members"` (default) — replay the property path on the target and call
- * the terminal method on its parent, receiver-preserving. Use when the
- * target is a real object whose methods exist:
+ * - The dial wraps the objects it resolves itself — env bindings, loader
+ *   entrypoints, facets — with its own plain in-process wrapper (dial.ts),
+ *   so a source cap just exports methods and its whole public surface is
+ *   replayed:
  *
  * ```ts
- * // target: { todos: { add(item) {…} } }
- * itx.myCap.todos.add({ text: "x" })  // → replays ["todos","add"] on the target
+ * // source worker: class extends WorkerEntrypoint { add({a,b}) { … } }
+ * itx.myCap.add({ a: 1, b: 2 })  // → wrap replays ["add"] on the entrypoint
  * ```
  *
- * `"path-call"` — the target implements ONE method, `call({ path, args })`,
- * and owns its own method-tree semantics. Use for SDK-shaped surfaces whose
- * tree you don't predeclare; the public SDK docs become the tool docs:
+ * - A LIVE provider either implements `call` itself (the SDK shape — own
+ *   your method-tree semantics; the public SDK docs become the tool docs)
+ *   or wraps a plain object-of-methods with `asPathCallable` before
+ *   providing (the replay then runs back in the provider's process):
  *
  * ```ts
  * // provider: class { call({ path, args }) { return slackApi(path.join("."), args[0]); } }
  * itx.slack.chat.postMessage({ … })   // → ONE call: call({ path: ["chat","postMessage"], … })
+ *
+ * await itx.provideCapability({ name: "mac", capability: asPathCallable({ run(src) { … } }) });
  * ```
+ *
+ * - Forwarders pick their INNER mode themselves: UrlDial always replays
+ *   the path as capnweb member pipelining against the remote main.
  */
-export type CapInvoke = "members" | "path-call";
-
-/** The wire shape of one dynamic-surface invocation. */
 export type PathCall = { path: string[]; args: unknown[] };
 
-/** What a `"path-call"` capability provider implements. */
-export type PathCallTarget = { call(input: PathCall): unknown };
+/** What every dispatched capability target implements. */
+export type PathCallable = { call(input: PathCall): unknown };
 
 /**
  * A live provider's stub: a function, an object of functions, or an
  * RpcTarget. Structural and opaque — it may arrive over Cap'n Web (a
  * browser tab, a Node process, an agent's sandbox) or Workers RPC; the
- * registry relies only on protocol-level controls (`dup`, `onRpcBroken`,
+ * core relies only on protocol-level controls (`dup`, `onRpcBroken`,
  * `Symbol.dispose`) when present.
  */
 export type LiveStub = object;
 
 /**
- * Arbitrary metadata on a registration. The registry stores it verbatim and
- * surfaces it in `describe()` — there is no schema. One convention worth
- * following: `instructions`, a human/agent-readable sentence on what the
- * cap does and how to call it, shown by `describe()`.
+ * Arbitrary metadata on a provide. The journal stores it verbatim and
+ * surfaces it in `describe()` — there is no schema. Two conventions worth
+ * following, a pair: `instructions` for the human/agent (a sentence on what
+ * the cap does and how to call it) and `types` for the machine/editor
+ * (TypeScript declarations of the cap's surface). Both are lifted by
+ * `describe()`.
  */
-export type CapMeta = {
+export type CapabilityMeta = {
   /** Shown in describe(); write it for the agent who finds this cap. */
   instructions?: string;
+  /** TypeScript declarations for the cap's surface (completion/typecheck
+   * material; the machine-facing counterpart of `instructions`). */
+  types?: string;
+  /** Provenance convention: who appended the provide. */
+  providedBy?: { type: "user" | "agent" | "system"; id: string };
+  /** HTTP routing flags (capability ingress). */
+  http?: { expose: boolean; public?: boolean };
   [key: string]: unknown;
 };
 
-/** A registry entry as reported by `describe()`. Never contains live stubs. */
-export type CapDescription = {
+/** A capability's kind is its provider's kind. */
+export type CapabilityKind = "live" | "rpc" | "url";
+
+/** A capability entry as reported by `describe()`. Never contains live stubs. */
+export type CapabilityDescription = {
   name: string;
   /** The target's kind: "live" | "rpc" | "url". */
-  kind: "live" | "rpc" | "url";
-  invoke: CapInvoke;
+  kind: CapabilityKind;
   /** Which context owns the entry — provenance for shadowing visibility. */
   owner: string;
   /** Live caps only: is the provider currently connected? */
   connected?: boolean;
   /** Lifted from meta for convenience: the one thing to read first. */
   instructions?: string;
-  meta: CapMeta;
+  /** Lifted from meta: TypeScript declarations for the cap's surface. */
+  types?: string;
+  meta: CapabilityMeta;
   updatedAtMs: number;
 };
 
@@ -569,7 +678,7 @@ export interface ItxStreams {
 /** Narrowing lives here: `get()` checks the principal's grants and returns
  * a NEW project-scoped handle. */
 export interface ItxProjects {
-  get(projectIdOrSlug: string): Promise<Itx>;
+  get(projectIdOrSlug: string): Promise<ItxHandle>;
   list(input?: { limit?: number; offset?: number }): Promise<{
     projects: {
       id: string;
@@ -598,11 +707,11 @@ export interface ItxProjects {
  * (helpers that take a `vars` object bake it into the source before
  * submitting, which is exactly what the /api/itx/run endpoint does).
  */
-export type ItxFn<R = unknown> = (itx: Itx) => Promise<R> | R;
+export type ItxFn<R = unknown> = (itx: ItxHandle) => Promise<R> | R;
 
 /**
  * Map an SDK's type surface onto its itx stub: every function becomes
- * async, everything else recurses. With this, {@link KnownCaps} merging
+ * async, everything else recurses. With this, {@link KnownCapabilities} merging
  * gives `itx.slack` the real @slack/web-api types while the runtime stays a
  * ten-line path-call forwarder.
  */
@@ -621,36 +730,16 @@ export type Stubify<T> = T extends (...args: infer A) => infer R
  * (Type-safe-ish via prefixes; `proj_` is the legacy project prefix, `prj_`
  * the canonical one minted by the auth worker.)
  */
-export type ContextRef = "global" | `prj_${string}` | `proj_${string}` | `ctx_${string}`;
+export type ContextRef = "global" | `prj_${string}` | `proj_${string}` | `itx_${string}`;
 
 /**
- * Who a handle was minted for — typed out BY HAND from the auth system
- * (`~/auth/principal.ts` + `@iterate-com/shared/auth-claims`), minus the
- * `can()` helper, so that drift becomes a type error at the conformance
- * seam rather than an invented parallel access model. Only fields itx
- * actually uses appear here.
- *
- * - `admin`: the admin API secret, or a user token carrying Better Auth's
- *   admin-plugin role claim. Sees everything.
- * - `user`: organization memberships and project grants exactly as the auth
- *   worker issued them. May do project-scoped things iff the project is in
- *   `projects`. Nothing finer-grained exists (the seam does; the
- *   implementation deliberately does not).
+ * The simplified access model: which projects a handle may narrow to —
+ * `"all"` (the admin API secret / an admin session) or a list of project
+ * ids exactly as connect-time auth resolved them. Nothing finer-grained
+ * exists. (The wire home of this shape is src/itx/refs.ts; it is declared
+ * inline here because this file imports nothing.)
  */
-export type ItxPrincipal =
-  | { type: "admin" }
-  | {
-      type: "user";
-      userId: string;
-      sessionId?: string;
-      organizations: {
-        id: string;
-        slug: string;
-        role: "member" | "admin" | "owner";
-        name?: string;
-      }[];
-      projects: { id: string; slug: string; organizationId: string }[];
-    };
+export type ProjectAccess = "all" | string[];
 
 /**
  * The ONE serializable parameterization in the system — what crosses a
@@ -658,14 +747,21 @@ export type ItxPrincipal =
  * identity, never composition or authority-by-content:
  *
  * - `context`: which context. The restorer turns it into a live handle.
- * - `principal`: honored on global handles only; a project-context handle
+ * - `access`: honored on global handles only; a project-context handle
  *   is always bound to exactly its own project regardless of what props
  *   claim.
- * - `cap`: pure attribution — which capability's isolate holds this handle.
- *   It grants nothing; it labels egress and audit records.
+ * - `contextAddress`/`projectId`: the resolved coordinate, passed by
+ *   platform wiring so a child context's isolates skip the directory
+ *   lookup; bare-id restores resolve through the context catalog instead.
+ *   Addresses are pure names — they grant nothing.
+ * - `capabilityPath`: pure attribution — which capability's isolate holds
+ *   this handle (the dotted route). It grants nothing; it labels egress and
+ *   journal records.
  */
 export type ItxProps = {
   context: ContextRef;
-  principal?: ItxPrincipal;
-  cap?: string;
+  contextAddress?: CapabilityAddress | null;
+  projectId?: string | null;
+  access?: ProjectAccess;
+  capabilityPath?: string;
 };
