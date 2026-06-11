@@ -568,8 +568,8 @@ importers:
         specifier: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
         version: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
       captun:
-        specifier: https://pkg.pr.new/captun@28
-        version: https://pkg.pr.new/captun@28(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0)
+        specifier: https://pkg.pr.new/captun@27
+        version: https://pkg.pr.new/captun@27(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0)
       comlink:
         specifier: ^4.4.2
         version: 4.4.2
@@ -8078,16 +8078,6 @@ packages:
 
   captun@https://pkg.pr.new/captun@27:
     resolution: {tarball: https://pkg.pr.new/captun@27}
-    version: 0.0.3
-    hasBin: true
-    peerDependencies:
-      vite: '>=5.1.0'
-    peerDependenciesMeta:
-      vite:
-        optional: true
-
-  captun@https://pkg.pr.new/captun@28:
-    resolution: {tarball: https://pkg.pr.new/captun@28}
     version: 0.0.3
     hasBin: true
     peerDependencies:
@@ -22113,7 +22103,7 @@ snapshots:
       - valibot
       - ws
 
-  captun@https://pkg.pr.new/captun@28(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0):
+  captun@https://pkg.pr.new/captun@27(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0):
     dependencies:
       '@inquirer/prompts': 8.4.3(@types/node@25.6.0)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)

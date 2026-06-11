@@ -185,9 +185,23 @@ CAPTUN_TUNNEL_NAME=jonas pnpm dev     # stable name → https://jonas.tunnels.it
 ```
 
 The captun Vite plugin (`apps/os/vite.config.ts`) activates when
-`CAPTUN_ENABLED`/`CAPTUN_TUNNEL_NAME` is set and forwards public HTTP to your
-local dev server. Plain HTTP only — HMR and other WebSockets stay on the
-local URL. Tests open tunnels via `createPublicTunnel`
+`CAPTUN_ENABLED`/`CAPTUN_TUNNEL_NAME` is set and forwards public **HTTP** to
+your local dev server. Its forwarder is plain `fetch`, so it does **not** carry
+WebSockets — HMR and itx (`/api/itx`, capnweb-over-WS) stay on the local URL.
+
+For WebSocket traffic over the tunnel (e.g. driving itx against a local dev
+server from outside), use the captun **CLI** instead, which forwards WS via
+captun@27's `connectWebSocket` hook:
+
+```bash
+captun tunnel http://127.0.0.1:<port> \
+  --name <name> --gateway https://tunnels.iterate.com --token "$CAPTUN_TOKEN"
+# → https://<name>.tunnels.iterate.com  (HTTP + WebSockets)
+# then: connectItx({ baseUrl: "https://<name>.tunnels.iterate.com", token: <admin> })
+```
+
+(Wiring `connectWebSocket` into the Vite plugin so `pnpm dev` carries WS too is
+a small captun follow-up.) Tests open tunnels via `createPublicTunnel`
 (`apps/os/e2e/test-support/create-test-project.ts`) against the same gateway.
 
 Tunnels are not scarce. The genuinely scarce thing is the webhook-source
