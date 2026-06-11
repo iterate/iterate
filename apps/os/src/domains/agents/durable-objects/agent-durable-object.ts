@@ -751,12 +751,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       },
       {
         instructions:
-          "Project-bound OS API. Call itx.os.listProcedures() for the TypeScript surface, then itx.os.<path.to.procedure>({ …input }).",
-        name: "os",
-        capability: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
-      },
-      {
-        instructions:
           "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }).",
         name: "gmail",
         capability: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },

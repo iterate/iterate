@@ -294,7 +294,6 @@ const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "EgressPipe",
   "GmailCapability",
   "McpClient",
-  "OrpcCapability",
   "ReposCapability",
   "SlackCapability",
   "StreamsCapability",

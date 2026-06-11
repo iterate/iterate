@@ -91,7 +91,7 @@ const eventTypePrefix = "events.iterate.com/mcp-server";
 const requiredToolScope = "profile";
 
 /** Bump when SEEDED_CAPS changes; existing sessions re-seed on next call. */
-const MCP_CONTEXT_CAPS_VERSION = "1";
+const MCP_CONTEXT_CAPS_VERSION = "2";
 
 /** Capabilities every MCP session context starts with (instructions feed the
  * exec_js tool description AND itx describe()). */
@@ -105,12 +105,6 @@ const SEEDED_CAPS: Array<{
       "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
     name: "ai",
     capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
-  },
-  {
-    instructions:
-      "Project-bound OS API. Call itx.os.listProcedures() for the TypeScript surface, then itx.os.<path.to.procedure>({ …input }).",
-    name: "os",
-    capability: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
   },
   {
     instructions:
@@ -531,7 +525,7 @@ export class ProjectMcpServerConnection extends McpAgent<
       code: z
         .string()
         .describe(
-          "JavaScript async arrow function to execute, e.g. `async (itx) => { return await itx.os.listProcedures(); }`",
+          "JavaScript async arrow function to execute, e.g. `async (itx) => { return await itx.describe(); }`",
         ),
       ...(options.requireProjectInput
         ? {

@@ -12,6 +12,7 @@ import {
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
+import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import {
   dispatchFetchCallable,
   matchIngressRequest,
@@ -109,7 +110,6 @@ export class RepoDurableObject extends RealRepoDurableObject {
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
-export { OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
 export { EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { PlatformContext } from "~/itx/platform-context.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
@@ -178,17 +178,14 @@ export default {
     }
 
     if (url.pathname === "/__test/upsert-secret") {
-      const secret = await ctx.exports
-        .OrpcCapability({ props: { projectId: "proj__local__test" } })
-        .call({
-          args: [
-            {
-              key: url.searchParams.get("key") ?? "openai",
-              material: url.searchParams.get("material") ?? "mvp-secret-value",
-            },
-          ],
-          path: ["secrets", "upsert"],
-        });
+      const secrets = getSecretsCapability({
+        exports: ctx.exports,
+        props: { projectId: "proj__local__test" },
+      });
+      const secret = await secrets.setSecret({
+        key: url.searchParams.get("key") ?? "openai",
+        material: url.searchParams.get("material") ?? "mvp-secret-value",
+      });
       return Response.json(secret);
     }
 

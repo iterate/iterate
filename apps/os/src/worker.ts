@@ -47,7 +47,7 @@ export { PackageStream as StreamDurableObject };
 
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-capability.ts";
-export { AiCapability, OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
+export { AiCapability } from "~/rpc-targets/os-capabilities.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { BindingCapability, EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { McpClient } from "~/itx/capabilities/mcp-client.ts";

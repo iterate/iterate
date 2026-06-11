@@ -183,17 +183,13 @@ Primary surfaces:
   and `project.streams` reads.
 - MCP: `exec_js` on the canonical MCP endpoint.
 
-Default providers
-(`src/domains/codemode/default-provider-registrations.ts`) are registered for
-every session: the workspace handle, `ctx.fetch`, `ctx.streams`, `ctx.slack`,
-project Secrets (`ctx.secrets`), and outbound MCP servers (`ctx.mcp.exa`,
-`ctx.mcp.context7`). Agent and MCP-server sessions additionally register the
-example capability providers (`example-provider-registrations.ts`): `ctx.ai`,
-`ctx.repos`, `ctx.agents.create()`, and `ctx.os`.
-
-The `ctx.os` provider (`OrpcCapability`) exposes the real `os.project.*`
-subtree project-bound: it injects the stable Project ID as `projectSlugOrId`
-and strips that field from generated codemode types/listings.
+Sessions are seeded with capabilities at context creation (see
+`SEEDED_CAPS` in
+`src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts`
+and the agent defaults in
+`src/domains/agents/durable-objects/agent-durable-object.ts`): `itx.ai`,
+`itx.gmail`, and for agents also `itx.slack`, `itx.agents`, `itx.workspace`,
+and more.
 
 Slack and other event-mediated providers can append function-call completions
 from outside the codemode processor. RPC providers return through
