@@ -27,19 +27,26 @@ key, so you can mint a session as anyone, instantly and offline:
 ## Local dev
 
 ```bash
+# once per worktree/clone — doppler.yaml maps each app dir to its Doppler
+# project, so this one command scopes the whole monorepo:
 pnpm install
-DOPPLER_CONFIG=dev pnpm dev   # fully-local OS dev server on http://os.localhost:<port>
+doppler setup --config dev --no-interactive       # or --config dev_<you>
+
+pnpm dev          # fully-local OS dev server on http://os.localhost:<port>
 ```
 
 - **Config selection**: `pnpm dev` resolves its Doppler config as
-  `DOPPLER_CONFIG` → `doppler configure` scope (machine _or worktree_) →
-  shared `dev`. A leftover `doppler setup` pointing at `dev_<user>` silently
-  gives you the _tunnel-backed_ legacy dev instead: fixed port 5173, a
-  cloudflared tunnel that claims `os.iterate-dev-<user>.com` (contested
-  across worktrees — agents will steal it from each other). Agents and
-  parallel worktrees should always pass `DOPPLER_CONFIG=dev` explicitly; the
-  startup banner prints `Stage: <config>` — if it doesn't say `dev`, you're
-  not fully local.
+  `DOPPLER_CONFIG` env var → `doppler setup` scope for the worktree → shared
+  `dev`. The scope (via the repo's `doppler.yaml`) is the intended mechanism;
+  the env var is a one-off override.
+- **Which config?** `dev` is the shared fully-local config — works for
+  everyone, any number of parallel worktrees. `dev_<you>` is your personal
+  _tunnel-backed_ config: fixed port 5173 plus a cloudflared tunnel claiming
+  `os.iterate-dev-<you>.com` — only one worktree can usefully hold that
+  tunnel at a time, so use it in the worktree where you need webhooks and
+  scope everything else (especially agent worktrees) to `dev`. The startup
+  banner prints `Stage: <config>` — if it doesn't say `dev`, you're not
+  fully local.
 - The chosen port is baked into the env (`APP_CONFIG_BASE_URL`) at startup and
   recorded in **`apps/os/.alchemy/dev-server.json`** (`{pid, port, baseUrl}`).
   Scripts and CLIs that need "the local dev server" read that file — no
