@@ -105,7 +105,17 @@ export type ProjectEgressProps = {
  */
 export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
   async fetch(request: Request): Promise<Response> {
-    return (await this.#project().itxInvoke({
+    // Dispatch at the ORIGINATING context node, not the project: a child
+    // context's `fetch` shadow must catch its isolates' bare fetch() too —
+    // the chain (child → project → defaults) is what resolves the cap.
+    const context = this.ctx.props.context;
+    const node =
+      context && isChildContextId(context)
+        ? (this.env.ITX_CONTEXT.getByName(context) as unknown as {
+            itxInvoke(input: PathCall & { name: string }): Promise<unknown>;
+          })
+        : this.#project();
+    return (await node.itxInvoke({
       args: [request],
       name: "fetch",
       path: [],

@@ -546,6 +546,38 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
     owner: "platform:project",
   });
   await expect(projectItx.fetch("https://intercept-probe.invalid/x")).rejects.toThrow();
+
+  // (6) Child contexts: a shadow defined on a FORK intercepts that fork's
+  // isolates too — ProjectEgress dispatches at the ORIGINATING context node,
+  // so the child's chain (child shadow → project → defaults) resolves bare
+  // fetch(), while the project context stays on the real pipe.
+  using child = await projectItx.fork({ name: "fetch-shadow" });
+  const childDescription = await child.describe();
+  await child.caps.define({
+    invoke: "path-call",
+    name: "fetch",
+    target: new EgressInterceptor() as never,
+  });
+  const childScriptResponse = await fetch(new URL("/api/itx/run", baseUrl()), {
+    body: JSON.stringify({
+      context: String(childDescription.context),
+      functionSource: bareFetchScript.toString(),
+    }),
+    headers: authHeaders(),
+    method: "POST",
+  });
+  const childScriptBody = (await childScriptResponse.json()) as {
+    error?: string;
+    result?: unknown;
+  };
+  if (!childScriptResponse.ok) {
+    throw new Error(`child bare-fetch script failed: ${childScriptBody.error}`);
+  }
+  expect(childScriptBody.result).toEqual({
+    intercepted: true,
+    url: "https://intercept-probe.invalid/bare",
+  });
+  await expect(projectItx.fetch("https://intercept-probe.invalid/x")).rejects.toThrow();
 });
 
 test("absolute stream refs are sugar through the one access check", async () => {
