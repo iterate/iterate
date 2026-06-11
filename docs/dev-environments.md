@@ -20,9 +20,10 @@ agents on one machine each run their own isolated environment with the same
 shared `dev` config.
 
 Identity is **claims in a JWT** — OS deliberately knows nothing about auth's
-user table. In dev and preview, the Doppler config carries a _forge_ private
-key, so you can mint a session as anyone, instantly and offline:
-`pnpm auth:mint` (see [Acting as users](#acting-as-users-and-admins)).
+user table. Every environment's Doppler config carries a _forge_ private key
+(prd's behind an explicit opt-in), so you can mint a session as anyone,
+instantly and offline: `pnpm auth:mint` (see
+[Acting as users](#acting-as-users-and-admins)).
 
 ## Local dev
 
@@ -135,14 +136,34 @@ A signed-in _human_ never hits this: the real OAuth flow walks you through
 creating an org + project on first sign-in (test emails `+...test@` with OTP
 `424242` work for that flow too, fully headless).
 
-The `browserSignInUrl` embeds the (short-lived, dev/preview) tokens as query
-params — treat it as a secret: it can appear in browser history and edge
-request logs, so don't paste it into shared channels.
+The `browserSignInUrl` embeds the (short-lived) tokens as query params — treat
+it as a secret: it can appear in browser history and edge request logs, so
+don't paste it into shared channels.
 
-There is intentionally **no forge key in prd** (the deploy fails if one
-appears in a prd config). Production access uses the existing admin API
-secret; an audited mint-endpoint on the auth worker is the planned
-replacement.
+### Minting in production
+
+The same mechanism works against **production** — you can mint a real
+`os.iterate.com` session as any user to poke around in prd:
+
+```bash
+doppler run --project os --config prd -- pnpm auth:mint --email someone@nustom.com --browser-url
+# open the printed URL → signed in on https://os.iterate.com as that user
+```
+
+The forge key is a **master key**: anyone holding `AUTH_FORGE_PRIVATE_JWK`
+from `os/prd` can mint a session as any user, including admins. There is no
+audit trail yet — an audited mint endpoint on the auth worker is the planned
+replacement. Until then, guard that Doppler value like any production secret
+and prefer minting a scoped (non-admin) identity when you can.
+
+Because the prd forge key is god-mode, the deploy refuses to bake its public
+key into the worker unless you opt in explicitly: `os/prd` must carry **both**
+`AUTH_FORGE_PRIVATE_JWK` and `AUTH_FORGE_ALLOW_PRODUCTION=true`. A forge key
+that lands in a prod config without the flag fails the deploy loudly rather
+than silently arming minting (each environment also uses its own key id —
+`iterate-forge-dev`/`-preview`/`-prd` — so a leak is scoped to one
+environment). Generate a fresh forge key with
+`pnpm tsx scripts/auth/generate-forge-key.ts --kid iterate-forge-<env>`.
 
 ## Browsers: the golden path for agents
 

@@ -140,6 +140,10 @@ can be destroyed and recreated.
     cached until expiry). **Hard placement rule: forge keys never appear in any prd config.**
     Prd break-glass needs no standing credential: prd auth Doppler access holders can sign
     with the issuer key directly if auth is hard-down.
+    _Update: the prd hard-rule was relaxed — `os/prd` now carries a forge key behind an
+    explicit `AUTH_FORGE_ALLOW_PRODUCTION=true` opt-in, so the same offline `pnpm auth:mint`
+    works against production. It's an unaudited master key for now; the audited auth-worker
+    endpoint above is still the intended end state. See `docs/dev-environments.md`._
 13. **One trust root; the parallel admin systems die** (one cutover PR, no compat bridges):
     `APP_CONFIG_ADMIN_API_SECRET` (admin = JWT with `platformAdmin` claim), the
     `iterate-admin-auth` cookie bridge (→ session-from-token), `X-Iterate-As-User` (→ mint

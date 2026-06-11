@@ -82,25 +82,37 @@ async function resolveStaticAuthJwks(issuer: string | undefined) {
   }
 }
 
-// Dev/preview identity forging: when the Doppler config carries the forge
-// private JWK (`AUTH_FORGE_PRIVATE_JWK`, from `_shared/dev` / `_shared/preview`),
-// its PUBLIC half joins the worker's trusted JWKS so locally-minted JWTs
+// Identity forging: when the Doppler config carries the forge private JWK
+// (`AUTH_FORGE_PRIVATE_JWK`, from `_shared/dev` / `_shared/preview`, and `os/prd`),
+// its PUBLIC half joins the worker's trusted JWKS so minted JWTs
 // (scripts/auth/mint-session.ts) verify exactly like issuer-signed ones.
-// Placement rule: the forge key must never exist in any prd config — enforced
-// here as a hard error rather than a silent skip.
+//
+// The forge key is a master key: whoever holds it can mint a session as any
+// user, including admins. In dev/preview that's the whole point. In PRODUCTION
+// it is also allowed (you can `pnpm auth:mint` against os.iterate.com to poke
+// around as any user) but is gated behind an explicit opt-in so a forge key
+// that *accidentally* lands in a prod config still fails the deploy loudly
+// instead of silently arming god-mode. Enabling prod minting takes two
+// deliberate Doppler values in `os/prd`: AUTH_FORGE_PRIVATE_JWK *and*
+// AUTH_FORGE_ALLOW_PRODUCTION=true. (TODO: replace with an audited mint
+// endpoint on the auth worker — see docs/dev-environments.md.)
 function withForgePublicKey(jwksJson: string) {
   const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
   if (!forgePrivateJwk) return jwksJson;
-  // Two independent backstops so the forge pubkey can never reach a
-  // production-serving worker: the stage name AND the issuer identity. A
-  // prod-serving deploy under a non-"prd" stage name (hotfix stage, custom
-  // hostname) is still caught by the issuer check.
+  // Detect a production-serving deploy two independent ways — stage name AND
+  // issuer identity — so a prod deploy under a non-"prd" stage (hotfix stage,
+  // custom hostname) is still caught by the issuer check.
   const isProdStage = process.env.ALCHEMY_STAGE?.trim() === "prd";
   const isProdIssuer = (resolvedAuthIssuer ?? "").includes("auth.iterate.com");
-  if (isProdStage || isProdIssuer) {
+  const allowProduction = /^(1|true|yes)$/i.test(
+    process.env.AUTH_FORGE_ALLOW_PRODUCTION?.trim() ?? "",
+  );
+  if ((isProdStage || isProdIssuer) && !allowProduction) {
     throw new Error(
-      "AUTH_FORGE_PRIVATE_JWK must never be present in a production config " +
-        `(stage=${process.env.ALCHEMY_STAGE}, issuer=${resolvedAuthIssuer}) — remove it from Doppler.`,
+      "AUTH_FORGE_PRIVATE_JWK is present in a production config " +
+        `(stage=${process.env.ALCHEMY_STAGE}, issuer=${resolvedAuthIssuer}) without ` +
+        "AUTH_FORGE_ALLOW_PRODUCTION=true. Set that flag in the same config to deliberately " +
+        "enable production minting, or remove the forge key if it landed there by accident.",
     );
   }
   try {
