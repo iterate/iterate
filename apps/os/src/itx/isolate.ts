@@ -52,7 +52,7 @@ export function wireIsolateEnv(input: {
       ...input.extraEnv,
     },
     globalOutbound: input.loopback("ProjectEgress", {
-      props: { cap: input.cap, context: input.contextId, project: input.projectId },
+      props: { cap: input.cap, context: input.contextId, projectId: input.projectId },
     }),
     mainModule: input.code.mainModule,
     modules: input.code.modules,

@@ -212,17 +212,18 @@ they're all "register a capability"; make ONE function whose argument shape
 is self-documenting:
 
 ```ts
-itx.caps.define({ name: "mac",   target: { type: "live", stub } });                                        // inbound, session-bound
+itx.caps.define({ name: "mac",   target: stub });                                                          // inbound, session-bound
 itx.caps.define({ name: "slack", target: { type: "rpc", worker: { type: "source", source: { … } } } });    // outbound, durable
 itx.caps.define({ name: "ai",    target: { type: "rpc", worker: { type: "binding", binding: "AI" } } });   // outbound, durable
 ```
 
 RESOLVED (supersedes an earlier `target | source | address` triple, which
-was confusing): one field, **`target`**, in different kinds — the
-discriminated union above. No separate `source`/`address` arms; direction
-is derived from the kind, never spelled by the caller. (Possible authoring
-sugar: a bare stub/function means `{ type: "live" }`.) `caps.provide` can
-stay as an alias during migration.
+was confusing): one field, **`target`**, in different kinds. No separate
+`source`/`address` arms; direction is derived from the kind, never spelled
+by the caller. SHIPPED in the consolidation pass (2026-06-10): there is no
+`{ type: "live", stub }` wrapper — the bare stub IS the live form, and the
+registry discriminates structurally (plain `type: "rpc" | "url"` data vs
+everything else). `caps.provide` stays as a one-line alias.
 
 RESOLVED: `kind: "facet"` dies as user-facing vocabulary (it names the
 platform _mechanism_, not the concept, and hides that this is a Durable
@@ -684,8 +685,9 @@ captun machinery dissolves.
   ```ts
   using itx = await connectItx({ context: projectId });
   await itx.caps.provide({
-    name: "egress", // shadows the default egress cap
-    target: { type: "live", stub: (request) => myLocalFetch(request) },
+    invoke: "path-call",
+    name: "fetch", // shadows the default egress pipe
+    target: new MyEgressShadow(), // call({ args: [request] }) -> Response
   });
   ```
 
@@ -694,22 +696,64 @@ captun machinery dissolves.
   The secret-withholding rule ("an active interceptor never sees real
   material") stops being a special case in `substituteProjectEgressSecretHeaders`
   and becomes a property of the egress cap's policy: requests routed to a
-  live `egress` provider get placeholders withheld, period.
+  live `fetch` shadow get placeholders withheld, period. SHIPPED (D23):
+  the withheld-text substitution mode is deleted; shadows see raw
+  placeholders.
 
-- **Sequencing.** (1) Land the capnweb WS transport. (2) Reframe egress as a
-  defined cap on the project context (default target: the stateless
-  `ProjectEgress` pipe) so `live` shadowing works with zero new concepts —
-  this is also a §8 code-context default. (3) Delete captun + the DO's
+- **Sequencing.** (1) Land the capnweb WS transport — DONE. (2) Reframe
+  egress as a defined cap on the project context (default target: the
+  stateless `ProjectEgress` pipe) so `live` shadowing works with zero new
+  concepts — this is also a §8 code-context default. SHIPPED in the
+  consolidation pass (2026-06-10): the cap is named `fetch`, not `egress` —
+  it shadows the very name both doors dispatch. (3) Delete captun + the DO's
   tunnel accept + the `fetch` WS exception; at that point the Project DO has
   NO fetch surface at all ("maybe there's a scenario where the project DO
   has neither fetch nor ingressFetch nor egressFetch — that might be nice,
-  just nothing").
+  just nothing"). SHIPPED (D23): the intercept tunnel is dead, the default
+  pipe is the stateless EgressPipe (no DO in the egress path at all), and
+  captun remains only for the public `/__iterate/captun` relay.
 
 Open: where does a held request park while awaiting approval (DO alarm?
-queue? the egress stream itself)? Does the live `egress` provider shadow for
+queue? the egress stream itself)? Does the live `fetch` shadow apply to
 ALL callers on the context or only for the session that provided it
-(current tunnel: all callers — keep)? Latency budget for policy-cache reads
-on the hot path?
+(current: all callers, like the old tunnel)? Latency budget for
+policy-cache reads on the hot path?
+
+## Consolidation pass (2026-06-10 night)
+
+Three collapses, no new concepts:
+
+- **One verb.** `provide` IS `define` with a live target: the registry's
+  `define()` takes `SerializableCapTarget | LiveCapTarget` and discriminates
+  structurally — a serializable target is a plain data object (prototype
+  `Object.prototype`/null) carrying `type: "rpc" | "url"`; ANYTHING else is
+  a live stub. The plainness check runs before any `.type` probe because
+  property access on a capnweb stub returns a truthy pipelined stub. The
+  `itxProvide` node verbs are gone; `caps.provide` survives as a one-line
+  alias for REPL muscle memory.
+- **fetch demoted from kernel to platform default.** `platform:project`
+  defines `fetch` (invoke `path-call`, wire shape
+  `call({ path: [], args: [request] }) → Response`) whose target is the
+  terminal `ProjectEgress.call` → Project DO `egressFetch`.
+  `ProjectEgress.fetch` (globalOutbound) and the handle's `itx.fetch` both
+  dispatch REGISTRY-FIRST through the cap — the default dialing `.call`,
+  not `.fetch`, is what breaks the loop. Egress interception is therefore
+  just cap shadowing: define a live `fetch`, all project egress (both
+  doors) flows through your provider until you disconnect/revoke; then the
+  default resurfaces. Security property, on purpose: a shadow provider
+  receives `getSecret(...)` placeholders UNSUBSTITUTED — substitution only
+  exists in the default pipe inside the Project DO. `ProjectEgress` joined
+  `DIALABLE_LOOPBACKS`, scoping strictly by registry-injected
+  `props.projectId` (renamed from `props.project`).
+- **One context-node shape.** `createContextRegistryHost`
+  (src/itx/registry-host.ts) builds the registry host for BOTH the Project
+  DO and ContextDO; only identity, audit destination, and `defaults` differ
+  (children still pass none — their misses walk the real chain).
+
+The kernel is now `caps, streams, fork, project, projects, describe` plus
+sugar (`fetch`, `cap()`). Follow-up debt: the captun egress intercept
+tunnel is now expressible as fetch-cap shadowing and should be deleted (see
+New debts).
 
 ## Resolved (was open, now decided)
 
@@ -804,6 +848,13 @@ origin })`, set by the first delegating hop, preserved upward; the
 
 ## New debts (2026-06-10 evening)
 
+- The captun egress intercept tunnel
+  (`acceptProjectEgressInterceptTunnel`, the DO `fetch` WS exception, the
+  intercept-aware branch of `substituteProjectEgressSecretHeaders`) is now
+  expressible as cap shadowing — a live `fetch` cap intercepts both egress
+  doors with session-bound semantics for free (consolidation pass, §9 step
+  2 shipped). Delete the tunnel machinery in a follow-up once its remaining
+  users move over.
 - ~~`itx.workspace.git.*` nested RpcTarget broken~~ → DELETED. The flat
   `gitClone`/`gitAdd`/`gitCommit`/`gitPush`/`gitStatus` methods are the
   surface; nested RpcTargets returned from entrypoint getters do not
@@ -838,5 +889,5 @@ origin })`, set by the first delegating hop, preserved upward; the
 5. Uncurried `{ namespace, … }` accessor pattern uniformly across
    repos/streams/workspaces — confirm shape.
 6. Egress-as-capability (§9): where held-for-approval requests park; whether
-   a live `egress` provider shadows for all callers or per-session; policy
+   a live `fetch` shadow applies to all callers or per-session; policy
    cache latency on the hot path.

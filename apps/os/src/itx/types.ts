@@ -30,7 +30,7 @@
  * ever touches, identical in the browser, Node, the REPL, the project
  * worker (the worker built from the project's own repo), itx scripts, and
  * capabilities themselves. Built-in
- * members (`caps`, `streams`, `fetch`, `fork`, …) are the trust kernel;
+ * members (`caps`, `streams`, `fork`, `projects`, …) are the trust kernel;
  * every other property falls through to the context's capability registry.
  * Authority is the handle itself: auth happens once at connect, and which
  * context you hold — plus the principal it was minted for — is the whole
@@ -135,11 +135,21 @@ export interface ItxBuiltins {
   readonly project: unknown;
 
   /**
-   * Explicit project egress. Secret placeholders are substituted inside the
-   * project's egress hop — `'Bearer getSecret({ key: "X_TOKEN" })'` in a
-   * header never sees the material. Isolates the platform loads get this
-   * same pipe bound as their global `fetch`, so inside a capability or itx
-   * script, bare `fetch()` and `itx.fetch()` are the same door.
+   * PLATFORM DEFAULT, not kernel: explicit project egress, as sugar over the
+   * context's `fetch` capability (`platform:project` defines the default).
+   * The default pipe substitutes secret placeholders inside the project's
+   * egress hop — `'Bearer getSecret({ key: "X_TOKEN" })'` in a header never
+   * sees the material. Isolates the platform loads get this same dispatch
+   * bound as their global `fetch`, so inside a capability or itx script,
+   * bare `fetch()` and `itx.fetch()` are the same door.
+   *
+   * Because it is a capability, it is SHADOWABLE: define your own `fetch`
+   * (e.g. a live provider implementing `call({ path: [], args: [request] })
+   * → Response`) and ALL project egress flows through your provider while it
+   * is connected; revoke it and the default resurfaces. A shadow provider
+   * receives `getSecret(...)` placeholders UNSUBSTITUTED — substitution only
+   * happens in the default pipe, so an interceptor never sees secret
+   * material.
    */
   fetch(input: Request | string, init?: RequestInit): Promise<Response>;
 
@@ -215,10 +225,11 @@ export interface ItxCaps {
    * belongs to the provided object, not the registry.
    *
    * ```ts
-   * // From a laptop/sandbox (inbound, lives while connected):
+   * // From a laptop/sandbox (inbound, lives while connected): a live
+   * // target is the stub itself — a function, object, or RpcTarget.
    * await itx.caps.define({
    *   name: "runSwiftOnMyMac",
-   *   target: { type: "live", stub: async (src) => runSwift(src) },
+   *   target: async (src) => runSwift(src),
    *   meta: { instructions: "Compile-and-run Swift on Jonas's Mac." },
    * });
    *
@@ -262,8 +273,8 @@ export interface ItxCaps {
     meta?: CapMeta;
   }): Promise<{ name: string; ok: true }>;
 
-  /** Legacy alias: `provide({ name, target: stub })` ≡
-   * `define({ name, target: { type: "live", stub } })`. */
+  /** Alias for {@link define} (REPL muscle memory) — define is the verb; a
+   * live stub is just another target. */
   provide(input: {
     name: string;
     target: LiveStub;
@@ -287,9 +298,12 @@ export interface ItxCaps {
 /**
  * THE capability target. Three kinds:
  *
- * - `live` — inbound. Something connected to this context and handed us a
+ * - live — inbound. Something connected to this context and handed us a
  *   stub; the cap exists exactly as long as that connection does. The one
- *   non-serializable kind.
+ *   non-serializable kind, and it has NO wrapper: the target IS the stub
+ *   (a function, an object of functions, an RpcTarget). Discrimination is
+ *   structural — a serializable target is a plain data object carrying
+ *   `type: "rpc" | "url"`; anything else is live.
  * - `rpc` — outbound, inside the Workers RPC universe. "There is an RPC
  *   target in some worker; here is how to reach it." The worker may be a
  *   platform binding, the platform worker's own exports, the project
@@ -313,7 +327,7 @@ export interface ItxCaps {
  * cap registered on another context.)
  */
 export type CapTarget =
-  | { type: "live"; stub: LiveStub }
+  | LiveStub
   | {
       type: "rpc";
       worker: WorkerRef;
@@ -444,7 +458,7 @@ export type CapMeta = {
 export type CapDescription = {
   name: string;
   /** The target's kind: "live" | "rpc" | "url". */
-  kind: CapTarget["type"];
+  kind: "live" | "rpc" | "url";
   invoke: CapInvoke;
   /** Which context owns the entry — provenance for shadowing visibility. */
   owner: string;

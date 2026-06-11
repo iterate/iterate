@@ -109,7 +109,7 @@ export async function runItxScript(input: {
       ...(input.projectId !== null
         ? {
             globalOutbound: exports.ProjectEgress!({
-              props: { context: input.props.context, project: input.projectId },
+              props: { context: input.props.context, projectId: input.projectId },
             }) as Fetcher,
           }
         : {}),

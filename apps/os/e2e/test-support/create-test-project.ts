@@ -134,7 +134,7 @@ export async function createTestProject(opts: { slugPrefix: string }) {
 }
 
 /**
- * Shadow the project's egress with a live `egress` capability — the
+ * Shadow the project's egress with a live `fetch` capability — the
  * capability-model replacement for the old captun intercept tunnel. The
  * provider receives every egress Request with secret placeholders RAW
  * (never material); disposing the session restores the default pipe.
@@ -144,8 +144,9 @@ export async function createProjectEgressInterceptTunnel(input: {
   fetch: Fetch;
 }) {
   class EgressShadow extends RpcTarget {
-    fetch(request: Request) {
-      return input.fetch(request);
+    call({ args }: { path: string[]; args: unknown[] }) {
+      const [request, init] = args as [Request | string, RequestInit | undefined];
+      return input.fetch(request instanceof Request ? request : new Request(request, init));
     }
   }
   const itx = connectItx({
@@ -156,9 +157,9 @@ export async function createProjectEgressInterceptTunnel(input: {
   try {
     await (
       itx as unknown as {
-        caps: { provide(i: { name: string; target: unknown }): Promise<unknown> };
+        caps: { provide(i: { invoke: string; name: string; target: unknown }): Promise<unknown> };
       }
-    ).caps.provide({ name: "egress", target: new EgressShadow() });
+    ).caps.provide({ invoke: "path-call", name: "fetch", target: new EgressShadow() });
   } catch (error) {
     itx[Symbol.dispose]();
     throw error;

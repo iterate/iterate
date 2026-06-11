@@ -307,16 +307,13 @@ export type CapDescription = {
  * - JS/RPC protocol names: `then` makes proxies thenable, `dup`/`onRpcBroken`
  *   are capnweb stub controls, `constructor`/`__proto__` are prototype
  *   pollution vectors, `map` is capnweb's magic promise method.
+ *
+ * `fetch` is deliberately NOT here: project egress is a `platform:project`
+ * default capability, and defining your own `fetch` (e.g. a live provider)
+ * is how egress interception works. The handle's real `fetch` method still
+ * wins property lookup; it routes through the registry anyway.
  */
-const ITX_BUILTIN_NAMES = [
-  "caps",
-  "describe",
-  "fetch",
-  "fork",
-  "project",
-  "projects",
-  "streams",
-] as const;
+const ITX_BUILTIN_NAMES = ["caps", "describe", "fork", "project", "projects", "streams"] as const;
 
 /**
  * Names that must never traverse a dynamic surface — prototype-pollution

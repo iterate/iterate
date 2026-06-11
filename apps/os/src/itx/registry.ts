@@ -11,6 +11,9 @@
 //     stubs die with their session and providers reconnect (Law 1),
 //   - dispatch: members-replay or one path-call, per entry (Law 6).
 //
+// Registration is ONE verb: define() takes any target — a live stub is just
+// another target kind, routed to the in-memory table instead of a stored row.
+//
 // The host stays in charge of identity and wiring via ContextRegistryHost;
 // the registry never touches authority — by the time a call reaches it, the
 // caller already held a handle on this context.
@@ -32,8 +35,8 @@ import {
   type SerializableCapTarget,
 } from "./protocol.ts";
 import { replayPathCall } from "./path-proxy.ts";
-import { wireIsolateEnv } from "./isolate.ts";
 import type { CodeContext } from "./code-contexts.ts";
+import { wireIsolateEnv } from "./isolate.ts";
 
 /**
  * A live provider's stub as the registry sees it. Structural because the
@@ -45,6 +48,29 @@ export type LiveCapTarget = {
   onRpcBroken?: (callback: (error: unknown) => void) => void;
   [Symbol.dispose]?: () => void;
 } & Record<string, unknown>;
+
+/**
+ * A SERIALIZABLE target is plain data: an object whose prototype is
+ * Object.prototype (or null) carrying `type: "rpc" | "url"`. Everything else
+ * — capnweb RpcStubs (callable function-proxies), workers-RPC stubs,
+ * RpcTarget instances, plain functions — is a LIVE provider. The plainness
+ * check MUST come before any `.type` probe: property access on a capnweb
+ * stub returns a truthy pipelined stub, so reading `.type` first would
+ * misclassify every live target.
+ */
+function isSerializableCapTarget(
+  target: SerializableCapTarget | LiveCapTarget,
+): target is SerializableCapTarget {
+  if (!isPlainObject(target)) return false;
+  const type = (target as { type?: unknown }).type;
+  return type === "rpc" || type === "url";
+}
+
+function isPlainObject(target: unknown): boolean {
+  if (typeof target !== "object" || target === null) return false;
+  const proto = Object.getPrototypeOf(target);
+  return proto === Object.prototype || proto === null;
+}
 
 type WorkerLoaderLike = {
   get(
@@ -188,79 +214,40 @@ export class ContextRegistry {
   }
 
   /**
-   * Register a live capability. Session-bound: the entry survives in SQLite
-   * (so describe() can report "registered but offline") but the stub lives
-   * only in memory and is torn down when the provider's session breaks.
-   */
-  provide(input: { name: string; target: LiveCapTarget; invoke?: CapInvoke; meta?: CapMeta }): {
-    name: string;
-    ok: true;
-  } {
-    assertValidCapName(input.name);
-    const invoke = input.invoke ?? "members";
-
-    // RPC disposes argument stubs when the call returns; keep a duplicate
-    // (and hand further dups to borrowers) — both directions of the dup()
-    // discipline from the original capnweb learnings.
-    const target = input.target.dup ? input.target.dup() : input.target;
-    const connection: LiveConnection = {
-      target,
-      [Symbol.dispose]: () => {
-        if (this.#live.get(input.name) === connection) {
-          this.#live.delete(input.name);
-          this.host.audit({
-            type: ITX_EVENT_TYPES.capDisconnected,
-            payload: { name: input.name },
-          });
-        }
-        target[Symbol.dispose]?.();
-      },
-    };
-
-    this.#live.get(input.name)?.[Symbol.dispose]();
-    this.#live.set(input.name, connection);
-    try {
-      // Cap'n Web stubs expose onRpcBroken; plain Workers RPC stubs do not
-      // (the access becomes a failing remote call — synchronously or as a
-      // rejected promise). Workers RPC providers simply lack
-      // auto-dispose-on-disconnect.
-      const wired = target.onRpcBroken?.(() => connection[Symbol.dispose]()) as unknown;
-      void Promise.resolve(wired).catch(() => {});
-    } catch {
-      // Not a capnweb stub — fine.
-    }
-
-    this.upsertRow({
-      invoke,
-      kind: "live",
-      meta: input.meta ?? {},
-      name: input.name,
-      target: null,
-    });
-    this.host.audit({
-      type: ITX_EVENT_TYPES.capProvided,
-      payload: { invoke, name: input.name },
-    });
-    return { name: input.name, ok: true };
-  }
-
-  /**
-   * Register a durable capability: a name plus a serializable target
-   * (types.ts is the design of record). Targets are validated here so
-   * misconfiguration fails at define(), and again at dial time (the
-   * authoritative gate).
+   * Register a capability: ONE verb for every target kind (types.ts is the
+   * design of record). A serializable target is stored durably and validated
+   * here so misconfiguration fails at define(), and again at dial time (the
+   * authoritative gate). Any other target is a LIVE provider stub —
+   * session-bound: the entry survives in SQLite (so describe() can report
+   * "registered but offline") but the stub lives only in memory and is torn
+   * down when the provider's session breaks.
    */
   define(input: {
     name: string;
-    target: SerializableCapTarget;
+    target: SerializableCapTarget | LiveCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
   }): { name: string; ok: true } {
     assertValidCapName(input.name);
-    const target = input.target;
-    assertDefinableCapTarget(input.name, target, this.dialable());
     const invoke = input.invoke ?? "members";
+    const target = input.target;
 
+    if (!isSerializableCapTarget(target)) {
+      // A PLAIN object carrying a string `type` is a malformed serializable
+      // target (typo, unknown kind), not a live provider — fail loudly
+      // instead of registering something that looks like an offline live cap.
+      const type = isPlainObject(target) ? (target as { type?: unknown }).type : undefined;
+      if (typeof type === "string") {
+        throw new Error(
+          `Capability "${input.name}": unknown target type ${JSON.stringify(type)} — ` +
+            `serializable targets are "rpc" or "url"; anything else must be a live provider stub.`,
+        );
+      }
+      this.#registerLive({ invoke, meta: input.meta ?? {}, name: input.name, target });
+      return { name: input.name, ok: true };
+    }
+
+    assertDefinableCapTarget(input.name, target, this.dialable());
     this.upsertRow({
       invoke,
       kind: target.type,
@@ -281,6 +268,48 @@ export class ContextRegistry {
       },
     });
     return { name: input.name, ok: true };
+  }
+
+  #registerLive(input: { name: string; target: LiveCapTarget; invoke: CapInvoke; meta: CapMeta }) {
+    // RPC disposes argument stubs when the call returns; keep a duplicate
+    // (and hand further dups to borrowers) — both directions of the dup()
+    // discipline from the original capnweb learnings.
+    const target = input.target.dup ? input.target.dup() : input.target;
+    const connection: LiveConnection = {
+      target,
+      [Symbol.dispose]: () => {
+        if (this.#live.get(input.name) === connection) {
+          this.#live.delete(input.name);
+          this.host.audit({
+            type: ITX_EVENT_TYPES.capDisconnected,
+            payload: { name: input.name },
+          });
+        }
+        target[Symbol.dispose]?.();
+      },
+    };
+
+    this.#live.get(input.name)?.[Symbol.dispose]();
+    this.#live.set(input.name, connection);
+    // Plain Workers-RPC stubs don't implement onRpcBroken (capnweb stubs do)
+    // and reject the call sync OR async — swallow both; teardown then relies
+    // on the session's own dispose path.
+    try {
+      const wired = target.onRpcBroken?.(() => connection[Symbol.dispose]()) as unknown;
+      void Promise.resolve(wired).catch(() => {});
+    } catch {}
+
+    this.upsertRow({
+      invoke: input.invoke,
+      kind: "live",
+      meta: input.meta,
+      name: input.name,
+      target: null,
+    });
+    this.host.audit({
+      type: ITX_EVENT_TYPES.capProvided,
+      payload: { invoke: input.invoke, name: input.name },
+    });
   }
 
   revoke(input: { name: string }): { name: string; ok: true } {
@@ -536,9 +565,6 @@ export class ContextRegistry {
     const loader = this.host.loader;
     if (!loader) throw new Error("Source capabilities need a LOADER binding.");
 
-    // Trust posture (ITERATE scoped to home context — Law 4; bare fetch()
-    // rides project egress — Law 5) is wired in ONE place for every isolate
-    // the platform loads: itx/isolate.ts.
     return loader.get(`itx-cap:${this.host.contextId}:${name}:${capSourceCacheKey(source)}`, () =>
       wireIsolateEnv({
         cap: name,

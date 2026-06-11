@@ -69,8 +69,8 @@ export function defineCodeContext(
 /**
  * The defaults every project context delegates to (§8's "cap #0 disappears"
  * direction). What was hardwired into the handle is now ordinary capability
- * definitions: ai, repos, workspace, and the project worker. The remaining
- * kernel — caps, streams, fetch, fork, project, projects, describe — is
+ * definitions: ai, fetch, repos, workspace, and the project worker. The
+ * remaining kernel — caps, streams, fork, project, projects, describe — is
  * composition the registry cannot express (access checks, narrowing, the
  * registry itself).
  */
@@ -86,6 +86,31 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
     target: {
       entrypoint: "BindingCapability",
       props: { binding: "AI" },
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    // The DEFAULT egress pipe: itx.fetch(...) and bare fetch() in every
+    // platform-loaded isolate dispatch through THIS registry entry. The
+    // target is the terminal, stateless EgressPipe (path: [], args:
+    // [request]): secret placeholder substitution + the real fetch, no
+    // Durable Object in the path. The dispatcher (ProjectEgress.fetch)
+    // routes registry-first and the default is a DIFFERENT entrypoint —
+    // that is what breaks the loop.
+    invoke: "path-call",
+    meta: {
+      instructions:
+        "Project egress: itx.fetch(request) and bare fetch() inside platform-loaded " +
+        "isolates both flow through this cap. Shadow it with your own `fetch` (e.g. a " +
+        "live provider whose call({ path: [], args: [request] }) returns a Response) to " +
+        "intercept ALL project egress while connected; revoke the shadow and this " +
+        "default resurfaces. A shadow provider receives getSecret(...) placeholders " +
+        "UNSUBSTITUTED — secret material only exists in the default pipe.",
+    },
+    name: "fetch",
+    target: {
+      entrypoint: "EgressPipe",
       type: "rpc",
       worker: { type: "loopback" },
     },
@@ -130,23 +155,6 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
     target: {
       entrypoint: "ProjectWorker",
       props: { invoke: "members" },
-      type: "rpc",
-      worker: { type: "loopback" },
-    },
-  });
-  caps.define({
-    invoke: "members",
-    meta: {
-      instructions:
-        "Project egress: itx.egress.fetch(request) — also what itx.fetch() and " +
-        "every loaded isolate's bare fetch() dispatch to. Secret placeholders " +
-        "in headers are substituted in the default pipe. Provide a live " +
-        "`egress` cap to intercept all egress for your session (the provider " +
-        "sees placeholders raw, never material).",
-    },
-    name: "egress",
-    target: {
-      entrypoint: "EgressPipe",
       type: "rpc",
       worker: { type: "loopback" },
     },

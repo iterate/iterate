@@ -112,9 +112,10 @@ class AnswerCapability extends RpcTarget {
   }
 }
 
-// provide() = live cap. It disappears when this tab disconnects; reconnect
-// and provide() again to restore it.
-await itx.caps.provide({ name: "answer", target: new AnswerCapability() });
+// define() is THE verb: a live stub is just another target. A live cap
+// disappears when this tab disconnects; reconnect and define() again to
+// restore it. (caps.provide still works as an alias.)
+await itx.caps.define({ name: "answer", target: new AnswerCapability() });
 
 // Unknown names on the handle fall through to the registry, so the cap is
 // callable as if it were built in.
@@ -123,7 +124,7 @@ return await itx.answer.run();
   },
   {
     id: "provide-path-call-sdk",
-    title: "Provide an SDK-shaped capability (path-call)",
+    title: "Define a live SDK-shaped capability (path-call)",
     description:
       "A path-call capability implements ONE method, call({ path, args }), and receives the whole dotted path as data. This is how 'use itx.slack exactly like @slack/web-api' works — the public SDK docs become the tool docs, with a ~10-line forwarder.",
     context: "project",
@@ -139,7 +140,7 @@ class FakeSlackSdk extends RpcTarget {
 
 // invoke: "path-call" tells the registry to deliver { path, args } in one
 // shot rather than replaying property access.
-await itx.caps.provide({
+await itx.caps.define({
   name: "fakeSlack",
   invoke: "path-call",
   target: new FakeSlackSdk(),
@@ -153,7 +154,7 @@ return await itx.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" });
     id: "define-durable-worker-cap",
     title: "Define a durable worker capability from source",
     description:
-      "define() stores source code as a DURABLE capability (a stateless dynamic worker), loaded on demand. Unlike provide(), it survives this session. Every public method on the WorkerEntrypoint is auto-proxied — add a method, call it instantly.",
+      "A serializable target stores source code as a DURABLE capability (a stateless dynamic worker), loaded on demand. Unlike a live stub target, it survives this session. Every public method on the WorkerEntrypoint is auto-proxied — add a method, call it instantly.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -393,7 +394,7 @@ return { current: await itx.counter.current() };   // 2, and it persists
     runtimes: ["browser", "node", "cli"],
     code: `
 // A cap on the project — visible to every child through the chain.
-await itx.caps.provide({
+await itx.caps.define({
   name: "shared",
   invoke: "path-call",
   target: new (class extends RpcTarget {
@@ -405,7 +406,7 @@ await itx.caps.provide({
 const child = await itx.fork({ name: "repl-scratch" });
 
 // The child can shadow 'shared' with its own definition...
-await child.caps.provide({
+await child.caps.define({
   name: "shared",
   invoke: "path-call",
   target: new (class extends RpcTarget {

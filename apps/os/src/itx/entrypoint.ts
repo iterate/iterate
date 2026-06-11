@@ -3,7 +3,7 @@
 // wires into isolates it loads:
 //
 //   env.ITERATE      = ctx.exports.ItxEntrypoint({ props: { context } })
-//   globalOutbound   = ctx.exports.ProjectEgress({ props: { project } })
+//   globalOutbound   = ctx.exports.ProjectEgress({ props: { projectId } })
 //
 // Props are sturdy refs (Law 2). The conversion from data back to authority
 // happens HERE and at connect-time auth (fetch.ts) — nowhere else.
@@ -78,51 +78,52 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxProps> {
 }
 
 export type ProjectEgressProps = {
-  project: string;
+  /** The owning project. Registry-injected at dial time (never definer
+   * props), so a `fetch` cap can only ever scope to its own project. */
+  projectId: string;
   /** Attribution only: which context/cap is fetching (audit + future policy). */
   context?: string;
   cap?: string;
 };
 
-/** The context's registry, addressed by id shape (project vs ctx_ child). */
-function registryStubForContext(
-  env: Env,
-  contextId: string,
-): { itxInvoke(input: PathCall & { name: string }): Promise<unknown> } {
-  if (isChildContextId(contextId)) {
-    return env.ITX_CONTEXT.getByName(contextId) as unknown as {
-      itxInvoke(input: PathCall & { name: string }): Promise<unknown>;
-    };
-  }
-  return env.PROJECT.getByName(getProjectDurableObjectName(contextId)) as unknown as {
-    itxInvoke(input: PathCall & { name: string }): Promise<unknown>;
-  };
-}
-
 /**
- * EGRESS IS A CAPABILITY. The platform default — this stateless pipe doing
- * secret placeholder substitution and the real fetch — is defined as the
- * `egress` cap on platform:project (code-contexts.ts). Anything holding the
- * context's handle can SHADOW it for the session with a live provider:
+ * One pipe, two doors (Law 5) — and the pipe itself is the project's `fetch`
+ * CAPABILITY (a platform:project default), so any handle holder can shadow
+ * it with a live provider and intercept ALL project egress.
  *
- *   await itx.caps.provide({ name: "egress", target: myFetchTarget });
+ * - `fetch` is the implicit door: bound as `globalOutbound` for every isolate
+ *   the platform loads, so bare fetch() — including fetches made by npm
+ *   dependencies the loaded code bundles — routes REGISTRY-FIRST through the
+ *   `fetch` cap, same as itx.fetch() (the explicit door).
+ * - The DEFAULT `fetch` cap target is EgressPipe (below): the TERMINAL,
+ *   stateless pipe where secret placeholder substitution and the real fetch
+ *   happen. The default is a DIFFERENT entrypoint from this dispatcher —
+ *   that is what breaks the loop.
  *
- * which is the whole egress-intercept story (replaces the captun tunnel):
- * the provider receives every egress Request — with secret placeholders RAW
- * and unsubstituted, so an interceptor never sees material — and its
- * Responses flow back. Disconnecting the session restores the default.
- * Future policy (allowlists, human-in-the-loop approval) slots in here.
+ * A live shadow provider receives requests with getSecret(...) placeholders
+ * UNSUBSTITUTED — substitution only happens in the default pipe. That is the
+ * security property: an interceptor never sees secret material.
  */
 export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
   async fetch(request: Request): Promise<Response> {
-    const props = this.ctx.props;
-    // Dispatch through the context's registry so live providers shadow the
-    // default — the supervisor stays in the path for every egress fetch.
-    const registry = registryStubForContext(this.env, props.context ?? props.project);
-    return (await registry.itxInvoke({
+    // Dispatch at the ORIGINATING context node, not the project: a child
+    // context's `fetch` shadow must catch its isolates' bare fetch() too —
+    // the chain (child → project → defaults) is what resolves the cap.
+    const context = this.ctx.props.context;
+    const node =
+      context && isChildContextId(context)
+        ? (this.env.ITX_CONTEXT.getByName(context) as unknown as {
+            itxInvoke(input: PathCall & { name: string }): Promise<unknown>;
+          })
+        : (this.env.PROJECT.getByName(
+            getProjectDurableObjectName(this.ctx.props.projectId),
+          ) as unknown as {
+            itxInvoke(input: PathCall & { name: string }): Promise<unknown>;
+          });
+    return (await node.itxInvoke({
       args: [request],
-      name: "egress",
-      path: ["fetch"],
+      name: "fetch",
+      path: [],
     })) as Response;
   }
 }
@@ -130,19 +131,27 @@ export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
 export type EgressPipeProps = {
   /** Injected by the registry at dial time — never definer-supplied. */
   projectId?: string;
-  cap?: string;
+  /** Attribution only: which context/cap is fetching (audit + future policy). */
   context?: string;
+  cap?: string;
 };
 
 /**
- * The default egress target: substitution + fetch, fully stateless. Secret
- * placeholders in headers (`getSecret({ key: "X" })`) become material HERE —
- * outside every loaded isolate — and nowhere else.
+ * The TERMINAL egress pipe: the default target of the `fetch` capability
+ * (platform:project, code-contexts.ts). Stateless — secret placeholder
+ * substitution and the real fetch, no Durable Object in the path. Future
+ * egress policy (allowlists, human-in-the-loop approval) slots in here.
  */
 export class EgressPipe extends WorkerEntrypoint<Env, EgressPipeProps> {
-  async fetch(request: Request): Promise<Response> {
-    const props = this.ctx.props;
-    if (!props.projectId) {
+  async call({ args }: PathCall): Promise<Response> {
+    const [input, init] = args;
+    if (!(input instanceof Request) && typeof input !== "string") {
+      throw new Error("The fetch capability expects call({ path: [], args: [request] }).");
+    }
+    const request = input instanceof Request ? input : new Request(input, init as RequestInit);
+
+    const projectId = this.ctx.props.projectId;
+    if (!projectId) {
       throw new Error("EgressPipe needs registry-injected projectId props.");
     }
     if (!isHttpRequestUrl(request.url)) {
@@ -151,7 +160,7 @@ export class EgressPipe extends WorkerEntrypoint<Env, EgressPipeProps> {
 
     const secrets = getSecretsCapability({
       exports: this.ctx.exports as unknown as Parameters<typeof getSecretsCapability>[0]["exports"],
-      props: { projectId: props.projectId },
+      props: { projectId },
     });
     const [substitutionError, substitutedHeaders] = await substituteProjectEgressSecretHeaders({
       headers: request.headers,
