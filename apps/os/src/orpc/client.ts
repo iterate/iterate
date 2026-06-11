@@ -1,7 +1,7 @@
 import { QueryClient } from "@tanstack/react-query";
-import { createORPCClient } from "@orpc/client";
+import { createORPCClient, type ClientContext } from "@orpc/client";
 import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
-import { OpenAPILink } from "@orpc/openapi-client/fetch";
+import { OpenAPILink, type OpenAPILinkOptions } from "@orpc/openapi-client/fetch";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
 import type { RouterClient } from "@orpc/server";
 import { createIsomorphicFn } from "@tanstack/react-start";
@@ -42,32 +42,26 @@ type OrpcClient = RouterClient<typeof appRouter>;
  * runtime entrypoints and is exposed to SSR via TanStack Start's request storage.
  */
 
-function createOpenApiClient(input: { headers?: Headers; url: string }): OrpcClient {
-  return createORPCClient(
-    new OpenAPILink(osContract, {
-      headers: input.headers,
-      url: input.url,
-    }),
-  );
+function createOpenApiClient(options: OpenAPILinkOptions<ClientContext>): OrpcClient {
+  return createORPCClient(new OpenAPILink(osContract, options));
 }
 
 function createBrowserOpenApiClient(): OrpcClient {
   return createOpenApiClient({ url: `${window.location.origin}/api` });
 }
 
+function createServerOpenApiClient(): OrpcClient {
+  return createOpenApiClient({
+    headers: () => getForwardedOpenApiHeaders(requireRequestContext().rawRequest),
+    url: () => `${getServerOpenApiBaseUrl()}/api`,
+  });
+}
+
 let cachedBrowserOpenApiClient: OrpcClient | undefined;
 
 const makeOrpcClient = createIsomorphicFn()
   .server((): OrpcClient => {
-    const context = requireRequestContext();
-    const requestUrl = context.rawRequest ? new URL(context.rawRequest.url) : undefined;
-    const baseUrl = context.config.baseUrl ?? requestUrl?.origin;
-    if (!baseUrl) throw new Error("Cannot create server oRPC client without a base URL.");
-
-    return createOpenApiClient({
-      headers: getForwardedOpenApiHeaders(context.rawRequest),
-      url: `${baseUrl.replace(/\/+$/, "")}/api`,
-    });
+    return createServerOpenApiClient();
   })
   .client((): OrpcClient => {
     cachedBrowserOpenApiClient ??= createBrowserOpenApiClient();
@@ -105,4 +99,12 @@ function getForwardedOpenApiHeaders(request: Request | undefined) {
   if (cookie) headers.set("cookie", cookie);
   if (authorization) headers.set("authorization", authorization);
   return headers;
+}
+
+function getServerOpenApiBaseUrl() {
+  const context = requireRequestContext();
+  const requestUrl = context.rawRequest ? new URL(context.rawRequest.url) : undefined;
+  const baseUrl = context.config.baseUrl ?? requestUrl?.origin;
+  if (!baseUrl) throw new Error("Cannot create server oRPC client without a base URL.");
+  return baseUrl.replace(/\/+$/, "");
 }
