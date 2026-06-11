@@ -253,13 +253,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     return await this.host.requestStreamSubscription(args);
   }
 
-  async afterAppend(input: { event: Event }) {
-    void input;
-    await this.ensureStartedOrInitializeFromRuntimeName();
-    await this.waitForAgentProcessorsCatchUp(this.structuredName);
-    return await this.getRuntimeState();
-  }
-
   async getRuntimeState() {
     const params = await this.ensureStartedAndCaughtUp();
     return await this.getAgentRuntimeState(params);
@@ -382,31 +375,14 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     }
   }
 
+  /** Per-processor checkpoints — the honest shape (legacy runner fields died). */
   private async getAgentRuntimeState(params: AgentDurableObjectStructuredName) {
     const processorSlugs = await this.agentProcessorSlugs(params);
-    const states = processorSlugs.map((processorSlug) => {
-      const runtime = this.host.runtimeState(processorSlug);
-      const offset = runtime.snapshot?.offset ?? 0;
-      return {
-        processorSlug,
-        state: {
-          afterAppendCompletedThroughOffset: offset,
-          reducedThroughOffset: offset,
-          state: runtime.snapshot?.state ?? null,
-        },
-      };
-    });
     return {
-      entries: states.map(({ processorSlug, state }) => ({
-        afterAppendCompletedThroughOffset: state.afterAppendCompletedThroughOffset,
-        processorSlug,
-        reducedThroughOffset: state.reducedThroughOffset,
-        streamPath: String(params.agentPath),
-      })),
-      lastAppendDeliveryDelays: [],
-      pendingWaitUntilCount: 0,
-      registeredProcessors: processorSlugs,
-      runners: Object.fromEntries(states.map(({ processorSlug, state }) => [processorSlug, state])),
+      agentPath: String(params.agentPath),
+      processors: Object.fromEntries(
+        processorSlugs.map((slug) => [slug, this.host.runtimeState(slug).snapshot ?? null]),
+      ),
     };
   }
 

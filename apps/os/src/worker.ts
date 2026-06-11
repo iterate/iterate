@@ -51,7 +51,7 @@ export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.t
 export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-capability.ts";
 export { AiCapability, OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
-export { BindingCapability, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
+export { BindingCapability, EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { McpClient } from "~/itx/caps/mcp-client.ts";
 export { ProjectWorker } from "~/itx/caps/project-worker.ts";
 export { UrlDial } from "~/itx/caps/url-dial.ts";
@@ -59,7 +59,6 @@ export { StreamsCap } from "~/itx/caps/streams.ts";
 export { ContextDO } from "~/itx/context-do.ts";
 export { ItxCapIngress } from "~/itx/http.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
-export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";

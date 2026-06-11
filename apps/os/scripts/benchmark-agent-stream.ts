@@ -23,12 +23,7 @@ type Options = {
 };
 
 type RuntimeState = {
-  entries?: Array<{
-    afterAppendCompletedThroughOffset: number;
-    processorSlug: string;
-    reducedThroughOffset: number;
-    streamPath: string;
-  }>;
+  processors?: Record<string, { offset: number } | null>;
 };
 
 const BENCHMARK_EVENT_TYPES = new Set([
@@ -282,14 +277,9 @@ async function waitForProcessorCursors(input: {
       projectSlugOrId: input.projectSlugOrId,
     });
     const state = lastState as RuntimeState;
-    const entries = state.entries ?? [];
-    const completed = [...input.targetOffsetByProcessor].every(([processorSlug, targetOffset]) =>
-      entries.some(
-        (entry) =>
-          entry.processorSlug === processorSlug &&
-          entry.streamPath === input.agentPath &&
-          entry.afterAppendCompletedThroughOffset >= targetOffset,
-      ),
+    const processors = state.processors ?? {};
+    const completed = [...input.targetOffsetByProcessor].every(
+      ([processorSlug, targetOffset]) => (processors[processorSlug]?.offset ?? 0) >= targetOffset,
     );
     if (completed) {
       return {

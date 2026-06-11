@@ -93,7 +93,7 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
 
   // Cast: the deeply-stubified DurableObjectStub type sends tsc into
   // excessively-deep instantiation when chained off the Itx stub.
-  const projectAdmin = (projectItx as { project: unknown }).project as {
+  const projectAdmin = (projectItx as unknown as { project: unknown }).project as {
     ingressUrl(): Promise<string>;
   };
   const ingress = new URL(await projectAdmin.ingressUrl());

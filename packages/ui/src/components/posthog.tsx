@@ -1,6 +1,9 @@
-import * as PosthogReact from "posthog-js/react";
-import posthog, { type PostHog, type PostHogInterface } from "posthog-js";
-import { memo, type PropsWithChildren } from "react";
+type PostHog = import("posthog-js").PostHog;
+type PostHogInterface = import("posthog-js").PostHogInterface;
+
+// posthog-js only ever runs in the browser; the SSR branch keeps it out of the
+// server bundle.
+const loadPosthog = import.meta.env.SSR ? null : () => import("posthog-js");
 
 export interface SetupPosthogOptions {
   apiKey?: string;
@@ -71,27 +74,31 @@ function buildPosthogInitOptions(options: SetupPosthogOptions) {
   };
 }
 
-// oxlint-disable-next-line react/only-export-components
-export function setupPosthog(options: SetupPosthogOptions): PostHog {
-  if (!shouldEnablePosthog(options.apiKey) || typeof window === "undefined") return posthog;
+function setupPosthog(client: PostHog, options: SetupPosthogOptions) {
+  if (!shouldEnablePosthog(options.apiKey) || typeof window === "undefined") return;
 
-  if (window.__iteratePosthogInitialized) {
-    if (window.__iteratePosthogApiKey === options.apiKey) {
-      return posthog;
-    }
+  if (window.__iteratePosthogInitialized && window.__iteratePosthogApiKey === options.apiKey) {
+    return;
   }
 
-  const client = posthog.init(options.apiKey!, buildPosthogInitOptions(options));
+  client.init(options.apiKey!, buildPosthogInitOptions(options));
   window.__iteratePosthogInitialized = true;
   window.__iteratePosthogApiKey = options.apiKey;
-  return client;
 }
 
-export const PostHogProvider = memo(
-  ({ children, client, enabled }: PropsWithChildren<{ client: PostHog; enabled: boolean }>) =>
-    enabled ? (
-      <PosthogReact.PostHogProvider client={client}>{children}</PosthogReact.PostHogProvider>
-    ) : (
-      <>{children}</>
-    ),
-);
+let posthogInitStarted = false;
+
+/**
+ * Once-per-app-load PostHog initialization. Nothing in our apps reads the
+ * PostHog React context, so there is no provider or Effect: autocapture,
+ * pageviews, session recording, and exception capture are all configured
+ * through `init`. This would run at module scope per React's guidance for app
+ * initialization, but the api key only arrives with loader data — so the
+ * once-guard lives here at module scope and the first render with config in
+ * hand kicks it off. Idempotent, so safe to call during render.
+ */
+export function initPosthog(options: SetupPosthogOptions) {
+  if (posthogInitStarted || !loadPosthog || !shouldEnablePosthog(options.apiKey)) return;
+  posthogInitStarted = true;
+  void loadPosthog().then((posthogModule) => setupPosthog(posthogModule.default, options));
+}

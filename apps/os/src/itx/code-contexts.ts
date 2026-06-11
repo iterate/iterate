@@ -93,9 +93,11 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
   caps.define({
     // The DEFAULT egress pipe: itx.fetch(...) and bare fetch() in every
     // platform-loaded isolate dispatch through THIS registry entry. The
-    // target is the terminal ProjectEgress.call (path: [], args: [request])
-    // → the Project DO's egressFetch — dialing .call, not .fetch, is what
-    // breaks the loop, because ProjectEgress.fetch routes registry-first.
+    // target is the terminal, stateless EgressPipe (path: [], args:
+    // [request]): secret placeholder substitution + the real fetch, no
+    // Durable Object in the path. The dispatcher (ProjectEgress.fetch)
+    // routes registry-first and the default is a DIFFERENT entrypoint —
+    // that is what breaks the loop.
     invoke: "path-call",
     meta: {
       instructions:
@@ -104,12 +106,11 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
         "live provider whose call({ path: [], args: [request] }) returns a Response) to " +
         "intercept ALL project egress while connected; revoke the shadow and this " +
         "default resurfaces. A shadow provider receives getSecret(...) placeholders " +
-        "UNSUBSTITUTED — secret material only exists in the default pipe inside the " +
-        "Project DO.",
+        "UNSUBSTITUTED — secret material only exists in the default pipe.",
     },
     name: "fetch",
     target: {
-      entrypoint: "ProjectEgress",
+      entrypoint: "EgressPipe",
       type: "rpc",
       worker: { type: "loopback" },
     },

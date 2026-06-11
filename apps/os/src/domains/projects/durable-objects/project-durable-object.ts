@@ -10,16 +10,14 @@
 //    dispatched by the stateless ProjectIngressEntrypoint, which loads the
 //    worker itself and only asks this DO for the checkout.
 //
-// 3. EGRESS AUTHORITY — `egressFetch` is the project's one pipe to the
-//    outside world (Law 5): secret placeholder substitution and (future)
-//    human-in-the-loop approval live here. It is the TERMINAL pipe behind
-//    the `fetch` CAPABILITY (platform:project
-//    default, dialed via ProjectEgress.call): itx.fetch and bare fetch() in
-//    loaded isolates dispatch registry-first, so a defined `fetch` shadow
-//    intercepts egress and this method is what the default resolves to.
-//    Calling `fetch` on the project worker gets the project's homepage;
-//    calling `fetch` on the project gets egress — matching itx vocabulary,
-//    where `itx.fetch` IS project egress.
+// Egress does NOT live here anymore: it is the `fetch` capability on
+// platform:project (itx/code-contexts.ts). This DO still supervises every
+// egress dispatch (job 1 — live shadows resolve in its registry), but the
+// terminal pipe is the stateless EgressPipe: secrets are D1 rows, so
+// substitution + the real fetch happen in a plain isolate and secret
+// material never enters this DO. The old captun intercept tunnel is reborn
+// as `itx.caps.define({ name: "fetch", target: liveStub })`. This DO has NO
+// fetch surface at all.
 //
 // State lives in the project's root event stream, projected by
 // ProjectProcessor (stream-processors/project-processor.ts), which also owns
@@ -27,12 +25,6 @@
 // The DO's own SQLite holds only the itx registry's capability table; the
 // worker checkout cache is plain DO storage. There is no bespoke project
 // table and no lifecycle mixin: the DO is addressed by the plain project id.
-//
-// Endgame for egress (itx-next.md §9, out of scope here): a stateless egress
-// capability with policy cached outside the DO. Egress interception is a
-// live `fetch` capability shadow (code-contexts.ts) — it dispatches in the
-// registry BEFORE this pipe, so an interceptor sees getSecret() placeholders
-// unsubstituted and drops with its session.
 
 import { DurableObject, env } from "cloudflare:workers";
 import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
@@ -60,11 +52,9 @@ import {
   ProjectConfigWorkerProcessor,
   ProjectConfigWorkerProcessorContract,
 } from "~/domains/projects/stream-processors/project-config-worker/implementation.ts";
-import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import {
   bundleWorkerCode,
   cloneWorkerRepo,
-  readLoopbackExports,
   WorkerHost,
   type WorkerCheckout,
   type WorkerCode,
@@ -78,7 +68,6 @@ import {
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { readRemoteBranchOid } from "~/domains/repos/repo-git.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
-import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import { ContextRegistry, type LiveCapTarget } from "~/itx/registry.ts";
 import { createContextRegistryHost } from "~/itx/registry-host.ts";
 import { platformProjectContext } from "~/itx/code-contexts.ts";
@@ -490,37 +479,6 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     return await bundleWorkerCode(files);
   }
 
-  // ---- egress --------------------------------------------------------------
-
-  /** `fetch` on the project IS egress (the worker's `fetch` is the homepage). */
-  async fetch(request: Request): Promise<Response> {
-    return await this.egressFetch(request);
-  }
-
-  async egressFetch(request: Request): Promise<Response> {
-    if (!isHttpRequestUrl(request.url)) {
-      return await fetch(request);
-    }
-
-    const secrets = getSecretsCapability({
-      exports: readLoopbackExports(this.ctx.exports),
-      props: { projectId: this.projectId },
-    });
-
-    const [secretSubstitutionError, substitutedHeaders] =
-      await substituteProjectEgressSecretHeaders({
-        headers: request.headers,
-        secrets,
-      });
-    if (secretSubstitutionError) return secretSubstitutionError;
-
-    const outboundHeaders = new Headers(request.headers);
-    for (const [header, value] of Object.entries(substitutedHeaders)) {
-      outboundHeaders.set(header, value);
-    }
-    return await fetch(new Request(request, { headers: outboundHeaders }));
-  }
-
   // ---- plumbing ------------------------------------------------------------
 
   private async requireSummary(): Promise<ProjectSummary> {
@@ -592,11 +550,6 @@ function toSummary(facts: ProjectFacts): ProjectSummary {
     defaultHost: facts.defaultHost,
     hosts: facts.hosts,
   };
-}
-
-function isHttpRequestUrl(urlString: string) {
-  const url = new URL(urlString);
-  return url.protocol === "http:" || url.protocol === "https:";
 }
 
 function projectRuntimeEnv(env: ProjectEnv): ProjectRuntimeEnv {

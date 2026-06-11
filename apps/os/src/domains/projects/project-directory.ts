@@ -17,7 +17,7 @@ import {
   listAllProjects,
 } from "~/db/queries/.generated/index.ts";
 import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object.ts";
-import { isProjectId, mintProjectId } from "~/domains/projects/project-id.ts";
+import { isProjectId } from "~/domains/projects/project-id.ts";
 import { principalIsAdmin } from "~/auth/principal.ts";
 
 type ProjectRow = {
@@ -120,7 +120,7 @@ export class ProjectsCapability extends RpcTarget {
       id = createdAuthProject.id;
       slug = createdAuthProject.slug;
     } else {
-      id = resolveOperatorProjectId(input.id);
+      id = await resolveOperatorProjectId(context, input.id);
       slug = input.slug;
     }
 
@@ -270,12 +270,16 @@ export async function requireProject(input: {
   });
 }
 
-// Operator/admin create has no auth organization to own the project, so OS
-// mints the id itself — using auth's `prj_` format so there's one id space. A
-// caller-supplied id must already be a project id (we never coin a new prefix).
-function resolveOperatorProjectId(id: string | undefined): string {
+// Operator/admin create has no auth organization to own the project, but the
+// id still comes from auth — the canonical minter of the one prj_ id space.
+// A caller-supplied id must already be a project id (never a new prefix).
+async function resolveOperatorProjectId(
+  context: RequestContext,
+  id: string | undefined,
+): Promise<string> {
   if (id === undefined) {
-    return mintProjectId();
+    const minted = await createAuthWorkerServiceClient(context).internal.project.mintProjectId();
+    return minted.id;
   }
   if (!isProjectId(id)) {
     throw new ORPCError("BAD_REQUEST", {

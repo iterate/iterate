@@ -3,7 +3,6 @@ import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { NotInitializedError } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 
-import { type Event } from "@iterate-com/shared/streams/types";
 import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import {
   createStreamProcessorHost,
@@ -99,30 +98,11 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
     return await this.host.requestStreamSubscription(args);
   }
 
-  async afterAppend(input: { event: Event }) {
-    void input;
-    const params = await this.ensureStartedOrInitializeFromRuntimeName();
-    await this.ensureIntegrationSubscription(params.projectId);
-    await this.waitForSlackIntegrationProcessorCatchUp(params.projectId);
-    return await this.getRunnerState();
-  }
-
   async ensureReady() {
     const params = await this.ensureStartedOrInitializeFromRuntimeName();
     await this.ensureIntegrationSubscription(params.projectId);
     await this.waitForSlackIntegrationProcessorCatchUp(params.projectId);
-    return await this.getRunnerState();
-  }
-
-  async getRunnerState() {
-    const snapshot = await this.slack.snapshot();
-    return {
-      processorSlug: this.slack.contract.slug,
-      snapshot,
-      state: snapshot.state,
-      reducedThroughOffset: snapshot.offset,
-      afterAppendCompletedThroughOffset: snapshot.offset,
-    };
+    return await this.slack.snapshot();
   }
 
   private async waitForSlackIntegrationProcessorCatchUp(projectId: string) {

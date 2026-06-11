@@ -158,11 +158,10 @@ export class ProjectDurableObject extends RealProjectDurableObject {
 }
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
-export { ProjectCapability } from "~/domains/projects/entrypoints/project-capability.ts";
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
 export { OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
-export { ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
+export { EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 export {
@@ -223,14 +222,16 @@ export default {
     }
 
     if (url.pathname === "/__test/egress") {
+      // The explicit door: itx.fetch dispatches the `fetch` capability, whose
+      // default target is the stateless EgressPipe (the DO has no fetch
+      // surface at all).
       const target = url.searchParams.get("target") ?? "https://os.iterate.localhost/__test/echo";
-      return await env.PROJECT.getByName(
-        getProjectDurableObjectName("proj__local__test"),
-      ).egressFetch(
-        new Request(target, {
-          headers: request.headers,
-        }),
-      );
+      const itx = await resolveItx({
+        env: env as never,
+        exports: ctx.exports as never,
+        props: { context: "proj__local__test" },
+      });
+      return await itx.fetch(target, { headers: request.headers });
     }
 
     if (url.pathname === "/__test/egress-with-fetch-shadow") {

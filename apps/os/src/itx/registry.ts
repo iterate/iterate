@@ -37,9 +37,7 @@ import {
 } from "./protocol.ts";
 import { replayPathCall } from "./path-proxy.ts";
 import type { CodeContext } from "./code-contexts.ts";
-
-const DEFAULT_CAP_COMPATIBILITY_DATE = "2026-04-27";
-const DEFAULT_CAP_COMPATIBILITY_FLAGS = ["nodejs_compat"];
+import { wireIsolateEnv } from "./isolate.ts";
 
 /**
  * A live provider's stub as the registry sees it. Structural because the
@@ -604,26 +602,13 @@ export class ContextRegistry {
     const loader = this.host.loader;
     if (!loader) throw new Error("Source capabilities need a LOADER binding.");
 
-    return loader.get(
-      `itx-cap:${this.host.contextId}:${name}:${capSourceCacheKey(source)}`,
-      () => ({
-        compatibilityDate: source.compatibilityDate ?? DEFAULT_CAP_COMPATIBILITY_DATE,
-        compatibilityFlags: DEFAULT_CAP_COMPATIBILITY_FLAGS,
-        env: {
-          // The cap's own itx is scoped to its home context — a cap can never
-          // reach wider than where it is defined (Law 4). `cap` is attribution.
-          ITERATE: this.host.loopback("ItxEntrypoint", {
-            props: { cap: name, context: this.host.contextId },
-          }),
-        },
-        // Bare fetch() inside the cap IS project egress: secret substitution
-        // and (future) policy live in the Project DO, and the cap's isolate
-        // never sees secret material (Law 5).
-        globalOutbound: this.host.loopback("ProjectEgress", {
-          props: { cap: name, context: this.host.contextId, projectId: this.host.projectId },
-        }),
-        mainModule: source.mainModule,
-        modules: source.modules,
+    return loader.get(`itx-cap:${this.host.contextId}:${name}:${capSourceCacheKey(source)}`, () =>
+      wireIsolateEnv({
+        cap: name,
+        code: source,
+        contextId: this.host.contextId,
+        loopback: this.host.loopback,
+        projectId: this.host.projectId,
       }),
     );
   }

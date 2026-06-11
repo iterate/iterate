@@ -1,4 +1,4 @@
-import { memo, type ReactNode } from "react";
+import { Suspense, lazy, type ReactNode } from "react";
 import {
   HeadContent,
   Link,
@@ -6,10 +6,6 @@ import {
   Scripts,
   createRootRouteWithContext,
 } from "@tanstack/react-router";
-import { TanStackDevtools } from "@tanstack/react-devtools";
-import { FormDevtoolsPanel } from "@tanstack/react-form-devtools";
-import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
-import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { extractPublicConfigSchema } from "@iterate-com/shared/config";
 import { AuthClientProvider } from "@iterate-com/auth/client";
 import { AppProviders } from "@iterate-com/ui/apps/providers";
@@ -25,6 +21,7 @@ import { fetchRootAuthSnapshot } from "~/lib/root-auth-snapshot.ts";
 import type { RouterContext } from "~/router-context.ts";
 
 const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
+const OSDevtools = import.meta.env.DEV ? lazy(() => import("~/components/os-devtools.tsx")) : null;
 
 const rootAuthSnapshotQueryOptions = {
   queryKey: ["__root-auth-snapshot"] as const,
@@ -86,35 +83,23 @@ function RootComponent() {
   const { config, authSession } = Route.useLoaderData();
 
   return (
-    <AppProviders config={config} devtools={<OSDevtools />} forcedTheme="light">
+    <AppProviders
+      config={config}
+      devtools={
+        OSDevtools ? (
+          <Suspense fallback={null}>
+            <OSDevtools />
+          </Suspense>
+        ) : null
+      }
+      forcedTheme="light"
+    >
       <AuthClientProvider initialSession={authSession}>
         <Outlet />
       </AuthClientProvider>
     </AppProviders>
   );
 }
-
-const OSDevtools = memo(function OSDevtools() {
-  return (
-    <TanStackDevtools
-      config={{ position: "bottom-right" }}
-      plugins={[
-        {
-          name: "TanStack Router",
-          render: <TanStackRouterDevtoolsPanel />,
-        },
-        {
-          name: "TanStack Query",
-          render: <ReactQueryDevtoolsPanel />,
-        },
-        {
-          name: "TanStack Form",
-          render: <FormDevtoolsPanel />,
-        },
-      ]}
-    />
-  );
-});
 
 function RootErrorComponent(props: { error: unknown; reset: () => void }) {
   return (

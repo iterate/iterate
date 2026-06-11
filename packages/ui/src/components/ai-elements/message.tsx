@@ -19,9 +19,9 @@ import {
   PaperclipIcon,
   XIcon,
 } from "lucide-react";
-import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
-import { createContext, memo, useContext, useEffect, useState } from "react";
-import { Streamdown } from "streamdown";
+import type { ComponentProps, ComponentType, HTMLAttributes, ReactElement } from "react";
+import { Suspense, createContext, lazy, memo, useContext, useEffect, useState } from "react";
+import type { StreamdownProps } from "streamdown";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -344,22 +344,39 @@ function MessageMarkdownCode({ children, className, node, ...props }: MarkdownCo
   );
 }
 
-export type MessageResponseProps = ComponentProps<typeof Streamdown>;
+function PlainMessageResponse({ children, className }: StreamdownProps) {
+  return (
+    <div className={cn("size-full whitespace-pre-wrap break-words", className)}>
+      {children}
+    </div>
+  );
+}
+
+const RichMessageResponse: ComponentType<StreamdownProps> = import.meta.env.SSR
+  ? PlainMessageResponse
+  : lazy(async (): Promise<{ default: ComponentType<StreamdownProps> }> => {
+      const { Streamdown } = await import("streamdown");
+      return { default: Streamdown as ComponentType<StreamdownProps> };
+    });
+
+export type MessageResponseProps = StreamdownProps;
 
 export const MessageResponse = memo(
   ({ className, components, ...props }: MessageResponseProps) => (
-    <Streamdown
-      className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-        className
-      )}
-      components={{
-        code: MessageMarkdownCode,
-        pre: MessageMarkdownPre,
-        ...components,
-      }}
-      {...props}
-    />
+    <Suspense fallback={<PlainMessageResponse className={className} {...props} />}>
+      <RichMessageResponse
+        className={cn(
+          "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+          className
+        )}
+        components={{
+          code: MessageMarkdownCode,
+          pre: MessageMarkdownPre,
+          ...components,
+        }}
+        {...props}
+      />
+    </Suspense>
   ),
   (prevProps, nextProps) => prevProps.children === nextProps.children
 );
