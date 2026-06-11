@@ -47,7 +47,6 @@ export { PackageStream as StreamDurableObject };
 
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-capability.ts";
-export { AiCapability } from "~/rpc-targets/os-capabilities.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { BindingCapability, EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { McpClient } from "~/itx/capabilities/mcp-client.ts";
@@ -56,7 +55,6 @@ export { StreamsCapability } from "~/itx/capabilities/streams.ts";
 export { ItxDurableObject } from "~/itx/itx-durable-object.ts";
 export { PlatformContext } from "~/itx/platform-context.ts";
 export { ItxCapabilityIngress } from "~/itx/http.ts";
-export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";

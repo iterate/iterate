@@ -507,9 +507,8 @@ export type WorkerSource = (
  * await itx.provideCapability({ name: "mac", capability: asPathCallable({ run(src) { … } }) });
  * ```
  *
- * - Forwarders keep their INNER mode as their own props: UrlDial's
- *   `props.invoke` says how to treat the remote main (members pipelining
- *   by default).
+ * - Forwarders pick their INNER mode themselves: UrlDial always replays
+ *   the path as capnweb member pipelining against the remote main.
  */
 export type PathCall = { path: string[]; args: unknown[] };
 

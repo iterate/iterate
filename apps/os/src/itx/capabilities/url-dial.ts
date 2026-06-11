@@ -6,7 +6,9 @@
 // as data; this entrypoint opens a WebSocket session, replays the call
 // against the remote main, and closes the session before returning. One
 // session per call — remote caps are stateless from the platform's point of
-// view, exactly like loopback and source refs.
+// view, exactly like loopback and source refs. One behavior: the call's path
+// replays as capnweb member pipelining against the remote main (UrlDial is
+// dial-internal — not a dialable loopback — so there is no other way in).
 //
 // Always a WebSocket session, never an HTTP batch (`newHttpBatchRpcSession`
 // is banned repo-wide by the iterate/no-capnweb-http-batch lint rule):
@@ -27,23 +29,11 @@ import { RESERVED_PATH_SEGMENTS, type PathCall } from "../itx.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 
-/**
- * How a FORWARDER treats the inner object it fronts (here, the remote main):
- * replay the path on its members (default) or hand it one call({path, args}).
- * Forwarder props, not kernel data — the core knows ONE calling convention.
- */
-export type WorkerInvokeMode = "members" | "path-call";
-
 export type UrlDialProps = {
   /** The remote Cap'n Web server. Provider-supplied; http(s) or ws(s). */
   url: string;
   /** Handshake headers; values pass through egress secret substitution. */
   headers?: Record<string, string>;
-  /** How to treat the REMOTE main: members pipelining (default) or one
-   * call({ path, args }). Forwarder props, not kernel data — `{ type:
-   * "url" }` cap targets always get the default; an SDK-shaped remote is
-   * reachable by providing UrlDial as a loopback cap with props.invoke. */
-  invoke?: WorkerInvokeMode;
   /** Attribution + secret scope, injected by the dial. */
   capabilityPath?: string;
   context?: string;
@@ -90,12 +80,8 @@ export class UrlDial extends WorkerEntrypoint<Env, UrlDialProps> {
 
     const remote = newWebSocketRpcSession(socket as unknown as WebSocket);
     try {
-      if (props.invoke === "path-call") {
-        // One round trip: the remote main implements call({ path, args }).
-        return await (remote as unknown as { call(input: PathCall): unknown }).call(input);
-      }
-      // Default: walk the path as capnweb property pipelining (still one
-      // round trip — the path resolves remotely) and call the terminal stub.
+      // Walk the path as capnweb property pipelining (one round trip — the
+      // path resolves remotely) and call the terminal stub.
       // Same reserved-segment filter as replayPathCall: these names are stub
       // controls / pollution vectors LOCALLY, before anything reaches the wire.
       let cursor: unknown = remote;

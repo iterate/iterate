@@ -7,7 +7,6 @@ export {
   MockArtifactsBinding,
 } from "./mock-artifacts-binding.ts";
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
-export { AiCapability } from "~/rpc-targets/os-capabilities.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
@@ -16,7 +15,6 @@ export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
-export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 export { ItxDurableObject } from "~/itx/itx-durable-object.ts";
 export { EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { PlatformContext } from "~/itx/platform-context.ts";

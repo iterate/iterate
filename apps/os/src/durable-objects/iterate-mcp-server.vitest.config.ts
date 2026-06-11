@@ -227,10 +227,6 @@ export default defineConfig({
             entrypoint: "MockArtifactsBinding",
             name: miniflare.kCurrentWorker,
           },
-          OPENAPI_BRIDGE: {
-            entrypoint: "OpenApiBridge",
-            name: miniflare.kCurrentWorker,
-          },
           SELF: {
             name: miniflare.kCurrentWorker,
           },
