@@ -1099,6 +1099,70 @@ Each lands independently green.
   transport chains CALLS on returned stubs — and the doc/code should say
   this in one place.
 
+### Locked in review (2026-06-11 evening) — the wave-(f)+ design
+
+- **provide signature**: object form only for now; `provideCapability({
+  path, capability, instructions?, types?, meta? })` where
+  `type Capability = Function | RpcTarget | CapabilityAddress` — a
+  function IS live by nature; live-vs-durable is a derived fact
+  (reference vs data), not vocabulary. The dial-time attribution prop
+  becomes `capabilityPath` (it is the dotted route, not a name). Returns
+  `{ revoke() }`; Symbol.dispose auto-revokes only where dropping the
+  session would have anyway (live/session provides) — a durable
+  provide's disposer is a no-op, by design.
+- **`extend` replaces `fork`** (prototype-chain intuition: children
+  extend parents; resolution climbs upward). `using session = await
+  itx.extend()` — and with everything-durable (below) extensions are
+  ALWAYS addressable, so inherited capabilities' outbound fetches route
+  back through your shadow via origin dial-back. No session concept, no
+  visibility flag: provides land on the context you address; private
+  interception = extend yourself; project-wide interception =
+  itx.parent.provideCapability (deliberate, visible).
+- **`itx.parent`** becomes a kernel member — the "call next()" of
+  middleware: a fetch shadow delegates to the unshadowed pipe via
+  itx.parent.fetch. Acceptance e2e committed: (a) middleware — bare-fn
+  shadow logs + delegates, both doors, revoke restores; (b) indirection —
+  an inherited source capability's bare fetch(), invoked through the
+  extension, hits the extension's shadow while siblings/project do not.
+- **`itx.narrow({ scopes })`** — handle sugar (~15 lines): extend +
+  provide GuardCapability rows whose PROPS are the scope rules (policy
+  as data, Law 2). Address-shaped guards make the narrowed context
+  durable and addressable: its id IS the sturdy ref; restore authority
+  stays at the connect edge; sealed share tokens remain the only bearer
+  form (capability URLs later, documented not built). Fine-grained
+  access control therefore needs ZERO kernel mechanism: connect edge =
+  who may hold which context; dial = what is reachable at all;
+  everything finer = attenuation by shadowing.
+- **Everything durable**: the stateless production host is deleted as a
+  concept. A context is a Durable Object with a stream; the bare Itx
+  class survives as the inner layer only. Global becomes a named
+  instance of the generic context DO (and its journal is where project
+  lifecycle events belong). Retention = dispose-deletes + idle-TTL
+  alarms for anonymous contexts + catalog/cascade via ownership;
+  narrowed credentials gain natural expiry. Connecting never mints
+  contexts.
+- **Self-address is derived, parentage is initialized**: a DO knows its
+  name (ctx.id.name); its class knows its own binding constant; address
+  = the two combined. journalRefOf(identity) likewise derives the
+  context's stream: project → (projectId, "/"), agent → (projectId,
+  agentPath), generic → (projectId, "/contexts/<id>"). "Every context
+  DO has a stream" is an accessor, not a maintained invariant.
+- **Facets**: contexts facet into the thing whose lifecycle owns them —
+  anonymous extends/narrows as facets of their Project DO (in-process
+  chain delegation, free cascade); agents keep their own DO with the
+  processor embedded (hot path). Address gains an optional `facet`
+  field; dialing routes through the parent. AgentProcessor-as-facet is
+  the recorded future direction for processor hosting.
+- **Workspaces are not itx's concern**: the per-context workspace
+  derivation (itxWorkspaceId origin magic, the itx:<id> colon strings)
+  dies; each HOST provides its own `workspace` capability bound to its
+  own identity in its constructor (the agent author's decision). Origin
+  demotes to pure attribution + dial-back addressing.
+- **The audit log stops existing as a concept** in wave (f): events are
+  the writes, state is their fold; the capability-provided record for a
+  live provide outlives the connection while the stub does not — the
+  only intentional record/state divergence, in the safe direction.
+
 ## Resolved (was open, now decided)
 
 - ~~Two invoke modes as registry data?~~ → ONE dispatch mode (2026-06-11):
