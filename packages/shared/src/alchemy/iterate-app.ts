@@ -466,7 +466,15 @@ function withSequentialCloudflareAssetPreupload(input: { command: string; worker
   const preuploadScriptPath = fileURLToPath(
     new URL("./preupload-worker-assets.ts", import.meta.url),
   );
+  const pruneScriptPath = fileURLToPath(new URL("./prune-server-bundle.ts", import.meta.url));
 
+  // The prune step keeps the uploaded worker script small: alchemy's noBundle
+  // upload globs everything under dist/server, but the Vite SSR build also
+  // emits browser-only modules (web workers, wasm) the server graph never
+  // imports. Script size is what every cold Durable Object isolate pays to
+  // start, and our request paths chain several DOs — see
+  // prune-server-bundle.ts for the measured impact.
+  //
   // Alchemy's Cloudflare Assets helper currently uploads multiple asset buckets
   // concurrently. The Cloudflare Assets API returns the final completion JWT only
   // from the bucket that completes the upload session, so concurrent buckets can
@@ -476,7 +484,11 @@ function withSequentialCloudflareAssetPreupload(input: { command: string; worker
   // sequentially before Alchemy creates the Worker. Alchemy then opens its own
   // session, sees no remaining buckets, and attaches a stable completion token.
   // https://developers.cloudflare.com/workers/static-assets/direct-upload/
-  return `${input.command} && pnpm exec tsx ${JSON.stringify(preuploadScriptPath)} --worker-name ${JSON.stringify(input.workerName)} --assets ${JSON.stringify("dist/client")}`;
+  return [
+    input.command,
+    `pnpm exec tsx ${JSON.stringify(pruneScriptPath)} --server-dir ${JSON.stringify("dist/server")} --entrypoint ${JSON.stringify("index.js")}`,
+    `pnpm exec tsx ${JSON.stringify(preuploadScriptPath)} --worker-name ${JSON.stringify(input.workerName)} --assets ${JSON.stringify("dist/client")}`,
+  ].join(" && ");
 }
 
 /**

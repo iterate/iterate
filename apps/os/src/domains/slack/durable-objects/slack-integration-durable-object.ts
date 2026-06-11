@@ -18,10 +18,12 @@ import { type AgentDurableObject } from "~/domains/agents/durable-objects/agent-
 import {
   AGENT_HOST_PROCESSOR_SLUG,
   agentProcessorSubscriptionConfiguredEvent,
+  getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-streams.ts";
 import {
   getSlackAgentDurableObjectName,
+  readSlackToken,
   type SlackAgentDurableObject,
 } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import {
@@ -29,6 +31,8 @@ import {
   SlackProcessorContract,
 } from "~/domains/slack/stream-processors/slack/implementation.ts";
 import { SlackAgentProcessorContract } from "~/domains/slack/stream-processors/slack-agent/contract.ts";
+import { eyesReactionTargetFromWebhookPayload } from "~/domains/slack/stream-processors/slack-agent/implementation.ts";
+import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-backend.ts";
 
 export { getSlackIntegrationDurableObjectName };
@@ -48,8 +52,10 @@ export function getSlackIntegrationStub(projectId: string) {
 
 type SlackIntegrationEnv = {
   AGENT: DurableObjectNamespace<AgentDurableObject>;
+  APP_CONFIG_SLACK_BOT_TOKEN?: string;
   DO_CATALOG: D1Database;
   SLACK_AGENT: DurableObjectNamespace<SlackAgentDurableObject>;
+  SLACK_BOT_TOKEN?: string;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
@@ -80,6 +86,49 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
           slackAgentDurableObjectName: "",
           streamPath,
         });
+      },
+      acknowledgeRoutedWebhook: async ({ payload }) => {
+        const ack = eyesReactionTargetFromWebhookPayload(payload);
+        if (ack == null) return;
+        const { projectId } = await this.ensureStartedOrInitializeFromRuntimeName();
+        const token = await readSlackToken({ db: this.env.DO_CATALOG, env: this.env, projectId });
+        if (!token) return;
+        try {
+          await callSlackWebApi({
+            body: { channel: ack.channel, name: "eyes", timestamp: ack.timestamp },
+            method: "reactions.add",
+            token,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          // The slack-agent processor adds the same reaction once the routed
+          // stream catches up; whichever lands second dedups here.
+          if (message.includes("already_reacted") || message.includes("not_reactable")) return;
+          console.error("[slack-integration] routed-webhook acknowledgement failed", {
+            error,
+            projectId,
+          });
+        }
+      },
+      prewarmRoutedStreamHosts: async ({ streamPath }) => {
+        const { projectId } = await this.ensureStartedOrInitializeFromRuntimeName();
+        const resolvedStreamPath = resolveStreamPath(streamPath);
+        const slackAgentName = getSlackAgentDurableObjectName({
+          projectId,
+          streamPath: resolvedStreamPath,
+        });
+        const agentName = getAgentDurableObjectName({
+          agentPath: resolvedStreamPath,
+          projectId,
+        });
+        // initialize() runs each host's full wake hook (agent setup events,
+        // subscriptions, itx context) concurrently with the thread stream's
+        // bootstrap append. Everything either side appends is idempotency-
+        // keyed and order-independent, so whichever wins the race dedups.
+        await Promise.all([
+          this.env.SLACK_AGENT.getByName(slackAgentName).initialize({ name: slackAgentName }),
+          this.env.AGENT.getByName(agentName).initialize({ name: agentName }),
+        ]);
       },
     });
   });

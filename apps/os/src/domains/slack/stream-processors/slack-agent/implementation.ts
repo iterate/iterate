@@ -416,6 +416,30 @@ function slackAgentTargetFromWebhookPayload(payload: unknown): SlackAgentTarget 
   };
 }
 
+/**
+ * Payload-only gate for the integration-level fast acknowledgement: the 👀
+ * reaction added at the routing hop, before the routed thread stream and its
+ * slack-agent host even exist. Mirrors `#addEyesReactionForMessageTarget`'s
+ * gating using only what the webhook itself carries — bot-authored messages,
+ * reaction events, and actions performed by the authorized bot user are
+ * skipped. The slack-agent processor still adds the same reaction once the
+ * routed stream catches up; Slack's `already_reacted` makes the pair
+ * idempotent.
+ */
+export function eyesReactionTargetFromWebhookPayload(
+  payload: unknown,
+): { channel: string; timestamp: string } | null {
+  const target = slackAgentTargetFromWebhookPayload(payload);
+  if (target == null || target.isBotMessage || target.isReactionEvent) return null;
+  if (target.messageTs == null) return null;
+  const body = readRecord(readRecord(payload)?.body);
+  const slackEvent = readRecord(body?.event);
+  const eventUserId = readString(slackEvent?.user);
+  const botUserId = botUserIdFromPayload(payload);
+  if (eventUserId != null && botUserId != null && eventUserId === botUserId) return null;
+  return { channel: target.channel, timestamp: target.messageTs };
+}
+
 function slackAgentStatusForEvent(event: { payload: unknown; type: string }): {
   clear: boolean;
   status: { loading_messages?: string[]; status: string };

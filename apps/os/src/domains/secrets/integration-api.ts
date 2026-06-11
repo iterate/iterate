@@ -318,7 +318,6 @@ async function handleVerifiedSlackWebhook(input: {
     ensureReady(): Promise<unknown>;
     initialize(input: { name: string }): Promise<unknown>;
   };
-  await slackIntegration.initialize({ name: slackIntegrationName });
 
   const stream = await getInitializedStreamStub({
     durableObjectNamespace: env.STREAM as never,
@@ -342,8 +341,18 @@ async function handleVerifiedSlackWebhook(input: {
       body: payload,
     },
   });
+  // Only the durable append gates the 200: Slack retries webhooks that take
+  // longer than ~3s, and awaiting the integration DO's initialize here used to
+  // serialize a cold DO chain ahead of the ack (observed at 8s in prd, with
+  // the retry queueing behind the same cold gate). Initialization is
+  // order-independent: an existing integration already has its
+  // subscription-configured event on the stream, and a brand-new one picks the
+  // webhook up via replay once the background initialize lands it.
   input.context.waitUntil?.(
-    slackIntegration.ensureReady().catch((error) => {
+    (async () => {
+      await slackIntegration.initialize({ name: slackIntegrationName });
+      await slackIntegration.ensureReady();
+    })().catch((error) => {
       console.error("[slack-integration-webhook] background catch-up failed", error);
     }),
   );
