@@ -266,7 +266,7 @@ test("extend: child worker caps run with the owning project's authority", async 
 // ---- the two locked acceptance tests (itx-next.md, "Locked in review") -------
 
 test(
-  "extend: MIDDLEWARE — a bare-function fetch shadow intercepts both doors and delegates via itx.parent",
+  "extend: MIDDLEWARE — a bare-function fetch shadow intercepts both doors and delegates via itx.super",
   { timeout: 120_000 },
   async () => {
     using itx = connectGlobal();
@@ -292,10 +292,10 @@ test(
       capability: async (request: { url?: string }) => {
         const url = request?.url ?? String(request);
         seen.push(url);
-        // Middleware: delegate to the UNSHADOWED pipe — itx.parent is the
+        // Middleware: delegate to the UNSHADOWED pipe — itx.super is the
         // "call next()" of the chain (the parent context has no shadow, so
         // its `fetch` resolves the platform default).
-        const delegated = (await childHandle.parent.fetch(url)) as Response;
+        const delegated = (await childHandle.super.fetch(url)) as Response;
         return new Response(JSON.stringify({ delegatedStatus: delegated.status, shadowed: true }), {
           headers: { "content-type": "application/json" },
         });

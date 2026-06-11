@@ -36,7 +36,7 @@
  * identical in the browser, Node, the REPL, the project worker (the worker
  * built from the project's own repo), itx scripts, and capabilities
  * themselves. A handle is an address, an access set, and five verbs: the
- * core's four plus `extend` and `parent` (and a few built-in members — `projects`,
+ * core's four plus `extend` and `super` (and a few built-in members — `projects`,
  * `streams`, `fetch`); every other property falls through to the context's
  * core. Authority is the handle itself: auth happens once at connect, and
  * which context you hold — plus the principal it was minted for — is the
@@ -295,11 +295,11 @@ export interface ItxBuiltins {
   /**
    * A handle on the PARENT context — the "call next()" of middleware: a
    * `fetch` shadow delegates to the unshadowed pipe via
-   * `itx.parent.fetch(request)`. An extension's parent comes from its birth
+   * `itx.super.fetch(request)`. An extension's parent comes from its birth
    * certificate; the project context's parent is the platform context (the
    * chain's read-only code root).
    */
-  readonly parent: ItxHandle;
+  readonly super: ItxHandle;
 }
 
 /**

@@ -10,7 +10,7 @@
 //
 // Anatomy:
 //   - typed built-ins (the trust kernel): the verbs provideCapability,
-//     revokeCapability, describe, extend, invoke — plus parent, streams,
+//     revokeCapability, describe, extend, invoke — plus super, streams,
 //     project, projects, and `fetch`, which is sugar dispatching through the
 //     core's `fetch` capability (a shadowable platform default)
 //   - a fallthrough Proxy: any unknown name becomes a PathProxy whose
@@ -343,15 +343,15 @@ export class ItxHandle extends RpcTarget {
   /**
    * A handle on the PARENT context — the "call next()" of middleware: a
    * `fetch` shadow delegates to the unshadowed pipe via
-   * `itx.parent.fetch(request)`. Returned as a path proxy (not a bare
+   * `itx.super.fetch(request)`. Returned as a path proxy (not a bare
    * promise) so the dotted call pipelines over capnweb in one round trip;
-   * `await itx.parent` also works and yields the parent handle's surface.
+   * `await itx.super` also works and yields the parent handle's surface.
    *
    * An extension's parent comes from its birth certificate; the project
    * context's parent IS the platform context (the chain's code root); the
    * platform context is the end of the line.
    */
-  get parent(): ItxHandle {
+  get super(): ItxHandle {
     const parentHandle = async (): Promise<ItxHandle> => {
       const address = this.#runtime.contextAddress;
       if (!address) {
@@ -389,7 +389,7 @@ export class ItxHandle extends RpcTarget {
     };
     return new PathProxy(async (call: PathCall) => {
       const handle = await parentHandle();
-      // Empty path = `await itx.parent` pulled the proxy and called it — not
+      // Empty path = `await itx.super` pulled the proxy and called it — not
       // meaningful; surface the handle's members via replay instead.
       return await replayPathCall(handle, call);
     }) as unknown as ItxHandle;

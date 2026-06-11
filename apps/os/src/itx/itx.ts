@@ -715,11 +715,11 @@ const ITX_BUILTIN_NAMES = [
   "describe",
   "extend",
   "invoke",
-  "parent",
   "project",
   "projects",
   "provideCapability",
   "revokeCapability",
+  "super",
 ] as const;
 
 /** A cap name may shadow neither an itx built-in nor a reserved path segment. */

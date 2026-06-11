@@ -234,7 +234,7 @@ capabilities themselves. Anatomy: the typed trust kernel — the four verbs
 plus **`extend`** (mint a child context: ④'s address + ⑤'s birth
 certificate + a handle), **`parent`** (a path-proxied handle on the parent
 context — the "call next()" of middleware: a `fetch` shadow delegates to the
-unshadowed pipe via `itx.parent.fetch(request)`), `streams`, `project`,
+unshadowed pipe via `itx.super.fetch(request)`), `streams`, `project`,
 `projects`, `fetch`, `describe`, `capability(name)`, `shareUrl` — and a
 fallthrough Proxy: any unknown name becomes a `PathProxy` (①) whose terminal
 call is one `invoke` on the node's core. `itx.slack` works because someone
@@ -441,7 +441,7 @@ await slack.chat.postMessage({ channel, text });
 The e2e suite (`src/itx/e2e/`, runnable against any deployment) covers the
 five-step live→durable capability flow, the journal as the record, egress
 through both doors with real secret substitution, the two locked acceptance
-tests (middleware via a bare-function `fetch` shadow + `itx.parent`;
+tests (middleware via a bare-function `fetch` shadow + `itx.super`;
 indirection via origin dial-back), extend/shadow/chain, the host-provided
 workspace semantics, facet state, and the HTTP gate matrix.
 

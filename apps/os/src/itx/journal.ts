@@ -152,7 +152,7 @@ export type ContextDescriptor = {
   id: string;
   name: string | null;
   /** The parent context: its identity plus its ADDRESS — how chain
-   * delegation and itx.parent dial the parent node. */
+   * delegation and itx.super dial the parent node. */
   parent: { id: string; address: CapabilityAddress };
   /** The owning project — every child context lives under exactly one. */
   projectId: string;
