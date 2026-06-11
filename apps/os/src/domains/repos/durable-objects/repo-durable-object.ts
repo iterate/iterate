@@ -30,11 +30,14 @@ import {
   ListRepoFilesInput,
   ReadRepoFilesInput,
   ReadRepoLogInput,
+  ReadRepoTreeInput,
   commitRepoFiles,
   isGitAuthError,
   listRepoFiles,
+  readRemoteBranchOid,
   readRepoFiles,
   readRepoLog,
+  readRepoTree,
   type CommitRepoFilesResult,
 } from "~/domains/repos/repo-git.ts";
 import {
@@ -262,6 +265,33 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
         paths: await listRepoFiles({ branch, remote: info.remote, token: info.token }),
       };
     });
+  }
+
+  /**
+   * One checkout, one answer: the ref's head commit plus every file on it —
+   * the build input for repo-sourced workers (itx/source-build.ts).
+   */
+  async readTree(input: ReadRepoTreeInput = {}) {
+    const parsed = ReadRepoTreeInput.parse(input);
+    return await this.withRepoGitCredentials((info) =>
+      readRepoTree({
+        branch: parsed.ref ?? info.defaultBranch,
+        remote: info.remote,
+        token: info.token,
+      }),
+    );
+  }
+
+  /** The ref's head commit oid — one HTTP request (ls-remote), no clone.
+   * The cheap freshness probe for "latest" repo sources. */
+  async headOid(input: { ref?: string } = {}) {
+    return await this.withRepoGitCredentials(async (info) => ({
+      oid: await readRemoteBranchOid({
+        branch: input.ref ?? info.defaultBranch,
+        remote: info.remote,
+        token: info.token,
+      }),
+    }));
   }
 
   /** Read the commit log of a branch (newest first). */

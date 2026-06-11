@@ -33,6 +33,20 @@ import { parseConfig } from "~/config.ts";
 
 export const PLATFORM_PROJECT_CONTEXT_ID = "platform:project";
 
+/**
+ * The project worker's source: the code in the project's own config repo,
+ * addressed like ANY repo-sourced capability. "latest" tracks pushes; the
+ * build is memoized per commit (source-build.ts). HTTP ingress and event
+ * forwarding load the same source (domains/projects/project-worker-runtime.ts).
+ */
+export const PROJECT_WORKER_SOURCE = {
+  bundle: {},
+  commit: "latest",
+  path: "worker.js",
+  repo: "iterate-config",
+  type: "repo",
+} as const satisfies import("./itx.ts").WorkerSource;
+
 /** The platform context's own address — pure code behind a loopback name. */
 export const PLATFORM_PROJECT_CONTEXT_ADDRESS: CapabilityAddress = {
   entrypoint: "PlatformContext",
@@ -116,16 +130,13 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     name: "workspace",
   },
   {
-    // The forwarder hop speaks call({ path, args }); how it treats the
-    // user's default export — members replay — rides in ITS props.
-    address: {
-      entrypoint: "ProjectWorker",
-      props: { invoke: "members" },
-      type: "rpc",
-      worker: { type: "loopback" },
-    },
+    // An ORDINARY repo source — the last project-worker specialness is gone.
+    // The platform guarantees exactly one thing: every project has its
+    // config repo with a defined file structure; this entry points at it.
+    address: { type: "rpc", worker: { type: "source", source: PROJECT_WORKER_SOURCE } },
     instructions:
-      "The project's own iterate-config worker, rebuilt from the repo on every call: " +
+      "The project's own worker — the code in the project's iterate-config repo " +
+      "(worker.js), built per commit and tracking pushes: " +
       "itx.worker.someExportedFunction(args) reaches any public method of its default export.",
     name: "worker",
   },

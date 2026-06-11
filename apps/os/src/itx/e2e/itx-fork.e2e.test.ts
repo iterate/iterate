@@ -224,6 +224,7 @@ test("extend: child worker caps run with the owning project's authority", async 
       worker: {
         type: "source",
         source: {
+          type: "inline",
           cacheKey: crypto.randomUUID(),
           mainModule: "cap.js",
           modules: {
@@ -364,6 +365,7 @@ test(
         worker: {
           type: "source",
           source: {
+            type: "inline",
             cacheKey: crypto.randomUUID(),
             mainModule: "cap.js",
             modules: {
@@ -425,6 +427,7 @@ function chatPostTarget(marker: string) {
     worker: {
       type: "source" as const,
       source: {
+        type: "inline",
         cacheKey: crypto.randomUUID(),
         mainModule: "cap.js",
         modules: {

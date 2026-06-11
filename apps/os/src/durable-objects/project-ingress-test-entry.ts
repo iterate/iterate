@@ -4,13 +4,11 @@ import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
 } from "~/domains/streams/stream-runtime.ts";
-import {
-  getProjectDurableObjectName,
-  ProjectDurableObject as RealProjectDurableObject,
-} from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { PROJECT_STREAM_PATH } from "~/domains/projects/stream-processors/project/contract.ts";
 import {
   getRepoDurableObjectName,
+  RepoDurableObject as RealRepoDurableObject,
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
@@ -21,8 +19,9 @@ import {
 } from "~/ingress/host-routing.ts";
 import { lookupIngressRule } from "~/ingress/lookup.ts";
 import { resolveItx } from "~/itx/entrypoint.ts";
+import { PROJECT_WORKER_SOURCE } from "~/itx/platform-context.ts";
+import { repoSourceMemoKey } from "~/itx/source-build.ts";
 
-const PROJECT_CONFIG_DIR = "/iterate-config";
 const MOCK_ARTIFACT_REMOTE_BASE = "https://artifacts.example.test/";
 const TEST_PROJECT_WORKER_SOURCE = `import app1 from "./apps/app1/worker.js";
 import app2 from "./apps/app2/worker.js";
@@ -70,93 +69,43 @@ const TEST_APP_TWO_WORKER_SOURCE = `export default {
 };
 `;
 
-type TestProjectConfigGit = {
-  add(input: { dir: string; filepath: string }): Promise<unknown>;
-  clone(input: Record<string, unknown>): Promise<unknown>;
-  commit(input: {
-    author: { email: string; name: string };
-    dir: string;
-    message: string;
-  }): Promise<unknown>;
-  init(input: { defaultBranch: string; dir: string }): Promise<unknown>;
-  log(input: { depth: number; dir: string; ref: string }): Promise<Array<{ oid: string }>>;
-  pull(input: Record<string, unknown>): Promise<unknown>;
-  status(input: { dir: string }): Promise<unknown>;
-};
+// A deterministic fake head commit for the mock remote — any 40-hex oid.
+const MOCK_TREE_COMMIT = "feedc0de".repeat(5);
 
-type TestProjectConfigWorkspace = {
-  cloudflareShellGit(): Promise<unknown>;
-  cloudflareShellState(): Promise<Record<string, unknown>>;
-  hasFile(path: string): Promise<boolean>;
-  initialize(input: { name: string }): Promise<unknown>;
-  removePath(input: { force: boolean; path: string; recursive: boolean }): Promise<void>;
-};
+export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
-export class ProjectDurableObject extends RealProjectDurableObject {
-  protected override async cloneWorkerRepo(input: {
-    git: TestProjectConfigGit;
-    repo: RepoInfo;
-    workspace: TestProjectConfigWorkspace;
-  }) {
-    if (!input.repo.remote.startsWith(MOCK_ARTIFACT_REMOTE_BASE)) {
-      await super.cloneWorkerRepo(input);
-      return;
-    }
-
-    const state = await input.workspace.cloudflareShellState();
-    const writeFile = readWorkspaceStateMethod({ method: "writeFile", state });
-    await writeFile(`${PROJECT_CONFIG_DIR}/iterate.config.jsonc`, '{\n  "version": 1\n}\n');
-    await writeFile(`${PROJECT_CONFIG_DIR}/package.json`, '{\n  "type": "module"\n}\n');
-    await writeFile(`${PROJECT_CONFIG_DIR}/worker.js`, TEST_PROJECT_WORKER_SOURCE);
-    await writeFile(`${PROJECT_CONFIG_DIR}/apps/app1/worker.js`, TEST_APP_ONE_WORKER_SOURCE);
-    await writeFile(`${PROJECT_CONFIG_DIR}/apps/app2/worker.js`, TEST_APP_TWO_WORKER_SOURCE);
-    await input.git.init({ dir: PROJECT_CONFIG_DIR, defaultBranch: input.repo.defaultBranch });
-    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "iterate.config.jsonc" });
-    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "package.json" });
-    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "worker.js" });
-    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "apps/app1/worker.js" });
-    await input.git.add({ dir: PROJECT_CONFIG_DIR, filepath: "apps/app2/worker.js" });
-    await input.git.commit({
-      dir: PROJECT_CONFIG_DIR,
-      message: "Seed test iterate config worker",
-      author: {
-        name: "Iterate",
-        email: "support@iterate.com",
-      },
-    });
-  }
-
-  protected override async bundleWorkerCode(files: Record<string, string>) {
-    if (typeof files["package.json"] !== "string") {
-      throw new Error("Test project worker bundler path requires package.json.");
-    }
-    if (typeof files["apps/app1/worker.js"] !== "string") {
-      throw new Error("Test project worker bundler path requires apps/app1/worker.js.");
-    }
-    if (typeof files["apps/app2/worker.js"] !== "string") {
-      throw new Error("Test project worker bundler path requires apps/app2/worker.js.");
-    }
-
+/**
+ * The mock seam moved to where the dependency actually is: the mock artifact
+ * remote serves no git protocol, so the repo DO's checkout surface answers
+ * from in-memory sources instead. Everything downstream — resolveWorkerSource,
+ * the R2 build memo, the REAL @cloudflare/worker-bundler multi-file bundle,
+ * the loader — runs for real.
+ */
+export class RepoDurableObject extends RealRepoDurableObject {
+  override async readTree(input = {}) {
+    if (!(await this.#isMockRemote())) return super.readTree(input);
     return {
-      compatibilityDate: "2026-04-27",
-      compatibilityFlags: ["nodejs_compat"],
-      globalOutbound: null,
-      mainModule: "worker.js",
-      modules: {
-        "worker.js": {
-          js: TEST_PROJECT_WORKER_SOURCE,
-        },
-        "apps/app1/worker.js": {
-          js: TEST_APP_ONE_WORKER_SOURCE,
-        },
-        "apps/app2/worker.js": {
-          js: TEST_APP_TWO_WORKER_SOURCE,
-        },
-      },
+      commitOid: MOCK_TREE_COMMIT,
+      files: [
+        { content: TEST_APP_ONE_WORKER_SOURCE, path: "apps/app1/worker.js" },
+        { content: TEST_APP_TWO_WORKER_SOURCE, path: "apps/app2/worker.js" },
+        { content: '{\n  "version": 1\n}\n', path: "iterate.config.jsonc" },
+        { content: '{\n  "type": "module"\n}\n', path: "package.json" },
+        { content: TEST_PROJECT_WORKER_SOURCE, path: "worker.js" },
+      ],
     };
   }
+
+  override async headOid(input = {}) {
+    if (!(await this.#isMockRemote())) return super.headOid(input);
+    return { oid: MOCK_TREE_COMMIT };
+  }
+
+  async #isMockRemote() {
+    const info = await this.getInfo();
+    return info.remote.startsWith(MOCK_ARTIFACT_REMOTE_BASE);
+  }
 }
-export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
@@ -198,6 +147,27 @@ export default {
         projectId,
         slug,
       });
+      // Pre-seed the R2 build memo for the mock commit: the REAL bundler
+      // cannot run under vitest-pool-workers (its internal esbuild.wasm
+      // import doesn't resolve in the test module runner), so the memo-hit
+      // path is what these tests exercise — the loader still consumes the
+      // multi-module output for real. Bundler-in-workerd is covered by the
+      // itx e2e litmus against deployed environments.
+      await env.ITX_BUILD_CACHE.put(
+        await repoSourceMemoKey({
+          oid: MOCK_TREE_COMMIT,
+          projectId,
+          source: PROJECT_WORKER_SOURCE,
+        }),
+        JSON.stringify({
+          mainModule: "worker.js",
+          modules: {
+            "apps/app1/worker.js": TEST_APP_ONE_WORKER_SOURCE,
+            "apps/app2/worker.js": TEST_APP_TWO_WORKER_SOURCE,
+            "worker.js": TEST_PROJECT_WORKER_SOURCE,
+          },
+        }),
+      );
       if (customHostname) {
         await env.DB.prepare(`UPDATE projects SET custom_hostname = ? WHERE id = ?`)
           .bind(normalizeIngressHost(customHostname), projectId)
@@ -427,14 +397,6 @@ async function ensureD1Schema(db: D1Database) {
     ),
     db.prepare(`CREATE INDEX IF NOT EXISTS idx_project_secrets_key ON project_secrets (key)`),
   ]);
-}
-
-function readWorkspaceStateMethod(input: { method: string; state: Record<string, unknown> }) {
-  const method = input.state[input.method];
-  if (typeof method !== "function") {
-    throw new Error(`Workspace state does not implement ${input.method}.`);
-  }
-  return method;
 }
 
 function headersToArrays(headers: Headers) {

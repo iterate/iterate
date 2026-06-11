@@ -1,5 +1,12 @@
 import alchemy from "alchemy";
-import { Ai, D1Database, DurableObjectNamespace, Queue, WorkerLoader } from "alchemy/cloudflare";
+import {
+  Ai,
+  D1Database,
+  DurableObjectNamespace,
+  Queue,
+  R2Bucket,
+  WorkerLoader,
+} from "alchemy/cloudflare";
 import { Artifacts } from "@iterate-com/shared/alchemy/artifacts";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
@@ -150,6 +157,13 @@ const artifactEventsQueue = await Queue("artifact-events", {
   name: `${ctx.workerName}-artifact-events`,
   adopt: true,
 });
+// Build memo for repo-sourced itx workers (src/itx/source-build.ts):
+// hash-keyed immutable bundles, reproducible from their keys — safe to wipe.
+const itxBuildCache = await R2Bucket("itx-build-cache", {
+  name: `${ctx.workerName}-itx-build-cache`,
+  adopt: true,
+  empty: true,
+});
 
 const debugAppendChainSubscriber = ctx.app.local
   ? DurableObjectNamespace<DebugAppendChainSubscriber>("debug-append-chain-subscriber", {
@@ -169,6 +183,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     ARTIFACTS_NAMESPACE: artifactsNamespace,
     GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
     LOADER: WorkerLoader(),
+    ITX_BUILD_CACHE: itxBuildCache,
     ITX_CONTEXT: itxContext,
     AGENT: agent,
     ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),

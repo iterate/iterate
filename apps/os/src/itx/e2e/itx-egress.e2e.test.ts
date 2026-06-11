@@ -97,6 +97,7 @@ test("bare fetch() inside a worker cap goes through egress (implicit door)", asy
       worker: {
         type: "source",
         source: {
+          type: "inline",
           cacheKey: crypto.randomUUID(),
           mainModule: "cap.js",
           modules: {

@@ -24,6 +24,7 @@ test("facet caps keep private durable state across invocations", async () => {
       worker: {
         type: "source",
         source: {
+          type: "inline",
           cacheKey: crypto.randomUUID(),
           // Facet classes must be NAMED exports (default exports trip an opaque
           // workerd error — the core validates this at provide time).
@@ -71,6 +72,7 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
       worker: {
         type: "source",
         source: {
+          type: "inline",
           cacheKey: crypto.randomUUID(),
           mainModule: "cap.js",
           modules: {
@@ -131,6 +133,7 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
       worker: {
         type: "source",
         source: {
+          type: "inline",
           cacheKey: crypto.randomUUID(),
           mainModule: "cap.js",
           modules: {
@@ -159,6 +162,7 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
       worker: {
         type: "source",
         source: {
+          type: "inline",
           cacheKey: crypto.randomUUID(),
           mainModule: "cap.js",
           modules: {

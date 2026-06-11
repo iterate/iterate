@@ -96,14 +96,6 @@ describe("Project ingress routing", () => {
           projectId: "proj__local__test",
         }),
       }),
-      expect.objectContaining({
-        type: "events.iterate.com/project/config-worker-built",
-        payload: expect.objectContaining({
-          mainModule: "worker.js",
-          projectId: "proj__local__test",
-          repoSlug: "iterate-config",
-        }),
-      }),
     ]);
 
     const projectState = await waitForProjectState();
@@ -113,10 +105,6 @@ describe("Project ingress routing", () => {
       slug: "demo",
     });
     expect(projectState.state.phase).toBe("ready");
-    expect(projectState.state.worker).toMatchObject({
-      mainModule: "worker.js",
-      repoSlug: "iterate-config",
-    });
     expect(projectState.offset).toBeGreaterThanOrEqual(4);
 
     // itx.project deep-traverses in one expression (path proxy; regression
@@ -365,10 +353,10 @@ describe("Project ingress routing", () => {
 test("project config worker receives root-stream events and appends facts back", async () => {
   await createProject();
 
-  // The config worker must be built before forwarding delivers to it (the
-  // gate is the ready flag set by provisioning).
+  // No build gate anymore: the forwarder loads the worker from its repo
+  // source on demand (R2 memo); creation only has to finish.
   await waitForProjectStreamEvents([
-    expect.objectContaining({ type: "events.iterate.com/project/config-worker-built" }),
+    expect.objectContaining({ type: "events.iterate.com/project/create-completed" }),
   ]);
 
   // Append a fact to the project root stream. The project-config-worker
@@ -435,13 +423,11 @@ async function waitForProjectState() {
       state: {
         phase: string;
         project: { projectId: string } | null;
-        worker: { commitOid: string } | null;
       };
     };
     if (
       snapshot.state.project?.projectId === "proj__local__test" &&
-      snapshot.state.phase === "ready" &&
-      snapshot.state.worker !== null
+      snapshot.state.phase === "ready"
     ) {
       return snapshot;
     }

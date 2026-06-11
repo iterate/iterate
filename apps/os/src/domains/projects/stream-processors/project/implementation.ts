@@ -40,7 +40,6 @@ import {
 } from "~/domains/secrets/example-secret.ts";
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-import { readLoopbackExports, type WorkerHost } from "~/domains/projects/durable-objects/worker.ts";
 import type { AppConfig } from "~/config.ts";
 
 export { PROJECT_STREAM_PATH, projectFacts, ProjectProcessorContract } from "./contract.ts";
@@ -61,7 +60,6 @@ export type ProjectProcessorDeps = {
   exports: unknown;
   /** The hosting DO's own project id — payloads must match (see #ownEvent). */
   projectId: () => string;
-  workerHost: WorkerHost;
   appConfig: () => AppConfig;
 };
 
@@ -93,16 +91,6 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/project/created":
         if (!this.#ownEvent(event.payload)) return state;
         return { ...state, project: event.payload };
-      case "events.iterate.com/project/config-worker-built":
-        if (!this.#ownEvent(event.payload)) return state;
-        return {
-          ...state,
-          worker: {
-            commitOid: event.payload.commitOid,
-            mainModule: event.payload.mainModule,
-            repoSlug: event.payload.repoSlug,
-          },
-        };
       case "events.iterate.com/project/create-completed":
         if (!this.#ownEvent(event.payload)) return state;
         return { ...state, phase: "ready" };
@@ -147,14 +135,6 @@ export class ProjectProcessor extends StreamProcessor<
           payload: { projectId },
         },
       });
-    });
-
-    // The build never gates creation: ingress builds on demand, so a failure
-    // here self-heals on the next request. WorkerHost appends the
-    // config-worker-built fact on EVERY successful build (creation and later
-    // rebuilds alike — its onBuilt hook), so nothing is appended here.
-    args.runInBackground(async () => {
-      await this.deps.workerHost.buildFresh({ id: projectId, slug });
     });
   }
 
@@ -218,7 +198,7 @@ export class ProjectProcessor extends StreamProcessor<
 
   async #ensureExampleEgressSecret(projectId: string) {
     const secrets = getSecretsCapability({
-      exports: readLoopbackExports(this.deps.exports),
+      exports: this.deps.exports as Parameters<typeof getSecretsCapability>[0]["exports"],
       props: { projectId },
     });
 

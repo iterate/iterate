@@ -4,14 +4,10 @@
 // (reachability) errors surface HERE — at the capability's first call —
 // never at provide time (provide is structural only, itx.ts).
 
-import {
-  capabilitySourceCacheKey,
-  type CapabilityDial,
-  type CapabilitySource,
-  type PathCallable,
-} from "./itx.ts";
+import { type CapabilityDial, type PathCallable, type WorkerSource } from "./itx.ts";
 import { replayPathCall } from "./path-proxy.ts";
 import { wireIsolateEnv } from "./isolate.ts";
+import { resolveWorkerSource, type SourceBuildEnv } from "./source-build.ts";
 
 type WorkerLoaderLike = {
   get(
@@ -67,22 +63,29 @@ export function makeDial(host: DialHost): CapabilityDial {
     return factory({ props });
   };
 
-  const loadWorker = (
+  const loadWorker = async (
     name: string,
     origin: { id: string; address: unknown },
-    source: CapabilitySource,
+    source: WorkerSource,
   ) => {
     if (!host.loader) throw new Error("Source capabilities need a LOADER binding.");
+    // Inline sources are already code; repo sources resolve through the
+    // per-commit R2 build memo (source-build.ts) — a warm key never builds.
+    const resolved = await resolveWorkerSource({
+      env: host.env as SourceBuildEnv,
+      projectId: host.projectId,
+      source,
+    });
     // The isolate is scoped to the ORIGINATING context, not the definition's
     // home: an inherited source cap invoked through a child context gets the
     // child's itx AND the child's egress, so its bare fetch() dials back
     // through the child's chain (and any `fetch` shadow there) — the
     // origin-dial-back property. The cache key carries the origin so two
     // contexts never share a differently-scoped isolate.
-    return host.loader.get(`itx-cap:${origin.id}:${name}:${capabilitySourceCacheKey(source)}`, () =>
+    return host.loader.get(sourceIsolateKey({ cacheKey: resolved.cacheKey, name, origin }), () =>
       wireIsolateEnv({
         capabilityPath: name,
-        code: source,
+        code: resolved,
         contextAddress: origin.address as Parameters<typeof wireIsolateEnv>[0]["contextAddress"],
         contextId: origin.id,
         loopback: (exportName, options) => loopback(exportName, options.props),
@@ -140,7 +143,9 @@ export function makeDial(host: DialHost): CapabilityDial {
         // Loader entrypoints and facet stubs are this dial's OWN borrows —
         // the user's class just exports methods, so the wrap (and the members
         // replay inside it) lives here. The wrapper's dispose releases the
-        // INNER borrow when the core's call ends.
+        // INNER borrow when the core's call ends. Loading is lazy-async
+        // because repo sources may build on a cold key; the loader callbacks
+        // accept promises, so the dial itself stays synchronous.
         const source = worker.source;
         if (source.exportType === "durable-object") {
           const facets = host.facets;
@@ -152,12 +157,13 @@ export function makeDial(host: DialHost): CapabilityDial {
           // the same property Cloudflare's AppRunner example relies on. It
           // also keys by the HOST context, not the origin: a stateful cap's
           // data belongs to the context it was provided on.
-          const facetTarget = facets(`cap:${name}`, () => {
-            const facetClass = loadWorker(
+          const facetTarget = facets(`cap:${name}`, async () => {
+            const worker = await loadWorker(
               name,
               { address: host.contextAddress, id: host.contextId },
               source,
-            ).getDurableObjectClass?.(source.entrypoint);
+            );
+            const facetClass = worker.getDurableObjectClass?.(source.entrypoint);
             if (!facetClass) {
               throw new Error(
                 `Capability "${name}" did not yield a DurableObject class ` +
@@ -168,10 +174,18 @@ export function makeDial(host: DialHost): CapabilityDial {
           });
           return inProcessPathCallable(facetTarget, () => disposeIfPossible(facetTarget));
         }
-        const entrypoint = loadWorker(name, attribution.origin, source).getEntrypoint(
-          source.entrypoint,
+        const entrypoint = loadWorker(name, attribution.origin, source).then((worker) =>
+          worker.getEntrypoint(source.entrypoint),
         );
-        return inProcessPathCallable(entrypoint, () => disposeIfPossible(entrypoint));
+        // The borrow may be disposed without ever being called; observe the
+        // load failure so it cannot become an unhandled rejection (the call
+        // path still awaits the original promise and gets the real error).
+        entrypoint.catch(() => {});
+        const borrowed: PathCallable & Disposable = {
+          call: async (input) => replayPathCall(await entrypoint, input),
+          [Symbol.dispose]: () => void entrypoint.then(disposeIfPossible, () => {}),
+        };
+        return borrowed;
       }
       case "durable-object": {
         if (!host.allowlists.durableObjects.has(worker.binding)) {
@@ -197,6 +211,19 @@ export function makeDial(host: DialHost): CapabilityDial {
       }
     }
   };
+}
+
+/**
+ * The loader cache key for a source capability's isolate. Exported so the
+ * non-dial loaders of the project worker (HTTP ingress, root-stream event
+ * forwarding) share the SAME warm isolates as `itx.worker` dials.
+ */
+export function sourceIsolateKey(input: {
+  cacheKey: string;
+  name: string;
+  origin: { id: string };
+}): string {
+  return `itx-cap:${input.origin.id}:${input.name}:${input.cacheKey}`;
 }
 
 /** An in-process borrow that speaks the calling convention: replays the path
@@ -268,7 +295,6 @@ const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "GmailCapability",
   "McpClient",
   "OrpcCapability",
-  "ProjectWorker",
   "ReposCapability",
   "SlackCapability",
   "StreamsCapability",

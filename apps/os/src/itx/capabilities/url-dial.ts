@@ -24,9 +24,15 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { RESERVED_PATH_SEGMENTS, type PathCall } from "../itx.ts";
-import type { WorkerInvokeMode } from "./project-worker.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+
+/**
+ * How a FORWARDER treats the inner object it fronts (here, the remote main):
+ * replay the path on its members (default) or hand it one call({path, args}).
+ * Forwarder props, not kernel data — the core knows ONE calling convention.
+ */
+export type WorkerInvokeMode = "members" | "path-call";
 
 export type UrlDialProps = {
   /** The remote Cap'n Web server. Provider-supplied; http(s) or ws(s). */

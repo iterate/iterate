@@ -10,7 +10,7 @@ done-condition and the doc that specifies it. Design docs of record:
 ## A. In flight (PR #1493, must land)
 
 1. **Repo-sourced workers wave** (agent running): `WorkerSource =
-   inline | repo`, R2 build memo (`ITX_BUILD_CACHE`, key =
+inline | repo`, R2 build memo (`ITX_BUILD_CACHE`, key =
    hash(repo, sha, path, bundleConfig)), @cloudflare/worker-bundler
    in workerd (repo DO readFiles → vfs → esbuild-wasm; NO workspace),
    `worker` default = ordinary repo provide, DELETE ProjectWorker

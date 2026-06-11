@@ -172,6 +172,7 @@ await itx.provideCapability({
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-greeter-v1",
         mainModule: "cap.js",
         modules: {
@@ -210,6 +211,7 @@ await itx.provideCapability({
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-todo-v1",
         mainModule: "cap.js",
         modules: {
@@ -256,6 +258,7 @@ await itx.provideCapability({
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-kit-v1",
         mainModule: "cap.js",
         modules: {
@@ -296,6 +299,7 @@ await itx.provideCapability({
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-inventory-v1",
         mainModule: "cap.js",
         modules: {
@@ -321,6 +325,7 @@ await itx.provideCapability({
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-report-v1",
         mainModule: "cap.js",
         modules: {
@@ -359,6 +364,7 @@ await itx.provideCapability({
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-counter-v1",
         entrypoint: "Counter",   // named export required for facets
         exportType: "durable-object",
@@ -454,6 +460,7 @@ await itx.provideCapability({
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-hello-http-v1",
         mainModule: "cap.js",
         modules: {

@@ -1,19 +1,18 @@
-// ONE place wires the environment of every isolate the platform loads — the
-// project worker (domains/projects/durable-objects/worker.ts), source caps
-// (dial.ts), and the /api/itx/run script harness all describe the same
-// trust posture:
+// ONE place wires the environment of every isolate the platform loads —
+// source caps (dial.ts, including the project's own worker) and the
+// /api/itx/run script harness all describe the same trust posture:
 //
 //   env.ITERATE    — an itx scoped to the isolate's HOME context (Law 4: a
 //                    cap can never reach wider than where it is provided);
 //                    `capabilityPath` is attribution.
+//   env.STREAMS    — the project's streams capability.
 //   globalOutbound — PROJECT EGRESS (Law 5): bare fetch() inside the isolate,
 //                    including fetches made by bundled npm dependencies, rides
 //                    the egress pipe — secret placeholders are substituted
 //                    outside the isolate, which never sees material.
 //
 // Loaders differ only in their loopback accessor (a DO's ctx.exports vs the
-// dial's host.loopback) and in extra bindings (the project worker also
-// gets env.STREAMS).
+// dial's host.loopback).
 
 import type { CapabilityAddress } from "./itx.ts";
 
@@ -59,6 +58,12 @@ export function wireIsolateEnv(input: {
           contextAddress: input.contextAddress ?? null,
           projectId: input.projectId,
         },
+      }),
+      // The project's streams, same posture in EVERY isolate (the project
+      // worker, source caps, scripts): identical env means identical
+      // loader-cache entries, so all load sites share warm isolates.
+      STREAMS: input.loopback("StreamsBackend", {
+        props: { projectId: input.projectId },
       }),
       ...input.extraEnv,
     },

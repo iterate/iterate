@@ -1,14 +1,13 @@
 // The Project Durable Object: the durable home of one PROJECT CONTEXT
-// (apps/os/docs/itx-spec.md). It has exactly three jobs:
+// (apps/os/docs/itx-spec.md). It has exactly one job: ITX CORE HOST — it
+// embeds the capability core (itx()) and is the dispatch point for every
+// capability invocation in this project.
 //
-// 1. ITX CORE HOST — it embeds the capability core (itx()) and is the
-//    dispatch point for every capability invocation in this project.
-//
-// 2. WORKER SOURCE-OF-TRUTH — it owns the build pipeline for the project's
-//    worker (durable-objects/worker.ts) and answers "what is the current
-//    worker code?". It does NOT serve ingress: project-host requests are
-//    dispatched by the stateless ProjectIngressEntrypoint, which loads the
-//    worker itself and only asks this DO for the checkout.
+// The project's WORKER does not live here: it is an ordinary repo-sourced
+// capability (PROJECT_WORKER_SOURCE, itx/platform-context.ts) built through
+// the generic per-commit R2 memo (itx/source-build.ts). Ingress loads it in
+// the stateless ProjectIngressEntrypoint; this DO only forwards root-stream
+// events to its processEvent hook (project-worker-runtime.ts).
 //
 // Egress does NOT live here anymore: it is the `fetch` capability among the
 // platform defaults (itx/platform-context.ts). This DO still supervises
@@ -54,34 +53,16 @@ import {
   ProjectConfigWorkerProcessorContract,
 } from "~/domains/projects/stream-processors/project-config-worker/implementation.ts";
 import {
-  bundleWorkerCode,
-  cloneWorkerRepo,
-  WorkerHost,
-  type WorkerCheckout,
-  type WorkerCode,
-  type WorkerLoaderBinding,
-  type WorkerWorkspace,
-} from "~/domains/projects/durable-objects/worker.ts";
-import {
-  type RepoDurableObject,
-  type RepoInfo,
-} from "~/domains/repos/durable-objects/repo-durable-object.ts";
-import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
-import { readRemoteBranchOid } from "~/domains/repos/repo-git.ts";
-import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
-import {
-  Itx,
-  replayPathCall,
-  type CapabilityAddress,
-  type PathCall,
-  type PathCallable,
-} from "~/itx/itx.ts";
+  isMissingProjectWorkerError,
+  loadProjectWorker,
+} from "~/domains/projects/project-worker-runtime.ts";
+import { type RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import { Itx, type CapabilityAddress } from "~/itx/itx.ts";
 import { durableObjectFacetsHook, makeDial, resolveDialableTargets } from "~/itx/dial.ts";
 import { journalStream, ownJournalPath, projectContextAddress } from "~/itx/journal.ts";
 import { getPlatformContext } from "~/itx/platform-context.ts";
 import { runItxScript } from "~/itx/run.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
-import type { WorkerInvokeMode } from "~/itx/capabilities/project-worker.ts";
 
 /** Project DOs are addressed by the plain project id. */
 export function getProjectDurableObjectName(projectId: string) {
@@ -117,11 +98,6 @@ type ProjectEnv = {
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
-type ProjectRuntimeEnv = {
-  LOADER: WorkerLoaderBinding;
-  WORKSPACE: DurableObjectNamespace;
-};
-
 export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   // ---- processor: the project's durable state ----------------------------
   //
@@ -129,41 +105,6 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   // the snapshot this DO reads back and owns every creation side effect.
 
   host = createStreamProcessorHost(this.ctx);
-  workerHost = new WorkerHost({
-    ctx: this.ctx,
-    loader: projectRuntimeEnv(this.env).LOADER,
-    workspaceNamespace: projectRuntimeEnv(this.env).WORKSPACE,
-    getRepo: (project) =>
-      ensureIterateConfigInfoForProject({
-        env: this.env,
-        projectId: project.id,
-        projectSlug: project.slug,
-      }),
-    cloneRepo: (input) => this.cloneWorkerRepo(input),
-    bundle: (files) => this.bundleWorkerCode(files),
-    // Every successful build leaves its fact on the stream — creation AND
-    // later rebuilds — so processor state tracks what dispatch serves. The
-    // per-commit idempotency key dedupes same-commit rebuilds.
-    onBuilt: (checkout) => {
-      this.ctx.waitUntil(
-        (async () => {
-          const stream = await this.projectStream(this.projectId);
-          await stream.append({
-            type: "events.iterate.com/project/config-worker-built",
-            idempotencyKey: `project-config-worker-built:${this.projectId}:${checkout.commitOid}`,
-            payload: {
-              commitOid: checkout.commitOid,
-              mainModule: checkout.workerCode.mainModule,
-              projectId: this.projectId,
-              repoSlug: ITERATE_CONFIG_REPO_SLUG,
-            },
-          });
-        })().catch((error) => {
-          console.error(`[ProjectDO] config-worker-built append failed:`, error);
-        }),
-      );
-    },
-  });
   #projectProcessor = this.host.add(
     ProjectProcessorContract.slug,
     (deps) =>
@@ -173,7 +114,6 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
         env: this.env,
         exports: this.ctx.exports,
         projectId: () => this.projectId,
-        workerHost: this.workerHost,
       }),
   );
   // The worker as a stream processor: every root-stream event is forwarded
@@ -351,80 +291,33 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     return projectContextAddress(this.projectId);
   }
 
-  // ---- the worker ----------------------------------------------------------
-  //
-  // Ingress dispatch happens in the stateless ProjectIngressEntrypoint; these
-  // methods are how it (and itx.worker) reach the worker's source of truth.
-
-  /**
-   * The current worker version, with dispatch semantics: serves the cached
-   * checkout while fresh, kicks off ONE background rebuild when stale, and
-   * reports "building" only when nothing is cached yet.
-   */
-  async getWorkerVersion(): Promise<
-    | { status: "ready"; commitOid: string; summary: ProjectSummary }
-    | { status: "building"; summary: ProjectSummary }
-  > {
-    const summary = await this.requireSummary();
-    const version = await this.workerHost.versionForDispatch(summary);
-    if (version.status === "ready") {
-      return { status: "ready", commitOid: version.checkout.commitOid, summary };
-    }
-    return { status: "building", summary };
-  }
-
-  /**
-   * The current checkout (commit + worker code). Loader miss callbacks fetch
-   * this lazily, so the code payload only crosses RPC on a cold isolate.
-   */
-  async getWorkerCheckout(): Promise<WorkerCheckout> {
-    const summary = await this.requireSummary();
-    return (
-      (await this.workerHost.getCachedCheckout()) ?? (await this.workerHost.buildFresh(summary))
-    );
-  }
-
-  /**
-   * itx `{ type: "project-worker" }` refs dispatch here (via the
-   * ProjectWorker loopback forwarder, itx/caps/project-worker.ts): a named
-   * export of the project's OWN worker is the capability target — user
-   * space, same shape as first-party. The whole call arrives as data because
-   * loader entrypoints cannot cross an RPC boundary; the entrypoint is
-   * instantiated per call with the registry-merged props (definer
-   * parameterization + { capability, context, projectId } attribution).
-   */
-  async itxProjectWorkerCall(input: {
-    call: PathCall;
-    entrypoint?: string;
-    invoke: WorkerInvokeMode;
-    props: Record<string, unknown>;
-  }): Promise<unknown> {
-    const summary = await this.requireSummary();
-    const checkout = await this.workerHost.buildFresh(summary);
-    const worker = this.workerHost.loadWorker({ checkout, projectId: summary.id });
-    const entrypoint = worker.getEntrypoint(input.entrypoint, { props: input.props }) as unknown;
-    try {
-      if (input.invoke === "path-call") {
-        return await (entrypoint as PathCallable).call(input.call);
-      }
-      return await replayPathCall(entrypoint, input.call);
-    } finally {
-      (entrypoint as Partial<Disposable>)?.[Symbol.dispose]?.();
-    }
-  }
-
   /**
    * Checkpointed delivery to the worker's processEvent export, dialed by the
-   * project-config-worker processor under blockProcessorWhile. USER failures
-   * (the project's hook throwing) are swallowed — an author's bug must never
-   * wedge root-stream delivery — while PLATFORM failures (entrypoint
-   * resolution, rebuilds) throw so the checkpoint holds and the event is
-   * redelivered rather than silently dropped.
+   * project-config-worker processor under blockProcessorWhile. The worker is
+   * loaded EXACTLY (latestMaxAgeMs 0 probes the repo head): an event can be
+   * the direct consequence of a config push — a new agent created right
+   * after its config landed — and serving the previous worker would consume
+   * the very trigger the new config exists to handle. USER failures (the
+   * project's hook throwing) are swallowed — an author's bug must never
+   * wedge root-stream delivery; a MISSING worker (no repo, no worker.js yet)
+   * is a normal skip; PLATFORM failures (build/git errors) throw so the
+   * checkpoint holds and the event is redelivered rather than dropped.
    */
   private async forwardEventToWorker(input: { event: StreamEvent; streamPath: string }) {
     const summary = await this.currentSummary();
-    if (summary === null || !(await this.workerHost.isReady())) return;
-    const entrypoint = await this.getForwardingWorkerEntrypoint(summary);
+    if (summary === null) return;
+    let entrypoint;
+    try {
+      entrypoint = await loadProjectWorker({
+        env: this.env as typeof this.env & Parameters<typeof loadProjectWorker>[0]["env"],
+        exports: this.ctx.exports,
+        latestMaxAgeMs: 0,
+        projectId: summary.id,
+      });
+    } catch (error) {
+      if (isMissingProjectWorkerError(error)) return;
+      throw error;
+    }
     try {
       await entrypoint.processEvent?.({
         event: input.event as unknown as Event,
@@ -433,57 +326,6 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     } catch (error) {
       console.error("Project worker processEvent failed.", error);
     }
-  }
-
-  /**
-   * Entrypoint resolution for event forwarding. Unlike ingress (time-window
-   * freshness, stale-while-revalidate, latency first), the forwarder prefers
-   * correctness: an event can be the direct consequence of a config push — a
-   * new agent created right after its config landed — and serving the
-   * previous worker would consume the very trigger the new config exists to
-   * handle. Freshness is exact: one ls-remote compares the repo's HEAD to
-   * the cached checkout's commit, and on any mismatch the rebuild is
-   * AWAITED (delivery runs under blockProcessorWhile, so the wait just holds
-   * this subscription's queue); rebuilds only happen when the repo changed.
-   */
-  private async getForwardingWorkerEntrypoint(summary: ProjectSummary) {
-    try {
-      const cached = await this.workerHost.getCachedCheckout();
-      if (cached) {
-        const repo = await ensureIterateConfigInfoForProject({
-          env: this.env,
-          projectId: summary.id,
-          projectSlug: summary.slug,
-        });
-        const headOid = await readRemoteBranchOid({
-          branch: repo.defaultBranch,
-          remote: repo.remote,
-          token: repo.token,
-        });
-        if (headOid !== null && headOid === cached.commitOid) {
-          return this.workerHost.load({ checkout: cached, projectId: summary.id });
-        }
-      }
-    } catch (error) {
-      // The probe is an optimization for exactness, not a gate: on probe
-      // failure fall back to the time-based window rather than blocking
-      // delivery on repo availability.
-      console.error("Worker freshness probe failed; using freshness window.", error);
-      if (await this.workerHost.checkoutIsFresh()) {
-        const cached = await this.workerHost.getCachedCheckout();
-        if (cached) return this.workerHost.load({ checkout: cached, projectId: summary.id });
-      }
-    }
-    const checkout = await (this.workerHost.currentBuild() ?? this.workerHost.buildFresh(summary));
-    return this.workerHost.load({ checkout, projectId: summary.id });
-  }
-
-  protected async cloneWorkerRepo(input: WorkerWorkspace & { repo: RepoInfo }) {
-    await cloneWorkerRepo(input);
-  }
-
-  protected async bundleWorkerCode(files: Record<string, string>): Promise<WorkerCode> {
-    return await bundleWorkerCode(files);
   }
 
   // ---- plumbing ------------------------------------------------------------
@@ -557,8 +399,4 @@ function toSummary(facts: ProjectFacts): ProjectSummary {
     defaultHost: facts.defaultHost,
     hosts: facts.hosts,
   };
-}
-
-function projectRuntimeEnv(env: ProjectEnv): ProjectRuntimeEnv {
-  return env as unknown as ProjectRuntimeEnv;
 }

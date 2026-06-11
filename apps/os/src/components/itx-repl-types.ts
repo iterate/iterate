@@ -77,7 +77,7 @@ declare global {
   type ItxDescription = itxTypes.ItxDescription;
   type CapabilityTarget = itxTypes.CapabilityTarget;
   type WorkerRef = itxTypes.WorkerRef;
-  type CapabilitySource = itxTypes.CapabilitySource;
+  type WorkerSource = itxTypes.WorkerSource;
   type PathCall = itxTypes.PathCall;
   type PathCallTarget = itxTypes.PathCallTarget;
   type LiveStub = itxTypes.LiveStub;

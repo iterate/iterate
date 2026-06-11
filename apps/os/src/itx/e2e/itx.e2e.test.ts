@@ -159,6 +159,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
       worker: {
         type: "source",
         source: {
+          type: "inline",
           cacheKey: crypto.randomUUID(),
           mainModule: "cap.js",
           modules: { "cap.js": slackShapedCapabilitySource({ marker }) },
@@ -717,6 +718,7 @@ test("worker caps hold a correctly scoped itx of their own", async () => {
       worker: {
         type: "source",
         source: {
+          type: "inline",
           cacheKey: crypto.randomUUID(),
           mainModule: "cap.js",
           modules: { "cap.js": todoCapabilitySource() },
@@ -759,6 +761,7 @@ test("members caps auto-proxy every public method/getter at any depth", async ()
       worker: {
         type: "source",
         source: {
+          type: "inline",
           cacheKey: crypto.randomUUID(),
           mainModule: "cap.js",
           modules: {
@@ -799,6 +802,7 @@ test("one dynamic worker cap calls another's methods through its own itx", async
       worker: {
         type: "source",
         source: {
+          type: "inline",
           cacheKey: crypto.randomUUID(),
           mainModule: "cap.js",
           modules: {
@@ -826,6 +830,7 @@ test("one dynamic worker cap calls another's methods through its own itx", async
       worker: {
         type: "source",
         source: {
+          type: "inline",
           cacheKey: crypto.randomUUID(),
           mainModule: "cap.js",
           modules: {
@@ -895,6 +900,7 @@ test("revoked and offline caps fail with instructive errors", async () => {
         worker: {
           type: "source",
           source: {
+            type: "inline",
             cacheKey: "x",
             mainModule: "cap.js",
             modules: { "cap.js": "export default {}" },

@@ -3,7 +3,11 @@
   "main": "iterate-mcp-server-test-entry.ts",
   "compatibility_date": "2026-04-27",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": {},
+  "vars": {
+    // The uniform isolate env wires STREAMS into every loaded isolate
+    // (itx/isolate.ts); StreamsBackend parses APP_CONFIG at instantiation.
+    "APP_CONFIG": "{\"adminApiSecret\":\"mcp-test-admin-secret\",\"openAiApiKey\":\"openai-test-key\",\"projectHostnameBases\":[\"iterate.localhost\"],\"typeIdPrefix\":\"os\"}",
+  },
   "durable_objects": {
     "bindings": [
       {
@@ -26,9 +30,21 @@
         "name": "STREAM",
         "class_name": "StreamDurableObject",
       },
+      {
+        "name": "ITX_CONTEXT",
+        "class_name": "ItxDurableObject",
+      },
     ],
   },
   "d1_databases": [
+    // Same database under both names — DB and DO_CATALOG alias one D1 in
+    // real deployments, and the itx context catalog reads env.DB.
+    {
+      "binding": "DB",
+      "database_id": "os-project-mcp-server-connection-vitest",
+      "database_name": "os-project-mcp-server-connection-vitest",
+      "preview_database_id": "os-project-mcp-server-connection-vitest",
+    },
     {
       "binding": "DO_CATALOG",
       "database_id": "os-project-mcp-server-connection-vitest",
@@ -53,6 +69,10 @@
     {
       "tag": "v3",
       "new_sqlite_classes": ["RepoDurableObject", "WorkspaceDurableObject", "AgentDurableObject"],
+    },
+    {
+      "tag": "v4",
+      "new_sqlite_classes": ["ItxDurableObject"],
     },
   ],
 }

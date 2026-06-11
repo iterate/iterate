@@ -20,20 +20,40 @@ export const ITX_EVENT_TYPES = {
   scriptExecutionCompleted: "events.iterate.com/itx/script-execution-completed",
 } as const;
 
-const CapabilitySourceRecord = z.looseObject({
-  cacheKey: z.string().optional(),
+const workerSourceEnvelope = {
   compatibilityDate: z.string().optional(),
   entrypoint: z.string().optional(),
   exportType: z.enum(["worker-entrypoint", "durable-object"]).optional(),
-  mainModule: z.string(),
-  modules: z.record(z.string(), z.string()),
-});
+};
+
+const WorkerSourceRecord = z.discriminatedUnion("type", [
+  z.looseObject({
+    ...workerSourceEnvelope,
+    cacheKey: z.string(),
+    mainModule: z.string(),
+    modules: z.record(z.string(), z.string()),
+    type: z.literal("inline"),
+  }),
+  z.looseObject({
+    ...workerSourceEnvelope,
+    bundle: z
+      .looseObject({
+        externals: z.array(z.string()).optional(),
+        minify: z.boolean().optional(),
+      })
+      .optional(),
+    commit: z.string(),
+    path: z.string(),
+    repo: z.string(),
+    type: z.literal("repo"),
+  }),
+]);
 
 const WorkerRefRecord = z.discriminatedUnion("type", [
   z.looseObject({ binding: z.string(), type: z.literal("binding") }),
   z.looseObject({ type: z.literal("loopback") }),
   z.looseObject({ binding: z.string(), name: z.string(), type: z.literal("durable-object") }),
-  z.looseObject({ source: CapabilitySourceRecord, type: z.literal("source") }),
+  z.looseObject({ source: WorkerSourceRecord, type: z.literal("source") }),
 ]);
 
 export const CapabilityAddressRecord = z.discriminatedUnion("type", [

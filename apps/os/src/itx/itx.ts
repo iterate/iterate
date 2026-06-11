@@ -78,23 +78,44 @@ export type CapabilityAddress =
     };
 
 /** Where an rpc address's worker lives (design of record: types.ts). The
- * project worker is NOT a kind: it is the `ProjectWorker` loopback
- * forwarder (user export + inner invoke mode ride in props). */
+ * project's own worker is NOT a kind: it is an ordinary repo source — the
+ * platform default `worker` capability points at the project repo. */
 export type WorkerRef =
   | { type: "binding"; binding: string }
   | { type: "loopback" }
   | { type: "durable-object"; binding: string; name: string }
-  | { type: "source"; source: CapabilitySource };
+  | { type: "source"; source: WorkerSource };
 
 /**
- * Source for a `{ type: "source" }` worker ref. `cacheKey` MUST change
- * whenever the module contents change — the Worker Loader caches the
- * materialized isolate by it (a content hash is the ideal value).
+ * Source for a `{ type: "source" }` worker ref — where the CODE comes from.
+ * Two kinds: the code travels in the record itself (`inline`), or it lives
+ * in one of the project's repos (`repo`), built per COMMIT — never per call
+ * — and memoized in R2 by `(repo, sha, path, bundle)` (source-build.ts).
  */
-export type CapabilitySource = {
-  cacheKey?: string;
-  mainModule: string;
-  modules: Record<string, string>;
+export type WorkerSource = (
+  | {
+      type: "inline";
+      /** Loader cache key — MUST change whenever `modules` change; a
+       * content hash is the ideal value. */
+      cacheKey: string;
+      mainModule: string;
+      modules: Record<string, string>;
+    }
+  | {
+      type: "repo";
+      /** Repo slug within the owning project (repos are project-scoped). */
+      repo: string;
+      /** A commit sha pins the capability forever (the journal entry fully
+       * determines behavior); "latest" tracks the default branch. */
+      commit: string | "latest";
+      /** Entry file within the repo. With no `bundle`, this file IS the
+       * worker, verbatim. */
+      path: string;
+      /** Bundle at build time (multi-file TS, npm deps) with
+       * @cloudflare/worker-bundler. */
+      bundle?: { minify?: boolean; externals?: string[] };
+    }
+) & {
   /** Named export to use; defaults to the default export. */
   entrypoint?: string;
   /**
@@ -106,16 +127,6 @@ export type CapabilitySource = {
   exportType?: "worker-entrypoint" | "durable-object";
   compatibilityDate?: string;
 };
-
-export function capabilitySourceCacheKey(source: CapabilitySource): string {
-  const key = source.cacheKey;
-  if (!key) {
-    throw new Error(
-      "CapabilitySource needs a cacheKey (rotate it whenever modules change; a content hash is ideal).",
-    );
-  }
-  return key;
-}
 
 /**
  * A live provider's stub as the core sees it. Structural because the stub
@@ -847,7 +858,23 @@ function assertWellFormedCapabilityAddress(name: string, address: CapabilityAddr
             `"class X extends DurableObject" (default exports do not work as facet classes).`,
         );
       }
-      capabilitySourceCacheKey(worker.source);
+      if (worker.source.type === "inline") {
+        if (!worker.source.cacheKey) {
+          throw new Error(
+            `Capability "${name}": inline sources need a cacheKey ` +
+              `(rotate it whenever modules change; a content hash is ideal).`,
+          );
+        }
+      } else if (worker.source.type === "repo") {
+        if (!worker.source.repo || !worker.source.path) {
+          throw new Error(`Capability "${name}": repo sources need a repo slug and a file path.`);
+        }
+      } else {
+        throw new Error(
+          `Capability "${name}": source.type must be "inline" or "repo" ` +
+            `(got ${JSON.stringify((worker.source as { type?: unknown }).type ?? null)}).`,
+        );
+      }
       return;
     case "durable-object":
       if (!worker.name) {
