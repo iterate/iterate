@@ -772,6 +772,146 @@ New debts).
 - **The REPL editor consumes types.ts verbatim** (?raw into the TS virtual
   FS); the hand-maintained ambient shrank to a prelude of session globals.
 
+## The address unification (direction, 2026-06-11)
+
+Owner direction from review, captured as the design of record for the next
+arc. The through-line: **the system has one data structure — the cap
+target — and everything that today is a bespoke concept becomes a use of
+it.** "Node", "global", "platform defaults", "live vs durable", and
+`itx.caps` all dissolve.
+
+### 1. A context's ADDRESS is a CapTarget
+
+A context is, operationally, anything that answers the context protocol
+(`itxInvoke / itxDefine / itxDescribe / itxRevoke` — the `RegistryStub`
+shape). A cap target is precisely "how to obtain an RPC surface". So
+context addresses ARE targets:
+
+```ts
+// the project context: a Durable Object hosts a project (it already
+// does; the address finally says so)
+{ type: "rpc", worker: { type: "durable-object", binding: "PROJECT", name: "…" } }
+
+// an agent session
+{ type: "rpc", worker: { type: "durable-object", binding: "ITX_CONTEXT", name: "ctx_…" } }
+
+// global: a STATELESS context — just a named loopback entrypoint.
+// Nothing special; if it ever needs a durable layer, point the name at a
+// DO address and nothing else changes.
+{ type: "rpc", worker: { type: "loopback" }, entrypoint: "GlobalContext" }
+
+// the platform defaults: ALSO a stateless context at a loopback address.
+// ContextRegistryHost.defaults stops being a bespoke mechanism and
+// becomes an ordinary parent pointer (the in-process map may survive as a
+// dial fast-path, but conceptually it is an address like any other).
+{ type: "rpc", worker: { type: "loopback" }, entrypoint: "PlatformProjectContext" }
+```
+
+Parent pointers are stored as addresses (`descriptor = { id, address,
+parent: address }`), and chain delegation needs zero new machinery: the
+registry already dials every target kind for caps — delegating a miss to
+the parent is the same `resolveTarget`. One dial mechanism for everything.
+
+`projectDoStub.itx()` (or `.address()`) returning the target completes the
+SturdyRef picture from persistent.capnp that this doc already cites:
+`save()` returns the sturdy ref, `restore(ref)` returns the live
+capability; `resolveItx` is already named the restorer.
+
+What falls out:
+
+- **Host swapping is invisible** — stateless ↔ durable is a one-line
+  address change behind a name.
+- **User-space context hosts**: a `source` ref with a durable-object facet
+  export means user code can HOST a context — the ProjectWorker litmus
+  symmetry, applied to contexts.
+- **Federation, accidentally**: `{ type: "url", url: "wss://…/api/itx/…" }`
+  is a valid parent. Cross-deployment chains were not designed for; the
+  unification simply permits them.
+- The string-sniffing dies: `GLOBAL_CONTEXT_ID`, `isChildContextId`
+  prefix checks in the restorer and `parentStub`, the registry-host
+  selection switches.
+- ContextDO may dissolve into **facets of the Project DO** (the facet
+  machinery already exists for caps): colocated storage, one less
+  namespace.
+
+Two splits keep it honest:
+
+- **Identity ≠ address.** `ctx_abc` remains the identity (audit,
+  workspace scoping, origin-carrying); the target is the address. Today's
+  string conflates them — the design separates them.
+- **Restore stays gated.** Addresses are pure names with zero authority.
+  The connect edge keeps short refs bound to grants ("restoring is itself
+  a capability"); raw targets are the realm-internal format, never a
+  bearer credential.
+
+### 2. Durability is a property of the HOST — and only governs retention
+
+Every context has a **session layer** (in-memory, dies with the
+connection) and, iff its host has storage, a **durable layer**. Defining
+always works; what varies is where the row lands:
+
+- serializable target + durable host → durable row (survives);
+- serializable target + stateless host → session row (your admin script
+  defines three caps on the global context for its own lifetime);
+- live target → session row, always (a connection cannot be persisted —
+  the rule has no exceptions; workerd#6087 may change this someday).
+
+The satisfying part: **the session layer already exists** — today's
+"live table" on the Project DO is it. "Live caps" and "defines on a
+stateless context" were the same concept all along; "stateless contexts
+are read-only" (an earlier framing in this doc) was the wrong frame.
+
+### 3. `itx.caps` dissolves into root verbs
+
+The `caps` namespace exists to dodge name collisions, but reserved names
+already exist as a mechanism. Kernel flattens to root:
+`itx.define() / itx.revoke() / itx.describe() / itx.fork()` — the
+`ItxCaps` class dies, and the `itx.describe()` vs `caps.describe()`
+duplication resolves to one merged view. A handle is **an address, an
+access set, and four verbs**.
+
+### 4. Definitions live at PATHS — longest-prefix dispatch
+
+REVERSES §4.5's "no dots in names" — deliberately. That rejection was
+about namespace organization and remains right for it; this is about
+**interception granularity**:
+
+```ts
+// shadow ONE method of an inherited cap; everything else falls through
+await itx.define({ path: ["slack", "chat", "postMessage"], target: reviewQueue });
+
+await itx.slack.chat.postMessage({ … });  // → reviewQueue
+await itx.slack.users.list();             // → chain → the real slack cap
+```
+
+Resolution rule: at each context, the **longest defined prefix** of the
+call path wins and is dialed with the _remainder_ as the call path; no
+prefix → delegate the whole path up the chain. Still one deterministic
+lookup per node; the registry resolves prefixes it was explicitly given
+and never traverses provided objects — §4.5's actual concern survives.
+This is the per-method mock / approval-gate / fork-with-one-override
+story (`define({ path: ["workspace", "gitPush"], … })` on a session).
+
+### Also queued from the same review (smaller, independent)
+
+- **`itx.project` is mislabeled and needlessly kernel**: it is the
+  Project DO's admin surface, not "the project" (a narrowed itx IS the
+  project). It becomes an ordinary platform default via a first-party
+  loopback (`ProjectAdmin`), with the itx\*/fetch masking moved inside the
+  entrypoint; rename to something honest (`admin` / `node`) in the same
+  move. (`itx.worker` already fell to this treatment in §8.)
+- **Global streams** then either remains the one kernel exception or the
+  dial-time injected props grow an `access` field alongside
+  `cap`/`context`/`projectId` — the same trusted-identity channel that
+  origin-carrying already established.
+
+Sequencing sketch: (a) address type + `.address()` + restorer-over-
+addresses with string refs as resolved aliases; (b) parent pointers as
+addresses, delete prefix-sniffing, defaults-as-parent; (c) global as a
+stateless loopback context (+ `projects` as its cap, `ProjectAdmin`);
+(d) root verbs replace itx.caps; (e) path defines with longest-prefix
+dispatch. Each lands independently green.
+
 ## Resolved (was open, now decided)
 
 - ~~Script calling convention?~~ → ONE shape: `async (itx) => …`, the single
