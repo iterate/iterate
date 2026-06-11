@@ -113,14 +113,15 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     // The project's secret store — the WRITE half of the placeholder design:
     // store material once (itx.secrets.setSecret), then reference it in any
     // egress header as getSecret({ key }) and the egress pipe substitutes it
-    // server-side. getSecret here returns material to project-authorized
-    // handle holders; prefer placeholders so connected sessions never hold it.
+    // server-side. The itx surface is writes + redacted summaries ONLY —
+    // material never crosses an itx boundary (secrets-capability-call.ts).
     address: { entrypoint: "SecretsCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
       "Project secrets: itx.secrets.setSecret({ key, material }), listSecrets() " +
-      "(redacted summaries), deleteSecret({ key }). Reference a stored secret in any " +
-      'egress header as getSecret({ key: "…" }) — substitution happens server-side ' +
-      "in the egress pipe, so scripts and connected sessions never handle the material.",
+      "(redacted summaries), getSecretSummaryByKey({ key }), deleteSecret({ key }). " +
+      'Reference a stored secret in any outbound-HTTP header as getSecret({ key: "…" }) ' +
+      "— the platform substitutes the real value inside its own outbound-HTTP layer; " +
+      "your code only ever sees the placeholder.",
     name: "secrets",
   },
   {
