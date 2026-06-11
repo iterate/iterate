@@ -709,9 +709,11 @@ captun machinery dissolves.
   tunnel accept + the `fetch` WS exception; at that point the Project DO has
   NO fetch surface at all ("maybe there's a scenario where the project DO
   has neither fetch nor ingressFetch nor egressFetch — that might be nice,
-  just nothing"). SHIPPED (D23): the intercept tunnel is dead, the default
-  pipe is the stateless EgressPipe (no DO in the egress path at all), and
-  captun remains only for the public `/__iterate/captun` relay.
+  just nothing"). SHIPPED (D23): the intercept tunnel is dead and the
+  default pipe is the stateless EgressPipe — the Project DO supervises
+  dispatch but never sees secret material (secrets are D1 rows; substitution
+  and the terminal fetch run in a plain isolate). captun remains only for
+  the public `/__iterate/captun` relay.
 
 Open: where does a held request park while awaiting approval (DO alarm?
 queue? the egress stream itself)? Does the live `fetch` shadow apply to

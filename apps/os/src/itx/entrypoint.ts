@@ -138,9 +138,12 @@ export type EgressPipeProps = {
 
 /**
  * The TERMINAL egress pipe: the default target of the `fetch` capability
- * (platform:project, code-contexts.ts). Stateless — secret placeholder
- * substitution and the real fetch, no Durable Object in the path. Future
- * egress policy (allowlists, human-in-the-loop approval) slots in here.
+ * (platform:project, code-contexts.ts). Stateless: secrets are D1 rows
+ * (domains/secrets), scoped by the registry-injected projectId, so
+ * substitution and the real fetch happen here in a plain isolate — the
+ * Project DO supervises dispatch (its registry is where live shadows live)
+ * but secret material never enters it. Future egress policy (allowlists,
+ * human-in-the-loop approval) slots in here.
  */
 export class EgressPipe extends WorkerEntrypoint<Env, EgressPipeProps> {
   async call({ args }: PathCall): Promise<Response> {

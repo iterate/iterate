@@ -350,8 +350,11 @@ One PR (deliberately breaking; prd gets redeployed), five moves:
 - **§9 shipped: egress is a capability.** `ProjectEgress` (every isolate's
   globalOutbound, and itx.fetch's target) dispatches the `fetch` cap through
   the context's registry (#1487's naming); the default target is the
-  stateless `EgressPipe` loopback (secret substitution + fetch, no DO
-  involved — superseding #1487's ProjectEgress.call → DO egressFetch pipe).
+  stateless `EgressPipe` loopback, superseding #1487's ProjectEgress.call →
+  DO egressFetch pipe. The Project DO still supervises dispatch (live
+  shadows live in its registry), but secrets are D1 rows scoped by the
+  dial-time projectId, so substitution + the terminal fetch run in a plain
+  isolate and secret material never enters the DO.
   The captun intercept tunnel is replaced by
   `itx.caps.provide({ invoke: "path-call", name: "fetch", target })` over
   capnweb-WS — a live provider receives every egress Request with

@@ -11,10 +11,12 @@
 //    worker itself and only asks this DO for the checkout.
 //
 // Egress does NOT live here anymore: it is the `fetch` capability on
-// platform:project (itx/code-contexts.ts) — a stateless terminal pipe
-// (EgressPipe: secret substitution + fetch, no DO) shadowable per-session by
-// a live provider (the old captun intercept tunnel, reborn as
-// `itx.caps.define({ name: "fetch", target: liveStub })`). This DO has NO
+// platform:project (itx/code-contexts.ts). This DO still supervises every
+// egress dispatch (job 1 — live shadows resolve in its registry), but the
+// terminal pipe is the stateless EgressPipe: secrets are D1 rows, so
+// substitution + the real fetch happen in a plain isolate and secret
+// material never enters this DO. The old captun intercept tunnel is reborn
+// as `itx.caps.define({ name: "fetch", target: liveStub })`. This DO has NO
 // fetch surface at all.
 //
 // State lives in the project's root event stream, projected by
