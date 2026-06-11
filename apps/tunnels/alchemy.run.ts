@@ -1,5 +1,5 @@
 import alchemy, { type Scope } from "alchemy";
-import { DurableObjectNamespace, Route, Worker } from "alchemy/cloudflare";
+import { DurableObjectNamespace, Worker } from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { slugify } from "@iterate-com/shared/slugify";
 import { ensureProxiedDnsForHostnames } from "@iterate-com/shared/alchemy/iterate-app";
