@@ -114,8 +114,14 @@ describe("provide + longest-prefix invoke", () => {
     const result = await itx.invoke({ args: [{ text: "hi" }], path: ["slack", "chat", "post"] });
 
     expect(result).toMatchObject({ path: ["chat", "post"] });
-    expect(dialed).toHaveLength(1);
+    // Two dials: the provide-time describeItx probe (self-description hook;
+    // a typeless rpc provide always asks once), then the invoke itself.
+    expect(dialed).toHaveLength(2);
     expect(dialed[0]).toMatchObject({
+      call: { args: [], path: ["describeItx"] },
+      disposed: true,
+    });
+    expect(dialed.at(-1)).toMatchObject({
       address: AI_ADDRESS,
       attribution: { capabilityPath: "slack", origin: { address: SELF_ADDRESS, id: "prj_1" } },
       call: { args: [{ text: "hi" }], path: ["chat", "post"] },
@@ -158,7 +164,95 @@ describe("provide + longest-prefix invoke", () => {
       id: "itx_child",
     };
     await itx.invoke({ args: [], origin, path: ["workspace", "readFile"] });
-    expect(dialed[0]!.attribution).toEqual({ capabilityPath: "workspace", origin });
+    expect(dialed.at(-1)!.attribution).toEqual({ capabilityPath: "workspace", origin });
+  });
+});
+
+describe("provide-time self-description (describeItx)", () => {
+  /** A dial whose target answers the probe — and records every call. */
+  function selfDescribingDial(answer: unknown) {
+    const calls: Array<{ path: string[]; args: unknown[] }> = [];
+    const dial: CapabilityDial = () => ({
+      call: async (input: { path: string[]; args: unknown[] }) => {
+        calls.push(input);
+        if (input.path.join(".") === "describeItx") return answer;
+        return "called";
+      },
+    });
+    return { calls, dial };
+  }
+
+  test("a typeless rpc provide journals the target's own types + instructions", async () => {
+    const { calls, dial } = selfDescribingDial({
+      instructions: "Petstore. listOperations() first.",
+      types: "declare function findPetsByStatus(input: { status: string }): Promise<unknown>;",
+    });
+    const { events, journal } = fakeJournal();
+    const itx = makeItx({ dial, journal });
+
+    await itx.provideCapability({ capability: LOOPBACK_ADDRESS, name: "petstore" });
+    expect(calls).toEqual([{ args: [], path: ["describeItx"] }]);
+    // The enrichment is IN the journaled event — the record, not a patch.
+    expect(events[0]!.payload).toMatchObject({
+      meta: {
+        instructions: "Petstore. listOperations() first.",
+        types: expect.stringContaining("declare function findPetsByStatus"),
+      },
+    });
+    expect(await itx.describe()).toMatchObject([
+      { instructions: "Petstore. listOperations() first.", name: "petstore" },
+    ]);
+  });
+
+  test("explicit caller values win; caller-supplied types skip the probe entirely", async () => {
+    const { calls, dial } = selfDescribingDial({ instructions: "theirs", types: "their types" });
+    const itx = makeItx({ dial });
+
+    await itx.provideCapability({
+      capability: LOOPBACK_ADDRESS,
+      instructions: "mine",
+      name: "a",
+    });
+    expect(await itx.describe()).toMatchObject([
+      { instructions: "mine", name: "a", types: "their types" },
+    ]);
+
+    calls.length = 0;
+    await itx.provideCapability({ capability: LOOPBACK_ADDRESS, name: "b", types: "mine" });
+    expect(calls).toEqual([]); // no probe — nothing to fill
+    expect(await itx.describe()).toMatchObject([{ name: "a" }, { name: "b", types: "mine" }]);
+  });
+
+  test("a throwing or garbage-answering target never blocks or fails the provide", async () => {
+    const throwingDial: CapabilityDial = () => ({
+      call: async () => {
+        throw new Error("no such method");
+      },
+    });
+    const itx = makeItx({ dial: throwingDial });
+    await itx.provideCapability({ capability: AI_ADDRESS, name: "ai" });
+    expect(await itx.describe()).toMatchObject([{ name: "ai", types: undefined }]);
+
+    const garbage = makeItx({ dial: selfDescribingDial(42).dial });
+    await garbage.provideCapability({ capability: AI_ADDRESS, name: "ai" });
+    expect(await garbage.describe()).toMatchObject([{ name: "ai", types: undefined }]);
+  });
+
+  test("live provides are never probed", async () => {
+    const dial = vi.fn();
+    const itx = makeItx({ dial: dial as unknown as CapabilityDial });
+    await itx.provideCapability({ capability: { run: async () => 1 }, name: "live" });
+    expect(dial).not.toHaveBeenCalled();
+  });
+
+  test("describeItx is reserved: not as a capability path, not as a dispatch segment", async () => {
+    const itx = makeItx();
+    await expect(
+      itx.provideCapability({ capability: AI_ADDRESS, name: "describeItx" }),
+    ).rejects.toThrow(/reserved/);
+    await expect(
+      itx.provideCapability({ capability: AI_ADDRESS, path: ["x", "describeItx"] }),
+    ).rejects.toThrow(/reserved/);
   });
 });
 

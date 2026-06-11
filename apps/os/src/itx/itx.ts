@@ -30,6 +30,7 @@ import { ItxContract, ITX_EVENT_TYPES, type ItxState } from "./contract.ts";
 import {
   replayPathCall,
   RESERVED_PATH_SEGMENTS,
+  SELF_DESCRIPTION_METHOD,
   type PathCall,
   type PathCallable,
 } from "./path-proxy.ts";
@@ -51,6 +52,7 @@ import type {
 export {
   replayPathCall,
   RESERVED_PATH_SEGMENTS,
+  SELF_DESCRIPTION_METHOD,
   type PathCall,
   type PathCallable,
 } from "./path-proxy.ts";
@@ -123,6 +125,9 @@ export type ItxStub = {
   describe(): Promise<CapabilityDescription[]>;
   invoke(input: { path: string[]; args: unknown[]; origin?: ItxOrigin }): Promise<unknown>;
 };
+
+/** How long a provide waits for a target's optional describeItx answer. */
+const SELF_DESCRIPTION_TIMEOUT_MS = 3_000;
 
 export class CapabilityOfflineError extends Error {
   constructor(name: string) {
@@ -301,6 +306,27 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       this.#registerLiveStub(name, live);
     }
 
+    // The self-description doctrine's provide-time hook: instructions +
+    // types belong in the journaled meta AT PROVIDE TIME, and the target
+    // knows its own surface best at exactly that moment. An rpc provide
+    // with no caller-supplied `types` is dialed ONCE and asked
+    // (`describeItx` — a reserved protocol name, so user paths can never
+    // collide); explicit caller values always win. Strictly best-effort:
+    // any failure or the short timeout means the provide proceeds
+    // unenriched. Only call-implementing targets (OpenApiClient, …) can
+    // answer — member-shaped source caps hit replayPathCall's reserved
+    // gate, which is the collision protection doing its job.
+    if (kind === "rpc" && meta.types === undefined) {
+      const described = await this.#dialSelfDescription(
+        name,
+        input.capability as CapabilityAddress,
+      );
+      if (typeof described?.types === "string") meta.types = described.types;
+      if (typeof described?.instructions === "string" && meta.instructions === undefined) {
+        meta.instructions = described.instructions;
+      }
+    }
+
     try {
       await this.#append(ITX_EVENT_TYPES.capabilityProvided, {
         address: kind === "live" ? null : (input.capability as CapabilityAddress),
@@ -435,6 +461,43 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       throw error;
     } finally {
       disposeIfPossible(borrowed);
+    }
+  }
+
+  /** Provide-time self-description (see provideCapability): one dial, one
+   * `describeItx` call, a short deadline, and null on ANY miss — never an
+   * error, never a hang. The losing in-flight call is observed so a late
+   * rejection cannot become unhandled. */
+  async #dialSelfDescription(
+    name: string,
+    address: CapabilityAddress,
+  ): Promise<{ instructions?: string; types?: string } | null> {
+    let borrowed: PathCallable | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      borrowed = this.deps.dial(address, {
+        capabilityPath: name,
+        origin: { address: this.deps.selfAddress, id: this.deps.contextId },
+      });
+      const call = Promise.resolve(borrowed.call({ args: [], path: [SELF_DESCRIPTION_METHOD] }));
+      call.catch(() => {});
+      const result = await Promise.race([
+        call,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), SELF_DESCRIPTION_TIMEOUT_MS);
+        }),
+      ]);
+      if (result == null || typeof result !== "object") return null;
+      const { instructions, types } = result as { instructions?: unknown; types?: unknown };
+      return {
+        ...(typeof instructions === "string" ? { instructions } : {}),
+        ...(typeof types === "string" ? { types } : {}),
+      };
+    } catch {
+      return null;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      if (borrowed) disposeIfPossible(borrowed);
     }
   }
 

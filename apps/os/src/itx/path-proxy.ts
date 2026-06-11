@@ -27,6 +27,15 @@ import type { PathCall } from "./types.ts";
 export type { PathCall, PathCallable } from "./types.ts";
 
 /**
+ * The optional self-description method the core probes at provide time
+ * (itx.ts): a call-implementing target answering `call({ path:
+ * ["describeItx"], args: [] })` with `{ types?, instructions? }` describes
+ * itself into the journaled meta. Reserved below so user capability paths
+ * can never collide with the protocol name.
+ */
+export const SELF_DESCRIPTION_METHOD = "describeItx";
+
+/**
  * Names that must never traverse a dynamic surface — prototype-pollution
  * vectors, capnweb stub controls, and thenable/`Function.prototype` traps.
  * The single source of truth for BOTH the consumer-side path proxy and the
@@ -34,6 +43,7 @@ export type { PathCall, PathCallable } from "./types.ts";
  * `invoke` directly is filtered identically.
  */
 export const RESERVED_PATH_SEGMENTS: ReadonlySet<string> = new Set([
+  SELF_DESCRIPTION_METHOD,
   "__defineGetter__",
   "__defineSetter__",
   "__lookupGetter__",

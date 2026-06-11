@@ -598,6 +598,38 @@ return tools.map((tool) => tool.name);
 `.trim(),
   },
   {
+    id: "openapi-client",
+    title: "Any OpenAPI API as an ergonomic capability",
+    description:
+      "Point OpenApiClient at an OpenAPI 3.x spec and every operation becomes a dotted call: itx.petstore.findPetsByStatus({ status }). One input object merges path params, query params, and body. The provider self-describes at provide time — describe() carries TypeScript declarations derived from the spec, with zero callsite ceremony. Auth headers take getSecret(...) placeholders, substituted on egress like everything else.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+await itx.provideCapability({
+  name: "petstore",
+  capability: {
+    type: "rpc",
+    worker: { type: "loopback" },
+    entrypoint: "OpenApiClient",
+    props: {
+      specUrl: "https://petstore3.swagger.io/api/v3/openapi.json",
+      // For authenticated APIs, add headers with a secret placeholder:
+      // headers: { authorization: 'Bearer getSecret({ key: "API_TOKEN" })' },
+    },
+  },
+});
+
+// Flat operationIds, one merged input object, through project egress.
+const pets = await itx.petstore.findPetsByStatus({ status: "available" });
+
+// describe() now carries spec-derived TypeScript — the provider answered
+// the platform's provide-time describeItx probe, no callsite ceremony.
+const { capabilities } = await itx.describe();
+const entry = capabilities.find((cap) => cap.name === "petstore");
+return { count: pets.length, types: entry.types.split("\\n").slice(0, 3) };
+`.trim(),
+  },
+  {
     id: "egress-with-secret-substitution",
     title: "Egress with server-side secret substitution",
     description:

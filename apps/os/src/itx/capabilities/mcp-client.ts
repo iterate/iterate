@@ -57,6 +57,13 @@ export class McpClient extends WorkerEntrypoint<Env, McpClientProps> {
       // client can never fetch outside the egress pipe.
       throw new Error("McpClient needs context attribution to route egress.");
     }
+    if (input.path.join(".") === "describeItx") {
+      // The core's provide-time self-description probe (itx.ts). An MCP
+      // surface is dynamic — listTools is the discovery door — so there is
+      // nothing static to answer; returning empty keeps the probe from
+      // becoming a real network tool call.
+      return {};
+    }
 
     const itx = await resolveItx({
       env: this.env,

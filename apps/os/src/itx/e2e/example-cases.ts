@@ -23,6 +23,10 @@
 //                                  a project secret; proven end to end (incl.
 //                                  the placeholder-never-material negative
 //                                  controls) by itx-mcp-auth.e2e.test.ts
+//   openapi-client                 depends on the live petstore demo server
+//                                  (and the provide-time describeItx probe's
+//                                  cold-start retry); proven end to end by
+//                                  itx-openapi.e2e.test.ts
 
 import { expect } from "vitest";
 
@@ -42,6 +46,7 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "egress-with-secret-substitution",
   "fetch-middleware",
   "mcp-authenticated",
+  "openapi-client",
   "provide-live-capability",
   "repo-sourced-capability",
 ]);

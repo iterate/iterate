@@ -300,6 +300,11 @@ const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "EgressPipe",
   "GmailCapability",
   "McpClient",
+  // Like McpClient: only provider props (specUrl/baseUrl/headers) + the
+  // dial-injected attribution — every fetch rides the originating project's
+  // egress, so a handle holder providing it grants nothing beyond HTTP
+  // through their own project's pipe.
+  "OpenApiClient",
   "ReposCapability",
   "SlackCapability",
   "StreamsCapability",
