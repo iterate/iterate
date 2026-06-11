@@ -1,13 +1,84 @@
-# itx — how the capability layer works, built up from zero
+# itx — the iterate context
 
-This directory is the **capability layer** of apps/os: the smallest possible
-trust kernel through which every piece of user-adjacent code — browser, Node,
-agents, the project worker, one-off scripts, capabilities themselves — talks
-to the platform. This README tells the story in BUILD ORDER: each piece
-exists because the previous one wasn't enough. Design history:
-`apps/os/docs/itx-next.md` (the arc) and `DECISIONS.md` (what changed on
-contact with reality). The agent-facing surface is `types.ts` — handwritten,
-import-free, the design of record the implementation conforms to.
+You are handed an `itx`. In the REPL, inside an agent, in a project worker,
+from `withItx()` on your laptop — it is always the same object: a handle on a
+**context**, a node that holds named capabilities. Three scenes cover almost
+everything you will ever do with one. The mechanics — journal, fold, dial,
+chain, addresses — are an appendix, because you don't need them to act.
+
+## Scene 1: use a capability
+
+```ts
+// What am I holding? What can I call?
+await itx.describe();
+// → [{ name: "slack", kind: "rpc", instructions: "Use itx.slack.<Slack Web
+//      API method path>(args), e.g. itx.slack.chat.postMessage({ channel,
+//      thread_ts, text })…" }, …]
+
+await itx.slack.chat.postMessage({ channel: "C123", text: "hi" });
+```
+
+`itx.slack` works because someone provided `"slack"` on this context (or on a
+parent — lookup climbs the chain), not because itx knows about Slack. Unknown
+property names fall through to the context's capability table; dots accumulate
+locally and the terminal call dispatches once. `describe()` is the runtime
+truth: every capability carries the `instructions` (and optionally `types`)
+its provider attached, so the answer to "what can this context do?" is always
+one call away — for you, and for any agent handed the same `itx`.
+
+## Scene 2: offer a capability from your laptop
+
+```ts
+import { withItx } from "~/itx/client.ts";
+
+using itx = withItx({ baseUrl, token, context: "my-project" });
+
+await itx.provideCapability({
+  name: "runSwiftOnMyMac",
+  instructions: "Compile-and-run Swift on Jonas's Mac. Pass the source string.",
+  capability: async (src) => runSwift(src),
+});
+```
+
+That's the whole thing. While your process stays connected, every agent,
+REPL, and script in the project can call `itx.runSwiftOnMyMac(src)` — the
+call travels back over YOUR connection and runs in YOUR process. A bare
+function is the simplest provider; live capabilities are session-bound (gone
+when the socket drops, back when you reconnect and provide again). The
+`instructions` you attach are what everyone else's `describe()` will say —
+write them for the stranger who finds your capability there.
+
+## Scene 3: override one method
+
+```ts
+const session = await itx.extend({ name: "review-run" });
+
+await session.provideCapability({
+  path: ["workspace", "gitPush"],
+  instructions: "gitPush waits for human approval; everything else is the real workspace.",
+  capability: approvalGate, // async (input) => { await approve(input); return itx.workspace.gitPush(input); }
+});
+```
+
+`extend()` mints a cheap child context. The shadow lives at a PATH:
+`session.workspace.gitPush(...)` hits the gate, while
+`session.workspace.readFile(...)` misses the child's table and falls through
+the chain to the inherited workspace — prototype semantics, per method.
+`session.super` is the handle on the unshadowed parent — the middleware
+"call next()": a `fetch` shadow delegates to the real pipe via
+`itx.super.fetch(request)`. Revoke the shadow and the inherited entry
+resurfaces. Hand `session` to the thing you don't fully trust; keep `itx`.
+
+The review question for any of this is always the same: **what does
+`describe()` say?** A context is exactly the sum of what its chain describes.
+
+---
+
+Everything below is the appendix: how the above actually works, in build
+order. Design history: `apps/os/docs/itx-next.md` (the arc) and `DECISIONS.md`
+(what changed on contact with reality). The agent-facing surface is
+`types.ts` — handwritten, import-free, the design of record the
+implementation conforms to.
 
 ## The Laws
 
@@ -83,8 +154,8 @@ Its state is ONE path-keyed capability table; its protocol is four verbs
 
 - **Entries live at PATHS.** `provideCapability({ name })` is the 1-segment
   sugar; `provideCapability({ path: ["slack","chat","postMessage"], … })`
-  shadows ONE subtree of an inherited capability. `invoke` resolves the
-  **longest provided prefix** of the call path
+  shadows ONE subtree of an inherited capability (Scene 3). `invoke` resolves
+  the **longest provided prefix** of the call path
   (`resolveLongestProvidedPrefix`, pure and module-level) and dispatches the
   REMAINDER as the `PathCall`.
 - **A miss delegates the WHOLE path to `parentItx`** — a stub of the parent
@@ -103,6 +174,10 @@ Its state is ONE path-keyed capability table; its protocol is four verbs
   `type: "rpc" | "url"`; everything else is live. Live stubs sit in an
   in-memory instance table, dup-retained, torn down with the provider's
   session.
+- **Every entry is self-describing.** `instructions` (prose for whoever calls
+  `describe()`) and `types` (a TypeScript declaration for machines and
+  editors) ride with the provide, are journaled with it, and come back from
+  `describe()` on every handle down the chain.
 - **Provide is structural validation only** (`assertValidCapabilityPath`,
   address well-formedness). Reachability is the dial's authority (④) and
   surfaces at first call.
@@ -162,10 +237,10 @@ allowlist-gated because only kernel code writes context addresses).
 authority:
 
 - `provideCapability` APPENDS `events.iterate.com/itx/capability-provided`
-  (path-keyed payload: path, kind, full address, meta, owner) and then
-  SELF-INGESTS through the one consumption door — read from the checkpoint,
-  fold forward. Read-your-writes with no waiting machinery; duplicate
-  delivery is inert by offset bookkeeping. `capability-revoked` and
+  (path-keyed payload: path, kind, full address, meta — which carries
+  `instructions`/`types` — and owner) and then SELF-INGESTS through the one
+  consumption door — read from the checkpoint, fold forward. Read-your-writes with no waiting machinery;
+  duplicate delivery is inert by offset bookkeeping. `capability-revoked` and
   `capability-disconnected` (session teardown) work the same way. A LIVE
   provide journals the EVENT — the record outlives the session — while the
   stub stays an instance field; replay marks the entry disconnected.
@@ -174,7 +249,7 @@ authority:
   The processor checkpoint (`{offset, state}` in the host DO's storage) is a
   disposable cache of the fold — delete it and replay rebuilds it. The
   record and the state cannot disagree, because events are the only writes.
-- **Creation is an event.** `extendContext` (`journal.ts`) mints a `itx_…`
+- **Creation is an event.** `extendContext` (`journal.ts`) mints an `itx_…`
   id, appends `context-created { id, name, parent: { id, address } }` — the
   **birth certificate**, the journal's first event — and returns. Nothing
   touches the new node; it materializes lazily by consuming its journal, and
@@ -232,13 +307,16 @@ journal. Plain extensions share the project workspace through the chain.
 the browser, Node, the REPL, the project worker, itx scripts, and
 capabilities themselves. Anatomy: the typed trust kernel — the four verbs
 plus **`extend`** (mint a child context: ④'s address + ⑤'s birth
-certificate + a handle), **`parent`** (a path-proxied handle on the parent
+certificate + a handle), **`super`** (a path-proxied handle on the parent
 context — the "call next()" of middleware: a `fetch` shadow delegates to the
 unshadowed pipe via `itx.super.fetch(request)`), `streams`, `project`,
 `projects`, `fetch`, `describe`, `capability(name)`, `shareUrl` — and a
 fallthrough Proxy: any unknown name becomes a `PathProxy` (①) whose terminal
-call is one `invoke` on the node's core. `itx.slack` works because someone
-provided `"slack"`, not because anything here knows about Slack.
+call is one `invoke` on the node's core (Scene 1).
+
+One papercut, priced and accepted: `super` is a reserved word, so
+`itx.super` works but `const { super } = itx` does not — destructure
+everything else, dot the parent.
 
 Handles are minted in exactly three ways (Law 3/4):
 
@@ -251,9 +329,9 @@ Handles are minted in exactly three ways (Law 3/4):
 - **platform wiring**: `wireIsolateEnv` hands isolates a handle scoped to
   their home context, with `capabilityPath` as pure attribution.
 
-Client plumbing: `client.ts` (`withItx` for Node), `use-itx.ts` (the
-browser hook), `browser-repl.ts` (REPL compiler), `errors.ts` (`ItxError`
-codes that survive capnweb's name-dropping reconstruction, plus
+Client plumbing: `client.ts` (`withItx` for Node, Scene 2), `use-itx.ts`
+(the browser hook), `browser-repl.ts` (REPL compiler), `errors.ts`
+(`ItxError` codes that survive capnweb's name-dropping reconstruction, plus
 existence-masking — missing and forbidden are byte-identical NOT_FOUND).
 
 ## ⑧ The platform chain: defaults are a parent written in code (`platform-context.ts`)
@@ -268,12 +346,14 @@ itx_session → project → platform:project (PlatformContext, read-only code)
 **`PlatformContext`** is a loopback `WorkerEntrypoint` answering the same
 context protocol as every node — `describe`/`invoke` from
 `PLATFORM_PROJECT_CAPABILITIES` (ai, fetch, streams, repos, workspace,
-worker), `provide`/`revoke` refused — addressed
+worker — each with its own instructions, so even the code-rooted defaults
+self-describe), `provide`/`revoke` refused — addressed
 `{ type: "rpc", worker: { type: "loopback" }, entrypoint: "PlatformContext" }`
-and dialed in-process, so default dispatch pays no DO hop. Shipping a new
-default is a deploy, not a migration: the chain sees it immediately;
-journaled rows shadow it; revoking a shadow resurfaces it. There is no
-defaults mechanism — only the chain.
+and dialed in-process, so default dispatch pays no DO hop. The `worker`
+capability is the project's own code: the worker built from the project's
+repo (slug `project`). Shipping a new default is a deploy, not a migration:
+the chain sees it immediately; journaled rows shadow it; revoking a shadow
+resurfaces it. There is no defaults mechanism — only the chain.
 
 Egress, both doors — `fetch` is itself a shadowable platform default:
 
@@ -311,7 +391,7 @@ bearer-token edge) | `meta.http.public`; then one core dispatch with
 | `http.ts`               | routable capabilities | hostname rule, `ItxCapabilityIngress`, share tokens                                                                               |
 | `refs.ts`               | wire refs             | `ItxProps`, `ProjectAccess`, `GLOBAL_CONTEXT_ID`, `isChildContextId` (import-light)                                               |
 | `types.ts`              | design of record      | the handwritten, import-free agent-facing surface (feeds the REPL editor)                                                         |
-| `capabilities/`         | first-party targets   | `StreamsCapability`, `McpClient`, `ProjectWorker` (the user-space forwarder), `UrlDial`                                           |
+| `capabilities/`         | first-party targets   | `StreamsCapability`, `McpClient`, `UrlDial`                                                                                       |
 | `client.ts`             | tier-3 clients        | `withItx` for Node                                                                                                                |
 | `use-itx.ts`            | the browser hook      | `useItx`/`getBrowserItx`: singleton sockets, Suspense, never SSRs                                                                 |
 | `browser-repl.ts`       | dev tooling           | the REPL snippet compiler (not part of the kernel)                                                                                |
@@ -322,12 +402,13 @@ _on top of_ this layer or beside it — never underneath it.
 
 ## Writing capabilities
 
-**Live** (session-bound — your laptop, a browser tab, another service). The
-capability IS the stub; `provideCapability` discriminates structurally. A
-bare function is the simplest provider (calling the capability calls it); an
-object either implements `call({ path, args })` itself — the SDK shape: own
-your whole method tree, the public SDK docs become the tool docs — or is
-wrapped with `asPathCallable` (the replay runs back in YOUR process):
+**Live** (session-bound — your laptop, a browser tab, another service; Scene
+2). The capability IS the stub; `provideCapability` discriminates
+structurally. A bare function is the simplest provider (calling the
+capability calls it); an object either implements `call({ path, args })`
+itself — the SDK shape: own your whole method tree, the public SDK docs
+become the tool docs — or is wrapped with `asPathCallable` (the replay runs
+back in YOUR process):
 
 ```ts
 import { withItx } from "~/itx/client.ts";
@@ -335,6 +416,7 @@ import { withItx } from "~/itx/client.ts";
 using itx = withItx({ baseUrl, token, context: "my-project" });
 const provision = await itx.provideCapability({
   name: "runSwiftOnMyMac",
+  instructions: "Compile-and-run Swift on Jonas's Mac.",
   capability: async (src) => runSwift(src),
 });
 // callable as itx.runSwiftOnMyMac(...) until this connection drops
@@ -349,6 +431,7 @@ counterpart of `instructions`:
 ```ts
 await itx.provideCapability({
   name: "slack",
+  instructions: "Post to the team Slack: itx.slack.postToChannel({ channel, text }).",
   types:
     "declare function postToChannel(input: { channel: string; text: string }): Promise<unknown>;",
   capability: {
@@ -382,11 +465,6 @@ await itx.provideCapability({
 
 await itx.slack.postToChannel({ channel: "C123", text: "hi" });
 ```
-
-(Want a durable SDK-shaped surface — the whole `chat.postMessage` tree in
-one method? Export a class implementing `call({ path, args })` from your
-project worker and point a `ProjectWorker` loopback capability at it with
-`props.invoke: "path-call"` — the forwarder's inner mode is its own prop.)
 
 **Durable + stateful** — `exportType: "durable-object"`: a **named** export
 extending `DurableObject` (D12), instantiated as a facet of the hosting
