@@ -186,6 +186,85 @@ describe("SlackProcessor", () => {
     expect(appended).toEqual([]);
   });
 
+  it("acknowledges routed webhooks and pre-warms hosts for new routes", async () => {
+    const acknowledged: unknown[] = [];
+    const prewarmed: string[] = [];
+    const { processor } = createProcessor({
+      createRoutedStreamBootstrapEvents: () => [],
+      acknowledgeRoutedWebhook: ({ payload }) => {
+        acknowledged.push(payload);
+      },
+      prewarmRoutedStreamHosts: ({ streamPath }) => {
+        prewarmed.push(streamPath);
+      },
+    });
+
+    await processor.ingest({
+      events: [webhookEvent({ offset: 7, text: "hello" })],
+      streamMaxOffset: 7,
+    });
+    await flushBackgroundWork();
+
+    expect(acknowledged).toEqual([webhookEvent({ offset: 7, text: "hello" }).payload]);
+    expect(prewarmed).toEqual(["/agents/slack/c123/ts-1772136258-963519"]);
+  });
+
+  it("acknowledges webhooks on existing routes without pre-warming again", async () => {
+    const acknowledged: unknown[] = [];
+    const prewarmed: string[] = [];
+    const { processor } = createProcessor({
+      acknowledgeRoutedWebhook: ({ payload }) => {
+        acknowledged.push(payload);
+      },
+      prewarmRoutedStreamHosts: ({ streamPath }) => {
+        prewarmed.push(streamPath);
+      },
+    });
+
+    await processor.ingest({
+      events: [
+        committedEvent({
+          offset: 3,
+          type: "events.iterate.com/slack/thread-route-configured",
+          payload: {
+            channel: "C123",
+            threadTs: "1772136258.963519",
+            streamPath: "/agents/slack/custom-path",
+          },
+        }),
+        webhookEvent({ offset: 4, text: "again" }),
+      ],
+      streamMaxOffset: 4,
+    });
+    await flushBackgroundWork();
+
+    expect(acknowledged).toHaveLength(1);
+    expect(prewarmed).toEqual([]);
+  });
+
+  it("does not acknowledge unroutable webhooks", async () => {
+    const acknowledged: unknown[] = [];
+    const { processor } = createProcessor({
+      acknowledgeRoutedWebhook: ({ payload }) => {
+        acknowledged.push(payload);
+      },
+    });
+
+    await processor.ingest({
+      events: [
+        committedEvent({
+          offset: 5,
+          type: "events.iterate.com/slack/webhook-received",
+          payload: { body: { type: "url_verification", challenge: "x" } },
+        }),
+      ],
+      streamMaxOffset: 5,
+    });
+    await flushBackgroundWork();
+
+    expect(acknowledged).toEqual([]);
+  });
+
   it("skips side effects for events at or below the side-effect anchor", async () => {
     const { appended, processor } = createProcessor({ sideEffectsAfterOffset: () => 10 });
 
