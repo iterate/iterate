@@ -33,10 +33,22 @@ import {
   type PathCall,
   type PathCallable,
 } from "./path-proxy.ts";
+import type {
+  CapabilityAddress,
+  CapabilityDescription,
+  CapabilityKind,
+  CapabilityMeta,
+  CapabilityProvision,
+  CapabilityTarget,
+  ItxOrigin,
+  WorkerRef,
+  WorkerSource,
+} from "./types.ts";
 
 // Server-side one-stop: the calling-convention pieces live in path-proxy.ts
-// only because Node/browser providers import them at runtime. Server code
-// imports them from here.
+// only because Node/browser providers import them at runtime, and the data
+// model lives in types.ts (the import-free design of record). Server code
+// imports all of it from here.
 export {
   asPathCallable,
   replayPathCall,
@@ -45,93 +57,25 @@ export {
   type PathCallable,
 } from "./path-proxy.ts";
 export { ItxContract, ITX_EVENT_TYPES, type ItxState } from "./contract.ts";
+export type {
+  CapabilityAddress,
+  CapabilityDescription,
+  CapabilityKind,
+  CapabilityMeta,
+  CapabilityProvision,
+  CapabilityTarget,
+  ItxOrigin,
+  WorkerRef,
+  WorkerSource,
+} from "./types.ts";
 
-// ---- the capability data model ----------------------------------------------
-
-/** A capability's kind is its provider's kind (design of record: types.ts). */
-export type CapabilityKind = "live" | "rpc" | "url";
-
-/**
- * The serializable capability addresses — this realm's sturdy refs, and (per
- * the address unification) also how context nodes themselves are addressed.
- * The non-serializable live kind never appears here: live stubs exist only
- * in the core's in-memory table.
- */
-export type CapabilityAddress =
-  | {
-      type: "rpc";
-      worker: WorkerRef;
-      /** Named export to instantiate (loopback refs require it). For
-       * `source` refs the export is named by `source.entrypoint` instead. */
-      entrypoint?: string;
-      /** Instantiation props (the ProjectEgress pattern). The dial adds
-       * `{ capabilityPath, context, projectId }` attribution at dial time. */
-      props?: Record<string, unknown>;
-    }
-  | {
-      /** A remote Cap'n Web server. The dial terminates in the UrlDial
-       * stateless worker (Law 7); `headers` ride the WebSocket handshake and
-       * pass through egress getSecret() substitution (Law 5). */
-      type: "url";
-      url: string;
-      headers?: Record<string, string>;
-    };
-
-/** Where an rpc address's worker lives (design of record: types.ts). The
- * project's own worker is NOT a kind: it is an ordinary repo source — the
- * platform default `worker` capability points at the project repo. */
-export type WorkerRef =
-  | { type: "binding"; binding: string }
-  | { type: "loopback" }
-  | { type: "durable-object"; binding: string; name: string }
-  | { type: "source"; source: WorkerSource };
-
-/**
- * Source for a `{ type: "source" }` worker ref — where the CODE comes from.
- * Two kinds: the code travels in the record itself (`inline`), or it lives
- * in one of the project's repos (`repo`), built per COMMIT — never per call
- * — and memoized in R2 by `(repo, sha, path, bundle)` (source-build.ts).
- */
-export type WorkerSource = (
-  | {
-      type: "inline";
-      /** Loader cache key — MUST change whenever `modules` change; a
-       * content hash is the ideal value. */
-      cacheKey: string;
-      mainModule: string;
-      modules: Record<string, string>;
-    }
-  | {
-      type: "repo";
-      /** Repo slug within the owning project (repos are project-scoped). */
-      repo: string;
-      /** A commit sha pins the capability forever (the journal entry fully
-       * determines behavior); "latest" tracks the default branch. */
-      commit: string | "latest";
-      /** Entry file within the repo. With no `bundle`, this file IS the
-       * worker, verbatim. */
-      path: string;
-      /** Bundle at build time (multi-file TS, npm deps) with
-       * @cloudflare/worker-bundler. */
-      bundle?: { minify?: boolean; externals?: string[] };
-    }
-) & {
-  /** Named export to use; defaults to the default export. */
-  entrypoint?: string;
-  /**
-   * What the entrypoint export IS: "worker-entrypoint" (default; stateless,
-   * fresh isolate per call) or "durable-object" (stateful; a NAMED export
-   * extending DurableObject, instantiated as a facet of the hosting context
-   * node with its own private SQLite).
-   */
-  exportType?: "worker-entrypoint" | "durable-object";
-  compatibilityDate?: string;
-};
+// ---- the capability data model (shapes: types.ts) -----------------------------
 
 /**
  * A live provider's stub as the core sees it. Structural because the stub
  * may arrive over Cap'n Web (browser/Node provider) or Workers RPC and we
- * only rely on the protocol-level controls.
+ * only rely on the protocol-level controls. (The design-of-record spelling
+ * is types.ts's opaque `LiveStub`; this is the core's working view of one.)
  */
 export type LiveProvider = {
   dup?: () => LiveProvider;
@@ -139,48 +83,15 @@ export type LiveProvider = {
   [Symbol.dispose]?: () => void;
 } & Record<string, unknown>;
 
-/**
- * What can be provided as a capability (the locked provide signature):
- * a bare function (live by nature — auto-wrapped with asPathCallable
- * semantics), any live stub/RpcTarget, or a serializable CapabilityAddress.
- */
-export type Capability = CapabilityAddress | LiveProvider | ((...args: never[]) => unknown);
-
-/**
- * Arbitrary metadata, stored verbatim in the journal and surfaced by
- * describe(). There is no schema — the named fields below are conventions:
- * - `instructions`: a sentence for the human/agent who finds this cap.
- * - `types`: TypeScript declarations for the cap's surface — the
- *   machine/editor counterpart of the human-facing `instructions`.
- * - `http`: HTTP routing flags (spec §8).
- */
-export type CapabilityMeta = {
-  instructions?: string;
-  types?: string;
-  providedBy?: { type: "user" | "agent" | "system"; id: string };
-  http?: { expose: boolean; public?: boolean };
-  [key: string]: unknown;
-};
-
 /** provideCapability's input — `instructions`/`types` are sugar for the meta
  * convention fields of the same names (the explicit meta spelling wins). */
 export type ProvideCapabilityInput = {
   name?: string;
   path?: string[];
-  capability: Capability;
+  capability: CapabilityTarget;
   instructions?: string;
   types?: string;
   meta?: CapabilityMeta;
-};
-
-/**
- * What a provide returns. `revoke()` removes the entry; `Symbol.dispose`
- * auto-revokes ONLY live provides (a durable provide's disposer is a no-op —
- * see Itx.provideCapability for why).
- */
-export type ProvidedCapabilityHandle = {
-  revoke(): Promise<void>;
-  [Symbol.dispose](): void;
 };
 
 /** One entry of the folded capability table. `owner` is provenance: which
@@ -188,37 +99,12 @@ export type ProvidedCapabilityHandle = {
 export type ProvidedCapability = {
   name: string;
   kind: CapabilityKind;
-  /** null iff kind is "live" — the stub lives in the session table instead. */
+  /** null iff kind is "live" — the stub lives in the live-stub table instead. */
   address: CapabilityAddress | null;
   owner: string;
   meta: CapabilityMeta;
   updatedAtMs: number;
 };
-
-/** An entry as reported by describe(); never contains live stubs. */
-export type CapabilityDescription = {
-  name: string;
-  kind: CapabilityKind;
-  /** Which context owns the entry — provenance for shadowing visibility. */
-  owner: string;
-  /** Live caps only: is the provider currently connected? */
-  connected?: boolean;
-  /** Lifted from meta for convenience: the one thing to read first. */
-  instructions?: string;
-  /** Lifted from meta: TypeScript declarations for the cap's surface. */
-  types?: string;
-  meta: CapabilityMeta;
-  updatedAtMs: number;
-};
-
-/**
- * The trusted identity a delegated call carries up the chain: the context
- * the call STARTED at, as id (attribution, workspace-style scoping) AND
- * address (origin dial-back: an inherited source capability's isolate is
- * wired to the ORIGIN, so its bare fetch() climbs the origin's chain).
- * Set by delegating nodes only — handles never forward it.
- */
-export type ItxOrigin = { id: string; address: CapabilityAddress };
 
 /** The one effect injected into the core: turn an address into something
  * speaking call({ path, args }) for THIS call. `attribution` is the per-call
@@ -376,7 +262,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    * session that created it (session teardown disposes every returned
    * handle, so a revoking disposer would silently undo it on disconnect).
    */
-  async provideCapability(input: ProvideCapabilityInput): Promise<ProvidedCapabilityHandle> {
+  async provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision> {
     await this.#materialize();
     const path = capabilityPathFrom(input);
     assertValidCapabilityPath(path);
@@ -776,7 +662,7 @@ export function capabilityPathFrom(input: { name?: string; path?: string[] }): s
  * property access on a capnweb stub returns a truthy pipelined stub, so
  * reading `.type` first would misclassify every live capability.
  */
-export function isCapabilityAddress(capability: Capability): capability is CapabilityAddress {
+export function isCapabilityAddress(capability: CapabilityTarget): capability is CapabilityAddress {
   if (!isPlainObject(capability)) return false;
   const type = (capability as { type?: unknown }).type;
   return type === "rpc" || type === "url";
@@ -792,7 +678,7 @@ const ASYNC_FUNCTION_PROTOTYPE = Object.getPrototypeOf(async () => {}) as object
  * handle), never here.
  */
 export function isLocalBareFunction(
-  capability: Capability,
+  capability: CapabilityTarget,
 ): capability is (...args: never[]) => unknown {
   if (typeof capability !== "function") return false;
   const proto = Object.getPrototypeOf(capability) as object | null;

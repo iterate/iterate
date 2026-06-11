@@ -39,7 +39,7 @@
  * core's four plus `extend` and `super` (and a few built-in members — `projects`,
  * `streams`, `fetch`); every other property falls through to the context's
  * core. Authority is the handle itself: auth happens once at connect, and
- * which context you hold — plus the principal it was minted for — is the
+ * which context you hold — plus the access set it was minted with — is the
  * whole permission model. Narrowing is construction: a weaker handle is a
  * new handle on a narrower context, never a flag on a wider one.
  *
@@ -87,11 +87,11 @@
  * The capability CORE a context node embeds (src/itx/itx.ts): pure
  * structure — entries, live stubs, longest-prefix dispatch, chain
  * delegation — with every effect injected as one `dial` function. Each
- * context node (the Project DO for a project context, a ContextDO for a
- * forked child) exposes its core via an `itx()` method; handles, ingress,
- * and chain delegation all speak to a stub of it. `invoke`'s `origin` is the
- * chain's trusted identity channel (the context a delegated call STARTED
- * at): nodes set it; handles never forward it.
+ * context node (the Project DO for a project context, an ItxDurableObject
+ * for an extended child) exposes its core via an `itx()` method; handles,
+ * ingress, and chain delegation all speak to a stub of it. `invoke`'s
+ * `origin` is the chain's trusted identity channel (the context a delegated
+ * call STARTED at): nodes set it; handles never forward it.
  */
 export interface Itx {
   provideCapability(input: {
@@ -104,8 +104,17 @@ export interface Itx {
   }): CapabilityProvision | Promise<CapabilityProvision>;
   revokeCapability(input: { name?: string; path?: string[] }): void | Promise<void>;
   describe(): Promise<CapabilityDescription[]>;
-  invoke(input: { path: string[]; args: unknown[]; origin?: string }): Promise<unknown>;
+  invoke(input: { path: string[]; args: unknown[]; origin?: ItxOrigin }): Promise<unknown>;
 }
+
+/**
+ * The trusted identity a delegated call carries up the chain: the context
+ * the call STARTED at, as id (attribution, workspace-style scoping) AND
+ * address (origin dial-back: an inherited source capability's isolate is
+ * wired to the ORIGIN, so its bare fetch() climbs the origin's chain).
+ * Set by delegating nodes only — handles never forward it.
+ */
+export type ItxOrigin = { id: string; address: CapabilityAddress };
 
 // ---------------------------------------------------------------------------
 // The handle
@@ -273,7 +282,7 @@ export interface ItxBuiltins {
   /**
    * Who/what am I holding? `describe()` always works, on every handle, and
    * endeavors to return every breadcrumb you need to explore from here:
-   * the context, the principal, and the merged capability chain — each cap
+   * the context, the access set, and the merged capability chain — each cap
    * with its provenance and its provider-supplied `instructions`. When in
    * doubt, describe.
    */
@@ -338,8 +347,8 @@ export interface KnownCapabilities {}
 export type ItxDescription = {
   /** "global", a project id, or a itx_… child context id. */
   context: ContextRef;
-  /** Who this handle was minted for. */
-  principal: ItxPrincipal;
+  /** What this handle may narrow to: "all" (admin) or named project ids. */
+  access: ProjectAccess;
   /** Attribution: which capability's isolate holds this handle, if any
    * (the dotted route). */
   capabilityPath?: string;
@@ -386,8 +395,15 @@ export type ItxDescription = {
  * (Possible later kind, deliberately absent until needed: a re-export of a
  * cap registered on another context.)
  */
-export type CapabilityTarget =
-  | LiveStub
+export type CapabilityTarget = LiveStub | CapabilityAddress;
+
+/**
+ * The serializable kinds of {@link CapabilityTarget} — this realm's sturdy
+ * refs, and (per the address unification) also how context nodes themselves
+ * are addressed. The non-serializable live kind never appears here: live
+ * stubs exist only in the core's in-memory table.
+ */
+export type CapabilityAddress =
   | {
       type: "rpc";
       worker: WorkerRef;
@@ -513,7 +529,7 @@ export type WorkerSource = (
 export type PathCall = { path: string[]; args: unknown[] };
 
 /** What every dispatched capability target implements. */
-export type PathCallTarget = { call(input: PathCall): unknown };
+export type PathCallable = { call(input: PathCall): unknown };
 
 /**
  * A live provider's stub: a function, an object of functions, or an
@@ -538,14 +554,21 @@ export type CapabilityMeta = {
   /** TypeScript declarations for the cap's surface (completion/typecheck
    * material; the machine-facing counterpart of `instructions`). */
   types?: string;
+  /** Provenance convention: who appended the provide. */
+  providedBy?: { type: "user" | "agent" | "system"; id: string };
+  /** HTTP routing flags (capability ingress). */
+  http?: { expose: boolean; public?: boolean };
   [key: string]: unknown;
 };
+
+/** A capability's kind is its provider's kind. */
+export type CapabilityKind = "live" | "rpc" | "url";
 
 /** A capability entry as reported by `describe()`. Never contains live stubs. */
 export type CapabilityDescription = {
   name: string;
   /** The target's kind: "live" | "rpc" | "url". */
-  kind: "live" | "rpc" | "url";
+  kind: CapabilityKind;
   /** Which context owns the entry — provenance for shadowing visibility. */
   owner: string;
   /** Live caps only: is the provider currently connected? */
@@ -707,33 +730,13 @@ export type Stubify<T> = T extends (...args: infer A) => infer R
 export type ContextRef = "global" | `prj_${string}` | `proj_${string}` | `itx_${string}`;
 
 /**
- * Who a handle was minted for — typed out BY HAND from the auth system
- * (`~/auth/principal.ts` + `@iterate-com/shared/auth-claims`), minus the
- * `can()` helper, so that drift becomes a type error at the conformance
- * seam rather than an invented parallel access model. Only fields itx
- * actually uses appear here.
- *
- * - `admin`: the admin API secret, or a user token carrying Better Auth's
- *   admin-plugin role claim. Sees everything.
- * - `user`: organization memberships and project grants exactly as the auth
- *   worker issued them. May do project-scoped things iff the project is in
- *   `projects`. Nothing finer-grained exists (the seam does; the
- *   implementation deliberately does not).
+ * The simplified access model: which projects a handle may narrow to —
+ * `"all"` (the admin API secret / an admin session) or a list of project
+ * ids exactly as connect-time auth resolved them. Nothing finer-grained
+ * exists. (The wire home of this shape is src/itx/refs.ts; it is declared
+ * inline here because this file imports nothing.)
  */
-export type ItxPrincipal =
-  | { type: "admin" }
-  | {
-      type: "user";
-      userId: string;
-      sessionId?: string;
-      organizations: {
-        id: string;
-        slug: string;
-        role: "member" | "admin" | "owner";
-        name?: string;
-      }[];
-      projects: { id: string; slug: string; organizationId: string }[];
-    };
+export type ProjectAccess = "all" | string[];
 
 /**
  * The ONE serializable parameterization in the system — what crosses a
@@ -741,7 +744,7 @@ export type ItxPrincipal =
  * identity, never composition or authority-by-content:
  *
  * - `context`: which context. The restorer turns it into a live handle.
- * - `principal`: honored on global handles only; a project-context handle
+ * - `access`: honored on global handles only; a project-context handle
  *   is always bound to exactly its own project regardless of what props
  *   claim.
  * - `contextAddress`/`projectId`: the resolved coordinate, passed by
@@ -754,8 +757,8 @@ export type ItxPrincipal =
  */
 export type ItxProps = {
   context: ContextRef;
-  contextAddress?: CapabilityTarget | null;
+  contextAddress?: CapabilityAddress | null;
   projectId?: string | null;
-  principal?: ItxPrincipal;
+  access?: ProjectAccess;
   capabilityPath?: string;
 };

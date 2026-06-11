@@ -29,9 +29,9 @@ import {
   isLocalBareFunction,
   replayPathCall,
   RESERVED_CAPABILITY_NAMES,
-  type Capability,
   type CapabilityAddress,
   type CapabilityMeta,
+  type CapabilityTarget,
   type ItxStub,
   type PathCall,
 } from "./itx.ts";
@@ -49,6 +49,7 @@ import {
   PLATFORM_PROJECT_CONTEXT_ID,
 } from "./platform-context.ts";
 import { GLOBAL_CONTEXT_ID, type ProjectAccess } from "./refs.ts";
+import type { CapabilityProvision as CapabilityProvisionContract } from "./types.ts";
 import { createShareToken, SHARE_TOKEN_PARAM } from "./http.ts";
 import type { AppConfig } from "~/config.ts";
 import {
@@ -157,7 +158,7 @@ export class ItxHandle extends RpcTarget {
      * function (auto-wrapped: empty remainder calls it, deeper errors), or
      * anything live — a stub implementing call({ path, args }) itself, or a
      * plain object-of-methods wrapped client-side with asPathCallable. */
-    capability: Capability;
+    capability: CapabilityTarget;
     /** A sentence for the human/agent who finds this cap (the
      * meta.instructions convention field, lifted by describe()). */
     instructions?: string;
@@ -481,28 +482,10 @@ export class ItxHandle extends RpcTarget {
   }
 }
 
-/** Itx scripts are plain functions of the handle: `async (itx) => …`.
- * Parameterization is the caller's concern — bake values into the source
- * (the /api/itx/run endpoint does this for its `vars` API). */
-export type ItxFn<R = unknown> = (itx: ItxHandle) => Promise<R> | R;
-
-/**
- * Map an SDK's type surface onto its itx stub: every function becomes async,
- * everything else recurses. Cap lookups are untyped at runtime (the Proxy
- * fallthrough), so callers cast: `itx.capability("slack") as
- * Stubify<import("@slack/web-api").WebClient>` gives the real SDK types while
- * the runtime stays a ten-line path-call forwarder.
- */
-export type Stubify<T> = T extends (...args: infer A) => infer R
-  ? (...args: A) => Promise<Awaited<R>>
-  : T extends object
-    ? { [K in keyof T]: Stubify<T[K]> }
-    : never;
-
 /**
  * What `provideCapability` returns over the wire: an RpcTarget so `revoke()`
  * crosses capnweb/Workers RPC, with disposal semantics both transports
- * propagate to the target.
+ * propagate to the target. (ItxFn and Stubify live in types.ts.)
  *
  * `Symbol.dispose` auto-revokes ONLY live provides. The asymmetry is the
  * point: session teardown disposes every stub the session was handed, so a
@@ -511,7 +494,7 @@ export type Stubify<T> = T extends (...args: infer A) => infer R
  * survive. A live provide dies with the session anyway; eager revocation
  * just removes the offline tombstone.
  */
-export class CapabilityProvision extends RpcTarget {
+export class CapabilityProvision extends RpcTarget implements CapabilityProvisionContract {
   readonly #live: boolean;
   readonly #revoke: () => Promise<void>;
 
@@ -544,10 +527,10 @@ export class CapabilityProvision extends RpcTarget {
  *   a call-implementing provider yields its method. Probe failures fall
  *   back to the historical call-convention dispatch.
  */
-async function resolveLiveCapability(capability: Capability): Promise<Capability> {
+async function resolveLiveCapability(capability: CapabilityTarget): Promise<CapabilityTarget> {
   if (isCapabilityAddress(capability)) return capability;
   if (isLocalBareFunction(capability)) {
-    return new BareFunctionCapability(capability) as unknown as Capability;
+    return new BareFunctionCapability(capability) as unknown as CapabilityTarget;
   }
   if (typeof capability === "function" && (capability as object) instanceof RpcStub) {
     const callMember = await Promise.resolve(
@@ -559,7 +542,7 @@ async function resolveLiveCapability(capability: Capability): Promise<Capability
     if (callMember === undefined) {
       return new BareFunctionCapability(
         capability as unknown as (...args: never[]) => unknown,
-      ) as unknown as Capability;
+      ) as unknown as CapabilityTarget;
     }
     (callMember as Partial<Disposable> | null | undefined)?.[Symbol.dispose]?.();
   }

@@ -382,7 +382,7 @@ bearer-token edge) | `meta.http.public`; then one core dispatch with
 | `dial.ts`               | reach                 | `makeDial` (allowlists, loader/facet wiring, prop injection), `durableObjectFacetsHook`, `resolveDialableTargets`                 |
 | `platform-context.ts`   | the chain root        | `PlatformContext` (read-only code context), `PLATFORM_PROJECT_CAPABILITIES`, `getPlatformContext`                                 |
 | `itx-durable-object.ts` | the generic host      | `ItxDurableObject`: name = coordinate, descriptor from state, `itx()`                                                             |
-| `handle.ts`             | the handle            | `ItxHandle` + built-ins, `CapabilityProvision`, the bare-function probe/wrap, `ItxProjects`, `Stubify`                            |
+| `handle.ts`             | the handle            | `ItxHandle` + built-ins, `CapabilityProvision`, the bare-function probe/wrap, `ItxProjects`                                       |
 | `entrypoint.ts`         | restorer + egress     | `resolveItx`, `ItxEntrypoint` (env.ITERATE), `ProjectEgress` (globalOutbound), `EgressPipe`, `BindingCapability`                  |
 | `isolate.ts`            | isolate wiring        | `wireIsolateEnv` — the one trust posture for every platform-loaded isolate                                                        |
 | `run.ts`                | the script runner     | `runItxScript`: loader isolate + the two-event journal record                                                                     |
@@ -498,10 +498,10 @@ await itx.provideCapability({
 
 **Typed capabilities**: there is no static name table — `itx.<name>` falls
 through a runtime Proxy, so TypeScript only knows the built-ins. Cast a
-stub through `Stubify` (from `handle.ts`) to borrow an SDK's types:
+stub through `Stubify` (from `types.ts`) to borrow an SDK's types:
 
 ```ts
-import type { Stubify } from "~/itx/handle.ts";
+import type { Stubify } from "~/itx/types.ts";
 const slack = itx.capability("slack") as Stubify<import("@slack/web-api").WebClient>;
 await slack.chat.postMessage({ channel, text });
 ```

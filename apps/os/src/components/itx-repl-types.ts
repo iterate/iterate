@@ -56,7 +56,7 @@ declare global {
    * the wrapper crosses the session as a stub and replays each
    * call({ path, args }) back here, on your concrete object.
    */
-  function asPathCallable(target: object): PathCallTarget;
+  function asPathCallable(target: object): PathCallable;
 
   /**
    * Anything not declared on the itx builtins resolves through the capability
@@ -76,10 +76,11 @@ declare global {
   type KnownCapabilities = itxTypes.KnownCapabilities;
   type ItxDescription = itxTypes.ItxDescription;
   type CapabilityTarget = itxTypes.CapabilityTarget;
+  type CapabilityAddress = itxTypes.CapabilityAddress;
   type WorkerRef = itxTypes.WorkerRef;
   type WorkerSource = itxTypes.WorkerSource;
   type PathCall = itxTypes.PathCall;
-  type PathCallTarget = itxTypes.PathCallTarget;
+  type PathCallable = itxTypes.PathCallable;
   type LiveStub = itxTypes.LiveStub;
   type CapabilityMeta = itxTypes.CapabilityMeta;
   type CapabilityDescription = itxTypes.CapabilityDescription;
@@ -93,7 +94,7 @@ declare global {
   type ItxFn<R = unknown> = itxTypes.ItxFn<R>;
   type Stubify<T> = itxTypes.Stubify<T>;
   type ContextRef = itxTypes.ContextRef;
-  type ItxPrincipal = itxTypes.ItxPrincipal;
+  type ProjectAccess = itxTypes.ProjectAccess;
   type ItxProps = itxTypes.ItxProps;
 
   /** The connected Iterate context handle for this REPL session. */

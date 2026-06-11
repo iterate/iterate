@@ -10,6 +10,7 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
+import type { CapabilityAddress, WorkerRef, WorkerSource } from "./types.ts";
 
 export const ITX_EVENT_TYPES = {
   contextCreated: "events.iterate.com/itx/context-created",
@@ -26,6 +27,8 @@ const workerSourceEnvelope = {
   exportType: z.enum(["worker-entrypoint", "durable-object"]).optional(),
 };
 
+// The `satisfies z.ZodType<…>` pins below tie each record to the
+// design-of-record shape in types.ts: drift becomes a type error here.
 const WorkerSourceRecord = z.discriminatedUnion("type", [
   z.looseObject({
     ...workerSourceEnvelope,
@@ -47,14 +50,14 @@ const WorkerSourceRecord = z.discriminatedUnion("type", [
     repo: z.string(),
     type: z.literal("repo"),
   }),
-]);
+]) satisfies z.ZodType<WorkerSource, unknown>;
 
 const WorkerRefRecord = z.discriminatedUnion("type", [
   z.looseObject({ binding: z.string(), type: z.literal("binding") }),
   z.looseObject({ type: z.literal("loopback") }),
   z.looseObject({ binding: z.string(), name: z.string(), type: z.literal("durable-object") }),
   z.looseObject({ source: WorkerSourceRecord, type: z.literal("source") }),
-]);
+]) satisfies z.ZodType<WorkerRef, unknown>;
 
 export const CapabilityAddressRecord = z.discriminatedUnion("type", [
   z.looseObject({
@@ -68,7 +71,7 @@ export const CapabilityAddressRecord = z.discriminatedUnion("type", [
     type: z.literal("url"),
     url: z.string(),
   }),
-]);
+]) satisfies z.ZodType<CapabilityAddress, unknown>;
 
 const ParentRefRecord = z.object({
   address: CapabilityAddressRecord,

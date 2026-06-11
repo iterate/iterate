@@ -16,14 +16,12 @@
 // segments.
 
 import { RpcTarget } from "capnweb";
+import type { PathCall, PathCallable } from "./types.ts";
 
-/** The ONE calling convention (Law 6): every capability target is dispatched
- * as `call({ path, args })`. Whether a path is replayed onto a real member
- * tree is decided at the EDGE where the concrete object lives. */
-export type PathCall = { path: string[]; args: unknown[] };
-
-/** The full shape every dispatched capability target speaks. */
-export type PathCallable = { call(input: PathCall): unknown };
+// The ONE calling convention's shapes (PathCall, PathCallable) are declared
+// in types.ts — the design of record — and re-exported here for runtime
+// importers.
+export type { PathCall, PathCallable } from "./types.ts";
 
 /**
  * Names that must never traverse a dynamic surface — prototype-pollution
