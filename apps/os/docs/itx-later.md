@@ -88,3 +88,60 @@ how they are CALLED (entrypoint + call({path, args})) vary
 independently. Addresses pin only the first, so the runtime swap, when
 it comes, is invisible — the same host-swap property context addresses
 bought.
+
+## Bundling without the workspace (owner decision)
+
+The workspace object plays NO role in building. The repos domain already
+exposes `readFiles`/`listFiles` on the repo DO and the bundler runs on an
+in-memory vfs, so the whole path is: repo DO `readFiles(commit)` →
+@cloudflare/worker-bundler vfs → esbuild-wasm → R2 memo. No clone, no
+shell, no filesystem. Requires a new R2 bucket resource + binding
+(`ITX_BUILD_CACHE`) in alchemy.run.ts. No backcompat with the old
+checkout pipeline — `workerHost`/checkout storage dies with it.
+
+## The "no longer special" checklist for the project worker
+
+- ProjectWorker forwarder + itxProjectWorkerCall + its mask entry: deleted
+  (the dial's ordinary `source` case covers repo sources).
+- workerHost build machinery in the Project DO (build chains, checkout
+  keys, background rebuilds, ready flags): deleted — building is the
+  generic repo→R2 memo, owned by no DO.
+- Rebuilt per CALL with worker.js verbatim → built per COMMIT, really
+  bundled (TS, multi-file, deps), pinnable.
+- `worker` = one ordinary provide:
+  `{ type: "repo", repo: "iterate-config", commit: "latest", path: "worker.ts", bundle: {…} }`.
+- The platform guarantee shrinks to: THE PROJECT REPO EXISTS with a
+  defined file structure. Done = `grep ProjectWorker` returns only the
+  default-provide line's prose.
+
+## Ingress: the hostname edge is the realm's HTTP restorer
+
+A URL is a ref form; ingress is one function:
+`(hostname, path, credential) → (context address, capability path) →
+invoke({ path: […, "fetch"], args: [request] })`.
+
+- **Derived URLs, not a routing table**: a context's hostname is a
+  projection of its id (`ctx-abc123.prj-myproj.iterate.app`), derivable
+  both directions, zero rows; claimed/custom hostnames remain the one
+  genuine table. Anything with an address that answers `fetch` is
+  browsable — including a script's dynamic worker — with no machinery.
+- The pieces exist (ItxCapabilityIngress + meta.http.expose/public,
+  share-token sealed refs, /api/itx/:ref connect); the work is unifying
+  them into the one edge function over derived names.
+- Auth at the edge: public is per-capability opt-in; share tokens are
+  the bearer bridge; everything else is cookie → principal → mask (see
+  itx-authority-research.md).
+
+## Apps are not capability state: lifecycle is the discriminator
+
+Stateful SOURCE CAPABILITIES (small, provided by a context, should die
+with it) → facets of the context host, as designed. APPLICATIONS (user
+DO classes from repo-sourced workers, real storage, hostname-routable
+mini apps) have an application lifecycle: they must survive context GC
+and belong to the (repo, app), not to a context. They get their own
+**AppHost DO per (repo, app)** — the AppRunner pattern keyed by the
+app's identity — answering its derived hostname; itx ADDRESSES apps (a
+capability whose address is the app's door) but never hosts them.
+Workers for Platforms is the eventual materialization swap for apps
+that outgrow the loader, under unchanged addresses. This seam is mostly
+orthogonal to itx and should get its own design doc when it activates.
