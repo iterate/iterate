@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { ThemeProvider, type ThemeProviderProps } from "next-themes";
 import {
-  PostHogInit,
+  initPosthog,
   shouldEnablePosthog,
   type SetupPosthogOptions,
 } from "../components/posthog.tsx";
@@ -29,6 +29,17 @@ export function AppProviders<TConfig>(props: {
   const sessionRecording = props.posthog?.sessionRecording;
   const posthogEnabled = props.posthog?.enabled ?? shouldEnablePosthog(posthogApiKey);
 
+  if (posthogEnabled) {
+    initPosthog({
+      apiKey: posthogApiKey,
+      proxyUrl,
+      uiHost,
+      appStage,
+      bootstrapFromUrl,
+      sessionRecording,
+    });
+  }
+
   return (
     <ConfigProvider value={props.config}>
       <ThemeProvider
@@ -40,17 +51,6 @@ export function AppProviders<TConfig>(props: {
         disableTransitionOnChange
         forcedTheme={props.forcedTheme ?? props.theme?.forcedTheme}
       >
-        <PostHogInit
-          enabled={posthogEnabled}
-          options={{
-            apiKey: posthogApiKey,
-            proxyUrl,
-            uiHost,
-            appStage,
-            bootstrapFromUrl,
-            sessionRecording,
-          }}
-        />
         {/* Base UI tooltips are intended to share a provider; setting delay=0
             here makes hover tooltips feel immediate across the app.
             First-party docs:

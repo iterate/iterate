@@ -1,5 +1,3 @@
-import { useEffect } from "react";
-
 type PostHog = import("posthog-js").PostHog;
 type PostHogInterface = import("posthog-js").PostHogInterface;
 
@@ -88,33 +86,19 @@ function setupPosthog(client: PostHog, options: SetupPosthogOptions) {
   window.__iteratePosthogApiKey = options.apiKey;
 }
 
+let posthogInitStarted = false;
+
 /**
- * Initializes PostHog as a browser-only side effect. Nothing in our apps reads
- * the PostHog React context, so there is no provider: autocapture, pageviews,
- * session recording, and exception capture are all configured through `init`.
+ * Once-per-app-load PostHog initialization. Nothing in our apps reads the
+ * PostHog React context, so there is no provider or Effect: autocapture,
+ * pageviews, session recording, and exception capture are all configured
+ * through `init`. This would run at module scope per React's guidance for app
+ * initialization, but the api key only arrives with loader data — so the
+ * once-guard lives here at module scope and the first render with config in
+ * hand kicks it off. Idempotent, so safe to call during render.
  */
-export function PostHogInit({
-  enabled,
-  options,
-}: {
-  enabled: boolean;
-  options: SetupPosthogOptions;
-}) {
-  const { apiKey, appStage, bootstrapFromUrl, proxyUrl, sessionRecording, uiHost } = options;
-
-  useEffect(() => {
-    if (!enabled || !shouldEnablePosthog(apiKey) || !loadPosthog) return;
-    void loadPosthog().then((posthogModule) =>
-      setupPosthog(posthogModule.default, {
-        apiKey,
-        appStage,
-        bootstrapFromUrl,
-        proxyUrl,
-        sessionRecording,
-        uiHost,
-      }),
-    );
-  }, [apiKey, appStage, bootstrapFromUrl, enabled, proxyUrl, sessionRecording, uiHost]);
-
-  return null;
+export function initPosthog(options: SetupPosthogOptions) {
+  if (posthogInitStarted || !loadPosthog || !shouldEnablePosthog(options.apiKey)) return;
+  posthogInitStarted = true;
+  void loadPosthog().then((posthogModule) => setupPosthog(posthogModule.default, options));
 }
