@@ -568,6 +568,36 @@ return { record }; // ["capability-provided", "capability-revoked"]
 `.trim(),
   },
   {
+    id: "mcp-authenticated",
+    title: "An authenticated MCP server via a project secret",
+    description:
+      "Connect a remote MCP server that needs an Authorization header — without the credential ever leaving the platform. The token lives as a PROJECT SECRET; the capability address carries only a getSecret(...) placeholder; substitution happens server-side on the egress path. This session, describe(), and the journal never see the material.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Store the credential ONCE as a project secret (Settings → Secrets), e.g.
+// key "CLOUDFLARE_API_TOKEN". From here on, only the key travels.
+await itx.provideCapability({
+  path: ["mcp", "cloudflare"],
+  instructions: "Cloudflare's MCP server, authenticated via a project secret.",
+  capability: {
+    type: "rpc",
+    worker: { type: "loopback" },
+    entrypoint: "McpClient",
+    props: {
+      serverUrl: "https://bindings.mcp.cloudflare.com/mcp",
+      headers: { authorization: 'Bearer getSecret({ key: "CLOUDFLARE_API_TOKEN" })' },
+    },
+  },
+});
+
+// Every MCP request rides the project egress pipe, where the placeholder
+// becomes the real token — the connected agent/isolate never sees it.
+const { tools } = await itx.mcp.cloudflare.listTools();
+return tools.map((tool) => tool.name);
+`.trim(),
+  },
+  {
     id: "egress-with-secret-substitution",
     title: "Egress with server-side secret substitution",
     description:

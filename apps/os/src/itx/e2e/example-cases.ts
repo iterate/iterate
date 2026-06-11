@@ -19,6 +19,10 @@
 //                                  for the per-runtime matrix; proven end to
 //                                  end by the litmus e2e in itx.e2e.test.ts
 //                                  ("user-space caps: repo-sourced code …")
+//   mcp-authenticated              needs a real Cloudflare API token stored as
+//                                  a project secret; proven end to end (incl.
+//                                  the placeholder-never-material negative
+//                                  controls) by itx-mcp-auth.e2e.test.ts
 
 import { expect } from "vitest";
 
@@ -37,6 +41,7 @@ export type ExampleCase = {
 export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "egress-with-secret-substitution",
   "fetch-middleware",
+  "mcp-authenticated",
   "provide-live-capability",
   "repo-sourced-capability",
 ]);
