@@ -110,6 +110,7 @@ export const PostHogProvider = memo(
         return;
       }
 
+      setProvider(null);
       let disposed = false;
 
       async function loadPosthog() {
