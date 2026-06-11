@@ -507,10 +507,10 @@ export class CapabilityProvision extends RpcTarget implements CapabilityProvisio
 
 /**
  * Normalize a live capability before it crosses to the context node. Bare
- * functions auto-wrap — an empty remainder calls the function, a deeper
- * remainder errors. Plain objects pass through UNTOUCHED: they cross every
- * transport by value (with their functions as stubs), so the core's dispatch
- * can replay paths onto their members directly — no wrapper exists.
+ * functions auto-wrap. Plain objects pass through UNTOUCHED: they cross
+ * every transport by value (with their functions as stubs), the core
+ * dup-retains those member stubs at registration (itx.ts), and dispatch
+ * replays paths onto them directly — no wrapper exists.
  *
  * - A LOCAL function (prototype Function/AsyncFunction.prototype — never
  *   true of an RPC stub) wraps directly.

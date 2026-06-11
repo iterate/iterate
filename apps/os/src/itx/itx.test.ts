@@ -6,6 +6,7 @@
 // folds to the same state).
 
 import { describe, expect, test, vi } from "vitest";
+import { newMessagePortRpcSession, RpcTarget } from "capnweb";
 import type { StreamEvent } from "@iterate-com/streams/shared/event";
 import {
   ITX_EVENT_TYPES,
@@ -15,6 +16,7 @@ import {
   type CapabilityDial,
   type ItxOrigin,
   type ItxStub,
+  type ProvideCapabilityInput,
 } from "./itx.ts";
 
 const AI_ADDRESS: CapabilityAddress = {
@@ -544,6 +546,82 @@ describe("plain objects ARE capabilities", () => {
       /did not resolve to a function/,
     );
     expect(await itx.describe()).toMatchObject([{ connected: true, kind: "live", name: "answer" }]);
+  });
+
+  test("member stubs are dup-retained at registration; revoke releases exactly the dups", async () => {
+    // Plain objects cross RPC by value with their function members as
+    // session stubs, and RPC disposes argument stubs when the provide call
+    // returns — so the core must store DUPS of the members, never the
+    // originals. This fake mirrors a member stub's protocol surface.
+    const disposed: string[] = [];
+    const memberStub = (label: string) => {
+      const fn = (...args: unknown[]) => ({ args, from: label });
+      return Object.assign(fn, {
+        dup: () => memberStub(`${label}+dup`),
+        [Symbol.dispose]: () => disposed.push(label),
+      });
+    };
+    const ultimate = memberStub("ultimate");
+    const thought = memberStub("thought");
+    const itx = makeItx();
+    await itx.provideCapability({
+      capability: { deep: { thought }, ultimate },
+      name: "answer",
+    });
+
+    // Simulate the RPC layer disposing the provide call's argument stubs.
+    ultimate[Symbol.dispose]();
+    thought[Symbol.dispose]();
+    // Dispatch runs on the retained dups, at any depth.
+    await expect(itx.invoke({ args: [1], path: ["answer", "ultimate"] })).resolves.toEqual({
+      args: [1],
+      from: "ultimate+dup",
+    });
+    await expect(itx.invoke({ args: [], path: ["answer", "deep", "thought"] })).resolves.toEqual({
+      args: [],
+      from: "thought+dup",
+    });
+
+    // Revoke releases exactly what registration dup'd — nothing else.
+    await itx.revokeCapability({ name: "answer" });
+    expect(disposed).toEqual(["ultimate", "thought", "thought+dup", "ultimate+dup"]);
+  });
+
+  test("members survive a REAL capnweb session's provide (argument stubs die at call end)", async () => {
+    const itx = makeItx();
+    // The context node's protocol surface, exposed over a real Cap'n Web
+    // session pair (in-memory MessagePorts — same wire discipline as the
+    // WebSocket sessions production uses).
+    class CoreMain extends RpcTarget {
+      provideCapability(input: ProvideCapabilityInput) {
+        return itx.provideCapability(input);
+      }
+      invoke(input: { path: string[]; args: unknown[] }) {
+        return itx.invoke(input);
+      }
+    }
+    const channel = new MessageChannel();
+    try {
+      newMessagePortRpcSession(channel.port1 as never, new CoreMain());
+      const remote = newMessagePortRpcSession<CoreMain>(channel.port2 as never);
+      await remote.provideCapability({
+        capability: {
+          deep: { thought: async (question: string) => ({ answer: 42, question }) },
+          ultimate: () => 42,
+        },
+        name: "answer",
+      } as never);
+
+      // The provide RPC has RETURNED — capnweb disposed its argument stubs.
+      // Dispatch must run on the core's retained dups, back in the provider.
+      await expect(remote.invoke({ args: [], path: ["answer", "ultimate"] })).resolves.toBe(42);
+      await expect(
+        remote.invoke({ args: ["life"], path: ["answer", "deep", "thought"] }),
+      ).resolves.toEqual({ answer: 42, question: "life" });
+    } finally {
+      channel.port1.close();
+      channel.port2.close();
+    }
   });
 
   test("a call-implementing provider still receives ONE call({ path, args }) — members are never traversed", async () => {

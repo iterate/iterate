@@ -248,6 +248,9 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    * In-memory on purpose: a connection cannot be persisted (workerd#6087
    * may change this) — replay marks live entries disconnected. */
   #liveStubs = new Map<string, LiveProvider>();
+  /** Releases everything a live registration dup-retained (the provider's
+   * own dup, or every member dup of a plain-object provider). */
+  #liveStubReleases = new Map<string, () => void>();
   #materialized = false;
   /** Monotonic append counter; #catchUp compares it against the counter a
    * sync STARTED at to guarantee read-your-writes. */
@@ -602,10 +605,13 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
   #registerLiveStub(name: string, provider: LiveProvider): void {
     // RPC disposes argument stubs when the call returns; keep a duplicate
     // (and hand further dups to borrowers) — both directions of the dup()
-    // discipline from the original capnweb learnings.
-    const retained = provider.dup ? provider.dup() : provider;
+    // discipline from the original capnweb learnings. A PLAIN-object provider
+    // crosses RPC by value with its function members as stubs, so retention
+    // walks it and dups every member (retainLiveProvider).
+    const { onRpcBroken, release, retained } = retainLiveProvider(provider);
     this.#dropLiveStub(name, { record: false });
     this.#liveStubs.set(name, retained);
+    this.#liveStubReleases.set(name, release);
     // Best-effort teardown registration: capnweb stubs implement onRpcBroken
     // locally, but Workers-RPC stubs proxy EVERY property as a remote method,
     // so on a provider that doesn't implement it the call rejects with "does
@@ -614,7 +620,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const teardown = () => {
       if (this.#liveStubs.get(name) === retained) this.#dropLiveStub(name, { record: true });
     };
-    void Promise.resolve(retained.onRpcBroken?.(teardown) as unknown).catch(() => {});
+    void Promise.resolve(onRpcBroken?.(teardown) as unknown).catch(() => {});
   }
 
   /** Drop a live stub. `record: true` (session teardown) appends the
@@ -624,6 +630,8 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const stub = this.#liveStubs.get(name);
     if (!stub) return;
     this.#liveStubs.delete(name);
+    const release = this.#liveStubReleases.get(name);
+    this.#liveStubReleases.delete(name);
     if (opts.record) {
       void this.ctx.journal
         .append({
@@ -634,7 +642,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
           console.error(`[itx] capability-disconnected append failed for "${name}":`, error);
         });
     }
-    stub[Symbol.dispose]?.();
+    release?.();
   }
 
   /** The two-case shape: a capability is either held up by a live connection
@@ -801,6 +809,66 @@ function isPlainObject(target: unknown): boolean {
   if (typeof target !== "object" || target === null) return false;
   const proto = Object.getPrototypeOf(target);
   return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Retention for a live provider, beyond the provide call that delivered it:
+ * RPC disposes argument stubs when the call returns, so anything stored must
+ * be a dup. Three shapes:
+ *
+ * - a stub with `.dup` (RpcTarget/function providers) retains via one dup;
+ * - a PLAIN object crosses RPC by value with its function members as session
+ *   stubs — retention deep-walks it and dups every stub-valued member (the
+ *   members are the things that die at call end, not the carrier object);
+ * - anything else (a local object) needs no retention.
+ *
+ * `release` disposes exactly what was dup'd here (#dropLiveStub calls it);
+ * `onRpcBroken` is the best teardown hook the shape offers — the provider's
+ * own, or any member stub's (members share the provider's session).
+ */
+function retainLiveProvider(provider: LiveProvider): {
+  retained: LiveProvider;
+  release: () => void;
+  onRpcBroken?: (callback: (error: unknown) => void) => void;
+} {
+  if (typeof provider.dup === "function") {
+    const retained = provider.dup();
+    return {
+      onRpcBroken: (callback) => retained.onRpcBroken?.(callback),
+      release: () => disposeIfPossible(retained),
+      retained,
+    };
+  }
+  if (!isPlainObject(provider)) {
+    return {
+      onRpcBroken: (callback) => provider.onRpcBroken?.(callback),
+      release: () => disposeIfPossible(provider),
+      retained: provider,
+    };
+  }
+  const memberDups: LiveProvider[] = [];
+  const walk = (node: Record<string, unknown>): Record<string, unknown> => {
+    const copy: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(node)) {
+      const dup = (value as { dup?: () => LiveProvider } | null)?.dup;
+      if (typeof value === "function" && typeof dup === "function") {
+        const duped = Reflect.apply(dup, value, []) as LiveProvider;
+        memberDups.push(duped);
+        copy[key] = duped;
+      } else if (isPlainObject(value)) {
+        copy[key] = walk(value as Record<string, unknown>);
+      } else {
+        copy[key] = value;
+      }
+    }
+    return copy;
+  };
+  const retained = walk(provider as Record<string, unknown>) as LiveProvider;
+  return {
+    onRpcBroken: memberDups[0] ? (callback) => memberDups[0]!.onRpcBroken?.(callback) : undefined,
+    release: () => memberDups.forEach((duped) => disposeIfPossible(duped)),
+    retained,
+  };
 }
 
 /**
