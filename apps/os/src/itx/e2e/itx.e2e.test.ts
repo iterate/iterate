@@ -578,6 +578,15 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
     url: "https://intercept-probe.invalid/bare",
   });
   await expect(projectItx.fetch("https://intercept-probe.invalid/x")).rejects.toThrow();
+
+  // (7) No raw doors around the shadow: the Project DO's fetch/egressFetch
+  // are masked on the cap-#0 surface — itx.fetch is THE egress door.
+  const rawDoors = projectItx.project as unknown as {
+    egressFetch(request: unknown): Promise<unknown>;
+  };
+  await expect(rawDoors.egressFetch("https://intercept-probe.invalid/x")).rejects.toThrow(
+    /raw egress pipe/,
+  );
 });
 
 test("absolute stream refs are sugar through the one access check", async () => {

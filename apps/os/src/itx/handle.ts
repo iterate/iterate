@@ -173,6 +173,17 @@ export class Itx extends RpcTarget {
           message: `${head} is internal registry plumbing, not part of the project surface — use itx.caps / itx.<cap> instead.`,
         });
       }
+      // Same reasoning for the raw egress doors: now that `fetch` is a
+      // shadowable capability, the DO's fetch/egressFetch here would bypass
+      // any live shadow — the one egress door for handle holders is
+      // itx.fetch (the terminal pipe stays reachable to the DEFAULT cap via
+      // direct stubs, never through this proxy).
+      if (head === "fetch" || head === "egressFetch") {
+        throw new ItxError({
+          code: "FORBIDDEN",
+          message: `${head} is the raw egress pipe — use itx.fetch, which honors fetch-cap shadowing.`,
+        });
+      }
       return replayPathCall(stub, call);
     }) as unknown as ProjectStub;
   }
