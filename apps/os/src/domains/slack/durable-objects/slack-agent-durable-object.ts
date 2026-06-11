@@ -5,11 +5,7 @@ import {
   deriveDurableObjectNameFromStructuredName,
   NotInitializedError,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import {
-  type Event,
-  StreamPath,
-  type StreamPath as StreamPathType,
-} from "@iterate-com/shared/streams/types";
+import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
@@ -96,28 +92,10 @@ export class SlackAgentDurableObject extends SlackAgentLifecycleBase<SlackAgentE
     return await this.host.requestStreamSubscription(args);
   }
 
-  async afterAppend(input: { event: Event }) {
-    void input;
-    await this.ensureStartedOrInitializeFromRuntimeName();
-    await this.waitForSlackAgentProcessorCatchUp();
-    return await this.getRunnerState();
-  }
-
   async ensureReady() {
     await this.ensureStartedOrInitializeFromRuntimeName();
     await this.waitForSlackAgentProcessorCatchUp();
-    return await this.getRunnerState();
-  }
-
-  async getRunnerState() {
-    const snapshot = await this.slackAgent.snapshot();
-    return {
-      processorSlug: this.slackAgent.contract.slug,
-      snapshot,
-      state: snapshot.state,
-      reducedThroughOffset: snapshot.offset,
-      afterAppendCompletedThroughOffset: snapshot.offset,
-    };
+    return await this.slackAgent.snapshot();
   }
 
   private async waitForSlackAgentProcessorCatchUp() {

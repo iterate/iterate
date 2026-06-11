@@ -48,7 +48,8 @@ import {
   getProjectDurableObjectName,
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
-import { isProjectId, mintProjectId } from "~/domains/projects/project-id.ts";
+import { isProjectId } from "~/domains/projects/project-id.ts";
+import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 
 /**
  * Everything a handle needs, resolved once by the restorer
@@ -453,10 +454,10 @@ export class ItxProjects extends RpcTarget {
   async create(input: { id?: string; slug: string }) {
     this.requireAllAccess("create projects");
     const db = this.db();
-    // Auth is the canonical id minter ("prj_"); this admin-only path mints in
-    // the same format only for the operator/recovery case where there is no
-    // auth org to own the project. A supplied id must already be a project id
-    // (legacy "proj_" still accepted), never a slug.
+    // Auth is the canonical minter of the one prj_ id space — even this
+    // admin-only operator/recovery path (no owning auth org) round-trips
+    // through it. A supplied id must already be a project id (legacy
+    // "proj_" still accepted), never a slug.
     if (input.id !== undefined && !isProjectId(input.id)) {
       throw new ItxError({
         code: "BAD_REQUEST",
@@ -464,7 +465,13 @@ export class ItxProjects extends RpcTarget {
         message: "Project ID must start with prj_ (or legacy proj_).",
       });
     }
-    const id = input.id ?? mintProjectId();
+    const id =
+      input.id ??
+      (
+        await createAuthWorkerServiceClient({
+          config: this.runtime.config,
+        }).internal.project.mintProjectId()
+      ).id;
 
     const existingById = await getProjectById(db, { id });
     if (existingById) {

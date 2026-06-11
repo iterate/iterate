@@ -528,7 +528,7 @@ second step, taken only after the shared layer proves itself.
   currying through the built-ins. (Polishing its shape beyond that is
   explicitly LATER.)
 
-## 8. Default capabilities are parent contexts written in code
+## 8. Default capabilities are parent contexts written in code — SHIPPED (D23)
 
 The idea (born as "what if ProjectItx / GlobalItx / CodemodeSessionItx
 subclasses just called `this.caps.define()` a few times in their
@@ -658,7 +658,7 @@ Open: the splice API shape on fork; ref naming for code contexts
 (`platform:` prefix?); can a context _revoke_ (not just shadow) a code
 default — tombstone rows? Defer until someone needs them.
 
-## 9. Egress is a capability; the intercept tunnel is a live cap (position)
+## 9. Egress is a capability; the intercept tunnel is a live cap — SHIPPED (D23)
 
 Where PR #1466 left it (DECISIONS D22): `project.fetch` IS egress, ingress
 never touches the Project DO, but `egressFetch` itself still lives on the DO
@@ -687,8 +687,9 @@ captun machinery dissolves.
   ```ts
   using itx = await connectItx({ context: projectId });
   await itx.caps.provide({
-    name: "egress", // shadows the default egress cap
-    target: { type: "live", stub: (request) => myLocalFetch(request) },
+    invoke: "path-call",
+    name: "fetch", // shadows the default egress pipe
+    target: new MyEgressShadow(), // call({ args: [request] }) -> Response
   });
   ```
 
@@ -697,7 +698,9 @@ captun machinery dissolves.
   The secret-withholding rule ("an active interceptor never sees real
   material") stops being a special case in `substituteProjectEgressSecretHeaders`
   and becomes a property of the egress cap's policy: requests routed to a
-  live `egress` provider get placeholders withheld, period.
+  live `fetch` shadow get placeholders withheld, period. SHIPPED (D23):
+  the withheld-text substitution mode is deleted; shadows see raw
+  placeholders.
 
 - **Sequencing.** (1) Land the capnweb WS transport — DONE. (2) Reframe
   egress as a defined cap on the project context (default target: the
@@ -708,13 +711,17 @@ captun machinery dissolves.
   tunnel accept + the `fetch` WS exception; at that point the Project DO has
   NO fetch surface at all ("maybe there's a scenario where the project DO
   has neither fetch nor ingressFetch nor egressFetch — that might be nice,
-  just nothing").
+  just nothing"). SHIPPED (D23): the intercept tunnel is dead and the
+  default pipe is the stateless EgressPipe — the Project DO supervises
+  dispatch but never sees secret material (secrets are D1 rows; substitution
+  and the terminal fetch run in a plain isolate). captun remains only for
+  the public `/__iterate/captun` relay.
 
 Open: where does a held request park while awaiting approval (DO alarm?
-queue? the egress stream itself)? Does the live `egress` provider shadow for
+queue? the egress stream itself)? Does the live `fetch` shadow apply to
 ALL callers on the context or only for the session that provided it
-(current tunnel: all callers — keep)? Latency budget for policy-cache reads
-on the hot path?
+(current: all callers, like the old tunnel)? Latency budget for
+policy-cache reads on the hot path?
 
 ## Consolidation pass (2026-06-10 night)
 
@@ -910,5 +917,5 @@ origin })`, set by the first delegating hop, preserved upward; the
 5. Uncurried `{ namespace, … }` accessor pattern uniformly across
    repos/streams/workspaces — confirm shape.
 6. Egress-as-capability (§9): where held-for-approval requests park; whether
-   a live `egress` provider shadows for all callers or per-session; policy
+   a live `fetch` shadow applies to all callers or per-session; policy
    cache latency on the hot path.

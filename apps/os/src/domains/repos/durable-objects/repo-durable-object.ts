@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { type Event } from "@iterate-com/shared/streams/types";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
@@ -304,13 +303,6 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
     }
 
     return this.requireArtifacts().get(repoArtifactName(this.structuredName));
-  }
-
-  async afterAppend(input: { event: Event }) {
-    void input;
-    await this.ensureStarted();
-    await this.waitForRepoProcessorCatchUp();
-    return await this.getRepoRunnerState();
   }
 
   private async currentRepo() {

@@ -331,3 +331,45 @@ been circling:
   project's durable state (with a pure `projectFacts()` + D1-slug fallback
   for cold snapshots), and "config worker" is now just **the worker**
   (`durable-objects/worker.ts`, `callWorkerFunction`, `itx.worker`).
+
+## D23: The grand cleanup — §8 and §9 graduate, captun intercept dies, auth mints
+
+One PR (deliberately breaking; prd gets redeployed), five moves:
+
+- **§8 shipped in full.** repos, workspace, worker, project, egress, and ai
+  are ordinary capabilities on `platform:project` (code-contexts.ts),
+  resolved through the fallthrough and SHADOWABLE per context. The kernel
+  shrank to `cap, caps, describe, fetch, fork, projects, streams` (streams
+  stays hardwired: its global-namespace/admin gating is handle logic, not a
+  project capability). `itx.project`'s default is a `durable-object` ref —
+  now implemented, with the instance name defaulting to the owning project
+  id — so the whole-DO-surface posture (D17) and one-expression deep
+  traversal survive unchanged, now supervised by the registry like every
+  other cap. ProjectCapability (the hand-wired forwarder entrypoint) is
+  deleted; nothing called it.
+- **§9 shipped: egress is a capability.** `ProjectEgress` (every isolate's
+  globalOutbound, and itx.fetch's target) dispatches the `fetch` cap through
+  the context's registry (#1487's naming); the default target is the
+  stateless `EgressPipe` loopback, superseding #1487's ProjectEgress.call →
+  DO egressFetch pipe. The Project DO still supervises dispatch (live
+  shadows live in its registry), but secrets are D1 rows scoped by the
+  dial-time projectId, so substitution + the terminal fetch run in a plain
+  isolate and secret material never enters the DO.
+  The captun intercept tunnel is replaced by
+  `itx.caps.provide({ invoke: "path-call", name: "fetch", target })` over
+  capnweb-WS — a live provider receives every egress Request with
+  placeholders RAW (never material; the "withheld text" substitution mode
+  died), and disconnecting restores the default. The Project DO now has NO
+  fetch surface at all. captun remains only for the public `/__iterate/captun`
+  relay.
+- **One isolate-wiring seam.** itx/isolate.ts is the single place the
+  platform's trust posture (Law 4 ITERATE scoping, Law 5 egress outbound)
+  is wired into loaded isolates; the registry's source caps and the project
+  worker both use it.
+- **Auth is the ONLY project-id minter.** Even operator/recovery creates
+  round-trip through auth's `/internal/project/mint-project-id`;
+  `mintProjectId` is deleted from OS.
+- **Legacy afterAppend/runner shapes are gone** from the agent, slack-agent,
+  slack-integration, and repo DOs (delivery has been on the host model for a
+  while; those were catch-up/observability vestiges). Agent runtime state is
+  now the honest `{ agentPath, processors: { [slug]: snapshot } }`.
