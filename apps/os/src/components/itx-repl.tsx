@@ -22,7 +22,8 @@ import {
   SheetTitle,
 } from "@iterate-com/ui/components/sheet";
 import { itxReplAutocompleteWorker } from "./itx-repl-autocomplete.ts";
-import type { BrowserReplEntry, BrowserReplExample } from "~/itx/browser-repl.ts";
+import type { BrowserReplEntry } from "~/itx/browser-repl.ts";
+import type { ItxExample } from "~/itx/examples.ts";
 
 const REPL_SOURCE_PATH = "/repl.ts";
 const replCodeBlockClassName =
@@ -39,8 +40,12 @@ const loadTypeScriptExtensionModules = import.meta.env.SSR
 export interface ItxReplProps {
   canRun: boolean;
   code: string;
+  /** The context this REPL session is connected to. Project-context examples
+   * only run on a project-scoped handle, so the global REPL offers them as
+   * reading material with a pointer to a project REPL instead. */
+  context: "global" | "project";
   entries: BrowserReplEntry[];
-  examples: BrowserReplExample[];
+  examples: ItxExample[];
   examplesOpen: boolean;
   onChangeCode: (code: string) => void;
   onRun: () => void;
@@ -52,6 +57,7 @@ export interface ItxReplProps {
 export function ItxRepl({
   canRun,
   code,
+  context,
   entries,
   examples,
   examplesOpen,
@@ -166,28 +172,45 @@ export function ItxRepl({
           </SheetHeader>
           <ScrollArea className="min-h-0 flex-1">
             <div className="flex flex-col gap-4 p-4">
-              {examples.map((example) => (
-                <article key={example.id} className="flex flex-col gap-3 rounded-md border p-3">
-                  <div className="flex flex-col gap-1">
-                    <h3 className="text-sm font-medium">{example.title}</h3>
-                    <p className="text-sm text-muted-foreground">{example.description}</p>
-                  </div>
-                  <SourceCodeBlock
-                    code={example.code}
-                    className="h-80"
-                    language="typescript"
-                    showCopyButton
-                  />
-                  <Button
-                    className="self-end"
-                    onClick={() => onSelectExample(example.code)}
-                    size="sm"
-                    variant="outline"
-                  >
-                    Use snippet
-                  </Button>
-                </article>
-              ))}
+              {examples.map((example) => {
+                // A project handle can run the global examples (narrowing to
+                // itself), but a global handle cannot run project ones.
+                const runnableHere = context === "project" || example.context === "global";
+                return (
+                  <article key={example.id} className="flex flex-col gap-3 rounded-md border p-3">
+                    <div className="flex flex-col gap-1">
+                      <h3 className="text-sm font-medium">{example.title}</h3>
+                      <p className="text-sm text-muted-foreground">{example.description}</p>
+                      <p className="font-mono text-xs text-muted-foreground">
+                        {example.context === "project" ? "project context" : "global context"}
+                        {" · runs in: "}
+                        {example.runtimes.join(", ")}
+                      </p>
+                    </div>
+                    <SourceCodeBlock
+                      code={example.code}
+                      className="h-80"
+                      language="typescript"
+                      showCopyButton
+                    />
+                    <div className="flex items-center justify-end gap-3">
+                      {!runnableHere ? (
+                        <span className="text-xs text-muted-foreground">
+                          Needs a project context — open a project&apos;s REPL to run it.
+                        </span>
+                      ) : null}
+                      <Button
+                        disabled={!runnableHere}
+                        onClick={() => onSelectExample(example.code)}
+                        size="sm"
+                        variant="outline"
+                      >
+                        Use snippet
+                      </Button>
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           </ScrollArea>
         </SheetContent>

@@ -5,9 +5,9 @@
 // subscribed LLM request processor owes the stream `agent/output-added` plus a
 // terminal `agent/llm-request-completed`.
 //
-// Migrated from packages/shared/src/stream-processors/agent/implementation.ts.
-// All appended events keep their legacy types, payload shapes, and
-// idempotency-key derivations (`agent/<key>@<sourceOffset>`).
+// Appended event types, payload shapes, and idempotency-key derivations
+// (`agent/<key>@<sourceOffset>`) are stable wire formats — changing them
+// breaks dedup against events already committed to streams.
 
 import {
   assertNever,
@@ -17,7 +17,6 @@ import {
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import {
   AgentProcessorContract,
-  buildLlmChatRequest,
   reduceAgentEvent,
   reduceAgentEvents,
   type AgentConsumedEvent,
@@ -505,6 +504,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     }
 
     try {
+      // Request-by-reference: no body. Providers rebuild the chat request from
+      // committed history up to this event's offset.
       await this.ctx.stream.append({
         event: {
           type: "events.iterate.com/agent/llm-request-requested",
@@ -515,7 +516,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           }),
           payload: {
             model: stateAtRequest.llmConfig.model,
-            body: buildLlmChatRequest(stateAtRequest),
             runOpts: stateAtRequest.llmConfig.runOpts,
           },
         },

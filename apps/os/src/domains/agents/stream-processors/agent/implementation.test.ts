@@ -1,7 +1,6 @@
-// Ported from packages/shared/src/stream-processors/agent/implementation.test.ts
-// onto the class-based StreamProcessor model: events are driven through
-// `ingest` and state is seeded through `readState` snapshots. Idempotency-key
-// assertions are wire-format regression checks — they must not change.
+// Events are driven through `ingest` and state is seeded through `readState`
+// snapshots. Idempotency-key assertions are wire-format regression checks —
+// they must not change.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getInitialProcessorState } from "@iterate-com/streams/shared/stream-processors";
@@ -707,7 +706,7 @@ describe("AgentProcessor", () => {
     ]);
   });
 
-  it("re-reads stream history before handing a scheduled LLM request to providers", async () => {
+  it("hands a scheduled LLM request to providers by reference, without a body", async () => {
     vi.useFakeTimers();
     const { stream, appended } = memoryStream();
     const triggeringInput = agentEvent({
@@ -743,18 +742,14 @@ describe("AgentProcessor", () => {
     await vi.advanceTimersByTimeAsync(1000);
 
     expect(appended).toHaveLength(2);
+    // Request-by-reference: the handoff records which model to run and how,
+    // but never embeds the conversation — providers rebuild it from history
+    // up to this event's own offset (see llm-request-helpers.ts).
     expect(appended[1]).toMatchObject({
       type: "events.iterate.com/agent/llm-request-requested",
-      payload: {
-        body: {
-          messages: [
-            { role: "system", content: "You are a helpful assistant. You can trust your user." },
-            { role: "user", content: "codemode primer" },
-            { role: "user", content: "hi" },
-          ],
-        },
-      },
+      payload: { model: expect.any(String), runOpts: {} },
     });
+    expect(appended[1]!.payload).not.toHaveProperty("body");
   });
 });
 

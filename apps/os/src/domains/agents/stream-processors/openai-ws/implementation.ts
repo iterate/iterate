@@ -1,8 +1,10 @@
-// Implements the "openai-ws" processor as a class-based StreamProcessor.
+// Implements the "openai-ws" processor.
 //
-// Migrated from packages/shared/src/stream-processors/openai-ws/implementation.ts.
-// All appended events keep their legacy types, payload shapes, and
-// idempotency-key derivations (`openai-ws/<key>@<sourceOffset>`).
+// This file is a deliberate SIBLING of ../cloudflare-ai/implementation.ts:
+// same method names, same control flow, same comments where the logic matches
+// — the two differ only in transport (a Responses WebSocket vs one AI.run
+// call). Stateless logic they share lives in ../llm-request-helpers.ts. When
+// you fix something here, check whether the sibling needs the same fix.
 //
 // Connection lifecycle: the WebSocket connection is a lazy instance field on
 // the class. The hosting Durable Object instance is the connection scope —
@@ -28,7 +30,12 @@ import {
   type StreamEvent,
 } from "@iterate-com/streams/shared/stream-processors";
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
-import { reduceAgentEvents } from "../agent/contract.ts";
+import {
+  buildAgentLlmRequestBody,
+  findDanglingLlmRequestIds,
+  isAgentLlmRequestStillCurrent,
+  parseLlmRequestRequestedEventAt,
+} from "../llm-request-helpers.ts";
 import { OpenAiWsProcessorContract, type OpenAiWsState } from "./contract.ts";
 
 export { OpenAiWsProcessorContract } from "./contract.ts";
@@ -114,11 +121,11 @@ export class OpenAiWsProcessor extends StreamProcessor<
    * Requests this instance has taken responsibility for executing. The DO
    * instance is the execution scope: a fresh instance after a crash/wake
    * starts empty, which is what lets `#reconcileDanglingStartedRequests`
-   * recognize requests a previous incarnation abandoned. Ids stay in the set
-   * after a request reaches its terminal appends (re-execution is never
-   * needed then, even while the completed event is still being delivered
-   * back); they are removed only when execution fails before the terminal
-   * appends landed, so a later batch's reconciliation can retry.
+   * recognize requests a previous incarnation abandoned. Entries are removed
+   * when execution fails before the terminal appends landed (so a later
+   * connected event can retry) and once the request's completed fact has been
+   * reduced back (re-execution is impossible then — the completed-skip is
+   * durable), which keeps the set bounded on long-lived instances.
    */
   #executedLlmRequestIds = new Set<number>();
 
@@ -167,7 +174,12 @@ export class OpenAiWsProcessor extends StreamProcessor<
     switch (event.type) {
       case "events.iterate.com/openai-ws/config-updated":
       case "events.iterate.com/openai-ws/llm-request-started":
+        return;
       case "events.iterate.com/openai-ws/llm-request-completed":
+        // The completed fact is durable; this instance can never need to
+        // (re-)execute this request again, so drop the claim — this is what
+        // keeps the executed set bounded.
+        this.#executedLlmRequestIds.delete(event.payload.llmRequestId);
         return;
       case "events.iterate.com/agent/llm-request-requested":
         this.#startLlmRequest({ event, state, runInBackground: args.runInBackground });
@@ -238,12 +250,10 @@ export class OpenAiWsProcessor extends StreamProcessor<
     sourceEvent: { offset: number };
     runInBackground: (work: () => Promise<unknown>) => void;
   }) {
-    const danglingIds = Object.entries(args.state.requests)
-      .filter(
-        ([id, request]) =>
-          request.status === "started" && !this.#executedLlmRequestIds.has(Number(id)),
-      )
-      .map(([id]) => Number(id));
+    const danglingIds = findDanglingLlmRequestIds({
+      requests: args.state.requests,
+      executedLlmRequestIds: this.#executedLlmRequestIds,
+    });
     if (danglingIds.length === 0) return;
 
     // Claim synchronously, before the first await: one batch routinely
@@ -259,16 +269,8 @@ export class OpenAiWsProcessor extends StreamProcessor<
     try {
       const events = await this.deps.readStreamEvents();
       for (const llmRequestId of danglingIds) {
-        const requestedEvent = events.find(
-          (event) =>
-            event.offset === llmRequestId &&
-            event.type === "events.iterate.com/agent/llm-request-requested",
-        );
-        const reduction =
-          requestedEvent === undefined
-            ? undefined
-            : this.reduceRawEvent({ event: requestedEvent, state: args.state });
-        if (reduction?.event.type !== "events.iterate.com/agent/llm-request-requested") {
+        const requestedEvent = parseLlmRequestRequestedEventAt({ events, llmRequestId });
+        if (requestedEvent === null) {
           // The entry cannot be tied back to a requested event, so it is
           // unrecoverable; the claim stays so it stops triggering history reads.
           heldClaims.delete(llmRequestId);
@@ -287,7 +289,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
         // Handed to the executor: its own failure handling owns the claim now.
         heldClaims.delete(llmRequestId);
         this.#startLlmRequest({
-          event: reduction.event,
+          event: requestedEvent,
           state: args.state,
           runInBackground: args.runInBackground,
         });
@@ -421,18 +423,20 @@ export class OpenAiWsProcessor extends StreamProcessor<
       },
     });
 
-    const systemMessages = args.event.payload.body.messages.filter(
-      (message) => message.role === "system",
-    );
-    const inputMessages = args.event.payload.body.messages.filter(
-      (message) => message.role !== "system",
-    );
+    // Request-by-reference: the requested event carries no body; rebuild the
+    // chat request from committed history up to the request's own offset.
+    const body = buildAgentLlmRequestBody({
+      events: await this.deps.readStreamEvents(),
+      llmRequestId,
+    });
+    const systemMessages = body.messages.filter((message) => message.role === "system");
+    const inputMessages = body.messages.filter((message) => message.role !== "system");
     const previousResponseId = this.#previousResponseId;
     /**
      * `store: false` keeps this out of OpenAI's stored response retention, but
      * WebSocket mode can still chain the immediate conversation by carrying
-     * `previous_response_id` from the prior completed response. The agent
-     * request body remains the source of truth for what we explicitly send.
+     * `previous_response_id` from the prior completed response. The rebuilt
+     * chat request remains the source of truth for what we explicitly send.
      */
     const requestMessage = toJsonValue({
       type: "response.create",
@@ -692,12 +696,10 @@ export class OpenAiWsProcessor extends StreamProcessor<
   }
 
   async #isAgentLlmRequestStillCurrent(args: { llmRequestId: number }) {
-    const events = await this.deps.readStreamEvents();
-    const state = reduceAgentEvents({ events });
-    return (
-      state.currentRequest?.phase === "requested" &&
-      state.currentRequest.llmRequestId === args.llmRequestId
-    );
+    return isAgentLlmRequestStillCurrent({
+      events: await this.deps.readStreamEvents(),
+      llmRequestId: args.llmRequestId,
+    });
   }
 
   async #append(event: { type: string; idempotencyKey: string; payload: unknown }) {

@@ -2,14 +2,15 @@ import { RpcStub, RpcTarget } from "capnweb";
 import { describe, expect, test, vi } from "vitest";
 import {
   browserReplExternalScopesEqual,
-  BROWSER_REPL_EXAMPLES,
   compileBrowserReplFunction,
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
   evalBrowserReplCode,
   evalBrowserReplSessionCode,
+  rewriteBrowserReplImports,
   runBrowserReplEntry,
 } from "./browser-repl.ts";
+import { ITX_EXAMPLES } from "./examples.ts";
 
 describe("browser Cap'n Web REPL", () => {
   test("default snippet uses Cap'n Web promise pipelining", async () => {
@@ -458,30 +459,33 @@ const persisted = answer();
   });
 
   test("every published example has unique metadata and compiles", () => {
-    expect(BROWSER_REPL_EXAMPLES.length).toBeGreaterThan(1);
+    expect(ITX_EXAMPLES.length).toBeGreaterThan(1);
     const ids = new Set<string>();
-    for (const example of BROWSER_REPL_EXAMPLES) {
+    for (const example of ITX_EXAMPLES) {
       expect(example.id, `duplicate example id ${example.id}`).not.toBe(undefined);
       expect(ids.has(example.id)).toBe(false);
       ids.add(example.id);
       expect(example.title.length).toBeGreaterThan(0);
       expect(example.description.length).toBeGreaterThan(0);
+      expect(["global", "project"]).toContain(example.context);
+      expect(example.runtimes.length).toBeGreaterThan(0);
       // The statement compiler must accept the snippet — this catches
       // transform bugs around nested template literals, top-level classes,
-      // and trailing `return` before any of them reaches a user.
+      // trailing `return`, and import rewriting before any of them reaches a
+      // user.
       expect(() => compileBrowserReplFunction(example.code)).not.toThrow();
     }
   });
 
-  test("caps.provide example registers and calls a browser-owned target", async () => {
-    // Mirrors the itx handle's shape: caps.provide registers a live target,
-    // and unknown names on the project handle fall through to it.
+  test("live-capability example registers and calls a session-owned target", async () => {
+    // Mirrors a PROJECT-scoped itx handle: caps.define with a live target
+    // registers it, and unknown names on the handle fall through to it.
     const providedTargets = new Map<string, { run(): unknown }>();
     const alert = vi.fn();
-    const project = new Proxy(
+    const itx = new Proxy(
       {
         caps: {
-          provide(input: { name: string; target: { run(): unknown } }) {
+          define(input: { name: string; target: { run(): unknown } }) {
             providedTargets.set(input.name, input.target);
             return { name: input.name, ok: true };
           },
@@ -496,31 +500,96 @@ const persisted = answer();
         },
       },
     );
-    const itx = {
-      projects: {
-        get(projectId: string) {
-          if (projectId !== "proj_123") throw new Error(`Unexpected project ${projectId}`);
-          return project;
-        },
-        list() {
-          return { projects: [{ id: "proj_123" }], total: 1 };
-        },
-      },
-    };
 
-    const example = BROWSER_REPL_EXAMPLES.find((candidate) => {
+    const example = ITX_EXAMPLES.find((candidate) => {
       return candidate.id === "provide-live-capability";
     });
-    if (!example) throw new Error("Missing provide-live-capability browser REPL example.");
+    if (!example) throw new Error("Missing provide-live-capability example.");
 
     await expect(
       evalBrowserReplSessionCode({
         code: example.code,
         itx,
-        scope: { alert, RpcTarget },
+        scope: { alert, RpcTarget, vars: {} },
       }),
     ).resolves.toBe("alerted");
     expect(alert).toHaveBeenCalledWith("The answer is 42");
+  });
+
+  test("snippets ending in a top-level return produce that value", async () => {
+    const scope: Record<string, unknown> = {};
+
+    await expect(
+      evalBrowserReplSessionCode({
+        code: "const stream = { offset: 41 }\nreturn stream.offset + 1",
+        itx: {},
+        scope,
+      }),
+    ).resolves.toBe(42);
+    expect(scope.stream).toEqual({ offset: 41 });
+  });
+
+  test("top-level imports rewrite to awaited esm.sh dynamic imports", () => {
+    expect(rewriteBrowserReplImports('import { z } from "zod";\nreturn z')).toBe(
+      'const __replModule1 = await import("https://esm.sh/zod");\n' +
+        "const z = __replModule1.z;\nreturn z",
+    );
+
+    expect(rewriteBrowserReplImports('import dayjs from "dayjs"')).toBe(
+      'const __replModule1 = await import("https://esm.sh/dayjs");\n' +
+        "const dayjs = __replModule1.default;",
+    );
+
+    expect(rewriteBrowserReplImports('import lodash, { chunk as c } from "lodash-es@4"')).toBe(
+      'const __replModule1 = await import("https://esm.sh/lodash-es@4");\n' +
+        "const lodash = __replModule1.default;\n" +
+        "const c = __replModule1.chunk;",
+    );
+
+    expect(rewriteBrowserReplImports('import * as R from "remeda"')).toBe(
+      'const __replModule1 = await import("https://esm.sh/remeda");\nconst R = __replModule1;',
+    );
+
+    expect(rewriteBrowserReplImports('import "side-effect-pkg"')).toBe(
+      'await import("https://esm.sh/side-effect-pkg")',
+    );
+
+    // Full URLs load as-is; type-only imports disappear.
+    expect(rewriteBrowserReplImports('import { x } from "https://example.com/mod.js"')).toBe(
+      'const __replModule1 = await import("https://example.com/mod.js");\nconst x = __replModule1.x;',
+    );
+    expect(rewriteBrowserReplImports('import type { Foo } from "zod"')).toBe("");
+  });
+
+  test("relative, scheme'd, and template-literal imports are left untouched", () => {
+    for (const untouched of [
+      'import { x } from "./local.ts"',
+      'import fs from "node:fs"',
+      'import { WorkerEntrypoint } from "cloudflare:workers"',
+      'const source = `\n  import { WorkerEntrypoint } from "cloudflare:workers";\n`;',
+      "await import(moduleName)",
+    ]) {
+      expect(rewriteBrowserReplImports(untouched)).toBe(untouched);
+    }
+  });
+
+  test("imported bindings persist across session snippets", async () => {
+    const scope: Record<string, unknown> = {};
+
+    // A stand-in for the esm.sh module: a data: URL is scheme'd, so the
+    // import statement itself is untouched — instead prove the REWRITTEN
+    // shape (`const x = …`) persists like any other top-level declaration.
+    await expect(
+      evalBrowserReplSessionCode({
+        code: 'const __replModule1 = { z: { kind: "schema" } };\nconst z = __replModule1.z;',
+        itx: {},
+        scope,
+      }),
+    ).resolves.toEqual({ kind: "schema" });
+
+    await expect(evalBrowserReplSessionCode({ code: "z.kind", itx: {}, scope })).resolves.toBe(
+      "schema",
+    );
   });
 });
 

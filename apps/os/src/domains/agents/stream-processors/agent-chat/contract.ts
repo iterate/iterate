@@ -4,9 +4,6 @@
 // Web and terminal chat are channels of the same domain concept. The channel
 // stays in payload data; the processor owns rendering chat-domain events into
 // curated `agent/input-added` rows for the Agent processor.
-//
-// Migrated from packages/shared/src/stream-processors/agent-chat/contract.ts.
-// Wire formats (event types and payload schemas) are unchanged.
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";

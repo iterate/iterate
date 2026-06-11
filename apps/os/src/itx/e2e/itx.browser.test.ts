@@ -1,7 +1,10 @@
 // Browser execution mode: a real Chromium tab holds an itx over a Cap'n Web
-// WebSocket — the same handle, same scripts, same capability verbs as Node
-// and the run harness. The browser is also a PROVIDER: it can register live
-// capabilities backed by browser-owned objects (tabs as tool servers).
+// WebSocket — the same handle, same catalogue examples, same capability verbs
+// as Node, the CLI, and the worker runtimes. Examples run through the REAL
+// REPL evaluation pipeline (compile + import rewriting + scope), so what the
+// Examples panel shows is exactly what this suite proves. The browser is also
+// a PROVIDER: it can register live capabilities backed by browser-owned
+// objects (tabs as tool servers).
 //
 // Auth: browser WebSockets cannot set Authorization headers, so the admin
 // cookie is installed through Playwright's context (vitest browser command) —
@@ -12,11 +15,12 @@ import { commands } from "vitest/browser";
 import { newWebSocketRpcSession, RpcTarget, type RpcStub } from "capnweb";
 import type { Itx } from "../handle.ts";
 import {
-  BROWSER_REPL_EXAMPLES,
+  createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
   evalBrowserReplSessionCode,
 } from "../browser-repl.ts";
-import { appendAndReadStream, describeProject } from "./itx-scripts.ts";
+import { ITX_EXAMPLES } from "../examples.ts";
+import { EXAMPLE_CASES } from "./example-cases.ts";
 
 declare const __ITX_BROWSER_E2E__: {
   adminApiSecret: string;
@@ -27,6 +31,10 @@ declare const __ITX_BROWSER_E2E__: {
 // SameSite=None, which Chromium requires to be Secure — so browser mode needs
 // an https target (a deployed preview/prod), never a plain-http local dev URL.
 const httpsTarget = __ITX_BROWSER_E2E__.baseUrl.startsWith("https:");
+
+const BROWSER_EXAMPLES = ITX_EXAMPLES.filter(
+  (example) => example.runtimes.includes("browser") && EXAMPLE_CASES[example.id] !== undefined,
+);
 
 describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
   const createdProjectIds: string[] = [];
@@ -45,7 +53,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
         code: DEFAULT_BROWSER_REPL_CODE,
         env: {},
         itx,
-        scope: {},
+        scope: createBrowserReplScope(),
       }),
     ).resolves.toMatchObject({
       projects: expect.any(Array),
@@ -53,41 +61,46 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
     });
   }, 45_000);
 
-  it("runs the shared itx scripts through browser Cap'n Web stubs", async () => {
-    using itx = await connectFromBrowser();
-    const project = (await itx.projects.create({
-      slug: `itx-browser-${uniqueSuffix()}`.slice(0, 40),
-    })) as { id: string; slug: string };
-    createdProjectIds.push(project.id);
+  // The catalogue, through the real REPL pipeline, against a project-scoped
+  // session — the browser leg of the cross-runtime matrix. One shared project
+  // (created lazily by the first example) mirrors the node-side matrix.
+  let sharedProjectId: Promise<string> | null = null;
+  function ensureBrowserMatrixProject(): Promise<string> {
+    sharedProjectId ??= (async () => {
+      using itx = await connectFromBrowser();
+      const project = (await itx.projects.create({
+        slug: `itx-browser-${uniqueSuffix()}`.slice(0, 40),
+      })) as { id: string };
+      createdProjectIds.push(project.id);
+      return project.id;
+    })();
+    return sharedProjectId;
+  }
 
-    await expect(
-      describeProject({ itx: itx as never, vars: { projectId: project.id } }),
-    ).resolves.toMatchObject({ context: project.id, projectId: project.id });
+  for (const example of BROWSER_EXAMPLES) {
+    const exampleCase = EXAMPLE_CASES[example.id]!;
+    it(`runs catalogue example "${example.id}" in the REPL pipeline`, async () => {
+      const projectId = await ensureBrowserMatrixProject();
+      using itx = await connectFromBrowser(projectId);
 
-    const marker = `browser-${uniqueSuffix()}`;
-    const streamed = await appendAndReadStream({
-      itx: itx as never,
-      vars: {
-        eventType: "events.iterate.test/itx/browser",
-        marker,
-        projectId: project.id,
-        streamPath: "/itx-e2e/browser",
-      },
-    });
-    expect(streamed.readBackMarkers).toContain(marker);
-  }, 45_000);
+      const ctx = { marker: `browser-${uniqueSuffix()}`, projectId };
+      const vars = exampleCase.vars?.(ctx) ?? {};
+      const result = await evalBrowserReplSessionCode({
+        code: example.code,
+        env: {},
+        itx,
+        scope: createBrowserReplScope({ projectId, vars }),
+      });
+      exampleCase.assert(result, ctx);
+    }, 120_000);
+  }
 
-  it("provides a live browser-owned capability and calls it via the fallthrough", async () => {
-    using itx = await connectFromBrowser();
-    const project = (await itx.projects.create({
-      slug: `itx-browser-cap-${uniqueSuffix()}`.slice(0, 40),
-    })) as { id: string };
-    createdProjectIds.push(project.id);
+  it("provides a live browser-owned capability and calls it via the fallthrough (alert example)", async () => {
+    const projectId = await ensureBrowserMatrixProject();
+    using itx = await connectFromBrowser(projectId);
 
-    const example = BROWSER_REPL_EXAMPLES.find(
-      (candidate) => candidate.id === "provide-live-capability",
-    );
-    if (!example) throw new Error("Missing provide-live-capability browser REPL example.");
+    const example = ITX_EXAMPLES.find((candidate) => candidate.id === "provide-live-capability");
+    if (!example) throw new Error("Missing provide-live-capability example.");
 
     const alertMessages: string[] = [];
     const originalAlert = globalThis.alert;
@@ -100,7 +113,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
           code: example.code,
           env: {},
           itx,
-          scope: { projectId: project.id, RpcTarget },
+          scope: createBrowserReplScope({ projectId }),
         }),
       ).resolves.toBe("alerted");
     } finally {
@@ -110,11 +123,8 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
   }, 45_000);
 
   it("provides a browser path-call cap with an SDK-shaped surface", async () => {
-    using itx = await connectFromBrowser();
-    const project = (await itx.projects.create({
-      slug: `itx-browser-sdk-${uniqueSuffix()}`.slice(0, 40),
-    })) as { id: string };
-    createdProjectIds.push(project.id);
+    const projectId = await ensureBrowserMatrixProject();
+    using projectItx = await connectFromBrowser(projectId);
 
     class BrowserSdk extends RpcTarget {
       async call({ path, args }: { path: string[]; args: unknown[] }) {
@@ -122,7 +132,6 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
       }
     }
 
-    using projectItx = await itx.projects.get(project.id);
     await projectItx.caps.provide({
       invoke: "path-call",
       name: "browserSlack",

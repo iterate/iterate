@@ -331,8 +331,22 @@ type Itx = ItxBuiltins & KnownCaps & Record<string, CapSurface>;
 declare const itx: Itx;
 /** Environment-style values injected into this REPL session. */
 declare const env: JsonRecord;
+/**
+ * Script parameters — always in scope, so the catalogue examples
+ * (src/itx/examples.ts) run unchanged in every runtime. Assign your own
+ * (\`const vars = { … }\`) to parameterize a snippet by hand.
+ */
+declare const vars: Record<string, any>;
+/** Set in a project REPL; undefined in the global one. */
+declare const projectId: string | undefined;
 /** The last successful REPL result. */
 declare let $_: unknown;
 /** Alias for the last successful REPL result. */
 declare let _: unknown;
+
+/**
+ * REPL imports resolve at runtime (bare specifiers via esm.sh); the editor
+ * cannot typecheck them, so every module is \`any\`.
+ */
+declare module "*";
 `;

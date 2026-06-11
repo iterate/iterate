@@ -162,7 +162,7 @@ export function withWorkerEnv(input: {
       }),
     },
     globalOutbound: input.exports.ProjectEgress({
-      props: { cap: "worker", context: input.projectId, project: input.projectId },
+      props: { cap: "worker", context: input.projectId, projectId: input.projectId },
     }),
     modules: {
       ...input.workerCode.modules,

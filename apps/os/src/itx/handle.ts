@@ -9,8 +9,9 @@
 // (which IS the access check), or by the platform wiring a cap's isolate.
 //
 // Anatomy:
-//   - typed built-ins (the trust kernel): caps, streams, repos, workspace,
-//     worker, project, projects, fetch, describe
+//   - typed built-ins (the trust kernel): caps, streams, project, projects,
+//     fork, describe — plus `fetch`, which is sugar dispatching through the
+//     registry's `fetch` capability (a shadowable platform default)
 //   - a fallthrough Proxy: any unknown name becomes a PathProxy whose
 //     terminal call dispatches to the context node's registry. itx.slack
 //     works because someone provided "slack", not because anything here
@@ -172,6 +173,17 @@ export class Itx extends RpcTarget {
           message: `${head} is internal registry plumbing, not part of the project surface — use itx.caps / itx.<cap> instead.`,
         });
       }
+      // Same reasoning for the raw egress doors: now that `fetch` is a
+      // shadowable capability, the DO's fetch/egressFetch here would bypass
+      // any live shadow — the one egress door for handle holders is
+      // itx.fetch (the terminal pipe stays reachable to the DEFAULT cap via
+      // direct stubs, never through this proxy).
+      if (head === "fetch" || head === "egressFetch") {
+        throw new ItxError({
+          code: "FORBIDDEN",
+          message: `${head} is the raw egress pipe — use itx.fetch, which honors fetch-cap shadowing.`,
+        });
+      }
       return replayPathCall(stub, call);
     }) as unknown as ProjectStub;
   }
@@ -181,14 +193,20 @@ export class Itx extends RpcTarget {
   }
 
   /**
-   * Explicit project egress (Law 5). Secrets are substituted inside the
-   * Project DO's egress hop — `fetch("https://api.x.com", { headers: {
-   * authorization: 'getSecret("X_TOKEN")' } })` never sees the material.
-   * Isolates the platform loads get this same pipe bound as global fetch.
+   * Explicit project egress (Law 5) — sugar over the context's `fetch`
+   * CAPABILITY (a platform:project default): the default pipe substitutes
+   * secrets inside the Project DO — `fetch("https://api.x.com", { headers: {
+   * authorization: 'getSecret("X_TOKEN")' } })` never sees the material —
+   * and a defined `fetch` shadow (e.g. a live provider) intercepts instead.
+   * Isolates the platform loads get this same dispatch as global fetch.
    */
   async fetch(input: Request | string, init?: RequestInit): Promise<Response> {
     const request = typeof input === "string" ? new Request(input, init) : input;
-    return await this.#projectStub().egressFetch(request);
+    return (await this.#registryStub().itxInvoke({
+      args: [request],
+      name: "fetch",
+      path: [],
+    })) as Response;
   }
 
   async describe() {
@@ -299,10 +317,7 @@ type ProjectStub = DurableObjectStub<ProjectDurableObject>;
 type ContextStub = DurableObjectStub<ContextDO>;
 
 /** The registry verbs every context node (project or child) exposes. */
-type RegistryStub = Pick<
-  ProjectStub,
-  "itxDefine" | "itxDescribe" | "itxInvoke" | "itxProvide" | "itxRevoke"
->;
+type RegistryStub = Pick<ProjectStub, "itxDefine" | "itxDescribe" | "itxInvoke" | "itxRevoke">;
 
 function projectStub(env: Env, projectId: string): ProjectStub {
   return env.PROJECT.getByName(getProjectDurableObjectName(projectId)) as unknown as ProjectStub;
@@ -315,10 +330,11 @@ function contextStub(env: Env, contextId: string): ContextStub {
 // ---- caps -----------------------------------------------------------------
 
 /**
- * Registry verbs. provide = live (session-bound, dies with your connection);
- * define = durable (source stored, loaded on demand). Promotion from a REPL
- * is `define` with the source you just wrote — durable means the code moved
- * server-side, which is physics, not API design.
+ * Registry verbs. define is THE verb: the target kind carries everything
+ * else — a live stub is session-bound (dies with your connection), an
+ * rpc/url target is durable. Promotion from a REPL is `define` with the
+ * source you just wrote — durable means the code moved server-side, which
+ * is physics, not API design.
  */
 export class ItxCaps extends RpcTarget {
   constructor(
@@ -329,24 +345,26 @@ export class ItxCaps extends RpcTarget {
     super();
   }
 
+  async define(input: {
+    name: string;
+    /** The capability's target (types.ts): serializable rpc/url data, or
+     * anything live — a stub, an RpcTarget, a function. */
+    target: SerializableCapTarget | LiveCapTarget;
+    invoke?: CapInvoke;
+    meta?: CapMeta;
+  }) {
+    return await this.registry.itxDefine(input);
+  }
+
+  /** Alias for {@link define} (REPL muscle memory) — define is the verb; a
+   * live stub is just another target. */
   async provide(input: {
     name: string;
     target: LiveCapTarget;
     invoke?: CapInvoke;
     meta?: CapMeta;
   }) {
-    return await this.registry.itxProvide(input);
-  }
-
-  async define(input: {
-    name: string;
-    /** The capability's target (types.ts). Serializable kinds only — for a
-     * live stub use provide(). */
-    target: SerializableCapTarget;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
-  }) {
-    return await this.registry.itxDefine(input);
+    return await this.define(input);
   }
 
   async revoke(input: { name: string }) {
