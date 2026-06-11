@@ -34,7 +34,9 @@ export const Route = createRootRouteWithContext<RouterContext>()({
   }),
   shellComponent: RootDocument,
   component: RootComponent,
-  errorComponent: RootErrorComponent,
+  errorComponent: (props: { error: unknown; reset: () => void }) => (
+    <DefaultErrorComponent {...props} />
+  ),
 });
 
 function RootDocument({ children }: { children: ReactNode }) {
@@ -76,8 +78,4 @@ function RootComponent() {
       <Outlet />
     </AppProviders>
   );
-}
-
-function RootErrorComponent(props: { error: unknown; reset: () => void }) {
-  return <DefaultErrorComponent {...props} />;
 }

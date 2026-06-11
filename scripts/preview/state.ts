@@ -114,7 +114,9 @@ function renderCloudflarePreviewSection(state: CloudflarePreviewState) {
   return [
     "## Environment Config Lease",
     "",
-    markdownAnnotator("", cloudflarePreviewStateLabel).update(wrapHiddenStateBlock(state)),
+    markdownAnnotator("", cloudflarePreviewStateLabel).update(
+      ["<!--", JSON.stringify(state, null, 2), "-->"].join("\n"),
+    ),
     state.environmentConfigLease
       ? renderEnvironmentConfigLease(state.environmentConfigLease)
       : "No active environment config lease.",
@@ -153,7 +155,7 @@ function renderPreviewAppEntry(entry: CloudflarePreviewAppEntry) {
           "<details>",
           "<summary>Failure details</summary>",
           "",
-          `<pre>${escapeHtml(details)}</pre>`,
+          `<pre>${details.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</pre>`,
           "",
           "</details>",
         ].join("\n")
@@ -210,14 +212,6 @@ function renderStatusLabel(status: CloudflarePreviewAppEntry["status"]) {
     case "fork-unavailable":
       return "unavailable for forks";
   }
-}
-
-function escapeHtml(value: string) {
-  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
-
-function wrapHiddenStateBlock(state: CloudflarePreviewState) {
-  return ["<!--", JSON.stringify(state, null, 2), "-->"].join("\n");
 }
 
 function unwrapHiddenStateBlock(contents: string) {

@@ -42,13 +42,8 @@ function getPropertyName(node) {
 }
 
 /** @param {string} filename */
-function normalizePathForLint(filename) {
-  return filename.replaceAll("\\", "/");
-}
-
-/** @param {string} filename */
 function isAllowedRawDurableObjectBindingAccessFile(filename) {
-  const path = normalizePathForLint(filename);
+  const path = filename.replaceAll("\\", "/");
 
   if (!path.includes("/apps/os/src/")) return true;
   if (path.includes("/apps/os/docs/")) return true;
@@ -110,11 +105,6 @@ function isDescribeCall(callee) {
 }
 
 /** @param {import("estree").Node} callee */
-function isLifecycleHookCall(callee) {
-  return callee.type === "Identifier" && LIFECYCLE_HOOKS.has(callee.name);
-}
-
-/** @param {import("estree").Node} callee */
 function isViMockCall(callee) {
   const name = getTestLintCallName(callee);
   return Boolean(name && VI_MOCK_CALLS.has(name));
@@ -143,6 +133,44 @@ function isFunctionLikeDeclaration(node) {
         init.type === "ClassExpression")
     );
   });
+}
+
+/**
+ * Counts the source lines spanned by a function's body content: the statements between the
+ * braces, or the expression of a concise arrow. Brace-only lines don't count, so
+ * `function f() {\n  return x;\n}` is 1 line.
+ *
+ * @param {import("eslint").SourceCode} sourceCode
+ * @param {import("estree").Function} fn
+ */
+function getFunctionBodyLineCount(sourceCode, fn) {
+  const body = fn.body;
+  if (!body) return Infinity; // overload signatures / declare function
+  let start;
+  let end;
+  if (body.type === "BlockStatement") {
+    const statements = body.body;
+    if (statements.length === 0) return 0;
+    start = statements[0].range?.[0];
+    end = statements[statements.length - 1].range?.[1];
+  } else {
+    start = body.range?.[0];
+    end = body.range?.[1];
+  }
+  if (start === undefined || end === undefined) return Infinity;
+  return sourceCode.getText().slice(start, end).split("\n").length;
+}
+
+/**
+ * @param {import("eslint").Scope.Scope | null} scope
+ * @param {string} name
+ */
+function findVariableInScopeChain(scope, name) {
+  for (let current = scope; current; current = current.upper) {
+    const variable = current.variables.find((v) => v.name === name);
+    if (variable) return variable;
+  }
+  return undefined;
 }
 
 /** @param {string} text */
@@ -533,7 +561,7 @@ const plugin = {
       create(context) {
         return {
           CallExpression(node) {
-            if (!isLifecycleHookCall(node.callee)) return;
+            if (node.callee.type !== "Identifier" || !LIFECYCLE_HOOKS.has(node.callee.name)) return;
             context.report({
               node,
               message:
@@ -581,6 +609,81 @@ const plugin = {
               message:
                 "Avoid vi.mock/vi.doMock in tests. Prefer dependency injection or a controllable fake dependency.",
             });
+          },
+        };
+      },
+    },
+    "no-single-use-helpers": {
+      meta: {
+        type: "suggestion",
+        docs: {
+          description:
+            "Flag tiny non-exported helper functions that are only used once. Inline them so the reader can see what's actually happening instead of chasing an indirection.",
+        },
+      },
+      create(context) {
+        const MAX_BODY_LINES = 1;
+
+        /**
+         * @param {import("estree").Identifier} id the helper's name binding
+         * @param {import("estree").Function} fn the function node
+         * @param {import("estree").Node} statement the enclosing declaration statement
+         */
+        function checkHelper(id, fn, statement) {
+          const exportParent = statement.parent?.type;
+          if (
+            exportParent === "ExportNamedDeclaration" ||
+            exportParent === "ExportDefaultDeclaration"
+          ) {
+            return;
+          }
+
+          const bodyLines = getFunctionBodyLineCount(context.sourceCode, fn);
+          if (bodyLines > MAX_BODY_LINES) return;
+
+          const scope = context.sourceCode.getScope(statement);
+          const variable = findVariableInScopeChain(scope, id.name);
+          if (!variable) return;
+
+          const reads = variable.references.filter((ref) => ref.isRead());
+          // `export { helper }` / `export default helper` make it part of the module's surface
+          const isExportedReference = reads.some((ref) => {
+            const parentType = ref.identifier.parent?.type;
+            return parentType === "ExportSpecifier" || parentType === "ExportDefaultDeclaration";
+          });
+          if (isExportedReference) return;
+
+          // a recursive helper can't be inlined, so any self-reference disqualifies it
+          const hasSelfReference = reads.some((ref) => {
+            const referenceStart = ref.identifier.range?.[0];
+            if (referenceStart === undefined || !fn.range) return false;
+            return referenceStart >= fn.range[0] && referenceStart < fn.range[1];
+          });
+          if (hasSelfReference) return;
+          if (reads.length !== 1) return;
+
+          context.report({
+            node: id,
+            message:
+              `${id.name} is a single-use helper with a ${bodyLines}-line body. ` +
+              `Inline it at the call site so the reader can see what's actually happening.`,
+          });
+        }
+
+        return {
+          FunctionDeclaration(node) {
+            if (!node.id) return;
+            checkHelper(node.id, node, node);
+          },
+          VariableDeclarator(node) {
+            if (node.id.type !== "Identifier" || !node.init) return;
+            if (
+              node.init.type !== "ArrowFunctionExpression" &&
+              node.init.type !== "FunctionExpression"
+            ) {
+              return;
+            }
+            checkHelper(node.id, node.init, node.parent);
           },
         };
       },

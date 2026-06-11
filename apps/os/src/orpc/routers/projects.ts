@@ -50,7 +50,7 @@ function toProject(row: ProjectRow) {
 async function toProjectWithIngressUrl(row: ProjectRow) {
   return {
     ...toProject(row),
-    ingressUrl: await projectDurableObject(row.id).ingressUrl(),
+    ingressUrl: await getProjectDurableObjectStub(row.id).ingressUrl(),
   };
 }
 
@@ -90,10 +90,6 @@ function normalizeConfigCustomHostname(
   }
 
   return customHostname;
-}
-
-function isUniqueConstraintError(error: unknown) {
-  return error instanceof Error && error.message.includes("UNIQUE constraint failed");
 }
 
 export const projectsRouter = {
@@ -147,7 +143,7 @@ export const projectsRouter = {
             { id: input.id },
           );
         } catch (error) {
-          if (isUniqueConstraintError(error)) {
+          if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) {
             throw new ORPCError("CONFLICT", {
               message: `Custom hostname ${nextCustomHostname} is already assigned.`,
             });
@@ -234,7 +230,9 @@ export const projectsRouter = {
         const project = requireProjectScope(context);
         // Raw Workers stub: await the property before calling (workerd does
         // not pipeline through property accesses; itx handles wrap this).
-        const processor = await projectStateDurableObject(project.id).processor;
+        const processor = await (
+          getProjectDurableObjectStub(project.id) as unknown as ProjectStateRpc
+        ).processor;
         return await processor.snapshot();
       }),
     agents: projectAgentsRouter,
@@ -267,16 +265,8 @@ async function requireProject(input: { context: RequestContext; projectId: strin
   return await requireAuthorizedProject(input);
 }
 
-function projectDurableObject(projectId: string) {
-  return getProjectDurableObjectStub(projectId);
-}
-
 // Processors extend RpcTarget (capnweb's, which IS cloudflare:workers' inside
 // workerd), so the `processor` getter traverses the stub.
 type ProjectStateRpc = {
   processor: { snapshot(): Promise<unknown> };
 };
-
-function projectStateDurableObject(projectId: string): ProjectStateRpc {
-  return getProjectDurableObjectStub(projectId) as unknown as ProjectStateRpc;
-}

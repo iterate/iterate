@@ -56,10 +56,6 @@ export function projectSecretId(input: { typeIdPrefix: string }) {
   });
 }
 
-function legacyId(prefix: string) {
-  return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
-}
-
 function parseMetadata(value: string): Record<string, unknown> {
   const parsed = JSON.parse(value) as unknown;
   return parsed && typeof parsed === "object" && !Array.isArray(parsed)
@@ -281,7 +277,7 @@ export async function upsertProjectConnection(
     webhookProviderIdentifier?: string | null;
   },
 ): Promise<ProjectConnection> {
-  const connectionId = legacyId("conn");
+  const connectionId = `conn_${crypto.randomUUID().replaceAll("-", "")}`;
   const rows = await db.all<ProjectConnectionRow>({
     name: "upsertProjectConnection",
     sql: `

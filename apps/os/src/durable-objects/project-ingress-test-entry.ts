@@ -245,7 +245,7 @@ export default {
         async call({ args }: { path: string[]; args: unknown[] }) {
           const request = args[0] as Request;
           return Response.json({
-            headers: headersToArrays(request.headers),
+            headers: Object.fromEntries([...request.headers].map(([key, value]) => [key, [value]])),
             url: request.url,
           });
         }
@@ -435,8 +435,4 @@ function readWorkspaceStateMethod(input: { method: string; state: Record<string,
     throw new Error(`Workspace state does not implement ${input.method}.`);
   }
   return method;
-}
-
-function headersToArrays(headers: Headers) {
-  return Object.fromEntries([...headers].map(([key, value]) => [key, [value]]));
 }

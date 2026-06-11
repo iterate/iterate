@@ -208,7 +208,9 @@ export async function seedIterateConfigBaseRepo(input: {
     });
     await ensureBranchRef({ branch: defaultBranch, git });
   } catch (error) {
-    if (!isNothingToCommitError(error)) throw error;
+    if (!(error instanceof Error && /nothing to commit|no changes/i.test(error.message))) {
+      throw error;
+    }
     committed = false;
   }
 
@@ -238,7 +240,7 @@ async function ensureBranchRef(input: { branch: string; git: ReturnType<typeof c
       name: input.branch,
     });
   } catch (error) {
-    if (!isBranchExistsError(error)) throw error;
+    if (!(error instanceof Error && /already exists/i.test(error.message))) throw error;
   }
 }
 
@@ -259,14 +261,6 @@ async function getOrCreateBaseArtifact(artifacts: CloudflareArtifactsBinding): P
       created: false,
     };
   }
-}
-
-function isNothingToCommitError(error: unknown) {
-  return error instanceof Error && /nothing to commit|no changes/i.test(error.message);
-}
-
-function isBranchExistsError(error: unknown) {
-  return error instanceof Error && /already exists/i.test(error.message);
 }
 
 async function readArtifactString(value: unknown): Promise<string | null> {

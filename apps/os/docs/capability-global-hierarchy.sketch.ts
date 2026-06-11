@@ -109,12 +109,9 @@ export class ProjectsCapability extends RpcTarget {
       this.input.props.auth,
       input.organization,
     );
-    const projectId = input.id ?? allocateProjectId();
-    createProject({
-      organization,
-      projectId,
-      slug: input.slug,
-    });
+    const projectId = input.id ?? "proj_generated";
+    // sketch only: a real implementation would persist the project record here
+    void { organization, projectId, slug: input.slug };
     return new ProjectCapability({
       env: this.input.env,
       props: withAuth(this.input.props, { projectId }),
@@ -122,7 +119,9 @@ export class ProjectsCapability extends RpcTarget {
   }
 
   get(projectIdOrSlug: string) {
-    const projectId = resolveProjectId(projectIdOrSlug);
+    const projectId = projectIdOrSlug.startsWith("proj_")
+      ? projectIdOrSlug
+      : `proj_${projectIdOrSlug}`;
     assertCanAccessProject(this.input.props.auth, projectId);
     return new ProjectCapability({
       env: this.input.env,
@@ -683,22 +682,6 @@ type CapabilityEnv = {
   STREAM: DurableObjectNamespace<StreamDurableObject>;
   WORKSPACE: DurableObjectNamespace<WorkspaceDurableObject>;
 };
-
-function resolveProjectId(projectIdOrSlug: string) {
-  return projectIdOrSlug.startsWith("proj_") ? projectIdOrSlug : `proj_${projectIdOrSlug}`;
-}
-
-function allocateProjectId() {
-  return "proj_generated";
-}
-
-function createProject(input: {
-  organization?: ProjectCreateOrganization;
-  projectId: string;
-  slug: string;
-}) {
-  void input;
-}
 
 function resolveProjectCreationOrganization(
   auth: CapabilityAuth,

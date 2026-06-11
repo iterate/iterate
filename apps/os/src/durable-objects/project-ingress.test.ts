@@ -413,14 +413,10 @@ function mockPublicEchoFetch() {
     }
 
     return Response.json({
-      headers: headersToArrays(request.headers),
+      headers: Object.fromEntries([...request.headers].map(([key, value]) => [key, [value]])),
       url: request.url,
     });
   });
-}
-
-function headersToArrays(headers: Headers) {
-  return Object.fromEntries([...headers].map(([key, value]) => [key, [value]]));
 }
 
 async function waitForProjectState() {

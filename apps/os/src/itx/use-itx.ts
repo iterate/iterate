@@ -140,11 +140,12 @@ export function useItx(context?: string): RpcStub<Itx> {
     (listener: () => void) => pool.subscribe(context, listener),
     [context],
   );
-  useSyncExternalStore(subscribe, () => pool.peek(context), neverOnTheServer);
+  // Server snapshot is never read: assertBrowser threw long before
+  // useSyncExternalStore could ask.
+  useSyncExternalStore(
+    subscribe,
+    () => pool.peek(context),
+    () => undefined,
+  );
   return use(pool.get(context).promise);
-}
-
-function neverOnTheServer(): undefined {
-  // assertBrowser threw long before useSyncExternalStore could ask.
-  return undefined;
 }

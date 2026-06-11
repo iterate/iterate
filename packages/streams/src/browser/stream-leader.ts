@@ -27,11 +27,8 @@ export type WriterRole = {
 };
 
 export function acquireWriterRole(args: { lockName: string }): WriterRole {
-  let release = () => {};
   // The lock is held until this promise resolves; resolving it === resigning.
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const held = Promise.withResolvers<void>();
   let signalWriter = () => {};
   const whenWriter = new Promise<void>((resolve) => {
     signalWriter = resolve;
@@ -45,7 +42,7 @@ export function acquireWriterRole(args: { lockName: string }): WriterRole {
   navigator.locks
     .request(args.lockName, { mode: "exclusive", signal: abortController.signal }, async () => {
       signalWriter();
-      await held;
+      await held.promise;
     })
     .catch((error: unknown) => {
       // AbortError is the expected outcome of release()-before-grant; anything else is a
@@ -59,7 +56,7 @@ export function acquireWriterRole(args: { lockName: string }): WriterRole {
       // Abort a not-yet-granted request, free a held lock, and settle whenWriter so an election
       // awaiting it can't hang forever when it's released before the lock is ever granted.
       abortController.abort();
-      release();
+      held.resolve();
       signalWriter();
     },
   };

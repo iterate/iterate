@@ -37,10 +37,16 @@ export async function handleCapnwebAdminCookieRequest(input: {
     return new Response("Unauthorized", { headers: corsHeaders, status: 401 });
   }
 
-  const payload = encodeCookiePayload({
-    scopes: { projects: "all" },
-    secret: input.config.adminApiSecret!.exposeSecret(),
-  });
+  // base64url-encode (no padding) so the payload survives cookie syntax.
+  const payload = btoa(
+    JSON.stringify({
+      scopes: { projects: "all" },
+      secret: input.config.adminApiSecret!.exposeSecret(),
+    } satisfies CookiePayload),
+  )
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
   const url = new URL(input.request.url);
   // SameSite=None is only valid together with Secure — browsers silently drop
   // the cookie otherwise. On plain-http origins (local dev) fall back to Lax,
@@ -65,10 +71,6 @@ function capnwebCookieCorsHeaders(request: Request) {
     "access-control-allow-origin": origin ?? "*",
     vary: "origin",
   };
-}
-
-function encodeCookiePayload(payload: CookiePayload) {
-  return btoa(JSON.stringify(payload)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }
 
 function decodeCookiePayload(value: string): CookiePayload | null {

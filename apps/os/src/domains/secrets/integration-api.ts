@@ -431,12 +431,8 @@ async function verifySlackSignature(input: {
     key,
     new TextEncoder().encode(`v0:${input.timestamp}:${input.body}`),
   );
-  const expected = `v0=${hex(new Uint8Array(signature))}`;
+  const expected = `v0=${Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
   return constantTimeEqual(expected, input.signature);
-}
-
-function hex(bytes: Uint8Array) {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function constantTimeEqual(left: string, right: string) {

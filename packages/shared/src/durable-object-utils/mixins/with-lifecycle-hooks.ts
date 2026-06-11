@@ -951,11 +951,7 @@ export function serializeDurableObjectStructuredName(options: {
     return options.structuredName;
   }
 
-  return canonicalFlatNameJson(options.structuredName);
-}
-
-function canonicalFlatNameJson(value: Record<string, LifecycleStructuredNamePrimitive>): string {
-  return JSON.stringify(canonicalizeStructuredNameRecord(value));
+  return JSON.stringify(canonicalizeStructuredNameRecord(options.structuredName));
 }
 
 function canonicalizeStructuredNameRecord(

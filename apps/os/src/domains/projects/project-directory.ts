@@ -150,7 +150,7 @@ export class ProjectsCapability extends RpcTarget {
         slug,
       });
     } catch (error) {
-      if (isUniqueConstraintError(error)) {
+      if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) {
         throw new ORPCError("CONFLICT", {
           message: `A project with slug ${slug} already exists.`,
         });
@@ -293,10 +293,6 @@ function projectDurableObject(projectId: string) {
   return getProjectDurableObjectStub(projectId);
 }
 
-function isUniqueConstraintError(error: unknown) {
-  return error instanceof Error && error.message.includes("UNIQUE constraint failed");
-}
-
 export type AuthProject = {
   id: string;
   slug: string;
@@ -314,12 +310,10 @@ function toOrphanedProjectFromAuthService(project: AuthProject): ProjectListItem
   };
 }
 
-function sortAuthProjects<T extends Pick<AuthProject, "slug">>(projects: T[]) {
-  return [...projects].sort((a, b) => a.slug.localeCompare(b.slug));
-}
-
 function listSignedProjectClaims(context: Pick<RequestContext, "principal">): AuthProject[] {
-  return context.principal?.type === "user" ? sortAuthProjects(context.principal.projects) : [];
+  return context.principal?.type === "user"
+    ? [...context.principal.projects].sort((a, b) => a.slug.localeCompare(b.slug))
+    : [];
 }
 
 function getAccessibleSignedProject(input: { context: RequestContext; projectId: string }) {

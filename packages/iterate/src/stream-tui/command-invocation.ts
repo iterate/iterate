@@ -44,7 +44,7 @@ export function parseSlashCommandInput(args: {
   }
 
   for (const flag of args.input.flags ?? []) {
-    if (hasFlag(remainingArgs, flag.flag)) {
+    if (remainingArgs.split(/\s+/).includes(flag.flag)) {
       input[flag.name] = flag.value;
       remainingArgs = removeFlag(remainingArgs, flag.flag);
     }
@@ -81,8 +81,9 @@ export function removeStringOption(rawArgs: string, optionName: string) {
 }
 
 function matchStringOption(rawArgs: string, optionName: string) {
+  const escapedOptionName = optionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(
-    `(?:^|\\s)${escapeRegExp(optionName)}(?:=|\\s+)(?:"([^"]+)"|'([^']+)'|(\\S+))`,
+    `(?:^|\\s)${escapedOptionName}(?:=|\\s+)(?:"([^"]+)"|'([^']+)'|(\\S+))`,
   );
   const match = pattern.exec(rawArgs);
   if (match == null || match.index == null) return undefined;
@@ -94,18 +95,10 @@ function matchStringOption(rawArgs: string, optionName: string) {
   };
 }
 
-function hasFlag(rawArgs: string, flagName: string) {
-  return rawArgs.split(/\s+/).includes(flagName);
-}
-
 function removeFlag(rawArgs: string, flagName: string) {
   return rawArgs
     .split(/\s+/)
     .filter((part) => part !== flagName)
     .join(" ")
     .trim();
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

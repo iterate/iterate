@@ -370,7 +370,12 @@ export default {
         const stub = env.ROOMS.getByName(name);
         const result = await stub.trySendMessage(requireString(body.text, "text"));
 
-        if (isCaughtErrorResult(result)) {
+        if (
+          typeof result === "object" &&
+          result !== null &&
+          "kind" in result &&
+          result.kind === "error"
+        ) {
           return json(
             {
               error: result.name,
@@ -423,8 +428,4 @@ function serializeError(error: unknown): CaughtErrorResult {
     name: error instanceof Error ? error.name : "UnknownError",
     message: error instanceof Error ? error.message : String(error),
   };
-}
-
-function isCaughtErrorResult(value: unknown): value is CaughtErrorResult {
-  return typeof value === "object" && value !== null && "kind" in value && value.kind === "error";
 }

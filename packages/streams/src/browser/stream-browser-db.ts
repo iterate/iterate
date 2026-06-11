@@ -80,8 +80,8 @@ export class StreamBrowserDatabase implements Disposable {
     readonly namespace: string,
     readonly streamPath: string,
   ) {
-    this.databasePath = databasePathFor(namespace, streamPath);
-    this.downloadFilename = downloadFilenameFor(namespace, streamPath);
+    this.databasePath = `${encodeURIComponent(namespace)}/${DATABASE_CACHE_VERSION}/${databaseSlugForStreamPath(streamPath)}.sqlite3`;
+    this.downloadFilename = `${encodeURIComponent(namespace)}__${DATABASE_CACHE_VERSION}-${databaseSlugForStreamPath(streamPath)}.sqlite3`;
     this.#worker = new Worker(new URL("./stream-db.worker.ts", import.meta.url), {
       type: "module",
     });
@@ -310,10 +310,15 @@ export class StreamBrowserDatabase implements Disposable {
       const data = await this.exec(entry.sql, entry.params);
       next = { data, status: "ok", error: undefined };
     } catch (error) {
-      if (isMissingTableError(error)) {
+      if (error instanceof Error && error.message.includes("no such table")) {
         // A view's table may not exist until its processor's first write creates it. Treat
-        // that as an empty result (count 0 / no rows) rather than a surfaced error.
-        next = { data: emptyTableRows(entry.sql), status: "ok", error: undefined };
+        // that as an empty result rather than a surfaced error: a `SELECT COUNT(*) AS count
+        // ...` over a not-yet-created table reads as 0, anything else reads as no rows.
+        next = {
+          data: /^\s*SELECT\s+COUNT\(\*\)\s+AS\s+count\b/i.test(entry.sql) ? [{ count: 0 }] : [],
+          status: "ok",
+          error: undefined,
+        };
       } else {
         console.error(`[stream-browser-db ${this.streamPath}] SQLite query failed`, {
           error,
@@ -399,14 +404,6 @@ export class StreamBrowserDatabase implements Disposable {
 // the mirror is a cache and will be replayed from the durable stream.
 const DATABASE_CACHE_VERSION = "v3";
 
-function databasePathFor(namespace: string, streamPath: string) {
-  return `${encodeURIComponent(namespace)}/${DATABASE_CACHE_VERSION}/${databaseSlugForStreamPath(streamPath)}.sqlite3`;
-}
-
-function downloadFilenameFor(namespace: string, streamPath: string) {
-  return `${encodeURIComponent(namespace)}__${DATABASE_CACHE_VERSION}-${databaseSlugForStreamPath(streamPath)}.sqlite3`;
-}
-
 function databaseSlugForStreamPath(streamPath: string) {
   const segments = streamPath.split("/").filter(Boolean).map(encodeURIComponent);
   const hint = segments.at(-1) ?? "root";
@@ -438,10 +435,6 @@ function isSqlValue(value: unknown): value is SqlValue {
   );
 }
 
-function isMissingTableError(error: unknown) {
-  return error instanceof Error && error.message.includes("no such table");
-}
-
 /**
  * Structural equality for query snapshots, used to suppress redundant listener
  * notifications. Rows are plain `Record<string, SqlValue>` objects, so a stable JSON
@@ -464,10 +457,4 @@ function serializeRows(rows: Record<string, SqlValue>[]): string {
   return JSON.stringify(rows, (_key, value) =>
     typeof value === "bigint" ? `__bigint__${value.toString()}` : value,
   );
-}
-
-function emptyTableRows(sql: string): Record<string, SqlValue>[] {
-  // A `SELECT COUNT(*) AS count ...` over a not-yet-created table reads as 0; anything else
-  // reads as no rows.
-  return /^\s*SELECT\s+COUNT\(\*\)\s+AS\s+count\b/i.test(sql) ? [{ count: 0 }] : [];
 }

@@ -29,9 +29,7 @@ export class PathProxyRpcTarget {
 }
 
 function pathNode(callPath: PathProxyCall, path: string[]): Function {
-  const fn = (...args: unknown[]) => callPath({ args, path });
-
-  return new Proxy(fn, {
+  return new Proxy((...args: unknown[]) => callPath({ args, path }), {
     apply(_target, _thisArg, args) {
       return callPath({ args, path });
     },

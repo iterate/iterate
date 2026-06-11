@@ -418,8 +418,8 @@ function collectCommandEntries(
       continue;
     }
 
-    if (isRecord(value)) {
-      entries.push(...collectCommandEntries(value, pathSegments));
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      entries.push(...collectCommandEntries(value as Record<string, unknown>, pathSegments));
     }
   }
 
@@ -433,8 +433,4 @@ function readCommandMeta(procedure: CommandProcedure) {
   }
 
   return meta.tui;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

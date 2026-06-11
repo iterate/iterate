@@ -419,13 +419,9 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-function isFetchCallable(callable: Callable): callable is FetchCallable {
-  return callable.type === "fetch";
-}
-
 function validateFetchCallable(options: { callable: unknown }): FetchCallable {
   const callable = validateCallable({ callable: options.callable });
-  if (!isFetchCallable(callable)) {
+  if (callable.type !== "fetch") {
     throw new CallableError("DESCRIPTOR_VALIDATION_FAILED", `Unsupported callable kind`);
   }
   return callable;

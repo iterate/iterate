@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { RepoStreamProcessor } from "./repo-stream-processor.ts";
 
-const iterateContext = () => ({ stream: { append() {}, appendBatch() {} } });
-
 describe("Repo stream processor", () => {
   test("derives Repo state from events.iterate.com/repo/created", async () => {
-    const processor = new RepoStreamProcessor({ iterateContext: iterateContext() });
+    const processor = new RepoStreamProcessor({
+      iterateContext: { stream: { append() {}, appendBatch() {} } },
+    });
 
     await processor.ingest({
       events: [

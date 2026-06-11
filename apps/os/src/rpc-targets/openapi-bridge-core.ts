@@ -46,7 +46,7 @@ export async function executeOpenApiToolFunction(input: OpenApiBridgeInput) {
     }));
   }
 
-  const operation = findOpenApiOperation(spec, operationId);
+  const operation = listOpenApiOperations(spec).find((op) => op.operationId === operationId);
   if (!operation) throw new Error(`Operation "${operationId}" not found in spec`);
   const [payload] = input.args;
 
@@ -97,10 +97,6 @@ function listOpenApiOperations(spec: Record<string, unknown>): OpenApiOperation[
   }
 
   return operations;
-}
-
-function findOpenApiOperation(spec: Record<string, unknown>, operationId: string) {
-  return listOpenApiOperations(spec).find((op) => op.operationId === operationId);
 }
 
 function buildOpenApiRequestUrl(

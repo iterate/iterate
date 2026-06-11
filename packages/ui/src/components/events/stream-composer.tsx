@@ -164,7 +164,7 @@ function RawPresetPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
-  const indexedPresets = useMemo(() => indexRawPresets(presets), [presets]);
+  const indexedPresets = useMemo(() => presets.map(indexRawPreset), [presets]);
   const filteredGroups = useMemo(
     () => groupRawPresetOptions(filterRawPresetOptions({ options: indexedPresets, filter })),
     [filter, indexedPresets],
@@ -301,12 +301,6 @@ type IndexedRawPresetOption = {
   payloadPreview: string;
   searchText: string;
 };
-
-function indexRawPresets(
-  presets: readonly EventsStreamComposerRawPreset[],
-): IndexedRawPresetOption[] {
-  return presets.map(indexRawPreset);
-}
 
 function indexRawPreset(preset: EventsStreamComposerRawPreset): IndexedRawPresetOption {
   const eventType = preset.eventType ?? readYamlScalarLine({ yaml: preset.value, key: "type" });

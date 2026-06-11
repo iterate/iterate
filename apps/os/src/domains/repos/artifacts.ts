@@ -233,7 +233,12 @@ async function artifactsApi<T>(
   const response = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${input.accountId}/artifacts/namespaces/${input.namespace}${apiPath}`,
     {
-      body: body == null ? undefined : JSON.stringify(dropUndefinedValues(body)),
+      body:
+        body == null
+          ? undefined
+          : JSON.stringify(
+              Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined)),
+            ),
       headers: {
         authorization: `Bearer ${input.apiToken}`,
         "content-type": "application/json",
@@ -286,8 +291,4 @@ function cloudflareErrorMessage(payload: CloudflareApiEnvelope<unknown>) {
     .map((entry) => entry.message)
     .filter((message) => typeof message === "string" && message.length > 0);
   return messages.length > 0 ? messages.join("; ") : JSON.stringify(payload);
-}
-
-function dropUndefinedValues(input: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }

@@ -151,12 +151,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           await this.#appendRewrite({
             event,
             key: "render-agent-capability-noted",
-            content: capabilityNotedEventBlock({
-              instructions: event.payload.instructions,
-              name: event.payload.name,
-              offset: event.offset,
-              type: event.type,
-            }),
+            content: `Capability available as \`itx.${event.payload.name}\`. ${event.payload.instructions} (to debug further, see ${event.type} event at offset ${event.offset})`,
           });
         });
         return;
@@ -643,7 +638,9 @@ function eventBlock(args: {
     `  offset: ${args.offset}`,
     `  type: ${yamlScalar(args.type)}`,
     ...Object.entries(args.fields ?? {}).map(([key, value]) => `  ${key}: ${yamlScalar(value)}`),
-    ...(args.body == null ? [] : yamlBlockScalar(args.bodyTag ?? "body", args.body)),
+    ...(args.body == null
+      ? []
+      : [`  ${args.bodyTag ?? "body"}: |-`, ...args.body.split("\n").map((line) => `    ${line}`)]),
   ];
   return ["```yaml", ...yamlLines, "```"].join("\n");
 }
@@ -652,17 +649,4 @@ function yamlScalar(value: string | number): string {
   if (typeof value === "number") return String(value);
   if (/^[a-zA-Z0-9._/@:-]+$/.test(value)) return value;
   return JSON.stringify(value);
-}
-
-function yamlBlockScalar(key: string, value: string): string[] {
-  return [`  ${key}: |-`, ...value.split("\n").map((line) => `    ${line}`)];
-}
-
-function capabilityNotedEventBlock(args: {
-  instructions: string;
-  name: string;
-  offset: number;
-  type: string;
-}): string {
-  return `Capability available as \`itx.${args.name}\`. ${args.instructions} (to debug further, see ${args.type} event at offset ${args.offset})`;
 }

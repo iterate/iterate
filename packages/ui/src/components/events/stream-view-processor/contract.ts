@@ -90,7 +90,10 @@ const StreamViewProcessorContractBase = defineProcessorContract({
 
     const feedItems = appendFeedItems({
       feedItems: state.slots.feed,
-      nextItems: reduceEventToRawPrettyFeedItems(event),
+      nextItems: [
+        createRawEventGroup([toRawEventSummary(event)]),
+        ...reduceEventToSemanticFeedItems(event),
+      ],
     });
 
     return deriveSlots({ feed: feedItems, activity });
@@ -267,10 +270,6 @@ function reduceActivityState(args: {
 // ---------------------------------------------------------------------------
 // Feed item production
 // ---------------------------------------------------------------------------
-
-function reduceEventToRawPrettyFeedItems(event: Event): EventsStreamBuiltInElement[] {
-  return [toRawEventFeedItem(event), ...reduceEventToSemanticFeedItems(event)];
-}
 
 function appendFeedItems(args: {
   feedItems: EventsStreamBuiltInElement[];
@@ -533,10 +532,6 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
 // ---------------------------------------------------------------------------
 // Raw event helpers
 // ---------------------------------------------------------------------------
-
-function toRawEventFeedItem(event: Event): EventsStreamGroupedRawEventElement {
-  return createRawEventGroup([toRawEventSummary(event)]);
-}
 
 function toRawEventSummary(event: Event): EventsStreamRawEventSummary {
   return {

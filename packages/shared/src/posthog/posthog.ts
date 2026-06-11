@@ -5,10 +5,6 @@ export interface ProxyPosthogRequestOptions {
   assetHost?: string;
 }
 
-function isNullBodyStatus(status: number) {
-  return status === 101 || status === 103 || status === 204 || status === 205 || status === 304;
-}
-
 function upstreamRequestBody(request: Request): ReadableStream<Uint8Array> | undefined {
   if (request.method === "GET" || request.method === "HEAD") return undefined;
   // Stream the body through instead of buffering (same idea as forwarding `c.req.raw.body` in Workers).
@@ -53,9 +49,12 @@ export async function proxyPosthogRequest(options: ProxyPosthogRequestOptions): 
     responseHeaders.delete("content-length");
   }
 
-  const body = isNullBodyStatus(upstreamResponse.status)
-    ? null
-    : await upstreamResponse.arrayBuffer();
+  // Null-body statuses: `new Response()` throws if given a body for these.
+  const status = upstreamResponse.status;
+  const body =
+    status === 101 || status === 103 || status === 204 || status === 205 || status === 304
+      ? null
+      : await upstreamResponse.arrayBuffer();
 
   return new Response(body, {
     status: upstreamResponse.status,

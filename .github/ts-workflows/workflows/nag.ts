@@ -155,10 +155,11 @@ export default {
                 const [hour, day] = [now.getHours(), now.getDay()];
                 return hour >= 9 && hour < 18 && day !== 0 && day !== 6;
               };
-              const testWorkingHours: typeof realWorkingHours = () => {
-                return true;
-              };
-              const workingHours = isTest ? testWorkingHours : realWorkingHours;
+              const workingHours: typeof realWorkingHours = isTest
+                ? () => {
+                    return true;
+                  }
+                : realWorkingHours;
 
               const lastNagTime = state.read().nags?.at(-1)?.time;
 
