@@ -779,7 +779,7 @@ New debts).
 - **The REPL editor consumes types.ts verbatim** (?raw into the TS virtual
   FS); the hand-maintained ambient shrank to a prelude of session globals.
 
-## The address unification (direction, 2026-06-11)
+## The address unification (2026-06-11 → SHIPPED 2026-06-12)
 
 Owner direction from review, captured as the design of record for the next
 arc. The through-line: **the system has one data structure — the cap
@@ -787,7 +787,7 @@ target — and everything that today is a bespoke concept becomes a use of
 it.** "Node", "global", "platform defaults", "live vs durable", and
 `itx.caps` all dissolve.
 
-### 1. A context's ADDRESS is a CapTarget
+### 1. A context's ADDRESS is a CapTarget — SHIPPED
 
 A context is, operationally, anything that answers the context protocol
 (`itxInvoke / itxProvideCapability / itxDescribe / itxRevokeCapability` —
@@ -851,7 +851,7 @@ Two splits keep it honest:
   a capability"); raw targets are the realm-internal format, never a
   bearer credential.
 
-### 2. Durability is a property of the HOST — and only governs retention
+### 2. Durability is a property of the HOST — superseded by everything-writable-is-durable (see the final statement below)
 
 Every context has a **session layer** (in-memory, dies with the
 connection) and, iff its host has storage, a **durable layer**. Defining
@@ -868,7 +868,7 @@ The satisfying part: **the session layer already exists** — today's
 stateless context" were the same concept all along; "stateless contexts
 are read-only" (an earlier framing in this doc) was the wrong frame.
 
-### 3. `itx.caps` dissolves into root verbs
+### 3. `itx.caps` dissolves into root verbs — SHIPPED
 
 The `caps` namespace exists to dodge name collisions, but reserved names
 already exist as a mechanism. Kernel flattens to root:
@@ -877,7 +877,7 @@ itx.fork() / itx.invoke()` — the `ItxCaps` class dies, and the
 `itx.describe()` vs `caps.describe()` duplication resolves to one merged
 view. A handle is **an address, an access set, and five verbs**.
 
-### 4. Definitions live at PATHS — longest-prefix dispatch
+### 4. Definitions live at PATHS — longest-prefix dispatch — SHIPPED
 
 REVERSES §4.5's "no dots in names" — deliberately. That rejection was
 about namespace organization and remains right for it; this is about
@@ -932,296 +932,105 @@ input); }`, live providers implement `call` themselves or wrap
   `capability`/`context`/`projectId` — the same trusted-identity channel that
   origin-carrying already established.
 
-### 5. ItxProcessor: the stream is the journal, the core is pure (REVISED after review)
+### SHIPPED (2026-06-12): the final shape — the journal is the only authority
 
-Refined twice on review; this supersedes the first sketch of this section.
-The shape is a PURE CORE plus a persistence ADAPTER — deliberately NOT
-"the processor is the context":
+The whole wave-(f)+ arc (the §5 core/processor debate, the evening lock, the
+facets/journal-paths review, and the end-of-review LOCK) landed as one
+implementation; the in-flight subsections that used to live here collapsed
+into this statement. What shipped, in the locked terms:
 
-```ts
-class Itx {                       // pure: no streams, no framework, no storage
-  define() / revoke() / describe() / invoke()
-  // path-keyed caps map + live stub table; longest-prefix dispatch;
-  // dial deps (bindings, exports, allowlists, execution context) injected
-}
+- **One class.** `Itx extends StreamProcessor` (`src/itx/itx.ts`;
+  `ItxContract` in `src/itx/contract.ts` via `defineProcessorContract`).
+  The pure functions — `reduceItxJournalEvent`, `resolveLongestProvidedPrefix`,
+  path validation, the live-vs-address discriminator — stay module-level and
+  are unit-tested over an in-memory journal without workerd. Three names,
+  three questions, as locked: `Itx` (what), `ItxDurableObject` (where),
+  a stub (how).
+- **The journal is the only authority.** provide/revoke APPEND
+  `capability-provided`/`capability-revoked` (path-keyed payloads carrying
+  the full address) and SELF-INGEST through the one consumption door
+  (append, then catch-up from the checkpoint — read-your-writes with no
+  waiting machinery; duplicates inert by offset). Live provides journal the
+  EVENT while the stub stays an instance field; teardown appends
+  `capability-disconnected`; replay marks live entries disconnected.
+  DELETED: `DurableItx`, the `itx_capabilities` SQLite table (dropped on
+  sight on old instances), every fire-and-forget audit append, and the
+  `ITX_AUDIT_STREAM_PATH` vocabulary — "audit log" stopped existing as a
+  concept; the journal is the record and state is its fold (the standing
+  doctrine, docs/domain-objects-and-stream-processors.md).
+- **Creation is an event.** `extendContext` (`src/itx/journal.ts`) mints the
+  id, appends `context-created { id, name, parent: { id, address } }` as the
+  journal's first event, and returns a handle; the context materializes
+  lazily by consuming its journal; the fold takes the first birth
+  certificate and ignores later ones. ContextDO's initialize RPC and
+  descriptor SQLite table are gone — `ItxDurableObject.descriptor()` derives
+  from state. No idempotency keys as a correctness mechanism anywhere in the
+  flow.
+- **Defaults live on the parent chain — Option 2, as locked.** ONE
+  capability map per context; the platform defaults are the provides of the
+  read-only, code-rooted `PlatformContext` loopback entrypoint
+  (`src/itx/platform-context.ts`), addressed `{ type: "rpc", worker:
+{ type: "loopback" }, entrypoint: "PlatformContext" }` and dialed
+  in-process as the project core's `parentItx`. Chain:
+  ctx → project → platform:project (code). Shadowing,
+  revoke-resurfaces-the-default, and deploy-updates hold as chain
+  consequences; "platform:project" remains the owner string. The
+  constructor-capabilities/defaults-map mechanism is deleted.
+- **Identity is a stream coordinate.** Journals live at
+  `<host base>/itx[/<child-id>]` — the host's OWN context at `<base>/itx`
+  (the project's is `/itx`, the old audit path, by uniform rule rather than
+  coincidence), children at `<base>/itx/<id>` (agents:
+  `<agentPath>/itx/<id>`). `itx` is a reserved stream path segment with one
+  clear error at the user-facing append doors; journals remain ordinary
+  readable streams in every viewer. The generic host's DO NAME is the
+  coordinate verbatim (`<namespace>:<journalPath>`); identity/journal/
+  self-address are projections of the name. Bare `ctx_…` refs resolve
+  through the `itx_contexts` D1 catalog (directory role only). Origin
+  travels as `{ id, address }`, so origin dial-back and the egress
+  dispatcher never pay a directory lookup.
+- **Workspaces de-itx-ified.** `itxWorkspaceId` and the `itx:<id>` colon
+  strings are deleted; `WorkspaceCapability` takes an explicit
+  `props.workspaceId`. The platform context provides the project workspace;
+  the AGENT host provides its own `workspace` capability bound to its
+  context's identity, journaled on that context. Semantic change, on
+  purpose: plain extensions now SHARE the project workspace through the
+  chain — isolation is a host's decision, not kernel magic.
+- **Processor-mode execution arrived.** `script-execution-requested` with
+  `enqueued: true` runs in the processor via the existing runner (detached:
+  a script's own provides re-enter the serialized ingest) and appends
+  `script-execution-completed`; `pendingExecutions` in state makes
+  at-least-once reruns detectable and completed pairs inert. The synchronous
+  /api/itx/run door writes the same two events as a record — both modes
+  converge on one journal vocabulary.
+- **The locked ergonomics** (from the evening review) shipped first:
+  `extend` replaced `fork`; `itx.parent` is kernel (an extension's parent
+  from its birth certificate; the project's parent IS the platform
+  context); `provideCapability({ path|name, capability, instructions?,
+types?, meta? })` with `Capability = Function | live stub |
+CapabilityAddress` and bare-function auto-wrap (asPathCallable
+  semantics); the dial-time attribution prop is `capabilityPath`; provides
+  return `{ revoke(), [Symbol.dispose] }` with dispose auto-revoking ONLY
+  live provides. The two committed acceptance e2es (middleware via a
+  bare-function fetch shadow + itx.parent; indirection via origin
+  dial-back) live in `src/itx/e2e/itx-fork.e2e.test.ts`.
 
-class ItxProcessor extends StreamProcessor<ITX_CONTRACT> {
-  itx = new Itx(deps);
-  reduce()        // pure: capability-provided/revoked/disconnected → caps state
-  processEvent()  // side effects: script-execution-requested → runItxScript(this.itx, code)
-}
+Still queued from this arc (deliberately not built):
 
-class AgentDurableObject extends DurableObject {
-  itx = new ItxProcessor({ readState, writeState, ... });  // journal = this agent's stream
-  agentProcessor = new AgentProcessor({ ... });            // sibling, own checkpoint
-}
-
-class GlobalItx extends WorkerEntrypoint {
-  itx = new Itx(deps);            // stateless: no processor AT ALL — nothing fake
-  constructor(ctx, env) {
-    super(ctx, env);
-    this.itx.provideCapability({ path: ["projects"], target: … }); // defaults: literal code
-  }
-}
-```
-
-Why core+adapter beat processor-is-the-context (both were steel-manned):
-the processor framework is a CONSUMER abstraction — making it the
-authority produced three symptoms of one category error: a strange loop
-(a processor that IS the itx while receiving an iterateContext and
-expecting a stream that stateless instances don't have), vestigial
-ingest/checkpoint surface on stateless hosts, and a self-consuming write
-path (define appends to its own input and dedups its own event). In the
-chosen shape each thing stays what it is: the core is the authority, the
-journal is the record, the processor is the pump. Live calls mutate the
-core NOW (read-your-writes) and append the event as the record; recovery
-replays the journal through the same core methods. The cost — two places
-transitions initiate — is held by one rule: on durable hosts the
-journaling wrapper is the only public write door.
-
-What this dissolves:
-
-- **The code-context mechanism dies.** Defaults are constructor define()
-  calls — "here are the capabilities; knock yourself out" — re-run every
-  construction, so deploys update them for free. They form the
-  NON-JOURNALED base layer; journal replay layers user rows over them:
-  shadowing collapses from a cross-node prototype chain into TWO LAYERS
-  OF ONE INSTANCE. Parent links remain only for actual parents (agent
-  session → project), not for defaults. (`PLATFORM_GLOBAL`-as-parent was
-  circular and is gone.)
-- **The SQLite caps table + fire-and-forget audit dies**: define/revoke
-  append to the context's stream as THE write; the reduction is the
-  table; the audit-vs-state divergence class is gone by construction.
-  "/" backs the project root registry; an agent's stream backs its
-  session context; inbound MCP sessions likewise. The stream reads top
-  to bottom as: every tool defined and removed, every script requested,
-  every result.
-- **Processor-mode execution arrives** (descoped since the codemode rip):
-  `script-execution-requested` events carry just `"async (itx) => {…}"`;
-  processEvent runs them against the core and appends
-  execution-completed. The framework supplies what scripts need:
-  `sideEffectsAfterOffset` means replay rebuilds state but never re-runs
-  scripts; serialized batches mean one context's scripts run in stream
-  order; `keepAliveWhile` covers long runs; the requested/completed pair
-  makes at-least-once reruns detectable. Appending IS requesting work;
-  the synchronous /api/itx/run door survives, writing the same two
-  events as a record (it already does — `enqueued: true` was reserved
-  for exactly this).
-- Live caps fit with no exception: provide/disconnect EVENTS are
-  journaled (the record outlives the session); the stubs are
-  non-checkpointed instance fields — replay marks entries disconnected.
-- ContextDO dissolves: a forked session context is an ItxProcessor on a
-  stream, hosted wherever that stream's processing already lives.
-
-Final review round, locked:
-
-- **The core is `protected` inside the processor.** The processor's
-  public provideCapability/revokeCapability are APPEND-ONLY facades (same
-  signatures); the core is mutated exclusively by event consumption. The
-  "two initiators" hazard dies by visibility, not discipline — an
-  AgentDurableObject constructor calls `this.itx.provideCapability(...)`
-  "like normal" and is really appending.
-- **Write path: append, then SELF-INGEST the same event synchronously.**
-  `ingest` is the one consumption door; its checkpoint-offset bookkeeping
-  makes the later subscription delivery of the same offsets a no-op, so
-  read-your-writes needs no waiting machinery and duplicate handling
-  falls out of the offset model. The subscription remains the recovery
-  path and how you hear about other writers. (No invented `.settled()`.)
-- **Constructor defaults are idempotency-keyed appends** — the streams
-  layer already drops repeat keys, so DO wakes re-issuing defines are
-  no-ops; a deploy changing a default changes the key → one new event →
-  last-write-wins per path, and the journal records the history of
-  platform-default changes per context. Removal needs a reconcile step:
-  diff current defaults against platform-tagged state entries, append
-  revokes for the missing.
-- **Stateful rule: the event stream is the ONLY authority.** Kills the
-  itx_caps SQLite table, the fire-and-forget audit appends ("audit log"
-  stops existing as a concept — record→state is a function, they cannot
-  disagree), and DECISIONS.md D1 itself. The framework checkpoint
-  ({offset, state} via writeState) is a disposable cache of a pure
-  function of the stream — rebuildable by replay, never disagreeing.
-  (Note: capability state never lived in Cloudflare D1 — "D1" in the old
-  decision is the decision-log label; the table is DO-embedded SQLite.
-  Cloudflare D1 remains only as the project directory / secrets / DO
-  catalog; making the GLOBAL context's journal the project directory is
-  a possible later arc.)
-- **Stateless is the rare case and needs no record**: a bare `Itx` with
-  constructor defines, remembering nothing — by design, full stop.
-- Naming follows the repo: `ItxProcessorContract` via
-  `defineProcessorContract`, `readonly contract = ItxProcessorContract`.
-
-Auth note: ctx.props on stateless entrypoints still carries the
-connect-time principal/access; the core's deps include identity+access —
-unchanged from the access model, just relocated.
-
-Sequencing sketch: (a) address type + `.address()` + restorer-over-
-addresses with string refs as resolved aliases — SHIPPED (`addresses.ts`:
-`contextAddressOf` is the one id→address mapping, `dialContext` the kernel
-dial; both node DOs expose `.address()`); (b) parent pointers as
-addresses, delete prefix-sniffing — SHIPPED (ContextDO stores `parent:
-{id, address}` and dials delegation through it; the prefix checks that
-remain classify ids — workspace scoping, untrusted connect strings — never
-pick a route); (c) extract the pure `Itx` core from
-ContextRegistry (constructor-defined defaults replace the code-context
-mechanism; global becomes `GlobalItx` with literal defines) — SHIPPED
-for the node-hosted contexts (src/itx/itx.ts is the core, the handle
-class is `ItxHandle`, both DOs expose `itx()`, provide takes `provider:`,
-the wire verbs and protocol/registry/registry-host/addresses/
-code-contexts modules are gone; `DurableItx` in durable-itx.ts is the
-interim SQLite+audit wrapper wave (f) replaces; the stateless
-`GlobalItx` node is still open — global handles stay connect-minted);
-(d) root verbs replace itx.caps; (e) path defines with longest-prefix
-dispatch; (f) ItxProcessor adapter: journal writes + replay +
-processor-mode execution, delete the SQLite caps table and ContextDO.
-Each lands independently green.
-
-### Queued from review (2026-06-11 afternoon), not yet implemented
-
-- **Artifact-addressed source.** A `source` worker ref should optionally
-  address its code as **(artifact, commit, entrypoint)** instead of inline
-  modules — source becomes a separate DIMENSION from the execution
-  mechanism (dynamic worker today; possibly Workers for Platforms later,
-  with the address unchanged). This makes the project worker completely
-  non-special: it is just a capability whose source ref points at the
-  project's build artifact at a commit. Targeting gets crisp:
-  `{ type: "source", source: { artifact, commit, entrypoint } }`.
-- **The 500-line workshop.** Build the whole system from zero in
-  dependency order, each step motivated by the previous one's limitation:
-  ① `{path, args}` + the path proxy (~30 lines: dots → data; property-get
-  silent and synchronous, `then` reserved or await misfires) →
-  ② replayPathCall (~20: data → dots, receiver-preserving, reserved
-  segments re-gated server-side) → ③ registry: longest-prefix Map +
-  parent delegation (~60) → ④ targets-as-data + dial/restore (~100) →
-  ⑤ the handle: fallthrough proxy + four verbs (~50) → ⑥ a capnweb
-  session serving it (~20; transport pipelining free) → ⑦ the journal:
-  append + reduce (~100). Note for the workshop: there are TWO composing
-  pipelining systems — ours flattens dotted NAMES into data; the
-  transport chains CALLS on returned stubs — and the doc/code should say
-  this in one place.
-
-### Locked in review (2026-06-11 evening) — the wave-(f)+ design
-
-- **provide signature**: object form only for now; `provideCapability({
-path, capability, instructions?, types?, meta? })` where
-  `type Capability = Function | RpcTarget | CapabilityAddress` — a
-  function IS live by nature; live-vs-durable is a derived fact
-  (reference vs data), not vocabulary. The dial-time attribution prop
-  becomes `capabilityPath` (it is the dotted route, not a name). Returns
-  `{ revoke() }`; Symbol.dispose auto-revokes only where dropping the
-  session would have anyway (live/session provides) — a durable
-  provide's disposer is a no-op, by design.
-- **`extend` replaces `fork`** (prototype-chain intuition: children
-  extend parents; resolution climbs upward). `using session = await
-itx.extend()` — and with everything-durable (below) extensions are
-  ALWAYS addressable, so inherited capabilities' outbound fetches route
-  back through your shadow via origin dial-back. No session concept, no
-  visibility flag: provides land on the context you address; private
-  interception = extend yourself; project-wide interception =
-  itx.parent.provideCapability (deliberate, visible).
-- **`itx.parent`** becomes a kernel member — the "call next()" of
-  middleware: a fetch shadow delegates to the unshadowed pipe via
-  itx.parent.fetch. Acceptance e2e committed: (a) middleware — bare-fn
-  shadow logs + delegates, both doors, revoke restores; (b) indirection —
-  an inherited source capability's bare fetch(), invoked through the
-  extension, hits the extension's shadow while siblings/project do not.
-- **`itx.narrow({ scopes })`** — handle sugar (~15 lines): extend +
-  provide GuardCapability rows whose PROPS are the scope rules (policy
-  as data, Law 2). Address-shaped guards make the narrowed context
-  durable and addressable: its id IS the sturdy ref; restore authority
-  stays at the connect edge; sealed share tokens remain the only bearer
-  form (capability URLs later, documented not built). Fine-grained
-  access control therefore needs ZERO kernel mechanism: connect edge =
-  who may hold which context; dial = what is reachable at all;
-  everything finer = attenuation by shadowing.
-- **Everything durable**: the stateless production host is deleted as a
-  concept. A context is a Durable Object with a stream; the bare Itx
-  class survives as the inner layer only. Global becomes a named
-  instance of the generic context DO (and its journal is where project
-  lifecycle events belong). Retention = dispose-deletes + idle-TTL
-  alarms for anonymous contexts + catalog/cascade via ownership;
-  narrowed credentials gain natural expiry. Connecting never mints
-  contexts.
-- **Self-address is derived, parentage is initialized**: a DO knows its
-  name (ctx.id.name); its class knows its own binding constant; address
-  = the two combined. journalRefOf(identity) likewise derives the
-  context's stream: project → (projectId, "/"), agent → (projectId,
-  agentPath), generic → (projectId, "/contexts/<id>"). "Every context
-  DO has a stream" is an accessor, not a maintained invariant.
-- **Facets**: contexts facet into the thing whose lifecycle owns them —
-  anonymous extends/narrows as facets of their Project DO (in-process
-  chain delegation, free cascade); agents keep their own DO with the
-  processor embedded (hot path). Address gains an optional `facet`
-  field; dialing routes through the parent. AgentProcessor-as-facet is
-  the recorded future direction for processor hosting.
-- **Workspaces are not itx's concern**: the per-context workspace
-  derivation (itxWorkspaceId origin magic, the itx:<id> colon strings)
-  dies; each HOST provides its own `workspace` capability bound to its
-  own identity in its constructor (the agent author's decision). Origin
-  demotes to pure attribution + dial-back addressing.
-- **The audit log stops existing as a concept** in wave (f): events are
-  the writes, state is their fold; the capability-provided record for a
-  live provide outlives the connection while the stub does not — the
-  only intentional record/state divergence, in the safe direction.
-
-### Facets as the embedding mechanism + journal paths (review, 2026-06-11 night)
-
-- **Facets replace class-field composition for hosting** (corrected
-  understanding: this is about embedding the host machinery, not about
-  placing other tenants' contexts). `class Agent { get itx() { return
-this.ctx.facets.get("itx", () => ({ class: ItxDurableObject })) } }` —
-  the facet has its own private SQLite, so the readState/writeState
-  checkpoint-wiring ceremony evaporates; colocation is identical to a
-  class field (same DO container, same isolate — there was never a
-  placement tradeoff in the embedded case). One `ItxDurableObject`
-  class serves standalone contexts, global, and every rich host; N
-  contexts per host = facet per name. The same move generalizes:
-  `ProcessorDurableObject` as a facet handed processor instances
-  replaces the bespoke processor-host plumbing (recorded direction).
-- **Checkpoint vs journal stays crisp**: the facet's private storage
-  holds the disposable fold ({offset, state}); the JOURNAL is a real
-  stream (Stream DO), which the facet consumes like any processor.
-- **Journal base paths: the hosting DO determines the base; context
-  journals live at `<base>/itx/<child-id>`** — extend the
-  /agents/some-agent context → /agents/some-agent/itx/<id>; extend the
-  project → /itx/<id>. `itx` becomes a RESERVED stream path segment
-  (domain code — subagent paths, user streams — may not claim it),
-  which is what keeps the nesting from being gross. Forensics by
-  directory listing: an agent's whole subtree contains its sessions.
-- **Open (owner to call): journal placement for the host's OWN
-  context** — `/itx` under the base uniformly (no schema entanglement:
-  domain reducers never see capability events; one rule, zero
-  exceptions) vs journaling INTO the domain stream itself (literal
-  one-stream-one-record interleaving). Current lean: uniform `/itx`.
-
-### LOCKED (2026-06-11, end of review): the final shape
-
-- **One class**: `Itx extends StreamProcessor` — the core/processor split
-  collapses (the objections died with the stateless host); the pure
-  functions (reduce, resolve, path validation) stay module-level for
-  unit tests and the workshop. Three names, three questions:
-  `Itx` (what), `ItxDurableObject` (where — standalone or facet), a stub
-  (how).
-- **Creation is an event** — the journal begins with its own birth
-  certificate (`context-created` carries parentage); no initialize RPC,
-  no idempotency keys; exactly-once is a property of the fold. Standing
-  doctrine recorded in docs/domain-objects-and-stream-processors.md.
-- **Defaults live on the parent chain — Option 2, locked.** No layers
-  inside the instance: ONE capability map; every entry in the system is
-  a provide; defaults are the PLATFORM CONTEXT's provides, reached by
-  ordinary chain delegation (ctx → project → platform:project (code) →
-  global (code)). Shadowing, revoke-resurfaces-current-default, and
-  deploy updates are consequences of the chain, not rules. The
-  everything-durable invariant refines to its true form: **everything
-  WRITABLE is durable; the root of every chain is code** — the platform
-  context is read-only, code-derived, loopback-addressed
-  ({ type: "rpc", worker: { type: "loopback" }, entrypoint:
-  "PlatformContext" }), dialed in-process so default dispatch pays no
-  DO hop. (§8's original "defaults are a parent context written in
-  code" returns, now expressed through the address system.)
-- **Identity is a stream coordinate**: context DO/facet names ARE
-  structured (namespace, path) records; contextId, journal ref, and
-  self-address are projections of the name. Journals live at
-  `<host base>/itx/<id>` with `itx` a reserved stream path segment.
+- **`itx.narrow({ scopes })`** — handle sugar over extend + GuardCapability
+  rows; fine-grained access stays zero-kernel-mechanism.
+- **Facet embedding for rich hosts** — agents keep their own
+  ItxDurableObject instances today; `ctx.facets`-hosted processors
+  (`ProcessorDurableObject`) remain the recorded direction.
+- **Global as a named instance of the generic host** (and its journal as the
+  project-lifecycle surface); global handles stay connect-minted views until
+  something needs to write on the global context.
+- **Retention**: dispose-deletes, idle-TTL alarms for anonymous contexts,
+  catalog/cascade via ownership.
+- **Artifact-addressed source** (`{ type: "source", source: { artifact,
+commit, entrypoint } }`) — source as a dimension separate from the
+  execution mechanism.
+- **The 500-line workshop** as a standalone teaching document; the build
+  order now exists as `src/itx/README.md`.
 
 ## Resolved (was open, now decided)
 

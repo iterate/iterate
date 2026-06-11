@@ -52,10 +52,10 @@ export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-c
 export { AiCapability, OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { BindingCapability, EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
-export { McpClient } from "~/itx/caps/mcp-client.ts";
-export { ProjectWorker } from "~/itx/caps/project-worker.ts";
-export { UrlDial } from "~/itx/caps/url-dial.ts";
-export { StreamsCapability } from "~/itx/caps/streams.ts";
+export { McpClient } from "~/itx/capabilities/mcp-client.ts";
+export { ProjectWorker } from "~/itx/capabilities/project-worker.ts";
+export { UrlDial } from "~/itx/capabilities/url-dial.ts";
+export { StreamsCapability } from "~/itx/capabilities/streams.ts";
 export { ItxDurableObject } from "~/itx/itx-durable-object.ts";
 export { PlatformContext } from "~/itx/platform-context.ts";
 export { ItxCapabilityIngress } from "~/itx/http.ts";

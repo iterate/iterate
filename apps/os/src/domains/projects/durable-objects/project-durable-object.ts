@@ -81,7 +81,7 @@ import { journalStream, ownJournalPath, projectContextAddress } from "~/itx/jour
 import { getPlatformContext } from "~/itx/platform-context.ts";
 import { runItxScript } from "~/itx/run.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
-import type { WorkerInvokeMode } from "~/itx/caps/project-worker.ts";
+import type { WorkerInvokeMode } from "~/itx/capabilities/project-worker.ts";
 
 /** Project DOs are addressed by the plain project id. */
 export function getProjectDurableObjectName(projectId: string) {

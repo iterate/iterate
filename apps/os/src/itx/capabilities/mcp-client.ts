@@ -41,7 +41,7 @@ export type McpClientProps = {
   serverUrl: string;
   /** Sent on every request; values pass through egress secret substitution. */
   headers?: Record<string, string>;
-  /** Attribution, injected by the registry at dial time. */
+  /** Attribution, injected by the dial. */
   capabilityPath?: string;
   context?: string;
 };
@@ -53,7 +53,7 @@ export class McpClient extends WorkerEntrypoint<Env, McpClientProps> {
       throw new Error("McpClient needs props.serverUrl (the remote MCP server).");
     }
     if (!props.context) {
-      // The registry always injects context; refusing without it means this
+      // The dial always injects context; refusing without it means this
       // client can never fetch outside the egress pipe.
       throw new Error("McpClient needs context attribution to route egress.");
     }

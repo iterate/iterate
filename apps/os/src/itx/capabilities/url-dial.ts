@@ -2,7 +2,7 @@
 // Cap'n Web server addressed by URL (itx-next.md §1).
 //
 // Law 7 lives here: the Cap'n Web session terminates in THIS stateless
-// worker, never a Durable Object. The registry (a DO) hands the call across
+// worker, never a Durable Object. The context node (a DO) hands the call across
 // as data; this entrypoint opens a WebSocket session, replays the call
 // against the remote main, and closes the session before returning. One
 // session per call — remote caps are stateless from the platform's point of
@@ -17,7 +17,7 @@
 // getSecret() placeholder substitution as project egress (Law 5), resolved
 // via the SecretsCapability loopback — so a provider writes
 // `authorization: 'Bearer getSecret({ key: "REMOTE_TOKEN" })'` and the
-// secret material never appears in any registry row or describe() output.
+// secret material never appears in any journal record or describe() output.
 // Known gap: these dials bypass fetch-cap shadowing (the UrlDial → Project
 // DO hop is Workers jsrpc, which cannot carry a WebSocket-bearing Response).
 
@@ -38,7 +38,7 @@ export type UrlDialProps = {
    * "url" }` cap targets always get the default; an SDK-shaped remote is
    * reachable by providing UrlDial as a loopback cap with props.invoke. */
   invoke?: WorkerInvokeMode;
-  /** Attribution + secret scope, injected by the registry at dial time. */
+  /** Attribution + secret scope, injected by the dial. */
   capabilityPath?: string;
   context?: string;
   projectId?: string;
@@ -49,9 +49,9 @@ export class UrlDial extends WorkerEntrypoint<Env, UrlDialProps> {
     const props = this.ctx.props;
     if (!props.url) throw new Error("UrlDial needs props.url (the remote Cap'n Web server).");
     if (!props.projectId) {
-      // The registry always injects projectId; refusing without it means a
+      // The dial always injects projectId; refusing without it means a
       // hand-built dial can never resolve another project's secrets.
-      throw new Error("UrlDial needs registry-injected projectId props.");
+      throw new Error("UrlDial needs dial-injected projectId props.");
     }
     const url = dialableHttpUrl(props.url);
 

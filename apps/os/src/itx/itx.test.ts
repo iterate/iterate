@@ -120,7 +120,7 @@ describe("provide + longest-prefix invoke", () => {
     });
   });
 
-  test("a path define shadows ONE subtree; siblings resolve the shorter prefix", async () => {
+  test("a path provide shadows ONE subtree; siblings resolve the shorter prefix", async () => {
     const { dial, dialed } = fakeDial();
     const itx = makeItx({ dial });
     await itx.provideCapability({ capability: AI_ADDRESS, name: "sdk" });
@@ -422,7 +422,7 @@ describe("the provision handle", () => {
     {
       using _durable = await itx.provideCapability({ capability: AI_ADDRESS, name: "durable" });
     }
-    expect((await itx.describe()).map((cap) => cap.name)).toEqual(["durable"]);
+    expect((await itx.describe()).map((entry) => entry.name)).toEqual(["durable"]);
 
     // Live: dropping the session would have killed it anyway — dispose makes
     // that explicit and removes the entry.
@@ -430,7 +430,7 @@ describe("the provision handle", () => {
       using _live = await itx.provideCapability({ capability: async () => "hi", name: "live" });
     }
     await vi.waitFor(async () => {
-      expect((await itx.describe()).map((cap) => cap.name)).toEqual(["durable"]);
+      expect((await itx.describe()).map((entry) => entry.name)).toEqual(["durable"]);
     });
   });
 });

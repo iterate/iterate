@@ -15,12 +15,12 @@
 // Why a forwarder instead of a dedicated WorkerRef kind: loader entrypoints
 // cannot cross an RPC boundary, so the call must replay INSIDE the Project
 // DO regardless — and a loopback with props needs no new union member, no
-// registry hook, and works identically from child contexts. The price is
+// kernel hook, and works identically from child contexts. The price is
 // that `export` (the user's class) and `invoke` (how to call it; default
 // "members") ride in props: the kernel speaks ONE convention (this
 // forwarder's call({ path, args })), and how the INNER/user object is
 // treated is the forwarder's own business, never kernel data.
-// props.projectId is registry-injected (spoof-proof).
+// props.projectId is dial-injected (spoof-proof).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { PathCall } from "../itx.ts";
@@ -33,12 +33,12 @@ import {
  * How a FORWARDER treats the inner object it fronts (ProjectWorker's user
  * export, UrlDial's remote main): replay the path on its members (default)
  * or hand it one call({ path, args }). This is forwarder props, not kernel
- * data — the registry itself knows exactly one calling convention.
+ * data — the core itself knows exactly one calling convention.
  */
 export type WorkerInvokeMode = "members" | "path-call";
 
 export type ProjectWorkerProps = {
-  /** Injected by the registry at dial time — never provider-supplied. */
+  /** Injected by the dial — never provider-supplied. */
   projectId?: string;
   /** The named export of the project worker to call (default export if omitted). */
   export?: string;
@@ -52,7 +52,7 @@ export class ProjectWorker extends WorkerEntrypoint<Env, ProjectWorkerProps> {
   async call(input: PathCall): Promise<unknown> {
     const props = this.ctx.props;
     if (!props.projectId) {
-      throw new Error("ProjectWorker needs registry-injected projectId props.");
+      throw new Error("ProjectWorker needs dial-injected projectId props.");
     }
     const {
       capabilityPath,

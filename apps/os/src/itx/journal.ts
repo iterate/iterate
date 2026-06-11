@@ -167,7 +167,9 @@ export type ContextDescriptor = {
  */
 export function dialContext(env: Env, address: CapabilityAddress): ContextNodeStub {
   if (address.type === "url") {
-    throw new Error("url context addresses are not dialable yet (federation is a later wave).");
+    throw new Error(
+      "url context addresses are not dialable yet (cross-deployment federation is a recorded direction, not built).",
+    );
   }
   const worker = address.worker;
   if (worker.type !== "durable-object") {

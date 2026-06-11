@@ -21,7 +21,7 @@
  *   project-context handles, mirroring the old "project workers cannot
  *   escalate scopes" rule.
  * - `capabilityPath` is pure attribution: which capability's isolate this is
- *   (the dotted route). It grants nothing; it labels egress and audit records.
+ *   (the dotted route). It grants nothing; it labels egress and journal records.
  */
 /** A CapabilityAddress as it rides in props — structurally typed so this
  * module stays import-light (the real type is itx.ts's CapabilityAddress). */

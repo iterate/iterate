@@ -5,7 +5,7 @@ import type {
   StreamState,
 } from "@iterate-com/shared/streams/types";
 import type { ItxRuntime } from "~/itx/handle.ts";
-import { ItxStream } from "~/itx/caps/streams.ts";
+import { ItxStream } from "~/itx/capabilities/streams.ts";
 import { getStreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";

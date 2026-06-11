@@ -5,6 +5,30 @@ structures for WITHOUT building yet. Separate from itx-next.md (the
 current arc's working notes) on purpose. Sibling reading:
 itx-authority-research.md (the principal/authority report).
 
+## SELF-DESCRIPTION IS A LOAD-BEARING REQUIREMENT (everywhere, loudly)
+
+**Agents are a first-class audience of this system, and an agent's only
+sense organ is `describe()`.** The acceptance test for every feature in
+this document: _an agent with no prior knowledge, handed a stub, can act
+competently from `describe()` + `instructions` + `types` alone._ This
+must be designed for, not hoped for:
+
+- Every provide carries `instructions` (human/agent prose) and `types`
+  (machine/editor declarations) AT provide time — the provider knows the
+  surface best at exactly that moment; the platform defaults are the
+  exemplars.
+- Every fold is a description: the capability table (what can I do
+  here), the `http` subtree (what routes/apps does this project serve —
+  describe() on a project automatically reveals its routes), the repo
+  processor's workers table (what apps does this project have), stream
+  state, context journals (what happened).
+- Every domain object answers describe(): contexts, workers, repos,
+  routes, agents and their sessions.
+- When adding any new capability, route, worker, or event type, the
+  review question is: "what does describe() say about this, and is that
+  enough for an agent to use it?" If the answer is weak, the feature is
+  not done.
+
 ## One source address — the repo IS the artifact wrapper
 
 Owner review resolved the apparent artifact-vs-repo split: they are not
@@ -141,9 +165,9 @@ processor.** (Owner lock, 2026-06-11 night.)
 
 - Identity: declared in the repo manifest (`iterate.toml` at a fixed
   root path — the platform's one well-known bootstrap name), `(repo,
-  name)`, NEVER path-derived: the runner DO key, facet storage, and
+name)`, NEVER path-derived: the runner DO key, facet storage, and
   routes hang off the name; source bindings `(commit, path, entrypoint,
-  bundleConfig)` are rebindable attributes recorded per build event.
+bundleConfig)` are rebindable attributes recorded per build event.
   Monorepos: many workers per repo, each a manifest entry. The same
   rule recurses to durable-object classes: the manifest declares stable
   facet names; export names are rebindable.
@@ -173,7 +197,7 @@ to whom) lives in the provide (`meta.http: { public?: boolean }`);
   The `--` separator is forced by TLS, not taste: wildcard certs cover
   ONE level (`*.iterate.app` covers `itx--misha.iterate.app`, never
   `itx.misha.iterate.app`). provideCapability returns the derived `url`
-  on its handle. Context id prefix renames ctx_ → itx_ (punch list).
+  on its handle. Context id prefix renames ctx* → itx* (punch list).
 - **Bound tier**: a route IS a provide at the reserved `http` subtree:
   `provideCapability({ path: ["http", "blah.example.com"], capability })`;
   ingress = `invoke(["http", host, "fetch"], [request])` on the project.

@@ -95,7 +95,7 @@ export function makeDial(host: DialHost): CapabilityDial {
     const name = attribution.capabilityPath;
     // Attribution wins over provider-supplied props, by spread order.
     // `context` is the ORIGINATING context (chain delegation carries it) —
-    // pure attribution for audit and policy.
+    // pure attribution for records and policy.
     const injected = {
       capabilityPath: name,
       context: attribution.origin.id,

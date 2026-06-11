@@ -1,6 +1,6 @@
 // ONE place wires the environment of every isolate the platform loads — the
 // project worker (domains/projects/durable-objects/worker.ts), source caps
-// (registry.ts), and the /api/itx/run script harness all describe the same
+// (dial.ts), and the /api/itx/run script harness all describe the same
 // trust posture:
 //
 //   env.ITERATE    — an itx scoped to the isolate's HOME context (Law 4: a
@@ -12,7 +12,7 @@
 //                    outside the isolate, which never sees material.
 //
 // Loaders differ only in their loopback accessor (a DO's ctx.exports vs the
-// registry's host.loopback) and in extra bindings (the project worker also
+// dial's host.loopback) and in extra bindings (the project worker also
 // gets env.STREAMS).
 
 import type { CapabilityAddress } from "./itx.ts";

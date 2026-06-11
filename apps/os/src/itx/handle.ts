@@ -23,7 +23,7 @@ import { RpcStub } from "capnweb";
 import { createD1Client } from "sqlfu";
 import { PathProxy } from "./path-proxy.ts";
 import { ItxError } from "./errors.ts";
-import { ItxStreams } from "./caps/streams.ts";
+import { ItxStreams } from "./capabilities/streams.ts";
 import {
   isCapabilityAddress,
   isLocalBareFunction,
@@ -247,7 +247,7 @@ export class ItxHandle extends RpcTarget {
       if (head === "itx" || /^itx[A-Z]/.test(head)) {
         throw new ItxError({
           code: "FORBIDDEN",
-          message: `${head} is internal registry plumbing, not part of the project surface — use itx.provideCapability / itx.<cap> instead.`,
+          message: `${head} is internal context-node plumbing, not part of the project surface — use itx.provideCapability / itx.<cap> instead.`,
         });
       }
       // Same reasoning for the raw egress doors: now that `fetch` is a
@@ -287,7 +287,7 @@ export class ItxHandle extends RpcTarget {
     return {
       access: this.#runtime.access,
       capabilityPath: this.#runtime.capabilityPath,
-      caps: projectId === null ? [] : await this.#itx().describe(),
+      capabilities: projectId === null ? [] : await this.#itx().describe(),
       context: this.#runtime.contextId,
       project: projectId === null ? null : await this.#projectStub().describe(),
     };
@@ -302,8 +302,8 @@ export class ItxHandle extends RpcTarget {
 
   /**
    * Extend this context with a child (prototype-chain intuition: children
-   * extend parents; resolution climbs upward): same anatomy (registry,
-   * parent chain, audit stream), cheaper and disposable — an agent session,
+   * extend parents; resolution climbs upward): same anatomy (capability table,
+   * parent chain, journal), cheaper and disposable — an agent session,
    * a REPL scratchpad. Returns a handle, because narrowing is construction
    * (Law 4). Child caps shadow this context's; misses delegate up the chain.
    */
@@ -348,9 +348,9 @@ export class ItxHandle extends RpcTarget {
    * promise) so the dotted call pipelines over capnweb in one round trip;
    * `await itx.parent` also works and yields the parent handle's surface.
    *
-   * A project context has no parent to address yet — the platform defaults
-   * context becomes its parent when the journal wave lands (itx-next.md,
-   * "LOCKED: the final shape").
+   * An extension's parent comes from its birth certificate; the project
+   * context's parent IS the platform context (the chain's code root); the
+   * platform context is the end of the line.
    */
   get parent(): ItxHandle {
     const parentHandle = async (): Promise<ItxHandle> => {
@@ -376,9 +376,7 @@ export class ItxHandle extends RpcTarget {
       if (this.#runtime.contextId === PLATFORM_PROJECT_CONTEXT_ID) {
         throw new ItxError({
           code: "BAD_REQUEST",
-          message:
-            "The platform context is the chain root — it has no parent (a global code " +
-            "context is a later wave).",
+          message: "The platform context is the chain root — it has no parent.",
         });
       }
       // The project context's parent IS the platform defaults link: a

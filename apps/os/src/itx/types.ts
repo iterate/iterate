@@ -53,7 +53,7 @@
  *
  * await itx.slack.chat.postMessage({       // call a capability someone provided —
  *   channel: "C123", text: "hi",           // works because "slack" is in the
- * });                                      // registry, not because itx knows Slack
+ * });                                      // capability table, not because itx knows Slack
  *
  * await itx.fetch("https://api.stripe.com/v1/charges", {
  *   headers: { authorization: 'Bearer getSecret({ key: "STRIPE_KEY" })' },
@@ -125,11 +125,11 @@ export type ItxHandle = ItxBuiltins & KnownCapabilities;
 
 /**
  * The built-in surface of every handle — the trust kernel. Everything else
- * you see on an `itx` is a capability that fell through to the registry.
+ * you see on an `itx` is a capability that fell through to the capability table.
  *
  * Child contexts inherit all of this: a forked session's `repos`,
  * `workspace`, and `streams` resolve through its owning project — the child
- * adds a capability registry of its own, not a different kernel.
+ * adds a capability table of its own, not a different kernel.
  */
 export interface ItxBuiltins {
   /**
@@ -294,9 +294,9 @@ export interface ItxBuiltins {
   /**
    * A handle on the PARENT context — the "call next()" of middleware: a
    * `fetch` shadow delegates to the unshadowed pipe via
-   * `itx.parent.fetch(request)`. A project context has no addressable
-   * parent yet (the platform defaults context becomes it when the journal
-   * wave lands).
+   * `itx.parent.fetch(request)`. An extension's parent comes from its birth
+   * certificate; the project context's parent is the platform context (the
+   * chain's read-only code root).
    */
   readonly parent: ItxHandle;
 }
@@ -345,7 +345,7 @@ export type ItxDescription = {
   /** The merged capability chain (own caps first, ancestors' after,
    * shadowed names carry `owner` provenance), including each cap's
    * `instructions`. */
-  caps: CapabilityDescription[];
+  capabilities: CapabilityDescription[];
   /** The bound project's own description, if this handle has one. */
   project: unknown | null;
 };
@@ -395,7 +395,7 @@ export type CapabilityTarget =
       entrypoint?: string;
       /** Instantiation props for the entrypoint (the ProjectEgress
        * pattern): serializable parameterization like a server URL or a
-       * gateway choice. The registry adds `{ context, capability }` attribution at
+       * gateway choice. The dial adds `{ context, capabilityPath }` attribution at
        * dial time. */
       props?: Record<string, unknown>;
     }
@@ -425,12 +425,12 @@ export type WorkerRef =
    * cannot cross an RPC boundary). */
   | { type: "loopback" }
   /** A Durable Object, addressed by namespace binding + instance name. The
-   * registry scopes the dial under the owning project —
+   * dial scopes the instance name under the owning project —
    * `getByName(\`itx:<projectId>:<name>\`)` — so a name only ever reaches
    * instances belonging to this project, never a sibling's. */
   | { type: "durable-object"; binding: string; name: string }
   /** A dynamic worker materialized on demand from stored source — code that
-   * lives in the registry itself rather than in any deployed artifact. */
+   * lives in the capability record itself rather than in any deployed artifact. */
   | { type: "source"; source: CapabilitySource };
 
 /**
@@ -506,13 +506,13 @@ export type PathCallTarget = { call(input: PathCall): unknown };
  * A live provider's stub: a function, an object of functions, or an
  * RpcTarget. Structural and opaque — it may arrive over Cap'n Web (a
  * browser tab, a Node process, an agent's sandbox) or Workers RPC; the
- * registry relies only on protocol-level controls (`dup`, `onRpcBroken`,
+ * core relies only on protocol-level controls (`dup`, `onRpcBroken`,
  * `Symbol.dispose`) when present.
  */
 export type LiveStub = object;
 
 /**
- * Arbitrary metadata on a registration. The registry stores it verbatim and
+ * Arbitrary metadata on a provide. The journal stores it verbatim and
  * surfaces it in `describe()` — there is no schema. Two conventions worth
  * following, a pair: `instructions` for the human/agent (a sentence on what
  * the cap does and how to call it) and `types` for the machine/editor
@@ -528,7 +528,7 @@ export type CapabilityMeta = {
   [key: string]: unknown;
 };
 
-/** A registry entry as reported by `describe()`. Never contains live stubs. */
+/** A capability entry as reported by `describe()`. Never contains live stubs. */
 export type CapabilityDescription = {
   name: string;
   /** The target's kind: "live" | "rpc" | "url". */
@@ -737,7 +737,7 @@ export type ItxPrincipal =
  *   Addresses are pure names — they grant nothing.
  * - `capabilityPath`: pure attribution — which capability's isolate holds
  *   this handle (the dotted route). It grants nothing; it labels egress and
- *   audit records.
+ *   journal records.
  */
 export type ItxProps = {
   context: ContextRef;

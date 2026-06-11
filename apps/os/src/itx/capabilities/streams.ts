@@ -6,7 +6,7 @@
 // connect-time access set, which no cap definition can express).
 //
 // Scope model: a StreamsScope carries the namespaces this surface may
-// resolve. The cap pins it to the owning project (registry-injected
+// resolve. The cap pins it to the owning project (dial-injected
 // projectId — a provider can never point it elsewhere); the global kernel
 // branch passes the handle's access set through. Absolute refs
 // ("ns:/path") are sugar through ONE access check either way.
@@ -39,10 +39,10 @@ export type StreamsScope = {
 };
 
 export type StreamsCapabilityProps = {
-  /** The owning project — registry-injected at dial time, never provider
+  /** The owning project — dial-injected at dial time, never provider
    * props, so a `streams` cap can only ever scope to its own namespace. */
   projectId?: string;
-  /** Attribution, injected by the registry at dial time. */
+  /** Attribution, injected by the dial. */
   context?: string;
   capabilityPath?: string;
 };
@@ -72,7 +72,7 @@ export class StreamsCapability extends WorkerEntrypoint<Env, StreamsCapabilityPr
 
   #collection(): ItxStreams {
     const projectId = this.ctx.props.projectId;
-    if (!projectId) throw new Error("StreamsCapability needs registry-injected projectId props.");
+    if (!projectId) throw new Error("StreamsCapability needs dial-injected projectId props.");
     return new ItxStreams(
       { access: [projectId], exports: this.ctx.exports as unknown as StreamsExports },
       projectId,

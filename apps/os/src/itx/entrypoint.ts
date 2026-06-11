@@ -88,7 +88,7 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxProps> {
 }
 
 export type ProjectEgressProps = {
-  /** The owning project. Registry-injected at dial time (never provider
+  /** The owning project. Dial-injected (never provider
    * props), so a `fetch` cap can only ever scope to its own project. */
   projectId: string;
   /** The originating context (id + address): dispatch happens at ITS node so
@@ -132,9 +132,9 @@ export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
 }
 
 export type EgressPipeProps = {
-  /** Injected by the registry at dial time — never provider-supplied. */
+  /** Injected by the dial — never provider-supplied. */
   projectId?: string;
-  /** Attribution only: which context/cap is fetching (audit + future policy). */
+  /** Attribution only: which context/capability is fetching (records + future policy). */
   context?: string;
   capabilityPath?: string;
 };
@@ -142,9 +142,9 @@ export type EgressPipeProps = {
 /**
  * The TERMINAL egress pipe: the default target of the `fetch` capability
  * (PLATFORM_PROJECT_CAPABILITIES, durable-itx.ts). Stateless: secrets are D1 rows
- * (domains/secrets), scoped by the registry-injected projectId, so
+ * (domains/secrets), scoped by the dial-injected projectId, so
  * substitution and the real fetch happen here in a plain isolate — the
- * Project DO supervises dispatch (its registry is where live shadows live)
+ * Project DO supervises dispatch (its capability table is where live shadows live)
  * but secret material never enters it. Future egress policy (allowlists,
  * human-in-the-loop approval) slots in here.
  */
@@ -158,7 +158,7 @@ export class EgressPipe extends WorkerEntrypoint<Env, EgressPipeProps> {
 
     const projectId = this.ctx.props.projectId;
     if (!projectId) {
-      throw new Error("EgressPipe needs registry-injected projectId props.");
+      throw new Error("EgressPipe needs dial-injected projectId props.");
     }
     if (!isHttpRequestUrl(request.url)) {
       return await fetch(request);
@@ -190,7 +190,7 @@ function isHttpRequestUrl(urlString: string) {
 export type BindingCapabilityProps = {
   /** Which env binding this instance wraps. Provider-supplied. */
   binding: string;
-  /** Attribution, injected by the registry at dial time. */
+  /** Attribution, injected by the dial. */
   capabilityPath?: string;
   context?: string;
 };

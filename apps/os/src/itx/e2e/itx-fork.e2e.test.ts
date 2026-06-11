@@ -1,5 +1,5 @@
 // Child contexts (spec §3): itx.extend() creates a cheap, disposable context
-// under a project — same anatomy, own registry, parent chain for misses.
+// under a project — same anatomy, own capability table, parent chain for misses.
 // This is the container an agent session or REPL scratchpad lives in.
 
 import { expect, test } from "vitest";
@@ -48,7 +48,7 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
   })) as { marker: string };
   expect(viaChain.marker).toBe("project-level");
 
-  // (2) Child defines its own cap under the SAME name → shadows the parent,
+  // (2) The child provides its own capability under the SAME name → shadows
   // visibly (describe reports the owner).
   await child.provideCapability({
     name: "shared",
@@ -59,8 +59,8 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
   })) as { marker: string };
   expect(viaShadow.marker).toBe("child-level");
 
-  const merged = (await child.describe()).caps as Array<{ name: string; owner: string }>;
-  const shared = merged.filter((cap) => cap.name === "shared");
+  const merged = (await child.describe()).capabilities as Array<{ name: string; owner: string }>;
+  const shared = merged.filter((entry) => entry.name === "shared");
   expect(shared).toHaveLength(1);
   expect(String(shared[0]!.owner)).toMatch(/^ctx_/);
 
@@ -84,7 +84,7 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
   expect(reconnectedShadow.marker).toBe("child-level");
 });
 
-test("extend: a path define shadows ONE subtree of an inherited cap (longest-prefix dispatch)", async () => {
+test("extend: a path provide shadows ONE subtree of an inherited capability (longest-prefix dispatch)", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `itx-fork-path-${suffix()}` })) as {
     id: string;
@@ -107,7 +107,7 @@ test("extend: a path define shadows ONE subtree of an inherited cap (longest-pre
     capability: new MarkedSdk("base") as never,
   });
 
-  // The extension overrides exactly one method via a PATH define; the entry path
+  // The extension overrides exactly one method via a PATH provide; the entry path
   // is consumed by resolution, so the override target sees the remainder.
   using child = await projectItx.extend({ name: "e2e-path-shadow" });
   await child.provideCapability({
@@ -124,7 +124,7 @@ test("extend: a path define shadows ONE subtree of an inherited cap (longest-pre
     method: "",
   });
 
-  // (2) Every other sdk.* call misses the child's registry entirely and
+  // (2) Every other sdk.* call misses the child's own table entirely and
   // falls through the chain to the base cap, remainder intact.
   expect(await handle(child).sdk.users.list()).toMatchObject({
     from: "base",
@@ -142,7 +142,7 @@ test("extend: a path define shadows ONE subtree of an inherited cap (longest-pre
     method: "chat.postMessage",
   });
 
-  // (4) Reserved segments are rejected per-segment at define time.
+  // (4) Reserved segments are rejected per-segment at provide time.
   await expect(
     child.provideCapability({
       path: ["sdk", "constructor"],
@@ -418,7 +418,7 @@ test(
 // ---- helpers ----------------------------------------------------------------
 
 function chatPostTarget(marker: string) {
-  // Source caps are member-shaped: the registry wraps the loader entrypoint
+  // Source caps are member-shaped: the dial wraps the loader entrypoint
   // and replays the dotted path on its real members (nested RpcTargets too).
   return {
     type: "rpc" as const,

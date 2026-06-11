@@ -26,7 +26,7 @@ test("facet caps keep private durable state across invocations", async () => {
         source: {
           cacheKey: crypto.randomUUID(),
           // Facet classes must be NAMED exports (default exports trip an opaque
-          // workerd error — registry validates this at define time).
+          // workerd error — the core validates this at provide time).
           entrypoint: "Counter",
           exportType: "durable-object",
           mainModule: "cap.js",

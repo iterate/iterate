@@ -119,7 +119,7 @@ const answer = {
 // provideCapability() again to restore it.
 await itx.provideCapability({ name: "answer", capability: asPathCallable(answer) });
 
-// Unknown names on the handle fall through to the registry, so the cap is
+// Unknown names on the handle fall through to the capability table, so the cap is
 // callable as if it were built in.
 return await itx.answer.run();
 `.trim(),
@@ -416,7 +416,7 @@ await child.provideCapability({
 // ...so the child sees its own, while the project still sees its own.
 return {
   fromChild: await child.shared.ping(),
-  caps: (await child.describe()).caps, // merged chain, child entries first
+  capabilities: (await child.describe()).capabilities, // merged chain, child entries first
 };
 `.trim(),
   },

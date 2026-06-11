@@ -58,6 +58,13 @@ What this doctrine buys, every time:
   wiring in the host) or as a processor-composition subclass — the host
   knows THAT it has processors, never how they are wired.
 
+- **Self-describing, always.** Agents are a first-class audience and
+  their only sense organ is `describe()`. Every domain object answers
+  it; every fold doubles as a description; every provided surface
+  carries `instructions` (prose) and `types` (declarations) from the
+  moment it exists. The acceptance test: an agent with no prior
+  knowledge, handed a stub, acts competently from describe() alone.
+
 The itx capability layer is the reference implementation of all of this
 (see `apps/os/docs/itx-next.md`, "The address unification"); a context is
 a domain object whose state is its capability table and whose creation

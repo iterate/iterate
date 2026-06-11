@@ -102,20 +102,20 @@ export class ItxCapabilityIngress extends WorkerEntrypoint<Env, ItxCapabilityIng
     // at `mycap--{project}`. (Collisions that differ only by case are the
     // owner's problem; first exposed match wins.)
     const wanted = props.capability.toLowerCase();
-    const caps = await node.itx().describe();
-    const cap = caps.find((candidate) => candidate.name.toLowerCase() === wanted);
-    if (!cap || cap.meta.http?.expose !== true) {
+    const described = await node.itx().describe();
+    const capability = described.find((candidate) => candidate.name.toLowerCase() === wanted);
+    if (!capability || capability.meta.http?.expose !== true) {
       return new Response("Not Found", { status: 404 });
     }
 
-    if (cap.meta.http.public !== true) {
+    if (capability.meta.http.public !== true) {
       const authorized =
         authenticateAdminBearer({
           authorizationHeader: request.headers.get("authorization"),
           config,
         }) ||
         (await verifyShareToken({
-          capability: cap.name,
+          capability: capability.name,
           projectId: props.projectId,
           secret: config.adminApiSecret?.exposeSecret() ?? "",
           token: new URL(request.url).searchParams.get(SHARE_TOKEN_PARAM),
@@ -127,7 +127,7 @@ export class ItxCapabilityIngress extends WorkerEntrypoint<Env, ItxCapabilityIng
       args: [request],
       // The core's exact name (not the lowercased host label) is the
       // dot-joined entry path; the full call path is entry path + "fetch".
-      path: [...cap.name.split("."), "fetch"],
+      path: [...capability.name.split("."), "fetch"],
     })) as Response;
   }
 }

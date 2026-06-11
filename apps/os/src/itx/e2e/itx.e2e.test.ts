@@ -126,7 +126,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
     }
   }
 
-  // (2) define() it as a live cap on the project context — ONE verb: a live
+  // (2) provide it as a live capability on the project context — ONE verb: a live
   // stub is just another target, discriminated structurally from the
   // serializable rpc/url kinds. The provider implements call({ path, args })
   // itself — the one calling convention, no invoke flag anywhere.
@@ -144,7 +144,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
   expect(liveResult).toMatchObject({ method: "chat.postMessage", provider: "node-live" });
 
   // (4) "I like this mount" → promote: durable means the code moves
-  // server-side (define with an rpc/source target), not a flag on the live
+  // server-side (provide an rpc/source address), not a flag on the live
   // stub. Source caps are member-shaped (the registry wraps the loader
   // entrypoint and replays the path); `types` documents the surface for
   // machines the way meta.instructions does for agents.
@@ -182,8 +182,8 @@ test("the five-step capability flow: provide live, call, promote durable, call f
   // Own rows only — platform defaults (e.g. `ai` from platform:project)
   // also appear in describe() with their code context as owner. `types`
   // is lifted from meta like instructions.
-  const description = (await projectItx.describe()).caps as Array<{ owner: string }>;
-  expect(description.filter((cap) => cap.owner === project.id)).toMatchObject([
+  const description = (await projectItx.describe()).capabilities as Array<{ owner: string }>;
+  expect(description.filter((entry) => entry.owner === project.id)).toMatchObject([
     { connected: true, kind: "live", name: "slack" },
     { kind: "rpc", name: "slackDurable", types: slackDurableTypes },
   ]);
@@ -256,7 +256,7 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
     capability: { entrypoint: "ItxEntrypoint", type: "rpc", worker: { type: "loopback" } },
   });
   await expect(handle.sneaky.context()).rejects.toThrow(/not dialable/);
-  // A typo'd serializable address still fails at define (structural check) —
+  // A typo'd serializable address still fails at provide (structural check) —
   // it must not register as a dead live cap.
   await expect(
     projectItx.provideCapability({
@@ -278,8 +278,8 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   // describe() reports the new kinds and lifts instructions (own rows only —
   // inherited platform defaults carry their code context as owner). The
   // unreachable-but-provided rows from (3) appear too: provide is structural.
-  const caps = (await projectItx.describe()).caps as Array<{ owner: string }>;
-  expect(caps.filter((cap) => cap.owner === project.id)).toMatchObject([
+  const caps = (await projectItx.describe()).capabilities as Array<{ owner: string }>;
+  expect(caps.filter((entry) => entry.owner === project.id)).toMatchObject([
     { instructions: "Workers AI. Use like the env.AI binding.", kind: "rpc", name: "ai" },
     { kind: "rpc", name: "aiWrapped" },
     { kind: "rpc", name: "db" },
@@ -405,7 +405,7 @@ export class PetstoreClient extends WorkerEntrypoint {
   });
 
   // (4) Props discipline: provider parameterization arrives intact, and the
-  // registry-injected attribution can't be spoofed by the provider.
+  // dial-injected attribution can't be spoofed by the provider.
   const echoed = (await handle.petstore.echo({ hello: 1 })) as {
     args: unknown[];
     attribution: { capabilityPath: string; context: string; projectId: string };
@@ -450,13 +450,13 @@ test("url caps dial a remote Cap'n Web server over a WebSocket session", async (
   // round trip working end to end.
   const handle = projectItx as never as Record<string, any>;
   const described = (await handle.remoteItx.describe()) as {
-    caps: Array<{ name: string }>;
+    capabilities: Array<{ name: string }>;
     context: string;
     project: { id: string };
   };
   expect(described.context).toBe(project.id);
   expect(described.project.id).toBe(project.id);
-  expect(described.caps.map((cap) => cap.name)).toContain("remoteItx");
+  expect(described.capabilities.map((entry) => entry.name)).toContain("remoteItx");
 });
 
 test("platform defaults arrive from the platform:project code context, and own rows shadow them", async () => {
@@ -468,15 +468,15 @@ test("platform defaults arrive from the platform:project code context, and own r
   // A fresh project has zero rows of its own, but `ai` is already there —
   // inherited from the code-defined parent context, with that context's
   // name as owner (itx-next.md §8).
-  type DescribedCaps = { caps: Array<{ name: string; owner: string }> };
-  const before = (await projectItx.describe()) as DescribedCaps;
-  expect(before.caps.find((cap) => cap.name === "ai")).toMatchObject({
+  type Described = { capabilities: Array<{ name: string; owner: string }> };
+  const before = (await projectItx.describe()) as Described;
+  expect(before.capabilities.find((entry) => entry.name === "ai")).toMatchObject({
     kind: "rpc",
     owner: "platform:project",
   });
   // The whole migrated kernel arrives the same way (§8: cap #0 disappears).
   for (const name of ["repos", "streams", "workspace", "worker"]) {
-    expect(before.caps.find((cap) => cap.name === name)).toMatchObject({
+    expect(before.capabilities.find((entry) => entry.name === name)).toMatchObject({
       owner: "platform:project",
     });
   }
@@ -496,8 +496,8 @@ test("platform defaults arrive from the platform:project code context, and own r
     name: "ai",
     capability: new ShadowAi() as never,
   });
-  const after = (await projectItx.describe()) as DescribedCaps;
-  const aiCaps = after.caps.filter((cap) => cap.name === "ai");
+  const after = (await projectItx.describe()) as Described;
+  const aiCaps = after.capabilities.filter((entry) => entry.name === "ai");
   expect(aiCaps).toHaveLength(1);
   expect(aiCaps[0]!.owner).toBe(project.id);
 
@@ -515,9 +515,9 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   using projectItx = await itx.projects.get(project.id);
 
   // (1) Fresh project: `fetch` is a platform default, not kernel.
-  type DescribedCaps = { caps: Array<{ name: string; owner: string }> };
-  const before = (await projectItx.describe()) as DescribedCaps;
-  expect(before.caps.find((cap) => cap.name === "fetch")).toMatchObject({
+  type Described = { capabilities: Array<{ name: string; owner: string }> };
+  const before = (await projectItx.describe()) as Described;
+  expect(before.capabilities.find((entry) => entry.name === "fetch")).toMatchObject({
     owner: "platform:project",
   });
 
@@ -571,8 +571,8 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   // network fetch to the NXDOMAIN host now fails instead of returning the
   // canned response.
   await projectItx.revokeCapability({ name: "fetch" });
-  const after = (await projectItx.describe()) as DescribedCaps;
-  expect(after.caps.find((cap) => cap.name === "fetch")).toMatchObject({
+  const after = (await projectItx.describe()) as Described;
+  expect(after.capabilities.find((entry) => entry.name === "fetch")).toMatchObject({
     owner: "platform:project",
   });
   await expect(projectItx.fetch("https://intercept-probe.invalid/x")).rejects.toThrow();
@@ -915,8 +915,10 @@ test("revoked and offline caps fail with instructive errors", async () => {
     itx(): Promise<unknown>;
     itxProjectWorkerCall(input: Record<string, unknown>): Promise<unknown>;
   };
-  await expect(projectDo.itx()).rejects.toThrow(/internal registry plumbing/);
-  await expect(projectDo.itxProjectWorkerCall({})).rejects.toThrow(/internal registry plumbing/);
+  await expect(projectDo.itx()).rejects.toThrow(/internal context-node plumbing/);
+  await expect(projectDo.itxProjectWorkerCall({})).rejects.toThrow(
+    /internal context-node plumbing/,
+  );
 });
 
 function authHeaders() {
