@@ -132,16 +132,39 @@ invoke({ path: […, "fetch"], args: [request] })`.
   the bearer bridge; everything else is cookie → principal → mask (see
   itx-authority-research.md).
 
-## Apps are not capability state: lifecycle is the discriminator
+## Workers, not apps: lifecycle is the discriminator (revised on review)
 
-Stateful SOURCE CAPABILITIES (small, provided by a context, should die
-with it) → facets of the context host, as designed. APPLICATIONS (user
-DO classes from repo-sourced workers, real storage, hostname-routable
-mini apps) have an application lifecycle: they must survive context GC
-and belong to the (repo, app), not to a context. They get their own
-**AppHost DO per (repo, app)** — the AppRunner pattern keyed by the
-app's identity — answering its derived hostname; itx ADDRESSES apps (a
-capability whose address is the app's door) but never hosts them.
-Workers for Platforms is the eventual materialization swap for apps
-that outgrow the loader, under unchanged addresses. This seam is mostly
-orthogonal to itx and should get its own design doc when it activates.
+- **One-shot dynamic workers** (inline provides, script runs): no domain
+  object, no journal, no identity beyond the loader cache key. Born,
+  used, gone — the vast majority, and they cost nothing.
+- **Repo-tied workers**: a real domain object — a **Worker** — identified
+  by `(repo, name)` (monorepos: one repo, many worker entrypoints, each
+  its own Worker). Each gets the doctrine's standard kit: a stream path
+  (`/repos/<repo>/workers/<name>`) whose journal records its life
+  (worker-created, build events `commit → R2 key`, route bindings), and
+  a **WorkerRunner DO** at that name hosting its durable-object facets
+  and answering its ingress routes. "Where build activity happens" for a
+  repo = listChildren on `/repos/<repo>/workers/`.
+- Stateful SOURCE CAPABILITIES (small, provided by a context, die with
+  it) remain facets of the context host; itx ADDRESSES Workers but never
+  hosts them. Workers for Platforms remains the eventual materialization
+  swap under unchanged addresses.
+
+## The routing table IS the capability table
+
+Owner instinct ("the project DO has a routing table; the processor has
+events that create routes") re-derived the existing mechanism — the
+convergence is the point: the route-creation event IS capability-provided
+with `meta.http`; the routing table IS the fold; the rich object behind
+a route IS the capability, dialed through the table at request time.
+No second mechanism. Human-friendly stable URLs = provides at pretty
+paths; the hostname→project hop may gain a KV cache later (a cache of a
+fold — disposable by doctrine).
+
+## Naming the special repo
+
+It is what makes one iterate project different from another. Candidates
+reviewed: `project` (recommended — "the project repo", meaning
+strengthens as the repo becomes the project's codebase), `main`
+(collides with branch vocabulary), `config` (decays as workers/apps move
+in). Awaiting owner pick; rename lands with the repo-source wave.
