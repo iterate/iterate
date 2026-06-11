@@ -4,7 +4,6 @@ import { Artifacts } from "@iterate-com/shared/alchemy/artifacts";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
 import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-server";
-import type { CaptunServerShard } from "captun/worker";
 import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
@@ -150,10 +149,6 @@ const artifactsNamespace = `${ctx.workerName}-repos`;
 // Stream namespace for worker-global (non-project-scoped) streams, such as the
 // raw Cloudflare event capture stream at /cloudflare/events.
 const globalStreamNamespace = `${ctx.workerName}-global`;
-const captunServerShard = DurableObjectNamespace<CaptunServerShard>("captun-server-shard", {
-  className: "CaptunServerShard",
-  sqlite: true,
-});
 const stream = DurableObjectNamespace<Stream>("stream", {
   className: "StreamDurableObject",
   sqlite: true,
@@ -227,7 +222,6 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     SLACK_AGENT: slackAgent,
     SLACK_INTEGRATION: slackIntegration,
     REPO: repo,
-    CaptunServerShard: captunServerShard,
     PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
     STREAM: stream,
     WORKSPACE: workspace,

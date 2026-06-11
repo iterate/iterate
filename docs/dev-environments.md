@@ -124,12 +124,11 @@ serially — concurrent invocations wedge its daemon.
 ## Preview environments
 
 Each preview slot N is a complete, isolated stack on the dev/preview
-Cloudflare account: `os.iterate-preview-N.com` + `auth.iterate-preview-N.com`
-
-- `<proj-slug>.iterate-preview-N.app`. Slots are leased via semaphore
-  (`environment-config-lease`, slugs `preview-1..9`); CI acquires a lease per
-  PR, deploys the slot's auth first (OS bakes its JWKS from it), then OS, runs
-  e2e, and destroys + releases on PR close.
+Cloudflare account: `os.iterate-preview-N.com`, `auth.iterate-preview-N.com`,
+and `<proj-slug>.iterate-preview-N.app`. Slots are leased via semaphore
+(`environment-config-lease`, slugs `preview-1..9`); CI acquires a lease per
+PR, deploys the slot's auth first (OS bakes its JWKS from it), then OS, runs
+e2e, and destroys + releases on PR close.
 
 The slot's OS↔auth OAuth client credentials are **constants in Doppler**
 (`auth/preview_N` carries `AUTH_SEED_OAUTH_CLIENTS`; `os/preview_N` carries
@@ -170,11 +169,31 @@ For the PR-centric flow (managed PR comment, tests, cleanup) use
 
 Inbound webhooks (Slack, GitHub) and third-party OAuth callbacks need a
 public HTTPS hostname — that's the only reason to reach for a tunnel from
-local dev. The tunnel-based per-user flow (`dev_<user>` configs,
-`os.iterate-dev-<user>.com`) still exists unchanged for that. A captun-based
-replacement is planned separately; the genuinely scarce resource is not the
-tunnel but the _webhook source configuration_ (a Slack app points at exactly
-one delivery URL), which stays per-human in `dev_<user>`.
+fully-local dev.
+
+The **iterate tunnel gateway** (`apps/tunnels`, deployed at
+`tunnels.iterate.com`) mints public tunnels on demand: any caller dials it
+with the shared gateway secret (`CAPTUN_TOKEN`, in Doppler `_shared/dev` and
+`_shared/preview`) and gets `<name>.tunnels.iterate.com` in ~200ms. It's a
+standalone captun worker — deliberately not embedded in OS, so it stays tiny
+and outlives any app deploy. Enable it for your dev server with env vars only
+(no code change):
+
+```bash
+CAPTUN_ENABLED=true pnpm dev          # random tunnel name on the default gateway
+CAPTUN_TUNNEL_NAME=jonas pnpm dev     # stable name → https://jonas.tunnels.iterate.com
+```
+
+The captun Vite plugin (`apps/os/vite.config.ts`) activates when
+`CAPTUN_ENABLED`/`CAPTUN_TUNNEL_NAME` is set and forwards public HTTP to your
+local dev server. Plain HTTP only — HMR and other WebSockets stay on the
+local URL. Tests open tunnels via `createPublicTunnel`
+(`apps/os/e2e/test-support/create-test-project.ts`) against the same gateway.
+
+Tunnels are not scarce. The genuinely scarce thing is the webhook-source
+configuration — a Slack app points at exactly one delivery URL at a time —
+so set a stable `CAPTUN_TUNNEL_NAME` per person (held in `dev_<user>`) to
+keep that URL working.
 
 ## Slack end-to-end testing
 
