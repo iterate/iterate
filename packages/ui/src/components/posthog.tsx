@@ -1,11 +1,11 @@
-import { memo, useEffect, useState, type ComponentType, type PropsWithChildren } from "react";
+import { useEffect } from "react";
 
 type PostHog = import("posthog-js").PostHog;
 type PostHogInterface = import("posthog-js").PostHogInterface;
-type PostHogProviderComponent = ComponentType<PropsWithChildren<{ client: PostHog }>>;
-const loadPostHogModules = import.meta.env.SSR
-  ? null
-  : async () => Promise.all([import("posthog-js/react"), import("posthog-js")]);
+
+// posthog-js only ever runs in the browser; the SSR branch keeps it out of the
+// server bundle.
+const loadPosthog = import.meta.env.SSR ? null : () => import("posthog-js");
 
 export interface SetupPosthogOptions {
   apiKey?: string;
@@ -76,68 +76,45 @@ function buildPosthogInitOptions(options: SetupPosthogOptions) {
   };
 }
 
-function setupPosthog(client: PostHog, options: SetupPosthogOptions): PostHog {
-  if (!shouldEnablePosthog(options.apiKey) || typeof window === "undefined") return client;
+function setupPosthog(client: PostHog, options: SetupPosthogOptions) {
+  if (!shouldEnablePosthog(options.apiKey) || typeof window === "undefined") return;
 
-  if (window.__iteratePosthogInitialized) {
-    if (window.__iteratePosthogApiKey === options.apiKey) {
-      return client;
-    }
+  if (window.__iteratePosthogInitialized && window.__iteratePosthogApiKey === options.apiKey) {
+    return;
   }
 
-  const initialized = client.init(options.apiKey!, buildPosthogInitOptions(options));
+  client.init(options.apiKey!, buildPosthogInitOptions(options));
   window.__iteratePosthogInitialized = true;
   window.__iteratePosthogApiKey = options.apiKey;
-  return initialized;
 }
 
-export const PostHogProvider = memo(
-  ({
-    children,
-    enabled,
-    options,
-  }: PropsWithChildren<{ enabled: boolean; options: SetupPosthogOptions }>) => {
-    const { apiKey, appStage, bootstrapFromUrl, proxyUrl, sessionRecording, uiHost } = options;
-    const [provider, setProvider] = useState<{
-      ClientProvider: PostHogProviderComponent;
-      client: PostHog;
-    } | null>(null);
+/**
+ * Initializes PostHog as a browser-only side effect. Nothing in our apps reads
+ * the PostHog React context, so there is no provider: autocapture, pageviews,
+ * session recording, and exception capture are all configured through `init`.
+ */
+export function PostHogInit({
+  enabled,
+  options,
+}: {
+  enabled: boolean;
+  options: SetupPosthogOptions;
+}) {
+  const { apiKey, appStage, bootstrapFromUrl, proxyUrl, sessionRecording, uiHost } = options;
 
-    useEffect(() => {
-      const loader = loadPostHogModules;
-      if (!enabled || !shouldEnablePosthog(apiKey) || !loader) {
-        setProvider(null);
-        return;
-      }
+  useEffect(() => {
+    if (!enabled || !shouldEnablePosthog(apiKey) || !loadPosthog) return;
+    void loadPosthog().then((posthogModule) =>
+      setupPosthog(posthogModule.default, {
+        apiKey,
+        appStage,
+        bootstrapFromUrl,
+        proxyUrl,
+        sessionRecording,
+        uiHost,
+      }),
+    );
+  }, [apiKey, appStage, bootstrapFromUrl, enabled, proxyUrl, sessionRecording, uiHost]);
 
-      setProvider(null);
-      let disposed = false;
-
-      async function loadPosthog() {
-        const [{ PostHogProvider: ClientProvider }, posthogModule] = await loader!();
-        if (disposed) return;
-        setProvider({
-          ClientProvider,
-          client: setupPosthog(posthogModule.default, {
-            apiKey,
-            appStage,
-            bootstrapFromUrl,
-            proxyUrl,
-            sessionRecording,
-            uiHost,
-          }),
-        });
-      }
-
-      void loadPosthog();
-
-      return () => {
-        disposed = true;
-      };
-    }, [apiKey, appStage, bootstrapFromUrl, enabled, proxyUrl, sessionRecording, uiHost]);
-
-    if (!enabled || !provider) return <>{children}</>;
-
-    return <provider.ClientProvider client={provider.client}>{children}</provider.ClientProvider>;
-  },
-);
+  return null;
+}

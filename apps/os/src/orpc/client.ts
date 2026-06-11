@@ -1,12 +1,12 @@
 import { QueryClient } from "@tanstack/react-query";
-import { createORPCClient, type ClientContext } from "@orpc/client";
+import { createORPCClient } from "@orpc/client";
 import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
-import { OpenAPILink, type OpenAPILinkOptions } from "@orpc/openapi-client/fetch";
+import { OpenAPILink } from "@orpc/openapi-client/fetch";
 import { createTanstackQueryUtils } from "@orpc/tanstack-query";
-import type { RouterClient } from "@orpc/server";
+import { createRouterClient, type RouterClient } from "@orpc/server";
 import { createIsomorphicFn } from "@tanstack/react-start";
 import { osContract } from "@iterate-com/os-contract";
-import type { appRouter } from "~/orpc/root.ts";
+import { appRouter } from "~/orpc/root.ts";
 import { requireRequestContext } from "~/request-context.ts";
 
 export const makeQueryClient = () =>
@@ -29,10 +29,9 @@ export const makeQueryClient = () =>
 type OrpcClient = RouterClient<typeof appRouter>;
 
 /**
- * Keep the TanStack Start route graph small by keeping the client typed from
- * the server router, but using the contract-only OpenAPI transport at runtime.
- * A direct in-process router client here pulls every oRPC handler and domain
- * dependency into the SSR route bundle.
+ * Keep the canonical TanStack Start + oRPC SSR shape small:
+ * - server: direct in-process router client
+ * - browser: OpenAPI client on `/api`
  *
  * Docs:
  * - https://orpc.dev/docs/adapters/tanstack-start
@@ -42,27 +41,23 @@ type OrpcClient = RouterClient<typeof appRouter>;
  * runtime entrypoints and is exposed to SSR via TanStack Start's request storage.
  */
 
-function createOpenApiClient(options: OpenAPILinkOptions<ClientContext>): OrpcClient {
-  return createORPCClient(new OpenAPILink(osContract, options));
-}
-
 function createBrowserOpenApiClient(): OrpcClient {
-  return createOpenApiClient({ url: `${window.location.origin}/api` });
-}
-
-function createServerOpenApiClient(): OrpcClient {
-  return createOpenApiClient({
-    headers: () => getForwardedOpenApiHeaders(requireRequestContext().rawRequest),
-    url: () => `${getServerOpenApiBaseUrl()}/api`,
-  });
+  return createORPCClient(
+    new OpenAPILink(osContract, {
+      url: `${window.location.origin}/api`,
+    }),
+  );
 }
 
 let cachedBrowserOpenApiClient: OrpcClient | undefined;
 
 const makeOrpcClient = createIsomorphicFn()
-  .server((): OrpcClient => {
-    return createServerOpenApiClient();
-  })
+  .server(
+    (): OrpcClient =>
+      createRouterClient(appRouter, {
+        context: async () => requireRequestContext(),
+      }),
+  )
   .client((): OrpcClient => {
     cachedBrowserOpenApiClient ??= createBrowserOpenApiClient();
     return cachedBrowserOpenApiClient;
@@ -91,20 +86,3 @@ export function createBrowserWebSocketClient(options?: { organizationSlug?: stri
 }
 
 export { createBrowserOpenApiClient };
-
-function getForwardedOpenApiHeaders(request: Request | undefined) {
-  const headers = new Headers();
-  const cookie = request?.headers.get("cookie");
-  const authorization = request?.headers.get("authorization");
-  if (cookie) headers.set("cookie", cookie);
-  if (authorization) headers.set("authorization", authorization);
-  return headers;
-}
-
-function getServerOpenApiBaseUrl() {
-  const context = requireRequestContext();
-  const requestUrl = context.rawRequest ? new URL(context.rawRequest.url) : undefined;
-  const baseUrl = requestUrl?.origin ?? context.config.baseUrl;
-  if (!baseUrl) throw new Error("Cannot create server oRPC client without a base URL.");
-  return baseUrl.replace(/\/+$/, "");
-}
