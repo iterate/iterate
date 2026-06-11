@@ -1049,6 +1049,30 @@ verbs replace itx.caps; (e) path defines with longest-prefix dispatch;
 execution, delete the SQLite caps table and ContextDO. Each lands
 independently green.
 
+### Queued from review (2026-06-11 afternoon), not yet implemented
+
+- **Artifact-addressed source.** A `source` worker ref should optionally
+  address its code as **(artifact, commit, entrypoint)** instead of inline
+  modules — source becomes a separate DIMENSION from the execution
+  mechanism (dynamic worker today; possibly Workers for Platforms later,
+  with the address unchanged). This makes the project worker completely
+  non-special: it is just a capability whose source ref points at the
+  project's build artifact at a commit. Targeting gets crisp:
+  `{ type: "source", source: { artifact, commit, entrypoint } }`.
+- **The 500-line workshop.** Build the whole system from zero in
+  dependency order, each step motivated by the previous one's limitation:
+  ① `{path, args}` + the path proxy (~30 lines: dots → data; property-get
+  silent and synchronous, `then` reserved or await misfires) →
+  ② replayPathCall (~20: data → dots, receiver-preserving, reserved
+  segments re-gated server-side) → ③ registry: longest-prefix Map +
+  parent delegation (~60) → ④ targets-as-data + dial/restore (~100) →
+  ⑤ the handle: fallthrough proxy + four verbs (~50) → ⑥ a capnweb
+  session serving it (~20; transport pipelining free) → ⑦ the journal:
+  append + reduce (~100). Note for the workshop: there are TWO composing
+  pipelining systems — ours flattens dotted NAMES into data; the
+  transport chains CALLS on returned stubs — and the doc/code should say
+  this in one place.
+
 ## Resolved (was open, now decided)
 
 - ~~Script calling convention?~~ → ONE shape: `async (itx) => …`, the single
