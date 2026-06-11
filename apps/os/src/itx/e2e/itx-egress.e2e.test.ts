@@ -90,13 +90,14 @@ test("bare fetch() inside a worker cap goes through egress (implicit door)", asy
   using projectItx = await itx.projects.get(project.id);
   await waitForProjectReady(projectItx);
 
-  await projectItx.caps.define({
+  await projectItx.provideCapability({
     name: "egressProbe",
-    target: {
+    capability: {
       type: "rpc",
       worker: {
         type: "source",
         source: {
+          type: "inline",
           cacheKey: crypto.randomUUID(),
           mainModule: "cap.js",
           modules: {

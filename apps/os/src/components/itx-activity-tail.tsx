@@ -1,8 +1,8 @@
-// Live tail of a project's /itx audit stream: capabilities being provided,
-// defined, revoked, disconnecting; contexts forking. The first instance of
-// the canonical "filtered stream view" — friendly per-event-type renderers,
-// raw mode shows the same events unfiltered (filtering is client-side by
-// design). Rides useItx (suspends until connected — give it a Suspense
+// Live tail of the project context's JOURNAL (the /itx stream — the only
+// authority for its capability table): capabilities being provided, revoked,
+// disconnecting; script executions. The first instance of the canonical
+// "filtered stream view" — friendly per-event-type renderers, raw mode shows
+// the same events unfiltered (filtering is client-side by design). Rides useItx (suspends until connected — give it a Suspense
 // boundary) with one kernel subscribe from "start": full replay + live tail.
 // If the socket dies, useItx re-suspends and hands back a fresh handle; the
 // effect re-subscribes from "start" again and dedupes the replay by offset.
@@ -11,18 +11,23 @@ import { useEffect, useState } from "react";
 import type { Event as StreamEvent } from "@iterate-com/shared/streams/types";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
 import { useItx } from "~/itx/use-itx.ts";
 
 const MAX_BUFFERED_EVENTS = 500;
 
+/** The project context's journal path (journal.ts ownJournalPath("/")). */
+const PROJECT_JOURNAL_PATH = "/itx";
+
+const capabilityName = (p: Record<string, unknown>) =>
+  Array.isArray(p.path) ? p.path.join(".") : String(p.name ?? "");
+
 const FRIENDLY_RENDERERS: Record<string, (payload: Record<string, unknown>) => string> = {
-  "events.iterate.com/itx/cap-provided": (p) => `capability "${p.name}" provided (live)`,
-  "events.iterate.com/itx/cap-defined": (p) =>
-    `capability "${p.name}" defined (${p.kind ?? "worker"})`,
-  "events.iterate.com/itx/cap-revoked": (p) => `capability "${p.name}" revoked`,
-  "events.iterate.com/itx/cap-disconnected": (p) => `capability "${p.name}" disconnected`,
-  "events.iterate.com/itx/context-forked": (p) => `context forked: ${p.id ?? ""}`,
+  "events.iterate.com/itx/capability-provided": (p) =>
+    `capability "${capabilityName(p)}" provided (${p.kind ?? "rpc"})`,
+  "events.iterate.com/itx/capability-revoked": (p) => `capability "${capabilityName(p)}" revoked`,
+  "events.iterate.com/itx/capability-disconnected": (p) =>
+    `capability "${capabilityName(p)}" disconnected`,
+  "events.iterate.com/itx/context-created": (p) => `context created: ${p.id ?? ""}`,
 };
 
 type TailStatus = "connecting" | "live" | "error";
@@ -40,7 +45,7 @@ export function ItxActivityTail({ projectId }: { projectId: string }) {
     setStatus("connecting");
     setError(undefined);
     itx.streams
-      .get(ITX_AUDIT_STREAM_PATH)
+      .get(PROJECT_JOURNAL_PATH)
       .subscribe(
         (batch) => {
           if (disposed) return;
@@ -103,8 +108,8 @@ export function ItxActivityTail({ projectId }: { projectId: string }) {
           <p className="py-2 font-mono text-xs text-destructive">{error}</p>
         ) : rows.length === 0 ? (
           <p className="py-2 text-xs text-muted-foreground">
-            Nothing yet — provide a capability from the repl (itx.caps.provide) and watch it land
-            here.
+            Nothing yet — provide a capability from the repl (itx.provideCapability) and watch it
+            land here.
           </p>
         ) : (
           <ol className="space-y-1">

@@ -14,7 +14,7 @@ import {
   type BrowserReplEntry,
 } from "~/itx/browser-repl.ts";
 import { ITX_EXAMPLES } from "~/itx/examples.ts";
-import type { Itx } from "~/itx/handle.ts";
+import type { ItxHandle } from "~/itx/handle.ts";
 import { ItxRepl } from "~/components/itx-repl.tsx";
 
 export const Route = createFileRoute("/_app/itx-repl")({
@@ -26,7 +26,7 @@ export const Route = createFileRoute("/_app/itx-repl")({
 
 export type BrowserReplSession = {
   close(): void;
-  itx: RpcStub<Itx>;
+  itx: RpcStub<ItxHandle>;
 };
 
 export type BrowserReplSessionFactory = () => BrowserReplSession | Promise<BrowserReplSession>;
@@ -46,7 +46,7 @@ export function createBrowserReplSession(context?: string): BrowserReplSession {
   );
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(wsUrl);
-  const rpc = newWebSocketRpcSession<Itx>(socket);
+  const rpc = newWebSocketRpcSession<ItxHandle>(socket);
 
   return {
     itx: rpc,
@@ -75,7 +75,7 @@ export function ItxReplPage({
   scope?: Record<string, unknown>;
 }) {
   const [code, setCode] = useState(initialCode);
-  const [itx, setItx] = useState<RpcStub<Itx> | null>(null);
+  const [itx, setItx] = useState<RpcStub<ItxHandle> | null>(null);
   const [status, setStatus] = useState("Connecting...");
   const [entries, setEntries] = useState<BrowserReplEntry[]>([]);
   const [examplesOpen, setExamplesOpen] = useState(false);
@@ -92,7 +92,7 @@ export function ItxReplPage({
 
   useEffect(() => {
     const globals = globalThis as typeof globalThis & {
-      itx?: RpcStub<Itx>;
+      itx?: RpcStub<ItxHandle>;
       env?: object;
     };
     let closed = false;

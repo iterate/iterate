@@ -2,10 +2,12 @@
 
 export * from "./count-all-projects.sql.ts";
 export * from "./delete-project.sql.ts";
+export * from "./get-itx-context-by-id.sql.ts";
 export * from "./get-project-by-custom-hostname.sql.ts";
 export * from "./get-project-by-custom-hostname-any-organization.sql.ts";
 export * from "./get-project-by-id.sql.ts";
 export * from "./get-project-by-slug.sql.ts";
+export * from "./insert-itx-context.sql.ts";
 export * from "./insert-project.sql.ts";
 export * from "./list-all-projects.sql.ts";
 export * from "./list-projects-by-slug.sql.ts";
@@ -21,6 +23,11 @@ export const sqlfuQuerySources = [
     sqlFile: "delete-project.sql",
     generatedFile: "delete-project.sql.ts",
     sourceSql: "delete from projects\nwhere id = :id;\n",
+  },
+  {
+    sqlFile: "get-itx-context-by-id.sql",
+    generatedFile: "get-itx-context-by-id.sql.ts",
+    sourceSql: "select id, project_id, journal_path\nfrom itx_contexts\nwhere id = :id\nlimit 1;\n",
   },
   {
     sqlFile: "get-project-by-custom-hostname.sql",
@@ -45,6 +52,12 @@ export const sqlfuQuerySources = [
     generatedFile: "get-project-by-slug.sql.ts",
     sourceSql:
       "select id, slug, custom_hostname, created_at, updated_at\nfrom projects\nwhere slug = :slug\nlimit 1;\n",
+  },
+  {
+    sqlFile: "insert-itx-context.sql",
+    generatedFile: "insert-itx-context.sql.ts",
+    sourceSql:
+      "insert into itx_contexts (id, project_id, journal_path)\nvalues (:id, :projectId, :journalPath)\non conflict (id) do nothing;\n",
   },
   {
     sqlFile: "insert-project.sql",

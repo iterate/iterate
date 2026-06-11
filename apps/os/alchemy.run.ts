@@ -1,5 +1,12 @@
 import alchemy from "alchemy";
-import { Ai, D1Database, DurableObjectNamespace, Queue, WorkerLoader } from "alchemy/cloudflare";
+import {
+  Ai,
+  D1Database,
+  DurableObjectNamespace,
+  Queue,
+  R2Bucket,
+  WorkerLoader,
+} from "alchemy/cloudflare";
 import { Artifacts } from "@iterate-com/shared/alchemy/artifacts";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
@@ -7,7 +14,7 @@ import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-ser
 import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
-import type { ContextDO } from "./src/itx/context-do.ts";
+import type { ItxDurableObject } from "./src/itx/itx-durable-object.ts";
 import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-append-chain-subscriber.ts";
 import type { ProjectDurableObject } from "./src/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnection } from "./src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
@@ -173,9 +180,10 @@ const stream = DurableObjectNamespace<Stream>("stream", {
   className: "StreamDurableObject",
   sqlite: true,
 });
-// itx child contexts (apps/os/docs/itx-spec.md §3): one instance per ctx_… id.
-const itxContext = DurableObjectNamespace<ContextDO>("itx-context", {
-  className: "ContextDO",
+// itx generic context hosts: one instance per extended context, addressed
+// by its journal coordinate (src/itx/journal.ts).
+const itxContext = DurableObjectNamespace<ItxDurableObject>("itx-context", {
+  className: "ItxDurableObject",
   sqlite: true,
 });
 const projectMcpServerConnection = DurableObjectNamespace<ProjectMcpServerConnection>(
@@ -216,6 +224,13 @@ const artifactEventsQueue = await Queue("artifact-events", {
   name: `${ctx.workerName}-artifact-events`,
   adopt: true,
 });
+// Build memo for repo-sourced itx workers (src/itx/source-build.ts):
+// hash-keyed immutable bundles, reproducible from their keys — safe to wipe.
+const itxBuildCache = await R2Bucket("itx-build-cache", {
+  name: `${ctx.workerName}-itx-build-cache`,
+  adopt: true,
+  empty: true,
+});
 
 const debugAppendChainSubscriber = ctx.app.local
   ? DurableObjectNamespace<DebugAppendChainSubscriber>("debug-append-chain-subscriber", {
@@ -235,6 +250,7 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     ARTIFACTS_NAMESPACE: artifactsNamespace,
     GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
     LOADER: WorkerLoader(),
+    ITX_BUILD_CACHE: itxBuildCache,
     ITX_CONTEXT: itxContext,
     AGENT: agent,
     ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),

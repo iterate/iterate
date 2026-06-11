@@ -2,6 +2,7 @@ import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type Git, type GitAuthor, type GitLogEntry } from "@cloudflare/shell/git";
 import { z } from "zod";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
+import { RepoEmptyError } from "~/domains/repos/repo-errors.ts";
 
 /**
  * Workspace-free git operations against an artifact repo remote. Every call
@@ -68,6 +69,12 @@ export const ReadRepoLogInput = z.object({
 });
 export type ReadRepoLogInput = z.infer<typeof ReadRepoLogInput>;
 
+export const ReadRepoTreeInput = z.object({
+  /** Branch (or any fetchable ref); the repo's default branch when omitted. */
+  ref: z.string().trim().min(1).optional(),
+});
+export type ReadRepoTreeInput = z.infer<typeof ReadRepoTreeInput>;
+
 export type CommitRepoFilesResult = {
   branch: string;
   changedPaths: string[];
@@ -110,7 +117,7 @@ export async function commitRepoFiles(
   if (changedPaths.length === 0 && !checkout.createdBranch) {
     const [head] = await checkout.git.log({ depth: 1 });
     if (!head) {
-      throw new Error("Repo has no commits.");
+      throw new RepoEmptyError("Repo has no commits.");
     }
     return {
       branch: input.branch,
@@ -126,7 +133,7 @@ export async function commitRepoFiles(
     // New branch with no file changes: push the branch pointer as-is.
     const [head] = await checkout.git.log({ depth: 1 });
     if (!head) {
-      throw new Error("Repo has no commits.");
+      throw new RepoEmptyError("Repo has no commits.");
     }
     commitOid = head.oid;
   } else {
@@ -185,6 +192,45 @@ export async function readRepoFiles(
     });
   }
   return files;
+}
+
+/**
+ * One checkout, everything a build needs: the ref's head commit plus every
+ * text file on it. Pairing the oid with the SAME checkout's contents matters
+ * — a separate probe could race a push and mislabel the build.
+ */
+export async function readRepoTree(
+  input: RepoRemote & { branch: string },
+): Promise<{ commitOid: string; files: Array<{ content: string; path: string }> }> {
+  const checkout = await checkoutRepoBranch({
+    branch: input.branch,
+    createMissingBranchFrom: null,
+    depth: 1,
+    remote: input.remote,
+    token: input.token,
+  });
+  const [head] = await checkout.git.log({ depth: 1 });
+  if (!head) {
+    throw new RepoEmptyError("Repo has no commits.");
+  }
+  const files: Array<{ content: string; path: string }> = [];
+  const walk = async (dir: string) => {
+    for (const entry of await checkout.filesystem.readdirWithFileTypes(dir)) {
+      if (dir === REPO_DIR && entry.name === ".git") continue;
+      const entryPath = `${dir}/${entry.name}`;
+      if (entry.type === "directory") {
+        await walk(entryPath);
+      } else {
+        files.push({
+          content: await checkout.filesystem.readFile(entryPath),
+          path: entryPath.slice(REPO_DIR.length + 1),
+        });
+      }
+    }
+  };
+  await walk(REPO_DIR);
+  files.sort((a, b) => (a.path < b.path ? -1 : 1));
+  return { commitOid: head.oid, files };
 }
 
 export async function listRepoFiles(input: RepoRemote & { branch: string }): Promise<string[]> {

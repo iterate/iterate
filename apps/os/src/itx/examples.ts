@@ -8,11 +8,11 @@
 //   node            AsyncFunction("itx", "vars", code) on a Cap'n Web stub
 //   cli             `pnpm cli itx run -e <code>` (same Node eval, spawned)
 //   dynamic-worker  POST /api/itx/run with `async ({ itx, vars }) => { code }`
-//   config-worker   the body baked into a project's iterate-config worker.js,
+//   config-worker   the body baked into the project repo's worker.js,
 //                   executed against env.ITERATE.context
 //
 // Almost every example is written against a PROJECT-scoped handle (context:
-// "project"): the harness — a project REPL, connectItx({ context }), a
+// "project"): the harness — a project REPL, withItx({ context }), a
 // /api/itx/run body with `context`, or a worker's env.ITERATE.context —
 // connects into the project, and the script gets straight to work:
 // itx.streams.get("/some/path").append(...). Only narrowing itself is a
@@ -99,51 +99,52 @@ return { appended, count: events.length };
     id: "provide-live-capability",
     title: "Provide a live, browser-owned capability",
     description:
-      "Registers a browser-owned RpcTarget as a LIVE capability on the project (session-bound — it lives only while this REPL tab is connected), then calls it straight back through the itx fallthrough as itx.answer.run().",
+      "Registers a browser-owned object as a LIVE capability on the project (session-bound — it lives only while this REPL tab is connected), then calls it straight back through the itx fallthrough as itx.answer.run().",
     context: "project",
     runtimes: ["browser"],
     code: `
-// A live capability is just an RpcTarget you own. Its methods run HERE, in
+// A live capability is just an object you own. Its methods run HERE, in
 // the browser tab — the project calls back to you over the open session.
-class AnswerCapability extends RpcTarget {
+const answer = {
   async run() {
     alert("The answer is 42");
     return "alerted";
-  }
-}
+  },
+};
 
-// define() is THE verb: a live stub is just another target. A live cap
-// disappears when this tab disconnects; reconnect and define() again to
-// restore it. (caps.provide still works as an alias.)
-await itx.caps.define({ name: "answer", target: new AnswerCapability() });
+// provideCapability() is THE verb: a live stub is just another capability.
+// asPathCallable() makes a plain object-of-methods speak the one calling
+// convention (call({ path, args }) replayed back here on your object). A
+// live cap disappears when this tab disconnects; reconnect and
+// provideCapability() again to restore it.
+await itx.provideCapability({ name: "answer", capability: asPathCallable(answer) });
 
-// Unknown names on the handle fall through to the registry, so the cap is
+// Unknown names on the handle fall through to the capability table, so the cap is
 // callable as if it were built in.
 return await itx.answer.run();
 `.trim(),
   },
   {
     id: "provide-path-call-sdk",
-    title: "Define a live SDK-shaped capability (path-call)",
+    title: "Provide a live SDK-shaped capability (path-call)",
     description:
       "A path-call capability implements ONE method, call({ path, args }), and receives the whole dotted path as data. This is how 'use itx.slack exactly like @slack/web-api' works — the public SDK docs become the tool docs, with a ~10-line forwarder.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
 // One method handles the entire method tree. itx.fakeSlack.chat.postMessage(x)
-// arrives here as { path: ["chat","postMessage"], args: [x] }.
+// arrives here as { path: ["chat","postMessage"], args: [x] } — call({ path,
+// args }) IS the calling convention, so a provider that implements it owns
+// its whole method-tree semantics.
 class FakeSlackSdk extends RpcTarget {
   async call({ path, args }) {
     return { method: path.join("."), args, provider: "live-session" };
   }
 }
 
-// invoke: "path-call" tells the registry to deliver { path, args } in one
-// shot rather than replaying property access.
-await itx.caps.define({
+await itx.provideCapability({
   name: "fakeSlack",
-  invoke: "path-call",
-  target: new FakeSlackSdk(),
+  capability: new FakeSlackSdk(),
 });
 
 // Call any depth — the path is accumulated locally and sent once.
@@ -151,10 +152,10 @@ return await itx.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" });
 `.trim(),
   },
   {
-    id: "define-durable-worker-cap",
-    title: "Define a durable worker capability from source",
+    id: "provide-durable-worker-cap",
+    title: "Provide a durable worker capability from source",
     description:
-      "A serializable target stores source code as a DURABLE capability (a stateless dynamic worker), loaded on demand. Unlike a live stub target, it survives this session. Every public method on the WorkerEntrypoint is auto-proxied — add a method, call it instantly.",
+      "A serializable address stores source code as a DURABLE capability (a stateless dynamic worker), loaded on demand. Unlike a live provider stub, it survives this session. Every public method on the WorkerEntrypoint is auto-proxied — add a method, call it instantly.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -164,13 +165,14 @@ return await itx.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" });
 // a content version: keep it stable while the source is unchanged (re-running
 // this snippet reuses the loaded worker) and bump it whenever you edit the
 // module text.
-await itx.caps.define({
+await itx.provideCapability({
   name: "greeter",
-  target: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-greeter-v1",
         mainModule: "cap.js",
         modules: {
@@ -202,13 +204,14 @@ return {
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-await itx.caps.define({
+await itx.provideCapability({
   name: "todo",
-  target: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-todo-v1",
         mainModule: "cap.js",
         modules: {
@@ -248,13 +251,14 @@ return await itx.todo.list();
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-await itx.caps.define({
+await itx.provideCapability({
   name: "kit",
-  target: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-kit-v1",
         mainModule: "cap.js",
         modules: {
@@ -288,13 +292,14 @@ return {
     runtimes: ALL_RUNTIMES,
     code: `
 // Provider cap.
-await itx.caps.define({
+await itx.provideCapability({
   name: "inventory",
-  target: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-inventory-v1",
         mainModule: "cap.js",
         modules: {
@@ -313,13 +318,14 @@ await itx.caps.define({
 });
 
 // Consumer cap — a different dynamic worker that calls the first via itx.
-await itx.caps.define({
+await itx.provideCapability({
   name: "report",
-  target: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-report-v1",
         mainModule: "cap.js",
         modules: {
@@ -351,13 +357,14 @@ return await itx.report.build({ sku: "ABC" });
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-await itx.caps.define({
+await itx.provideCapability({
   name: "counter",
-  target: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-counter-v1",
         entrypoint: "Counter",   // named export required for facets
         exportType: "durable-object",
@@ -386,30 +393,28 @@ return { current: await itx.counter.current() };   // 2, and it persists
 `.trim(),
   },
   {
-    id: "fork-child-context",
-    title: "Fork a child context (a session) with its own caps",
+    id: "extend-child-context",
+    title: "Extend the context with its own caps",
     description:
-      "itx.fork() makes a cheap, disposable child context under the project — an agent session or scratchpad. Its caps SHADOW the parent's; names it doesn't define delegate up the chain. describe() shows the merged view with provenance.",
+      "itx.extend() makes a cheap, disposable child context under the project — an agent session or scratchpad. Its caps SHADOW the parent's; names it doesn't provide delegate up the chain. describe() shows the merged view with provenance.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
 // A cap on the project — visible to every child through the chain.
-await itx.caps.define({
+await itx.provideCapability({
   name: "shared",
-  invoke: "path-call",
-  target: new (class extends RpcTarget {
+  capability: new (class extends RpcTarget {
     async call({ path }) { return { from: "project", method: path.join(".") }; }
   })(),
 });
 
-// Fork a child. It's a full itx handle on a new ctx_… context.
-const child = await itx.fork({ name: "repl-scratch" });
+// Extend a child. It's a full itx handle on a new itx_… context.
+const child = await itx.extend({ name: "repl-scratch" });
 
 // The child can shadow 'shared' with its own definition...
-await child.caps.define({
+await child.provideCapability({
   name: "shared",
-  invoke: "path-call",
-  target: new (class extends RpcTarget {
+  capability: new (class extends RpcTarget {
     async call({ path }) { return { from: "child", method: path.join(".") }; }
   })(),
 });
@@ -417,7 +422,7 @@ await child.caps.define({
 // ...so the child sees its own, while the project still sees its own.
 return {
   fromChild: await child.shared.ping(),
-  caps: await child.caps.describe(),   // merged chain, child entries first
+  capabilities: (await child.describe()).capabilities, // merged chain, child entries first
 };
 `.trim(),
   },
@@ -443,18 +448,19 @@ return { status: response.status, sawSubstitutedHeader: body.headers };
     id: "http-cap-and-share-url",
     title: "Serve a capability over HTTP + a shareable link",
     description:
-      "A cap whose fetch() is exposed (meta.http.expose) gets its own hostname: {cap}--{project}.<base>. Routable ≠ public — it's admin-gated by default. caps.shareUrl() mints a signed, expiring link: 'let me show you something real quick.'",
+      "A cap whose fetch() is exposed (meta.http.expose) gets its own hostname: {cap}--{project}.<base>. Routable ≠ public — it's admin-gated by default. itx.shareUrl() mints a signed, expiring link: 'let me show you something real quick.'",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-await itx.caps.define({
+await itx.provideCapability({
   name: "hello",
   meta: { http: { expose: true } },   // routable; still admin-gated
-  target: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",
       source: {
+        type: "inline",
         cacheKey: "itx-example-hello-http-v1",
         mainModule: "cap.js",
         modules: {
@@ -474,7 +480,7 @@ await itx.caps.define({
 });
 
 // A signed link anyone can open for the next hour (no further auth needed).
-return { shareUrl: await itx.caps.shareUrl({ name: "hello", path: "/demo", ttlSeconds: 3600 }) };
+return { shareUrl: await itx.shareUrl({ name: "hello", path: "/demo", ttlSeconds: 3600 }) };
 `.trim(),
   },
   {

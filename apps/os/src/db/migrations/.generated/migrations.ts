@@ -22,6 +22,7 @@ export const migrations = {
   "src/db/migrations/0013_drop_project_external_egress_proxy_url.sql": "alter table projects drop column external_egress_proxy_url;\n",
   "src/db/migrations/0014_drop_project_permissions.sql": "drop table project_permissions;\n",
   "src/db/migrations/0015_drop_ingress_routes.sql": "-- Project platform hosts resolve dynamically from the projects table\n-- (src/ingress/lookup.ts); the materialized route rows duplicated that with\n-- stale copies and nothing else wrote to the table.\ndrop table ingress_routes;\n",
+  "src/db/migrations/0016_add_itx_contexts.sql": "-- The itx context catalog: id -> journal coordinate. This is a DIRECTORY\n-- (the sanctioned D1 role: project directory / secrets / DO catalog), never\n-- the authority — a context's state and parentage fold from its journal\n-- stream; this table only answers \"where does ctx_… live\" for bare-id\n-- restores (reconnects, isolate props).\ncreate table itx_contexts (\n  id text primary key not null,\n  project_id text not null references projects (id) on delete cascade,\n  journal_path text not null,\n  created_at text not null default current_timestamp\n);\n\ncreate index idx_itx_contexts_project_id on itx_contexts (project_id);\n",
 };
 
 export function migrate(client: SyncClient): void;

@@ -4,19 +4,20 @@ import type { Connection } from "agents";
 import { z } from "zod";
 import { StreamPath, type EventInput } from "@iterate-com/shared/streams/types";
 import { upsertD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { typeid } from "@iterate-com/shared/typeid";
+import { createD1Client } from "sqlfu";
 import packageJson from "../../../../package.json" with { type: "json" };
 import {
-  getStreamsCapability,
-  type StreamsCapabilityProps,
-} from "~/domains/streams/entrypoints/streams-capability.ts";
+  getStreamsBackend,
+  type StreamsBackendProps,
+} from "~/domains/streams/entrypoints/streams-backend.ts";
 import { parseConfig } from "~/config.ts";
-import type { ContextDO } from "~/itx/context-do.ts";
+import type { ItxDurableObject } from "~/itx/itx-durable-object.ts";
+import type { CapabilityAddress } from "~/itx/itx.ts";
+import { dialContext, extendContext, projectContextAddress } from "~/itx/journal.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
-import type { CapInvoke, SerializableCapTarget } from "~/itx/protocol.ts";
 import { runItxScript } from "~/itx/run.ts";
 
-export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 
 /**
  * Project-scoped MCP server connection for os.
@@ -35,7 +36,7 @@ export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capabil
 
 interface McpServerEnv {
   DO_CATALOG: D1Database;
-  ITX_CONTEXT: DurableObjectNamespace<ContextDO>;
+  ITX_CONTEXT: DurableObjectNamespace<ItxDurableObject>;
   MOCK_PROVIDER_BASE_URL?: string;
   PROJECT_MCP_SERVER_CONNECTION: DurableObjectNamespace;
 }
@@ -90,36 +91,26 @@ const eventTypePrefix = "events.iterate.com/mcp-server";
 const requiredToolScope = "profile";
 
 /** Bump when SEEDED_CAPS changes; existing sessions re-seed on next call. */
-const MCP_CONTEXT_CAPS_VERSION = "1";
+const MCP_CONTEXT_CAPS_VERSION = "2";
 
 /** Capabilities every MCP session context starts with (instructions feed the
  * exec_js tool description AND itx describe()). */
 const SEEDED_CAPS: Array<{
   name: string;
   instructions: string;
-  invoke: CapInvoke;
-  target: SerializableCapTarget;
+  capability: CapabilityAddress;
 }> = [
   {
     instructions:
       "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
-    invoke: "members",
     name: "ai",
-    target: { type: "rpc", worker: { binding: "AI", type: "binding" } },
-  },
-  {
-    instructions:
-      "Project-bound OS API. Call itx.os.listProcedures() for the TypeScript surface, then itx.os.<path.to.procedure>({ …input }).",
-    invoke: "path-call",
-    name: "os",
-    target: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
+    capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
   },
   {
     instructions:
       "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }) against the Gmail REST API.",
-    invoke: "members",
     name: "gmail",
-    target: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
+    capability: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
   },
 ];
 
@@ -139,7 +130,7 @@ export class ProjectMcpServerConnection extends McpAgent<
         "",
         "exec_js runs JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async (itx) => { ... }` — the one argument is your iterate context handle.",
         "",
-        "The `itx` object is a handle on this session's iterate context: built-ins (itx.fetch, itx.streams, itx.caps) plus every capability on the context, called as `itx.<cap>.<method>(args)`. Available capabilities are listed in the exec_js tool description.",
+        "The `itx` object is a handle on this session's iterate context: built-ins (itx.fetch, itx.streams, itx.provideCapability) plus every capability on the context, called as `itx.<cap>.<method>(args)`. Available capabilities are listed in the exec_js tool description.",
         "",
         "Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP requests (it rides project egress with secret substitution). The return value is sent back as the result. Do NOT write bare statements — always wrap in `async (itx) => { ... }`.",
       ].join("\n"),
@@ -330,30 +321,31 @@ export class ProjectMcpServerConnection extends McpAgent<
     if (existing && seededVersion === MCP_CONTEXT_CAPS_VERSION) return existing;
 
     const config = parseConfig(this.env as unknown as Env);
-    const contextId =
-      existing ??
-      typeid({
-        env: { TYPEID_PREFIX: config.typeIdPrefix },
-        prefix: "ctx",
-      });
-    const contextStub = this.env.ITX_CONTEXT.getByName(contextId);
-    await contextStub.initialize({
-      id: contextId,
+    // Creation is an event: extend the project context — the birth
+    // certificate is the journal's first event; the node materializes
+    // lazily by consuming it. A version bump mints a FRESH context
+    // (contexts are erasable; the session record is the session stream).
+    void existing;
+    const created = await extendContext({
+      base: "/",
+      db: createD1Client(this.env.DO_CATALOG),
+      env: this.env as unknown as Env,
       name: `mcp:${await this.getSessionSlug()}`,
-      parent: projectId,
+      parent: { address: projectContextAddress(projectId), id: projectId },
       projectId,
+      typeIdPrefix: config.typeIdPrefix,
     });
+    const contextItx = dialContext(this.env as unknown as Env, created.address).itx();
     for (const cap of SEEDED_CAPS) {
-      await contextStub.itxDefine({
-        invoke: cap.invoke,
-        meta: { instructions: cap.instructions },
+      await contextItx.provideCapability({
+        instructions: cap.instructions,
         name: cap.name,
-        target: cap.target,
+        capability: cap.capability,
       });
     }
-    await this.ctx.storage.put(storageKey, contextId);
+    await this.ctx.storage.put(storageKey, created.contextId);
     await this.ctx.storage.put(versionKey, MCP_CONTEXT_CAPS_VERSION);
-    return contextId;
+    return created.contextId;
   }
 
   private async emitLifecycleEvent(slug: string, payload: Record<string, unknown>) {
@@ -368,7 +360,7 @@ export class ProjectMcpServerConnection extends McpAgent<
         return;
       }
 
-      await getStreamsCapability({
+      await getStreamsBackend({
         exports: this.workerExports(),
         props: streamCapabilityProps({
           projectId,
@@ -533,7 +525,7 @@ export class ProjectMcpServerConnection extends McpAgent<
       code: z
         .string()
         .describe(
-          "JavaScript async arrow function to execute, e.g. `async (itx) => { return await itx.os.listProcedures(); }`",
+          "JavaScript async arrow function to execute, e.g. `async (itx) => { return await itx.describe(); }`",
         ),
       ...(options.requireProjectInput
         ? {
@@ -620,7 +612,7 @@ function serializeError(error: unknown) {
 function streamCapabilityProps(input: {
   projectId: string;
   streamPath: StreamPath;
-}): StreamsCapabilityProps {
+}): StreamsBackendProps {
   return {
     appendPolicy: { mode: "stream" },
     projectId: input.projectId,

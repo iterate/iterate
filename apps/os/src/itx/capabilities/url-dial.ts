@@ -2,11 +2,13 @@
 // Cap'n Web server addressed by URL (itx-next.md §1).
 //
 // Law 7 lives here: the Cap'n Web session terminates in THIS stateless
-// worker, never a Durable Object. The registry (a DO) hands the call across
+// worker, never a Durable Object. The context node (a DO) hands the call across
 // as data; this entrypoint opens a WebSocket session, replays the call
 // against the remote main, and closes the session before returning. One
 // session per call — remote caps are stateless from the platform's point of
-// view, exactly like loopback and source refs.
+// view, exactly like loopback and source refs. One behavior: the call's path
+// replays as capnweb member pipelining against the remote main (UrlDial is
+// dial-internal — not a dialable loopback — so there is no other way in).
 //
 // Always a WebSocket session, never an HTTP batch (`newHttpBatchRpcSession`
 // is banned repo-wide by the iterate/no-capnweb-http-batch lint rule):
@@ -15,27 +17,25 @@
 //
 // Headers ride the WebSocket handshake and pass through the SAME
 // getSecret() placeholder substitution as project egress (Law 5), resolved
-// via the SecretsCapability loopback — so a definer writes
+// via the SecretsCapability loopback — so a provider writes
 // `authorization: 'Bearer getSecret({ key: "REMOTE_TOKEN" })'` and the
-// secret material never appears in any registry row or describe() output.
+// secret material never appears in any journal record or describe() output.
 // Known gap: these dials bypass fetch-cap shadowing (the UrlDial → Project
 // DO hop is Workers jsrpc, which cannot carry a WebSocket-bearing Response).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
-import { RESERVED_PATH_SEGMENTS, type CapInvoke, type PathCall } from "../protocol.ts";
+import { RESERVED_PATH_SEGMENTS, type PathCall } from "../itx.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 
 export type UrlDialProps = {
-  /** The remote Cap'n Web server. Definer-supplied; http(s) or ws(s). */
+  /** The remote Cap'n Web server. Provider-supplied; http(s) or ws(s). */
   url: string;
   /** Handshake headers; values pass through egress secret substitution. */
   headers?: Record<string, string>;
-  /** The cap's invoke mode, applied against the REMOTE main. */
-  invoke?: CapInvoke;
-  /** Attribution + secret scope, injected by the registry at dial time. */
-  cap?: string;
+  /** Attribution + secret scope, injected by the dial. */
+  capabilityPath?: string;
   context?: string;
   projectId?: string;
 };
@@ -45,9 +45,9 @@ export class UrlDial extends WorkerEntrypoint<Env, UrlDialProps> {
     const props = this.ctx.props;
     if (!props.url) throw new Error("UrlDial needs props.url (the remote Cap'n Web server).");
     if (!props.projectId) {
-      // The registry always injects projectId; refusing without it means a
+      // The dial always injects projectId; refusing without it means a
       // hand-built dial can never resolve another project's secrets.
-      throw new Error("UrlDial needs registry-injected projectId props.");
+      throw new Error("UrlDial needs dial-injected projectId props.");
     }
     const url = dialableHttpUrl(props.url);
 
@@ -80,12 +80,8 @@ export class UrlDial extends WorkerEntrypoint<Env, UrlDialProps> {
 
     const remote = newWebSocketRpcSession(socket as unknown as WebSocket);
     try {
-      if (props.invoke === "path-call") {
-        // One round trip: the remote main implements call({ path, args }).
-        return await (remote as unknown as { call(input: PathCall): unknown }).call(input);
-      }
-      // Members mode: walk the path as capnweb property pipelining (still one
-      // round trip — the path resolves remotely) and call the terminal stub.
+      // Walk the path as capnweb property pipelining (one round trip — the
+      // path resolves remotely) and call the terminal stub.
       // Same reserved-segment filter as replayPathCall: these names are stub
       // controls / pollution vectors LOCALLY, before anything reaches the wire.
       let cursor: unknown = remote;
@@ -109,7 +105,7 @@ export class UrlDial extends WorkerEntrypoint<Env, UrlDialProps> {
 
 /**
  * Workers dial WebSockets with an Upgrade fetch, which only accepts http(s)
- * URLs — ws(s) spellings normalize here so definers can use either.
+ * URLs — ws(s) spellings normalize here so providers can use either.
  */
 function dialableHttpUrl(raw: string): URL {
   const url = new URL(raw);

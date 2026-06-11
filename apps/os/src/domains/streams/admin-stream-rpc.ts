@@ -5,7 +5,7 @@ import { authenticateCapnwebAdmin } from "~/itx/admin-auth-cookie.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import { principalIsAdmin } from "~/auth/principal.ts";
 import { getStreamDurableObjectName } from "~/domains/streams/stream-runtime.ts";
-import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-backend.ts";
 import type { AppConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
 

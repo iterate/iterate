@@ -6,7 +6,7 @@
 //   node            AsyncFunction over a Cap'n Web stub in this process
 //   cli             `iterate-app-cli itx run -e …` (a real spawned CLI)
 //   dynamic-worker  POST /api/itx/run with the body wrapped as a function
-//   config-worker   the body baked into the project's iterate-config
+//   config-worker   the body baked into the project's repo
 //                   worker.js, invoked via itx.worker (env.ITERATE.context)
 
 import { execFile } from "node:child_process";
@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { RpcTarget } from "capnweb";
+import { asPathCallable } from "../client.ts";
 import type { ItxExample, ItxExampleRuntime } from "../examples.ts";
 import { adminApiSecret, baseUrl, connectGlobal } from "./e2e-env.ts";
 
@@ -25,7 +26,12 @@ export type MatrixRuntime = (typeof MATRIX_RUNTIMES)[number] & ItxExampleRuntime
 
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
-) => (itx: unknown, vars: Record<string, unknown>, rpcTarget: unknown) => Promise<unknown>;
+) => (
+  itx: unknown,
+  vars: Record<string, unknown>,
+  rpcTarget: unknown,
+  pathCallable: unknown,
+) => Promise<unknown>;
 
 export async function runExampleCode(
   runtime: MatrixRuntime,
@@ -75,10 +81,10 @@ async function runInNode(input: {
   projectId: string;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
-  const script = new AsyncFunction("itx", "vars", "RpcTarget", input.code);
+  const script = new AsyncFunction("itx", "vars", "RpcTarget", "asPathCallable", input.code);
   using itx = connectGlobal();
   using projectItx = await itx.projects.get(input.projectId);
-  return await script(projectItx, input.vars, RpcTarget);
+  return await script(projectItx, input.vars, RpcTarget, asPathCallable);
 }
 
 async function runInCli(input: {
@@ -148,7 +154,7 @@ async function runInConfigWorker(input: {
 }
 
 /**
- * The iterate-config worker.js for the matrix project: every config-worker
+ * The project-repo worker.js for the matrix project: every config-worker
  * example baked in as `async ({ itx, vars }) => { <body> }`, dispatched by id
  * through ONE exported method. `itx.worker.runItxExample(...)` reaches it via
  * the Project DO's path replay, and the script's handle is the config
@@ -184,24 +190,24 @@ export default class extends WorkerEntrypoint {
 }
 
 /**
- * Replace worker.js in a project's iterate-config repo. The push itself runs
+ * Commit files into a project's repo. The push itself runs
  * as an itx script via /api/itx/run (the in-isolate path agents use); the
- * worker source travels via the endpoint's vars.
+ * file contents travel via the endpoint's vars.
  */
-export async function pushIterateConfigWorker(input: {
+export async function pushProjectRepoFiles(input: {
   commitMessage: string;
+  files: Record<string, string>;
   projectId: string;
   projectSlug: string;
-  workerSource: string;
 }): Promise<void> {
   const pushScript = async ({
     itx,
     vars,
   }: {
     itx: Record<string, any>;
-    vars: { dir: string; message: string; projectSlug: string; workerSource: string };
+    vars: { dir: string; files: Record<string, string>; message: string; projectSlug: string };
   }) => {
-    const repo = await itx.repos.ensureIterateConfigInfo({ projectSlug: vars.projectSlug });
+    const repo = await itx.repos.ensureProjectRepoInfo({ projectSlug: vars.projectSlug });
     const url = new URL(repo.remote);
     url.username = "x";
     url.password = repo.token.split("?")[0];
@@ -211,8 +217,10 @@ export async function pushIterateConfigWorker(input: {
       dir: vars.dir,
       url: url.toString(),
     });
-    await itx.workspace.writeFile(`${vars.dir}/worker.js`, vars.workerSource);
-    await itx.workspace.gitAdd({ dir: vars.dir, filepath: "worker.js" });
+    for (const [path, content] of Object.entries(vars.files)) {
+      await itx.workspace.writeFile(`${vars.dir}/${path}`, content);
+      await itx.workspace.gitAdd({ dir: vars.dir, filepath: path });
+    }
     await itx.workspace.gitCommit({
       author: { email: "e2e@iterate.com", name: "itx e2e" },
       dir: vars.dir,
@@ -228,9 +236,9 @@ export async function pushIterateConfigWorker(input: {
       functionSource: pushScript.toString(),
       vars: {
         dir: `/e2e-config-${crypto.randomUUID().slice(0, 8)}`,
+        files: input.files,
         message: input.commitMessage,
         projectSlug: input.projectSlug,
-        workerSource: input.workerSource,
       },
     }),
     headers: matrixAuthHeaders(),

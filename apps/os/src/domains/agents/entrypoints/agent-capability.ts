@@ -5,6 +5,8 @@ import {
   type AgentDurableObject,
   getAgentDurableObjectName,
 } from "../durable-objects/agent-durable-object.ts";
+import { replayPathCall } from "~/itx/path-proxy.ts";
+import type { PathCall } from "~/itx/itx.ts";
 
 type AgentCapabilityEnv = {
   AGENT?: DurableObjectNamespace<AgentDurableObject>;
@@ -21,6 +23,11 @@ type AgentRpcStub = {
 };
 
 export class AgentCapability extends WorkerEntrypoint<AgentCapabilityEnv, AgentCapabilityProps> {
+  /** The itx kernel's one calling convention; replay walks this entrypoint's own members. */
+  call(input: PathCall): Promise<unknown> {
+    return replayPathCall(this, input);
+  }
+
   create() {
     if (!this.env.AGENT) {
       throw new Error("AGENT Durable Object namespace is not configured.");

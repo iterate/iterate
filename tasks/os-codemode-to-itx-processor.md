@@ -9,8 +9,8 @@ tags: [os, itx, codemode, agents]
 # Kill codemode, birth the itx processor
 
 Being executed as its own effort (agent already working on it); recorded here
-so the plan survives the session. Context:
-[itx oRPC replacement plan](../apps/os/docs/itx-orpc-replacement-plan.md).
+so the plan survives the session. Context: [itx-next.md](../apps/os/docs/itx-next.md)
+(the oRPC replacement plan doc was deleted).
 
 Codemode — the `ctx`-based script execution system (~3,850 LOC domain +
 session DO) — is deleted entirely and replaced by a **very limited stream

@@ -2,8 +2,7 @@
 
 Status: NOODLING. This is the running list of things we want to fix or build in
 the itx layer, with positions and open questions. Nothing here is committed;
-when an item graduates it gets its own task/PR and the spec
-(`itx-spec.md`) gets amended. Companion docs: `apps/os/src/itx/README.md`
+when an item graduates it gets its own task/PR. Companion docs: `apps/os/src/itx/README.md`
 (what exists), `apps/os/src/itx/DECISIONS.md` (what changed on contact with
 reality).
 
@@ -779,7 +778,289 @@ New debts).
 - **The REPL editor consumes types.ts verbatim** (?raw into the TS virtual
   FS); the hand-maintained ambient shrank to a prelude of session globals.
 
+## The address unification (2026-06-11 → SHIPPED 2026-06-12)
+
+Owner direction from review, captured as the design of record for the next
+arc. The through-line: **the system has one data structure — the cap
+target — and everything that today is a bespoke concept becomes a use of
+it.** "Node", "global", "platform defaults", "live vs durable", and
+`itx.caps` all dissolve.
+
+### 1. A context's ADDRESS is a CapTarget — SHIPPED
+
+A context is, operationally, anything that answers the context protocol
+(`itxInvoke / itxProvideCapability / itxDescribe / itxRevokeCapability` —
+the `RegistryStub` shape). A cap target is precisely "how to obtain an RPC surface". So
+context addresses ARE targets:
+
+```ts
+// the project context: a Durable Object hosts a project (it already
+// does; the address finally says so)
+{ type: "rpc", worker: { type: "durable-object", binding: "PROJECT", name: "…" } }
+
+// an agent session
+{ type: "rpc", worker: { type: "durable-object", binding: "ITX_CONTEXT", name: "ctx_…" } }
+
+// global: a STATELESS context — just a named loopback entrypoint.
+// Nothing special; if it ever needs a durable layer, point the name at a
+// DO address and nothing else changes.
+{ type: "rpc", worker: { type: "loopback" }, entrypoint: "GlobalContext" }
+
+// the platform defaults: ALSO a stateless context at a loopback address.
+// ContextRegistryHost.defaults stops being a bespoke mechanism and
+// becomes an ordinary parent pointer (the in-process map may survive as a
+// dial fast-path, but conceptually it is an address like any other).
+{ type: "rpc", worker: { type: "loopback" }, entrypoint: "PlatformProjectContext" }
+```
+
+Parent pointers are stored as addresses (`descriptor = { id, address,
+parent: address }`), and chain delegation needs zero new machinery: the
+registry already dials every target kind for caps — delegating a miss to
+the parent is the same `resolveTarget`. One dial mechanism for everything.
+
+`projectDoStub.itx()` (or `.address()`) returning the target completes the
+SturdyRef picture from persistent.capnp that this doc already cites:
+`save()` returns the sturdy ref, `restore(ref)` returns the live
+capability; `resolveItx` is already named the restorer.
+
+What falls out:
+
+- **Host swapping is invisible** — stateless ↔ durable is a one-line
+  address change behind a name.
+- **User-space context hosts**: a `source` ref with a durable-object facet
+  export means user code can HOST a context — the ProjectWorker litmus
+  symmetry, applied to contexts.
+- **Federation, accidentally**: `{ type: "url", url: "wss://…/api/itx/…" }`
+  is a valid parent. Cross-deployment chains were not designed for; the
+  unification simply permits them.
+- The string-sniffing dies: `GLOBAL_CONTEXT_ID`, `isChildContextId`
+  prefix checks in the restorer and `parentStub`, the registry-host
+  selection switches.
+- ContextDO may dissolve into **facets of the Project DO** (the facet
+  machinery already exists for caps): colocated storage, one less
+  namespace.
+
+Two splits keep it honest:
+
+- **Identity ≠ address.** `ctx_abc` remains the identity (audit,
+  workspace scoping, origin-carrying); the target is the address. Today's
+  string conflates them — the design separates them.
+- **Restore stays gated.** Addresses are pure names with zero authority.
+  The connect edge keeps short refs bound to grants ("restoring is itself
+  a capability"); raw targets are the realm-internal format, never a
+  bearer credential.
+
+### 2. Durability is a property of the HOST — superseded by everything-writable-is-durable (see the final statement below)
+
+Every context has a **session layer** (in-memory, dies with the
+connection) and, iff its host has storage, a **durable layer**. Defining
+always works; what varies is where the row lands:
+
+- serializable target + durable host → durable row (survives);
+- serializable target + stateless host → session row (your admin script
+  defines three caps on the global context for its own lifetime);
+- live target → session row, always (a connection cannot be persisted —
+  the rule has no exceptions; workerd#6087 may change this someday).
+
+The satisfying part: **the session layer already exists** — today's
+"live table" on the Project DO is it. "Live caps" and "defines on a
+stateless context" were the same concept all along; "stateless contexts
+are read-only" (an earlier framing in this doc) was the wrong frame.
+
+### 3. `itx.caps` dissolves into root verbs — SHIPPED
+
+The `caps` namespace exists to dodge name collisions, but reserved names
+already exist as a mechanism. Kernel flattens to root:
+`itx.provideCapability() / itx.revokeCapability() / itx.describe() /
+itx.fork() / itx.invoke()` — the `ItxCaps` class dies, and the
+`itx.describe()` vs `caps.describe()` duplication resolves to one merged
+view. A handle is **an address, an access set, and five verbs**.
+
+### 4. Definitions live at PATHS — longest-prefix dispatch — SHIPPED
+
+REVERSES §4.5's "no dots in names" — deliberately. That rejection was
+about namespace organization and remains right for it; this is about
+**interception granularity**:
+
+```ts
+// shadow ONE method of an inherited cap; everything else falls through
+await itx.provideCapability({ path: ["slack", "chat", "postMessage"], target: reviewQueue });
+
+await itx.slack.chat.postMessage({ … });  // → reviewQueue
+await itx.slack.users.list();             // → chain → the real slack cap
+```
+
+Resolution rule: at each context, the **longest defined prefix** of the
+call path wins and is dialed with the _remainder_ as the call path; no
+prefix → delegate the whole path up the chain. Still one deterministic
+lookup per node; the registry resolves prefixes it was explicitly given
+and never traverses provided objects — §4.5's actual concern survives.
+This is the per-method mock / approval-gate / fork-with-one-override
+story (`provideCapability({ path: ["workspace", "gitPush"], … })` on a
+session).
+
+### SHIPPED (2026-06-11): one dispatch mode; `types` on provide/describe
+
+- **`invoke` died from the kernel.** The registry knows exactly one calling
+  convention — `target.call({ path, args })` — and the members/path-call
+  CHOICE moved to the edges where the concrete object lives: the dial wraps
+  concrete objects (env bindings, loader entrypoints, facets) with
+  `asPathCallable` (path-proxy.ts), first-party loopback entrypoints
+  self-replay via a one-line `call(input) { return replayPathCall(this,
+input); }`, live providers implement `call` themselves or wrap
+  client-side with `asPathCallable` (extends capnweb RpcTarget, so the
+  replay runs in the provider's process), and forwarders keep their inner
+  mode as THEIR props (`ProjectWorkerProps.invoke`, `UrlDialProps.invoke` —
+  `WorkerInvokeMode` in project-worker.ts). `CapabilityInvoke`, the stored
+  `invoke` column, and the field on provide/describe/events are gone.
+- **`types` joined `instructions`.** `provideCapability({ types })` stores
+  TypeScript declarations for the cap's surface as the `types` meta
+  convention field (machine/editor counterpart of the human-facing
+  `instructions`); `describe()` lifts both.
+
+### Also queued from the same review (smaller, independent)
+
+- **`itx.project` is mislabeled and needlessly kernel**: it is the
+  Project DO's admin surface, not "the project" (a narrowed itx IS the
+  project). It becomes an ordinary platform default via a first-party
+  loopback (`ProjectAdmin`), with the itx\*/fetch masking moved inside the
+  entrypoint; rename to something honest (`admin` / `node`) in the same
+  move. (`itx.worker` already fell to this treatment in §8.)
+- **Global streams** then either remains the one kernel exception or the
+  dial-time injected props grow an `access` field alongside
+  `capability`/`context`/`projectId` — the same trusted-identity channel that
+  origin-carrying already established.
+
+### SHIPPED (2026-06-12): the final shape — the journal is the only authority
+
+The whole wave-(f)+ arc (the §5 core/processor debate, the evening lock, the
+facets/journal-paths review, and the end-of-review LOCK) landed as one
+implementation; the in-flight subsections that used to live here collapsed
+into this statement. What shipped, in the locked terms:
+
+- **One class.** `Itx extends StreamProcessor` (`src/itx/itx.ts`;
+  `ItxContract` in `src/itx/contract.ts` via `defineProcessorContract`).
+  The pure functions — `reduceItxJournalEvent`, `resolveLongestProvidedPrefix`,
+  path validation, the live-vs-address discriminator — stay module-level and
+  are unit-tested over an in-memory journal without workerd. Three names,
+  three questions, as locked: `Itx` (what), `ItxDurableObject` (where),
+  a stub (how).
+- **The journal is the only authority.** provide/revoke APPEND
+  `capability-provided`/`capability-revoked` (path-keyed payloads carrying
+  the full address) and SELF-INGEST through the one consumption door
+  (append, then catch-up from the checkpoint — read-your-writes with no
+  waiting machinery; duplicates inert by offset). Live provides journal the
+  EVENT while the stub stays an instance field; teardown appends
+  `capability-disconnected`; replay marks live entries disconnected.
+  DELETED: `DurableItx`, the `itx_capabilities` SQLite table (dropped on
+  sight on old instances), every fire-and-forget audit append, and the
+  `ITX_AUDIT_STREAM_PATH` vocabulary — "audit log" stopped existing as a
+  concept; the journal is the record and state is its fold (the standing
+  doctrine, docs/domain-objects-and-stream-processors.md).
+- **Creation is an event.** `extendContext` (`src/itx/journal.ts`) mints the
+  id, appends `context-created { id, name, parent: { id, address } }` as the
+  journal's first event, and returns a handle; the context materializes
+  lazily by consuming its journal; the fold takes the first birth
+  certificate and ignores later ones. ContextDO's initialize RPC and
+  descriptor SQLite table are gone — `ItxDurableObject.descriptor()` derives
+  from state. No idempotency keys as a correctness mechanism anywhere in the
+  flow.
+- **Defaults live on the parent chain — Option 2, as locked.** ONE
+  capability map per context; the platform defaults are the provides of the
+  read-only, code-rooted `PlatformContext` loopback entrypoint
+  (`src/itx/platform-context.ts`), addressed `{ type: "rpc", worker:
+{ type: "loopback" }, entrypoint: "PlatformContext" }` and dialed
+  in-process as the project core's `parentItx`. Chain:
+  ctx → project → platform:project (code). Shadowing,
+  revoke-resurfaces-the-default, and deploy-updates hold as chain
+  consequences; "platform:project" remains the owner string. The
+  constructor-capabilities/defaults-map mechanism is deleted.
+- **Identity is a stream coordinate.** Journals live at
+  `<host base>/itx[/<child-id>]` — the host's OWN context at `<base>/itx`
+  (the project's is `/itx`, the old audit path, by uniform rule rather than
+  coincidence), children at `<base>/itx/<id>` (agents:
+  `<agentPath>/itx/<id>`). `itx` is a reserved stream path segment with one
+  clear error at the user-facing append doors; journals remain ordinary
+  readable streams in every viewer. The generic host's DO NAME is the
+  coordinate verbatim (`<namespace>:<journalPath>`); identity/journal/
+  self-address are projections of the name. Bare `ctx_…` refs resolve
+  through the `itx_contexts` D1 catalog (directory role only). Origin
+  travels as `{ id, address }`, so origin dial-back and the egress
+  dispatcher never pay a directory lookup.
+- **Workspaces de-itx-ified.** `itxWorkspaceId` and the `itx:<id>` colon
+  strings are deleted; `WorkspaceCapability` takes an explicit
+  `props.workspaceId`. The platform context provides the project workspace;
+  the AGENT host provides its own `workspace` capability bound to its
+  context's identity, journaled on that context. Semantic change, on
+  purpose: plain extensions now SHARE the project workspace through the
+  chain — isolation is a host's decision, not kernel magic.
+- **Processor-mode execution arrived.** `script-execution-requested` with
+  `enqueued: true` runs in the processor via the existing runner (detached:
+  a script's own provides re-enter the serialized ingest) and appends
+  `script-execution-completed`; `pendingExecutions` in state makes
+  at-least-once reruns detectable and completed pairs inert. The synchronous
+  /api/itx/run door writes the same two events as a record — both modes
+  converge on one journal vocabulary.
+- **The locked ergonomics** (from the evening review) shipped first:
+  `extend` replaced `fork`; `itx.parent` is kernel (an extension's parent
+  from its birth certificate; the project's parent IS the platform
+  context); `provideCapability({ path|name, capability, instructions?,
+types?, meta? })` with `Capability = Function | live stub |
+CapabilityAddress` and bare-function auto-wrap (asPathCallable
+  semantics); the dial-time attribution prop is `capabilityPath`; provides
+  return `{ revoke(), [Symbol.dispose] }` with dispose auto-revoking ONLY
+  live provides. The two committed acceptance e2es (middleware via a
+  bare-function fetch shadow + itx.parent; indirection via origin
+  dial-back) live in `src/itx/e2e/itx-fork.e2e.test.ts`.
+
+Still queued from this arc (deliberately not built):
+
+- **`itx.narrow({ scopes })`** — handle sugar over extend + GuardCapability
+  rows; fine-grained access stays zero-kernel-mechanism.
+- **Facet embedding for rich hosts** — agents keep their own
+  ItxDurableObject instances today; `ctx.facets`-hosted processors
+  (`ProcessorDurableObject`) remain the recorded direction.
+- **Global as a named instance of the generic host** (and its journal as the
+  project-lifecycle surface); global handles stay connect-minted views until
+  something needs to write on the global context.
+- **Retention**: dispose-deletes, idle-TTL alarms for anonymous contexts,
+  catalog/cascade via ownership.
+- **Artifact-addressed source** (`{ type: "source", source: { artifact,
+commit, entrypoint } }`) — source as a dimension separate from the
+  execution mechanism.
+- **The 500-line workshop** as a standalone teaching document; the build
+  order now exists as `src/itx/README.md`.
+
 ## Resolved (was open, now decided)
+
+- ~~Two invoke modes as registry data?~~ → ONE dispatch mode (2026-06-11):
+  the kernel always dispatches `target.call({ path, args })`; the
+  members/path-call choice moved to the edges (dial wraps concrete objects
+  with `asPathCallable`, loopbacks self-replay via `call`, live objects
+  wrap client-side, forwarders keep inner mode in props). `invoke` is gone
+  from provide/describe/rows/events; `types?: string` (machine-facing
+  counterpart of `instructions`) landed on provide + describe in the same
+  move.
+
+- ~~Naming: `define`/`cap` vocabulary?~~ → The capability rename landed
+  (2026-06-11): `define` is dead as a verb everywhere — the handle root is
+  `provideCapability` / `revokeCapability` (ONE provide verb for durable AND
+  live targets; the target kind decides), plus a public root
+  `invoke({ path, args })` (the explicit dispatch form) and the explicit
+  accessor `capability(name)`. Wire verbs: `itxProvideCapability` /
+  `itxRevokeCapability` (itxDescribe/itxInvoke unchanged). Events:
+  `cap-defined` + `cap-provided` merged into ONE
+  `events.iterate.com/itx/capability-provided` (payload `kind` records
+  live vs durable), `cap-revoked`/`cap-disconnected` →
+  `capability-revoked`/`capability-disconnected`, and the script pair is
+  `script-execution-requested`/`script-execution-completed`. Every `Cap*`
+  identifier is spelled out (`CapabilityTarget`, `CapabilitySource`,
+  `CapabilityInvoke`, `RESERVED_CAPABILITY_NAMES`, …), the dial-time
+  attribution prop `cap` is now `capability`, the registry table is
+  `itx_capabilities`, and `ItxCapIngress` → `ItxCapabilityIngress`. The itx
+  streams loopback took the `StreamsCapability` name; the streams DOMAIN
+  entrypoint that previously held it is now `StreamsBackend`
+  (`getStreamsBackend`, `streams-backend.ts`).
 
 - ~~Script calling convention?~~ → ONE shape: `async (itx) => …`, the single
   argument is the handle. No conventions in the runner; parameterization is

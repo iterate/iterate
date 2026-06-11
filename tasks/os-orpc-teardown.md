@@ -8,7 +8,8 @@ tags: [os, itx, orpc, cutover]
 
 # Rip out oRPC from apps/os: itx serves everything
 
-Plan and decisions: [itx oRPC replacement plan](../apps/os/docs/itx-orpc-replacement-plan.md).
+Plan and decisions: superseded by [itx-next.md](../apps/os/docs/itx-next.md)
+(the oRPC replacement plan doc was deleted).
 Posture: immediate cutover, no back-compat, POC — `git revert` is the
 rollback plan.
 

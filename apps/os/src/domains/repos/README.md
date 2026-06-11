@@ -16,8 +16,8 @@ Durable Object names.
   and pure reducer.
 - `artifacts.ts` — Cloudflare Artifacts binding helpers, token minting, remote
   URL derivation, initial README push.
-- `iterate-config-repo.ts` / `iterate-config-base-seed.ts` — the
-  `iterate-config` repo slug/base-artifact constants and the base-repo seeding
+- `project-repo.ts` / `iterate-config-base-seed.ts` — the project repo
+  slug (`project`) / base-artifact constants and the base-repo seeding
   script.
 - `repo-errors.ts` — error classifier helpers
   (`isRepoAlreadyExistsError`, ...).
@@ -162,8 +162,8 @@ shared surface for oRPC and codemode. It is also exported under the alias
   `readFiles`, `listFiles`, `readLog`, and `getArtifact`. `create` throws if
   the Repo already exists; `get` never implicitly initializes a Repo DO.
 - `createInfo` / `getInfo` — same, but return serialized `RepoInfo`.
-- `ensureIterateConfigInfo({ projectSlug })` — create-or-read the project's
-  `iterate-config` Repo.
+- `ensureProjectRepoInfo({ projectSlug })` — create-or-read the project's
+  `project` Repo.
 - `list()` — reads D1 lifecycle catalog rows by the `projectId` index, then
   filters out rows whose DO exists but was never fully created.
 - `executeCodemodeFunctionCall` — codemode adapter for the above.
@@ -177,13 +177,13 @@ Codemode exposes the capability as `ctx.repos`
 project-scope middleware, call the capability, and return serializable
 `RepoInfo` (oRPC cannot return live DO stubs).
 
-## Iterate config repo
+## The project repo
 
-Every Project gets a Repo with slug `iterate-config`, created by the Project
+Every Project gets a Repo with slug `project`, created by the Project
 Durable Object during project creation as a fork of the Cloudflare Artifacts
-repo `iterate-config-base` (`ensureIterateConfigInfoForProject`). The fork
+repo `iterate-config-base` (`ensureProjectRepoInfoForProject`). The fork
 follows normal Repo lifecycle and records `repo/created` in
-`/repos/iterate-config`.
+`/repos/project`.
 
 The base artifact is seeded from the checked-in holder directory
 `apps/os/iterate-config-repo` (must contain `iterate.config.jsonc`):

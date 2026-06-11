@@ -2,6 +2,8 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { createD1Client } from "sqlfu";
 import { parseConfig } from "~/config.ts";
 import { getFreshGoogleAccessToken } from "~/domains/secrets/oauth.ts";
+import { replayPathCall } from "~/itx/path-proxy.ts";
+import type { PathCall } from "~/itx/itx.ts";
 
 type GmailCapabilityEnv = {
   DB?: D1Database;
@@ -20,6 +22,11 @@ type GmailRequestInput = {
 };
 
 export class GmailCapability extends WorkerEntrypoint<GmailCapabilityEnv, GmailCapabilityProps> {
+  /** The itx kernel's one calling convention; replay walks this entrypoint's own members. */
+  call(input: PathCall): Promise<unknown> {
+    return replayPathCall(this, input);
+  }
+
   async request(request: GmailRequestInput) {
     const token = await this.readToken();
     return await callGmailApi({ request, token });

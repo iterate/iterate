@@ -147,7 +147,7 @@ describe("SlackAgentProcessor", () => {
 
     expect(appended).toHaveLength(1);
     expect(appended[0]!.event).toMatchObject({
-      type: "events.iterate.com/itx/execution-requested",
+      type: "events.iterate.com/itx/script-execution-requested",
       idempotencyKey: "slack-agent/slack-bang-command-to-codemode-script@42",
       payload: {
         enqueued: true,

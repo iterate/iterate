@@ -11,6 +11,12 @@
       "binding": "LOADER",
     },
   ],
+  "r2_buckets": [
+    {
+      "binding": "ITX_BUILD_CACHE",
+      "bucket_name": "itx-build-cache-vitest",
+    },
+  ],
   "durable_objects": {
     "bindings": [
       {

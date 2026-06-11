@@ -1,10 +1,10 @@
 import { describe, expect, test, vi } from "vitest";
-import { createConnectionPool } from "./use-itx.ts";
+import { createSocketSuspenseCache } from "./use-itx.ts";
 
 function harness() {
   const deaths = new Map<string, () => void>();
   let dials = 0;
-  const pool = createConnectionPool<string>({
+  const pool = createSocketSuspenseCache<string>({
     connect: (context, onDead) => {
       dials += 1;
       deaths.set(context ?? "", onDead);
@@ -14,7 +14,7 @@ function harness() {
   return { pool, deaths, dials: () => dials };
 }
 
-describe("createConnectionPool", () => {
+describe("createSocketSuspenseCache", () => {
   test("get() returns the SAME entry across calls — the stable promise Suspense needs", async () => {
     const { pool, dials } = harness();
     const entry = pool.get("prj_1");

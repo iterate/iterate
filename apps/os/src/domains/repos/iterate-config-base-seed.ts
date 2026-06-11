@@ -9,7 +9,7 @@ import {
   REPO_WRITE_TOKEN_TTL_SECONDS,
   stripArtifactTokenQuery,
 } from "~/domains/repos/artifacts.ts";
-import { ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME } from "~/domains/repos/iterate-config-repo.ts";
+import { ITERATE_CONFIG_BASE_REPO_ARTIFACT_NAME } from "~/domains/repos/project-repo.ts";
 
 const ITERATE_CONFIG_REPO_DIR = "/repo";
 const ITERATE_CONFIG_JSONC = '{\n  "version": 1\n}\n';

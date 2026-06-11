@@ -15,11 +15,16 @@ import { os } from "@orpc/server";
 import { RpcTarget } from "capnweb";
 import { z } from "zod";
 
-import { connectItx } from "../src/itx/client.ts";
+import { asPathCallable, withItx } from "../src/itx/client.ts";
 
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
-) => (itx: unknown, vars: Record<string, unknown>, rpcTarget: unknown) => Promise<unknown>;
+) => (
+  itx: unknown,
+  vars: Record<string, unknown>,
+  rpcTarget: unknown,
+  pathCallable: unknown,
+) => Promise<unknown>;
 
 const ItxRunInput = z.object({
   eval: z
@@ -60,10 +65,10 @@ export const itxRunScript = os
 
     // The script body becomes an async function body, so `return` works and
     // `await` is available throughout — same wrapping as /api/itx/run.
-    const script = new AsyncFunction("itx", "vars", "RpcTarget", code);
+    const script = new AsyncFunction("itx", "vars", "RpcTarget", "asPathCallable", code);
 
-    using itx = connectItx({ baseUrl, context: input.context, token });
-    const result = await script(itx, vars, RpcTarget);
+    using itx = withItx({ baseUrl, context: input.context, token });
+    const result = await script(itx, vars, RpcTarget, asPathCallable);
 
     // Exactly one JSON document on stdout — scripts and the e2e suite parse it.
     process.stdout.write(`${JSON.stringify(result ?? null, null, 2)}\n`);

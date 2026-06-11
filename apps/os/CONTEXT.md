@@ -163,7 +163,7 @@ Future outbound HTTP/S policy work for Project-owned execution. Current codemode
 _Avoid_: Project Ingress, implemented gateway, implemented secret system
 
 **Project Worker**:
-The Project-owned dynamic Worker loaded from Iterate Config Repo code.
+The Project-owned dynamic Worker loaded from Project Repo code.
 _Avoid_: OS App Worker, Project Durable Object, Codemode worker
 
 **Project Worker Fetch**:
@@ -340,7 +340,7 @@ _Avoid_: Session ID, stream path
 A scoped RPC capability handed to script executors and tool providers so they can interact with a Codemode Session.
 _Avoid_: RpcTarget, session stub, callback bundle
 
-**StreamsCapability**:
+**StreamsBackend**:
 A Project ID-backed RPC capability for stream operations. Its props bind the shared stream namespace to the Project ID, and optional `streamPath` props narrow calls to one namespace-local Event Stream Path.
 _Avoid_: Generic stream client, cross-app stream client
 
@@ -480,12 +480,12 @@ _Avoid_: Repo row, Durable Object fields, frontend state
 A long-lived Cloudflare Artifacts write token stored in Repo Reduced State so a user or script can access a Repo's Git remote in the v1 prototype.
 _Avoid_: API key, separate secret, token row
 
-**Iterate Config Repo**:
-The project-created Repo with slug `iterate-config` that stores project-local Iterate configuration.
+**Project Repo**:
+The project-created Repo with slug `project` that stores project-local Iterate configuration.
 _Avoid_: config artifact, project settings row, GitHub config repo
 
 **Iterate Config Base Repo**:
-The Cloudflare Artifacts repo named `iterate-config-base` that seeds each Project's Iterate Config Repo by Artifact fork.
+The Cloudflare Artifacts repo named `iterate-config-base` that seeds each Project's Project Repo by Artifact fork.
 _Avoid_: template row, default config object, GitHub template
 
 **Cloudflare Artifacts**:
@@ -563,8 +563,8 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - **Repo Reduced State** is derived from the **Repo Stream Processor**, not from ad hoc Durable Object fields or frontend state.
 - The **Repo Created Event** payload is project-local; Project ID comes from the **Stream Namespace**, not the event payload.
 - The initial long-lived **Repo Token** and Git remote details are part of the **Repo Created Event** and therefore part of **Repo Reduced State** returned by Repo info reads.
-- Every new **Project** gets an **Iterate Config Repo** with Repo Slug `iterate-config`.
-- The **Iterate Config Repo** is forked from the **Iterate Config Base Repo** during Project creation and then behaves like an ordinary **Repo**.
+- Every new **Project** gets a **Project Repo** with Repo Slug `project`.
+- The **Project Repo** is forked from the **Iterate Config Base Repo** during Project creation and then behaves like an ordinary **Repo**.
 - **ReposCapability** owns Repo collection semantics for one **Project**; project-scoped oRPC procedures and codemode both use it instead of duplicating Repo lifecycle logic.
 - Creating a **Repo** is explicit through **ReposCapability** create behavior and fails if that Repo already exists.
 - Selecting a missing **Repo** returns a not-found result and should not initialize a **Repo Durable Object**.
@@ -740,9 +740,9 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - For an **Event-Mediated Tool Provider**, the **Codemode Processor** appends the function-call-requested event, but the Tool Function Implementation owns appending the matching function-call-completed event.
 - `ctx.<provider>.<toolFunction>(payload)` calls a **Tool Function**.
 - Built-in stream operations, such as append, are ordinary **Tool Functions** under paths like `ctx.streams.append(...)`.
-- A **StreamsCapability** defaults operations to its narrowed **Event Stream Path** when the caller omits a path.
-- In a narrowed **StreamsCapability**, stream paths without a leading slash, including `./` paths, resolve relative to the narrowed **Event Stream Path**.
-- In a narrowed **StreamsCapability**, stream paths with a leading slash resolve as absolute project-scoped **Event Stream Paths** and remain subject to capability policy.
+- A **StreamsBackend** defaults operations to its narrowed **Event Stream Path** when the caller omits a path.
+- In a narrowed **StreamsBackend**, stream paths without a leading slash, including `./` paths, resolve relative to the narrowed **Event Stream Path**.
+- In a narrowed **StreamsBackend**, stream paths with a leading slash resolve as absolute project-scoped **Event Stream Paths** and remain subject to capability policy.
 - Navigating to an **Event Stream Path** in the Project Stream Explorer may initialize that stream; users do not need a separate create-stream command.
 - The **Project Stream Explorer** lists every initialized **Event Stream Path**, including `/`, as a flat list rather than a tree.
 - For the **Project Stream Explorer**, an Event Stream Path exists in reality when its Stream Durable Object is initialized and cataloged for the Project.
