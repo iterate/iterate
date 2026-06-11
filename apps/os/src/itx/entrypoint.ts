@@ -12,13 +12,12 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { Itx, type ItxRuntime } from "./handle.ts";
 import {
   GLOBAL_CONTEXT_ID,
-  isChildContextId,
   resolveDialableTargets,
   type ItxProps,
   type PathCall,
 } from "./protocol.ts";
+import { contextAddressOf, dialContext, isChildContextAddress } from "./addresses.ts";
 import { replayPathCall } from "./path-proxy.ts";
-import type { ContextDO } from "./context-do.ts";
 import { parseConfig } from "~/config.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
@@ -39,14 +38,16 @@ export async function resolveItx(input: {
 
   let projectId: string | null;
   if (contextId === GLOBAL_CONTEXT_ID) {
+    // Global handle minting stays connect-time — the global context has no
+    // node to dial yet (address unification step (c)).
     projectId = null;
-  } else if (isChildContextId(contextId)) {
-    const contextDo = input.env.ITX_CONTEXT.getByName(
-      contextId,
-    ) as unknown as DurableObjectStub<ContextDO>;
-    projectId = (await contextDo.descriptor()).projectId;
   } else {
-    projectId = contextId;
+    const address = contextAddressOf(contextId);
+    // A project context's identity IS its project; a child node resolves its
+    // owning project from its descriptor — the one lookup a sturdy ref costs.
+    projectId = isChildContextAddress(address)
+      ? (await dialContext(input.env, address).descriptor!()).projectId
+      : contextId;
   }
 
   return new Itx({
@@ -109,12 +110,7 @@ export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
     // context's `fetch` shadow must catch its isolates' bare fetch() too —
     // the chain (child → project → defaults) is what resolves the cap.
     const context = this.ctx.props.context;
-    const node =
-      context && isChildContextId(context)
-        ? (this.env.ITX_CONTEXT.getByName(context) as unknown as {
-            itxInvoke(input: PathCall): Promise<unknown>;
-          })
-        : this.#project();
+    const node = context ? dialContext(this.env, contextAddressOf(context)) : this.#project();
     return (await node.itxInvoke({
       args: [request],
       path: ["fetch"],

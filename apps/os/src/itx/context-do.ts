@@ -23,24 +23,24 @@ import type {
   SerializableCapTarget,
 } from "./protocol.ts";
 import {
+  contextAddressOf,
+  dialContext,
+  type ContextAddress,
+  type ContextNodeStub,
+} from "./addresses.ts";
+import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
 } from "~/domains/streams/stream-runtime.ts";
-import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 export type ContextDescriptor = {
   id: string;
   name: string | null;
-  /** Parent context id: a project id or another ctx_… id. */
-  parent: string;
+  /** The parent context: its identity (a project id or another ctx_… id, for
+   * audit) plus its ADDRESS — how chain delegation dials the parent node. */
+  parent: { id: string; address: ContextAddress };
   /** The owning project — every child context lives under exactly one. */
   projectId: string;
-};
-
-/** The registry surface a context host exposes; chain calls use this shape. */
-type RegistryHostStub = {
-  itxDescribe(): Promise<CapDescription[]>;
-  itxInvoke(input: PathCall & { origin?: string }): Promise<unknown>;
 };
 
 export class ContextDO extends DurableObject<Env> {
@@ -58,21 +58,28 @@ export class ContextDO extends DurableObject<Env> {
   }
 
   /** Idempotent: fork() calls this once; later connects just read. */
-  initialize(input: { id: string; name?: string; parent: string; projectId: string }) {
+  initialize(input: {
+    id: string;
+    name?: string;
+    parent: { id: string; address: ContextAddress };
+    projectId: string;
+  }) {
     const cursor = this.ctx.storage.sql.exec(
       `INSERT INTO itx_context (id, project_id, parent, name, created_at_ms)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(id) DO NOTHING`,
       input.id,
       input.projectId,
-      input.parent,
+      // The parent column holds the JSON {id, address} pair — the id for
+      // audit/identity, the address for chain delegation's dial.
+      JSON.stringify(input.parent),
       input.name ?? null,
       Date.now(),
     );
     // Only emit the fork event when a row was actually inserted — a re-init or
     // retry (ON CONFLICT DO NOTHING) must not append a duplicate audit event.
     if (cursor.rowsWritten > 0) {
-      this.audit(ITX_EVENT_TYPES.contextForked, { id: input.id, parent: input.parent });
+      this.audit(ITX_EVENT_TYPES.contextForked, { id: input.id, parent: input.parent.id });
     }
     return this.descriptor();
   }
@@ -84,7 +91,17 @@ export class ContextDO extends DurableObject<Env> {
       )
       .toArray()[0];
     if (!row) throw new Error("This itx context has not been initialized (fork it first).");
-    return { id: row.id, name: row.name, parent: row.parent, projectId: row.project_id };
+    return {
+      id: row.id,
+      name: row.name,
+      parent: JSON.parse(row.parent) as ContextDescriptor["parent"],
+      projectId: row.project_id,
+    };
+  }
+
+  /** This node's own address — the save() half of the SturdyRef story. */
+  address(): ContextAddress {
+    return contextAddressOf(this.descriptor().id);
   }
 
   itxDefine(input: {
@@ -124,14 +141,8 @@ export class ContextDO extends DurableObject<Env> {
     });
   }
 
-  private parentStub(): RegistryHostStub {
-    const { parent } = this.descriptor();
-    if (parent.startsWith("ctx_")) {
-      return this.env.ITX_CONTEXT.getByName(parent) as unknown as RegistryHostStub;
-    }
-    return this.env.PROJECT.getByName(
-      getProjectDurableObjectName(parent),
-    ) as unknown as RegistryHostStub;
+  private parentStub(): ContextNodeStub {
+    return dialContext(this.env, this.descriptor().parent.address);
   }
 
   private registry(): ContextRegistry {

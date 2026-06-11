@@ -26,13 +26,13 @@ import { ItxError } from "./errors.ts";
 import { ItxStreams } from "./caps/streams.ts";
 import {
   GLOBAL_CONTEXT_ID,
-  isChildContextId,
   RESERVED_CAP_NAMES,
   type CapInvoke,
   type CapMeta,
   type ProjectAccess,
   type SerializableCapTarget,
 } from "./protocol.ts";
+import { contextAddressOf, dialContext } from "./addresses.ts";
 import type { ContextDO } from "./context-do.ts";
 import { createShareToken, SHARE_TOKEN_PARAM } from "./http.ts";
 import type { LiveCapTarget } from "./registry.ts";
@@ -264,7 +264,12 @@ export class Itx extends RpcTarget {
     await contextStub(this.#runtime.env, childId).initialize({
       id: childId,
       name: opts.name,
-      parent: this.#runtime.contextId,
+      // Identity AND address: the child audits/scopes by the parent's id and
+      // dials chain delegation through the parent's address.
+      parent: {
+        id: this.#runtime.contextId,
+        address: contextAddressOf(this.#runtime.contextId),
+      },
       projectId,
     });
     // The child is NARROWER than its parent (Law 4): its access is exactly
@@ -318,12 +323,15 @@ export class Itx extends RpcTarget {
    * The context node that owns this handle's registry: the Project DO for
    * project contexts, a ContextDO for children. Both speak the same itx*
    * registry surface; a child node delegates misses up the chain itself.
+   * The id→address mapping (addresses.ts) picks the node — no prefix
+   * sniffing here; global handles get the narrow-first error.
    */
   #registryStub(): RegistryStub {
-    if (isChildContextId(this.#runtime.contextId)) {
-      return contextStub(this.#runtime.env, this.#runtime.contextId);
-    }
-    return this.#projectStub();
+    this.#requireProjectId();
+    return dialContext(
+      this.#runtime.env,
+      contextAddressOf(this.#runtime.contextId),
+    ) as unknown as RegistryStub;
   }
 
   #requireProjectId(): string {

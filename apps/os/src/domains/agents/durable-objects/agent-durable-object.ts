@@ -19,6 +19,7 @@ import {
 import { typeid } from "@iterate-com/shared/typeid";
 import type { ContextDO } from "~/itx/context-do.ts";
 import type { CapInvoke, SerializableCapTarget } from "~/itx/protocol.ts";
+import { contextAddressOf } from "~/itx/addresses.ts";
 import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
 import { AgentChatProcessor } from "~/domains/agents/stream-processors/agent-chat/implementation.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
@@ -505,7 +506,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     await contextStub.initialize({
       id: contextId,
       name: `agent:${params.agentPath}`,
-      parent: params.projectId,
+      parent: { id: params.projectId, address: contextAddressOf(params.projectId) },
       projectId: params.projectId,
     });
     const caps = this.agentContextCaps(params);

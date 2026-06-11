@@ -7,7 +7,7 @@
 
 import type { Client } from "sqlfu";
 import { isChildContextId, type ProjectAccess } from "./protocol.ts";
-import type { ContextDO } from "./context-do.ts";
+import { contextAddressOf, dialContext } from "./addresses.ts";
 import type { ItxRuntime } from "./handle.ts";
 import type { Principal } from "~/auth/principal.ts";
 import type { RequestContext } from "~/request-context.ts";
@@ -31,12 +31,13 @@ export async function resolveAccessibleContextId(input: {
   env: Env;
   idOrSlug: string;
 }): Promise<{ contextId: string; projectId: string } | null> {
+  // The prefix check CLASSIFIES the untrusted connect string (child context
+  // id vs project id-or-slug, like isProjectId below) — the dial itself goes
+  // through the central id→address mapping (addresses.ts).
   if (isChildContextId(input.idOrSlug)) {
-    const contextDo = input.env.ITX_CONTEXT.getByName(
-      input.idOrSlug,
-    ) as unknown as DurableObjectStub<ContextDO>;
+    const node = dialContext(input.env, contextAddressOf(input.idOrSlug));
     try {
-      const descriptor = await contextDo.descriptor();
+      const descriptor = await node.descriptor!();
       if (input.access !== "all" && !input.access.includes(descriptor.projectId)) return null;
       return { contextId: descriptor.id, projectId: descriptor.projectId };
     } catch {

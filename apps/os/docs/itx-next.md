@@ -991,8 +991,13 @@ connect-time principal/access; the core's deps include identity+access —
 unchanged from the access model, just relocated.
 
 Sequencing sketch: (a) address type + `.address()` + restorer-over-
-addresses with string refs as resolved aliases; (b) parent pointers as
-addresses, delete prefix-sniffing; (c) extract the pure `Itx` core from
+addresses with string refs as resolved aliases — SHIPPED (`addresses.ts`:
+`contextAddressOf` is the one id→address mapping, `dialContext` the kernel
+dial; both node DOs expose `.address()`); (b) parent pointers as
+addresses, delete prefix-sniffing — SHIPPED (ContextDO stores `parent:
+{id, address}` and dials delegation through it; the prefix checks that
+remain classify ids — workspace scoping, untrusted connect strings — never
+pick a route); (c) extract the pure `Itx` core from
 ContextRegistry (constructor-defined defaults replace the code-context
 mechanism; global becomes `GlobalItx` with literal defines); (d) root
 verbs replace itx.caps; (e) path defines with longest-prefix dispatch;

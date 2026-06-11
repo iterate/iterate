@@ -12,6 +12,7 @@ import {
 } from "~/domains/streams/entrypoints/streams-capability.ts";
 import { parseConfig } from "~/config.ts";
 import type { ContextDO } from "~/itx/context-do.ts";
+import { contextAddressOf } from "~/itx/addresses.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
 import type { CapInvoke, SerializableCapTarget } from "~/itx/protocol.ts";
 import { runItxScript } from "~/itx/run.ts";
@@ -340,7 +341,7 @@ export class ProjectMcpServerConnection extends McpAgent<
     await contextStub.initialize({
       id: contextId,
       name: `mcp:${await this.getSessionSlug()}`,
-      parent: projectId,
+      parent: { id: projectId, address: contextAddressOf(projectId) },
       projectId,
     });
     for (const cap of SEEDED_CAPS) {

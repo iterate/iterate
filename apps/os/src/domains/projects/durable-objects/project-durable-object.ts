@@ -84,6 +84,7 @@ import { createContextRegistryHost } from "~/itx/registry-host.ts";
 import { platformProjectContext } from "~/itx/code-contexts.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
 import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
+import { contextAddressOf, type ContextAddress } from "~/itx/addresses.ts";
 import type {
   CapInvoke,
   CapMeta,
@@ -313,6 +314,12 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
 
   async itxInvoke(input: PathCall & { origin?: string }) {
     return await this.itxRegistry().invoke({ args: input.args, path: input.path }, input.origin);
+  }
+
+  /** This node's own context address — the save() half of the SturdyRef
+   * story (itx-next.md, address unification): dial it back with dialContext. */
+  address(): ContextAddress {
+    return contextAddressOf(this.projectId);
   }
 
   private itxRegistry(): ContextRegistry {

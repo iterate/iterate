@@ -27,6 +27,17 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
     target: pathCallTarget("project-level"),
   });
 
+  // The node's own ADDRESS is a cap target (itx-next.md, address
+  // unification): the save() half of the SturdyRef story.
+  const address = (await (projectItx as never as Record<string, any>).project.address()) as {
+    type: string;
+    worker: { type: string; binding: string; name: string };
+  };
+  expect(address).toMatchObject({
+    type: "rpc",
+    worker: { type: "durable-object", binding: "PROJECT", name: expect.any(String) },
+  });
+
   using child = await projectItx.fork({ name: "e2e-session" });
   const childDescription = await child.describe();
   expect(String(childDescription.context)).toMatch(/^ctx_/);
