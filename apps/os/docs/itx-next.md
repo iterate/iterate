@@ -905,6 +905,29 @@ story (`define({ path: ["workspace", "gitPush"], … })` on a session).
   `cap`/`context`/`projectId` — the same trusted-identity channel that
   origin-carrying already established.
 
+### 5. The durable layer is a STREAM (owner direction, queued behind the addresses)
+
+Event-source the registry: define/revoke stop being best-effort audit
+appends next to authoritative SQLite and become THE writes — appended to
+the context's stream, with an `ItxProcessor` reducing them (plus the
+existing execution-requested/completed pair) into the caps-state the
+dispatcher reads. `/` backs the project's root registry; `/agents/…`
+already carries an AgentDurableObject + AgentProcessor and hosts an
+ItxProcessor alongside — the agent session's context IS that stream; an
+inbound MCP session likewise. The stream is then, by construction, the
+complete record: every tool provided and removed, every script run,
+every result — the "SQLite authoritative / stream best-effort" split
+(D1) and its divergence class disappear.
+
+What stays as designed above: the SESSION layer remains in-memory (live
+caps cannot be event-sourced — a connection is not data), and because a
+context is addressed by a target, swapping its durable layer from
+DO-SQLite to stream-backed is an invisible host change — exactly the
+property the address unification buys. This is §6's "second step"
+("a stream is a context whose primary fact is its log") arriving
+concretely, and it begins dissolving ContextDO: a child context becomes
+a stream path with an ItxProcessor, identity (namespace, path).
+
 Sequencing sketch: (a) address type + `.address()` + restorer-over-
 addresses with string refs as resolved aliases; (b) parent pointers as
 addresses, delete prefix-sniffing, defaults-as-parent; (c) global as a
