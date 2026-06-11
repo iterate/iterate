@@ -3,7 +3,71 @@
 
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/streams/shared/event";
-import { SlackAgentProcessor, type SlackAgentProcessorDeps } from "./implementation.ts";
+import {
+  SlackAgentProcessor,
+  eyesReactionTargetFromWebhookPayload,
+  type SlackAgentProcessorDeps,
+} from "./implementation.ts";
+
+describe("eyesReactionTargetFromWebhookPayload", () => {
+  const humanMessagePayload = (event: Record<string, unknown> = {}) => ({
+    slackTeamId: "T1",
+    body: {
+      type: "event_callback",
+      authorizations: [{ is_bot: true, user_id: "U_BOT", bot_id: "B_BOT" }],
+      event: {
+        type: "message",
+        channel: "C123",
+        channel_type: "channel",
+        user: "U_HUMAN",
+        ts: "1772136259.000000",
+        text: "hello",
+        ...event,
+      },
+    },
+  });
+
+  it("targets human messages", () => {
+    expect(eyesReactionTargetFromWebhookPayload(humanMessagePayload())).toEqual({
+      channel: "C123",
+      timestamp: "1772136259.000000",
+    });
+  });
+
+  it("skips bot-authored messages", () => {
+    expect(
+      eyesReactionTargetFromWebhookPayload(humanMessagePayload({ bot_id: "B_OTHER" })),
+    ).toBeNull();
+    expect(
+      eyesReactionTargetFromWebhookPayload(humanMessagePayload({ subtype: "bot_message" })),
+    ).toBeNull();
+  });
+
+  it("skips actions performed by the authorized bot user", () => {
+    expect(eyesReactionTargetFromWebhookPayload(humanMessagePayload({ user: "U_BOT" }))).toBeNull();
+  });
+
+  it("skips reaction events", () => {
+    expect(
+      eyesReactionTargetFromWebhookPayload({
+        slackTeamId: "T1",
+        body: {
+          type: "event_callback",
+          event: {
+            type: "reaction_added",
+            user: "U_HUMAN",
+            reaction: "eyes",
+            item: { type: "message", channel: "C123", ts: "1772136259.000000" },
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("skips payloads without a message timestamp", () => {
+    expect(eyesReactionTargetFromWebhookPayload({ body: { event: {} } })).toBeNull();
+  });
+});
 
 describe("SlackAgentProcessor", () => {
   it("reduces Slack route context", async () => {

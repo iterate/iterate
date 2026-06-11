@@ -26,6 +26,24 @@ export type SlackProcessorDeps = {
     streamPath: string;
     threadTs: string;
   }): Promise<StreamEventInput[]> | StreamEventInput[];
+  /**
+   * Acknowledge a routed webhook to the source platform (e.g. the 👀
+   * reaction) as soon as the router has decided where it goes, instead of
+   * waiting for the routed stream's own processors to wake — several Durable
+   * Object cold starts later on a fresh thread. The host owns filtering
+   * (which webhooks deserve an ack) and delivery; the router only reports
+   * "this webhook is being forwarded". Best-effort: failures must not affect
+   * routing.
+   */
+  acknowledgeRoutedWebhook?(input: { payload: unknown }): Promise<void> | void;
+  /**
+   * Pre-warm the Durable Objects that will subscribe to a newly routed
+   * stream, concurrently with the bootstrap append that creates it. Without
+   * this the chain is serial: thread stream cold start, then its dial wakes
+   * the slack-agent host, then the agent host — each a fresh isolate.
+   * Best-effort: the subscription dial remains the source of truth.
+   */
+  prewarmRoutedStreamHosts?(input: { streamPath: string }): Promise<void> | void;
 };
 
 export class SlackProcessor extends StreamProcessor<SlackProcessorContract, SlackProcessorDeps> {
@@ -93,6 +111,12 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
     const streamPath = state.routes[route.key] ?? route.streamPath;
     if (streamPath == null) return;
 
+    // Independent of the forwarding appends below so the user-visible ack
+    // races ahead of (possibly cold) stream creation rather than behind it.
+    args.runInBackground(async () => {
+      await this.deps.acknowledgeRoutedWebhook?.({ payload: event.payload });
+    });
+
     const forwardedWebhookEvent: StreamEventInput = {
       type: "events.iterate.com/slack/webhook-received",
       idempotencyKey: buildProcessorIdempotencyKey({
@@ -118,6 +142,11 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
           streamPath,
         },
       };
+      // The hosts that will subscribe to the new stream cold-start in
+      // parallel with its creation instead of serially after its first dial.
+      args.runInBackground(async () => {
+        await this.deps.prewarmRoutedStreamHosts?.({ streamPath });
+      });
       // Every append carries an idempotency key derived from the source event,
       // so replays after a re-handshake dedupe instead of double-forwarding.
       args.runInBackground(async () => {
