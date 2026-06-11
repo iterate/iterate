@@ -627,6 +627,50 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     }
   });
 
+  // One-URL sign-in for minted/programmatic tokens: validates an access+id
+  // token pair against the trusted JWKS and writes the normal session cookie.
+  // Used by Playwright/agent-browser/humans via `pnpm auth:mint --browser-url`.
+  // No new trust is introduced — only tokens signed by a key in this
+  // deployment's JWKS are accepted, the same check every request performs.
+  app.get("/session-from-token", async (c) => {
+    const requestURL = new URL(c.req.url);
+    const accessToken = requestURL.searchParams.get("access_token")?.trim();
+    const idToken = requestURL.searchParams.get("id_token")?.trim();
+    if (!accessToken || !idToken) {
+      return c.text("access_token and id_token query params are required", 400);
+    }
+
+    let accessTokenExp: number;
+    try {
+      const { payload: rawAccessToken } = await jwtVerify(accessToken, jwks, {
+        issuer: issuerURL.href,
+        audience: infra.audiences(),
+      });
+      const { payload: rawIdToken } = await jwtVerify(idToken, jwks, {
+        issuer: issuerURL.href,
+        audience: config.clientId,
+      });
+      AccessTokenClaims.parse(rawAccessToken);
+      IdTokenClaims.parse(rawIdToken);
+      accessTokenExp = rawAccessToken.exp ?? Math.floor(Date.now() / 1000) + 60;
+    } catch (error) {
+      return c.text(`Token validation failed: ${error}`, 401);
+    }
+
+    writeCookie(c, {
+      accessToken,
+      accessTokenExpiresAt: accessTokenExp * 1000,
+      idToken,
+      tokenType: "bearer",
+    });
+
+    const returnTo = resolveAllowedReturnTo(requestURL.searchParams.get("return_to"), [
+      requestURL.origin,
+      ...(config.logoutReturnToOrigins ?? []),
+    ]);
+    return c.redirect(returnTo);
+  });
+
   app.get("/logout", async (c) => {
     const tokenSet = getTokenSet(c);
     deleteCookie(c, SESSION_COOKIE, cookieOpts());

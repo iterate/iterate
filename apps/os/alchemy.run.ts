@@ -41,7 +41,7 @@ async function resolveStaticAuthJwks(issuer: string | undefined) {
   const issuerIsLoopback = ["localhost", "127.0.0.1", "::1"].includes(issuerUrl.hostname);
 
   const explicit = process.env.APP_CONFIG_ITERATE_AUTH__JWKS ?? process.env.ITERATE_AUTH_JWKS;
-  if (explicit && !issuerIsLoopback) return explicit;
+  if (explicit && !issuerIsLoopback) return withForgePublicKey(explicit);
 
   try {
     const response = await fetch(`${issuer.replace(/\/+$/, "")}/jwks`, {
@@ -52,7 +52,7 @@ async function resolveStaticAuthJwks(issuer: string | undefined) {
     if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) {
       throw new Error("JWKS response has no keys");
     }
-    return JSON.stringify(jwks);
+    return withForgePublicKey(JSON.stringify(jwks));
   } catch (error) {
     console.warn(
       `[alchemy.run] Could not fetch JWKS from ${issuer} at deploy time; ` +
@@ -63,7 +63,39 @@ async function resolveStaticAuthJwks(issuer: string | undefined) {
   }
 }
 
-const env = {
+// Dev/preview identity forging: when the Doppler config carries the forge
+// private JWK (`AUTH_FORGE_PRIVATE_JWK`, from `_shared/dev` / `_shared/preview`),
+// its PUBLIC half joins the worker's trusted JWKS so locally-minted JWTs
+// (scripts/auth/mint-session.ts) verify exactly like issuer-signed ones.
+// Placement rule: the forge key must never exist in any prd config — enforced
+// here as a hard error rather than a silent skip.
+function withForgePublicKey(jwksJson: string) {
+  const forgePrivateJwk = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
+  if (!forgePrivateJwk) return jwksJson;
+  if (process.env.ALCHEMY_STAGE?.trim() === "prd") {
+    throw new Error(
+      "AUTH_FORGE_PRIVATE_JWK must never be present in the prd config — remove it from Doppler.",
+    );
+  }
+  try {
+    const jwks = JSON.parse(jwksJson) as { keys: Record<string, unknown>[] };
+    const { d: _privateKey, ...publicJwk } = JSON.parse(forgePrivateJwk) as Record<
+      string,
+      unknown
+    > & { d?: string };
+    if (!publicJwk.kid || !publicJwk.kty) {
+      throw new Error("AUTH_FORGE_PRIVATE_JWK must be a JWK with kid and kty");
+    }
+    if (!jwks.keys.some((key) => key.kid === publicJwk.kid)) {
+      jwks.keys.push(publicJwk);
+    }
+    return JSON.stringify(jwks);
+  } catch (error) {
+    throw new Error(`Invalid AUTH_FORGE_PRIVATE_JWK: ${error}`);
+  }
+}
+
+const env: Record<string, string | undefined> = {
   ...process.env,
   APP_CONFIG_ITERATE_AUTH__ISSUER: resolvedAuthIssuer,
   APP_CONFIG_ITERATE_AUTH__CLIENT_ID:

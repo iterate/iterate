@@ -29,7 +29,8 @@
     "db:studio": "pnpm --dir apps/os sqlfu:ui",
     "clean": "rm -rf ./**/node_modules",
     "workflows": "cd .github/ts-workflows && pnpm generate",
-    "super-reset": "pnpm i && pnpm -r --parallel --filter '!iterate' super-reset"
+    "super-reset": "pnpm i && pnpm -r --parallel --filter '!iterate' super-reset",
+    "auth:mint": "tsx scripts/auth/mint-session.ts"
   },
   "devDependencies": {
     "@tanstack/eslint-plugin-router": "^1.139.0",

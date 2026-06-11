@@ -7,8 +7,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@iterate-com/shared": "workspace:*",
     "@octokit/rest": "^22.0.0",
     "@orpc/server": "1.13.14",
+    "jose": "^6.2.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
