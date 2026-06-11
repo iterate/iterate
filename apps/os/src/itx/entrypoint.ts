@@ -19,7 +19,6 @@ import {
 import { contextAddressOf, dialContext, isChildContextAddress } from "./addresses.ts";
 import { replayPathCall } from "./path-proxy.ts";
 import { parseConfig } from "~/config.ts";
-import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 
