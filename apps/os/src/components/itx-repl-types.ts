@@ -51,6 +51,14 @@ declare global {
   class RpcTarget {}
 
   /**
+   * Wrap a plain object-of-methods (or a bare function) so it speaks the
+   * kernel's one calling convention and can be provided as a LIVE capability:
+   * the wrapper crosses the session as a stub and replays each
+   * call({ path, args }) back here, on your concrete object.
+   */
+  function asPathCallable(target: object): PathCallTarget;
+
+  /**
    * Anything not declared on the itx builtins resolves through the capability
    * fallthrough. Property access accumulates a path locally, then the
    * terminal call dispatches once: \`itx.slack.chat.postMessage(...)\`.
@@ -69,7 +77,6 @@ declare global {
   type CapabilityTarget = itxTypes.CapabilityTarget;
   type WorkerRef = itxTypes.WorkerRef;
   type CapabilitySource = itxTypes.CapabilitySource;
-  type CapabilityInvoke = itxTypes.CapabilityInvoke;
   type PathCall = itxTypes.PathCall;
   type PathCallTarget = itxTypes.PathCallTarget;
   type LiveStub = itxTypes.LiveStub;

@@ -17,7 +17,6 @@ import { createContextRegistryHost } from "./registry-host.ts";
 import { ITX_AUDIT_STREAM_PATH, ITX_EVENT_TYPES } from "./protocol.ts";
 import type {
   CapabilityDescription,
-  CapabilityInvoke,
   CapabilityMeta,
   PathCall,
   SerializableCapabilityTarget,
@@ -108,7 +107,7 @@ export class ContextDO extends DurableObject<Env> {
     name?: string;
     path?: string[];
     target: SerializableCapabilityTarget | LiveCapabilityTarget;
-    invoke?: CapabilityInvoke;
+    types?: string;
     meta?: CapabilityMeta;
   }) {
     return this.registry().provideCapability(input);

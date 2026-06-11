@@ -7,7 +7,6 @@
 // equivalent (the same class exported from a project worker) couldn't have.
 //
 //   await itx.provideCapability({
-//     invoke: "path-call",
 //     name: "docs",
 //     target: {
 //       type: "rpc",

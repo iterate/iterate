@@ -3,7 +3,6 @@
 // as first-party (the §1 litmus test's second half).
 //
 //   await itx.provideCapability({
-//     invoke: "path-call",
 //     name: "petstore",
 //     target: {
 //       type: "rpc",
@@ -18,15 +17,25 @@
 // DO regardless — and a loopback with props needs no new union member, no
 // registry hook, and works identically from child contexts. The price is
 // that `export` (the user's class) and `invoke` (how to call it; default
-// "members") ride in props, because the cap's own entrypoint/invoke describe
-// THIS forwarder hop. props.projectId is registry-injected (spoof-proof).
+// "members") ride in props: the kernel speaks ONE convention (this
+// forwarder's call({ path, args })), and how the INNER/user object is
+// treated is the forwarder's own business, never kernel data.
+// props.projectId is registry-injected (spoof-proof).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { CapabilityInvoke, PathCall } from "../protocol.ts";
+import type { PathCall } from "../protocol.ts";
 import {
   getProjectDurableObjectName,
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
+
+/**
+ * How a FORWARDER treats the inner object it fronts (ProjectWorker's user
+ * export, UrlDial's remote main): replay the path on its members (default)
+ * or hand it one call({ path, args }). This is forwarder props, not kernel
+ * data — the registry itself knows exactly one calling convention.
+ */
+export type WorkerInvokeMode = "members" | "path-call";
 
 export type ProjectWorkerProps = {
   /** Injected by the registry at dial time — never provider-supplied. */
@@ -34,7 +43,7 @@ export type ProjectWorkerProps = {
   /** The named export of the project worker to call (default export if omitted). */
   export?: string;
   /** How to call the user's export: members replay (default) or one call({path,args}). */
-  invoke?: CapabilityInvoke;
+  invoke?: WorkerInvokeMode;
   capability?: string;
   context?: string;
 };

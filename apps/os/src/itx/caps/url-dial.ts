@@ -23,7 +23,8 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
-import { RESERVED_PATH_SEGMENTS, type CapabilityInvoke, type PathCall } from "../protocol.ts";
+import { RESERVED_PATH_SEGMENTS, type PathCall } from "../protocol.ts";
+import type { WorkerInvokeMode } from "./project-worker.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 
@@ -32,8 +33,11 @@ export type UrlDialProps = {
   url: string;
   /** Handshake headers; values pass through egress secret substitution. */
   headers?: Record<string, string>;
-  /** The cap's invoke mode, applied against the REMOTE main. */
-  invoke?: CapabilityInvoke;
+  /** How to treat the REMOTE main: members pipelining (default) or one
+   * call({ path, args }). Forwarder props, not kernel data — `{ type:
+   * "url" }` cap targets always get the default; an SDK-shaped remote is
+   * reachable by providing UrlDial as a loopback cap with props.invoke. */
+  invoke?: WorkerInvokeMode;
   /** Attribution + secret scope, injected by the registry at dial time. */
   capability?: string;
   context?: string;
@@ -84,7 +88,7 @@ export class UrlDial extends WorkerEntrypoint<Env, UrlDialProps> {
         // One round trip: the remote main implements call({ path, args }).
         return await (remote as unknown as { call(input: PathCall): unknown }).call(input);
       }
-      // Members mode: walk the path as capnweb property pipelining (still one
+      // Default: walk the path as capnweb property pipelining (still one
       // round trip — the path resolves remotely) and call the terminal stub.
       // Same reserved-segment filter as replayPathCall: these names are stub
       // controls / pollution vectors LOCALLY, before anything reaches the wire.

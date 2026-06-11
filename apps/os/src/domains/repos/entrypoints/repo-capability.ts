@@ -25,6 +25,8 @@ import type {
   ReadRepoFilesInput,
   ReadRepoLogInput,
 } from "~/domains/repos/repo-git.ts";
+import { replayPathCall } from "~/itx/path-proxy.ts";
+import type { PathCall } from "~/itx/protocol.ts";
 
 export type ReposCapabilityEnv = {
   DO_CATALOG?: D1Database;
@@ -88,6 +90,11 @@ export class RepoHandle extends RpcTarget {
 }
 
 export class ReposCapability extends WorkerEntrypoint<ReposCapabilityEnv, ReposCapabilityProps> {
+  /** The itx kernel's one calling convention; replay walks this entrypoint's own members. */
+  call(input: PathCall): Promise<unknown> {
+    return replayPathCall(this, input);
+  }
+
   async create(input: { projectSlug?: string; slug: string }) {
     const namespace = this.requireRepoNamespace();
     const name = this.repoName(input.slug);

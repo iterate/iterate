@@ -75,12 +75,12 @@ import { replayPathCall } from "~/itx/path-proxy.ts";
 import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
 import { contextAddressOf, type ContextAddress } from "~/itx/addresses.ts";
 import type {
-  CapabilityInvoke,
   CapabilityMeta,
   PathCall,
   PathCallTarget,
   SerializableCapabilityTarget,
 } from "~/itx/protocol.ts";
+import type { WorkerInvokeMode } from "~/itx/caps/project-worker.ts";
 
 /** Project DOs are addressed by the plain project id. */
 export function getProjectDurableObjectName(projectId: string) {
@@ -287,7 +287,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     name?: string;
     path?: string[];
     target: SerializableCapabilityTarget | LiveCapabilityTarget;
-    invoke?: CapabilityInvoke;
+    types?: string;
     meta?: CapabilityMeta;
   }) {
     return this.itxRegistry().provideCapability(input);
@@ -389,7 +389,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   async itxProjectWorkerCall(input: {
     call: PathCall;
     entrypoint?: string;
-    invoke: CapabilityInvoke;
+    invoke: WorkerInvokeMode;
     props: Record<string, unknown>;
   }): Promise<unknown> {
     const summary = await this.requireSummary();

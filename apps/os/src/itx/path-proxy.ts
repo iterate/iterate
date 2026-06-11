@@ -3,16 +3,19 @@
 // A PathProxy turns real JavaScript property access into a single terminal
 // call: `proxy.chat.postMessage(args)` accumulates ["chat", "postMessage"]
 // locally (zero round trips) and then invokes the supplied callback once.
-// Both capability invoke modes ride on this: the callback either replays the
-// path on a member-shaped target or delivers `{ path, args }` to a
-// path-call target — the proxy itself doesn't know or care.
+// The kernel knows exactly ONE calling convention — `target.call({ path,
+// args })` — and this module owns both halves of bridging real objects onto
+// it: `replayPathCall` (data → dots, receiver-preserving) and
+// `asPathCallable` (wrap a member-shaped object so it speaks the
+// convention, replaying in the process where the object is concrete).
 //
 // This is the only place in the codebase that plays reserved-name games.
 // Capability *names* are validated at registration time instead
 // (protocol.ts), so the proxy only needs to protect protocol-level names on
 // intermediate path segments.
 
-import { RESERVED_PATH_SEGMENTS, type PathCall } from "./protocol.ts";
+import { RpcTarget } from "capnweb";
+import { RESERVED_PATH_SEGMENTS, type PathCall, type PathCallTarget } from "./protocol.ts";
 
 export type PathProxyCall = (input: PathCall) => unknown;
 
@@ -111,4 +114,35 @@ export async function replayPathCall(target: unknown, call: PathCall): Promise<u
     throw new Error(`Capability path ${call.path.join(".")} did not resolve to a function.`);
   }
   return await holder[method](...call.args);
+}
+
+/**
+ * Make a member-shaped object speak the kernel's ONE calling convention:
+ * `asPathCallable(obj).call({ path, args })` replays the path on `obj` via
+ * {@link replayPathCall} — in THIS process, where `obj` is concrete.
+ *
+ * Two homes, one helper:
+ * - Server-side, the registry wraps the concrete objects it dials itself
+ *   (env bindings, loader entrypoints, facets) so dispatch never branches.
+ * - Client-side, a live provider wraps a plain object-of-methods (or a bare
+ *   function) before provideCapability(): the wrapper extends capnweb's
+ *   RpcTarget so it crosses the session as a stub, and the replay then runs
+ *   back in the provider's process. Providers that implement `call`
+ *   themselves (the SDK-shaped FakeSlackSdk pattern) don't need it.
+ */
+export function asPathCallable(target: unknown): PathCallTarget {
+  return new PathCallable(target);
+}
+
+class PathCallable extends RpcTarget {
+  readonly #target: unknown;
+
+  constructor(target: unknown) {
+    super();
+    this.#target = target;
+  }
+
+  call(input: PathCall): Promise<unknown> {
+    return replayPathCall(this.#target, input);
+  }
 }

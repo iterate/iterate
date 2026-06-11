@@ -27,7 +27,6 @@ import { ItxStreams } from "./caps/streams.ts";
 import {
   GLOBAL_CONTEXT_ID,
   RESERVED_CAPABILITY_NAMES,
-  type CapabilityInvoke,
   type CapabilityMeta,
   type ProjectAccess,
   type SerializableCapabilityTarget,
@@ -128,9 +127,12 @@ export class Itx extends RpcTarget {
     name?: string;
     path?: string[];
     /** The capability's target (types.ts): serializable rpc/url data, or
-     * anything live — a stub, an RpcTarget, a function. */
+     * anything live — a stub implementing call({ path, args }) itself, or a
+     * plain object/function wrapped client-side with asPathCallable. */
     target: SerializableCapabilityTarget | LiveCapabilityTarget;
-    invoke?: CapabilityInvoke;
+    /** TypeScript declarations for the cap's surface — the machine-facing
+     * counterpart of meta.instructions; lifted by describe(). */
+    types?: string;
     meta?: CapabilityMeta;
   }) {
     return await this.#registryStub().itxProvideCapability(input);

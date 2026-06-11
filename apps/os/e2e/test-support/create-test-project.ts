@@ -162,7 +162,6 @@ async function provideLiveEgressFetchCapability(input: {
   });
   try {
     await itx.provideCapability({
-      invoke: "path-call",
       name: "fetch",
       target: new LiveEgressFetch() as never,
     });

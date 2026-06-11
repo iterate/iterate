@@ -900,6 +900,25 @@ This is the per-method mock / approval-gate / fork-with-one-override
 story (`provideCapability({ path: ["workspace", "gitPush"], … })` on a
 session).
 
+### SHIPPED (2026-06-11): one dispatch mode; `types` on provide/describe
+
+- **`invoke` died from the kernel.** The registry knows exactly one calling
+  convention — `target.call({ path, args })` — and the members/path-call
+  CHOICE moved to the edges where the concrete object lives: the dial wraps
+  concrete objects (env bindings, loader entrypoints, facets) with
+  `asPathCallable` (path-proxy.ts), first-party loopback entrypoints
+  self-replay via a one-line `call(input) { return replayPathCall(this,
+input); }`, live providers implement `call` themselves or wrap
+  client-side with `asPathCallable` (extends capnweb RpcTarget, so the
+  replay runs in the provider's process), and forwarders keep their inner
+  mode as THEIR props (`ProjectWorkerProps.invoke`, `UrlDialProps.invoke` —
+  `WorkerInvokeMode` in project-worker.ts). `CapabilityInvoke`, the stored
+  `invoke` column, and the field on provide/describe/events are gone.
+- **`types` joined `instructions`.** `provideCapability({ types })` stores
+  TypeScript declarations for the cap's surface as the `types` meta
+  convention field (machine/editor counterpart of the human-facing
+  `instructions`); `describe()` lifts both.
+
 ### Also queued from the same review (smaller, independent)
 
 - **`itx.project` is mislabeled and needlessly kernel**: it is the
@@ -1075,6 +1094,15 @@ independently green.
   this in one place.
 
 ## Resolved (was open, now decided)
+
+- ~~Two invoke modes as registry data?~~ → ONE dispatch mode (2026-06-11):
+  the kernel always dispatches `target.call({ path, args })`; the
+  members/path-call choice moved to the edges (dial wraps concrete objects
+  with `asPathCallable`, loopbacks self-replay via `call`, live objects
+  wrap client-side, forwarders keep inner mode in props). `invoke` is gone
+  from provide/describe/rows/events; `types?: string` (machine-facing
+  counterpart of `instructions`) landed on provide + describe in the same
+  move.
 
 - ~~Naming: `define`/`cap` vocabulary?~~ → The capability rename landed
   (2026-06-11): `define` is dead as a verb everywhere — the handle root is

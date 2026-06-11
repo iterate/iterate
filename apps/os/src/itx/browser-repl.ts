@@ -1,4 +1,5 @@
 import { RpcTarget } from "capnweb";
+import { asPathCallable } from "./path-proxy.ts";
 
 export const DEFAULT_BROWSER_REPL_CODE = "await itx.projects.list({ limit: 5 })";
 
@@ -16,7 +17,8 @@ export function createBrowserReplScope(scope?: Record<string, unknown>): Record<
   // examples.ts) run unchanged in the REPL: scripts read parameters from
   // `vars` and every other runtime injects it the same way. Assign your own
   // (`const vars = { … }`) to parameterize a snippet by hand.
-  return { RpcTarget, vars: {}, ...scope };
+  // `asPathCallable` makes a plain object-of-methods providable as a live cap.
+  return { asPathCallable, RpcTarget, vars: {}, ...scope };
 }
 
 export function browserReplExternalScopesEqual(

@@ -10,7 +10,6 @@ import {
   GLOBAL_CONTEXT_ID,
   isChildContextId,
   type CapabilityDescription,
-  type CapabilityInvoke,
   type CapabilityMeta,
   type PathCall,
   type SerializableCapabilityTarget,
@@ -36,7 +35,7 @@ export type ContextNodeStub = {
     name?: string;
     path?: string[];
     target: SerializableCapabilityTarget | LiveCapabilityTarget;
-    invoke?: CapabilityInvoke;
+    types?: string;
     meta?: CapabilityMeta;
   }): Promise<unknown>;
   itxRevokeCapability(input: { name?: string; path?: string[] }): Promise<unknown>;

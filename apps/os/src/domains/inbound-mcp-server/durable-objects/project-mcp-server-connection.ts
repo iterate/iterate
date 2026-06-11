@@ -14,7 +14,7 @@ import { parseConfig } from "~/config.ts";
 import type { ContextDO } from "~/itx/context-do.ts";
 import { contextAddressOf } from "~/itx/addresses.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
-import type { CapabilityInvoke, SerializableCapabilityTarget } from "~/itx/protocol.ts";
+import type { SerializableCapabilityTarget } from "~/itx/protocol.ts";
 import { runItxScript } from "~/itx/run.ts";
 
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
@@ -98,27 +98,23 @@ const MCP_CONTEXT_CAPS_VERSION = "1";
 const SEEDED_CAPS: Array<{
   name: string;
   instructions: string;
-  invoke: CapabilityInvoke;
   target: SerializableCapabilityTarget;
 }> = [
   {
     instructions:
       "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
-    invoke: "members",
     name: "ai",
     target: { type: "rpc", worker: { binding: "AI", type: "binding" } },
   },
   {
     instructions:
       "Project-bound OS API. Call itx.os.listProcedures() for the TypeScript surface, then itx.os.<path.to.procedure>({ …input }).",
-    invoke: "path-call",
     name: "os",
     target: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
   },
   {
     instructions:
       "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }) against the Gmail REST API.",
-    invoke: "members",
     name: "gmail",
     target: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
   },
@@ -346,7 +342,6 @@ export class ProjectMcpServerConnection extends McpAgent<
     });
     for (const cap of SEEDED_CAPS) {
       await contextStub.itxProvideCapability({
-        invoke: cap.invoke,
         meta: { instructions: cap.instructions },
         name: cap.name,
         target: cap.target,

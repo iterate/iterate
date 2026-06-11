@@ -256,7 +256,6 @@ export default {
         props: { context: "proj__local__test" },
       });
       await itx.provideCapability({
-        invoke: "path-call",
         name: "fetch",
         target: new EchoEgressShadow() as never,
       });

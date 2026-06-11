@@ -51,7 +51,7 @@ export class AiCapability extends WorkerEntrypoint<ExampleCapabilityEnv, Example
 
 export class OrpcCapability extends WorkerEntrypoint<ExampleCapabilityEnv, ExampleCapabilityProps> {
   /**
-   * itx path-call surface (`invoke: "path-call"` caps dial this):
+   * itx surface (the kernel's one calling convention dials this):
    * `itx.os.listProcedures()` for the typed surface, then
    * `itx.os.some.procedure({ ...input })`. props.projectId is injected by
    * the registry at dial time (spoof-proof), never definer-supplied.

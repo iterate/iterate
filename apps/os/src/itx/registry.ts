@@ -9,7 +9,11 @@
 //     records) — the authoritative state (D1),
 //   - the in-memory live connection table — runtime-only by design; live
 //     stubs die with their session and providers reconnect (Law 1),
-//   - dispatch: members-replay or one path-call, per entry (Law 6).
+//   - dispatch: ONE calling convention, `target.call({ path, args })` (Law
+//     6). The members/path-call choice lives at the edges: the registry
+//     wraps the concrete objects it dials itself (bindings, loader
+//     entrypoints, facets) with asPathCallable; everything else implements
+//     `call` (loopback entrypoints, live providers, forwarders).
 //
 // Registration is ONE verb: provideCapability() takes any target — a live
 // stub is just another target kind, routed to the in-memory table instead of
@@ -27,7 +31,6 @@ import {
   DEFAULT_DIALABLE_TARGETS,
   ITX_EVENT_TYPES,
   type CapabilityDescription,
-  type CapabilityInvoke,
   type CapabilityKind,
   type CapabilityMeta,
   type CapabilitySource,
@@ -36,7 +39,7 @@ import {
   type PathCallTarget,
   type SerializableCapabilityTarget,
 } from "./protocol.ts";
-import { replayPathCall } from "./path-proxy.ts";
+import { asPathCallable } from "./path-proxy.ts";
 import type { CodeContext } from "./code-contexts.ts";
 import { wireIsolateEnv } from "./isolate.ts";
 
@@ -143,7 +146,6 @@ export type ContextRegistryHost = {
 type CapabilityRow = {
   name: string;
   kind: CapabilityKind;
-  invoke: CapabilityInvoke;
   target_json: string | null;
   meta_json: string;
   updated_at_ms: number;
@@ -208,7 +210,6 @@ export class ContextRegistry {
     host.sql.exec(`CREATE TABLE IF NOT EXISTS itx_capabilities (
       name TEXT PRIMARY KEY,
       kind TEXT NOT NULL,
-      invoke TEXT NOT NULL,
       target_json TEXT,
       meta_json TEXT NOT NULL,
       updated_at_ms INTEGER NOT NULL
@@ -231,14 +232,19 @@ export class ContextRegistry {
     name?: string;
     path?: string[];
     target: SerializableCapabilityTarget | LiveCapabilityTarget;
-    invoke?: CapabilityInvoke;
+    /** TypeScript declarations for the cap's surface — stored as the
+     * `types` meta convention field and lifted by describe(). */
+    types?: string;
     meta?: CapabilityMeta;
   }): { name: string; ok: true } {
     const path = capabilityPathFrom(input);
     assertValidCapabilityPath(path);
     const name = path.join(".");
-    const invoke = input.invoke ?? "members";
     const target = input.target;
+    const meta: CapabilityMeta = {
+      ...(input.meta ?? {}),
+      ...(input.types !== undefined ? { types: input.types } : {}),
+    };
 
     if (!isSerializableCapabilityTarget(target)) {
       // A PLAIN object carrying a string `type` is a malformed serializable
@@ -251,22 +257,20 @@ export class ContextRegistry {
             `serializable targets are "rpc" or "url"; anything else must be a live provider stub.`,
         );
       }
-      this.#registerLive({ invoke, meta: input.meta ?? {}, name, target });
+      this.#registerLive({ meta, name, target });
       return { name, ok: true };
     }
 
     assertProvidableCapabilityTarget(name, target, this.dialable());
     this.upsertRow({
-      invoke,
       kind: target.type,
-      meta: input.meta ?? {},
+      meta,
       name,
       target,
     });
     this.host.audit({
       type: ITX_EVENT_TYPES.capabilityProvided,
       payload: {
-        invoke,
         kind: target.type,
         name,
         ...(target.type === "rpc" ? { worker: target.worker.type } : {}),
@@ -278,12 +282,7 @@ export class ContextRegistry {
     return { name, ok: true };
   }
 
-  #registerLive(input: {
-    name: string;
-    target: LiveCapabilityTarget;
-    invoke: CapabilityInvoke;
-    meta: CapabilityMeta;
-  }) {
+  #registerLive(input: { name: string; target: LiveCapabilityTarget; meta: CapabilityMeta }) {
     // RPC disposes argument stubs when the call returns; keep a duplicate
     // (and hand further dups to borrowers) — both directions of the dup()
     // discipline from the original capnweb learnings.
@@ -314,7 +313,6 @@ export class ContextRegistry {
     );
 
     this.upsertRow({
-      invoke: input.invoke,
       kind: "live",
       meta: input.meta,
       name: input.name,
@@ -322,7 +320,7 @@ export class ContextRegistry {
     });
     this.host.audit({
       type: ITX_EVENT_TYPES.capabilityProvided,
-      payload: { invoke: input.invoke, kind: "live", name: input.name },
+      payload: { kind: "live", name: input.name },
     });
   }
 
@@ -351,11 +349,11 @@ export class ContextRegistry {
       return {
         connected: row.kind === "live" ? this.#live.has(row.name) : undefined,
         instructions: typeof meta.instructions === "string" ? meta.instructions : undefined,
-        invoke: row.invoke,
         kind: row.kind,
         meta,
         name: row.name,
         owner: this.host.contextId,
+        types: typeof meta.types === "string" ? meta.types : undefined,
         updatedAtMs: row.updated_at_ms,
       };
     });
@@ -371,11 +369,11 @@ export class ContextRegistry {
         ([name, cap]): CapabilityDescription => ({
           instructions:
             typeof cap.meta.instructions === "string" ? cap.meta.instructions : undefined,
-          invoke: cap.invoke,
           kind: cap.target.type,
           meta: cap.meta,
           name,
           owner: defaults.name,
+          types: typeof cap.meta.types === "string" ? cap.meta.types : undefined,
           updatedAtMs: 0,
         }),
       );
@@ -430,24 +428,21 @@ export class ContextRegistry {
     //             concurrent / back-to-back calls never share or close it),
     //  - worker → the fresh per-call entrypoint stub,
     //  - facet  → the per-call facet stub.
-    // project-worker refs return a custom dispatch instead of a target: the
-    // call crosses to the Project DO as data and is replayed there.
+    // ONE convention: every borrow speaks call({ path, args }). Concrete
+    // objects the registry dials itself (bindings, loader entrypoints,
+    // facets) are wrapped with asPathCallable; the wrap closes over the
+    // borrowed object, so disposing the borrow after the call keeps the
+    // dispose-after-call discipline intact.
     const entryCall: PathCall = { args: call.args, path: remainder };
-    const { dispatch, target, dispose } = this.borrowTarget(row, origin ?? this.host.contextId);
+    const { target, dispose } = this.borrowTarget(row, origin ?? this.host.contextId);
     try {
-      if (dispatch) return await dispatch(entryCall);
-      if (row.invoke === "path-call") {
-        // One RPC: the provider implements call({ path, args }) and owns its
-        // own method-tree semantics (e.g. forwarding to the Slack web API).
-        return await (target as PathCallTarget).call(entryCall);
-      }
-      return await replayPathCall(target, entryCall);
+      return await (target as PathCallTarget).call(entryCall);
     } catch (error) {
       // Log at the supervisor: errors crossing the RPC boundary back to the
       // caller can be masked as "internal error; reference = …", so the only
       // place the real failure is visible is here.
       console.error(
-        `[itx] cap "${name}" (${row.kind}/${row.invoke}) failed in ${this.host.contextId} ` +
+        `[itx] cap "${name}" (${row.kind}) failed in ${this.host.contextId} ` +
           `at path ${remainder.join(".") || "<call>"}:`,
         error,
       );
@@ -465,9 +460,8 @@ export class ContextRegistry {
     row: CapabilityRow,
     originContext: string,
   ): {
-    target?: unknown;
+    target: unknown;
     dispose: () => void;
-    dispatch?: (call: PathCall) => Promise<unknown>;
   } {
     if (row.kind === "live") {
       const connection = this.#live.get(row.name);
@@ -475,44 +469,41 @@ export class ContextRegistry {
       // Borrow a duplicate, not the stored stub itself. Disposing the borrow
       // releases only this call's reference; the registered target stays
       // callable for the next caller (matches the original getConnection
-      // dup-on-borrow behaviour).
+      // dup-on-borrow behaviour). The provider implements call({path,args})
+      // itself or wrapped client-side with asPathCallable before providing.
       const target = connection.target.dup ? connection.target.dup() : connection.target;
       return { target, dispose: () => disposeIfPossible(target) };
     }
-    return this.resolveTarget(row.name, targetOf(row), row.invoke, originContext);
+    return this.resolveTarget(row.name, targetOf(row), originContext);
   }
 
   private resolveTarget(
     name: string,
     target: SerializableCapabilityTarget,
-    invoke: CapabilityInvoke,
     originContext: string,
   ): {
-    target?: unknown;
+    target: unknown;
     dispose: () => void;
-    dispatch?: (call: PathCall) => Promise<unknown>;
   } {
     if (target.type === "url") {
       // Law 7: the Cap'n Web session must terminate in a stateless worker,
       // never this DO — so the call crosses to the UrlDial entrypoint as
-      // data (a custom dispatch, like ProjectWorker), and UrlDial applies
-      // the cap's invoke mode against the REMOTE main. `invoke` here would
-      // otherwise be interpreted against the UrlDial stub itself.
+      // data and UrlDial replays it against the REMOTE main via capnweb
+      // property pipelining. (A remote main that is itself SDK-shaped is
+      // reachable by providing UrlDial as a loopback cap with
+      // props.invoke: "path-call" — the forwarder's inner mode is ITS prop,
+      // not kernel data.)
       const stub = this.host.loopback("UrlDial", {
         props: {
           headers: target.headers,
-          invoke,
           url: target.url,
           // Attribution + secret scope; same spoof-proofing as loopback refs.
           capability: name,
           context: originContext,
           projectId: this.host.projectId,
         },
-      }) as { call(call: PathCall): Promise<unknown> };
-      return {
-        dispatch: async (call) => await stub.call(call),
-        dispose: () => disposeIfPossible(stub),
-      };
+      });
+      return { target: stub, dispose: () => disposeIfPossible(stub) };
     }
     const worker = target.worker;
     switch (worker.type) {
@@ -527,11 +518,15 @@ export class ContextRegistry {
             `Capability "${name}": binding "${worker.binding}" is not available on this host.`,
           );
         }
-        // Env bindings are long-lived host objects, never per-call borrows —
-        // do NOT dispose them.
-        return { target: binding, dispose: () => {} };
+        // The binding is a concrete env object that doesn't speak the
+        // calling convention — wrap it here, where it is real. Env bindings
+        // are long-lived host objects, never per-call borrows — do NOT
+        // dispose them.
+        return { target: asPathCallable(binding), dispose: () => {} };
       }
       case "loopback": {
+        // First-party loopback entrypoints all implement call({ path, args })
+        // themselves — member-shaped ones self-replay via replayPathCall.
         if (!target.entrypoint || !this.dialable().loopbacks.has(target.entrypoint)) {
           throw new Error(
             `Capability "${name}": loopback export "${target.entrypoint}" is not dialable.`,
@@ -556,6 +551,10 @@ export class ContextRegistry {
         return { target: stub, dispose: () => disposeIfPossible(stub) };
       }
       case "source": {
+        // Loader entrypoints and facet stubs are this registry's OWN
+        // borrows — the user's class just exports methods, so the wrap (and
+        // the members replay inside it) lives here at the dial. Dispose the
+        // INNER borrow, not the wrap, when the call ends.
         const source = worker.source;
         if (source.exportType === "durable-object") {
           const facets = this.host.facets;
@@ -577,10 +576,13 @@ export class ContextRegistry {
             }
             return { class: facetClass };
           });
-          return { target: facetTarget, dispose: () => disposeIfPossible(facetTarget) };
+          return {
+            target: asPathCallable(facetTarget),
+            dispose: () => disposeIfPossible(facetTarget),
+          };
         }
         const entrypoint = this.loadWorker(name, source).getEntrypoint(source.entrypoint);
-        return { target: entrypoint, dispose: () => disposeIfPossible(entrypoint) };
+        return { target: asPathCallable(entrypoint), dispose: () => disposeIfPossible(entrypoint) };
       }
       case "durable-object": {
         // Authoritative allowlist gate (provide-time check is fail-fast only).
@@ -599,7 +601,10 @@ export class ContextRegistry {
         }
         // Names are scoped under the owning project, so two projects naming
         // the same instance get DISJOINT objects — an allowlisted namespace
-        // never lets one project dial another's instances.
+        // never lets one project dial another's instances. The stub is
+        // remote (never concrete here), so the DO class itself must
+        // implement call({ path, args }) — namespaces opt in via config and
+        // are designed to be reached this way.
         const stub = namespace.getByName(`itx:${this.host.projectId}:${worker.name}`);
         return { target: stub, dispose: () => disposeIfPossible(stub) };
       }
@@ -626,22 +631,19 @@ export class ContextRegistry {
   private upsertRow(input: {
     name: string;
     kind: CapabilityKind;
-    invoke: CapabilityInvoke;
     target: SerializableCapabilityTarget | null;
     meta: CapabilityMeta;
   }) {
     this.host.sql.exec(
-      `INSERT INTO itx_capabilities (name, kind, invoke, target_json, meta_json, updated_at_ms)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO itx_capabilities (name, kind, target_json, meta_json, updated_at_ms)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(name) DO UPDATE SET
          kind = excluded.kind,
-         invoke = excluded.invoke,
          target_json = excluded.target_json,
          meta_json = excluded.meta_json,
          updated_at_ms = excluded.updated_at_ms`,
       input.name,
       input.kind,
-      input.invoke,
       input.target ? JSON.stringify(input.target) : null,
       JSON.stringify(input.meta),
       Date.now(),
@@ -651,7 +653,7 @@ export class ContextRegistry {
   private rows(): CapabilityRow[] {
     return this.host.sql
       .exec<CapabilityRow>(
-        `SELECT name, kind, invoke, target_json, meta_json, updated_at_ms FROM itx_capabilities ORDER BY name`,
+        `SELECT name, kind, target_json, meta_json, updated_at_ms FROM itx_capabilities ORDER BY name`,
       )
       .toArray();
   }
@@ -665,7 +667,6 @@ export class ContextRegistry {
     const cap = this.host.defaults?.caps.get(name);
     if (!cap) return null;
     return {
-      invoke: cap.invoke,
       kind: cap.target.type,
       meta_json: JSON.stringify(cap.meta),
       name,
@@ -678,7 +679,7 @@ export class ContextRegistry {
     return (
       this.host.sql
         .exec<CapabilityRow>(
-          `SELECT name, kind, invoke, target_json, meta_json, updated_at_ms FROM itx_capabilities WHERE name = ?`,
+          `SELECT name, kind, target_json, meta_json, updated_at_ms FROM itx_capabilities WHERE name = ?`,
           name,
         )
         .toArray()[0] ?? null

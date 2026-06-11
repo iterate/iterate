@@ -25,10 +25,14 @@ These invariants ARE the architecture. Every file here serves one of them.
    it as global `fetch` (`globalOutbound = ProjectEgress`); everyone else
    calls `itx.fetch()`. Secrets are substituted inside the Project DO and
    never exist anywhere else.
-6. **One wire protocol for dynamic surfaces.** A capability is invoked either
-   by replaying property path segments (`invoke: "members"`) or by ONE
-   `call({ path, args })` (`invoke: "path-call"`). One consumer-side adapter
-   (`path-proxy.ts`). Nothing else is ever standardized.
+6. **One calling convention.** The kernel dispatches every capability as
+   `target.call({ path, args })`. The members/path-call choice lives at the
+   EDGES, never in registry data: the registry wraps the concrete objects it
+   dials itself (bindings, loader entrypoints, facets) with `asPathCallable`,
+   loopback entrypoints self-replay via their own `call`, live providers
+   implement `call` or wrap client-side, and forwarders carry their inner
+   mode in their own props. One consumer-side adapter (`path-proxy.ts`).
+   Nothing else is ever standardized.
 7. **Cap'n Web terminates in the stateless worker, never in a DO.** The DOs
    speak plain Workers RPC — Kenton's stated hibernation architecture
    (capnweb#36 / workerd#6087), so hibernatable RPC arrives for free.
@@ -71,9 +75,12 @@ browser ──capnweb/WebSocket──► OS worker /api/itx        (auth happene
         └─► PathProxyRpcTarget accumulates ["add"], one terminal call
               └─► Workers RPC: ProjectDO.itxInvoke({path:["todo","add"], args})
                     └─► ContextRegistry.invoke   ◄── THE one dispatch (supervisor)
-                          longest entry-path prefix wins; the REMAINDER is the call
-                          ├─ live   → replay path on provider's stub
-                          ├─ rpc/source → LOADER.get(cacheKey) → entrypoint, replay
+                          longest entry-path prefix wins; the REMAINDER is the
+                          call — always delivered as target.call({path, args})
+                          ├─ live   → provider's stub implements call (or was
+                          │           wrapped client-side with asPathCallable)
+                          ├─ rpc/source → LOADER.get(cacheKey) → entrypoint,
+                          │            asPathCallable wrap replays the path
                           │            env.ITERATE = ItxEntrypoint({context})  ┐
                           │            globalOutbound = ProjectEgress         ┤ Law 5
                           └─ …durable-object → ctx.facets.get("cap:todo")     ┘
@@ -106,7 +113,7 @@ https://{cap}--{project}.{base}/…
 | File                   | Role                     | Owns                                                                                                                                         |
 | ---------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `protocol.ts`          | the serializable surface | `ItxProps`, cap types, name validation, event types                                                                                          |
-| `path-proxy.ts`        | Law 6, both halves       | `PathProxyRpcTarget` (consumer), `replayPathCall` (supervisor)                                                                               |
+| `path-proxy.ts`        | Law 6, all halves        | `PathProxyRpcTarget` (consumer), `replayPathCall` (replay), `asPathCallable` (wrap a concrete object onto the convention)                    |
 | `registry.ts`          | the supervisor           | `ContextRegistry`: provideCapability/revokeCapability/describe/invoke, live table, loader/facet wiring                                       |
 | `registry-host.ts`     | the one node shape       | `createContextRegistryHost`: the host wiring both the Project DO and `ContextDO` embed                                                       |
 | `handle.ts`            | the handle               | `Itx` + built-ins (`provideCapability`, `revokeCapability`, `invoke`, `streams`, `project`, `projects`, `fetch`, `fork`), `ItxFn`, `Stubify` |
@@ -125,24 +132,34 @@ _on top of_ this layer or beside it — never underneath it.
 ## Writing capabilities
 
 **Live** (session-bound — your laptop, a browser tab, another service). The
-target IS the stub; `provideCapability` discriminates structurally:
+target IS the stub; `provideCapability` discriminates structurally. A live
+target either implements `call({ path, args })` itself — the SDK shape: own
+your whole method tree, and the public SDK docs become the tool docs ("use
+`itx.slack` exactly like @slack/web-api") — or is a plain object-of-methods
+wrapped with `asPathCallable` (the replay runs back in YOUR process):
 
 ```ts
-import { connectItx } from "~/itx/client.ts";
+import { asPathCallable, connectItx } from "~/itx/client.ts";
 
 const itx = connectItx({ baseUrl, token, context: "my-project" });
-await itx.provideCapability({ name: "runSwiftOnMyMac", target: async (src) => runSwift(src) });
+await itx.provideCapability({
+  name: "runSwiftOnMyMac",
+  target: asPathCallable(async (src) => runSwift(src)),
+});
 // stays callable as itx.runSwiftOnMyMac(...) until this connection drops
 ```
 
-**Worker** (durable, stateless — e.g. an SDK adapter). The `path-call` mode
-means public SDK docs become your tool docs: tell an agent "`itx.slack` works
-exactly like @slack/web-api" and that's the whole tool description.
+**Worker** (durable, stateless). Source caps are member-shaped: the registry
+wraps the loader entrypoint with `asPathCallable` and replays the dotted
+path on its real members — just export methods (and getters returning nested
+RpcTargets), no method list anywhere. `types` is the machine-facing
+counterpart of `meta.instructions`:
 
 ```ts
 await itx.provideCapability({
-  invoke: "path-call",
   name: "slack",
+  types:
+    "declare function postToChannel(input: { channel: string; text: string }): Promise<unknown>;",
   target: {
     type: "rpc",
     worker: {
@@ -154,11 +171,11 @@ await itx.provideCapability({
           "cap.js": `
       import { WorkerEntrypoint } from "cloudflare:workers";
       export default class extends WorkerEntrypoint {
-        async call({ path, args }) {
+        async postToChannel({ channel, text }) {
           // bare fetch() here IS project egress: the Slack token lives in
           // project secrets and is substituted server-side (Law 5)
-          return await (await fetch("https://slack.com/api/" + path.join("."), {
-            body: JSON.stringify(args[0]),
+          return await (await fetch("https://slack.com/api/chat.postMessage", {
+            body: JSON.stringify({ channel, text }),
             headers: { authorization: 'Bearer getSecret({ key: "SLACK_TOKEN" })',
                        "content-type": "application/json" },
             method: "POST",
@@ -172,8 +189,13 @@ await itx.provideCapability({
   },
 });
 
-await itx.slack.chat.postMessage({ channel: "C123", text: "hi" });
+await itx.slack.postToChannel({ channel: "C123", text: "hi" });
 ```
+
+(Want a durable SDK-shaped surface — the whole `chat.postMessage` tree in
+one method? Export a class implementing `call({ path, args })` from your
+project worker and point a `ProjectWorker` loopback cap at it with
+`props.invoke: "path-call"` — the forwarder's inner mode is its own prop.)
 
 **Facet** (durable + stateful — its own private SQLite, zero provisioning).
 The class must be a **named** export (D12):

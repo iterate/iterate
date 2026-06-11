@@ -99,23 +99,25 @@ return { appended, count: events.length };
     id: "provide-live-capability",
     title: "Provide a live, browser-owned capability",
     description:
-      "Registers a browser-owned RpcTarget as a LIVE capability on the project (session-bound — it lives only while this REPL tab is connected), then calls it straight back through the itx fallthrough as itx.answer.run().",
+      "Registers a browser-owned object as a LIVE capability on the project (session-bound — it lives only while this REPL tab is connected), then calls it straight back through the itx fallthrough as itx.answer.run().",
     context: "project",
     runtimes: ["browser"],
     code: `
-// A live capability is just an RpcTarget you own. Its methods run HERE, in
+// A live capability is just an object you own. Its methods run HERE, in
 // the browser tab — the project calls back to you over the open session.
-class AnswerCapability extends RpcTarget {
+const answer = {
   async run() {
     alert("The answer is 42");
     return "alerted";
-  }
-}
+  },
+};
 
-// provideCapability() is THE verb: a live stub is just another target. A live
-// cap disappears when this tab disconnects; reconnect and provideCapability()
-// again to restore it.
-await itx.provideCapability({ name: "answer", target: new AnswerCapability() });
+// provideCapability() is THE verb: a live stub is just another target.
+// asPathCallable() makes a plain object-of-methods speak the one calling
+// convention (call({ path, args }) replayed back here on your object). A
+// live cap disappears when this tab disconnects; reconnect and
+// provideCapability() again to restore it.
+await itx.provideCapability({ name: "answer", target: asPathCallable(answer) });
 
 // Unknown names on the handle fall through to the registry, so the cap is
 // callable as if it were built in.
@@ -131,18 +133,17 @@ return await itx.answer.run();
     runtimes: ["browser", "node", "cli"],
     code: `
 // One method handles the entire method tree. itx.fakeSlack.chat.postMessage(x)
-// arrives here as { path: ["chat","postMessage"], args: [x] }.
+// arrives here as { path: ["chat","postMessage"], args: [x] } — call({ path,
+// args }) IS the calling convention, so a provider that implements it owns
+// its whole method-tree semantics.
 class FakeSlackSdk extends RpcTarget {
   async call({ path, args }) {
     return { method: path.join("."), args, provider: "live-session" };
   }
 }
 
-// invoke: "path-call" tells the registry to deliver { path, args } in one
-// shot rather than replaying property access.
 await itx.provideCapability({
   name: "fakeSlack",
-  invoke: "path-call",
   target: new FakeSlackSdk(),
 });
 
@@ -396,7 +397,6 @@ return { current: await itx.counter.current() };   // 2, and it persists
 // A cap on the project — visible to every child through the chain.
 await itx.provideCapability({
   name: "shared",
-  invoke: "path-call",
   target: new (class extends RpcTarget {
     async call({ path }) { return { from: "project", method: path.join(".") }; }
   })(),
@@ -408,7 +408,6 @@ const child = await itx.fork({ name: "repl-scratch" });
 // The child can shadow 'shared' with its own definition...
 await child.provideCapability({
   name: "shared",
-  invoke: "path-call",
   target: new (class extends RpcTarget {
     async call({ path }) { return { from: "child", method: path.join(".") }; }
   })(),

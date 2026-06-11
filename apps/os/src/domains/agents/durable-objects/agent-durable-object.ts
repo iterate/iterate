@@ -18,7 +18,7 @@ import {
 } from "@iterate-com/streams/workers/stream-processor-host";
 import { typeid } from "@iterate-com/shared/typeid";
 import type { ContextDO } from "~/itx/context-do.ts";
-import type { CapabilityInvoke, SerializableCapabilityTarget } from "~/itx/protocol.ts";
+import type { SerializableCapabilityTarget } from "~/itx/protocol.ts";
 import { contextAddressOf } from "~/itx/addresses.ts";
 import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
 import { AgentChatProcessor } from "~/domains/agents/stream-processors/agent-chat/implementation.ts";
@@ -489,7 +489,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     const caps = this.agentContextCapabilities(params);
     for (const cap of caps) {
       await contextStub.itxProvideCapability({
-        invoke: cap.invoke,
         meta: { instructions: cap.instructions },
         name: cap.name,
         target: cap.target,
@@ -710,7 +709,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   private agentContextCapabilities(params: AgentDurableObjectStructuredName): Array<{
     name: string;
     instructions: string;
-    invoke: CapabilityInvoke;
     target: SerializableCapabilityTarget;
   }> {
     const agentTool = (tool: "chat" | "debug"): SerializableCapabilityTarget => ({
@@ -726,7 +724,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
             {
               instructions:
                 "Use itx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
-              invoke: "path-call" as const,
               name: "chat",
               target: agentTool("chat"),
             },
@@ -734,42 +731,36 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       {
         instructions:
           "Use itx.debug() to return OS debug information about the current agent stream.",
-        invoke: "path-call" as const,
         name: "debug",
         target: agentTool("debug"),
       },
       {
         instructions:
           "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
-        invoke: "members" as const,
         name: "ai",
         target: { type: "rpc", worker: { binding: "AI", type: "binding" } },
       },
       {
         instructions:
           "Project-bound OS API. Call itx.os.listProcedures() for the TypeScript surface, then itx.os.<path.to.procedure>({ …input }).",
-        invoke: "path-call" as const,
         name: "os",
         target: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
           "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }).",
-        invoke: "members" as const,
         name: "gmail",
         target: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
           "Use itx.slack.<Slack Web API method path>(args), e.g. itx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If no reply is needed, do not call chat.postMessage. For legitimate long-running Slack replies, use Promise.all to send an immediate acknowledgment while doing the real work in parallel, then send the actual result afterwards.",
-        invoke: "path-call" as const,
         name: "slack",
         target: { entrypoint: "SlackCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
           "Use itx.agents.create() to get a promise-pipelineable subagent handle, e.g. await itx.agents.create().doThing(args).",
-        invoke: "members" as const,
         name: "agents",
         target: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },
       },

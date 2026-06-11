@@ -127,7 +127,6 @@ export interface ItxBuiltins {
    * // First-party MCP client, parameterized per server (see CapabilityTarget):
    * await itx.provideCapability({
    *   name: "docs",
-   *   invoke: "path-call",
    *   target: {
    *     type: "rpc",
    *     worker: { type: "loopback" },
@@ -150,7 +149,10 @@ export interface ItxBuiltins {
     name?: string;
     path?: string[];
     target: CapabilityTarget;
-    invoke?: CapabilityInvoke;
+    /** TypeScript declarations for the cap's surface — the machine/editor
+     * counterpart of `meta.instructions`. Stored as the `types` meta
+     * convention field and lifted by describe(). */
+    types?: string;
     meta?: CapabilityMeta;
   }): Promise<{ name: string; ok: true }>;
 
@@ -404,32 +406,39 @@ export type CapabilitySource = {
 };
 
 /**
- * How a capability is called once the supervisor holds its target.
+ * The kernel knows exactly ONE calling convention: every capability is
+ * dispatched as `target.call({ path, args })`. Whether a dotted path is
+ * replayed onto a real member tree is decided at the EDGE where the
+ * concrete object lives, never by registry data:
  *
- * `"members"` (default) — replay the property path on the target and call
- * the terminal method on its parent, receiver-preserving. Use when the
- * target is a real object whose methods exist:
+ * - The registry wraps the objects it dials itself — env bindings, loader
+ *   entrypoints, facets — with `asPathCallable`, so a source cap just
+ *   exports methods and its whole public surface is replayed:
  *
  * ```ts
- * // target: { todos: { add(item) {…} } }
- * itx.myCap.todos.add({ text: "x" })  // → replays ["todos","add"] on the target
+ * // source worker: class extends WorkerEntrypoint { add({a,b}) { … } }
+ * itx.myCap.add({ a: 1, b: 2 })  // → wrap replays ["add"] on the entrypoint
  * ```
  *
- * `"path-call"` — the target implements ONE method, `call({ path, args })`,
- * and owns its own method-tree semantics. Use for SDK-shaped surfaces whose
- * tree you don't predeclare; the public SDK docs become the tool docs:
+ * - A LIVE provider either implements `call` itself (the SDK shape — own
+ *   your method-tree semantics; the public SDK docs become the tool docs)
+ *   or wraps a plain object-of-methods with `asPathCallable` before
+ *   providing (the replay then runs back in the provider's process):
  *
  * ```ts
  * // provider: class { call({ path, args }) { return slackApi(path.join("."), args[0]); } }
  * itx.slack.chat.postMessage({ … })   // → ONE call: call({ path: ["chat","postMessage"], … })
+ *
+ * await itx.provideCapability({ name: "mac", target: asPathCallable({ run(src) { … } }) });
  * ```
+ *
+ * - Forwarders keep their INNER mode as their own props: ProjectWorker's
+ *   `props.invoke` says how to call the user's export; UrlDial's how to
+ *   treat the remote main (members pipelining by default).
  */
-export type CapabilityInvoke = "members" | "path-call";
-
-/** The wire shape of one dynamic-surface invocation. */
 export type PathCall = { path: string[]; args: unknown[] };
 
-/** What a `"path-call"` capability provider implements. */
+/** What every dispatched capability target implements. */
 export type PathCallTarget = { call(input: PathCall): unknown };
 
 /**
@@ -443,13 +452,18 @@ export type LiveStub = object;
 
 /**
  * Arbitrary metadata on a registration. The registry stores it verbatim and
- * surfaces it in `describe()` — there is no schema. One convention worth
- * following: `instructions`, a human/agent-readable sentence on what the
- * cap does and how to call it, shown by `describe()`.
+ * surfaces it in `describe()` — there is no schema. Two conventions worth
+ * following, a pair: `instructions` for the human/agent (a sentence on what
+ * the cap does and how to call it) and `types` for the machine/editor
+ * (TypeScript declarations of the cap's surface). Both are lifted by
+ * `describe()`.
  */
 export type CapabilityMeta = {
   /** Shown in describe(); write it for the agent who finds this cap. */
   instructions?: string;
+  /** TypeScript declarations for the cap's surface (completion/typecheck
+   * material; the machine-facing counterpart of `instructions`). */
+  types?: string;
   [key: string]: unknown;
 };
 
@@ -458,13 +472,14 @@ export type CapabilityDescription = {
   name: string;
   /** The target's kind: "live" | "rpc" | "url". */
   kind: "live" | "rpc" | "url";
-  invoke: CapabilityInvoke;
   /** Which context owns the entry — provenance for shadowing visibility. */
   owner: string;
   /** Live caps only: is the provider currently connected? */
   connected?: boolean;
   /** Lifted from meta for convenience: the one thing to read first. */
   instructions?: string;
+  /** Lifted from meta: TypeScript declarations for the cap's surface. */
+  types?: string;
   meta: CapabilityMeta;
   updatedAtMs: number;
 };

@@ -15,13 +15,11 @@
 import {
   assertProvidableCapabilityTarget,
   assertValidCapabilityName,
-  type CapabilityInvoke,
   type CapabilityMeta,
   type SerializableCapabilityTarget,
 } from "./protocol.ts";
 
 export type CodeContextCapability = {
-  invoke: CapabilityInvoke;
   meta: CapabilityMeta;
   target: SerializableCapabilityTarget;
 };
@@ -43,7 +41,9 @@ export function defineCodeContext(
     provideCapability(input: {
       name: string;
       target: SerializableCapabilityTarget;
-      invoke?: CapabilityInvoke;
+      /** TypeScript declarations for the cap's surface (the `types` meta
+       * convention field, lifted by describe()). */
+      types?: string;
       meta?: CapabilityMeta;
     }): void;
   }) => void,
@@ -57,8 +57,10 @@ export function defineCodeContext(
         throw new Error(`Code context "${name}" provides "${input.name}" twice.`);
       }
       caps.set(input.name, {
-        invoke: input.invoke ?? "members",
-        meta: input.meta ?? {},
+        meta: {
+          ...(input.meta ?? {}),
+          ...(input.types !== undefined ? { types: input.types } : {}),
+        },
         target: input.target,
       });
     },
@@ -77,7 +79,6 @@ export function defineCodeContext(
  */
 export const platformProjectContext = defineCodeContext("platform:project", (caps) => {
   caps.provideCapability({
-    invoke: "path-call",
     meta: {
       instructions:
         "Workers AI. Use it like an env.AI binding: itx.ai.run(model, inputs). " +
@@ -99,7 +100,6 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
     // Durable Object in the path. The dispatcher (ProjectEgress.fetch)
     // routes registry-first and the default is a DIFFERENT entrypoint —
     // that is what breaks the loop.
-    invoke: "path-call",
     meta: {
       instructions:
         "Project egress: itx.fetch(request) and bare fetch() inside platform-loaded " +
@@ -159,9 +159,8 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
     },
   });
   caps.provideCapability({
-    // path-call: the cap's own invoke describes the forwarder hop; the
-    // members replay against the user's default export rides in props.
-    invoke: "path-call",
+    // The forwarder hop speaks call({ path, args }); how it treats the
+    // user's default export — members replay — rides in ITS props.
     meta: {
       instructions:
         "The project's own iterate-config worker, rebuilt from the repo on every call: " +

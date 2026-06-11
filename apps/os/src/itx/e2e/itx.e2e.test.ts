@@ -24,7 +24,7 @@ import {
   pushIterateConfigWorker,
   runExampleCode,
 } from "./example-matrix.ts";
-import { pathCallCapabilitySource, todoCapabilitySource } from "./itx-scripts.ts";
+import { slackShapedCapabilitySource, todoCapabilitySource } from "./itx-scripts.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const PROJECT_SLUG = `itx-e2e-${RUN_SUFFIX}`;
@@ -128,10 +128,10 @@ test("the five-step capability flow: provide live, call, promote durable, call f
 
   // (2) define() it as a live cap on the project context — ONE verb: a live
   // stub is just another target, discriminated structurally from the
-  // serializable rpc/url kinds.
+  // serializable rpc/url kinds. The provider implements call({ path, args })
+  // itself — the one calling convention, no invoke flag anywhere.
   using projectItx = await itx.projects.get(project.id);
   await projectItx.provideCapability({
-    invoke: "path-call",
     name: "slack",
     target: new FakeSlackSdk() as never,
   });
@@ -145,11 +145,15 @@ test("the five-step capability flow: provide live, call, promote durable, call f
 
   // (4) "I like this mount" → promote: durable means the code moves
   // server-side (define with an rpc/source target), not a flag on the live
-  // stub.
+  // stub. Source caps are member-shaped (the registry wraps the loader
+  // entrypoint and replays the path); `types` documents the surface for
+  // machines the way meta.instructions does for agents.
   const marker = `durable-${RUN_SUFFIX}`;
+  const slackDurableTypes =
+    "declare const chat: { postMessage(body: object): Promise<{ method: string }> };";
   await projectItx.provideCapability({
-    invoke: "path-call",
     name: "slackDurable",
+    types: slackDurableTypes,
     target: {
       type: "rpc",
       worker: {
@@ -157,7 +161,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
         source: {
           cacheKey: crypto.randomUUID(),
           mainModule: "cap.js",
-          modules: { "cap.js": pathCallCapabilitySource({ marker }) },
+          modules: { "cap.js": slackShapedCapabilitySource({ marker }) },
         },
       },
     },
@@ -176,11 +180,12 @@ test("the five-step capability flow: provide live, call, promote durable, call f
   }
 
   // Own rows only — platform defaults (e.g. `ai` from platform:project)
-  // also appear in describe() with their code context as owner.
+  // also appear in describe() with their code context as owner. `types`
+  // is lifted from meta like instructions.
   const description = (await projectItx.describe()).caps as Array<{ owner: string }>;
   expect(description.filter((cap) => cap.owner === project.id)).toMatchObject([
-    { connected: true, invoke: "path-call", kind: "live", name: "slack" },
-    { invoke: "path-call", kind: "rpc", name: "slackDurable" },
+    { connected: true, kind: "live", name: "slack" },
+    { kind: "rpc", name: "slackDurable", types: slackDurableTypes },
   ]);
 });
 
@@ -201,10 +206,10 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   expect(Array.isArray(models)).toBe(true);
   expect(models.length).toBeGreaterThan(0);
 
-  // (2) Wrapped via the BindingCapability loopback (path-call): same binding,
-  // reached through the thin policy entrypoint — the §2 pattern.
+  // (2) Wrapped via the BindingCapability loopback: same binding, reached
+  // through the thin policy entrypoint (which implements call) — the §2
+  // pattern.
   await projectItx.provideCapability({
-    invoke: "path-call",
     name: "aiWrapped",
     target: {
       entrypoint: "BindingCapability",
@@ -257,7 +262,7 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   const caps = (await projectItx.describe()).caps as Array<{ owner: string }>;
   expect(caps.filter((cap) => cap.owner === project.id)).toMatchObject([
     { instructions: "Workers AI. Use like the env.AI binding.", kind: "rpc", name: "ai" },
-    { invoke: "path-call", kind: "rpc", name: "aiWrapped" },
+    { kind: "rpc", name: "aiWrapped" },
   ]);
 });
 
@@ -278,7 +283,6 @@ test.skipIf(!MCP_TEST_SERVER_URL)(
     using projectItx = await itx.projects.get(project.id);
 
     await projectItx.provideCapability({
-      invoke: "path-call",
       meta: { instructions: "Test MCP server. Call listTools() first." },
       name: "mcptest",
       target: {
@@ -348,9 +352,9 @@ export class PetstoreClient extends WorkerEntrypoint {
   });
 
   // (2) Point a cap at the user's export via the ProjectWorker forwarder —
-  // props.export names THEIR class, props.invoke how to call it.
+  // props.export names THEIR class, props.invoke how the FORWARDER calls it
+  // (the forwarder's inner mode is its own prop, not kernel data).
   await projectItx.provideCapability({
-    invoke: "path-call",
     meta: { instructions: "Petstore API. Call listOperations() first." },
     name: "petstore",
     target: {
@@ -445,7 +449,6 @@ test("platform defaults arrive from the platform:project code context, and own r
   type DescribedCaps = { caps: Array<{ name: string; owner: string }> };
   const before = (await projectItx.describe()) as DescribedCaps;
   expect(before.caps.find((cap) => cap.name === "ai")).toMatchObject({
-    invoke: "path-call",
     kind: "rpc",
     owner: "platform:project",
   });
@@ -468,7 +471,6 @@ test("platform defaults arrive from the platform:project code context, and own r
     }
   }
   await projectItx.provideCapability({
-    invoke: "path-call",
     name: "ai",
     target: new ShadowAi() as never,
   });
@@ -494,7 +496,6 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   type DescribedCaps = { caps: Array<{ name: string; owner: string }> };
   const before = (await projectItx.describe()) as DescribedCaps;
   expect(before.caps.find((cap) => cap.name === "fetch")).toMatchObject({
-    invoke: "path-call",
     owner: "platform:project",
   });
 
@@ -511,7 +512,6 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
     }
   }
   await projectItx.provideCapability({
-    invoke: "path-call",
     name: "fetch",
     target: new EgressInterceptor() as never,
   });
@@ -562,7 +562,6 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   using child = await projectItx.fork({ name: "fetch-shadow" });
   const childDescription = await child.describe();
   await child.provideCapability({
-    invoke: "path-call",
     name: "fetch",
     target: new EgressInterceptor() as never,
   });

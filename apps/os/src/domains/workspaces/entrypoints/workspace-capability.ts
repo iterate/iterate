@@ -5,7 +5,8 @@ import {
   type WorkspaceDurableObject,
   type WorkspaceStructuredName,
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
-import { isChildContextId } from "~/itx/protocol.ts";
+import { replayPathCall } from "~/itx/path-proxy.ts";
+import { isChildContextId, type PathCall } from "~/itx/protocol.ts";
 
 type WorkspaceCapabilityEnv = {
   WORKSPACE?: DurableObjectNamespace<WorkspaceDurableObject>;
@@ -39,6 +40,11 @@ export class WorkspaceCapability extends WorkerEntrypoint<
   WorkspaceCapabilityEnv,
   WorkspaceCapabilityProps
 > {
+  /** The itx kernel's one calling convention; replay walks this entrypoint's own members. */
+  call(input: PathCall): Promise<unknown> {
+    return replayPathCall(this, input);
+  }
+
   async gitAdd(input: Record<string, unknown>) {
     return await this.#callGit("add", input);
   }

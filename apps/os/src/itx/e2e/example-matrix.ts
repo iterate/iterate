@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { RpcTarget } from "capnweb";
+import { asPathCallable } from "../client.ts";
 import type { ItxExample, ItxExampleRuntime } from "../examples.ts";
 import { adminApiSecret, baseUrl, connectGlobal } from "./e2e-env.ts";
 
@@ -25,7 +26,12 @@ export type MatrixRuntime = (typeof MATRIX_RUNTIMES)[number] & ItxExampleRuntime
 
 const AsyncFunction = async function () {}.constructor as new (
   ...args: string[]
-) => (itx: unknown, vars: Record<string, unknown>, rpcTarget: unknown) => Promise<unknown>;
+) => (
+  itx: unknown,
+  vars: Record<string, unknown>,
+  rpcTarget: unknown,
+  pathCallable: unknown,
+) => Promise<unknown>;
 
 export async function runExampleCode(
   runtime: MatrixRuntime,
@@ -75,10 +81,10 @@ async function runInNode(input: {
   projectId: string;
   vars: Record<string, unknown>;
 }): Promise<unknown> {
-  const script = new AsyncFunction("itx", "vars", "RpcTarget", input.code);
+  const script = new AsyncFunction("itx", "vars", "RpcTarget", "asPathCallable", input.code);
   using itx = connectGlobal();
   using projectItx = await itx.projects.get(input.projectId);
-  return await script(projectItx, input.vars, RpcTarget);
+  return await script(projectItx, input.vars, RpcTarget, asPathCallable);
 }
 
 async function runInCli(input: {

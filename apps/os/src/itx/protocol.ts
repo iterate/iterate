@@ -28,21 +28,19 @@ export type ProjectAccess = "all" | string[];
 export const GLOBAL_CONTEXT_ID = "global";
 
 /**
- * How a capability is invoked (Law 6: one wire protocol, two modes).
- *
- * - "members": the registry replays the property path on the target and
- *   calls the terminal method on its parent (receiver-preserving). Right for
- *   plain RpcTargets, functions, and objects-of-functions.
- * - "path-call": the registry makes ONE call, `target.call({ path, args })`.
- *   Right for SDK-shaped surfaces with method trees we don't predeclare —
- *   the provider implements a single method and the public Slack SDK docs
- *   become the tool docs ("use itx.slack exactly like @slack/web-api").
+ * The ONE calling convention (Law 6): the kernel dispatches every capability
+ * as `target.call({ path, args })`. Whether a path is replayed onto a real
+ * member tree is decided at the EDGE where the concrete object lives — the
+ * registry wraps the objects it dials itself (bindings, loader entrypoints,
+ * facets) with `asPathCallable`, first-party loopback entrypoints self-replay
+ * via their own `call`, live providers either implement `call` (the
+ * SDK-shaped FakeSlackSdk pattern) or wrap client-side with `asPathCallable`,
+ * and forwarders (ProjectWorker, UrlDial) carry their inner mode in their own
+ * props.
  */
-export type CapabilityInvoke = "members" | "path-call";
-
 export type PathCall = { path: string[]; args: unknown[] };
 
-/** The full shape a "path-call" capability provider implements. */
+/** The full shape every dispatched capability target speaks. */
 export type PathCallTarget = { call(input: PathCall): unknown };
 
 /** A capability's kind is its target's type (design of record: types.ts). */
@@ -278,10 +276,13 @@ export function assertProvidableCapabilityTarget(
  * Arbitrary metadata, stored verbatim and surfaced by describe(). There is
  * no schema — the named fields below are conventions:
  * - `instructions`: a sentence for the human/agent who finds this cap.
+ * - `types`: TypeScript declarations for the cap's surface — the
+ *   machine/editor-facing counterpart of `instructions`.
  * - `http`: HTTP routing flags (spec §8).
  */
 export type CapabilityMeta = {
   instructions?: string;
+  types?: string;
   providedBy?: { type: "user" | "agent" | "system"; id: string };
   http?: { expose: boolean; public?: boolean };
   [key: string]: unknown;
@@ -291,13 +292,14 @@ export type CapabilityMeta = {
 export type CapabilityDescription = {
   name: string;
   kind: CapabilityKind;
-  invoke: CapabilityInvoke;
   /** Which context owns the entry — provenance for shadowing visibility. */
   owner: string;
   /** Live caps only: is the provider currently connected? */
   connected?: boolean;
   /** Lifted from meta for convenience: the one thing to read first. */
   instructions?: string;
+  /** Lifted from meta: TypeScript declarations for the cap's surface. */
+  types?: string;
   meta: CapabilityMeta;
   updatedAtMs: number;
 };

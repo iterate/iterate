@@ -22,9 +22,8 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
 
   // A project-level cap every child should see through the chain.
   await projectItx.provideCapability({
-    invoke: "path-call",
     name: "shared",
-    target: pathCallTarget("project-level"),
+    target: chatPostTarget("project-level"),
   });
 
   // The node's own ADDRESS is a cap target (itx-next.md, address
@@ -52,9 +51,8 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   // (2) Child defines its own cap under the SAME name → shadows the parent,
   // visibly (describe reports the owner).
   await child.provideCapability({
-    invoke: "path-call",
     name: "shared",
-    target: pathCallTarget("child-level"),
+    target: chatPostTarget("child-level"),
   });
   const viaShadow = (await (child as never as Record<string, any>).shared.chat.post({
     text: "hi",
@@ -105,7 +103,6 @@ test("fork: a path define shadows ONE subtree of an inherited cap (longest-prefi
     }
   }
   await projectItx.provideCapability({
-    invoke: "path-call",
     name: "sdk",
     target: new MarkedSdk("base") as never,
   });
@@ -114,7 +111,6 @@ test("fork: a path define shadows ONE subtree of an inherited cap (longest-prefi
   // is consumed by resolution, so the override target sees the remainder.
   using child = await projectItx.fork({ name: "e2e-path-shadow" });
   await child.provideCapability({
-    invoke: "path-call",
     path: ["sdk", "chat", "postMessage"],
     target: new MarkedSdk("override") as never,
   });
@@ -149,7 +145,6 @@ test("fork: a path define shadows ONE subtree of an inherited cap (longest-prefi
   // (4) Reserved segments are rejected per-segment at define time.
   await expect(
     child.provideCapability({
-      invoke: "path-call",
       path: ["sdk", "constructor"],
       target: new MarkedSdk("nope") as never,
     }),
@@ -258,7 +253,9 @@ test("fork: child worker caps run with the owning project's authority", async ()
 
 // ---- helpers ----------------------------------------------------------------
 
-function pathCallTarget(marker: string) {
+function chatPostTarget(marker: string) {
+  // Source caps are member-shaped: the registry wraps the loader entrypoint
+  // and replays the dotted path on its real members (nested RpcTargets too).
   return {
     type: "rpc" as const,
     worker: {
@@ -268,11 +265,14 @@ function pathCallTarget(marker: string) {
         mainModule: "cap.js",
         modules: {
           "cap.js": `
-            import { WorkerEntrypoint } from "cloudflare:workers";
-            export default class extends WorkerEntrypoint {
-              async call({ path, args }) {
-                return { args, marker: ${JSON.stringify(marker)}, method: path.join(".") };
+            import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
+            class Chat extends RpcTarget {
+              post(...args) {
+                return { args, marker: ${JSON.stringify(marker)}, method: "chat.post" };
               }
+            }
+            export default class extends WorkerEntrypoint {
+              get chat() { return new Chat(); }
             }
           `,
         },

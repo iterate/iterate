@@ -25,7 +25,8 @@ import type {
 } from "@iterate-com/shared/streams/types";
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { ItxError } from "../errors.ts";
-import type { ProjectAccess } from "../protocol.ts";
+import { replayPathCall } from "../path-proxy.ts";
+import type { PathCall, ProjectAccess } from "../protocol.ts";
 import { getStreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 
 type StreamsClient = ReturnType<typeof getStreamsBackend>;
@@ -47,10 +48,16 @@ export type StreamsCapabilityProps = {
 };
 
 /**
- * The platform:project `streams` default. Members invoke: get/namespace/
- * create replay straight onto a project-pinned collection.
+ * The platform:project `streams` default: get/namespace/create against a
+ * project-pinned collection, reached through the one calling convention via
+ * the self-replaying `call` below.
  */
 export class StreamsCapability extends WorkerEntrypoint<Env, StreamsCapabilityProps> {
+  /** The kernel's one calling convention; replay walks this entrypoint's own members. */
+  call(input: PathCall): Promise<unknown> {
+    return replayPathCall(this, input);
+  }
+
   get(ref: string | { namespace?: string; path: string }): ItxStream {
     return this.#collection().get(ref);
   }
