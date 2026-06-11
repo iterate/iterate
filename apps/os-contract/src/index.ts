@@ -513,6 +513,26 @@ export const osContract = oc.router({
         })
         .input(ProjectScopedInput.extend({ integration: z.string().trim().min(1) }))
         .output(z.unknown()),
+      setJournaledSecret: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/journaled-secrets",
+          description:
+            "Set a journal-backed Secret: material, a derivation (derived secrets recompute from other secrets), or both",
+          tags: ["/project", "/secrets"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            slug: z.string().trim().min(1),
+            material: z.string().optional(),
+            metadata: z.record(z.string(), z.unknown()).optional(),
+            tier: z.enum(["project", "iterate"]).optional(),
+            sensitivity: z.enum(["secret", "plain"]).optional(),
+            expiresAt: z.string().optional(),
+            derivation: z.unknown().optional(),
+          }),
+        )
+        .output(z.unknown()),
       describeJournaledSecret: oc
         .route({
           method: "GET",

@@ -101,11 +101,111 @@ integration that provided it).
   — Discord's identify frame, SDK constructors in first-party loopbacks.
   `revealForPlatformUse({ usedBy })` exists for exactly that, and both paths
   append `secret/used` audit events (who, which host, when — never material).
-- **Refresh is the DO's job.** A material version carrying an OAuth refresh
-  config arms the DO's alarm at expiry-minus-leeway; the alarm POSTs the token
-  endpoint and appends `secret/rotated`. The refresh token rides encrypted; the
-  OAuth _client secret_ is another Secret referenced by slug — the secret
-  system consuming itself, on purpose.
+- **Refresh is the DO's job** — via derivation (next section): a secret
+  carrying a derivation re-derives inline whenever a use finds it stale, and
+  proactively via an alarm at expiry-minus-leeway, each run appended as
+  `secret/rotated`. Derivation sources are other Secrets, dereferenced through
+  their own DOs — the secret system consuming itself, on purpose.
+
+## Derived secrets — the unifying theory
+
+A Secret's material is either a **fact** (set directly: a password, a PAT, a
+refresh token, a plain config variable) or **derived**: computed from the
+material of OTHER secrets via an exchange, valid for a while, recomputed on
+demand. That one idea (`secret-derivation.ts`) subsumes what looked like
+separate features:
+
+- **OAuth access tokens aren't special.** "POST the token endpoint with
+  `getSecret({ key: "google/refresh-token" })` and
+  `getSecret({ key: "google/oauth-client-secret" })`, read `access_token` and
+  `expires_in`" is just one `http-exchange` derivation. The refresh token and
+  client secret are ordinary sibling Secrets.
+- **The Waitrose case.** No refresh tokens — you re-login with
+  username/password and sessions last ~5 minutes:
+  `waitrose/access-token = http-exchange(generateSession mutation referencing
+waitrose/username + waitrose/password, ttlSeconds: 300)`.
+- **Doppler-style variables** are the degenerate case: a fact with
+  `sensitivity: "plain"` (still enveloped on the stream; `describe()` shows
+  the value).
+
+Freshness is the Secret DO's job, twice over: **inline** — every dereference
+(fetch-with-substitution, egress placeholder resolution, platform reveal) goes
+through `ensureFreshMaterial`, so a stale token re-derives on the very request
+that found it stale — and **proactively** via the alarm at expiry-minus-leeway.
+Every run appends `secret/rotated`; every source dereference appends
+`secret/used` on the source's own stream. And because a derivation's
+`getSecret({ key })` references resolve through the SOURCE secrets' own DOs,
+**derivations chain**: a token derived from a token derived from a password,
+lazily, hop by hop, fully audited.
+
+The placeholder language is the same one project egress speaks — derivation IS
+egress substitution, one hop further down, performed by the secret system on
+itself. (One wrinkle worth knowing: templates embedded in `JSON.stringify`'d
+bodies carry escaped quotes, so the reference parser accepts
+`\"key\"` too.) A `script` derivation kind is declared but not executable yet —
+the fully general escape hatch where project code computes
+`{ material, expiresAt }`.
+
+The terminal EgressPipe now resolves `getSecret({ key })` placeholders against
+journaled Secrets first (falling back to legacy D1 rows), which is what makes
+the headline work: a project worker writes
+`authorization: Bearer getSecret({ key: "waitrose/access-token" })` and gets
+automatic inline token refresh without ever holding a credential.
+
+## Userspace integrations — the Waitrose case
+
+A customer can define a whole integration in their own project worker, and
+`itx.integrations.waitrose` simply exists. Same surface as github/discord, two
+resolution tiers:
+
+- Slugs in the platform registry build their SDK inside the first-party
+  loopback (tokens via the Secret DO trapdoor).
+- **Any other slug forwards to the project's own worker** as one call:
+  `worker.integrations({ slug, path, args })` (one method call, not a deep
+  property walk — workerd RPC doesn't traverse instance fields). The project
+  walks the path on its concrete SDK object locally.
+
+The userspace SDK authenticates with `getSecret({ key })` placeholders in bare
+`fetch()` headers — so even the customer's own integration code never holds
+its tokens; substitution (with inline derivation) happens in the terminal
+egress pipe, and live `fetch` shadows still only ever see placeholders.
+
+The working example is in the project template
+(`iterate-config-repo/apps/waitrose/worker.js`, wired through the root
+worker's `integrations` export, modeled on github.com/jonastemplestein/waitrose):
+
+```js
+// one-time: itx.worker.connectWaitrose({ username, password })
+await itx.secrets.set({ slug: "waitrose/username", material: username, sensitivity: "plain" });
+await itx.secrets.set({ slug: "waitrose/password", material: password });
+await itx.secrets.set({
+  slug: "waitrose/access-token",
+  derivation: {
+    kind: "http-exchange",
+    request: {
+      /* generateSession mutation,
+    credentials as getSecret refs */
+    },
+    extract: { materialPointer: "/data/generateSession/accessToken", ttlSeconds: 300 },
+  },
+});
+
+// henceforth, from anywhere in the project:
+await itx.integrations.waitrose.searchProducts("milk");
+```
+
+`itx.secrets` (SecretsJournalCapability) is the deliberately reveal-free
+surface that makes this possible from userspace: set, describe,
+fetch-with-substitution — never material. The whole loop is exercised in
+`src/domains/integrations/waitrose-userspace.test.ts`: connect → first search
+derives a session inline → second search reuses it → six minutes later the
+next search re-derives, with the SDK provably holding only placeholders
+throughout.
+
+This is also where first-party and customer-owned integrations meet: a
+userspace integration is structurally a customer-owned integration whose
+definition lives in the project repo instead of the platform registry. The
+promotion path (userspace → registry) is "move the provider file".
 
 ## Connect: the symmetric heart
 
@@ -172,6 +272,55 @@ by tier — material then never sits in D1 rows at all.
 - Flood control is open: the spike captures all dispatches under the
   configured intents; a real version probably filters per connection.
 
+## Compared with executor (rhyssullivan/executor)
+
+Studied at `~/src/github.com/rhyssullivan/executor` — an open-source
+integration layer for AI agents: a unified tool catalog over OpenAPI/GraphQL/
+MCP sources, with connections (credential + integration pairs), pluggable
+secret providers (file, keychain, 1Password, WorkOS Vault), sandboxed code
+execution (QuickJS-WASM / Deno subprocess), and tools addressed as
+`tools.github.user.personal.issues.list()`.
+
+Where the designs agree (independently arrived at — good sign):
+
+- **Fetch-with-substitution.** Their connections store provider+item-id, never
+  values; credentials resolve at invocation time and are substituted into the
+  authenticated request, invisible to sandboxed code. Same principle as our
+  placeholder substitution — though our Durable Object boundary is stricter
+  (their cloud workers still materialize values in the calling isolate).
+- **Capability fields over generic abstraction.** Their plugin spec
+  deliberately has typed fields (`secretProviders`, `routes`, `handlers`)
+  instead of a generic provides/requires machinery — the same
+  conventions-over-frameworks instinct as our partial-fetch-function providers.
+- **Integration-as-address.** `tools.<integration>.<owner>.<connection>.<tool>`
+  rhymes with `itx.integrations.<slug>.<sdk path>`; both resolve lazily at
+  call time.
+
+Where we differ, deliberately:
+
+- **They have no ingress.** No webhook receivers (explicitly a v1 non-goal),
+  no event streams, no stateful processors — executor is a pull-only tool
+  catalog. Our capture-stream → router → project-stream spine, gateway
+  connections, and journaled audit/replay are exactly the half they're
+  missing, and the half agents-reacting-to-the-world needs.
+- **Their tokens refresh in core code per OAuth template; ours are derived
+  secrets** — one mechanism for OAuth, password-exchange sessions, and
+  anything `http-exchange` can express, journaled as rotations.
+
+Worth stealing later:
+
+- **Curated remote integration registry** (integrations.sh JSON, 12h cache):
+  pre-configured auth templates + source URLs per provider, so "add Linear"
+  needs no deploy. Our registry could merge a remote catalog the same way.
+- **Transcript-based testing** (testkit/): black-box tests through the MCP
+  surface that emit a replayable chat transcript as the artifact. Great fit
+  for our agent flows.
+- **Tool generation from OpenAPI/GraphQL sources** — we hand-pick SDKs
+  (octokit, @discordjs/core); generating a typed surface from a provider's
+  OpenAPI spec would make long-tail userspace integrations cheaper.
+- **Pause/resume execution for mid-call elicitation** (OAuth popup, approval)
+  — relevant to our human-in-the-loop egress policy plans.
+
 ## Spike boundaries / open questions
 
 - Slack and Google still run their bespoke wiring; migration = re-express each
@@ -210,6 +359,15 @@ pnpm cli rpc project integrations describeJournaledSecret \
 
 # hold the discord gateway open (first-party bot from APP_CONFIG_DISCORD_BOT_TOKEN)
 pnpm cli rpc project integrations ensureDiscordGateway --project-slug-or-id my-project
+
+# waitrose (userspace): in a project itx session —
+#   await itx.worker.connectWaitrose({ username: "...", password: "..." })
+#   await itx.integrations.waitrose.searchProducts("milk")
+# or set a derived secret directly from the CLI:
+pnpm cli rpc project integrations setJournaledSecret \
+  --project-slug-or-id my-project --slug waitrose/password --material 'hunter2'
+pnpm cli rpc project integrations describeJournaledSecret \
+  --project-slug-or-id my-project --slug waitrose/access-token   # audit + rotations, no material
 ```
 
 Unit tests cover the symmetry contract, both providers' partial fetch

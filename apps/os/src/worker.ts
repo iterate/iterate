@@ -64,6 +64,7 @@ export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+export { SecretsJournalCapability } from "~/domains/secrets/entrypoints/secrets-journal-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";

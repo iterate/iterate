@@ -102,8 +102,26 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
       "ready-authenticated from the project's Secrets: " +
       "itx.integrations.github.octokit.rest.issues.create({...}), " +
       "itx.integrations.discord.api.channels.createMessage(channelId, {...}). " +
-      "Call itx.integrations() to list what's available.",
+      "Slugs the platform doesn't know forward to the project worker's own " +
+      "integrations({ slug, path, args }) export — userspace integrations. " +
+      "Call itx.integrations() to list the platform-provided ones.",
     name: "integrations",
+  },
+  {
+    address: {
+      entrypoint: "SecretsJournalCapability",
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+    instructions:
+      "Journaled Secrets at /secrets/{slug}: itx.secrets.set({ slug, material?, derivation?, " +
+      "sensitivity? }) to store credentials, config variables, or DERIVED secrets " +
+      "(material recomputed from other secrets, e.g. a session token from a stored " +
+      "username/password); itx.secrets.describe({ slug }) for material-free state. " +
+      'Reference material in outbound requests as getSecret({ key: "slug" }) header ' +
+      "placeholders — substitution (with inline refresh) happens in egress, so code " +
+      "here never sees the bytes.",
+    name: "secrets",
   },
   {
     address: { entrypoint: "StreamsCapability", type: "rpc", worker: { type: "loopback" } },

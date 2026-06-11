@@ -27,6 +27,7 @@ import {
   getSecretDurableObjectName,
   getSecretStub,
 } from "~/domains/secrets/durable-objects/secret-durable-object.ts";
+import { setJournaledSecret } from "~/domains/secrets/secret-streams.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
 
@@ -68,6 +69,29 @@ export const projectIntegrationsRouter = {
         }),
       });
       return await stub.ensureReady();
+    }),
+  setJournaledSecret: os.project.integrations.setJournaledSecret
+    .use(projectScopeMiddleware)
+    .handler(async ({ context, input }) => {
+      const project = requireProjectScope(context);
+      const event = await setJournaledSecret({
+        projectId: project.id,
+        slug: input.slug,
+        ...(input.material == null ? {} : { material: input.material }),
+        ...(input.metadata == null ? {} : { metadata: input.metadata }),
+        ...(input.tier == null ? {} : { tier: input.tier }),
+        ...(input.sensitivity == null ? {} : { sensitivity: input.sensitivity }),
+        ...(input.expiresAt == null ? {} : { expiresAt: input.expiresAt }),
+        ...(input.derivation == null
+          ? {}
+          : {
+              derivation: input.derivation as Parameters<
+                typeof setJournaledSecret
+              >[0]["derivation"],
+            }),
+        source: { kind: "orpc" },
+      });
+      return { slug: input.slug, offset: event.offset };
     }),
   describeJournaledSecret: os.project.integrations.describeJournaledSecret
     .use(projectScopeMiddleware)

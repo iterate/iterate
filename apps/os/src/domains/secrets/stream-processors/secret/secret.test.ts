@@ -98,10 +98,22 @@ describe("SecretProcessor", () => {
             slug: "google/access-token",
             encryptedMaterial: await encrypted_("ya29.token"),
             expiresAt: "2026-06-11T01:00:00.000Z",
-            refresh: {
-              kind: "oauth-refresh-token",
-              tokenEndpoint: "https://oauth2.googleapis.com/token",
-              clientId: "client-id",
+            // OAuth refresh expressed as the general derivation: the refresh
+            // token and client secret are SOURCE secrets; the token endpoint
+            // is just an http exchange.
+            derivation: {
+              kind: "http-exchange",
+              request: {
+                url: "https://oauth2.googleapis.com/token",
+                method: "POST",
+                headers: { "content-type": "application/x-www-form-urlencoded" },
+                body:
+                  "grant_type=refresh_token" +
+                  '&refresh_token=getSecret({ key: "google/refresh-token" })' +
+                  "&client_id=client-id" +
+                  '&client_secret=getSecret({ key: "google/oauth-client-secret" })',
+              },
+              extract: { materialPointer: "/access_token", expiresInPointer: "/expires_in" },
               refreshLeewaySeconds: 300,
             },
           },

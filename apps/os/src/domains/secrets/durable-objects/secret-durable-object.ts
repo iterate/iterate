@@ -9,10 +9,14 @@
 // audited revealForPlatformUse trapdoor. Both paths append a `secret/used`
 // audit event to the journal.
 //
-// Refresh also lives here: when a material version carries an OAuth refresh
-// config, the DO arms its alarm at expiry-minus-leeway and appends
-// `secret/rotated` (re-encrypted) when it fires. The journal stays the only
-// write authority; this DO is a fold plus a clock.
+// DERIVED secrets live here too: a Secret whose journal carries a derivation
+// (secret-derivation.ts) recomputes its material from OTHER secrets — every
+// dereference goes through ensureFreshMaterial, so a stale 5-minute session
+// token re-derives INLINE on use (and proactively via the alarm), each run
+// appended as `secret/rotated`. Resolving a derivation's source keys dials the
+// siblings' own DOs, which ensure their own freshness first — derivations
+// chain, every hop audited. The journal stays the only write authority; this
+// DO is a fold plus a clock plus the one place plaintext exists.
 
 import { env } from "cloudflare:workers";
 import { z } from "zod";
@@ -33,6 +37,7 @@ import {
   encryptSecretMaterial,
   importSecretsKey,
 } from "~/domains/secrets/secret-crypto.ts";
+import { deriveViaHttpExchange, materialIsStale } from "~/domains/secrets/secret-derivation.ts";
 import { secretStreamPath } from "~/domains/secrets/stream-processors/secret/contract.ts";
 import {
   SecretProcessor,
@@ -80,6 +85,8 @@ const SecretLifecycleBase = createIterateDurableObjectBase<
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
+type SecretState = Awaited<ReturnType<SecretProcessor["snapshot"]>>["state"];
+
 export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObjectEnv> {
   host = createStreamProcessorHost(this.ctx);
   secret = this.host.add(SecretProcessorContract.slug, (deps) => {
@@ -106,23 +113,36 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
     return await this.host.requestStreamSubscription(args);
   }
 
-  /** Material-free public view of the Secret. */
+  /** Public view of the Secret: material-free — except plain config
+   * variables (sensitivity: "plain"), whose value is included. */
   async describe() {
     const { state } = await this.readyState();
-    const { encryptedMaterial: _material, refresh, ...visible } = state;
-    return { ...visible, hasRefresh: refresh != null };
+    const { encryptedMaterial, derivation, ...visible } = state;
+    return {
+      ...visible,
+      hasMaterial: encryptedMaterial != null,
+      derivation: derivation == null ? null : { kind: derivation.kind },
+      ...(state.sensitivity === "plain" && encryptedMaterial != null
+        ? {
+            value: await decryptSecretMaterial({
+              key: await this.encryptionKey(),
+              encrypted: encryptedMaterial,
+            }),
+          }
+        : {}),
+    };
   }
 
   /**
    * Perform an HTTP request with `{{secret}}` placeholders (url, header
-   * values, string body) replaced by the decrypted material. The substituted
-   * request and live response exist only inside this DO; the caller gets a
-   * serializable response snapshot. Every call appends a `secret/used` audit
-   * event.
+   * values, string body) replaced by the material — re-derived first if
+   * stale. The substituted request and live response exist only inside this
+   * DO; the caller gets a serializable response snapshot. Every call appends
+   * a `secret/used` audit event.
    */
   async fetchWithSecret(input: { request: SubstitutableRequest; usedBy: string }) {
     const { params, state } = await this.readyState();
-    const material = await this.decryptCurrentMaterial(state);
+    const material = await this.ensureFreshMaterial({ params, state });
     const substituted = substituteSecretPlaceholders(input.request, material);
     const response = await fetch(substituted.url, {
       method: substituted.method ?? "GET",
@@ -146,81 +166,35 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
 
   /**
    * The audited trapdoor for PLATFORM-TRUSTED consumers only: first-party
-   * loopback capabilities constructing SDK clients, and the Discord gateway
-   * building its identify frame. Project worker code and agents never get a
-   * dial on this — they go through fetchWithSecret or egress substitution.
+   * loopback capabilities constructing SDK clients, the Discord gateway
+   * building its identify frame, and sibling Secret DOs resolving derivation
+   * sources. Project worker code and agents never get a dial on this — they
+   * go through fetchWithSecret or egress substitution.
    */
   async revealForPlatformUse(input: { usedBy: string }) {
     const { params, state } = await this.readyState();
-    const material = await this.decryptCurrentMaterial(state);
+    const material = await this.ensureFreshMaterial({ params, state });
     await this.appendUsedEvent({ params, usage: "reveal", usedBy: input.usedBy });
     return material;
   }
 
-  /** Refresh the material via the journaled OAuth refresh config, appending a
-   * `secret/rotated` event with the re-encrypted result. */
-  async refreshNow(): Promise<{ refreshed: boolean; reason?: string }> {
+  /** Run the derivation now regardless of staleness, journaling the result. */
+  async deriveNow(): Promise<{ derived: boolean; reason?: string }> {
     const { params, state } = await this.readyState();
-    const refresh = state.refresh;
-    if (state.status !== "set" || refresh == null) {
-      return { refreshed: false, reason: "no refresh config" };
+    if (state.status !== "set" || state.derivation == null) {
+      return { derived: false, reason: "no derivation" };
     }
-    if (refresh.encryptedRefreshToken == null) {
-      return { refreshed: false, reason: "no refresh token" };
-    }
-    const key = await this.encryptionKey();
-    const refreshToken = await decryptSecretMaterial({
-      key,
-      encrypted: refresh.encryptedRefreshToken,
-    });
-    // The OAuth client secret is itself a Secret — dereferenced via its own
-    // DO's audited trapdoor, so even refresh flows leave a `secret/used` trail.
-    const clientSecret = refresh.clientSecretSecretSlug
-      ? await getSecretStub({
-          projectId: params.projectId,
-          slug: refresh.clientSecretSecretSlug,
-        }).revealForPlatformUse({ usedBy: `secret:${params.slug}:refresh` })
-      : undefined;
-
-    const response = await fetch(refresh.tokenEndpoint, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-        client_id: refresh.clientId,
-        ...(clientSecret == null ? {} : { client_secret: clientSecret }),
-      }),
-    });
-    const tokenData = (await response.json()) as {
-      access_token?: string;
-      error?: string;
-      expires_in?: number;
-    };
-    if (!response.ok || !tokenData.access_token) {
-      return { refreshed: false, reason: tokenData.error ?? `HTTP ${response.status}` };
-    }
-
-    const stream = await this.secretStream(params);
-    await stream.append({
-      type: "events.iterate.com/secret/rotated",
-      idempotencyKey: `secret-rotated:${params.slug}:${crypto.randomUUID()}`,
-      payload: {
-        slug: params.slug,
-        encryptedMaterial: await encryptSecretMaterial({ key, material: tokenData.access_token }),
-        ...(tokenData.expires_in == null
-          ? {}
-          : { expiresAt: new Date(Date.now() + tokenData.expires_in * 1000).toISOString() }),
-        reason: "oauth-refresh",
-      },
-    });
-    return { refreshed: true };
+    await this.runDerivation({ params, state, reason: "derive-now" });
+    return { derived: true };
   }
 
   async alarm() {
-    const result = await this.refreshNow();
-    if (!result.refreshed) {
-      console.warn("[secret] alarm refresh did not rotate material", result);
+    const { params, state } = await this.readyState();
+    if (state.status !== "set" || state.derivation == null) return;
+    try {
+      await this.runDerivation({ params, state, reason: "alarm-refresh" });
+    } catch (error) {
+      console.warn("[secret] alarm derivation failed", { error, slug: params.slug });
     }
   }
 
@@ -231,24 +205,84 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
     return await this.secret.snapshot();
   }
 
+  /** Stale material + a derivation = re-derive inline, on the very use that
+   * found it stale. This is what makes `getSecret({ key:
+   * "waitrose/access-token" })` Just Work against a 5-minute token. */
+  private async ensureFreshMaterial(input: {
+    params: SecretDurableObjectStructuredName;
+    state: SecretState;
+  }): Promise<string> {
+    const { params, state } = input;
+    if (state.status !== "set") {
+      throw new Error(`Secret ${params.slug} is ${state.status}.`);
+    }
+    const stale = materialIsStale({
+      hasMaterial: state.encryptedMaterial != null,
+      expiresAt: state.expiresAt,
+      leewaySeconds: state.derivation?.refreshLeewaySeconds ?? 0,
+      nowMs: Date.now(),
+    });
+    if (stale && state.derivation != null) {
+      return await this.runDerivation({ params, state, reason: "inline-refresh" });
+    }
+    if (state.encryptedMaterial == null) {
+      throw new Error(`Secret ${params.slug} has no material and no derivation.`);
+    }
+    return await decryptSecretMaterial({
+      key: await this.encryptionKey(),
+      encrypted: state.encryptedMaterial,
+    });
+  }
+
+  /** Execute the derivation, append `secret/rotated`, return the material. */
+  private async runDerivation(input: {
+    params: SecretDurableObjectStructuredName;
+    state: SecretState;
+    reason: string;
+  }): Promise<string> {
+    const { params, state } = input;
+    if (state.derivation == null) throw new Error(`Secret ${params.slug} has no derivation.`);
+    if (state.derivation.kind === "script") {
+      throw new Error(
+        "Script derivations are declared but not executable in this spike " +
+          "(they will dial the project worker's own capability).",
+      );
+    }
+
+    const derived = await deriveViaHttpExchange({
+      derivation: state.derivation,
+      // Source secrets resolve through their OWN DOs: freshness and audit
+      // compose — a derivation chain re-derives lazily, hop by hop.
+      resolveSecretKey: (key) =>
+        getSecretStub({ projectId: params.projectId, slug: key }).revealForPlatformUse({
+          usedBy: `secret:${params.slug}:derivation`,
+        }),
+      nowMs: Date.now(),
+    });
+
+    const stream = await this.secretStream(params);
+    await stream.append({
+      type: "events.iterate.com/secret/rotated",
+      idempotencyKey: `secret-rotated:${params.slug}:${crypto.randomUUID()}`,
+      payload: {
+        slug: params.slug,
+        encryptedMaterial: await encryptSecretMaterial({
+          key: await this.encryptionKey(),
+          material: derived.material,
+        }),
+        ...(derived.expiresAt == null ? {} : { expiresAt: derived.expiresAt }),
+        reason: input.reason,
+      },
+    });
+    return derived.material;
+  }
+
   private async readyState() {
     const params = await this.ensureStartedOrInitializeFromRuntimeName();
     await this.ensureSecretSubscription(params);
     await this.waitForCatchUp(params);
     const snapshot = await this.secret.snapshot();
     return { params, state: snapshot.state };
-  }
-
-  private async decryptCurrentMaterial(
-    state: Awaited<ReturnType<SecretDurableObject["secret"]["snapshot"]>>["state"],
-  ) {
-    if (state.status !== "set" || state.encryptedMaterial == null) {
-      throw new Error(`Secret ${state.slug ?? "(unset)"} has no material.`);
-    }
-    return await decryptSecretMaterial({
-      key: await this.encryptionKey(),
-      encrypted: state.encryptedMaterial,
-    });
   }
 
   private async encryptionKey() {

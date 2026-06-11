@@ -2,15 +2,20 @@
 //
 // A Secret is a domain object: one stream per secret in the owning project's
 // namespace, one Secret Durable Object folding that stream. The journal is the
-// write authority for the whole lifecycle — set, rotation (refresh), every
-// audited use, deletion — and material appears in payloads ONLY inside the
-// AES-GCM envelope (secret-crypto.ts). Plaintext exists transiently inside the
-// Secret DO.
+// write authority for the whole lifecycle — set, rotation (derivation runs),
+// every audited use, deletion — and material appears in payloads ONLY inside
+// the AES-GCM envelope (secret-crypto.ts). Plaintext exists transiently inside
+// the Secret DO.
+//
+// "Secret" also covers plain config variables (sensitivity: "plain") and
+// DERIVED secrets — born with a derivation instead of material, computed from
+// other secrets on first use (secret-derivation.ts).
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { EncryptedMaterial } from "~/domains/secrets/secret-crypto.ts";
+import { SecretDerivation } from "~/domains/secrets/secret-derivation.ts";
 
 export const SECRETS_STREAM_PREFIX = "/secrets";
 
@@ -35,33 +40,26 @@ export function secretStreamPath(slug: string): StreamPath {
 export const SecretTier = z.enum(["project", "iterate"]);
 export type SecretTier = z.infer<typeof SecretTier>;
 
-/** How the Secret DO refreshes its own material before it expires. The
- * refresh token rides encrypted; the OAuth client secret is ANOTHER Secret,
- * referenced by slug — a secret consuming the secret system. */
-export const SecretRefreshConfig = z.object({
-  kind: z.literal("oauth-refresh-token"),
-  tokenEndpoint: z.string(),
-  clientId: z.string(),
-  clientSecretSecretSlug: z.string().optional(),
-  encryptedRefreshToken: EncryptedMaterial.optional(),
-  refreshLeewaySeconds: z.number().default(300),
-});
-export type SecretRefreshConfig = z.infer<typeof SecretRefreshConfig>;
+/** Doppler-style: the same lifecycle stores non-secret config. "plain" values
+ * are still enveloped on the stream, but the DO will show them in describe(). */
+export const SecretSensitivity = z.enum(["secret", "plain"]);
+export type SecretSensitivity = z.infer<typeof SecretSensitivity>;
 
 export const SecretProcessorContract = defineProcessorContract({
   slug: "secret",
-  version: "0.1.0",
+  version: "0.2.0",
   description:
-    "Folds one Secret's lifecycle journal at /secrets/{slug}: encrypted material versions, refresh config, and a per-use audit trail.",
+    "Folds one Secret's lifecycle journal at /secrets/{slug}: encrypted material versions, an optional derivation (how to recompute material from other secrets), and a per-use audit trail.",
   stateSchema: z.object({
     slug: z.string().optional(),
     status: z.enum(["unset", "set", "deleted"]).default("unset"),
-    /** Increments on every set/rotation — a cheap rotation audit. */
+    /** Counts material versions (set-with-material and every rotation). */
     version: z.number().default(0),
     encryptedMaterial: EncryptedMaterial.optional(),
     metadata: z.record(z.string(), z.unknown()).default({}),
     tier: SecretTier.default("project"),
-    refresh: SecretRefreshConfig.optional(),
+    sensitivity: SecretSensitivity.default("secret"),
+    derivation: SecretDerivation.optional(),
     expiresAt: z.string().optional(),
     audit: z
       .object({
@@ -75,21 +73,22 @@ export const SecretProcessorContract = defineProcessorContract({
   events: {
     "events.iterate.com/secret/set": {
       description:
-        "A Secret's material was set (or replaced) by its owner. Material is AES-GCM encrypted with the deployment key; plaintext never appears on the stream.",
+        "A Secret was set by its owner. Material (AES-GCM encrypted; plaintext never appears on the stream) OR a derivation must be present: derived Secrets are born material-less and compute on first use.",
       payloadSchema: z.object({
         slug: z.string(),
-        encryptedMaterial: EncryptedMaterial,
+        encryptedMaterial: EncryptedMaterial.optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
         tier: SecretTier.optional(),
-        refresh: SecretRefreshConfig.optional(),
+        sensitivity: SecretSensitivity.optional(),
+        derivation: SecretDerivation.optional(),
         expiresAt: z.string().optional(),
-        /** Provenance — e.g. { kind: "integration-oauth", integration: "github" }. */
+        /** Provenance — e.g. { kind: "integration-connect", integration: "github" }. */
         source: z.record(z.string(), z.unknown()).optional(),
       }),
     },
     "events.iterate.com/secret/rotated": {
       description:
-        "The Secret DO replaced its own material, typically after an OAuth refresh. Appended by the DO itself.",
+        "The Secret DO replaced its own material — a derivation run (inline on a stale use, or the proactive alarm). Appended by the DO itself.",
       payloadSchema: z.object({
         slug: z.string(),
         encryptedMaterial: EncryptedMaterial,
@@ -99,7 +98,7 @@ export const SecretProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/secret/used": {
       description:
-        "Audit record: the Secret's material was dereferenced (fetch-with-substitution or a platform-trusted reveal). Carries WHO and WHERE, never the material.",
+        "Audit record: the Secret's material was dereferenced (fetch-with-substitution, a platform-trusted reveal, or as a SOURCE of another secret's derivation). Carries WHO and WHERE, never the material.",
       payloadSchema: z.object({
         slug: z.string(),
         usedBy: z.string(),

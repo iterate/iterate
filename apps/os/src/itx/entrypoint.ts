@@ -18,6 +18,7 @@ import { GLOBAL_CONTEXT_ID, isChildContextId, type ItxProps } from "./refs.ts";
 import { parseConfig } from "~/config.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+import { journaledSecretEgressResolver } from "~/domains/secrets/secret-streams.ts";
 
 /**
  * restore(): names → live object graph. A project-context handle's access is
@@ -164,10 +165,22 @@ export class EgressPipe extends WorkerEntrypoint<Env, EgressPipeProps> {
       return await fetch(request);
     }
 
-    const secrets = getSecretsCapability({
+    const legacySecrets = getSecretsCapability({
       exports: this.ctx.exports as unknown as Parameters<typeof getSecretsCapability>[0]["exports"],
       props: { projectId },
     });
+    // Journaled Secrets win: resolving through the Secret DO gives inline
+    // derivation (a stale derived token re-mints itself on this very fetch).
+    // Keys without a journaled Secret fall back to the legacy D1 rows.
+    const journaledSecrets = journaledSecretEgressResolver({ projectId });
+    const secrets = {
+      async getSecretOrNull(query: { key: string }) {
+        return (
+          (await journaledSecrets.getSecretOrNull(query)) ??
+          (await legacySecrets.getSecretOrNull(query))
+        );
+      },
+    };
     const [substitutionError, substitutedHeaders] = await substituteProjectEgressSecretHeaders({
       headers: request.headers,
       secrets,

@@ -1,6 +1,6 @@
 // Implements the "secret" lifecycle processor (contract.ts). Pure fold plus
-// one side effect: telling the host DO when a refreshable material version
-// landed so it can arm its alarm.
+// one side effect: telling the host DO when a refreshable (derived,
+// expiring) material version landed so it can arm its alarm.
 
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import { assertNever } from "@iterate-com/streams/shared/stream-processors";
@@ -11,9 +11,11 @@ export type SecretProcessorContract = typeof SecretProcessorContract;
 
 export type SecretProcessorDeps = {
   /**
-   * A refreshable material version became current (set or rotated). The host
-   * Durable Object owns the clock: it arms an alarm at expiry minus leeway and
-   * calls its own refreshNow() when it fires.
+   * A derivable material version with an expiry became current (set or
+   * rotated). The host Durable Object owns the clock: it arms an alarm at
+   * expiry minus leeway and re-derives when it fires. Inline re-derivation on
+   * a stale use happens regardless; the alarm just keeps hot secrets fresh
+   * proactively.
    */
   onRefreshableMaterial?(input: { expiresAt: string; refreshLeewaySeconds: number }): void;
 };
@@ -31,11 +33,14 @@ export class SecretProcessor extends StreamProcessor<SecretProcessorContract, Se
           ...state,
           slug: event.payload.slug,
           status: "set",
-          version: state.version + 1,
-          encryptedMaterial: event.payload.encryptedMaterial,
+          version: event.payload.encryptedMaterial == null ? state.version : state.version + 1,
+          ...(event.payload.encryptedMaterial == null
+            ? {}
+            : { encryptedMaterial: event.payload.encryptedMaterial }),
           metadata: event.payload.metadata ?? state.metadata,
           tier: event.payload.tier ?? state.tier,
-          ...(event.payload.refresh == null ? {} : { refresh: event.payload.refresh }),
+          sensitivity: event.payload.sensitivity ?? state.sensitivity,
+          ...(event.payload.derivation == null ? {} : { derivation: event.payload.derivation }),
           ...(event.payload.expiresAt == null ? {} : { expiresAt: event.payload.expiresAt }),
         };
       case "events.iterate.com/secret/rotated":
@@ -56,7 +61,12 @@ export class SecretProcessor extends StreamProcessor<SecretProcessorContract, Se
           },
         };
       case "events.iterate.com/secret/deleted": {
-        const { encryptedMaterial: _dropped, refresh: _droppedRefresh, ...rest } = state;
+        const {
+          encryptedMaterial: _dropped,
+          derivation: _droppedDerivation,
+          expiresAt: _droppedExpiresAt,
+          ...rest
+        } = state;
         return { ...rest, status: "deleted" };
       }
       default:
@@ -74,10 +84,10 @@ export class SecretProcessor extends StreamProcessor<SecretProcessorContract, Se
     ) {
       return;
     }
-    if (state.refresh == null || state.expiresAt == null) return;
+    if (state.derivation == null || state.expiresAt == null) return;
     this.deps.onRefreshableMaterial?.({
       expiresAt: state.expiresAt,
-      refreshLeewaySeconds: state.refresh.refreshLeewaySeconds,
+      refreshLeewaySeconds: state.derivation.refreshLeewaySeconds,
     });
   }
 }

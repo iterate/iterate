@@ -4,13 +4,16 @@
 // the way out it's the Secret Durable Object.
 
 import { env } from "cloudflare:workers";
+import { getD1ObjectCatalogRecord } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
 } from "~/domains/streams/stream-runtime.ts";
 import { encryptSecretMaterial, importSecretsKey } from "~/domains/secrets/secret-crypto.ts";
+import { SecretDerivation } from "~/domains/secrets/secret-derivation.ts";
 import {
   secretStreamPath,
+  type SecretSensitivity,
   type SecretTier,
 } from "~/domains/secrets/stream-processors/secret/contract.ts";
 import {
@@ -19,6 +22,7 @@ import {
 } from "~/domains/secrets/durable-objects/secret-durable-object.ts";
 
 type SecretsEnv = {
+  DO_CATALOG?: D1Database;
   SECRETS_ENCRYPTION_KEY?: string;
   STREAM: StreamDurableObjectNamespace;
 };
@@ -26,18 +30,14 @@ type SecretsEnv = {
 export type SetJournaledSecretInput = {
   projectId: string;
   slug: string;
-  material: string;
+  /** Optional: derived Secrets are born material-less and compute on first use. */
+  material?: string;
   metadata?: Record<string, unknown>;
   tier?: SecretTier;
+  sensitivity?: SecretSensitivity;
   expiresAt?: string;
-  /** Plaintext refresh inputs — encrypted here before they touch the journal. */
-  refresh?: {
-    tokenEndpoint: string;
-    clientId: string;
-    clientSecretSecretSlug?: string;
-    refreshToken?: string;
-    refreshLeewaySeconds?: number;
-  };
+  /** How to (re)compute material from other secrets — see secret-derivation.ts. */
+  derivation?: SecretDerivation;
   source?: Record<string, unknown>;
 };
 
@@ -45,6 +45,9 @@ export async function setJournaledSecret(input: SetJournaledSecretInput) {
   const secretsEnv = env as unknown as SecretsEnv;
   if (!secretsEnv.SECRETS_ENCRYPTION_KEY) {
     throw new Error("SECRETS_ENCRYPTION_KEY is not configured for this deployment.");
+  }
+  if (input.material == null && input.derivation == null) {
+    throw new Error(`Secret ${input.slug} needs material, a derivation, or both.`);
   }
   const key = await importSecretsKey(secretsEnv.SECRETS_ENCRYPTION_KEY);
 
@@ -58,31 +61,14 @@ export async function setJournaledSecret(input: SetJournaledSecretInput) {
     idempotencyKey: `secret-set:${input.slug}:${crypto.randomUUID()}`,
     payload: {
       slug: input.slug,
-      encryptedMaterial: await encryptSecretMaterial({ key, material: input.material }),
+      ...(input.material == null
+        ? {}
+        : { encryptedMaterial: await encryptSecretMaterial({ key, material: input.material }) }),
       ...(input.metadata == null ? {} : { metadata: input.metadata }),
       ...(input.tier == null ? {} : { tier: input.tier }),
+      ...(input.sensitivity == null ? {} : { sensitivity: input.sensitivity }),
       ...(input.expiresAt == null ? {} : { expiresAt: input.expiresAt }),
-      ...(input.refresh == null
-        ? {}
-        : {
-            refresh: {
-              kind: "oauth-refresh-token" as const,
-              tokenEndpoint: input.refresh.tokenEndpoint,
-              clientId: input.refresh.clientId,
-              ...(input.refresh.clientSecretSecretSlug == null
-                ? {}
-                : { clientSecretSecretSlug: input.refresh.clientSecretSecretSlug }),
-              ...(input.refresh.refreshToken == null
-                ? {}
-                : {
-                    encryptedRefreshToken: await encryptSecretMaterial({
-                      key,
-                      material: input.refresh.refreshToken,
-                    }),
-                  }),
-              refreshLeewaySeconds: input.refresh.refreshLeewaySeconds ?? 300,
-            },
-          }),
+      ...(input.derivation == null ? {} : { derivation: SecretDerivation.parse(input.derivation) }),
       ...(input.source == null ? {} : { source: input.source }),
     },
   });
@@ -120,4 +106,34 @@ export async function revealJournaledSecretForPlatformUse(input: {
     if (fallback) return fallback;
     throw error;
   }
+}
+
+/**
+ * Egress-substitution resolver over journaled Secrets, for the terminal
+ * EgressPipe: `getSecret({ key })` placeholders resolve to a Secret DO's
+ * material — INCLUDING inline derivation, so a project worker writing
+ * `authorization: Bearer getSecret({ key: "waitrose/access-token" })` gets a
+ * freshly derived 5-minute token without ever seeing it. Keys with no
+ * journaled Secret return null so the caller can fall back (legacy D1 rows).
+ *
+ * Existence is checked against the DO catalog first — probing an arbitrary
+ * key must not mint an empty Secret DO (and its stream) as a side effect.
+ */
+export function journaledSecretEgressResolver(input: { projectId: string }) {
+  const secretsEnv = env as unknown as SecretsEnv;
+  return {
+    async getSecretOrNull(query: { key: string }): Promise<{ material: string } | null> {
+      if (!secretsEnv.DO_CATALOG) return null;
+      const record = await getD1ObjectCatalogRecord(secretsEnv.DO_CATALOG, {
+        className: "SecretDurableObject",
+        name: getSecretDurableObjectName({ projectId: input.projectId, slug: query.key }),
+      });
+      if (record == null) return null;
+      const material = await getSecretStub({
+        projectId: input.projectId,
+        slug: query.key,
+      }).revealForPlatformUse({ usedBy: "egress-pipe" });
+      return { material };
+    },
+  };
 }
