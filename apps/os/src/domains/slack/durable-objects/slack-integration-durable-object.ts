@@ -151,7 +151,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
       // streams that already carry the legacy built-in subscription.
       idempotencyKey: `slack-subscription:${projectId}:workers-rpc:callable`,
       payload: {
-        subscriptionKey: slackIntegrationProcessorSubscriptionKey(projectId),
+        subscriptionKey: `slack:${projectId}`,
         subscriber: durableObjectProcessorSubscriber({
           bindingName: "SLACK_INTEGRATION",
           durableObjectName: getSlackIntegrationDurableObjectName(projectId),
@@ -176,10 +176,7 @@ export function routedStreamBootstrapEvents(input: {
       // streams that already carry the legacy built-in subscription.
       idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.streamPath}:workers-rpc:callable`,
       payload: {
-        subscriptionKey: slackAgentProcessorSubscriptionKey({
-          projectId: input.projectId,
-          streamPath,
-        }),
+        subscriptionKey: `slack-agent:${input.projectId}:${streamPath}`,
         // The SLACK_AGENT host DO name is derived here rather than taken from
         // the input so legacy callers passing "" still produce a dialable
         // subscriber.
@@ -203,12 +200,4 @@ export function routedStreamBootstrapEvents(input: {
       projectId: input.projectId,
     }),
   ];
-}
-
-function slackIntegrationProcessorSubscriptionKey(projectId: string) {
-  return `slack:${projectId}`;
-}
-
-function slackAgentProcessorSubscriptionKey(input: { projectId: string; streamPath: string }) {
-  return `slack-agent:${input.projectId}:${input.streamPath}`;
 }

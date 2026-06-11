@@ -311,13 +311,6 @@ function sanitizeWebSocketMessage(message: HarWebSocketMessage): HarWebSocketMes
   return { ...message, data: JSON.stringify(sanitized) };
 }
 
-function findHeader(
-  headers: Array<{ name: string; value: string }>,
-  name: string,
-): { name: string; value: string } | undefined {
-  return headers.find((h) => h.name.toLowerCase() === name.toLowerCase());
-}
-
 function setOrAddHeader(
   headers: Array<{ name: string; value: string }>,
   name: string,
@@ -396,7 +389,9 @@ export function createDefaultHarSanitizer(): HarEntrySanitizer {
       sanitized.response.content.size = newSize;
       sanitized.response.bodySize = newSize;
 
-      const existingCL = findHeader(sanitized.response.headers, "content-length");
+      const existingCL = sanitized.response.headers.find(
+        (h) => h.name.toLowerCase() === "content-length",
+      );
       if (existingCL) {
         sanitized.response.headers = setOrAddHeader(
           sanitized.response.headers,

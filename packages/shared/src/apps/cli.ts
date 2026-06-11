@@ -551,11 +551,9 @@ function getValidationIssues(error: unknown): ValidationIssue[] {
     return [];
   }
 
-  return rawIssues.filter(isValidationIssue);
-}
-
-function isValidationIssue(value: unknown): value is ValidationIssue {
-  return typeof value === "object" && value !== null;
+  return rawIssues.filter(
+    (value): value is ValidationIssue => typeof value === "object" && value !== null,
+  );
 }
 
 function formatIssue(issue: ValidationIssue) {

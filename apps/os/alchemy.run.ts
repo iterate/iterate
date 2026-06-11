@@ -193,7 +193,10 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
   extraRouteHostnames: [
     ...(eventDocsRouteHostname ? [eventDocsRouteHostname] : []),
     ...(mcpRouteHostname ? [mcpRouteHostname] : []),
-    ...projectHostnameBases.flatMap(projectRouteHostnamesForBase),
+    // each project-host base routes both the bare base and its dotted project
+    // subdomains (`<slug>.<base>`); preview bases like iterate-preview-N.app
+    // are normal bases too
+    ...projectHostnameBases.flatMap((base) => [base, `*.${base}`]),
   ],
 });
 
@@ -203,16 +206,6 @@ await ctx.app.finalize();
 await afterFinalize();
 
 if (!ctx.app.local) process.exit(0);
-
-/**
- * Convert OS project-host bases into Cloudflare route host patterns.
- *
- * Normal bases use dotted project subdomains (`<slug>.<base>`). OS preview
- * project bases are normal bases too: `<slug>.iterate-preview-N.app`.
- */
-function projectRouteHostnamesForBase(base: string) {
-  return [base, `*.${base}`];
-}
 
 function routeHostnameForUrl(url: string | undefined) {
   if (!url) return undefined;

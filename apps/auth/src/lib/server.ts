@@ -233,10 +233,6 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
     return { [oauth.allowInsecureRequests]: true } as const;
   }
 
-  function cookieOpts() {
-    return { httpOnly: true, path: "/", sameSite: "Lax", secure: secureCookies } as const;
-  }
-
   function audiences() {
     const resources = Array.isArray(config.resource) ? config.resource : [config.resource];
     const configuredResources = resources.filter((resource): resource is string => !!resource);
@@ -338,7 +334,8 @@ function createOAuthInfra(config: IterateAuthConfig, jwks: JWKS): OAuthInfra {
     toTokenSet,
     doRefresh,
     getUserInfo,
-    cookieOpts,
+    cookieOpts: () =>
+      ({ httpOnly: true, path: "/", sameSite: "Lax", secure: secureCookies }) as const,
     resource,
     audiences,
   };

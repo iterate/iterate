@@ -25,7 +25,6 @@ import { spendCircuitBreakerToken } from "./processors/circuit-breaker/contract.
 
 const iso = (ms = 0) => new Date(ms).toISOString();
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-const iterateContext = () => ({ stream: { append() {}, appendBatch() {} } });
 
 // A minimal counting processor whose batch hook can be made to throw once.
 const CounterContract = defineProcessorContract({
@@ -171,11 +170,10 @@ function fakeStream() {
     },
   };
 
-  // External producer: append a user event to the stream (drives delivery).
-  const produce = (input: StreamEventInput) => push(input);
   return {
     stream,
-    produce,
+    // External producer: append a user event to the stream (drives delivery).
+    produce: push,
     hostAppends,
     failNextSubscribes: (count: number) => {
       subscribeFailures = count;
@@ -315,7 +313,7 @@ describe("T2 — writeState failure advances the in-memory checkpoint (C2)", () 
     const writes: StreamProcessorSnapshot<{ total: number }>[] = [];
     let failNextWrite = true;
     const processor = new CounterProcessor({
-      iterateContext: iterateContext(),
+      iterateContext: { stream: { append() {}, appendBatch() {} } },
       writeState: (snapshot) => {
         if (failNextWrite) {
           failNextWrite = false;

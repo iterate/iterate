@@ -611,12 +611,17 @@ describe("stream capnweb protocol", () => {
     const inbound = parsedFrames(frames)
       .slice(afterSubscribe)
       .filter((frame) => frame.direction === "in");
-    expect(inbound.every((frame) => isPushOrReleaseFrame(frame.data))).toBe(true);
+    expect(
+      inbound.every(
+        (frame) =>
+          isPushFrame(frame.data) || (Array.isArray(frame.data) && frame.data[0] === "release"),
+      ),
+    ).toBe(true);
     // Earlier push frames race the `afterSubscribe` snapshot and each other:
     // the subscription's initial state push (events: []) and the
     // subscriber-connected fact's delivery. Assert the last frame (the
     // published event's) exactly; earlier ones are push frames by the
-    // `isPushOrReleaseFrame` check above.
+    // push-or-release check above.
     const pushFrames = inbound.filter((frame) => isPushFrame(frame.data));
     expect(pushFrames.length).toBeGreaterThanOrEqual(1);
     expect(pushFrames.at(-1)).toMatchObject({
@@ -659,10 +664,6 @@ function outboundFrames(messages: WebSocketFrame[], afterFrameIndex: number) {
     .slice(afterFrameIndex)
     .filter((frame) => frame.direction === "out")
     .map((frame) => frame.data);
-}
-
-function isPushOrReleaseFrame(value: unknown) {
-  return isPushFrame(value) || (Array.isArray(value) && value[0] === "release");
 }
 
 function isPushFrame(value: unknown) {

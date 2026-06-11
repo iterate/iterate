@@ -52,7 +52,7 @@ function ProjectIntegrationsPage() {
   const googleQuery = projectGoogleConnectionQueryOptions(project.id);
   const { data: slackConnection } = useQuery(slackQuery);
   const { data: googleConnection } = useQuery(googleQuery);
-  const oauthErrorLabel = search.error ? formatOAuthError(search.error) : null;
+  const oauthErrorLabel = search.error ? search.error.replaceAll("_", " ") : null;
 
   const startSlack = useMutation(
     orpc.project.integrations.startSlackOAuthFlow.mutationOptions({
@@ -282,10 +282,6 @@ function formatTimestamp(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(timestamp));
-}
-
-function formatOAuthError(value: string) {
-  return value.replaceAll("_", " ");
 }
 
 function countScopes(scopes: string | null, separator: "," | " ") {

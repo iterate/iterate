@@ -91,10 +91,6 @@ function add(offset: number, amount: number): StreamEvent {
   return { type: "test/add", payload: { amount }, offset, createdAt: iso };
 }
 
-function ignored(offset: number): StreamEvent {
-  return { type: "test/ignored", payload: {}, offset, createdAt: iso };
-}
-
 describe("reduce and checkpoint", () => {
   it("reduces consumed events into state and checkpoints once per batch", async () => {
     const writes: CounterSnapshot[] = [];
@@ -153,7 +149,10 @@ describe("reduce and checkpoint", () => {
       onProcessEvent,
     });
 
-    await processor.ingest({ events: [ignored(1)], streamMaxOffset: 1 });
+    await processor.ingest({
+      events: [{ type: "test/ignored", payload: {}, offset: 1, createdAt: iso }],
+      streamMaxOffset: 1,
+    });
 
     expect(processor.state).toEqual({ total: 0 });
     expect(processor.checkpointOffset).toBe(1);

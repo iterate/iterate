@@ -183,7 +183,7 @@ function AppSidebarUser() {
   const [debugOpen, setDebugOpen] = useState(false);
   const user = session?.authenticated ? session.user : null;
   const isAdmin = user?.isAdmin ?? false;
-  const label = nonEmptyLabel(user?.name, user?.email, "Account");
+  const label = [user?.name, user?.email, "Account"].find((value) => value?.trim())?.trim() ?? "";
   const email = user?.email?.trim() ?? "";
   const initials = userInitials(label);
   const debugInfo = useMemo(
@@ -315,10 +315,6 @@ function userInitials(label: string) {
     .join("")
     .toUpperCase();
   return initials || "I";
-}
-
-function nonEmptyLabel(...values: Array<string | null | undefined>) {
-  return values.find((value) => value?.trim())?.trim() ?? "";
 }
 
 function authWorkerUrl(config: PublicConfig, path: string) {

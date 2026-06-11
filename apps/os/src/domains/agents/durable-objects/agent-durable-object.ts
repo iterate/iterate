@@ -594,9 +594,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     );
 
     for (const [index, event] of setupEvents.entries()) {
-      const idempotencyKey = `os-agent-setup:${normalizeIdempotencyKeyPart(
-        preset?.basePath ?? "default",
-      )}:${index}:${event.type}`;
+      const idempotencyKey = `os-agent-setup:${(preset?.basePath ?? "default").replace(/[^a-zA-Z0-9._/-]+/g, "-")}:${index}:${event.type}`;
       if (events.some((existingEvent) => existingEvent.idempotencyKey === idempotencyKey)) {
         continue;
       }
@@ -812,10 +810,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       streamPath,
     });
   }
-}
-
-function normalizeIdempotencyKeyPart(value: string) {
-  return value.replace(/[^a-zA-Z0-9._/-]+/g, "-");
 }
 
 function hasEquivalentDefaultSetupEvent(input: {

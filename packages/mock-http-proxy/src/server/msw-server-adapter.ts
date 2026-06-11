@@ -89,14 +89,6 @@ export type CreateNativeMswServerOptions = {
   }) => boolean;
 };
 
-function isRequestHandler(handler: AnyHandler): handler is msw.RequestHandler {
-  return handler instanceof RequestHandler;
-}
-
-function isWebSocketHandler(handler: AnyHandler): handler is msw.WebSocketHandler {
-  return handler instanceof WebSocketHandler;
-}
-
 function incomingToWebSocketUrl(req: http.IncomingMessage): URL {
   const protocol =
     "encrypted" in req.socket && Boolean((req.socket as tls.TLSSocket).encrypted) ? "wss:" : "ws:";
@@ -437,7 +429,9 @@ export function createNativeMswServer(
       const startedAt = Date.now();
       const rawRequest = incomingToWebRequest(req);
       const webRequest = transformRequest ? transformRequest(rawRequest) : rawRequest;
-      const activeHandlers = msw.listHandlers().filter(isRequestHandler);
+      const activeHandlers = msw
+        .listHandlers()
+        .filter((handler) => handler instanceof RequestHandler);
       const requestId = `native-${randomUUID()}`;
       const mockedResponse = await handleRequest(
         webRequest,
@@ -573,7 +567,9 @@ export function createNativeMswServer(
   };
 
   nodeServer.on("upgrade", (req, socket, head) => {
-    const webSocketHandlers = msw.listHandlers().filter(isWebSocketHandler);
+    const webSocketHandlers = msw
+      .listHandlers()
+      .filter((handler) => handler instanceof WebSocketHandler);
     const rawWsUrl = incomingToWebSocketUrl(req);
     const wsHeaders = incomingHeadersToHeaders(req.headers);
     const requestUrl = transformWebSocketUrl

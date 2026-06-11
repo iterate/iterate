@@ -47,8 +47,6 @@ function wrap(db: DatabaseSync): SqlClient {
   };
 }
 
-const iterateContext = () => ({ stream: { append() {}, appendBatch() {} } });
-
 function rawEvent(offset: number): StreamEvent {
   return { type: "test/raw", payload: { offset }, offset, createdAt: new Date(0).toISOString() };
 }
@@ -59,7 +57,7 @@ function createRawEventsProcessor(sql: SqlClient) {
     processorSlug: BrowserRawEventsContract.slug,
   });
   return new BrowserRawEventsProcessor({
-    iterateContext: iterateContext(),
+    iterateContext: { stream: { append() {}, appendBatch() {} } },
     sql,
     readState: storage.readState,
     writeState: storage.writeState,

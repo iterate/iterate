@@ -119,7 +119,8 @@ function eventBlock(args: {
     `  offset: ${args.offset}`,
     `  type: ${yamlScalar(args.type)}`,
     `  channel: ${yamlScalar(args.channel)}`,
-    ...yamlBlockScalar(args.bodyTag, args.body),
+    `  ${args.bodyTag}: |-`,
+    ...args.body.split("\n").map((line) => `    ${line}`),
   ];
   return ["```yaml", ...yamlLines, "```"].join("\n");
 }
@@ -127,8 +128,4 @@ function eventBlock(args: {
 function yamlScalar(value: string): string {
   if (/^[a-zA-Z0-9._/@:-]+$/.test(value)) return value;
   return JSON.stringify(value);
-}
-
-function yamlBlockScalar(key: string, value: string): string[] {
-  return [`  ${key}: |-`, ...value.split("\n").map((line) => `    ${line}`)];
 }

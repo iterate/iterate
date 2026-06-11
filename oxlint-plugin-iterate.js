@@ -42,13 +42,8 @@ function getPropertyName(node) {
 }
 
 /** @param {string} filename */
-function normalizePathForLint(filename) {
-  return filename.replaceAll("\\", "/");
-}
-
-/** @param {string} filename */
 function isAllowedRawDurableObjectBindingAccessFile(filename) {
-  const path = normalizePathForLint(filename);
+  const path = filename.replaceAll("\\", "/");
 
   if (!path.includes("/apps/os/src/")) return true;
   if (path.includes("/apps/os/docs/")) return true;
@@ -107,11 +102,6 @@ function getTestLintCallObjectName(node) {
 function isDescribeCall(callee) {
   const name = getTestLintCallName(callee);
   return name === "describe" || Boolean(name?.startsWith("describe."));
-}
-
-/** @param {import("estree").Node} callee */
-function isLifecycleHookCall(callee) {
-  return callee.type === "Identifier" && LIFECYCLE_HOOKS.has(callee.name);
 }
 
 /** @param {import("estree").Node} callee */
@@ -571,7 +561,7 @@ const plugin = {
       create(context) {
         return {
           CallExpression(node) {
-            if (!isLifecycleHookCall(node.callee)) return;
+            if (node.callee.type !== "Identifier" || !LIFECYCLE_HOOKS.has(node.callee.name)) return;
             context.report({
               node,
               message:

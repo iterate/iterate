@@ -23,15 +23,14 @@ function isLoopbackHost(host: string): boolean {
   return name === "localhost" || name === "::1" || name === "127.0.0.1" || name.startsWith("127.");
 }
 
-function normalizeProto(value: string): string {
-  return value.trim().toLowerCase().replace(/:$/, "");
-}
-
 function resolveTargetUrl(requestUrl: URL, headers: Headers, scheme: "http" | "ws"): URL | null {
   const host = headers.get(X_FORWARDED_HOST_HEADER) ?? headers.get("host") ?? "";
   if (!host) return null;
 
-  const proto = normalizeProto(headers.get(X_FORWARDED_PROTO_HEADER) ?? "");
+  const proto = (headers.get(X_FORWARDED_PROTO_HEADER) ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/:$/, "");
 
   let targetScheme: string;
   if (scheme === "ws") {

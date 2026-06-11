@@ -95,7 +95,9 @@ export async function runBrowserReplEntry(input: {
 
 export function compileBrowserReplFunction(rawCode: string) {
   const code = rewriteBrowserReplImports(rawCode);
-  if (startsWithTopLevelDeclaration(code)) {
+  // Snippets starting with a top-level declaration (function/class) go
+  // straight to statement mode — they can't be wrapped as an expression.
+  if (/^\s*(?:async\s+function|function|class)\s+[A-Za-z_$][\w$]*/.test(code)) {
     return compileBrowserReplStatements(code);
   }
 
@@ -129,10 +131,6 @@ function compileBrowserReplStatements(code: string) {
     "scope",
     `with (scope) { return (async () => { let __replLastValue;\n${statementSource}\n; return __replLastValue })() }`,
   ) as ReplFunction;
-}
-
-function startsWithTopLevelDeclaration(code: string) {
-  return /^\s*(?:async\s+function|function|class)\s+[A-Za-z_$][\w$]*/.test(code);
 }
 
 /**
@@ -554,7 +552,8 @@ function readTopLevelDeclarationReplacement(
 }
 
 function isTopLevelStatementBoundary(code: string, index: number) {
-  if (!isIdentifierStart(code[index] ?? "")) return false;
+  // A statement boundary must start with an identifier character.
+  if (!/^[A-Za-z_$]$/.test(code[index] ?? "")) return false;
 
   let previous = index - 1;
   let crossedLineBreak = false;
@@ -566,10 +565,6 @@ function isTopLevelStatementBoundary(code: string, index: number) {
   if (crossedLineBreak) return true;
 
   return [";", "}"].includes(code[previous] ?? "");
-}
-
-function isIdentifierStart(value: string) {
-  return /^[A-Za-z_$]$/.test(value);
 }
 
 function scopeAssignmentTarget(name: string) {
@@ -617,8 +612,11 @@ function createBrowserReplConsole(logs: BrowserReplConsoleLog[]) {
 
   return new Proxy(globalThis.console, {
     get(consoleTarget, key, receiver) {
-      if (typeof key === "string" && isBrowserReplConsoleMethod(key)) {
-        return capturedMethods.get(key);
+      if (
+        typeof key === "string" &&
+        BROWSER_REPL_CONSOLE_METHODS.includes(key as BrowserReplConsoleMethod)
+      ) {
+        return capturedMethods.get(key as BrowserReplConsoleMethod);
       }
 
       const value = Reflect.get(consoleTarget, key, receiver);
@@ -630,19 +628,11 @@ function createBrowserReplConsole(logs: BrowserReplConsoleLog[]) {
 
 const BROWSER_REPL_CONSOLE_METHODS = ["debug", "error", "info", "log", "table", "warn"] as const;
 
-function isBrowserReplConsoleMethod(value: string): value is BrowserReplConsoleMethod {
-  return BROWSER_REPL_CONSOLE_METHODS.includes(value as BrowserReplConsoleMethod);
-}
-
 function formatBrowserReplConsoleOutput(logs: BrowserReplConsoleLog[]) {
   return logs
     .map((log) => {
       const prefix = log.method === "log" ? "" : `${log.method}: `;
-      return `${prefix}${log.args.map(formatBrowserReplConsoleArg).join(" ")}`;
+      return `${prefix}${log.args.map((arg) => formatBrowserReplResult(arg).text).join(" ")}`;
     })
     .join("\n");
-}
-
-function formatBrowserReplConsoleArg(arg: unknown) {
-  return formatBrowserReplResult(arg).text;
 }

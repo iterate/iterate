@@ -463,7 +463,7 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
       idempotencyKey: `repo-subscription:${params.projectId}:${params.repoSlug}:workers-rpc:callable`,
       payload: {
-        subscriptionKey: repoProcessorSubscriptionKey(params),
+        subscriptionKey: `repo:${params.projectId}:${params.repoSlug}`,
         subscriber: durableObjectProcessorSubscriber({
           bindingName: "REPO",
           durableObjectName: getRepoDurableObjectName(params),
@@ -485,10 +485,6 @@ type RepoProcessorRuntimeState = {
   state: { repo: RepoInfoSource | null } | null;
   reducedThroughOffset: number;
 };
-
-function repoProcessorSubscriptionKey(input: RepoStructuredName) {
-  return `repo:${input.projectId}:${input.repoSlug}`;
-}
 
 export function getRepoDurableObjectName(name: RepoStructuredName) {
   return deriveDurableObjectNameFromStructuredName({

@@ -218,7 +218,13 @@ export async function IterateApp<B extends Bindings>(
       );
     }
 
-    const dnsRouteHosts = routeHosts.filter(shouldCreateDnsRecordForRouteHostname);
+    // Cloudflare accepts route patterns like `*-preview-1.iterate.app/*`, but
+    // DNS has no equivalent partial-label wildcard record. OS preview relies on
+    // the existing proxied `*.iterate.app` DNS record for those one-label project
+    // hosts, while ordinary exact and `*.` wildcard routes still get app-owned DNS.
+    const dnsRouteHosts = routeHosts.filter(
+      (hostname) => !hostname.startsWith("*") || hostname.startsWith("*."),
+    );
     await Promise.all(
       dnsRouteHosts.map(async (hostname) => {
         const zoneId =
@@ -268,14 +274,6 @@ function routeResourceIdForHostname(hostname: string) {
   return hostname.startsWith("*.")
     ? `route-wildcard-${slugify(hostname.slice(2))}`
     : `route-${slugify(hostname)}`;
-}
-
-function shouldCreateDnsRecordForRouteHostname(hostname: string) {
-  // Cloudflare accepts route patterns like `*-preview-1.iterate.app/*`, but
-  // DNS has no equivalent partial-label wildcard record. OS preview relies on
-  // the existing proxied `*.iterate.app` DNS record for those one-label project
-  // hosts, while ordinary exact and `*.` wildcard routes still get app-owned DNS.
-  return !hostname.startsWith("*") || hostname.startsWith("*.");
 }
 
 /**

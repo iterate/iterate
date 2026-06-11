@@ -326,7 +326,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
       return this.#connection;
     }
 
-    const connectionId = createConnectionId({ llmRequestId: sourceEvent.offset });
+    const connectionId = `openai_ws_${sourceEvent.offset}_${crypto.randomUUID()}`;
     const client = await this.deps.openResponsesWebSocket();
     const iterator = client.stream();
     await waitForOpenAiResponsesSocketOpen(iterator);
@@ -705,10 +705,6 @@ export class OpenAiWsProcessor extends StreamProcessor<
   async #append(event: { type: string; idempotencyKey: string; payload: unknown }) {
     await this.ctx.stream.append({ event });
   }
-}
-
-function createConnectionId(args: { llmRequestId: number }) {
-  return `openai_ws_${args.llmRequestId}_${crypto.randomUUID()}`;
 }
 
 async function waitForOpenAiResponsesSocketOpen(

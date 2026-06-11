@@ -10,7 +10,6 @@ import {
   ITERATE_IS_ADMIN_CLAIM,
   ITERATE_ORGANIZATIONS_CLAIM,
   ITERATE_ROLE_CLAIM,
-  type IterateAuthAccessTokenOrganizationClaim,
   type IterateAuthOrganizationClaim,
   type IterateAuthProjectClaim,
 } from "@iterate-com/shared/auth-claims";
@@ -74,12 +73,6 @@ async function listOrganizationClaims(
     role:
       organization.role === "owner" || organization.role === "admin" ? organization.role : "member",
   }));
-}
-
-async function listAccessTokenOrganizationClaims(
-  user: Record<string, unknown> | null | undefined,
-): Promise<IterateAuthAccessTokenOrganizationClaim[]> {
-  return await listOrganizationClaims(user);
 }
 
 async function listProjectClaims(
@@ -210,7 +203,9 @@ export function getAuthPlugins(env: Record<string, unknown>) {
         const isProjectScopedToken = scopes.includes(ITERATE_PROJECT_SELECTION_SCOPE);
         const selectedProjectIds = isProjectScopedToken ? (selection?.projectIds ?? []) : null;
         const [organizations, projects] = await Promise.all([
-          listAccessTokenOrganizationClaims(user),
+          // the org claims double as the access-token organizations claim
+          // (IterateAuthAccessTokenOrganizationClaim, where name is optional)
+          listOrganizationClaims(user),
           listProjectClaims(user, selectedProjectIds),
         ]);
 

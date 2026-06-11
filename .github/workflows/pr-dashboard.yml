@@ -91,9 +91,8 @@ jobs:
               );
               mergedToday.sort((a, b) => (a.pr.merged_at || "").localeCompare(b.pr.merged_at || ""));
 
-              const escape = (text) =>
-                text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-              const link = (item) => `<${item.html_url}|#${item.number} ${escape(item.title)}>`;
+              const link = (item) =>
+                `<${item.html_url}|#${item.number} ${item.title.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}>`;
               const by = (login) => {
                 const slackUser = slackUsers.find(
                   (u) => u.github.toLowerCase() === (login || "").toLowerCase(),

@@ -60,7 +60,7 @@ export async function handleMcpFetch(input: McpHandlerInput): Promise<Response |
     return new Response(null, { headers: mcpCorsHeaders });
   }
 
-  if (isMcpProtectedResourceMetadataPath(routeMatch.relativePathname)) {
+  if (routeMatch.relativePathname === "/.well-known/oauth-protected-resource") {
     return Response.json(buildProtectedResourceMetadata(input), { headers: mcpCorsHeaders });
   }
 
@@ -179,10 +179,6 @@ async function authenticateAdminMcpRequest(input: McpHandlerInput) {
   } satisfies ProjectMcpServerConnectionProps;
 }
 
-function isMcpProtectedResourceMetadataPath(pathname: string) {
-  return pathname === "/.well-known/oauth-protected-resource";
-}
-
 function matchConfiguredMcpBaseUrl(input: McpHandlerInput) {
   return matchMcpRequestUrl({
     appBaseUrl: input.config.baseUrl,
@@ -201,7 +197,7 @@ function createMcpIterateAuth(input: McpHandlerInput) {
   const config = input.config.iterateAuth;
   if (!config) return null;
 
-  const baseUrl = getRequestBaseUrl(input);
+  const baseUrl = (input.config.baseUrl ?? new URL(input.request.url).origin).replace(/\/+$/, "");
   return createIterateAuth({
     issuer: config.issuer,
     clientId: config.clientId,
@@ -264,10 +260,6 @@ function canonicalMcpResourceUrl(input: McpHandlerInput) {
   if (!rawUrl) throw new Error("APP_CONFIG_MCP__BASE_URL is required for MCP requests.");
   const baseUrl = normalizeMcpBaseUrl(rawUrl);
   return stripTrailingSlash(baseUrl.toString());
-}
-
-function getRequestBaseUrl(input: McpHandlerInput) {
-  return (input.config.baseUrl ?? new URL(input.request.url).origin).replace(/\/+$/, "");
 }
 
 function unauthorizedMcpResponse(input: McpHandlerInput, message: string) {

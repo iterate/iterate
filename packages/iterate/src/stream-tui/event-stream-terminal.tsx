@@ -1042,7 +1042,7 @@ function createOAuthAuthProvider(initialSession: OAuthRuntimeSession, cookie: st
   let lastForcedRefreshAt = 0;
 
   const refresh = async (force: boolean) => {
-    if (!canRefreshOAuthSession(session)) return false;
+    if (!(session.refreshToken && session.clientId && session.authBaseUrl)) return false;
     if (force) {
       const now = Date.now();
       if (now - lastForcedRefreshAt < OAUTH_FORCE_REFRESH_THROTTLE_MS) return false;
@@ -1078,10 +1078,6 @@ function authHeaders(input: { bearerToken: string | undefined; cookie: string | 
     ...(input.bearerToken ? { Authorization: `Bearer ${input.bearerToken}` } : {}),
     ...(input.cookie ? { Cookie: input.cookie } : {}),
   };
-}
-
-function canRefreshOAuthSession(session: OAuthRuntimeSession) {
-  return Boolean(session.refreshToken && session.clientId && session.authBaseUrl);
 }
 
 function sessionNeedsRefresh(session: OAuthRuntimeSession) {

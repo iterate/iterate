@@ -13,9 +13,5 @@ export const Route = createFileRoute("/_app/projects/$projectSlug")({
       breadcrumb: context.project.slug,
     };
   },
-  component: ProjectLayout,
+  component: () => <Outlet />,
 });
-
-function ProjectLayout() {
-  return <Outlet />;
-}
