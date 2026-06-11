@@ -9,7 +9,7 @@ import {
   ensureProjectCustomHostname,
   ensureProjectCustomHostnameStatus,
 } from "~/domains/projects/cloudflare-custom-hostnames.ts";
-import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object-ref.ts";
 import type { ProjectMcpServerConnectionStructuredName } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import {
   isReservedProjectHostname,

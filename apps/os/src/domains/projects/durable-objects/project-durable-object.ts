@@ -26,7 +26,7 @@
 // project table and no lifecycle mixin: the DO is addressed by the plain
 // project id.
 
-import { DurableObject, env } from "cloudflare:workers";
+import { DurableObject } from "cloudflare:workers";
 import { type Event } from "@iterate-com/shared/streams/types";
 import type { StreamEvent } from "@iterate-com/streams/shared/event";
 import {
@@ -63,20 +63,12 @@ import { journalStream, ownJournalPath, projectContextAddress } from "~/itx/jour
 import { getPlatformContext } from "~/itx/platform-context.ts";
 import { runItxScript } from "~/itx/run.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
+import {
+  getProjectDurableObjectName,
+  getProjectDurableObjectStub,
+} from "~/domains/projects/durable-objects/project-durable-object-ref.ts";
 
-/** Project DOs are addressed by the plain project id. */
-export function getProjectDurableObjectName(projectId: string) {
-  return projectId;
-}
-
-/**
- * Mint a Project DO stub. Lives here (a trusted domain DO file) so ingress code
- * never accesses the raw PROJECT binding — see the
- * no-raw-durable-object-binding-access lint rule.
- */
-export function getProjectDurableObjectStub(projectId: string) {
-  return env.PROJECT.getByName(getProjectDurableObjectName(projectId));
-}
+export { getProjectDurableObjectName, getProjectDurableObjectStub };
 
 export type ProjectSummary = {
   id: string;

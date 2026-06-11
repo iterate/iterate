@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from "node:fs";
 import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import tailwindcss from "@tailwindcss/vite";
@@ -5,6 +6,19 @@ import viteReact from "@vitejs/plugin-react";
 import alchemy from "alchemy/cloudflare/tanstack-start";
 import captunVite from "captun/vite";
 import { defineConfig } from "vite";
+
+// Local dev runs the whole worker topology (docs/worker-topology.md) inside
+// vite's single workerd: alchemy.run.ts writes one wrangler config per
+// worker plus this manifest before spawning vite. One workerd keeps
+// cross-script Durable Object names intact (the cross-process dev registry
+// proxy loses ctx.id.name). Absent manifest (plain `vite build`, CI) → no
+// auxiliary workers.
+const auxWorkersManifest = new URL("./.alchemy/local/aux-workers.json", import.meta.url);
+const auxiliaryWorkers = existsSync(auxWorkersManifest)
+  ? (JSON.parse(readFileSync(auxWorkersManifest, "utf8")) as string[]).map((configPath) => ({
+      configPath,
+    }))
+  : [];
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = process.env.PORT ? Number(process.env.PORT) : 5173;
@@ -49,7 +63,7 @@ export default defineConfig({
     devtools(), // must be first
     // Temporarily disabled: PostHog source map upload fails in this worktree
     // layout because the CLI cannot determine the current git branch.
-    alchemy(),
+    alchemy({ auxiliaryWorkers }),
     tanstackStart(),
     viteReact(),
     tailwindcss(),

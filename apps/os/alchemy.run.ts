@@ -1,3 +1,6 @@
+import { spawnSync } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import alchemy from "alchemy";
 import {
   Ai,
@@ -5,11 +8,20 @@ import {
   DurableObjectNamespace,
   Queue,
   R2Bucket,
+  Worker,
   WorkerLoader,
+  WranglerJson,
+  createCloudflareApi,
 } from "alchemy/cloudflare";
+import type { Bindings, WorkerProps } from "alchemy/cloudflare";
 import { Artifacts } from "@iterate-com/shared/alchemy/artifacts";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
-import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
+import {
+  ITERATE_WORKER_OBSERVABILITY,
+  IterateAppWorker,
+  IterateDevTunnel,
+  IterateRoutes,
+} from "@iterate-com/shared/alchemy/iterate-app";
 import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-server";
 import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
@@ -157,6 +169,33 @@ await ensureLocalDevOAuthClient(env);
 const ctx = await initAlchemy("os", AppConfig, env);
 const slackBotToken = ctx.runtimeConfig.slackBotToken?.exposeSecret();
 
+// ---------------------------------------------------------------------------
+// Worker topology
+//
+// OS deploys as MANY small workers instead of one big one, so every cold
+// Durable Object isolate loads only the code it runs (apps/os/docs/
+// worker-topology.md). `${ctx.workerName}` (os-prd, os-preview-N,
+// os-dev-<user>) is the tiny ingress router that owns all routes; the
+// dashboard app and each Durable Object class get their own worker. Durable
+// Object classes exported from one worker are bound as cross-script
+// namespaces (`scriptName`) in every worker that dials them.
+// ---------------------------------------------------------------------------
+
+const workerNames = {
+  agent: `${ctx.workerName}-agent`,
+  app: `${ctx.workerName}-app`,
+  debugSubscriber: `${ctx.workerName}-debug-subscriber`,
+  ingress: ctx.workerName,
+  itx: `${ctx.workerName}-itx`,
+  mcp: `${ctx.workerName}-mcp`,
+  project: `${ctx.workerName}-project`,
+  repo: `${ctx.workerName}-repo`,
+  slackAgent: `${ctx.workerName}-slack-agent`,
+  slackIntegration: `${ctx.workerName}-slack-integration`,
+  stream: `${ctx.workerName}-stream`,
+  workspace: `${ctx.workerName}-workspace`,
+};
+
 const db = await D1Database("os-db", {
   name: `${ctx.workerName}-db`,
   migrationsDir: "./src/db/migrations",
@@ -176,50 +215,74 @@ const artifactsNamespace = `${ctx.workerName}-repos`;
 // Stream namespace for worker-global (non-project-scoped) streams, such as the
 // raw Cloudflare event capture stream at /cloudflare/events.
 const globalStreamNamespace = `${ctx.workerName}-global`;
+
+// ---- Durable Object namespaces ---------------------------------------------
+// One declaration per class, `scriptName` = the OWNING worker. Alchemy strips
+// `script_name` (and runs class migrations) when the namespace is bound on its
+// owner, and emits a cross-script binding everywhere else — so the same
+// object is passed to owner and consumers alike.
+
 const stream = DurableObjectNamespace<Stream>("stream", {
   className: "StreamDurableObject",
+  scriptName: workerNames.stream,
   sqlite: true,
 });
 // itx generic context hosts: one instance per extended context, addressed
 // by its journal coordinate (src/itx/journal.ts).
 const itxContext = DurableObjectNamespace<ItxDurableObject>("itx-context", {
   className: "ItxDurableObject",
+  scriptName: workerNames.itx,
   sqlite: true,
 });
 const projectMcpServerConnection = DurableObjectNamespace<ProjectMcpServerConnection>(
   "project-mcp-server-connection-local",
   {
     className: "ProjectMcpServerConnection",
+    scriptName: workerNames.mcp,
     sqlite: true,
   },
 );
 const project = DurableObjectNamespace<ProjectDurableObject>("project", {
   className: "ProjectDurableObject",
+  scriptName: workerNames.project,
   sqlite: true,
 });
 const repo = DurableObjectNamespace<RepoDurableObject>("repo", {
   className: "RepoDurableObject",
+  scriptName: workerNames.repo,
   sqlite: true,
 });
 const workspace = DurableObjectNamespace<WorkspaceDurableObject>("workspace", {
   className: "WorkspaceDurableObject",
+  scriptName: workerNames.workspace,
   sqlite: true,
 });
 const agent = DurableObjectNamespace<AgentDurableObject>("agent", {
   className: "AgentDurableObject",
+  scriptName: workerNames.agent,
   sqlite: true,
 });
 const slackIntegration = DurableObjectNamespace<SlackIntegrationDurableObject>(
   "slack-integration",
   {
     className: "SlackIntegrationDurableObject",
+    scriptName: workerNames.slackIntegration,
     sqlite: true,
   },
 );
 const slackAgent = DurableObjectNamespace<SlackAgentDurableObject>("slack-agent", {
   className: "SlackAgentDurableObject",
+  scriptName: workerNames.slackAgent,
   sqlite: true,
 });
+const debugAppendChainSubscriber = ctx.app.local
+  ? DurableObjectNamespace<DebugAppendChainSubscriber>("debug-append-chain-subscriber", {
+      className: "DebugAppendChainSubscriber",
+      scriptName: workerNames.debugSubscriber,
+      sqlite: true,
+    })
+  : undefined;
+
 const artifactEventsQueue = await Queue("artifact-events", {
   name: `${ctx.workerName}-artifact-events`,
   adopt: true,
@@ -232,39 +295,247 @@ const itxBuildCache = await R2Bucket("itx-build-cache", {
   empty: true,
 });
 
-const debugAppendChainSubscriber = ctx.app.local
-  ? DurableObjectNamespace<DebugAppendChainSubscriber>("debug-append-chain-subscriber", {
-      className: "DebugAppendChainSubscriber",
-      sqlite: true,
+// ---- Fresh-stage bootstrap --------------------------------------------------
+// Cloudflare rejects a cross-script DO binding whose target script does not
+// exist yet (error 10061), and the stream worker and its subscriber workers
+// reference each other — a legitimate cycle once everything is deployed, but
+// unsatisfiable on the FIRST deploy of a fresh stage. So: bindings whose
+// target script is missing are omitted this pass, and the run re-executes
+// itself once at the end to wire them up. Steady-state deploys (all scripts
+// exist) never take this path. Local dev resolves bindings lazily through
+// miniflare's dev registry, so it never needs it either.
+const missingScripts = ctx.app.local
+  ? new Set<string>()
+  : await findMissingWorkerScripts(Object.values(workerNames));
+if (missingScripts.size > 0) {
+  console.warn(
+    `[alchemy.run] Bootstrap: ${[...missingScripts].join(", ")} not deployed yet — ` +
+      `cross-script bindings to them are omitted this pass and wired by a second pass.`,
+  );
+}
+
+function withoutBindingsToMissingScripts<B extends Bindings>(owner: string, bindings: B): B {
+  if (missingScripts.size === 0) return bindings;
+  return Object.fromEntries(
+    Object.entries(bindings).filter(([name, value]) => {
+      const scriptName = (value as { scriptName?: string } | null | undefined)?.scriptName;
+      if (!scriptName || scriptName === owner || !missingScripts.has(scriptName)) return true;
+      console.warn(`[alchemy.run]   ${owner}: omitting ${name} -> ${scriptName}`);
+      return false;
+    }),
+  ) as B;
+}
+
+// ---- The workers -------------------------------------------------------------
+
+// Local dev hosts EVERY worker inside vite's single workerd as auxiliary
+// workers (@cloudflare/vite-plugin `auxiliaryWorkers`): osWorker writes a
+// wrangler config per worker, the manifest below hands the list to
+// vite.config.ts, and the Worker resources skip alchemy's own miniflare via
+// `dev.url`. One workerd means cross-script DO bindings resolve in-process —
+// the wrangler dev-registry proxy dials remote objects by hex id, which
+// loses `ctx.id.name`, and Stream/itx DOs derive their identity from it.
+const LOCAL_AUX_WORKERS_MANIFEST = ".alchemy/local/aux-workers.json";
+const localAuxWorkerConfigPaths: string[] = [];
+
+/** A small non-app OS worker: esbuild-bundled, no routes, no workers.dev URL,
+ * standard observability, APP_CONFIG injected. */
+async function osWorker<B extends Bindings>(
+  id: keyof typeof workerNames,
+  props: {
+    bindings: B;
+    compatibilityFlags?: string[];
+    entrypoint: string;
+    eventSources?: WorkerProps["eventSources"];
+  },
+) {
+  const name = workerNames[id];
+  const worker = await Worker(id, {
+    name,
+    adopt: true,
+    entrypoint: props.entrypoint,
+    bundle: { minify: true },
+    compatibilityFlags: props.compatibilityFlags,
+    eventSources: props.eventSources,
+    bindings: {
+      ...withoutBindingsToMissingScripts(name, props.bindings),
+      APP_CONFIG: ctx.app.local
+        ? JSON.stringify(ctx.rawRuntimeConfig, null, 2)
+        : alchemy.secret(JSON.stringify(ctx.rawRuntimeConfig, null, 2)),
+    },
+    observability: ITERATE_WORKER_OBSERVABILITY,
+    url: false,
+    // Local: vite hosts this worker (see LOCAL_AUX_WORKERS_MANIFEST); a dev
+    // url makes alchemy skip starting it in its own miniflare.
+    ...(ctx.app.local ? { dev: { url: ctx.runtimeConfig.baseUrl ?? "http://localhost:0" } } : {}),
+  });
+  if (ctx.app.local) {
+    const configPath = `.alchemy/local/workers/${name}.wrangler.jsonc`;
+    await WranglerJson({ worker, path: configPath, secrets: true });
+    localAuxWorkerConfigPaths.push(configPath);
+  }
+  return worker;
+}
+
+// Bindings needed by the loopback capability surface (workers/shared/
+// loopback-exports.ts) — every itx-hosting worker (project, agent, itx, mcp,
+// app) carries these so any capability can be provided on any context.
+const loopbackUnionBindings = {
+  AI: Ai(),
+  AGENT: agent,
+  DB: db,
+  DO_CATALOG: db,
+  ITX_BUILD_CACHE: itxBuildCache,
+  ITX_CONTEXT: itxContext,
+  LOADER: WorkerLoader(),
+  PROJECT: project,
+  REPO: repo,
+  STREAM: stream,
+  WORKSPACE: workspace,
+  ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
+};
+
+const workspaceWorker = await osWorker("workspace", {
+  entrypoint: "./src/workers/workspace.ts",
+  // @cloudflare/shell needs Node APIs.
+  compatibilityFlags: ["nodejs_compat"],
+  bindings: { DO_CATALOG: db, WORKSPACE: workspace },
+});
+
+const slackAgentWorker = await osWorker("slackAgent", {
+  entrypoint: "./src/workers/slack-agent.ts",
+  bindings: {
+    DO_CATALOG: db,
+    SLACK_AGENT: slackAgent,
+    STREAM: stream,
+    ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
+  },
+});
+
+const repoWorker = await osWorker("repo", {
+  entrypoint: "./src/workers/repo.ts",
+  // isomorphic-git + @cloudflare/shell need Node APIs.
+  compatibilityFlags: ["nodejs_compat"],
+  eventSources: [artifactEventsQueue],
+  bindings: {
+    // The artifacts binding type only exists on deployed workers (the local
+    // dev pipeline has no Cloudflare Artifacts emulation); repo code
+    // feature-checks env.ARTIFACTS, same as before the worker split.
+    ...(ctx.app.local ? {} : { ARTIFACTS: Artifacts({ namespace: artifactsNamespace }) }),
+    ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
+    ARTIFACTS_NAMESPACE: artifactsNamespace,
+    DO_CATALOG: db,
+    GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
+    REPO: repo,
+    STREAM: stream,
+  },
+});
+
+const itxWorker = await osWorker("itx", {
+  entrypoint: "./src/workers/itx.ts",
+  // Own-zone fetches (UrlDial / EgressPipe dialing project hosts) must go
+  // through Worker routes, not origin — same reason as the app worker.
+  compatibilityFlags: ["global_fetch_strictly_public"],
+  bindings: loopbackUnionBindings,
+});
+
+const agentWorker = await osWorker("agent", {
+  entrypoint: "./src/workers/agent.ts",
+  // openai needs Node APIs.
+  compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
+  bindings: loopbackUnionBindings,
+});
+
+const slackIntegrationWorker = await osWorker("slackIntegration", {
+  entrypoint: "./src/workers/slack-integration.ts",
+  bindings: {
+    AGENT: agent,
+    DB: db,
+    DO_CATALOG: db,
+    SLACK_AGENT: slackAgent,
+    SLACK_INTEGRATION: slackIntegration,
+    STREAM: stream,
+    ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
+  },
+});
+
+const mcpWorker = await osWorker("mcp", {
+  entrypoint: "./src/workers/mcp.ts",
+  // McpAgent (agents) and @iterate-com/auth (better-auth) need Node APIs.
+  compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
+  bindings: {
+    ...loopbackUnionBindings,
+    PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
+  },
+});
+
+const projectWorker = await osWorker("project", {
+  entrypoint: "./src/workers/project.ts",
+  // nodejs_als for evlog's AsyncLocalStorage — full nodejs_compat not needed.
+  compatibilityFlags: ["nodejs_als", "global_fetch_strictly_public"],
+  bindings: loopbackUnionBindings,
+});
+
+const debugSubscriberWorker = ctx.app.local
+  ? await osWorker("debugSubscriber", {
+      entrypoint: "./src/workers/debug-append-chain-subscriber.ts",
+      bindings: {
+        DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber!,
+        STREAM: stream,
+      },
     })
   : undefined;
 
-const { worker, afterFinalize } = await IterateApp(ctx, {
-  main: "./src/worker.ts",
-  eventSources: [artifactEventsQueue],
+// The stream worker is created AFTER its subscribers so a fresh-stage first
+// pass already finds their scripts and binds them all; only the subscribers'
+// STREAM bindings wait for the second pass.
+const streamWorker = await osWorker("stream", {
+  entrypoint: "./src/workers/stream.ts",
   bindings: {
-    DB: db,
-    DO_CATALOG: db,
-    AI: Ai(),
-    ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
-    ARTIFACTS_NAMESPACE: artifactsNamespace,
-    GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
-    LOADER: WorkerLoader(),
-    ITX_BUILD_CACHE: itxBuildCache,
-    ITX_CONTEXT: itxContext,
     AGENT: agent,
-    ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
     PROJECT: project,
+    REPO: repo,
     SLACK_AGENT: slackAgent,
     SLACK_INTEGRATION: slackIntegration,
-    REPO: repo,
-    PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
     STREAM: stream,
-    WORKSPACE: workspace,
     ...(debugAppendChainSubscriber == null
       ? {}
       : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
-    ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
+  },
+});
+
+// ---- The app worker (TanStack Start dashboard) -------------------------------
+
+// Hand vite the auxiliary worker list BEFORE TanStackStart spawns it. The
+// ingress worker is deliberately absent: it is created after the app worker
+// (it service-binds it), and in dev the browser talks to vite directly — the
+// app worker runs the same shared router, so the ingress hop adds nothing.
+if (ctx.app.local) {
+  await mkdir(new URL("./.alchemy/local", import.meta.url), { recursive: true });
+  await writeFile(
+    new URL(`./${LOCAL_AUX_WORKERS_MANIFEST}`, import.meta.url),
+    `${JSON.stringify(localAuxWorkerConfigPaths, null, 2)}\n`,
+  );
+}
+
+const appWorker = await IterateAppWorker(ctx, {
+  main: "./src/workers/app.ts",
+  bindings: {
+    ...loopbackUnionBindings,
+    // The artifacts debug route (admin-gated base-repo seeding) lives on the
+    // app worker; everything else artifacts-related is the repo worker's.
+    ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
+    ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
+    ARTIFACTS_NAMESPACE: artifactsNamespace,
+    GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
+    MCP: mcpWorker,
+    PROJECT_HOST: projectWorker,
+    PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
+    SLACK_AGENT: slackAgent,
+    SLACK_INTEGRATION: slackIntegration,
+    ...(debugAppendChainSubscriber == null
+      ? {}
+      : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
   },
   // OAuth login/refresh/logout, and JWT verification when static JWKS is not
   // configured, can still talk to auth.iterate.com from inside the Worker.
@@ -272,17 +543,90 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
   // origin, which breaks auth-worker discovery on production iterate.com
   // hostnames.
   compatibilityFlags: ["global_fetch_strictly_public"],
+});
+
+// ---- The ingress router -------------------------------------------------------
+// The ONLY worker with routes. Tiny on purpose: one config parse, at most one
+// D1 lookup, then a service-binding forward (workers/ingress.ts).
+
+const ingressWorker = await osWorker("ingress", {
+  entrypoint: "./src/workers/ingress.ts",
+  bindings: {
+    APP: appWorker,
+    DB: db,
+    MCP: mcpWorker,
+    PROJECT_HOST: projectWorker,
+  },
+});
+
+const baseUrlHostname = ctx.runtimeConfig.baseUrl
+  ? new URL(ctx.runtimeConfig.baseUrl).hostname
+  : undefined;
+await IterateRoutes(ctx, {
+  worker: ingressWorker,
+  hostnames: [
+    ...new Set(
+      [
+        ...(baseUrlHostname ? [baseUrlHostname] : []),
+        ...(eventDocsRouteHostname ? [eventDocsRouteHostname] : []),
+        ...(mcpRouteHostname ? [mcpRouteHostname] : []),
+        ...projectHostnameBases.flatMap(projectRouteHostnamesForBase),
+      ].filter((hostname) => !hostname.endsWith(".workers.dev")),
+    ),
+  ],
+});
+
+// Dev tunnel (tunnel-backed dev_<user> configs): real domains -> local vite.
+// The browser-facing dev entry is the app worker (it runs the same router),
+// so the tunnel points at vite, exactly as before the split.
+const { afterFinalize } = await IterateDevTunnel(ctx, {
   extraRouteHostnames: [
     ...(eventDocsRouteHostname ? [eventDocsRouteHostname] : []),
     ...(mcpRouteHostname ? [mcpRouteHostname] : []),
     ...projectHostnameBases.flatMap(projectRouteHostnamesForBase),
   ],
+  worker: appWorker,
 });
 
-export { worker };
+/** Per-worker Env types for src/lib/worker-env.d.ts. */
+export const workers = {
+  agent: agentWorker,
+  app: appWorker,
+  debugSubscriber: debugSubscriberWorker,
+  ingress: ingressWorker,
+  itx: itxWorker,
+  mcp: mcpWorker,
+  project: projectWorker,
+  repo: repoWorker,
+  slackAgent: slackAgentWorker,
+  slackIntegration: slackIntegrationWorker,
+  stream: streamWorker,
+  workspace: workspaceWorker,
+};
+
+console.dir(
+  {
+    config: ctx.runtimeConfig,
+    url: ctx.runtimeConfig.baseUrl ?? appWorker.url,
+    workers: workerNames,
+  },
+  { depth: null },
+);
 
 await ctx.app.finalize();
 await afterFinalize();
+
+// Second bootstrap pass (fresh stages only): every script now exists, so
+// re-running wires the cross-script bindings that were omitted above.
+if (missingScripts.size > 0 && !process.env.OS_BOOTSTRAP_SECOND_PASS) {
+  console.warn("[alchemy.run] Bootstrap: re-running to wire deferred cross-script bindings…");
+  const result = spawnSync("pnpm", ["exec", "tsx", fileURLToPath(import.meta.url)], {
+    cwd: fileURLToPath(new URL(".", import.meta.url)),
+    env: { ...process.env, OS_BOOTSTRAP_SECOND_PASS: "1" },
+    stdio: "inherit",
+  });
+  process.exit(result.status ?? 1);
+}
 
 if (!ctx.app.local) process.exit(0);
 
@@ -305,4 +649,27 @@ function requireEnv(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required.`);
   return value;
+}
+
+/** Which of the given worker scripts do not exist on the account yet. */
+async function findMissingWorkerScripts(names: string[]) {
+  const api = await createCloudflareApi({});
+  const missing = new Set<string>();
+  await Promise.all(
+    names.map(async (name) => {
+      const response = await api.get(
+        `/accounts/${api.accountId}/workers/scripts/${encodeURIComponent(name)}/settings`,
+      );
+      if (response.status === 404) {
+        missing.add(name);
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(
+          `Failed to check worker script ${name}: ${response.status} ${await response.text()}`,
+        );
+      }
+    }),
+  );
+  return missing;
 }

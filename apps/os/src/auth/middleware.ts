@@ -24,7 +24,7 @@ const authClients = new Map<string, OsIterateAuth>();
 // https://tanstack.com/start/latest/docs/framework/react/guide/middleware
 export const iterateAuthMiddleware = createMiddleware({ type: "request" }).server(
   async ({ request, context, next }) => {
-    // Start types the request context as possibly undefined, but worker.ts
+    // Start types the request context as possibly undefined, but workers/app.ts
     // always passes one to handler.fetch — treat its absence as a wiring bug.
     if (!context) {
       throw new Error("Request context missing — handler.fetch was called without a context.");
