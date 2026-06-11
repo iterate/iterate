@@ -554,8 +554,9 @@ export type LiveStub = object;
  * surfaces it in `describe()` — there is no schema. Two conventions worth
  * following, a pair: `instructions` for the human/agent (a sentence on what
  * the cap does and how to call it) and `types` for the machine/editor
- * (TypeScript declarations of the cap's surface). Both are lifted by
- * `describe()`.
+ * (TypeScript declarations of the cap's surface). Both are LIFTED to the
+ * entry's top level by `describe()` and removed from the projected meta —
+ * each fact appears once (the journal record keeps the full meta).
  */
 export type CapabilityMeta = {
   /** Shown in describe(); write it for the agent who finds this cap. */
@@ -584,10 +585,12 @@ export type CapabilityDescription = {
   from?: string;
   /** Live caps only: is the provider currently connected? */
   connected?: boolean;
-  /** Lifted from meta for convenience: the one thing to read first. */
+  /** Lifted from meta: the one thing to read first. */
   instructions?: string;
   /** Lifted from meta: TypeScript declarations for the cap's surface. */
   types?: string;
+  /** The provide's remaining meta (e.g. `http`); `instructions`/`types`
+   * live at the top level, not in here. */
   meta: CapabilityMeta;
   updatedAtMs: number;
 };

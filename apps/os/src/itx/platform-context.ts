@@ -166,7 +166,7 @@ export class PlatformContext extends WorkerEntrypoint<Env, PlatformContextProps>
     return PLATFORM_PROJECT_CAPABILITIES.map((capability) => ({
       instructions: capability.instructions,
       kind: capability.address.type,
-      meta: { instructions: capability.instructions },
+      meta: {},
       name: capability.name,
       updatedAtMs: 0,
     }));
@@ -180,9 +180,13 @@ export class PlatformContext extends WorkerEntrypoint<Env, PlatformContextProps>
     );
     const resolved = resolveLongestProvidedPrefix(byName, input.path);
     if (!resolved) {
+      // This is the error every FULL-chain miss surfaces to the caller (the
+      // chain root answers last), so it must read as "nothing anywhere",
+      // not name internal plumbing like the platform:project chain id.
       throw new Error(
-        `No capability named "${input.path[0] ?? ""}" in context ${PLATFORM_PROJECT_CONTEXT_ID}` +
-          (input.path.length > 1 ? ` (call path "${input.path.join(".")}").` : `.`),
+        `No capability named "${input.path[0] ?? ""}" on this context or anywhere up its chain` +
+          (input.path.length > 1 ? ` (call path "${input.path.join(".")}").` : `.`) +
+          ` describe() lists what exists.`,
       );
     }
     const origin = input.origin ?? {

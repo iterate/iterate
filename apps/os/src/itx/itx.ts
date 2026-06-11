@@ -128,7 +128,8 @@ export class CapabilityOfflineError extends Error {
   constructor(name: string) {
     super(
       `Capability "${name}" is registered but its provider is not connected. ` +
-        `Live capabilities last as long as the provider's session; the provider must reconnect and provide() again.`,
+        `Live capabilities last as long as the provider's session; the provider must ` +
+        `reconnect and call provideCapability() again.`,
     );
   }
 }
@@ -334,10 +335,11 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
         (description) => description.name === name,
       );
       if (inherited) {
+        const from = inherited.from ?? parent!.from;
         throw new Error(
           `Capability "${name}" is not provided on this context — it is inherited from ` +
-            `${inherited.from ?? parent!.from} (e.g. a platform default) and cannot be ` +
-            `revoked here; provide your own "${name}" to shadow it.`,
+            `${from === "platform" ? "the platform defaults" : `context ${from}`} and cannot ` +
+            `be revoked here; provide your own "${name}" to shadow it.`,
         );
       }
       return;
@@ -360,14 +362,17 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const own = Object.values(this.state.capabilities)
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((entry): CapabilityDescription => {
-        const meta = entry.meta as CapabilityMeta;
+        // `instructions`/`types` are LIFTED to the entry's top level and
+        // removed from the projected meta — one place to read each fact.
+        // (The journal keeps the full meta verbatim; this is projection.)
+        const { instructions, types, ...meta } = entry.meta as CapabilityMeta;
         return {
           connected: entry.kind === "live" ? this.#liveStubs.has(entry.name) : undefined,
-          instructions: typeof meta.instructions === "string" ? meta.instructions : undefined,
+          instructions: typeof instructions === "string" ? instructions : undefined,
           kind: entry.kind,
           meta,
           name: entry.name,
-          types: typeof meta.types === "string" ? meta.types : undefined,
+          types: typeof types === "string" ? types : undefined,
           updatedAtMs: entry.updatedAtMs,
         };
       });
