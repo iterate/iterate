@@ -66,7 +66,7 @@ describe("parseSecretReferences", () => {
 });
 
 describe("substituteProjectEgressSecretHeaders", () => {
-  it("substitutes real secret material when no Project Egress Intercept Tunnel is active", async () => {
+  it("substitutes real secret material", async () => {
     const getSecret = vi.fn(async () => ({ material: "real-secret-value" }));
     const [error, headers] = await substituteProjectEgressSecretHeaders({
       headers: new Headers({
@@ -74,7 +74,6 @@ describe("substituteProjectEgressSecretHeaders", () => {
       }),
       secrets: {
         getSecretOrNull: getSecret,
-        getSecretSummaryByKeyOrNull: vi.fn(),
       },
     });
 
@@ -91,7 +90,6 @@ describe("substituteProjectEgressSecretHeaders", () => {
       }),
       secrets: {
         getSecretOrNull: vi.fn(async () => ({ material })),
-        getSecretSummaryByKeyOrNull: vi.fn(),
       },
     });
 
@@ -109,7 +107,6 @@ describe("substituteProjectEgressSecretHeaders", () => {
         getSecretOrNull: vi.fn(async (input) =>
           input.key === "openai" ? { material: "real-secret-value" } : null,
         ),
-        getSecretSummaryByKeyOrNull: vi.fn(),
       },
     });
 
@@ -132,7 +129,6 @@ describe("substituteProjectEgressSecretHeaders", () => {
       }),
       secrets: {
         getSecretOrNull: vi.fn(async () => null),
-        getSecretSummaryByKeyOrNull: vi.fn(),
       },
     });
 

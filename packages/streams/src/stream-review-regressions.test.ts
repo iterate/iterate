@@ -1,5 +1,5 @@
-// Regression tests from the June 2026 packages/streams review.
-// See tasks/streams-review-fixes.md — each test is tagged with its finding id.
+// Regression tests from the June 2026 packages/streams review (PRs #1455/#1458/#1459).
+// Each test is tagged with its review finding id (C*/M*).
 //
 // Tests for bugs that are still unfixed use `it.fails`: they PASS today because
 // the asserted (correct) behavior currently throws/mismatches, and they START

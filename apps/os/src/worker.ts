@@ -55,6 +55,7 @@ export { BindingCapability, EgressPipe, ItxEntrypoint, ProjectEgress } from "~/i
 export { McpClient } from "~/itx/caps/mcp-client.ts";
 export { ProjectWorker } from "~/itx/caps/project-worker.ts";
 export { UrlDial } from "~/itx/caps/url-dial.ts";
+export { StreamsCap } from "~/itx/caps/streams.ts";
 export { ContextDO } from "~/itx/context-do.ts";
 export { ItxCapIngress } from "~/itx/http.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";

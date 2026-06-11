@@ -92,21 +92,6 @@ type TestProjectConfigWorkspace = {
   removePath(input: { force: boolean; path: string; recursive: boolean }): Promise<void>;
 };
 
-/**
- * A live `fetch` shadow — the capability-model replacement for the old
- * captun intercept tunnel. Echoes what it receives so tests can observe that
- * shadowed egress sees secret placeholders RAW (never material).
- */
-class TestEgressShadow extends RpcTarget {
-  call({ args }: { path: string[]; args: unknown[] }) {
-    const request = args[0] as Request;
-    return Response.json({
-      headers: headersToArrays(request.headers),
-      url: request.url,
-    });
-  }
-}
-
 export class ProjectDurableObject extends RealProjectDurableObject {
   protected override async cloneWorkerRepo(input: {
     git: TestProjectConfigGit;
@@ -237,7 +222,9 @@ export default {
     }
 
     if (url.pathname === "/__test/egress") {
-      // The real explicit door: itx.fetch dispatches the `fetch` capability.
+      // The explicit door: itx.fetch dispatches the `fetch` capability, whose
+      // default target is the stateless EgressPipe (the DO has no fetch
+      // surface at all).
       const target = url.searchParams.get("target") ?? "https://os.iterate.localhost/__test/echo";
       const itx = await resolveItx({
         env: env as never,
@@ -247,21 +234,39 @@ export default {
       return await itx.fetch(target, { headers: request.headers });
     }
 
-    if (url.pathname === "/__test/revoke-egress-shadow") {
-      const project = env.PROJECT.getByName(getProjectDurableObjectName("proj__local__test"));
-      await project.itxRevoke({ name: "fetch" });
-      return Response.json({ ok: true });
-    }
-
-    if (url.pathname === "/__test/connect-egress-intercept") {
-      // Live shadow via the registry — replaces the captun tunnel.
-      const project = env.PROJECT.getByName(getProjectDurableObjectName("proj__local__test"));
-      await project.itxDefine({
+    if (url.pathname === "/__test/egress-with-fetch-shadow") {
+      // The same user story the deleted egress intercept tunnel served:
+      // a LIVE `fetch` cap shadows the project's egress capability and sees
+      // getSecret() placeholders UNSUBSTITUTED (substitution lives in the
+      // default pipe). Live stubs passed over Workers RPC only survive the
+      // defining request, so define → fetch → revoke happen in one go —
+      // exactly the session-bound semantics live caps are designed around.
+      class EchoEgressShadow extends RpcTarget {
+        async call({ args }: { path: string[]; args: unknown[] }) {
+          const request = args[0] as Request;
+          return Response.json({
+            headers: headersToArrays(request.headers),
+            url: request.url,
+          });
+        }
+      }
+      const itx = await resolveItx({
+        env: env as never,
+        exports: ctx.exports as never,
+        props: { context: "proj__local__test" },
+      });
+      await itx.caps.define({
         invoke: "path-call",
         name: "fetch",
-        target: new TestEgressShadow() as never,
+        target: new EchoEgressShadow() as never,
       });
-      return Response.json({ ok: true });
+      try {
+        const target = url.searchParams.get("target") ?? "https://api.example.com/v1/models";
+        const response = await itx.fetch(new Request(target, { headers: request.headers }));
+        return Response.json(await response.json());
+      } finally {
+        await itx.caps.revoke({ name: "fetch" });
+      }
     }
 
     if (url.pathname === "/__test/echo" || url.pathname.startsWith("/__test/proxy/")) {
@@ -323,9 +328,7 @@ export default {
         exports: ctx.exports as never,
         props: { context: "proj__local__test" },
       });
-      // itx.project is a capability now (platform:project default) — it
-      // resolves through the fallthrough proxy, not a typed member.
-      const project = (itx as unknown as { project: unknown }).project as {
+      const project = itx.project as unknown as {
         processor: { snapshot(): Promise<{ state: { phase: string } }> };
       };
       const snapshot = await project.processor.snapshot();

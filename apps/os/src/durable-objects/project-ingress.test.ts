@@ -312,15 +312,19 @@ describe("Project ingress routing", () => {
     fetchSpy.mockRestore();
   });
 
-  test("a live egress provider shadows the default and sees placeholders RAW", async () => {
+  test("a live fetch-cap shadow intercepts egress and sees secret placeholders unsubstituted", async () => {
     await createProject();
     await SELF.fetch(
       "https://os.iterate.localhost/__test/upsert-secret?key=openai&material=mvp-secret-value",
     );
-    await SELF.fetch("https://os.iterate.localhost/__test/connect-egress-intercept");
 
+    // The shadow is a LIVE cap defined for the duration of one request (see
+    // the /__test/egress-with-fetch-shadow route): it receives the request
+    // instead of the network, with the getSecret() reference verbatim —
+    // substitution only happens in the default pipe, so an interceptor never
+    // sees secret material.
     const response = await SELF.fetch(
-      `https://os.iterate.localhost/__test/egress?target=${encodeURIComponent("https://api.example.com/v1/models?x=1")}`,
+      `https://os.iterate.localhost/__test/egress-with-fetch-shadow?target=${encodeURIComponent("https://api.example.com/v1/models?x=1")}`,
       {
         headers: {
           "x-iterate-test-secret": `getSecret('openai')`,
@@ -335,14 +339,8 @@ describe("Project ingress routing", () => {
     };
 
     expect(body.url).toBe("https://api.example.com/v1/models?x=1");
-    // The shadow receives the placeholder UNSUBSTITUTED — an interceptor
-    // never sees secret material.
     expect(body.headers["x-iterate-test-secret"]).toEqual([`getSecret('openai')`]);
     expect(JSON.stringify(body)).not.toContain("mvp-secret-value");
-
-    // Revoking the live provider restores the default pipe (and keeps the
-    // following tests on unshadowed egress).
-    await SELF.fetch("https://os.iterate.localhost/__test/revoke-egress-shadow");
   });
 
   test("fails egress descriptively when a referenced secret is missing", async () => {

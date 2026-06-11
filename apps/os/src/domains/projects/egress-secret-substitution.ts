@@ -2,7 +2,6 @@ import JSON5 from "json5";
 
 type ProjectEgressSecretResolver = {
   getSecretOrNull(input: { key: string }): Promise<{ material: string } | null>;
-  getSecretSummaryByKeyOrNull(input: { key: string }): Promise<unknown | null>;
 };
 
 type SecretReference = {

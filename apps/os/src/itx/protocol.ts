@@ -140,16 +140,19 @@ export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "ProjectWorker",
   "ReposCapability",
   "SlackCapability",
+  "StreamsCap",
   "WorkspaceCapability",
 ]);
 
 /**
  * Durable Object namespace bindings dialable via `{ type: "durable-object" }`
- * refs. Empty on purpose: a DO ref names an arbitrary instance
- * (`binding` + `name`), and every platform namespace (PROJECT, STREAM, …) is
- * keyed across ALL projects — allowlisting one would let any project handle
- * dial any other project's objects. Deployments opt namespaces in via config
- * once they have a namespace whose instances are safe to reach by name.
+ * refs. The registry scopes every dial under the owning project
+ * (`itx:<projectId>:<name>`), so an allowlisted namespace's itx-reachable
+ * instances are disjoint per project. Still empty by default: namespaces
+ * whose EXISTING instances matter (PROJECT, STREAM, …) must not be
+ * allowlisted — itx-created instances would be fresh/empty objects under the
+ * scoped name, not the real ones. Deployments opt namespaces in via config
+ * once they have one designed to be reached this way.
  */
 export const DIALABLE_DURABLE_OBJECTS: ReadonlySet<string> = new Set();
 
@@ -313,7 +316,7 @@ export type CapDescription = {
  * is how egress interception works. The handle's real `fetch` method still
  * wins property lookup; it routes through the registry anyway.
  */
-const ITX_BUILTIN_NAMES = ["caps", "describe", "fork", "project", "projects", "streams"] as const;
+const ITX_BUILTIN_NAMES = ["caps", "describe", "fork", "project", "projects"] as const;
 
 /**
  * Names that must never traverse a dynamic surface — prototype-pollution

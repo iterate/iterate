@@ -4,7 +4,6 @@
 // cache key the DO uses, so warm isolates are shared and the code payload
 // only crosses RPC on a cold isolate — and dispatches. The DO never serves
 // ingress; it is just where the worker's source of truth lives.
-//
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { parseConfig } from "~/config.ts";
@@ -40,7 +39,6 @@ export class ProjectIngressEntrypoint extends WorkerEntrypoint<
 > {
   async fetch(request: Request) {
     const project = this.project();
-
     const version = await project.getWorkerVersion();
     if (version.status === "building") {
       return workerBuildingResponse();

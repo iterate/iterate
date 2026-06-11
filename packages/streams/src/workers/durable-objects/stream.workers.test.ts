@@ -1,7 +1,7 @@
 /// <reference types="@cloudflare/vitest-pool-workers/types" />
 // Stream Durable Object tests, run inside workerd via vitest.workers.config.ts.
-// See tasks/streams-review-fixes.md (Stage 0). These exercise the real SQL
-// storage path that node tests can't reach.
+// Always-on DO regression suite from the streams review (Stage 0). These exercise
+// the real SQL storage path that node tests can't reach.
 //
 // Pattern (borrowed from cloudflare/agents + the workers-sdk rpc fixture): most
 // tests use `runInDurableObject` to call the DO instance directly and read its

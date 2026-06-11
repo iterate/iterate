@@ -69,10 +69,10 @@ export function defineCodeContext(
 /**
  * The defaults every project context delegates to (§8's "cap #0 disappears"
  * direction). What was hardwired into the handle is now ordinary capability
- * definitions: ai, fetch, repos, workspace, and the project worker. The
- * remaining kernel — caps, streams, fork, project, projects, describe — is
- * composition the registry cannot express (access checks, narrowing, the
- * registry itself).
+ * definitions: ai, fetch, streams, repos, workspace, and the project
+ * worker. The remaining kernel — caps, fork, project, projects, describe,
+ * plus the GLOBAL streams namespace — is composition the registry cannot
+ * express (access checks, narrowing, the registry itself).
  */
 export const platformProjectContext = defineCodeContext("platform:project", (caps) => {
   caps.define({
@@ -111,6 +111,21 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
     name: "fetch",
     target: {
       entrypoint: "EgressPipe",
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    meta: {
+      instructions:
+        "Event streams in this project's namespace: itx.streams.get('/path') returns a " +
+        "stream handle with append/read/getState/subscribe; get also takes absolute " +
+        "refs ('ns:/path') checked against this project's access. Chained calls ride " +
+        "RPC promise pipelining.",
+    },
+    name: "streams",
+    target: {
+      entrypoint: "StreamsCap",
       type: "rpc",
       worker: { type: "loopback" },
     },

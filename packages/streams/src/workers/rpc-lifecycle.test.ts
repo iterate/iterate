@@ -1,4 +1,4 @@
-// Regression tests for tasks/streams-review-fixes.md M1: broken delivery
+// Regression tests for streams review finding M1: broken delivery
 // connections were never detected. Two halves:
 //
 // 1. `onRpcBroken` was guarded by `Object.hasOwn`, which is always false for
