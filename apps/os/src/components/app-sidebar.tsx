@@ -355,6 +355,7 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
         customHostname={activeProject?.customHostname ?? null}
         projectSlug={activeProjectSlug}
         projectHostnameBases={routeConfig.projectHostnameBases}
+        appBaseUrl={routeConfig.baseUrl}
       />
     );
   }
@@ -439,16 +440,19 @@ function ProjectSidebarGroup({
   customHostname,
   projectHostnameBases,
   projectSlug,
+  appBaseUrl,
 }: {
   customHostname: string | null;
   projectHostnameBases: readonly string[];
   projectSlug: string;
+  appBaseUrl?: string;
 }) {
   const matchRoute = useMatchRoute();
   const customWorkerUrl = buildProjectWorkerUrl({
     projectSlug,
     customHostname,
     projectHostnameBases,
+    appBaseUrl,
   });
 
   return (

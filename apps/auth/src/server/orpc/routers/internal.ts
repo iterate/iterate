@@ -418,6 +418,20 @@ const ensureOAuthClient = os.internal.oauth.ensureClient
     };
   });
 
+// The oauth-provider plugin stores client secrets as unsalted SHA-256
+// base64url (its `defaultHasher` with storeClientSecret: "hashed") and
+// compares hashes at the token endpoint — seeded secrets must be stored in
+// the same format.
+async function hashOAuthClientSecret(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  const bytes = new Uint8Array(digest);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
 // Declarative upsert with caller-provided credentials. Unlike ensureClient
 // (which generates/rotates secrets server-side), the caller's Doppler config is
 // the source of truth: re-running with the same input is a no-op, and nothing
@@ -429,7 +443,7 @@ const setOAuthClient = os.internal.oauth.setClient
     const redirectURIs = [...new Set(input.redirectURIs.map((uri) => uri.trim()))].sort();
     const overwrite = {
       newClientId: input.clientId,
-      clientSecret: input.clientSecret,
+      clientSecret: await hashOAuthClientSecret(input.clientSecret),
       name: input.clientName,
       redirectUris: JSON.stringify(redirectURIs),
       referenceId: input.referenceId ?? null,

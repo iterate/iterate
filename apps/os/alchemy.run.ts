@@ -3,6 +3,7 @@ import { Ai, D1Database, DurableObjectNamespace, Queue, WorkerLoader } from "alc
 import { Artifacts } from "@iterate-com/shared/alchemy/artifacts";
 import { initAlchemy } from "@iterate-com/shared/alchemy/init";
 import { IterateApp } from "@iterate-com/shared/alchemy/iterate-app";
+import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-server";
 import type { CaptunServerShard } from "captun/worker";
 import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
@@ -73,6 +74,25 @@ const env = {
   APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN:
     process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
 };
+
+// Fully-local default dev (config `dev`): no tunnel, no per-user domain. Picks
+// a free port, bakes APP_CONFIG_BASE_URL=http://os.localhost:<port>, and
+// writes .alchemy/dev-server.json so CLIs can find the running server. No-op
+// for configs that set APP_CONFIG_BASE_URL (tunnel-backed dev_<user>,
+// dev_localhost, deploys).
+const localDevServer = await prepareLocalDevServer(env, { appSlug: "os" });
+if (localDevServer && !env.APP_CONFIG_PROJECT_HOSTNAME_BASES) {
+  // Project hosts resolve as <proj-slug>.os.localhost:<port> in the browser.
+  env.APP_CONFIG_PROJECT_HOSTNAME_BASES = JSON.stringify([
+    new URL(localDevServer.baseUrl).hostname,
+  ]);
+}
+if (localDevServer) {
+  // The OAuth resource (RFC 8707) must be a registered audience at the auth
+  // worker, which can't enumerate arbitrary local ports — use the stable
+  // portless loopback origin (mirrored in auth's getOsResourceBases).
+  env.APP_CONFIG_ITERATE_AUTH__RESOURCE ||= `http://${new URL(localDevServer.baseUrl).hostname}`;
+}
 
 await ensureLocalDevOAuthClient(env);
 
