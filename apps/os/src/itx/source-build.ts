@@ -16,6 +16,17 @@ import {
   getRepoDurableObjectName,
   type RepoDurableObject,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import { RepoEmptyError } from "~/domains/repos/repo-errors.ts";
+
+/**
+ * The checkout has no file at the source's path — a NORMAL "there is no
+ * worker yet" state, as opposed to a transient build/git failure. Workers
+ * RPC preserves `error.name`, so classifiers (isMissingProjectWorkerError)
+ * match by name even across the repo-DO hop.
+ */
+export class MissingProjectWorkerError extends Error {
+  override readonly name = "MissingProjectWorkerError";
+}
 
 /** Worker code ready for the Worker Loader: the universal shape every source
  * kind resolves to. For repo sources `cacheKey` is the R2 memo key. */
@@ -125,7 +136,13 @@ async function buildAndMemoize(input: {
       : await repoSourceMemoKey({ oid: tree.commitOid, projectId: input.projectId, source });
 
   const stored = await buildFromTree({ files: tree.files, oid: tree.commitOid, source });
-  await input.cache.put(memoKey, JSON.stringify(stored));
+  // The memo is an optimization; a failed write must not fail the dial that
+  // just built perfectly good code (the next cold dial rebuilds).
+  try {
+    await input.cache.put(memoKey, JSON.stringify(stored));
+  } catch (error) {
+    console.warn(`[itx build] memo write failed for ${memoKey}:`, error);
+  }
   return { cacheKey: memoKey, ...stored };
 }
 
@@ -137,11 +154,17 @@ async function buildFromTree(input: {
   const { source } = input;
   const files = Object.fromEntries(input.files.map((file) => [file.path, file.content]));
 
+  // Typed for BOTH branches: a missing/empty entry file is the normal
+  // "no worker yet" state, never a build failure (the bundler would surface
+  // it as an opaque resolve error otherwise).
+  const content = files[source.path];
+  if (typeof content !== "string" || content.trim() === "") {
+    throw new MissingProjectWorkerError(
+      `${source.repo}@${input.oid.slice(0, 8)} has no file at "${source.path}".`,
+    );
+  }
+
   if (!source.bundle) {
-    const content = files[source.path];
-    if (typeof content !== "string" || content.trim() === "") {
-      throw new Error(`${source.repo}@${input.oid.slice(0, 8)} has no file at "${source.path}".`);
-    }
     return {
       compatibilityDate: source.compatibilityDate,
       mainModule: source.path,
@@ -177,13 +200,14 @@ async function latestOid(input: {
   const cached = latestProbes.get(input.key);
   if (cached && Date.now() - cached.at < input.maxAgeMs) return cached.oid;
   const { oid } = await input.repo.headOid();
-  if (!oid) throw new Error(`Repo "${input.key}" has no head commit to build from.`);
+  if (!oid) throw new RepoEmptyError(`Repo "${input.key}" has no head commit to build from.`);
   latestProbes.set(input.key, { at: Date.now(), oid });
   return oid;
 }
 
-/** The cache key IS the address: hash(project, repo, sha, path, bundle).
- * Exported for tests that pre-seed the memo. */
+/** The cache key IS the address: hash(project, repo, sha, path, bundle,
+ * compatibilityDate — it changes the stored build). Exported for tests that
+ * pre-seed the memo. */
 export async function repoSourceMemoKey(input: {
   oid: string;
   projectId: string;
@@ -193,7 +217,14 @@ export async function repoSourceMemoKey(input: {
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(
-      JSON.stringify([input.projectId, source.repo, input.oid, source.path, source.bundle ?? null]),
+      JSON.stringify([
+        input.projectId,
+        source.repo,
+        input.oid,
+        source.path,
+        source.bundle ?? null,
+        source.compatibilityDate ?? null,
+      ]),
     ),
   );
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");

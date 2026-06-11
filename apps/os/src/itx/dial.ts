@@ -157,6 +157,10 @@ export function makeDial(host: DialHost): CapabilityDial {
           // the same property Cloudflare's AppRunner example relies on. It
           // also keys by the HOST context, not the origin: a stateful cap's
           // data belongs to the context it was provided on.
+          // Asymmetry vs the stateless path: a "latest"-commit source here
+          // resolves at facet START and stays on that build until the DO is
+          // evicted; the worker-entrypoint path below re-resolves per dial
+          // (≤10s staleness via the latest-probe window).
           const facetTarget = facets(`cap:${name}`, async () => {
             const worker = await loadWorker(
               name,

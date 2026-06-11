@@ -2,6 +2,7 @@ import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type Git, type GitAuthor, type GitLogEntry } from "@cloudflare/shell/git";
 import { z } from "zod";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
+import { RepoEmptyError } from "~/domains/repos/repo-errors.ts";
 
 /**
  * Workspace-free git operations against an artifact repo remote. Every call
@@ -116,7 +117,7 @@ export async function commitRepoFiles(
   if (changedPaths.length === 0 && !checkout.createdBranch) {
     const [head] = await checkout.git.log({ depth: 1 });
     if (!head) {
-      throw new Error("Repo has no commits.");
+      throw new RepoEmptyError("Repo has no commits.");
     }
     return {
       branch: input.branch,
@@ -132,7 +133,7 @@ export async function commitRepoFiles(
     // New branch with no file changes: push the branch pointer as-is.
     const [head] = await checkout.git.log({ depth: 1 });
     if (!head) {
-      throw new Error("Repo has no commits.");
+      throw new RepoEmptyError("Repo has no commits.");
     }
     commitOid = head.oid;
   } else {
@@ -210,7 +211,7 @@ export async function readRepoTree(
   });
   const [head] = await checkout.git.log({ depth: 1 });
   if (!head) {
-    throw new Error("Repo has no commits.");
+    throw new RepoEmptyError("Repo has no commits.");
   }
   const files: Array<{ content: string; path: string }> = [];
   const walk = async (dir: string) => {

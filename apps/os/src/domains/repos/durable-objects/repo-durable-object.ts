@@ -25,6 +25,7 @@ import {
   stripArtifactTokenQuery,
 } from "~/domains/repos/artifacts.ts";
 import { parseConfig } from "~/config.ts";
+import { RepoNotCreatedError } from "~/domains/repos/repo-errors.ts";
 import {
   CommitRepoFilesInput,
   ListRepoFilesInput,
@@ -198,7 +199,7 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
     await this.waitForRepoProcessorCatchUp();
 
     if ((await this.currentRepo()) === null) {
-      throw new Error(`Repo ${this.structuredName.repoSlug} has not been created.`);
+      throw new RepoNotCreatedError(`Repo ${this.structuredName.repoSlug} has not been created.`);
     }
 
     const artifactName = repoArtifactName(this.structuredName);
@@ -329,7 +330,7 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
     await this.waitForRepoProcessorCatchUp();
 
     if ((await this.currentRepo()) === null) {
-      throw new Error(`Repo ${this.structuredName.repoSlug} has not been created.`);
+      throw new RepoNotCreatedError(`Repo ${this.structuredName.repoSlug} has not been created.`);
     }
 
     return this.requireArtifacts().get(repoArtifactName(this.structuredName));
@@ -378,7 +379,7 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
   private async requireInfo(): Promise<RepoInfo> {
     const repo = await this.currentRepo();
     if (repo === null) {
-      throw new Error(`Repo ${this.structuredName.repoSlug} has not been created.`);
+      throw new RepoNotCreatedError(`Repo ${this.structuredName.repoSlug} has not been created.`);
     }
 
     const token = await this.ctx.storage.get<string>(REPO_WRITE_TOKEN_STORAGE_KEY);

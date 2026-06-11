@@ -242,8 +242,11 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    * may change this) — replay marks live entries disconnected. */
   #liveStubs = new Map<string, LiveProvider>();
   #materialized = false;
+  /** Monotonic append counter; #catchUp compares it against the counter a
+   * sync STARTED at to guarantee read-your-writes. */
+  #appendCount = 0;
   // eslint-disable-next-line no-unused-private-class-members -- oxlint false positive: read and assigned via ??=.
-  #syncing: Promise<void> | null = null;
+  #syncing: { done: Promise<void>; startedAtAppendCount: number } | null = null;
 
   /**
    * Register a capability — ONE verb for every capability kind, and ONE
@@ -484,6 +487,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    * concurrent writers interleave offsets. */
   async #append(type: string, payload: Record<string, unknown>): Promise<void> {
     await this.ctx.journal.append({ payload, type });
+    this.#appendCount += 1;
     await this.#catchUp();
   }
 
@@ -499,7 +503,20 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
 
   async #catchUp(): Promise<void> {
     // Single-flight; ingest's own offset bookkeeping makes overlap benign.
-    this.#syncing ??= (async () => {
+    // The invariant: the record and the state cannot disagree — a provide
+    // must observe its own event. A joined in-flight sync may have started
+    // BEFORE this caller's append landed, so loop until a sync that started
+    // at (or after) the current append count has completed.
+    while (true) {
+      const sync = (this.#syncing ??= this.#startSync());
+      await sync.done;
+      if (sync.startedAtAppendCount >= this.#appendCount) return;
+    }
+  }
+
+  #startSync(): { done: Promise<void>; startedAtAppendCount: number } {
+    const startedAtAppendCount = this.#appendCount;
+    const done = (async () => {
       try {
         const { offset } = await this.snapshot();
         const events = await this.ctx.journal.read({ afterOffset: offset });
@@ -510,7 +527,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
         this.#syncing = null;
       }
     })();
-    await this.#syncing;
+    return { done, startedAtAppendCount };
   }
 
   // ---- live stubs ----------------------------------------------------------------

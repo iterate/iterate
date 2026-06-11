@@ -98,15 +98,18 @@ export function isProjectWorkerEntrypoint(value: unknown): value is ProjectWorke
  * does not exist yet), as opposed to a transient build/git failure. Event
  * forwarding skips on the former and rethrows the latter so checkpointed
  * delivery retries.
+ *
+ * Classified by `error.name`: every throw site is ours and typed
+ * (MissingProjectWorkerError in ~/itx/source-build.ts; RepoNotCreatedError /
+ * RepoEmptyError in ~/domains/repos), and Workers RPC preserves the name
+ * across the repo-DO hop.
  */
+const MISSING_PROJECT_WORKER_ERROR_NAMES: ReadonlySet<string> = new Set([
+  "MissingProjectWorkerError",
+  "RepoNotCreatedError",
+  "RepoEmptyError",
+]);
+
 export function isMissingProjectWorkerError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  const message = error.message.toLowerCase();
-  return (
-    message.includes("has no file at") ||
-    message.includes("has not been created") ||
-    message.includes("has no head commit") ||
-    message.includes("has no commits") ||
-    message.includes("not been initialized")
-  );
+  return error instanceof Error && MISSING_PROJECT_WORKER_ERROR_NAMES.has(error.name);
 }
