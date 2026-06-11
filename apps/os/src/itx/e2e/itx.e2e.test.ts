@@ -64,11 +64,13 @@ function ensureMatrixProject(): Promise<{ projectId: string }> {
     createdProjectIds.push(project.id);
     await pushIterateConfigWorker({
       commitMessage: "bake catalogue examples into the config worker",
+      files: {
+        "worker.js": configWorkerRunnerSource(
+          MATRIX_EXAMPLES.filter((example) => example.runtimes.includes("config-worker")),
+        ),
+      },
       projectId: project.id,
       projectSlug: project.slug,
-      workerSource: configWorkerRunnerSource(
-        MATRIX_EXAMPLES.filter((example) => example.runtimes.includes("config-worker")),
-      ),
     });
     return { projectId: project.id };
   })();
@@ -329,7 +331,7 @@ test.skipIf(!MCP_TEST_SERVER_URL)(
   },
 );
 
-test("user-space caps: a named export of the project worker is a first-class capability", async () => {
+test("user-space caps: repo-sourced code is a first-class capability through the generic source dial", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-uw` })) as {
     id: string;
@@ -338,90 +340,69 @@ test("user-space caps: a named export of the project worker is a first-class cap
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
-  // (1) Ship user code: replace worker.js in the project's iterate-config
-  // repo with one that ALSO exports a capability class. This is the §1
-  // litmus test's user-space half — same shape as the first-party McpClient,
-  // reached via the ProjectWorker loopback forwarder.
+  // (1) Ship user code: a MULTI-FILE capability module in the project's own
+  // repo — the entry imports a sibling, so the provide exercises the real
+  // chain end to end: repo readTree → @cloudflare/worker-bundler → R2 build
+  // memo → Worker Loader. This is the §1 litmus test's user-space half:
+  // same address shape as anything else, no forwarder, no special kind.
   const marker = `litmus-${RUN_SUFFIX}`;
-  const userWorker = `import { WorkerEntrypoint } from "cloudflare:workers";
-
-export default {
-  async fetch() {
-    return new Response("user worker");
-  },
-};
+  await pushIterateConfigWorker({
+    commitMessage: "add petstore capability module",
+    files: {
+      "caps/petstore-data.js":
+        `export const OPERATIONS = ["getPet", "listPets"];\n` +
+        `export const MARKER = ${JSON.stringify(marker)};\n`,
+      "caps/petstore.js": `import { WorkerEntrypoint } from "cloudflare:workers";
+import { MARKER, OPERATIONS } from "./petstore-data.js";
 
 export class PetstoreClient extends WorkerEntrypoint {
-  async call({ path, args }) {
-    if (path.join(".") === "listOperations") {
-      return { operations: ["getPet", "listPets"], specUrl: this.ctx.props.specUrl ?? null };
-    }
-    if (path.join(".") === "echo") {
-      const { capabilityPath, context, projectId, ...providerProps } = this.ctx.props;
-      return { args, attribution: { capabilityPath, context, projectId }, providerProps };
-    }
-    throw new Error("PetstoreClient does not implement " + path.join("."));
+  async listOperations() {
+    return { marker: MARKER, operations: OPERATIONS };
+  }
+  async echo(value) {
+    return { marker: MARKER, value };
   }
 }
-`;
-
-  // The push runs as an itx script (the in-isolate path agents use); the
-  // worker source travels via the endpoint's vars.
-  await pushIterateConfigWorker({
-    commitMessage: "add PetstoreClient capability export",
+`,
+    },
     projectId: project.id,
     projectSlug: project.slug,
-    workerSource: userWorker,
   });
 
-  // (2) Point a cap at the user's export via the ProjectWorker forwarder —
-  // props.export names THEIR class, props.invoke how the FORWARDER calls it
-  // (the forwarder's inner mode is its own prop, not kernel data).
+  // (2) Provide it as an ordinary repo source. "latest" tracks the push;
+  // the build happens per commit (memoized), never per call.
   await projectItx.provideCapability({
     meta: { instructions: "Petstore API. Call listOperations() first." },
     name: "petstore",
     capability: {
-      entrypoint: "ProjectWorker",
-      props: {
-        export: "PetstoreClient",
-        invoke: "path-call",
-        marker,
-        specUrl: "https://petstore.example.com/openapi.json",
-      },
       type: "rpc",
-      worker: { type: "loopback" },
+      worker: {
+        type: "source",
+        source: {
+          bundle: {},
+          commit: "latest",
+          entrypoint: "PetstoreClient",
+          path: "caps/petstore.js",
+          repo: "iterate-config",
+          type: "repo",
+        },
+      },
     },
   });
 
-  // (3) Call it like any other capability. The Project DO rebuilds the
-  // worker from the fresh push and instantiates the named export per call.
+  // (3) Call it like any other capability. The first call may land inside
+  // the 10s "latest" probe window of a pre-push head — poll briefly until
+  // the freshly pushed module is what answers.
   const handle = projectItx as never as Record<string, any>;
-  const listed = (await handle.petstore.listOperations()) as {
-    operations: string[];
-    specUrl: string;
-  };
-  expect(listed).toEqual({
-    operations: ["getPet", "listPets"],
-    specUrl: "https://petstore.example.com/openapi.json",
-  });
+  await expect
+    .poll(async () => handle.petstore.listOperations().catch((error: unknown) => error), {
+      interval: 1_000,
+      timeout: 30_000,
+    })
+    .toEqual({ marker, operations: ["getPet", "listPets"] });
 
-  // (4) Props discipline: provider parameterization arrives intact, and the
-  // dial-injected attribution can't be spoofed by the provider.
-  const echoed = (await handle.petstore.echo({ hello: 1 })) as {
-    args: unknown[];
-    attribution: { capabilityPath: string; context: string; projectId: string };
-    providerProps: Record<string, unknown>;
-  };
-  expect(echoed.args).toEqual([{ hello: 1 }]);
-  expect(echoed.attribution).toEqual({
-    capabilityPath: "petstore",
-    context: project.id,
-    projectId: project.id,
-  });
-  expect(echoed.providerProps).toEqual({
-    marker,
-    specUrl: "https://petstore.example.com/openapi.json",
-  });
+  const echoed = (await handle.petstore.echo({ hello: 1 })) as Record<string, unknown>;
+  expect(echoed).toEqual({ marker, value: { hello: 1 } });
 });
 
 test("url caps dial a remote Cap'n Web server over a WebSocket session", async () => {
@@ -911,20 +892,15 @@ test("revoked and offline caps fail with instructive errors", async () => {
   ).rejects.toThrow(/reserved/);
 
   // itx.project IS the full Project DO surface (D17) — except the node's
-  // `itx()` core (and the residual itx*-prefixed forwarder plumbing), which
-  // is node-to-node machinery: invoke carries the trusted chain-delegation
-  // `origin`, so exposing it would let any handle holder spoof another
-  // context's identity (a sibling fork's workspace). The proxy masks the
-  // `itx` head; the core's reserved-segment gate stays as defense in depth
-  // for paths arriving over the real chain.
+  // `itx()` core, which is node-to-node machinery: invoke carries the
+  // trusted chain-delegation `origin`, so exposing it would let any handle
+  // holder spoof another context's identity (a sibling fork's workspace).
+  // The proxy masks the `itx` head; the core's reserved-segment gate stays
+  // as defense in depth for paths arriving over the real chain.
   const projectDo = (projectItx as { project: unknown }).project as {
     itx(): Promise<unknown>;
-    itxProjectWorkerCall(input: Record<string, unknown>): Promise<unknown>;
   };
   await expect(projectDo.itx()).rejects.toThrow(/internal context-node plumbing/);
-  await expect(projectDo.itxProjectWorkerCall({})).rejects.toThrow(
-    /internal context-node plumbing/,
-  );
 });
 
 function authHeaders() {

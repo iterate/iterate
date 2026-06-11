@@ -190,22 +190,22 @@ export default class extends WorkerEntrypoint {
 }
 
 /**
- * Replace worker.js in a project's iterate-config repo. The push itself runs
+ * Commit files into a project's iterate-config repo. The push itself runs
  * as an itx script via /api/itx/run (the in-isolate path agents use); the
- * worker source travels via the endpoint's vars.
+ * file contents travel via the endpoint's vars.
  */
 export async function pushIterateConfigWorker(input: {
   commitMessage: string;
+  files: Record<string, string>;
   projectId: string;
   projectSlug: string;
-  workerSource: string;
 }): Promise<void> {
   const pushScript = async ({
     itx,
     vars,
   }: {
     itx: Record<string, any>;
-    vars: { dir: string; message: string; projectSlug: string; workerSource: string };
+    vars: { dir: string; files: Record<string, string>; message: string; projectSlug: string };
   }) => {
     const repo = await itx.repos.ensureIterateConfigInfo({ projectSlug: vars.projectSlug });
     const url = new URL(repo.remote);
@@ -217,8 +217,10 @@ export async function pushIterateConfigWorker(input: {
       dir: vars.dir,
       url: url.toString(),
     });
-    await itx.workspace.writeFile(`${vars.dir}/worker.js`, vars.workerSource);
-    await itx.workspace.gitAdd({ dir: vars.dir, filepath: "worker.js" });
+    for (const [path, content] of Object.entries(vars.files)) {
+      await itx.workspace.writeFile(`${vars.dir}/${path}`, content);
+      await itx.workspace.gitAdd({ dir: vars.dir, filepath: path });
+    }
     await itx.workspace.gitCommit({
       author: { email: "e2e@iterate.com", name: "itx e2e" },
       dir: vars.dir,
@@ -234,9 +236,9 @@ export async function pushIterateConfigWorker(input: {
       functionSource: pushScript.toString(),
       vars: {
         dir: `/e2e-config-${crypto.randomUUID().slice(0, 8)}`,
+        files: input.files,
         message: input.commitMessage,
         projectSlug: input.projectSlug,
-        workerSource: input.workerSource,
       },
     }),
     headers: matrixAuthHeaders(),

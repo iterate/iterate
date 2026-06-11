@@ -241,9 +241,10 @@ export interface ItxBuiltins {
    * `platform:project`. */
   readonly workspace: unknown;
 
-  /** PLATFORM DEFAULT, not kernel: the project's iterate-config worker via
-   * the ProjectWorker forwarder — `itx.worker.someTool(args)` reaches any
-   * public method of the default export, rebuilt from the repo per call. */
+  /** PLATFORM DEFAULT, not kernel: the project's own worker — an ordinary
+   * `{ type: "repo" }` source provide pointed at the project repo, built
+   * per commit. `itx.worker.someTool(args)` reaches any public method of
+   * its default export. */
   readonly worker: unknown;
 
   /** The Project Durable Object stub, whole surface ("cap #0"). If your
@@ -378,8 +379,8 @@ export type ItxDescription = {
  * are client implementations, i.e. ordinary RPC targets. The platform ships
  * `McpClient` / `OpenApiClient` entrypoints (reach them via
  * `worker: { type: "loopback" }`, parameterized by `props`), and nothing
- * stops you from shipping your own version as an export of your project
- * worker (the `ProjectWorker` loopback forwarder). If a first-party client
+ * stops you from shipping your own version as a module in your project's
+ * repo (an ordinary `{ type: "repo" }` source). If a first-party client
  * needs to be special, the design has failed.
  *
  * (Possible later kind, deliberately absent until needed: a re-export of a
@@ -418,20 +419,19 @@ export type WorkerRef =
    * is the target (`itx.ai.run(...)` replays straight onto `env.AI`). */
   | { type: "binding"; binding: string }
   /** The platform worker's own exports (ctx.exports) — first-party code:
-   * `McpClient`, thin policy wrappers around bindings, and `ProjectWorker`,
-   * the forwarder that makes YOUR repo's worker exports dialable (user
-   * space: `entrypoint: "ProjectWorker", props: { export: "MyClass" }` —
-   * the call replays inside the Project DO because loader entrypoints
-   * cannot cross an RPC boundary). */
+   * `McpClient` and thin policy wrappers around bindings, parameterized
+   * per provide via `props`. */
   | { type: "loopback" }
   /** A Durable Object, addressed by namespace binding + instance name. The
    * dial scopes the instance name under the owning project —
    * `getByName(\`itx:<projectId>:<name>\`)` — so a name only ever reaches
    * instances belonging to this project, never a sibling's. */
   | { type: "durable-object"; binding: string; name: string }
-  /** A dynamic worker materialized on demand from stored source — code that
-   * lives in the capability record itself rather than in any deployed artifact. */
-  | { type: "source"; source: CapabilitySource };
+  /** A dynamic worker materialized on demand from a stored source: code
+   * carried inline in the record itself, or code living in one of the
+   * project's repos. The project's own worker is exactly this — a repo
+   * source — not a special kind. */
+  | { type: "source"; source: WorkerSource };
 
 /**
  * Stored source for a `{ type: "source" }` worker. The platform materializes
@@ -440,16 +440,30 @@ export type WorkerRef =
  * `env.ITERATE` is an itx scoped to the cap's home context — a capability
  * can never reach wider than where it is provided.
  */
-export type CapabilitySource = {
-  /**
-   * The loader caches the materialized isolate by this string, so it MUST
-   * change whenever `modules` change; a content hash is the ideal value.
-   * (Replaces the old `codeId` field — it was never an id, and "id" in this
-   * codebase means typeid.)
-   */
-  cacheKey: string;
-  mainModule: string;
-  modules: Record<string, string>;
+export type WorkerSource = (
+  | {
+      /** The code travels in the capability record itself. The loader
+       * caches the materialized isolate by `cacheKey`, so it MUST change
+       * whenever `modules` change; a content hash is the ideal value. */
+      type: "inline";
+      cacheKey: string;
+      mainModule: string;
+      modules: Record<string, string>;
+    }
+  | {
+      /** The code lives in one of the project's repos. Built per COMMIT —
+       * never per call — through @cloudflare/worker-bundler, memoized in R2
+       * by hash(repo, sha, path, bundle). A pinned commit sha makes the
+       * journal entry fully determine behavior; "latest" tracks pushes
+       * (the platform `worker` default uses it). With no `bundle`, the
+       * file at `path` IS the worker, verbatim. */
+      type: "repo";
+      repo: string;
+      commit: string | "latest";
+      path: string;
+      bundle?: { minify?: boolean; externals?: string[] };
+    }
+) & {
   /** Named export to load; defaults to the default export. */
   entrypoint?: string;
   /**
@@ -493,9 +507,9 @@ export type CapabilitySource = {
  * await itx.provideCapability({ name: "mac", capability: asPathCallable({ run(src) { … } }) });
  * ```
  *
- * - Forwarders keep their INNER mode as their own props: ProjectWorker's
- *   `props.invoke` says how to call the user's export; UrlDial's how to
- *   treat the remote main (members pipelining by default).
+ * - Forwarders keep their INNER mode as their own props: UrlDial's
+ *   `props.invoke` says how to treat the remote main (members pipelining
+ *   by default).
  */
 export type PathCall = { path: string[]; args: unknown[] };
 

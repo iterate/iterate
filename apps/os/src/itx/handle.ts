@@ -236,10 +236,9 @@ export class ItxHandle extends RpcTarget {
   get project(): ProjectStub {
     const stub = this.#projectStub();
     return new PathProxy((call) => {
-      // The node's `itx()` core (and the remaining itx*-prefixed forwarder
-      // plumbing, e.g. itxProjectWorkerCall) is node-to-node machinery:
-      // chain delegation passes a TRUSTED `origin` and the forwarder passes
-      // core-merged props. Reachable here, they would let any handle holder
+      // The node's `itx()` core is node-to-node machinery: chain
+      // delegation passes a TRUSTED `origin`. Reachable here, it would let
+      // any handle holder
       // spoof another context's identity (e.g. read a sibling fork's
       // workspace by faking origin). The proper doors are the root verbs
       // (provideCapability/revokeCapability) and the caps themselves.
