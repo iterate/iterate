@@ -905,35 +905,100 @@ story (`define({ path: ["workspace", "gitPush"], … })` on a session).
   `cap`/`context`/`projectId` — the same trusted-identity channel that
   origin-carrying already established.
 
-### 5. The durable layer is a STREAM (owner direction, queued behind the addresses)
+### 5. ItxProcessor: the stream is the journal, the core is pure (REVISED after review)
 
-Event-source the registry: define/revoke stop being best-effort audit
-appends next to authoritative SQLite and become THE writes — appended to
-the context's stream, with an `ItxProcessor` reducing them (plus the
-existing execution-requested/completed pair) into the caps-state the
-dispatcher reads. `/` backs the project's root registry; `/agents/…`
-already carries an AgentDurableObject + AgentProcessor and hosts an
-ItxProcessor alongside — the agent session's context IS that stream; an
-inbound MCP session likewise. The stream is then, by construction, the
-complete record: every tool provided and removed, every script run,
-every result — the "SQLite authoritative / stream best-effort" split
-(D1) and its divergence class disappear.
+Refined twice on review; this supersedes the first sketch of this section.
+The shape is a PURE CORE plus a persistence ADAPTER — deliberately NOT
+"the processor is the context":
 
-What stays as designed above: the SESSION layer remains in-memory (live
-caps cannot be event-sourced — a connection is not data), and because a
-context is addressed by a target, swapping its durable layer from
-DO-SQLite to stream-backed is an invisible host change — exactly the
-property the address unification buys. This is §6's "second step"
-("a stream is a context whose primary fact is its log") arriving
-concretely, and it begins dissolving ContextDO: a child context becomes
-a stream path with an ItxProcessor, identity (namespace, path).
+```ts
+class Itx {                       // pure: no streams, no framework, no storage
+  define() / revoke() / describe() / invoke()
+  // path-keyed caps map + live stub table; longest-prefix dispatch;
+  // dial deps (bindings, exports, allowlists, execution context) injected
+}
+
+class ItxProcessor extends StreamProcessor<ITX_CONTRACT> {
+  itx = new Itx(deps);
+  reduce()        // pure: cap-defined/revoked/provided/disconnected → caps state
+  processEvent()  // side effects: script-execution-requested → runItxScript(this.itx, code)
+}
+
+class AgentDurableObject extends DurableObject {
+  itx = new ItxProcessor({ readState, writeState, ... });  // journal = this agent's stream
+  agentProcessor = new AgentProcessor({ ... });            // sibling, own checkpoint
+}
+
+class GlobalItx extends WorkerEntrypoint {
+  itx = new Itx(deps);            // stateless: no processor AT ALL — nothing fake
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.itx.define({ path: ["projects"], target: … });    // defaults: literal code
+  }
+}
+```
+
+Why core+adapter beat processor-is-the-context (both were steel-manned):
+the processor framework is a CONSUMER abstraction — making it the
+authority produced three symptoms of one category error: a strange loop
+(a processor that IS the itx while receiving an iterateContext and
+expecting a stream that stateless instances don't have), vestigial
+ingest/checkpoint surface on stateless hosts, and a self-consuming write
+path (define appends to its own input and dedups its own event). In the
+chosen shape each thing stays what it is: the core is the authority, the
+journal is the record, the processor is the pump. Live calls mutate the
+core NOW (read-your-writes) and append the event as the record; recovery
+replays the journal through the same core methods. The cost — two places
+transitions initiate — is held by one rule: on durable hosts the
+journaling wrapper is the only public write door.
+
+What this dissolves:
+
+- **The code-context mechanism dies.** Defaults are constructor define()
+  calls — "here are the capabilities; knock yourself out" — re-run every
+  construction, so deploys update them for free. They form the
+  NON-JOURNALED base layer; journal replay layers user rows over them:
+  shadowing collapses from a cross-node prototype chain into TWO LAYERS
+  OF ONE INSTANCE. Parent links remain only for actual parents (agent
+  session → project), not for defaults. (`PLATFORM_GLOBAL`-as-parent was
+  circular and is gone.)
+- **The SQLite caps table + fire-and-forget audit dies**: define/revoke
+  append to the context's stream as THE write; the reduction is the
+  table; the audit-vs-state divergence class is gone by construction.
+  "/" backs the project root registry; an agent's stream backs its
+  session context; inbound MCP sessions likewise. The stream reads top
+  to bottom as: every tool defined and removed, every script requested,
+  every result.
+- **Processor-mode execution arrives** (descoped since the codemode rip):
+  `script-execution-requested` events carry just `"async (itx) => {…}"`;
+  processEvent runs them against the core and appends
+  execution-completed. The framework supplies what scripts need:
+  `sideEffectsAfterOffset` means replay rebuilds state but never re-runs
+  scripts; serialized batches mean one context's scripts run in stream
+  order; `keepAliveWhile` covers long runs; the requested/completed pair
+  makes at-least-once reruns detectable. Appending IS requesting work;
+  the synchronous /api/itx/run door survives, writing the same two
+  events as a record (it already does — `enqueued: true` was reserved
+  for exactly this).
+- Live caps fit with no exception: provide/disconnect EVENTS are
+  journaled (the record outlives the session); the stubs are
+  non-checkpointed instance fields — replay marks entries disconnected.
+- ContextDO dissolves: a forked session context is an ItxProcessor on a
+  stream, hosted wherever that stream's processing already lives.
+
+Auth note: ctx.props on stateless entrypoints still carries the
+connect-time principal/access; the core's deps include identity+access —
+unchanged from the access model, just relocated.
 
 Sequencing sketch: (a) address type + `.address()` + restorer-over-
 addresses with string refs as resolved aliases; (b) parent pointers as
-addresses, delete prefix-sniffing, defaults-as-parent; (c) global as a
-stateless loopback context (+ `projects` as its cap, `ProjectAdmin`);
-(d) root verbs replace itx.caps; (e) path defines with longest-prefix
-dispatch. Each lands independently green.
+addresses, delete prefix-sniffing; (c) extract the pure `Itx` core from
+ContextRegistry (constructor-defined defaults replace the code-context
+mechanism; global becomes `GlobalItx` with literal defines); (d) root
+verbs replace itx.caps; (e) path defines with longest-prefix dispatch;
+(f) ItxProcessor adapter: journal writes + replay + processor-mode
+execution, delete the SQLite caps table and ContextDO. Each lands
+independently green.
 
 ## Resolved (was open, now decided)
 
