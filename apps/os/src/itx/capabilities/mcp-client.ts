@@ -76,13 +76,25 @@ export class McpClient extends WorkerEntrypoint<Env, McpClientProps> {
       // getSecret() placeholders in headers become real credentials. Build a
       // real Request first: the SDK may pass a URL (which itx.fetch would not
       // stringify) or a Request plus separate init (whose headers must merge
-      // before egress sees them).
-      fetch: (fetchInput: Request | string | URL, init?: RequestInit) =>
-        itx.fetch(
+      // before egress sees them). The SDK also attaches an AbortSignal to
+      // every request, and a signal cannot cross the RPC hop to the egress
+      // pipe (DataCloneError: AbortSignal serialization is not enabled) —
+      // rebuild WITHOUT it; per-request aborts don't survive egress, the
+      // pipe's own timeouts do the bounding.
+      fetch: (fetchInput: Request | string | URL, init?: RequestInit) => {
+        const request =
           fetchInput instanceof Request
             ? new Request(fetchInput, init)
-            : new Request(String(fetchInput), init),
-        ),
+            : new Request(String(fetchInput), init);
+        return itx.fetch(
+          new Request(request.url, {
+            body: request.body,
+            headers: request.headers,
+            method: request.method,
+            redirect: request.redirect,
+          }),
+        );
+      },
       headers: props.headers,
       serverUrl: props.serverUrl,
     });
