@@ -152,7 +152,7 @@ describe("provide + longest-prefix invoke", () => {
         type: "rpc",
         worker: { binding: "ITX_CONTEXT", name: "x", type: "durable-object" },
       },
-      id: "ctx_child",
+      id: "itx_child",
     };
     await itx.invoke({ args: [], origin, path: ["workspace", "readFile"] });
     expect(dialed[0]!.attribution).toEqual({ capabilityPath: "workspace", origin });
@@ -208,17 +208,17 @@ describe("the journal is the only authority", () => {
   test("the birth certificate folds first-wins", () => {
     const initial = { capabilities: {}, context: null, pendingExecutions: {} };
     const born = reduceItxJournalEvent(initial, {
-      payload: { id: "ctx_a", name: "session", parent: { address: SELF_ADDRESS, id: "prj_1" } },
+      payload: { id: "itx_a", name: "session", parent: { address: SELF_ADDRESS, id: "prj_1" } },
       type: ITX_EVENT_TYPES.contextCreated,
     });
-    expect(born.context).toMatchObject({ id: "ctx_a", name: "session", parent: { id: "prj_1" } });
+    expect(born.context).toMatchObject({ id: "itx_a", name: "session", parent: { id: "prj_1" } });
     // A later (retried/duplicate) birth certificate is inert — exactly-once
     // is a property of the fold, not of delivery.
     const again = reduceItxJournalEvent(born, {
-      payload: { id: "ctx_b", parent: null },
+      payload: { id: "itx_b", parent: null },
       type: ITX_EVENT_TYPES.contextCreated,
     });
-    expect(again.context).toMatchObject({ id: "ctx_a" });
+    expect(again.context).toMatchObject({ id: "itx_a" });
   });
 
   test("malformed journal payloads are ignored by the fold, never wedge it", () => {
@@ -246,14 +246,14 @@ describe("chain delegation", () => {
 
   test("a miss delegates the WHOLE path up with origin ?? self", async () => {
     const parent = parentStub();
-    const itx = makeItx({ contextId: "ctx_a", parent });
+    const itx = makeItx({ contextId: "itx_a", parent });
 
     await expect(itx.invoke({ args: [1], path: ["inherited", "run"] })).resolves.toBe(
       "from-parent",
     );
     expect(parent.invoke).toHaveBeenCalledWith({
       args: [1],
-      origin: { address: SELF_ADDRESS, id: "ctx_a" },
+      origin: { address: SELF_ADDRESS, id: "itx_a" },
       path: ["inherited", "run"],
     });
 
@@ -263,7 +263,7 @@ describe("chain delegation", () => {
         type: "rpc",
         worker: { binding: "ITX_CONTEXT", name: "g", type: "durable-object" },
       },
-      id: "ctx_grandchild",
+      id: "itx_grandchild",
     };
     await itx.invoke({ args: [], origin, path: ["inherited", "run"] });
     expect(parent.invoke).toHaveBeenLastCalledWith({
@@ -282,12 +282,12 @@ describe("chain delegation", () => {
 
   test("describe merges the parent chain with exact-match suppression", async () => {
     const parent = parentStub();
-    const itx = makeItx({ contextId: "ctx_a", parent });
+    const itx = makeItx({ contextId: "itx_a", parent });
     await itx.provideCapability({ capability: AI_ADDRESS, name: "ai" }); // shadows the parent's
 
     const described = await itx.describe();
     expect(described.map(({ name, owner }) => ({ name, owner }))).toEqual([
-      { name: "ai", owner: "ctx_a" },
+      { name: "ai", owner: "itx_a" },
       { name: "inherited", owner: "prj_1" },
     ]);
   });

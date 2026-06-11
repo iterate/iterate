@@ -336,7 +336,7 @@ export interface KnownCapabilities {}
  * we can possibly give you — this should always be the best starting point
  * for exploring what exists. */
 export type ItxDescription = {
-  /** "global", a project id, or a ctx_… child context id. */
+  /** "global", a project id, or a itx_… child context id. */
   context: ContextRef;
   /** Who this handle was minted for. */
   principal: ItxPrincipal;
@@ -705,7 +705,7 @@ export type Stubify<T> = T extends (...args: infer A) => infer R
  * (Type-safe-ish via prefixes; `proj_` is the legacy project prefix, `prj_`
  * the canonical one minted by the auth worker.)
  */
-export type ContextRef = "global" | `prj_${string}` | `proj_${string}` | `ctx_${string}`;
+export type ContextRef = "global" | `prj_${string}` | `proj_${string}` | `itx_${string}`;
 
 /**
  * Who a handle was minted for — typed out BY HAND from the auth system

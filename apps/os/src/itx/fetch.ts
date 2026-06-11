@@ -56,7 +56,7 @@ export async function handleItxFetch(input: {
   }
 
   // Bare prefix → global handle; anything else is a project id/slug or a
-  // ctx_… child context id.
+  // itx_… child context id.
   let props: ItxProps;
   if (subpath === "") {
     // A global handle is safe for any authenticated principal: its access is

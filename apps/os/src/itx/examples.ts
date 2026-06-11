@@ -408,7 +408,7 @@ await itx.provideCapability({
   })(),
 });
 
-// Extend a child. It's a full itx handle on a new ctx_… context.
+// Extend a child. It's a full itx handle on a new itx_… context.
 const child = await itx.extend({ name: "repl-scratch" });
 
 // The child can shadow 'shared' with its own definition...

@@ -127,7 +127,7 @@ export function getBrowserItx(context?: string): Promise<RpcStub<ItxHandle>> {
 
 /**
  * The itx handle for `context` ("global" when omitted, else a project id/slug
- * or ctx_… id; session-cookie auth). Suspends until the socket is connected;
+ * or itx_… id; session-cookie auth). Suspends until the socket is connected;
  * re-suspends (fresh socket, fresh state) if it dies. See the module header
  * for the full contract. Wrap consumers in a Suspense boundary and keep them
  * out of SSR.

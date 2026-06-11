@@ -174,7 +174,7 @@ authority:
   The processor checkpoint (`{offset, state}` in the host DO's storage) is a
   disposable cache of the fold — delete it and replay rebuilds it. The
   record and the state cannot disagree, because events are the only writes.
-- **Creation is an event.** `extendContext` (`journal.ts`) mints a `ctx_…`
+- **Creation is an event.** `extendContext` (`journal.ts`) mints a `itx_…`
   id, appends `context-created { id, name, parent: { id, address } }` — the
   **birth certificate**, the journal's first event — and returns. Nothing
   touches the new node; it materializes lazily by consuming its journal, and
@@ -184,7 +184,7 @@ authority:
 - **Identity is a stream coordinate.** Journals live at
   `<host base>/itx[/<child-id>]` in the project's namespace: the project
   context's own journal is `/itx`; extending the project gives
-  `/itx/<ctx_…>`; an agent's context lives at `<agentPath>/itx/<ctx_…>`.
+  `/itx/<itx_…>`; an agent's context lives at `<agentPath>/itx/<itx_…>`.
   `itx` is a RESERVED stream path segment — the user-facing append doors
   (`StreamsBackend`) refuse it with one clear error
   (`assertStreamPathDoesNotClaimItxSegment`); journals stay readable
@@ -196,7 +196,7 @@ authority:
   processor runs it (`Itx.processEventBatch` → the host's runner) and
   appends the completed event — at-least-once reruns stay detectable via the
   requested/completed pair, and already-completed pairs are inert.
-- Bare `ctx_…` refs (reconnects, `/api/itx/run`, isolate props) resolve to
+- Bare `itx_…` refs (reconnects, `/api/itx/run`, isolate props) resolve to
   their coordinate through the **`itx_contexts` D1 catalog** — a directory
   in D1's sanctioned role (project directory / secrets / DO catalog), never
   the authority.
@@ -262,7 +262,7 @@ Every chain roots in code: **everything WRITABLE is durable; the root of
 every chain is code.**
 
 ```text
-ctx_session → project → platform:project (PlatformContext, read-only code)
+itx_session → project → platform:project (PlatformContext, read-only code)
 ```
 
 **`PlatformContext`** is a loopback `WorkerEntrypoint` answering the same

@@ -39,7 +39,7 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
 
   using child = await projectItx.extend({ name: "e2e-session" });
   const childDescription = await child.describe();
-  expect(String(childDescription.context)).toMatch(/^ctx_/);
+  expect(String(childDescription.context)).toMatch(/^itx_/);
   expect(childDescription.project).toMatchObject({ id: project.id });
 
   // (1) Chain miss → parent's cap answers.
@@ -62,7 +62,7 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
   const merged = (await child.describe()).capabilities as Array<{ name: string; owner: string }>;
   const shared = merged.filter((entry) => entry.name === "shared");
   expect(shared).toHaveLength(1);
-  expect(String(shared[0]!.owner)).toMatch(/^ctx_/);
+  expect(String(shared[0]!.owner)).toMatch(/^itx_/);
 
   // (3) The parent is untouched — and a sibling extension sees the parent's cap.
   using sibling = await projectItx.extend();
@@ -250,7 +250,7 @@ test("extend: child worker caps run with the owning project's authority", async 
   const noted = (await (child as never as Record<string, any>).noter.note({
     text: "from a child context",
   })) as { context: string };
-  expect(noted.context).toMatch(/^ctx_/);
+  expect(noted.context).toMatch(/^itx_/);
 
   const events = (await projectItx.streams.get("/itx-e2e/notes").read()) as Array<{
     payload: { text?: string };

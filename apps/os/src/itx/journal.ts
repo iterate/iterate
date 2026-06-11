@@ -5,8 +5,8 @@
 // `<host base>/itx[/<child-id>]` in the owning project's namespace:
 //
 //   project context              (prj_x, "/itx")           — own journal, base "/"
-//   extend the project           (prj_x, "/itx/ctx_a")     — child under the base
-//   an agent's context           (prj_x, "<agentPath>/itx/ctx_b")
+//   extend the project           (prj_x, "/itx/itx_a")     — child under the base
+//   an agent's context           (prj_x, "<agentPath>/itx/itx_b")
 //
 // "itx" is a RESERVED stream path segment: domain code (subagent paths, user
 // streams) may not write under it — assertStreamPathDoesNotClaimItxSegment
@@ -16,7 +16,7 @@
 // The generic context DO's NAME encodes the coordinate verbatim
 // (`<namespace>:<journalPath>`, the same shape stream DO names use), so
 // identity, journal ref, and self-address are PROJECTIONS of the name —
-// derived, never configured. Bare `ctx_…` refs (reconnects, isolate props)
+// derived, never configured. Bare `itx_…` refs (reconnects, isolate props)
 // resolve through the D1 catalog row extendContext writes — a directory in
 // D1's sanctioned role, never the authority: parentage and state fold from
 // the journal.
@@ -238,7 +238,7 @@ export async function extendContext(input: {
 }): Promise<ExtendedContext> {
   const contextId = typeid({
     env: { TYPEID_PREFIX: input.typeIdPrefix },
-    prefix: "ctx",
+    prefix: "itx",
   });
   const journal: ItxJournalRef = {
     namespace: input.projectId,
@@ -260,7 +260,7 @@ export async function extendContext(input: {
   return { address: childContextAddress(journal), contextId, journal };
 }
 
-/** Resolve a bare `ctx_…` ref through the catalog. */
+/** Resolve a bare `itx_…` ref through the catalog. */
 export async function lookupContext(
   db: Client,
   contextId: string,

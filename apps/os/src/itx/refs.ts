@@ -39,8 +39,8 @@ export type ProjectAccess = "all" | string[];
 
 export const GLOBAL_CONTEXT_ID = "global";
 
-/** Child context ids: `ctx_…` TypeIDs; project contexts use the project id. */
-export const CHILD_CONTEXT_PREFIX = "ctx";
+/** Child context ids: `itx_…` TypeIDs; project contexts use the project id. */
+export const CHILD_CONTEXT_PREFIX = "itx";
 
 export function isChildContextId(contextId: string): boolean {
   return contextId.startsWith(`${CHILD_CONTEXT_PREFIX}_`);

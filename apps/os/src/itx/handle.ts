@@ -77,11 +77,11 @@ export type ItxRuntime = {
    * the dotted route, not a display name. */
   capabilityPath?: string;
   config: AppConfig;
-  /** "global", a project id, a ctx_… child context id, or the
+  /** "global", a project id, a itx_… child context id, or the
    * platform:project chain root. */
   contextId: string;
   /** How to dial the context node — resolved once by the restorer (the
-   * catalog for bare ctx_… refs, derivation for projects); null only on
+   * catalog for bare itx_… refs, derivation for projects); null only on
    * global handles. */
   contextAddress: CapabilityAddress | null;
   /** The owning project; null only on global handles. For project contexts
@@ -329,7 +329,7 @@ export class ItxHandle extends RpcTarget {
     // its owning project, never the parent's wider scope. So a session
     // extended off an admin (access "all") handle still cannot reach sibling
     // projects via itx.projects — same access a reconnect through
-    // /api/itx/ctx_… would resolve.
+    // /api/itx/itx_… would resolve.
     return new ItxHandle({
       ...this.#runtime,
       access: [projectId],

@@ -23,7 +23,7 @@ import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capa
  * restore(): names → live object graph. A project-context handle's access is
  * always exactly its own project, regardless of what props claim — same
  * non-escalation rule the old config-worker scope rewrite enforced (D7).
- * Child contexts (ctx_…) carry their coordinate in props when platform
+ * Child contexts (itx_…) carry their coordinate in props when platform
  * wiring minted them; a bare-id restore resolves it through the context
  * catalog — the one lookup a sturdy ref costs.
  */
