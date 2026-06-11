@@ -11,7 +11,8 @@
 // Capability resolution walks the chain child → parent (→ … → the
 // platform context): the core delegates a miss per call through the parent
 // address recorded in the birth certificate. Shadowing is allowed and
-// VISIBLE: describe() returns the merged chain with each entry's owner.
+// VISIBLE: describe() returns the merged chain — inherited entries carry
+// `from`, own entries carry no provenance field.
 
 import { DurableObject } from "cloudflare:workers";
 import { Itx, type CapabilityAddress, type ItxStub } from "./itx.ts";
@@ -75,15 +76,18 @@ export class ItxDurableObject extends DurableObject<Env> {
     const journal = this.#journal();
     const contextId = contextIdOfJournalPath(journal.path);
     const selfAddress = childContextAddress(journal);
-    const parentNode = (): ItxStub | null => {
+    const parentNode = (): { from: string; stub: ItxStub } | null => {
       const parent = this.#itx?.state.context?.parent;
       if (!parent) return null;
       const node = () => dialContext(this.env, parent.address as CapabilityAddress);
       return {
-        describe: () => node().itx().describe(),
-        invoke: (input) => node().itx().invoke(input),
-        provideCapability: (input) => node().itx().provideCapability(input),
-        revokeCapability: (input) => node().itx().revokeCapability(input),
+        from: parent.id,
+        stub: {
+          describe: () => node().itx().describe(),
+          invoke: (input) => node().itx().invoke(input),
+          provideCapability: (input) => node().itx().provideCapability(input),
+          revokeCapability: (input) => node().itx().revokeCapability(input),
+        },
       };
     };
     // Legacy pre-journal residue (the itx_capabilities/itx_context SQLite

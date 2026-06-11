@@ -60,7 +60,7 @@ import { type RepoDurableObject } from "~/domains/repos/durable-objects/repo-dur
 import { Itx, type CapabilityAddress } from "~/itx/itx.ts";
 import { durableObjectFacetsHook, makeDial, resolveDialableTargets } from "~/itx/dial.ts";
 import { journalStream, ownJournalPath, projectContextAddress } from "~/itx/journal.ts";
-import { getPlatformContext } from "~/itx/platform-context.ts";
+import { getPlatformContext, PLATFORM_DESCRIBE_FROM } from "~/itx/platform-context.ts";
 import { runItxScript } from "~/itx/run.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
 
@@ -254,13 +254,17 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
       }),
       iterateContext: { journal: journalStream(this.env as unknown as Env, journal) },
       keepAliveWhile: (work) => this.ctx.waitUntil(work()),
-      parentItx: () =>
-        getPlatformContext({
+      parentItx: () => ({
+        // describe() labels entries inherited through this link "platform";
+        // the internal platform:project chain id stays internal.
+        from: PLATFORM_DESCRIBE_FROM,
+        stub: getPlatformContext({
           exports: this.ctx.exports as unknown as Parameters<
             typeof getPlatformContext
           >[0]["exports"],
           projectId,
         }),
+      }),
       readState: async () =>
         await this.ctx.storage.get<{ offset: number; state: Itx["state"] }>("itx-checkpoint"),
       // Processor-mode execution: an enqueued script-execution-requested on

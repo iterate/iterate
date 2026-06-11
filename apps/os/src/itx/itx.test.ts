@@ -89,6 +89,8 @@ function makeItx(
     dial?: CapabilityDial;
     journal?: ReturnType<typeof fakeJournal>["journal"];
     parent?: ItxStub | null;
+    /** describe()'s label for entries inherited through the parent link. */
+    parentFrom?: string;
     runScript?: (input: { code: string; executionId: string }) => Promise<unknown>;
   } = {},
 ) {
@@ -96,7 +98,8 @@ function makeItx(
     contextId: input.contextId ?? "prj_1",
     dial: input.dial ?? fakeDial().dial,
     iterateContext: { journal: input.journal ?? fakeJournal().journal },
-    parentItx: () => input.parent ?? null,
+    parentItx: () =>
+      input.parent ? { from: input.parentFrom ?? "prj_1", stub: input.parent } : null,
     runScript: input.runScript,
     selfAddress: SELF_ADDRESS,
   });
@@ -171,12 +174,15 @@ describe("the journal is the only authority", () => {
     });
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
+      // The JOURNAL record keeps its internal owner field (data) …
       payload: { address: AI_ADDRESS, kind: "rpc", owner: "prj_1", path: ["ai"] },
       type: ITX_EVENT_TYPES.capabilityProvided,
     });
-    expect(await itx.describe()).toMatchObject([
-      { instructions: "Workers AI.", kind: "rpc", name: "ai", owner: "prj_1" },
-    ]);
+    // … while describe() — the projection — shows an OWN entry with no
+    // provenance field at all (`from` is for inherited entries only).
+    const described = await itx.describe();
+    expect(described).toMatchObject([{ instructions: "Workers AI.", kind: "rpc", name: "ai" }]);
+    expect(described[0]).not.toHaveProperty("from");
   });
 
   test("a fresh instance over the same journal folds to the same state; live entries replay disconnected", async () => {
@@ -235,8 +241,11 @@ describe("chain delegation", () => {
   function parentStub() {
     return {
       describe: vi.fn(async () => [
-        { kind: "rpc" as const, meta: {}, name: "ai", owner: "platform:project", updatedAtMs: 0 },
-        { kind: "rpc" as const, meta: {}, name: "inherited", owner: "prj_1", updatedAtMs: 1 },
+        // The parent's own merged view: `ai` arrived from ITS parent (the
+        // platform link, already stamped); `inherited` is the parent's own
+        // entry, so it carries no provenance field yet.
+        { from: "platform", kind: "rpc" as const, meta: {}, name: "ai", updatedAtMs: 0 },
+        { kind: "rpc" as const, meta: {}, name: "inherited", updatedAtMs: 1 },
       ]),
       invoke: vi.fn(async () => "from-parent"),
       provideCapability: vi.fn(async () => {}),
@@ -280,16 +289,25 @@ describe("chain delegation", () => {
     );
   });
 
-  test("describe merges the parent chain with exact-match suppression", async () => {
+  test("describe merges the parent chain: own entries unstamped, inherited carry `from`", async () => {
     const parent = parentStub();
-    const itx = makeItx({ contextId: "itx_a", parent });
-    await itx.provideCapability({ capability: AI_ADDRESS, name: "ai" }); // shadows the parent's
+    const itx = makeItx({ contextId: "itx_a", parent, parentFrom: "prj_1" });
 
-    const described = await itx.describe();
-    expect(described.map(({ name, owner }) => ({ name, owner }))).toEqual([
-      { name: "ai", owner: "itx_a" },
-      { name: "inherited", owner: "prj_1" },
+    // Before any own provide: everything is inherited. A deeper ancestor's
+    // stamp ("platform") survives verbatim; the parent's own entry is
+    // stamped with this link's label, exactly one level below its owner.
+    expect((await itx.describe()).map(({ from, name }) => ({ from, name }))).toEqual([
+      { from: "platform", name: "ai" },
+      { from: "prj_1", name: "inherited" },
     ]);
+
+    await itx.provideCapability({ capability: AI_ADDRESS, name: "ai" }); // shadows the parent's
+    const described = await itx.describe();
+    expect(described.map(({ from, name }) => ({ from, name }))).toEqual([
+      { from: undefined, name: "ai" }, // own — no provenance field
+      { from: "prj_1", name: "inherited" },
+    ]);
+    expect(described[0]).not.toHaveProperty("from");
   });
 
   test("platform defaults shadow and resurface as chain consequences", async () => {

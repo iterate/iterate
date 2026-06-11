@@ -182,11 +182,11 @@ test("the five-step capability flow: provide live, call, promote durable, call f
     expect(viaDurable).toMatchObject({ marker, method: "chat.postMessage" });
   }
 
-  // Own rows only — platform defaults (e.g. `ai` from platform:project)
-  // also appear in describe() with their code context as owner. `types`
-  // is lifted from meta like instructions.
-  const description = (await projectItx.describe()).capabilities as Array<{ owner: string }>;
-  expect(description.filter((entry) => entry.owner === project.id)).toMatchObject([
+  // Own rows carry NO provenance field — `from` marks inherited entries
+  // only (platform defaults like `ai` appear with from: "platform").
+  // `types` is lifted from meta like instructions.
+  const description = (await projectItx.describe()).capabilities as Array<{ from?: string }>;
+  expect(description.filter((entry) => entry.from === undefined)).toMatchObject([
     { connected: true, kind: "live", name: "slack" },
     { kind: "rpc", name: "slackDurable", types: slackDurableTypes },
   ]);
@@ -279,10 +279,10 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   await expect(handle.sneakyDo.anything()).rejects.toThrow(/not dialable/);
 
   // describe() reports the new kinds and lifts instructions (own rows only —
-  // inherited platform defaults carry their code context as owner). The
-  // unreachable-but-provided rows from (3) appear too: provide is structural.
-  const caps = (await projectItx.describe()).capabilities as Array<{ owner: string }>;
-  expect(caps.filter((entry) => entry.owner === project.id)).toMatchObject([
+  // they carry no `from`; inherited platform defaults read from: "platform").
+  // The unreachable-but-provided rows from (3) appear too: provide is structural.
+  const caps = (await projectItx.describe()).capabilities as Array<{ from?: string }>;
+  expect(caps.filter((entry) => entry.from === undefined)).toMatchObject([
     { instructions: "Workers AI. Use like the env.AI binding.", kind: "rpc", name: "ai" },
     { kind: "rpc", name: "aiWrapped" },
     { kind: "rpc", name: "db" },
@@ -441,25 +441,25 @@ test("url caps dial a remote Cap'n Web server over a WebSocket session", async (
   expect(described.capabilities.map((entry) => entry.name)).toContain("remoteItx");
 });
 
-test("platform defaults arrive from the platform:project code context, and own rows shadow them", async () => {
+test("platform defaults arrive from the platform code context, and own rows shadow them", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-def` })) as { id: string };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   // A fresh project has zero rows of its own, but `ai` is already there —
-  // inherited from the code-defined parent context, with that context's
-  // name as owner (itx-next.md §8).
-  type Described = { capabilities: Array<{ name: string; owner: string }> };
+  // inherited from the code-defined parent context, labeled from: "platform"
+  // (the internal chain id never leaves the chain).
+  type Described = { capabilities: Array<{ from?: string; name: string }> };
   const before = (await projectItx.describe()) as Described;
   expect(before.capabilities.find((entry) => entry.name === "ai")).toMatchObject({
+    from: "platform",
     kind: "rpc",
-    owner: "platform:project",
   });
   // The whole migrated kernel arrives the same way (§8: cap #0 disappears).
   for (const name of ["repos", "streams", "workspace", "worker"]) {
     expect(before.capabilities.find((entry) => entry.name === name)).toMatchObject({
-      owner: "platform:project",
+      from: "platform",
     });
   }
 
@@ -468,7 +468,7 @@ test("platform defaults arrive from the platform:project code context, and own r
   await expect(projectItx.revokeCapability({ name: "ai" })).rejects.toThrow(/platform default/);
 
   // Shadowing is prototype semantics: a row of this context's own wins, and
-  // describe() shows exactly one `ai` with the project as owner.
+  // describe() shows exactly one `ai` — an OWN entry, so no `from` field.
   class ShadowAi extends RpcTarget {
     async call({ path }: { path: string[]; args: unknown[] }) {
       return { method: path.join("."), provider: "shadow" };
@@ -481,7 +481,7 @@ test("platform defaults arrive from the platform:project code context, and own r
   const after = (await projectItx.describe()) as Described;
   const aiCaps = after.capabilities.filter((entry) => entry.name === "ai");
   expect(aiCaps).toHaveLength(1);
-  expect(aiCaps[0]!.owner).toBe(project.id);
+  expect(aiCaps[0]!.from).toBeUndefined();
 
   const handle = projectItx as never as Record<string, any>;
   expect(await handle.ai.run("model", { prompt: "hi" })).toEqual({
@@ -497,10 +497,10 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   using projectItx = await itx.projects.get(project.id);
 
   // (1) Fresh project: `fetch` is a platform default, not kernel.
-  type Described = { capabilities: Array<{ name: string; owner: string }> };
+  type Described = { capabilities: Array<{ from?: string; name: string }> };
   const before = (await projectItx.describe()) as Described;
   expect(before.capabilities.find((entry) => entry.name === "fetch")).toMatchObject({
-    owner: "platform:project",
+    from: "platform",
   });
 
   // (2) A Node-side shadow provider: the whole intercept is ONE call method.
@@ -555,7 +555,7 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   await projectItx.revokeCapability({ name: "fetch" });
   const after = (await projectItx.describe()) as Described;
   expect(after.capabilities.find((entry) => entry.name === "fetch")).toMatchObject({
-    owner: "platform:project",
+    from: "platform",
   });
   await expect(projectItx.fetch("https://intercept-probe.invalid/x")).rejects.toThrow();
 

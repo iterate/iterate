@@ -354,9 +354,8 @@ export type ItxDescription = {
   /** Attribution: which capability's isolate holds this handle, if any
    * (the dotted route). */
   capabilityPath?: string;
-  /** The merged capability chain (own caps first, ancestors' after,
-   * shadowed names carry `owner` provenance), including each cap's
-   * `instructions`. */
+  /** The merged capability chain (own caps first, ancestors' after —
+   * inherited entries carry `from`), including each cap's `instructions`. */
   capabilities: CapabilityDescription[];
   /** The bound project's own description, if this handle has one. */
   project: unknown | null;
@@ -579,8 +578,10 @@ export type CapabilityDescription = {
   name: string;
   /** The target's kind: "live" | "rpc" | "url". */
   kind: CapabilityKind;
-  /** Which context owns the entry — provenance for shadowing visibility. */
-  owner: string;
+  /** INHERITED entries only: which chain link the entry comes from — a
+   * context id, or `"platform"` for the code-rooted defaults. The described
+   * context's own entries carry no provenance field at all. */
+  from?: string;
   /** Live caps only: is the provider currently connected? */
   connected?: boolean;
   /** Lifted from meta for convenience: the one thing to read first. */

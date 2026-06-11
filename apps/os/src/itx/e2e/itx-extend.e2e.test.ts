@@ -49,7 +49,8 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
   expect(viaChain.marker).toBe("project-level");
 
   // (2) The child provides its own capability under the SAME name → shadows
-  // visibly (describe reports the owner).
+  // visibly: exactly one `shared` survives, and it is an OWN entry (no
+  // `from` — that field marks inherited entries only).
   await child.provideCapability({
     name: "shared",
     capability: chatPostTarget("child-level"),
@@ -59,10 +60,10 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
   })) as { marker: string };
   expect(viaShadow.marker).toBe("child-level");
 
-  const merged = (await child.describe()).capabilities as Array<{ name: string; owner: string }>;
+  const merged = (await child.describe()).capabilities as Array<{ from?: string; name: string }>;
   const shared = merged.filter((entry) => entry.name === "shared");
   expect(shared).toHaveLength(1);
-  expect(String(shared[0]!.owner)).toMatch(/^itx_/);
+  expect(shared[0]!.from).toBeUndefined();
 
   // (3) The parent is untouched — and a sibling extension sees the parent's cap.
   using sibling = await projectItx.extend();

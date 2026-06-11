@@ -217,16 +217,19 @@ export type ItxIterateContext = {
 };
 
 export type ItxDeps = {
-  /** This context's identity — describe() owner label, origin id. */
+  /** This context's identity — the journal records' owner field, origin id. */
   contextId: string;
   /** This context's own address — stamped as origin when delegating. */
   selfAddress: CapabilityAddress;
   /** THE only dial effect: address → something speaking call({ path, args }). */
   dial: CapabilityDial;
-  /** The parent context's core, or null at the chain root. A function
+  /** The parent context's link, or null at the chain root. A function
    * because a generic context learns its parent from its own birth
-   * certificate (state), which exists only after the journal is consumed. */
-  parentItx: () => ItxStub | null;
+   * certificate (state), which exists only after the journal is consumed.
+   * `from` is how describe() labels entries inherited through this link —
+   * the parent's context id, or "platform" at the code root (the internal
+   * platform:project id never leaves the chain). */
+  parentItx: () => { from: string; stub: ItxStub } | null;
   /** Processor-mode execution: run one enqueued script-execution-requested
    * event (the runner appends the completed event to this journal). */
   runScript?: (input: { code: string; executionId: string }) => Promise<unknown>;
@@ -326,14 +329,15 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     if (!(name in this.state.capabilities)) {
       // Distinguish "never existed" (a no-op, matching the old semantics)
       // from "inherited through the chain" (refuse with the shadowing hint).
-      const inherited = (await this.deps.parentItx()?.describe())?.find(
+      const parent = this.deps.parentItx();
+      const inherited = (await parent?.stub.describe())?.find(
         (description) => description.name === name,
       );
       if (inherited) {
         throw new Error(
           `Capability "${name}" is not provided on this context — it is inherited from ` +
-            `${inherited.owner} (e.g. a platform default) and cannot be revoked here; ` +
-            `provide your own "${name}" to shadow it.`,
+            `${inherited.from ?? parent!.from} (e.g. a platform default) and cannot be ` +
+            `revoked here; provide your own "${name}" to shadow it.`,
         );
       }
       return;
@@ -343,13 +347,13 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
   }
 
   /**
-   * The merged chain view: own entries (each with its `owner` provenance),
-   * then the parent chain's — the platform defaults arrive from the chain's
-   * code-rooted final link like any other ancestor's. Suppression is
-   * deliberately EXACT-match only: a path provide ("sdk.chat.postMessage")
-   * shadows just its subtree — the parent's "sdk" stays live for every other
-   * path, so hiding it here would lie about what longest-prefix dispatch
-   * actually resolves.
+   * The merged chain view: own entries first (no provenance field — they are
+   * yours), then the parent chain's, each carrying `from` (the context the
+   * entry actually lives on; the platform defaults read `from: "platform"`).
+   * Suppression is deliberately EXACT-match only: a path provide
+   * ("sdk.chat.postMessage") shadows just its subtree — the parent's "sdk"
+   * stays live for every other path, so hiding it here would lie about what
+   * longest-prefix dispatch actually resolves.
    */
   async describe(): Promise<CapabilityDescription[]> {
     await this.#materialize();
@@ -363,7 +367,6 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
           kind: entry.kind,
           meta,
           name: entry.name,
-          owner: entry.owner,
           types: typeof meta.types === "string" ? meta.types : undefined,
           updatedAtMs: entry.updatedAtMs,
         };
@@ -371,8 +374,18 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const parent = this.deps.parentItx();
     if (!parent) return own;
     const shadowed = new Set(own.map((description) => description.name));
-    const inherited = await parent.describe();
-    return [...own, ...inherited.filter((description) => !shadowed.has(description.name))];
+    const inherited = await parent.stub.describe();
+    return [
+      ...own,
+      ...inherited
+        .filter((description) => !shadowed.has(description.name))
+        // Stamp `from` exactly one level below the owner: the parent's OWN
+        // entries arrive unstamped (own entries carry no provenance) and get
+        // this link's label; deeper ancestors' already carry theirs.
+        .map((description) =>
+          description.from === undefined ? { ...description, from: parent.from } : description,
+        ),
+    ];
   }
 
   /**
@@ -391,7 +404,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     if (!resolved) {
       const parent = this.deps.parentItx();
       if (parent) {
-        return await parent.invoke({ ...input, origin });
+        return await parent.stub.invoke({ ...input, origin });
       }
       throw new Error(
         `No capability named "${input.path[0] ?? ""}" in context ${this.deps.contextId}` +

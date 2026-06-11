@@ -33,6 +33,11 @@ import { parseConfig } from "~/config.ts";
 
 export const PLATFORM_PROJECT_CONTEXT_ID = "platform:project";
 
+/** How describe() labels entries inherited from the platform context. The
+ * chain id above stays internal plumbing — handles, agents, and the REPL
+ * see plain `from: "platform"`. */
+export const PLATFORM_DESCRIBE_FROM = "platform";
+
 /**
  * The project worker's source: the code in the project's own config repo,
  * addressed like ANY repo-sourced capability. "latest" tracks pushes; the
@@ -155,12 +160,14 @@ export type PlatformContextProps = {
  */
 export class PlatformContext extends WorkerEntrypoint<Env, PlatformContextProps> {
   async describe(): Promise<CapabilityDescription[]> {
+    // These are this context's OWN entries, so no `from` here — the project
+    // core stamps `from: "platform"` when it merges them into a chain view
+    // (Itx.describe).
     return PLATFORM_PROJECT_CAPABILITIES.map((capability) => ({
       instructions: capability.instructions,
       kind: capability.address.type,
       meta: { instructions: capability.instructions },
       name: capability.name,
-      owner: PLATFORM_PROJECT_CONTEXT_ID,
       updatedAtMs: 0,
     }));
   }
