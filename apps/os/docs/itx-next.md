@@ -1102,7 +1102,7 @@ Each lands independently green.
 ### Locked in review (2026-06-11 evening) — the wave-(f)+ design
 
 - **provide signature**: object form only for now; `provideCapability({
-  path, capability, instructions?, types?, meta? })` where
+path, capability, instructions?, types?, meta? })` where
   `type Capability = Function | RpcTarget | CapabilityAddress` — a
   function IS live by nature; live-vs-durable is a derived fact
   (reference vs data), not vocabulary. The dial-time attribution prop
@@ -1112,7 +1112,7 @@ Each lands independently green.
   provide's disposer is a no-op, by design.
 - **`extend` replaces `fork`** (prototype-chain intuition: children
   extend parents; resolution climbs upward). `using session = await
-  itx.extend()` — and with everything-durable (below) extensions are
+itx.extend()` — and with everything-durable (below) extensions are
   ALWAYS addressable, so inherited capabilities' outbound fetches route
   back through your shadow via origin dial-back. No session concept, no
   visibility flag: provides land on the context you address; private
@@ -1168,7 +1168,7 @@ Each lands independently green.
 - **Facets replace class-field composition for hosting** (corrected
   understanding: this is about embedding the host machinery, not about
   placing other tenants' contexts). `class Agent { get itx() { return
-  this.ctx.facets.get("itx", () => ({ class: ItxDurableObject })) } }` —
+this.ctx.facets.get("itx", () => ({ class: ItxDurableObject })) } }` —
   the facet has its own private SQLite, so the readState/writeState
   checkpoint-wiring ceremony evaporates; colocation is identical to a
   class field (same DO container, same isolate — there was never a

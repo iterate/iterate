@@ -16,7 +16,7 @@
 // terminal pipe is the stateless EgressPipe: secrets are D1 rows, so
 // substitution + the real fetch happen in a plain isolate and secret
 // material never enters this DO. The old captun intercept tunnel is reborn
-// as `itx.provideCapability({ name: "fetch", provider: liveStub })`. This DO
+// as `itx.provideCapability({ name: "fetch", capability: liveStub })`. This DO
 // has NO fetch surface at all.
 //
 // State lives in the project's root event stream, projected by

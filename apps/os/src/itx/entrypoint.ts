@@ -54,7 +54,7 @@ export async function resolveItx(input: {
 
   return new ItxHandle({
     access: contextId === GLOBAL_CONTEXT_ID ? (input.props.access ?? []) : [projectId!],
-    capability: input.props.capability,
+    capabilityPath: input.props.capabilityPath,
     config,
     contextId,
     env: input.env,
@@ -84,7 +84,7 @@ export type ProjectEgressProps = {
   projectId: string;
   /** Attribution only: which context/cap is fetching (audit + future policy). */
   context?: string;
-  capability?: string;
+  capabilityPath?: string;
 };
 
 /**
@@ -121,7 +121,7 @@ export type EgressPipeProps = {
   projectId?: string;
   /** Attribution only: which context/cap is fetching (audit + future policy). */
   context?: string;
-  capability?: string;
+  capabilityPath?: string;
 };
 
 /**
@@ -176,7 +176,7 @@ export type BindingCapabilityProps = {
   /** Which env binding this instance wraps. Provider-supplied. */
   binding: string;
   /** Attribution, injected by the registry at dial time. */
-  capability?: string;
+  capabilityPath?: string;
   context?: string;
 };
 

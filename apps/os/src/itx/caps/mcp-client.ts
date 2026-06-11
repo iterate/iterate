@@ -42,7 +42,7 @@ export type McpClientProps = {
   /** Sent on every request; values pass through egress secret substitution. */
   headers?: Record<string, string>;
   /** Attribution, injected by the registry at dial time. */
-  capability?: string;
+  capabilityPath?: string;
   context?: string;
 };
 
@@ -61,7 +61,7 @@ export class McpClient extends WorkerEntrypoint<Env, McpClientProps> {
     const itx = await resolveItx({
       env: this.env,
       exports: this.ctx.exports as unknown as ItxRuntime["exports"],
-      props: { capability: props.capability, context: props.context },
+      props: { capabilityPath: props.capabilityPath, context: props.context },
     });
 
     const client = await connectMcp({

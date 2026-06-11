@@ -19,7 +19,7 @@ These invariants ARE the architecture. Every file here serves one of them.
 3. **Auth happens at connect, nowhere else.** Credentials become a handle
    once, at the edge (`fetch.ts`). No code holding an itx ever checks scopes;
    _which context your handle points at_ is the authority.
-4. **Narrowing is construction.** `itx.projects.get()` and `itx.fork()`
+4. **Narrowing is construction.** `itx.projects.get()` and `itx.extend()`
    return new handles on narrower contexts — never flags on wider ones.
 5. **All policy-governed egress flows through one pipe.** Loaded isolates get
    it as global `fetch` (`globalOutbound = ProjectEgress`); everyone else
@@ -44,13 +44,13 @@ These invariants ARE the architecture. Every file here serves one of them.
 | **context**           | A durable node: capability registry + parent pointer + audit stream + live connections. Three flavors, one anatomy.                                                                     |
 | **global context**    | The root. Holds `projects`. No registry (deliberately — ambient authority creep starts here).                                                                                           |
 | **project context**   | One per project, hosted **by** the Project Durable Object. The DO's own surface is "capability #0"; repos/workspace/worker/fetch arrive as `platform:project` defaults.                 |
-| **child context**     | `ctx_…`, hosted by `ContextDO`, created by `itx.fork()`. An agent session, a REPL scratchpad. Same anatomy, disposable.                                                                 |
+| **child context**     | `ctx_…`, hosted by `ContextDO`, created by `itx.extend()`. An agent session, a REPL scratchpad. Same anatomy, disposable.                                                               |
 | **cap**               | A named registry entry: `live` (connected provider's stub), `worker` (stored source, stateless), `facet` (stored source extending `DurableObject`, own private SQLite).                 |
 | **itx**               | A live handle on a context — the only thing user code touches.                                                                                                                          |
 | **itx script**        | A function `(itx) => result`, runnable identically from every execution mode (vars are baked in client-side).                                                                           |
 | **connect**           | credential → handle (`/api/itx`). The only auth point.                                                                                                                                  |
 | **provideCapability** | Register a capability — ONE verb, durable or live; a live stub is just another provider. Entries live at PATHS (`name` is the 1-segment sugar); dispatch is longest-prefix per context. |
-| **fork**              | Create a child context.                                                                                                                                                                 |
+| **extend**            | Create a child context.                                                                                                                                                                 |
 | **restorer**          | `resolveItx`: serializable props → live handle.                                                                                                                                         |
 
 ## The context tree
@@ -60,7 +60,7 @@ global                                   (no node yet; "projects" is built-in)
 └── project proj_…                       (hosted BY the Project DO)
     │   registry ──► itx_capabilities (SQLite)   audit ──► stream  {proj}:/itx
     │   live table (in-memory)           cap #0 = the DO's own surface
-    ├── child ctx_…                      (ContextDO; itx.fork())
+    ├── child ctx_…                      (ContextDO; itx.extend())
     │     registry + live table of its own; misses delegate ↑ per call
     └── child ctx_… …                    (any depth; parents may be ctx_… too)
 ```
@@ -110,21 +110,21 @@ https://{cap}--{project}.{base}/…
 
 ## Files (the whole kernel)
 
-| File                   | Role                    | Owns                                                                                                                                        |
-| ---------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `itx.ts`               | THE CORE                | `Itx` (provide/revoke/describe/invoke, live table, longest-prefix dispatch, parent chain), cap types, validation, context addresses, events |
-| `path-proxy.ts`        | Law 6, client-safe half | `PathProxy` (consumer), `replayPathCall` (replay), `asPathCallable` (wrap an object onto the convention), `RESERVED_PATH_SEGMENTS`          |
-| `refs.ts`              | wire refs               | `ItxProps`, `ProjectAccess`, `GLOBAL_CONTEXT_ID`, `isChildContextId`, `ITX_AUDIT_STREAM_PATH` (browser-safe, import-free)                   |
-| `durable-itx.ts`       | the host boundary       | `makeDial` (reach: allowlists, loader/facet wiring, prop injection), `DurableItx` (interim SQLite + audit), `PLATFORM_PROJECT_CAPABILITIES` |
-| `handle.ts`            | the handle              | `ItxHandle` + built-ins (`provideCapability`, `revokeCapability`, `invoke`, `streams`, `project`, `projects`, `fetch`, `fork`), `Stubify`   |
-| `entrypoint.ts`        | the restorer + egress   | `resolveItx`, `ItxEntrypoint` (env.ITERATE), `ProjectEgress` (globalOutbound)                                                               |
-| `context-do.ts`        | child contexts          | `ContextDO`: descriptor, its core (`itx()`), parent-stub chain delegation                                                                   |
-| `fetch.ts`             | connect + run           | `/api/itx[/:context]`, `/api/itx/run`, project-host `/__itx`                                                                                |
-| `http.ts`              | routable caps           | hostname rule, `ItxCapabilityIngress`, share tokens                                                                                         |
-| `client.ts`            | tier-3 clients          | `connectItx` for Node (browser uses `browser-repl.ts`/the REPL routes)                                                                      |
-| `use-itx.ts`           | the browser hook        | `useItx`/`getBrowserItx`: per-context singleton sockets, Suspense until connected, never SSRs (DECISIONS D21)                               |
-| `browser-repl.ts`      | dev tooling             | the REPL snippet compiler (not part of the kernel)                                                                                          |
-| `admin-auth-cookie.ts` | test bridge             | browser-WebSocket admin auth (cookies, since WS can't set headers)                                                                          |
+| File                   | Role                    | Owns                                                                                                                                                  |
+| ---------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `itx.ts`               | THE CORE                | `Itx` (provide/revoke/describe/invoke, live table, longest-prefix dispatch, parent chain), cap types, validation, context addresses, events           |
+| `path-proxy.ts`        | Law 6, client-safe half | `PathProxy` (consumer), `replayPathCall` (replay), `asPathCallable` (wrap an object onto the convention), `RESERVED_PATH_SEGMENTS`                    |
+| `refs.ts`              | wire refs               | `ItxProps`, `ProjectAccess`, `GLOBAL_CONTEXT_ID`, `isChildContextId`, `ITX_AUDIT_STREAM_PATH` (browser-safe, import-free)                             |
+| `durable-itx.ts`       | the host boundary       | `makeDial` (reach: allowlists, loader/facet wiring, prop injection), `DurableItx` (interim SQLite + audit), `PLATFORM_PROJECT_CAPABILITIES`           |
+| `handle.ts`            | the handle              | `ItxHandle` + built-ins (`provideCapability`, `revokeCapability`, `invoke`, `streams`, `project`, `projects`, `fetch`, `extend`, `parent`), `Stubify` |
+| `entrypoint.ts`        | the restorer + egress   | `resolveItx`, `ItxEntrypoint` (env.ITERATE), `ProjectEgress` (globalOutbound)                                                                         |
+| `context-do.ts`        | child contexts          | `ContextDO`: descriptor, its core (`itx()`), parent-stub chain delegation                                                                             |
+| `fetch.ts`             | connect + run           | `/api/itx[/:context]`, `/api/itx/run`, project-host `/__itx`                                                                                          |
+| `http.ts`              | routable caps           | hostname rule, `ItxCapabilityIngress`, share tokens                                                                                                   |
+| `client.ts`            | tier-3 clients          | `connectItx` for Node (browser uses `browser-repl.ts`/the REPL routes)                                                                                |
+| `use-itx.ts`           | the browser hook        | `useItx`/`getBrowserItx`: per-context singleton sockets, Suspense until connected, never SSRs (DECISIONS D21)                                         |
+| `browser-repl.ts`      | dev tooling             | the REPL snippet compiler (not part of the kernel)                                                                                                    |
+| `admin-auth-cookie.ts` | test bridge             | browser-WebSocket admin auth (cookies, since WS can't set headers)                                                                                    |
 
 Everything else in apps/os (oRPC, dashboard routes, domain entrypoints) sits
 _on top of_ this layer or beside it — never underneath it.
@@ -249,7 +249,7 @@ await slack.chat.postMessage({ channel, text });
 
 The e2e suite (`pnpm e2e:itx` against any deployment) runs the same scripts
 through the modes and covers: the five-step live→durable capability flow,
-egress through both doors with real secret substitution, fork/shadow/chain,
+egress through both doors with real secret substitution, extend/shadow/chain,
 facet state, and the HTTP gate matrix.
 
 ## What deliberately does not exist

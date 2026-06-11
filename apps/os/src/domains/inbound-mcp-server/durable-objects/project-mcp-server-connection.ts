@@ -97,25 +97,25 @@ const MCP_CONTEXT_CAPS_VERSION = "1";
 const SEEDED_CAPS: Array<{
   name: string;
   instructions: string;
-  provider: CapabilityAddress;
+  capability: CapabilityAddress;
 }> = [
   {
     instructions:
       "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
     name: "ai",
-    provider: { type: "rpc", worker: { binding: "AI", type: "binding" } },
+    capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
   },
   {
     instructions:
       "Project-bound OS API. Call itx.os.listProcedures() for the TypeScript surface, then itx.os.<path.to.procedure>({ …input }).",
     name: "os",
-    provider: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
+    capability: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
   },
   {
     instructions:
       "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }) against the Gmail REST API.",
     name: "gmail",
-    provider: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
+    capability: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
   },
 ];
 
@@ -344,7 +344,7 @@ export class ProjectMcpServerConnection extends McpAgent<
       await contextItx.provideCapability({
         instructions: cap.instructions,
         name: cap.name,
-        provider: cap.provider,
+        capability: cap.capability,
       });
     }
     await this.ctx.storage.put(storageKey, contextId);

@@ -38,7 +38,7 @@ declare module "./itx-types.ts" {
   /**
    * The editor's view of the capability fallthrough: unknown property names
    * complete as callable capability paths. Merging this into KnownCapabilities means
-   * EVERY handle carries it — including ones returned by \`fork()\` and
+   * EVERY handle carries it — including ones returned by \`extend()\` and
    * \`itx.projects.get()\`.
    */
   interface KnownCapabilities {

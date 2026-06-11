@@ -1,4 +1,4 @@
-// Child contexts (spec §3): itx.fork() creates a cheap, disposable context
+// Child contexts (spec §3): itx.extend() creates a cheap, disposable context
 // under a project — same anatomy, own registry, parent chain for misses.
 // This is the container an agent session or REPL scratchpad lives in.
 
@@ -14,7 +14,7 @@ import {
 
 const createdProjectIds = registerCreatedProjectCleanup();
 
-test("fork: child caps shadow the parent, misses delegate up the chain", async () => {
+test("extend: child caps shadow the parent, misses delegate up the chain", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `itx-fork-${suffix()}` })) as { id: string };
   createdProjectIds.push(project.id);
@@ -23,7 +23,7 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   // A project-level cap every child should see through the chain.
   await projectItx.provideCapability({
     name: "shared",
-    provider: chatPostTarget("project-level"),
+    capability: chatPostTarget("project-level"),
   });
 
   // The node's own ADDRESS is a cap target (itx-next.md, address
@@ -37,7 +37,7 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
     worker: { type: "durable-object", binding: "PROJECT", name: expect.any(String) },
   });
 
-  using child = await projectItx.fork({ name: "e2e-session" });
+  using child = await projectItx.extend({ name: "e2e-session" });
   const childDescription = await child.describe();
   expect(String(childDescription.context)).toMatch(/^ctx_/);
   expect(childDescription.project).toMatchObject({ id: project.id });
@@ -52,7 +52,7 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   // visibly (describe reports the owner).
   await child.provideCapability({
     name: "shared",
-    provider: chatPostTarget("child-level"),
+    capability: chatPostTarget("child-level"),
   });
   const viaShadow = (await (child as never as Record<string, any>).shared.chat.post({
     text: "hi",
@@ -64,8 +64,8 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   expect(shared).toHaveLength(1);
   expect(String(shared[0]!.owner)).toMatch(/^ctx_/);
 
-  // (3) The parent is untouched — and a sibling fork sees the parent's cap.
-  using sibling = await projectItx.fork();
+  // (3) The parent is untouched — and a sibling extension sees the parent's cap.
+  using sibling = await projectItx.extend();
   const viaSibling = (await (sibling as never as Record<string, any>).shared.chat.post({
     text: "hi",
   })) as { marker: string };
@@ -84,7 +84,7 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   expect(reconnectedShadow.marker).toBe("child-level");
 });
 
-test("fork: a path define shadows ONE subtree of an inherited cap (longest-prefix dispatch)", async () => {
+test("extend: a path define shadows ONE subtree of an inherited cap (longest-prefix dispatch)", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `itx-fork-path-${suffix()}` })) as {
     id: string;
@@ -104,15 +104,15 @@ test("fork: a path define shadows ONE subtree of an inherited cap (longest-prefi
   }
   await projectItx.provideCapability({
     name: "sdk",
-    provider: new MarkedSdk("base") as never,
+    capability: new MarkedSdk("base") as never,
   });
 
-  // The fork overrides exactly one method via a PATH define; the entry path
+  // The extension overrides exactly one method via a PATH define; the entry path
   // is consumed by resolution, so the override target sees the remainder.
-  using child = await projectItx.fork({ name: "e2e-path-shadow" });
+  using child = await projectItx.extend({ name: "e2e-path-shadow" });
   await child.provideCapability({
     path: ["sdk", "chat", "postMessage"],
-    provider: new MarkedSdk("override") as never,
+    capability: new MarkedSdk("override") as never,
   });
 
   const handle = (target: unknown) => target as never as Record<string, any>;
@@ -146,12 +146,12 @@ test("fork: a path define shadows ONE subtree of an inherited cap (longest-prefi
   await expect(
     child.provideCapability({
       path: ["sdk", "constructor"],
-      provider: new MarkedSdk("nope") as never,
+      capability: new MarkedSdk("nope") as never,
     }),
   ).rejects.toThrow(/reserved/);
 });
 
-test("fork: the inherited workspace default is isolated per child context", async () => {
+test("extend: the inherited workspace default is isolated per child context", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `itx-fork-ws-${suffix()}` })) as {
     id: string;
@@ -162,7 +162,7 @@ test("fork: the inherited workspace default is isolated per child context", asyn
   // `workspace` is a platform:project default, but it is CONTEXT-scoped:
   // chain delegation carries the originating context, so a child resolves
   // its own workspace (itx:ctx_…), not the project's shared one.
-  using child = await projectItx.fork({ name: "e2e-ws" });
+  using child = await projectItx.extend({ name: "e2e-ws" });
   const handle = (target: unknown) => target as never as Record<string, any>;
 
   const marker = suffix();
@@ -174,12 +174,12 @@ test("fork: the inherited workspace default is isolated per child context", asyn
   // The project context's workspace must NOT see the child's file…
   await expect(handle(projectItx).workspace.readFile(`/isolation-${marker}.txt`)).rejects.toThrow();
 
-  // …and a sibling fork gets its own empty workspace too.
-  using sibling = await projectItx.fork({ name: "e2e-ws-sibling" });
+  // …and a sibling extension gets its own empty workspace too.
+  using sibling = await projectItx.extend({ name: "e2e-ws-sibling" });
   await expect(handle(sibling).workspace.readFile(`/isolation-${marker}.txt`)).rejects.toThrow();
 });
 
-test("fork narrows access: a session cannot reach sibling projects", async () => {
+test("extend narrows access: a session cannot reach sibling projects", async () => {
   using itx = connectGlobal();
   // Two projects under an admin (access "all") handle.
   const a = (await itx.projects.create({ slug: `itx-fork-a-${suffix()}` })) as { id: string };
@@ -187,28 +187,28 @@ test("fork narrows access: a session cannot reach sibling projects", async () =>
   createdProjectIds.push(a.id, b.id);
 
   using projectA = await itx.projects.get(a.id);
-  using session = await projectA.fork({ name: "agent-session" });
+  using session = await projectA.extend({ name: "agent-session" });
 
-  // The forked session is narrowed to project A — it must NOT be able to hop
+  // The extended session is narrowed to project A — it must NOT be able to hop
   // to a sibling project even though it descends from an admin handle.
   await expect(session.projects.get(b.id)).rejects.toThrow(/not found/i);
   // ...but reaching its own project is fine.
   await expect(session.projects.get(a.id)).resolves.toBeDefined();
 });
 
-test("fork: child worker caps run with the owning project's authority", async () => {
+test("extend: child worker caps run with the owning project's authority", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `itx-fork-itx-${suffix()}` })) as {
     id: string;
   };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
-  using child = await projectItx.fork();
+  using child = await projectItx.extend();
 
   // The child-scoped cap's own itx writes to the project's streams.
   await child.provideCapability({
     name: "noter",
-    provider: {
+    capability: {
       type: "rpc",
       worker: {
         type: "source",
@@ -250,6 +250,159 @@ test("fork: child worker caps run with the owning project's authority", async ()
       .map((event) => event.payload.text),
   ).toEqual(["from a child context"]);
 });
+
+// ---- the two locked acceptance tests (itx-next.md, "Locked in review") -------
+
+test(
+  "extend: MIDDLEWARE — a bare-function fetch shadow intercepts both doors and delegates via itx.parent",
+  { timeout: 120_000 },
+  async () => {
+    using itx = connectGlobal();
+    const project = (await itx.projects.create({ slug: `itx-mw-${suffix()}` })) as { id: string };
+    createdProjectIds.push(project.id);
+    using projectItx = await itx.projects.get(project.id);
+    using child = await projectItx.extend({ name: "middleware" });
+    const childHandle = child as never as Record<string, any>;
+
+    // A URL the REAL egress pipe can reach deterministically: this
+    // deployment's own /api/itx answers 401 without credentials, so a 401
+    // riding back through the shadow proves the delegated hop hit the
+    // genuine default pipe.
+    const probeUrl = new URL("/api/itx", baseUrl()).toString();
+
+    // The shadow is a BARE FUNCTION — no RpcTarget, no asPathCallable. It
+    // crosses the provide input nested inside a plain object, which is the
+    // bare-nested-function-over-capnweb serialization proof: capnweb stubs
+    // the function, the platform probes the stub (a pure property pull) and
+    // auto-wraps it so call({ path: [], args: [request] }) invokes it.
+    const seen: string[] = [];
+    const provision = await child.provideCapability({
+      capability: async (request: { url?: string }) => {
+        const url = request?.url ?? String(request);
+        seen.push(url);
+        // Middleware: delegate to the UNSHADOWED pipe — itx.parent is the
+        // "call next()" of the chain (the parent context has no shadow, so
+        // its `fetch` resolves the platform default).
+        const delegated = (await childHandle.parent.fetch(url)) as Response;
+        return new Response(JSON.stringify({ delegatedStatus: delegated.status, shadowed: true }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+      name: "fetch",
+    });
+
+    // (1) The EXPLICIT door: itx.fetch on the extension lands on the shadow,
+    // which delegates through the parent to the real pipe (401 from /api/itx).
+    const explicit = await child.fetch(probeUrl);
+    expect(await explicit.json()).toEqual({ delegatedStatus: 401, shadowed: true });
+
+    // (2) The IMPLICIT door: bare fetch() inside a script run ON THIS
+    // CONTEXT (globalOutbound = ProjectEgress, dispatching at the
+    // originating context) resolves the same shadow through the chain.
+    const childContext = String((await child.describe()).context);
+    const bareFetchScript = async ({ vars }: { vars: { url: string } }) => {
+      const response = await fetch(vars.url);
+      return await response.json();
+    };
+    const scriptResponse = await fetch(new URL("/api/itx/run", baseUrl()), {
+      body: JSON.stringify({
+        context: childContext,
+        functionSource: bareFetchScript.toString(),
+        vars: { url: probeUrl },
+      }),
+      headers: {
+        authorization: `Bearer ${adminApiSecret()}`,
+        "content-type": "application/json",
+      },
+      method: "POST",
+    });
+    const scriptBody = (await scriptResponse.json()) as { error?: string; result?: unknown };
+    if (!scriptResponse.ok) throw new Error(`bare-fetch script failed: ${scriptBody.error}`);
+    expect(scriptBody.result).toEqual({ delegatedStatus: 401, shadowed: true });
+    expect(seen).toEqual([probeUrl, probeUrl]);
+
+    // (3) The parent/project is unaffected: its fetch is the raw pipe.
+    const parentResponse = await projectItx.fetch(probeUrl);
+    expect(parentResponse.status).toBe(401);
+    expect(seen).toHaveLength(2);
+
+    // (4) Revoke through the provision handle: the default pipe resurfaces
+    // on the extension — a raw 401, no shadow JSON.
+    await provision.revoke();
+    const restored = await child.fetch(probeUrl);
+    expect(restored.status).toBe(401);
+    expect(seen).toHaveLength(2);
+  },
+);
+
+test(
+  "extend: INDIRECTION — an inherited source cap's bare fetch() dials back through the invoking extension's shadow",
+  { timeout: 120_000 },
+  async () => {
+    using itx = connectGlobal();
+    const project = (await itx.projects.create({ slug: `itx-ind-${suffix()}` })) as { id: string };
+    createdProjectIds.push(project.id);
+    using projectItx = await itx.projects.get(project.id);
+
+    // The capability is defined on the PROJECT; its worker code does a bare
+    // fetch() — Law 5 wiring routes that through the egress pipe of the
+    // context the call ORIGINATED at, not the context the definition lives on.
+    await projectItx.provideCapability({
+      capability: {
+        type: "rpc",
+        worker: {
+          type: "source",
+          source: {
+            cacheKey: crypto.randomUUID(),
+            mainModule: "cap.js",
+            modules: {
+              "cap.js": `
+                import { WorkerEntrypoint } from "cloudflare:workers";
+                export default class extends WorkerEntrypoint {
+                  async probe({ url }) {
+                    const response = await fetch(url);
+                    return await response.json();
+                  }
+                }
+              `,
+            },
+          },
+        },
+      },
+      name: "prober",
+    });
+
+    using shadowed = await projectItx.extend({ name: "shadowed" });
+    using sibling = await projectItx.extend({ name: "sibling" });
+    const handle = (target: unknown) => target as never as Record<string, any>;
+
+    const seen: string[] = [];
+    await shadowed.provideCapability({
+      capability: async (request: { url?: string }) => {
+        seen.push(request?.url ?? String(request));
+        return new Response(JSON.stringify({ via: "shadow" }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+      name: "fetch",
+    });
+
+    // Invoked THROUGH the shadowing extension: prober misses on the
+    // extension, delegates up with origin = the extension, the project dials
+    // the source isolate scoped to that ORIGIN — so its bare fetch() climbs
+    // the extension's chain and lands on the shadow. The .invalid TLD
+    // guarantees NXDOMAIN, so a JSON answer can only be the shadow's.
+    const url = "https://indirection-probe.invalid/x";
+    await expect(handle(shadowed).prober.probe({ url })).resolves.toEqual({ via: "shadow" });
+    expect(seen).toEqual([url]);
+
+    // A sibling extension and the project itself resolve the real pipe — the
+    // NXDOMAIN host fails for them and the shadow never sees their requests.
+    await expect(handle(sibling).prober.probe({ url })).rejects.toThrow();
+    await expect(handle(projectItx).prober.probe({ url })).rejects.toThrow();
+    expect(seen).toEqual([url]);
+  },
+);
 
 // ---- helpers ----------------------------------------------------------------
 

@@ -80,7 +80,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(current).toBeGreaterThanOrEqual(2);
     },
   },
-  "fork-child-context": {
+  "extend-child-context": {
     assert: (result) => {
       expect(result).toMatchObject({ fromChild: { from: "child", method: "ping" } });
     },

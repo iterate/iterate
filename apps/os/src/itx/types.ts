@@ -12,7 +12,7 @@
  * **A context** is an addressable node that holds named capabilities.
  * Contexts form a prototype chain: capability lookup walks child → parent
  * with shadowing, writes land on the node your handle points at, and
- * `fork()` is `Object.create(parent)`. A context MAY be durable (a project's
+ * `extend()` is `Object.create(parent)`. A context MAY be durable (a project's
  * context lives in its Durable Object; a forked child gets its own node so
  * others can address it later) — but durability is not part of the concept:
  * a context that nothing else needs to re-address can live entirely in a
@@ -36,7 +36,7 @@
  * identical in the browser, Node, the REPL, the project worker (the worker
  * built from the project's own repo), itx scripts, and capabilities
  * themselves. A handle is an address, an access set, and five verbs: the
- * core's four plus `fork` (and a few built-in members — `projects`,
+ * core's four plus `extend` and `parent` (and a few built-in members — `projects`,
  * `streams`, `fetch`); every other property falls through to the context's
  * core. Authority is the handle itself: auth happens once at connect, and
  * which context you hold — plus the principal it was minted for — is the
@@ -62,10 +62,10 @@
  *
  * await itx.provideCapability({            // teach this context a new trick:
  *   name: "ai",                            // itx.ai.run(model, input)
- *   provider: { type: "rpc", worker: { type: "binding", binding: "AI" } },
+ *   capability: { type: "rpc", worker: { type: "binding", binding: "AI" } },
  * });
  *
- * const session = await itx.fork({ name: "agent-run-42" });
+ * using session = await itx.extend({ name: "agent-run-42" });
  * // a cheap, disposable child context: its caps shadow the project's,
  * // misses delegate up the chain. (This is what a "codemode session" is.)
  * ```
@@ -97,11 +97,11 @@ export interface Itx {
   provideCapability(input: {
     name?: string;
     path?: string[];
-    provider: CapabilityTarget;
+    capability: CapabilityTarget;
     instructions?: string;
     types?: string;
     meta?: CapabilityMeta;
-  }): void | Promise<void>;
+  }): CapabilityProvision | Promise<CapabilityProvision>;
   revokeCapability(input: { name?: string; path?: string[] }): void | Promise<void>;
   describe(): Promise<CapabilityDescription[]>;
   invoke(input: { path: string[]; args: unknown[]; origin?: string }): Promise<unknown>;
@@ -144,23 +144,25 @@ export interface ItxBuiltins {
    *
    * ```ts
    * // From a laptop/sandbox (inbound, lives while connected): a live
-   * // provider is the stub itself — a function, object, or RpcTarget.
+   * // capability is the stub itself — a bare function (auto-wrapped:
+   * // calling the cap calls the function; it has no member tree), an
+   * // object, or an RpcTarget.
    * await itx.provideCapability({
    *   name: "runSwiftOnMyMac",
-   *   provider: async (src) => runSwift(src),
+   *   capability: async (src) => runSwift(src),
    *   instructions: "Compile-and-run Swift on Jonas's Mac.",
    * });
    *
    * // A raw platform binding (outbound, durable):
    * await itx.provideCapability({
    *   name: "ai",
-   *   provider: { type: "rpc", worker: { type: "binding", binding: "AI" } },
+   *   capability: { type: "rpc", worker: { type: "binding", binding: "AI" } },
    * });
    *
    * // First-party MCP client, parameterized per server (see CapabilityTarget):
    * await itx.provideCapability({
    *   name: "docs",
-   *   provider: {
+   *   capability: {
    *     type: "rpc",
    *     worker: { type: "loopback" },
    *     entrypoint: "McpClient",
@@ -171,17 +173,17 @@ export interface ItxBuiltins {
    *   },
    * });
    *
-   * // Shadow one method of an inherited cap on a session (a fork):
+   * // Shadow one method of an inherited cap on a session (an extension):
    * await session.provideCapability({
    *   path: ["workspace", "gitPush"],
-   *   provider: approvalGate,
+   *   capability: approvalGate,
    * });
    * ```
    */
   provideCapability(input: {
     name?: string;
     path?: string[];
-    provider: CapabilityTarget;
+    capability: CapabilityTarget;
     /** A sentence for the human/agent who finds this cap. Stored as the
      * `instructions` meta convention field and lifted by describe(). */
     instructions?: string;
@@ -190,7 +192,7 @@ export interface ItxBuiltins {
      * field and lifted by describe(). */
     types?: string;
     meta?: CapabilityMeta;
-  }): Promise<void>;
+  }): Promise<CapabilityProvision>;
 
   /** Remove an entry — exact path match, never prefix; `name`/`path` as in
    * {@link provideCapability}. Platform defaults cannot be revoked, only
@@ -281,12 +283,34 @@ export interface ItxBuiltins {
   capability(name: string): unknown;
 
   /**
-   * Create a child context under this one: same anatomy, cheaper,
-   * disposable — an agent session, a REPL scratchpad. The child's caps
-   * shadow this context's; misses delegate up the chain. The child's
-   * authority is exactly its owning project, even if this handle was wider.
+   * Extend this context with a child: same anatomy, cheaper, disposable —
+   * an agent session, a REPL scratchpad. The child's caps shadow this
+   * context's; misses delegate up the chain (prototype semantics: children
+   * extend parents, resolution climbs upward). The child's authority is
+   * exactly its owning project, even if this handle was wider.
    */
-  fork(opts?: { name?: string }): Promise<ItxHandle>;
+  extend(opts?: { name?: string }): Promise<ItxHandle>;
+
+  /**
+   * A handle on the PARENT context — the "call next()" of middleware: a
+   * `fetch` shadow delegates to the unshadowed pipe via
+   * `itx.parent.fetch(request)`. A project context has no addressable
+   * parent yet (the platform defaults context becomes it when the journal
+   * wave lands).
+   */
+  readonly parent: ItxHandle;
+}
+
+/**
+ * What `provideCapability` returns. `revoke()` removes the entry;
+ * `Symbol.dispose` auto-revokes ONLY live provides — a live capability dies
+ * with its session anyway, while a durable provide must survive the session
+ * that created it (session teardown disposes every returned handle), so a
+ * durable provision's disposer is deliberately a no-op.
+ */
+export interface CapabilityProvision {
+  revoke(): Promise<void>;
+  [Symbol.dispose](): void;
 }
 
 /**
@@ -315,8 +339,9 @@ export type ItxDescription = {
   context: ContextRef;
   /** Who this handle was minted for. */
   principal: ItxPrincipal;
-  /** Attribution: which capability's isolate holds this handle, if any. */
-  capability?: string;
+  /** Attribution: which capability's isolate holds this handle, if any
+   * (the dotted route). */
+  capabilityPath?: string;
   /** The merged capability chain (own caps first, ancestors' after,
    * shadowed names carry `owner` provenance), including each cap's
    * `instructions`. */
@@ -465,7 +490,7 @@ export type CapabilitySource = {
  * // provider: class { call({ path, args }) { return slackApi(path.join("."), args[0]); } }
  * itx.slack.chat.postMessage({ … })   // → ONE call: call({ path: ["chat","postMessage"], … })
  *
- * await itx.provideCapability({ name: "mac", provider: asPathCallable({ run(src) { … } }) });
+ * await itx.provideCapability({ name: "mac", capability: asPathCallable({ run(src) { … } }) });
  * ```
  *
  * - Forwarders keep their INNER mode as their own props: ProjectWorker's
@@ -706,11 +731,12 @@ export type ItxPrincipal =
  * - `principal`: honored on global handles only; a project-context handle
  *   is always bound to exactly its own project regardless of what props
  *   claim.
- * - `capability`: pure attribution — which capability's isolate holds this
- *   handle. It grants nothing; it labels egress and audit records.
+ * - `capabilityPath`: pure attribution — which capability's isolate holds
+ *   this handle (the dotted route). It grants nothing; it labels egress and
+ *   audit records.
  */
 export type ItxProps = {
   context: ContextRef;
   principal?: ItxPrincipal;
-  capability?: string;
+  capabilityPath?: string;
 };

@@ -39,7 +39,7 @@ export type UrlDialProps = {
    * reachable by providing UrlDial as a loopback cap with props.invoke. */
   invoke?: WorkerInvokeMode;
   /** Attribution + secret scope, injected by the registry at dial time. */
-  capability?: string;
+  capabilityPath?: string;
   context?: string;
   projectId?: string;
 };

@@ -165,7 +165,7 @@ export function withWorkerEnv(input: {
     return factory(options);
   };
   return wireIsolateEnv({
-    capability: "worker",
+    capabilityPath: "worker",
     code: input.workerCode,
     contextId: input.projectId,
     extraEnv: {

@@ -1,6 +1,6 @@
 // ContextDO: hosts one CHILD context (spec §3) — the durable container behind
-// itx.fork(). An agent session, a REPL scratchpad, a notebook-to-be: each is
-// one ContextDO instance with the same anatomy as the project context it
+// itx.extend(). An agent session, a REPL scratchpad, a notebook-to-be: each
+// is one ContextDO instance with the same anatomy as the project context it
 // hangs under (capability core + parent pointer + stream + live connections),
 // just cheaper and more disposable.
 //
@@ -53,7 +53,7 @@ export class ContextDO extends DurableObject<Env> {
     )`);
   }
 
-  /** Idempotent: fork() calls this once; later connects just read. */
+  /** Idempotent: extend() calls this once; later connects just read. */
   initialize(input: {
     id: string;
     name?: string;
@@ -86,7 +86,8 @@ export class ContextDO extends DurableObject<Env> {
         `SELECT id, project_id, parent, name FROM itx_context LIMIT 1`,
       )
       .toArray()[0];
-    if (!row) throw new Error("This itx context has not been initialized (fork it first).");
+    if (!row)
+      throw new Error("This itx context has not been initialized (extend a context first).");
     return {
       id: row.id,
       name: row.name,

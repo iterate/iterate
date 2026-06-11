@@ -163,7 +163,7 @@ async function provideLiveEgressFetchCapability(input: {
   try {
     await itx.provideCapability({
       name: "fetch",
-      provider: new LiveEgressFetch() as never,
+      capability: new LiveEgressFetch() as never,
     });
   } catch (error) {
     itx[Symbol.dispose]?.();

@@ -133,7 +133,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
   using projectItx = await itx.projects.get(project.id);
   await projectItx.provideCapability({
     name: "slack",
-    provider: new FakeSlackSdk() as never,
+    capability: new FakeSlackSdk() as never,
   });
 
   // (3) Anyone holding a handle calls it through the fallthrough — zero
@@ -154,7 +154,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
   await projectItx.provideCapability({
     name: "slackDurable",
     types: slackDurableTypes,
-    provider: {
+    capability: {
       type: "rpc",
       worker: {
         type: "source",
@@ -200,7 +200,7 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   await projectItx.provideCapability({
     meta: { instructions: "Workers AI. Use like the env.AI binding." },
     name: "ai",
-    provider: { type: "rpc", worker: { binding: "AI", type: "binding" } },
+    capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
   });
   const models = (await (projectItx as never as Record<string, any>).ai.models()) as unknown[];
   expect(Array.isArray(models)).toBe(true);
@@ -211,7 +211,7 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   // pattern.
   await projectItx.provideCapability({
     name: "aiWrapped",
-    provider: {
+    capability: {
       entrypoint: "BindingCapability",
       props: { binding: "AI" },
       type: "rpc",
@@ -230,12 +230,12 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   const handle = projectItx as never as Record<string, any>;
   await projectItx.provideCapability({
     name: "db",
-    provider: { type: "rpc", worker: { binding: "DB", type: "binding" } },
+    capability: { type: "rpc", worker: { binding: "DB", type: "binding" } },
   });
   await expect(handle.db.prepare("SELECT 1")).rejects.toThrow(/not dialable/);
   await projectItx.provideCapability({
     name: "sneaky",
-    provider: { entrypoint: "ItxEntrypoint", type: "rpc", worker: { type: "loopback" } },
+    capability: { entrypoint: "ItxEntrypoint", type: "rpc", worker: { type: "loopback" } },
   });
   await expect(handle.sneaky.context()).rejects.toThrow(/not dialable/);
   // A typo'd serializable address still fails at define (structural check) —
@@ -243,14 +243,14 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   await expect(
     projectItx.provideCapability({
       name: "typoed",
-      provider: { type: "rcp", worker: { binding: "AI", type: "binding" } } as never,
+      capability: { type: "rcp", worker: { binding: "AI", type: "binding" } } as never,
     }),
   ).rejects.toThrow(/unknown target type/);
   // Durable Object dials are name-scoped per project (itx:<projectId>:<name>),
   // but the namespace allowlist still defaults to empty — config has to opt in.
   await projectItx.provideCapability({
     name: "sneakyDo",
-    provider: {
+    capability: {
       type: "rpc",
       worker: { binding: "PROJECT", name: "someone-elses-project", type: "durable-object" },
     },
@@ -289,7 +289,7 @@ test.skipIf(!MCP_TEST_SERVER_URL)(
     await projectItx.provideCapability({
       meta: { instructions: "Test MCP server. Call listTools() first." },
       name: "mcptest",
-      provider: {
+      capability: {
         entrypoint: "McpClient",
         props: { serverUrl: MCP_TEST_SERVER_URL },
         type: "rpc",
@@ -338,8 +338,8 @@ export class PetstoreClient extends WorkerEntrypoint {
       return { operations: ["getPet", "listPets"], specUrl: this.ctx.props.specUrl ?? null };
     }
     if (path.join(".") === "echo") {
-      const { capability, context, projectId, ...providerProps } = this.ctx.props;
-      return { args, attribution: { capability, context, projectId }, providerProps };
+      const { capabilityPath, context, projectId, ...providerProps } = this.ctx.props;
+      return { args, attribution: { capabilityPath, context, projectId }, providerProps };
     }
     throw new Error("PetstoreClient does not implement " + path.join("."));
   }
@@ -361,7 +361,7 @@ export class PetstoreClient extends WorkerEntrypoint {
   await projectItx.provideCapability({
     meta: { instructions: "Petstore API. Call listOperations() first." },
     name: "petstore",
-    provider: {
+    capability: {
       entrypoint: "ProjectWorker",
       props: {
         export: "PetstoreClient",
@@ -390,12 +390,12 @@ export class PetstoreClient extends WorkerEntrypoint {
   // registry-injected attribution can't be spoofed by the provider.
   const echoed = (await handle.petstore.echo({ hello: 1 })) as {
     args: unknown[];
-    attribution: { capability: string; context: string; projectId: string };
+    attribution: { capabilityPath: string; context: string; projectId: string };
     providerProps: Record<string, unknown>;
   };
   expect(echoed.args).toEqual([{ hello: 1 }]);
   expect(echoed.attribution).toEqual({
-    capability: "petstore",
+    capabilityPath: "petstore",
     context: project.id,
     projectId: project.id,
   });
@@ -419,7 +419,7 @@ test("url caps dial a remote Cap'n Web server over a WebSocket session", async (
   await projectItx.provideCapability({
     meta: { instructions: "This deployment's own itx, dialed back over the network." },
     name: "remoteItx",
-    provider: {
+    capability: {
       headers: { authorization: `Bearer ${adminApiSecret()}` },
       type: "url",
       url: new URL(`/api/itx/${project.id}`, baseUrl()).toString(),
@@ -476,7 +476,7 @@ test("platform defaults arrive from the platform:project code context, and own r
   }
   await projectItx.provideCapability({
     name: "ai",
-    provider: new ShadowAi() as never,
+    capability: new ShadowAi() as never,
   });
   const after = (await projectItx.describe()) as DescribedCaps;
   const aiCaps = after.caps.filter((cap) => cap.name === "ai");
@@ -517,7 +517,7 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   }
   await projectItx.provideCapability({
     name: "fetch",
-    provider: new EgressInterceptor() as never,
+    capability: new EgressInterceptor() as never,
   });
 
   // (3) The explicit door: itx.fetch now lands on the provider, not the
@@ -559,15 +559,15 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   });
   await expect(projectItx.fetch("https://intercept-probe.invalid/x")).rejects.toThrow();
 
-  // (6) Child contexts: a shadow defined on a FORK intercepts that fork's
+  // (6) Child contexts: a shadow defined on an EXTENSION intercepts that extension's
   // isolates too — ProjectEgress dispatches at the ORIGINATING context node,
   // so the child's chain (child shadow → project → defaults) resolves bare
   // fetch(), while the project context stays on the real pipe.
-  using child = await projectItx.fork({ name: "fetch-shadow" });
+  using child = await projectItx.extend({ name: "fetch-shadow" });
   const childDescription = await child.describe();
   await child.provideCapability({
     name: "fetch",
-    provider: new EgressInterceptor() as never,
+    capability: new EgressInterceptor() as never,
   });
   const childScriptResponse = await fetch(new URL("/api/itx/run", baseUrl()), {
     body: JSON.stringify({
@@ -694,7 +694,7 @@ test("worker caps hold a correctly scoped itx of their own", async () => {
 
   await projectItx.provideCapability({
     name: "todo",
-    provider: {
+    capability: {
       type: "rpc",
       worker: {
         type: "source",
@@ -736,7 +736,7 @@ test("members caps auto-proxy every public method/getter at any depth", async ()
   // getter returning a nested surface), and they are all instantly callable.
   await projectItx.provideCapability({
     name: "kit",
-    provider: {
+    capability: {
       type: "rpc",
       worker: {
         type: "source",
@@ -776,7 +776,7 @@ test("one dynamic worker cap calls another's methods through its own itx", async
   // getter. No method list — the whole public surface is proxied.
   await projectItx.provideCapability({
     name: "inventory",
-    provider: {
+    capability: {
       type: "rpc",
       worker: {
         type: "source",
@@ -803,7 +803,7 @@ test("one dynamic worker cap calls another's methods through its own itx", async
   // itx.inventory.skus.priceOf(...) are proxied worker→worker, no wiring.
   await projectItx.provideCapability({
     name: "report",
-    provider: {
+    capability: {
       type: "rpc",
       worker: {
         type: "source",
@@ -872,7 +872,7 @@ test("revoked and offline caps fail with instructive errors", async () => {
   await expect(
     projectItx.provideCapability({
       name: "then",
-      provider: {
+      capability: {
         type: "rpc",
         worker: {
           type: "source",

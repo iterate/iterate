@@ -80,16 +80,34 @@ export class Itx extends RpcTarget {
   }
 
   /**
-   * Register a capability — ONE verb for every provider kind. A
+   * Register a capability — ONE verb for every capability kind. A
    * CapabilityAddress (plain data carrying type "rpc" | "url") registers
-   * durably-shaped; anything else is a LIVE provider stub, session-bound:
-   * the entry survives (describe() reports "registered but offline") but the
-   * stub dies with the provider's session. The entry lives at a PATH —
-   * `name` is the 1-segment sugar, `path` shadows one subtree of an
-   * inherited cap (longest-prefix dispatch); exactly one of the two.
+   * durably-shaped; anything else is LIVE, session-bound: the entry survives
+   * (describe() reports "registered but offline") but the stub dies with the
+   * provider's session. A bare local FUNCTION is live by nature and
+   * auto-wraps with asPathCallable semantics (empty remainder calls the
+   * function; a deeper remainder errors). The entry lives at a PATH — `name`
+   * is the 1-segment sugar, `path` shadows one subtree of an inherited cap
+   * (longest-prefix dispatch); exactly one of the two.
+   *
+   * Returns the provision handle: `revoke()` removes the entry;
+   * `Symbol.dispose` auto-revokes ONLY live provides — a live capability
+   * dies with its session anyway, so `using` just makes that explicit, while
+   * a durable provide must outlive the session that created it (session
+   * teardown disposes every returned handle, so a revoking disposer on a
+   * durable provide would silently undo it on disconnect).
    */
-  provideCapability(input: ProvideCapabilityInput): void {
-    this.#provide(input, { owner: this.contextId, updatedAtMs: Date.now() });
+  provideCapability(input: ProvideCapabilityInput): ProvidedCapabilityHandle {
+    const entry = this.#provide(input, { owner: this.contextId, updatedAtMs: Date.now() });
+    const revoke = async () => {
+      this.revokeCapability({ path: entry.name.split(".") });
+    };
+    return {
+      revoke,
+      [Symbol.dispose]: () => {
+        if (entry.kind === "live") void revoke().catch(() => {});
+      },
+    };
   }
 
   /** Remove an entry (exact path match, never prefix). A revoked shadow
@@ -220,25 +238,31 @@ export class Itx extends RpcTarget {
     };
 
     let entry: ProvidedCapability;
-    if (isCapabilityAddress(input.provider)) {
-      assertWellFormedCapabilityAddress(name, input.provider);
-      entry = { address: input.provider, kind: input.provider.type, meta, name, ...provenance };
+    if (isCapabilityAddress(input.capability)) {
+      assertWellFormedCapabilityAddress(name, input.capability);
+      entry = { address: input.capability, kind: input.capability.type, meta, name, ...provenance };
       this.#dropLiveStub(name);
     } else {
       // A PLAIN object carrying a string `type` is a malformed address
       // (typo, unknown kind), not a live provider — fail loudly instead of
       // registering something that looks like an offline live cap.
-      const type = isPlainObject(input.provider)
-        ? (input.provider as { type?: unknown }).type
+      const type = isPlainObject(input.capability)
+        ? (input.capability as { type?: unknown }).type
         : undefined;
       if (typeof type === "string") {
         throw new Error(
           `Capability "${name}": unknown target type ${JSON.stringify(type)} — ` +
-            `addresses are "rpc" or "url"; anything else must be a live provider stub.`,
+            `addresses are "rpc" or "url"; anything else must be a live capability.`,
         );
       }
       entry = { address: null, kind: "live", meta, name, ...provenance };
-      this.#registerLiveStub(name, input.provider as LiveProvider);
+      // A bare LOCAL function is live by nature: wrap it so it speaks the one
+      // calling convention (remote functions arrive as RPC stubs and are
+      // wrapped where they are still distinguishable — the handle).
+      const live = isLocalBareFunction(input.capability)
+        ? localFunctionCapability(input.capability)
+        : (input.capability as LiveProvider);
+      this.#registerLiveStub(name, live);
     }
     this.#capabilities.set(name, entry);
     return entry;
@@ -278,7 +302,7 @@ export class Itx extends RpcTarget {
       if (!stub) throw new CapabilityOfflineError(entry.name);
       return (stub.dup ? stub.dup() : stub) as unknown as PathCallable;
     }
-    return this.#dial(entry.address!, { capability: entry.name, origin });
+    return this.#dial(entry.address!, { capabilityPath: entry.name, origin });
   }
 }
 
@@ -380,15 +404,32 @@ export type CapabilityMeta = {
   [key: string]: unknown;
 };
 
+/**
+ * What can be provided as a capability (the locked provide signature):
+ * a bare function (live by nature — auto-wrapped with asPathCallable
+ * semantics), any live stub/RpcTarget, or a serializable CapabilityAddress.
+ */
+export type Capability = CapabilityAddress | LiveProvider | ((...args: never[]) => unknown);
+
 /** provideCapability's input — `instructions`/`types` are sugar for the meta
  * convention fields of the same names (the explicit meta spelling wins). */
 export type ProvideCapabilityInput = {
   name?: string;
   path?: string[];
-  provider: LiveProvider | CapabilityAddress;
+  capability: Capability;
   instructions?: string;
   types?: string;
   meta?: CapabilityMeta;
+};
+
+/**
+ * What a provide returns. `revoke()` removes the entry; `Symbol.dispose`
+ * auto-revokes ONLY live provides (a durable provide's disposer is a no-op —
+ * see Itx.provideCapability for why).
+ */
+export type ProvidedCapabilityHandle = {
+  revoke(): Promise<void>;
+  [Symbol.dispose](): void;
 };
 
 /** One entry of the core's capability map. `owner` is provenance: which
@@ -421,12 +462,13 @@ export type CapabilityDescription = {
 
 /** The one effect injected into the core: turn an address into something
  * speaking call({ path, args }) for THIS call. `attribution` is the per-call
- * knowledge only the core has — the entry name and the originating context —
- * which the dial injects as `{ capability, context }` props (the owning
- * projectId rides in the dial's own closure; the core never touches it). */
+ * knowledge only the core has — the entry's dotted path and the originating
+ * context — which the dial injects as `{ capabilityPath, context }` props
+ * (the owning projectId rides in the dial's own closure; the core never
+ * touches it). */
 export type CapabilityDial = (
   address: CapabilityAddress,
-  attribution: { capability: string; origin: string },
+  attribution: { capabilityPath: string; origin: string },
 ) => PathCallable;
 
 /** What a stub of an Itx answers — the context protocol. Both context-node
@@ -434,7 +476,7 @@ export type CapabilityDial = (
  * satisfying this type that re-dials the parent node per call (Workers RPC
  * stubs are request-scoped, so a held stub would go stale). */
 export type ItxStub = {
-  provideCapability(input: ProvideCapabilityInput): Promise<void>;
+  provideCapability(input: ProvideCapabilityInput): Promise<unknown>;
   revokeCapability(input: { name?: string; path?: string[] }): Promise<void>;
   describe(): Promise<CapabilityDescription[]>;
   invoke(input: { path: string[]; args: unknown[]; origin?: string }): Promise<unknown>;
@@ -480,8 +522,9 @@ function resolveLongestProvidedPrefix(
 const ITX_BUILTIN_NAMES = [
   "capability",
   "describe",
-  "fork",
+  "extend",
   "invoke",
+  "parent",
   "project",
   "projects",
   "provideCapability",
@@ -538,16 +581,38 @@ function capabilityPathFrom(input: { name?: string; path?: string[] }): string[]
  * whose prototype is Object.prototype (or null) carrying `type: "rpc" |
  * "url"`. Everything else — capnweb RpcStubs (callable function-proxies),
  * workers-RPC stubs, RpcTarget instances, plain functions — is a LIVE
- * provider. The plainness check MUST come before any `.type` probe: property
- * access on a capnweb stub returns a truthy pipelined stub, so reading
- * `.type` first would misclassify every live provider.
+ * capability. The plainness check MUST come before any `.type` probe:
+ * property access on a capnweb stub returns a truthy pipelined stub, so
+ * reading `.type` first would misclassify every live capability.
  */
-function isCapabilityAddress(
-  provider: LiveProvider | CapabilityAddress,
-): provider is CapabilityAddress {
-  if (!isPlainObject(provider)) return false;
-  const type = (provider as { type?: unknown }).type;
+export function isCapabilityAddress(capability: Capability): capability is CapabilityAddress {
+  if (!isPlainObject(capability)) return false;
+  const type = (capability as { type?: unknown }).type;
   return type === "rpc" || type === "url";
+}
+
+const ASYNC_FUNCTION_PROTOTYPE = Object.getPrototypeOf(async () => {}) as object;
+
+/**
+ * A bare LOCAL function (same isolate): prototype Function.prototype or
+ * AsyncFunction.prototype. RPC stubs never match — a capnweb stub's
+ * prototype is RpcStub.prototype and a Workers-RPC stub's is its own class —
+ * so remote functions are wrapped at the boundary that received them (the
+ * handle), never here.
+ */
+export function isLocalBareFunction(
+  capability: Capability,
+): capability is (...args: never[]) => unknown {
+  if (typeof capability !== "function") return false;
+  const proto = Object.getPrototypeOf(capability) as object | null;
+  return proto === Function.prototype || proto === ASYNC_FUNCTION_PROTOTYPE;
+}
+
+/** Wrap a bare local function so it speaks the one calling convention:
+ * empty remainder calls the function, a deeper remainder errors (the
+ * asPathCallable semantics, replayed in-process). */
+function localFunctionCapability(fn: (...args: never[]) => unknown): LiveProvider {
+  return { call: (input: PathCall) => replayPathCall(fn, input) } as LiveProvider;
 }
 
 function isPlainObject(target: unknown): boolean {

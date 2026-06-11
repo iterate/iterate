@@ -28,6 +28,7 @@ import {
   type ItxStub,
   type PathCallable,
   type ProvideCapabilityInput,
+  type ProvidedCapabilityHandle,
 } from "./itx.ts";
 import { wireIsolateEnv } from "./isolate.ts";
 
@@ -87,29 +88,33 @@ export function makeDial(host: DialHost): CapabilityDial {
     return factory({ props });
   };
 
-  const loadWorker = (name: string, source: CapabilitySource) => {
+  const loadWorker = (name: string, origin: string, source: CapabilitySource) => {
     if (!host.loader) throw new Error("Source capabilities need a LOADER binding.");
-    return host.loader.get(
-      `itx-cap:${host.contextId}:${name}:${capabilitySourceCacheKey(source)}`,
-      () =>
-        wireIsolateEnv({
-          capability: name,
-          code: source,
-          contextId: host.contextId,
-          loopback: (exportName, options) => loopback(exportName, options.props),
-          projectId: host.projectId,
-        }),
+    // The isolate is scoped to the ORIGINATING context, not the definition's
+    // home: an inherited source cap invoked through a child context gets the
+    // child's itx AND the child's egress, so its bare fetch() dials back
+    // through the child's chain (and any `fetch` shadow there) — the
+    // origin-dial-back property. The cache key carries the origin so two
+    // contexts never share a differently-scoped isolate.
+    return host.loader.get(`itx-cap:${origin}:${name}:${capabilitySourceCacheKey(source)}`, () =>
+      wireIsolateEnv({
+        capabilityPath: name,
+        code: source,
+        contextId: origin,
+        loopback: (exportName, options) => loopback(exportName, options.props),
+        projectId: host.projectId,
+      }),
     );
   };
 
   return (address, attribution): PathCallable => {
-    const name = attribution.capability;
+    const name = attribution.capabilityPath;
     // Attribution wins over provider-supplied props, by spread order.
     // `context` is the ORIGINATING context (chain delegation carries it), so
     // context-scoped first-party caps — the workspace — bind to the caller's
     // context even when the definition is inherited.
     const injected = {
-      capability: name,
+      capabilityPath: name,
       context: attribution.origin,
       projectId: host.projectId,
     };
@@ -161,9 +166,13 @@ export function makeDial(host: DialHost): CapabilityDial {
           }
           // Facet name deliberately excludes the cache key: the facet's
           // private SQLite survives code upgrades (new source, same data) —
-          // the same property Cloudflare's AppRunner example relies on.
+          // the same property Cloudflare's AppRunner example relies on. It
+          // also keys by the HOST context, not the origin: a stateful cap's
+          // data belongs to the context it was provided on.
           const facetTarget = facets(`cap:${name}`, () => {
-            const facetClass = loadWorker(name, source).getDurableObjectClass?.(source.entrypoint);
+            const facetClass = loadWorker(name, host.contextId, source).getDurableObjectClass?.(
+              source.entrypoint,
+            );
             if (!facetClass) {
               throw new Error(
                 `Capability "${name}" did not yield a DurableObject class ` +
@@ -174,7 +183,9 @@ export function makeDial(host: DialHost): CapabilityDial {
           });
           return inProcessPathCallable(facetTarget, () => disposeIfPossible(facetTarget));
         }
-        const entrypoint = loadWorker(name, source).getEntrypoint(source.entrypoint);
+        const entrypoint = loadWorker(name, attribution.origin, source).getEntrypoint(
+          source.entrypoint,
+        );
         return inProcessPathCallable(entrypoint, () => disposeIfPossible(entrypoint));
       }
       case "durable-object": {
@@ -305,8 +316,8 @@ export class DurableItx extends Itx {
     }
   }
 
-  override provideCapability(input: ProvideCapabilityInput): void {
-    super.provideCapability(input);
+  override provideCapability(input: ProvideCapabilityInput): ProvidedCapabilityHandle {
+    const provision = super.provideCapability(input);
     const name = (input.path ?? [input.name!]).join(".");
     const entry = this.providedCapability(name)!;
     this.#sql.exec(
@@ -334,6 +345,7 @@ export class DurableItx extends Itx {
           : {}),
       },
     });
+    return provision;
   }
 
   override revokeCapability(input: { name?: string; path?: string[] }): void {
@@ -364,7 +376,7 @@ export const PLATFORM_PROJECT_CAPABILITIES: ProvideCapabilityInput[] = [
       "Workers AI. Use it like an env.AI binding: itx.ai.run(model, inputs). " +
       "Shadow it with your own `ai` cap to swap providers.",
     name: "ai",
-    provider: {
+    capability: {
       entrypoint: "BindingCapability",
       props: { binding: "AI" },
       type: "rpc",
@@ -386,7 +398,7 @@ export const PLATFORM_PROJECT_CAPABILITIES: ProvideCapabilityInput[] = [
       "default resurfaces. A shadow provider receives getSecret(...) placeholders " +
       "UNSUBSTITUTED — secret material only exists in the default pipe.",
     name: "fetch",
-    provider: { entrypoint: "EgressPipe", type: "rpc", worker: { type: "loopback" } },
+    capability: { entrypoint: "EgressPipe", type: "rpc", worker: { type: "loopback" } },
   },
   {
     instructions:
@@ -395,14 +407,14 @@ export const PLATFORM_PROJECT_CAPABILITIES: ProvideCapabilityInput[] = [
       "refs ('ns:/path') checked against this project's access. Chained calls ride " +
       "RPC promise pipelining.",
     name: "streams",
-    provider: { entrypoint: "StreamsCapability", type: "rpc", worker: { type: "loopback" } },
+    capability: { entrypoint: "StreamsCapability", type: "rpc", worker: { type: "loopback" } },
   },
   {
     instructions:
       "The project's git repos: itx.repos.ensureIterateConfigInfo({ projectSlug }), " +
       "list(), create({ slug }), get({ slug }) — repo handles expose commitFiles/readFiles/readLog.",
     name: "repos",
-    provider: { entrypoint: "ReposCapability", type: "rpc", worker: { type: "loopback" } },
+    capability: { entrypoint: "ReposCapability", type: "rpc", worker: { type: "loopback" } },
   },
   {
     instructions:
@@ -410,7 +422,7 @@ export const PLATFORM_PROJECT_CAPABILITIES: ProvideCapabilityInput[] = [
       "git methods gitClone/gitAdd/gitCommit/gitPush/gitStatus. Project contexts share " +
       "one workspace; forked child contexts each get their own.",
     name: "workspace",
-    provider: { entrypoint: "WorkspaceCapability", type: "rpc", worker: { type: "loopback" } },
+    capability: { entrypoint: "WorkspaceCapability", type: "rpc", worker: { type: "loopback" } },
   },
   {
     // The forwarder hop speaks call({ path, args }); how it treats the
@@ -419,7 +431,7 @@ export const PLATFORM_PROJECT_CAPABILITIES: ProvideCapabilityInput[] = [
       "The project's own iterate-config worker, rebuilt from the repo on every call: " +
       "itx.worker.someExportedFunction(args) reaches any public method of its default export.",
     name: "worker",
-    provider: {
+    capability: {
       entrypoint: "ProjectWorker",
       props: { invoke: "members" },
       type: "rpc",

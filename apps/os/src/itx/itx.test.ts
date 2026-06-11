@@ -21,7 +21,7 @@ const LOOPBACK_ADDRESS: CapabilityAddress = {
 function fakeDial() {
   const dialed: Array<{
     address: CapabilityAddress;
-    attribution: { capability: string; origin: string };
+    attribution: { capabilityPath: string; origin: string };
     call?: { path: string[]; args: unknown[] };
     disposed: boolean;
   }> = [];
@@ -46,14 +46,14 @@ describe("provide + longest-prefix invoke", () => {
     const { dial, dialed } = fakeDial();
     const itx = new Itx({ contextId: "prj_1", dial });
 
-    itx.provideCapability({ name: "slack", provider: AI_ADDRESS });
+    itx.provideCapability({ name: "slack", capability: AI_ADDRESS });
     const result = await itx.invoke({ args: [{ text: "hi" }], path: ["slack", "chat", "post"] });
 
     expect(result).toMatchObject({ path: ["chat", "post"] });
     expect(dialed).toHaveLength(1);
     expect(dialed[0]).toMatchObject({
       address: AI_ADDRESS,
-      attribution: { capability: "slack", origin: "prj_1" },
+      attribution: { capabilityPath: "slack", origin: "prj_1" },
       call: { args: [{ text: "hi" }], path: ["chat", "post"] },
       disposed: true, // the borrow is disposed when the call ends
     });
@@ -62,14 +62,14 @@ describe("provide + longest-prefix invoke", () => {
   test("a path define shadows ONE subtree; siblings resolve the shorter prefix", async () => {
     const { dial, dialed } = fakeDial();
     const itx = new Itx({ contextId: "prj_1", dial });
-    itx.provideCapability({ name: "sdk", provider: AI_ADDRESS });
-    itx.provideCapability({ path: ["sdk", "chat", "post"], provider: LOOPBACK_ADDRESS });
+    itx.provideCapability({ name: "sdk", capability: AI_ADDRESS });
+    itx.provideCapability({ path: ["sdk", "chat", "post"], capability: LOOPBACK_ADDRESS });
 
     // The shadowed subtree hits the override; the entry path is consumed.
     await itx.invoke({ args: [], path: ["sdk", "chat", "post"] });
     expect(dialed.at(-1)).toMatchObject({
       address: LOOPBACK_ADDRESS,
-      attribution: { capability: "sdk.chat.post" },
+      attribution: { capabilityPath: "sdk.chat.post" },
       call: { path: [] },
     });
 
@@ -84,10 +84,10 @@ describe("provide + longest-prefix invoke", () => {
   test("a caller-supplied origin rides into the dial attribution", async () => {
     const { dial, dialed } = fakeDial();
     const itx = new Itx({ contextId: "prj_1", dial });
-    itx.provideCapability({ name: "workspace", provider: LOOPBACK_ADDRESS });
+    itx.provideCapability({ name: "workspace", capability: LOOPBACK_ADDRESS });
 
     await itx.invoke({ args: [], origin: "ctx_child", path: ["workspace", "readFile"] });
-    expect(dialed[0]!.attribution).toEqual({ capability: "workspace", origin: "ctx_child" });
+    expect(dialed[0]!.attribution).toEqual({ capabilityPath: "workspace", origin: "ctx_child" });
   });
 });
 
@@ -136,7 +136,7 @@ describe("chain delegation", () => {
   test("describe merges the parent chain with exact-match suppression", async () => {
     const parent = parentStub();
     const itx = new Itx({ contextId: "ctx_a", dial: fakeDial().dial, parentItx: parent });
-    itx.provideCapability({ name: "ai", provider: AI_ADDRESS }); // shadows the parent's
+    itx.provideCapability({ name: "ai", capability: AI_ADDRESS }); // shadows the parent's
 
     const described = await itx.describe();
     expect(described.map(({ name, owner }) => ({ name, owner }))).toEqual([
@@ -150,7 +150,7 @@ describe("constructor defaults + describe provenance + revoke", () => {
   function withDefaults() {
     const { dial, dialed } = fakeDial();
     const itx = new Itx({
-      capabilities: [{ instructions: "Workers AI.", name: "ai", provider: AI_ADDRESS }],
+      capabilities: [{ instructions: "Workers AI.", name: "ai", capability: AI_ADDRESS }],
       contextId: "prj_1",
       dial,
     });
@@ -172,7 +172,7 @@ describe("constructor defaults + describe provenance + revoke", () => {
 
   test("a runtime provide shadows the default (one entry, runtime owner)", async () => {
     const { itx } = withDefaults();
-    itx.provideCapability({ name: "ai", provider: LOOPBACK_ADDRESS });
+    itx.provideCapability({ name: "ai", capability: LOOPBACK_ADDRESS });
     const described = await itx.describe();
     expect(described).toHaveLength(1);
     expect(described[0]).toMatchObject({ name: "ai", owner: "prj_1" });
@@ -182,7 +182,7 @@ describe("constructor defaults + describe provenance + revoke", () => {
     const { dialed, itx } = withDefaults();
     expect(() => itx.revokeCapability({ name: "ai" })).toThrow(/platform default/);
 
-    itx.provideCapability({ name: "ai", provider: LOOPBACK_ADDRESS });
+    itx.provideCapability({ name: "ai", capability: LOOPBACK_ADDRESS });
     itx.revokeCapability({ name: "ai" });
     expect(await itx.describe()).toMatchObject([{ name: "ai", owner: "platform:project" }]);
     await itx.invoke({ args: [], path: ["ai", "run"] });
@@ -191,7 +191,7 @@ describe("constructor defaults + describe provenance + revoke", () => {
 
   test("revoking a non-default entry deletes it; revoking nothing is a no-op", async () => {
     const { itx } = withDefaults();
-    itx.provideCapability({ name: "extra", provider: LOOPBACK_ADDRESS });
+    itx.provideCapability({ name: "extra", capability: LOOPBACK_ADDRESS });
     itx.revokeCapability({ name: "extra" });
     itx.revokeCapability({ name: "neverExisted" });
     expect((await itx.describe()).map((cap) => cap.name)).toEqual(["ai"]);
@@ -214,7 +214,7 @@ describe("live providers", () => {
         if (label === "original+dup") state.broken = callback;
       },
     });
-    // A plain object WITHOUT a string `type` is a live provider too (the
+    // A plain object WITHOUT a string `type` is a live capability too (the
     // discriminator only claims plain objects carrying type "rpc"/"url").
     const provider = makeStub("original");
     return { disposed, provider, state };
@@ -223,7 +223,7 @@ describe("live providers", () => {
   test("registers dup-retained, dispatches on a per-call dup, reports connected", async () => {
     const { disposed, provider } = liveProvider();
     const itx = new Itx({ contextId: "prj_1", dial: fakeDial().dial });
-    itx.provideCapability({ name: "slack", provider });
+    itx.provideCapability({ name: "slack", capability: provider });
 
     const result = await itx.invoke({ args: [{}], path: ["slack", "chat", "post"] });
     // The borrow is a dup OF the retained dup, and is disposed after the call.
@@ -236,7 +236,7 @@ describe("live providers", () => {
   test("a broken session disconnects: entry survives, invoke throws offline", async () => {
     const { provider, state } = liveProvider();
     const itx = new Itx({ contextId: "prj_1", dial: fakeDial().dial });
-    itx.provideCapability({ name: "slack", provider });
+    itx.provideCapability({ name: "slack", capability: provider });
 
     state.broken?.(new Error("session died"));
     expect(await itx.describe()).toMatchObject([{ connected: false, name: "slack" }]);
@@ -248,9 +248,58 @@ describe("live providers", () => {
   test("revoking a live cap disposes the retained stub", () => {
     const { disposed, provider } = liveProvider();
     const itx = new Itx({ contextId: "prj_1", dial: fakeDial().dial });
-    itx.provideCapability({ name: "slack", provider });
+    itx.provideCapability({ name: "slack", capability: provider });
     itx.revokeCapability({ name: "slack" });
     expect(disposed).toContain("original+dup");
+  });
+});
+
+describe("bare-function capabilities", () => {
+  test("a local bare function auto-wraps: empty remainder calls it, deeper errors", async () => {
+    const itx = new Itx({ contextId: "prj_1", dial: fakeDial().dial });
+    const seen: unknown[][] = [];
+    itx.provideCapability({
+      capability: async (...args: unknown[]) => {
+        seen.push(args);
+        return { ok: true };
+      },
+      name: "probe",
+    });
+
+    await expect(itx.invoke({ args: [1, "two"], path: ["probe"] })).resolves.toEqual({ ok: true });
+    expect(seen).toEqual([[1, "two"]]);
+    // asPathCallable semantics: a bare function has no member tree.
+    await expect(itx.invoke({ args: [], path: ["probe", "deeper"] })).rejects.toThrow(
+      /did not resolve to a function/,
+    );
+    expect(await itx.describe()).toMatchObject([{ connected: true, kind: "live", name: "probe" }]);
+  });
+});
+
+describe("the provision handle", () => {
+  test("revoke() removes the entry", async () => {
+    const itx = new Itx({ contextId: "prj_1", dial: fakeDial().dial });
+    const provision = itx.provideCapability({ capability: AI_ADDRESS, name: "extra" });
+    await provision.revoke();
+    expect(await itx.describe()).toEqual([]);
+  });
+
+  test("Symbol.dispose auto-revokes LIVE provides only (a durable disposer is a no-op)", async () => {
+    const itx = new Itx({ contextId: "prj_1", dial: fakeDial().dial });
+    // Durable: `using` must NOT undo the provide — session teardown disposes
+    // every returned handle, and durable means surviving the session.
+    {
+      using _durable = itx.provideCapability({ capability: AI_ADDRESS, name: "durable" });
+    }
+    expect((await itx.describe()).map((cap) => cap.name)).toEqual(["durable"]);
+
+    // Live: dropping the session would have killed it anyway — dispose makes
+    // that explicit and removes the entry.
+    {
+      using _live = itx.provideCapability({ capability: async () => "hi", name: "live" });
+    }
+    await Promise.resolve(); // the disposer's revoke is fire-and-forget
+    expect((await itx.describe()).map((cap) => cap.name)).toEqual(["durable"]);
   });
 });
 
@@ -258,35 +307,35 @@ describe("structural validation (provide time)", () => {
   const itx = () => new Itx({ contextId: "prj_1", dial: fakeDial().dial });
 
   test("reserved and non-identifier names refuse", () => {
-    expect(() => itx().provideCapability({ name: "then", provider: AI_ADDRESS })).toThrow(
+    expect(() => itx().provideCapability({ name: "then", capability: AI_ADDRESS })).toThrow(
       /reserved/,
     );
     expect(() =>
-      itx().provideCapability({ path: ["sdk", "constructor"], provider: AI_ADDRESS }),
+      itx().provideCapability({ path: ["sdk", "constructor"], capability: AI_ADDRESS }),
     ).toThrow(/reserved/);
-    expect(() => itx().provideCapability({ name: "not a name", provider: AI_ADDRESS })).toThrow(
+    expect(() => itx().provideCapability({ name: "not a name", capability: AI_ADDRESS })).toThrow(
       /plain JavaScript identifier/,
     );
-    expect(() => itx().provideCapability({ name: "x", path: ["x"], provider: AI_ADDRESS })).toThrow(
-      /exactly one/,
-    );
+    expect(() =>
+      itx().provideCapability({ name: "x", path: ["x"], capability: AI_ADDRESS }),
+    ).toThrow(/exactly one/);
   });
 
   test("malformed addresses refuse structurally; allowlists do NOT gate provide", () => {
     expect(() =>
-      itx().provideCapability({ name: "x", provider: { type: "url", url: "not a url" } }),
+      itx().provideCapability({ name: "x", capability: { type: "url", url: "not a url" } }),
     ).toThrow(/not a valid URL/);
     expect(() =>
       itx().provideCapability({
         name: "x",
-        provider: { type: "rcp", worker: AI_ADDRESS.worker } as never,
+        capability: { type: "rcp", worker: AI_ADDRESS.worker } as never,
       }),
     ).toThrow(/unknown target type/);
     expect(() =>
       itx().provideCapability({
         entrypoint: "Nope",
         name: "x",
-        provider: { ...AI_ADDRESS, entrypoint: "Nope" },
+        capability: { ...AI_ADDRESS, entrypoint: "Nope" },
       } as never),
     ).toThrow(/binding refs take no entrypoint/);
     // Reachability is the dial's authority: providing a non-dialable binding
@@ -294,7 +343,7 @@ describe("structural validation (provide time)", () => {
     expect(() =>
       itx().provideCapability({
         name: "db",
-        provider: { type: "rpc", worker: { binding: "DB", type: "binding" } },
+        capability: { type: "rpc", worker: { binding: "DB", type: "binding" } },
       }),
     ).not.toThrow();
   });

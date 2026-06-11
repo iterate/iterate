@@ -44,7 +44,7 @@ export type StreamsCapabilityProps = {
   projectId?: string;
   /** Attribution, injected by the registry at dial time. */
   context?: string;
-  capability?: string;
+  capabilityPath?: string;
 };
 
 /**

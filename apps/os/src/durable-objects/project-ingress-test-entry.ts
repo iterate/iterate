@@ -257,7 +257,7 @@ export default {
       });
       await itx.provideCapability({
         name: "fetch",
-        provider: new EchoEgressShadow() as never,
+        capability: new EchoEgressShadow() as never,
       });
       try {
         const target = url.searchParams.get("target") ?? "https://api.example.com/v1/models";

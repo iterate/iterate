@@ -112,12 +112,12 @@ const answer = {
   },
 };
 
-// provideCapability() is THE verb: a live stub is just another provider.
+// provideCapability() is THE verb: a live stub is just another capability.
 // asPathCallable() makes a plain object-of-methods speak the one calling
 // convention (call({ path, args }) replayed back here on your object). A
 // live cap disappears when this tab disconnects; reconnect and
 // provideCapability() again to restore it.
-await itx.provideCapability({ name: "answer", provider: asPathCallable(answer) });
+await itx.provideCapability({ name: "answer", capability: asPathCallable(answer) });
 
 // Unknown names on the handle fall through to the registry, so the cap is
 // callable as if it were built in.
@@ -144,7 +144,7 @@ class FakeSlackSdk extends RpcTarget {
 
 await itx.provideCapability({
   name: "fakeSlack",
-  provider: new FakeSlackSdk(),
+  capability: new FakeSlackSdk(),
 });
 
 // Call any depth — the path is accumulated locally and sent once.
@@ -167,7 +167,7 @@ return await itx.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" });
 // module text.
 await itx.provideCapability({
   name: "greeter",
-  provider: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",
@@ -205,7 +205,7 @@ return {
     code: `
 await itx.provideCapability({
   name: "todo",
-  provider: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",
@@ -251,7 +251,7 @@ return await itx.todo.list();
     code: `
 await itx.provideCapability({
   name: "kit",
-  provider: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",
@@ -291,7 +291,7 @@ return {
 // Provider cap.
 await itx.provideCapability({
   name: "inventory",
-  provider: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",
@@ -316,7 +316,7 @@ await itx.provideCapability({
 // Consumer cap — a different dynamic worker that calls the first via itx.
 await itx.provideCapability({
   name: "report",
-  provider: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",
@@ -354,7 +354,7 @@ return await itx.report.build({ sku: "ABC" });
     code: `
 await itx.provideCapability({
   name: "counter",
-  provider: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",
@@ -387,28 +387,28 @@ return { current: await itx.counter.current() };   // 2, and it persists
 `.trim(),
   },
   {
-    id: "fork-child-context",
-    title: "Fork a child context (a session) with its own caps",
+    id: "extend-child-context",
+    title: "Extend the context (a session) with its own caps",
     description:
-      "itx.fork() makes a cheap, disposable child context under the project — an agent session or scratchpad. Its caps SHADOW the parent's; names it doesn't provide delegate up the chain. describe() shows the merged view with provenance.",
+      "itx.extend() makes a cheap, disposable child context under the project — an agent session or scratchpad. Its caps SHADOW the parent's; names it doesn't provide delegate up the chain. describe() shows the merged view with provenance.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
 // A cap on the project — visible to every child through the chain.
 await itx.provideCapability({
   name: "shared",
-  provider: new (class extends RpcTarget {
+  capability: new (class extends RpcTarget {
     async call({ path }) { return { from: "project", method: path.join(".") }; }
   })(),
 });
 
-// Fork a child. It's a full itx handle on a new ctx_… context.
-const child = await itx.fork({ name: "repl-scratch" });
+// Extend a child. It's a full itx handle on a new ctx_… context.
+const child = await itx.extend({ name: "repl-scratch" });
 
 // The child can shadow 'shared' with its own definition...
 await child.provideCapability({
   name: "shared",
-  provider: new (class extends RpcTarget {
+  capability: new (class extends RpcTarget {
     async call({ path }) { return { from: "child", method: path.join(".") }; }
   })(),
 });
@@ -449,7 +449,7 @@ return { status: response.status, sawSubstitutedHeader: body.headers };
 await itx.provideCapability({
   name: "hello",
   meta: { http: { expose: true } },   // routable; still admin-gated
-  provider: {
+  capability: {
     type: "rpc",
     worker: {
       type: "source",

@@ -480,15 +480,15 @@ const persisted = answer();
 
   test("live-capability example registers and calls a session-owned target", async () => {
     // Mirrors a PROJECT-scoped itx handle: provideCapability() with a live
-    // provider registers it, and unknown names on the handle fall through to
+    // capability registers it, and unknown names on the handle fall through to
     // a path proxy whose terminal call dispatches the kernel's one calling
     // convention — provider.call({ path, args }) — exactly like the core.
     const providedTargets = new Map<string, { call(input: unknown): unknown }>();
     const alert = vi.fn();
     const itx = new Proxy(
       {
-        provideCapability(input: { name: string; provider: { call(input: unknown): unknown } }) {
-          providedTargets.set(input.name, input.provider);
+        provideCapability(input: { name: string; capability: { call(input: unknown): unknown } }) {
+          providedTargets.set(input.name, input.capability);
         },
       },
       {

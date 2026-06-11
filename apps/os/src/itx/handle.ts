@@ -10,15 +10,16 @@
 //
 // Anatomy:
 //   - typed built-ins (the trust kernel): the verbs provideCapability,
-//     revokeCapability, describe, fork, invoke — plus streams, project,
-//     projects, and `fetch`, which is sugar dispatching through the core's
-//     `fetch` capability (a shadowable platform default)
+//     revokeCapability, describe, extend, invoke — plus parent, streams,
+//     project, projects, and `fetch`, which is sugar dispatching through the
+//     core's `fetch` capability (a shadowable platform default)
 //   - a fallthrough Proxy: any unknown name becomes a PathProxy whose
 //     terminal call dispatches to the context node's core (node.itx()).
 //     itx.slack works because someone provided "slack", not because anything
 //     here knows about Slack.
 
 import { RpcTarget } from "cloudflare:workers";
+import { RpcStub } from "capnweb";
 import { typeid } from "@iterate-com/shared/typeid";
 import { createD1Client } from "sqlfu";
 import { PathProxy } from "./path-proxy.ts";
@@ -27,12 +28,15 @@ import { ItxStreams } from "./caps/streams.ts";
 import {
   contextAddressOf,
   dialContext,
+  isCapabilityAddress,
+  isChildContextAddress,
+  isLocalBareFunction,
   replayPathCall,
   RESERVED_CAPABILITY_NAMES,
-  type CapabilityAddress,
+  type Capability,
   type CapabilityMeta,
   type ItxStub,
-  type LiveProvider,
+  type PathCall,
 } from "./itx.ts";
 import { GLOBAL_CONTEXT_ID, type ProjectAccess } from "./refs.ts";
 import type { ContextDO } from "./context-do.ts";
@@ -60,8 +64,9 @@ import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
  */
 export type ItxRuntime = {
   access: ProjectAccess;
-  /** Attribution: which capability's isolate holds this handle, if any. */
-  capability?: string;
+  /** Attribution: which capability's isolate holds this handle, if any —
+   * the dotted route, not a display name. */
+  capabilityPath?: string;
   config: AppConfig;
   /** "global", a project id, or a ctx_… child context id. */
   contextId: string;
@@ -118,20 +123,27 @@ export class ItxHandle extends RpcTarget {
   // ---- the trust kernel ---------------------------------------------------
 
   /**
-   * Provide a capability on this handle's context — THE verb: the provider
-   * kind carries everything else (durable or live). A live stub is
-   * session-bound (dies with your connection), an rpc/url address is durable.
-   * The entry lives at a PATH: `name` is the 1-segment sugar, `path` shadows
-   * one subtree of an inherited cap (longest-prefix dispatch) — exactly one
-   * of the two.
+   * Provide a capability on this handle's context — THE verb: the capability
+   * kind carries everything else (durable or live). A bare function or a
+   * live stub is session-bound (dies with your connection); an rpc/url
+   * address is durable. The entry lives at a PATH: `name` is the 1-segment
+   * sugar, `path` shadows one subtree of an inherited cap (longest-prefix
+   * dispatch) — exactly one of the two.
+   *
+   * Returns a provision handle: `revoke()` removes the entry, and
+   * `Symbol.dispose` auto-revokes ONLY live provides — dropping the session
+   * would have killed those anyway, while a durable provide must outlive the
+   * session that created it (session teardown disposes every returned
+   * handle), so its disposer is deliberately a no-op.
    */
   async provideCapability(input: {
     name?: string;
     path?: string[];
-    /** The capability's provider (types.ts): a serializable rpc/url address,
-     * or anything live — a stub implementing call({ path, args }) itself, or
-     * a plain object/function wrapped client-side with asPathCallable. */
-    provider: CapabilityAddress | LiveProvider;
+    /** The capability (types.ts): a serializable rpc/url address, a bare
+     * function (auto-wrapped: empty remainder calls it, deeper errors), or
+     * anything live — a stub implementing call({ path, args }) itself, or a
+     * plain object-of-methods wrapped client-side with asPathCallable. */
+    capability: Capability;
     /** A sentence for the human/agent who finds this cap (the
      * meta.instructions convention field, lifted by describe()). */
     instructions?: string;
@@ -139,8 +151,16 @@ export class ItxHandle extends RpcTarget {
      * counterpart of `instructions`; lifted by describe(). */
     types?: string;
     meta?: CapabilityMeta;
-  }) {
-    return await this.#itx().provideCapability(input);
+  }): Promise<CapabilityProvision> {
+    const capability = await resolveLiveCapability(input.capability);
+    await this.#itx().provideCapability({ ...input, capability });
+    const path = input.path ?? [input.name!];
+    return new CapabilityProvision({
+      live: !isCapabilityAddress(capability),
+      revoke: async () => {
+        await this.#itx().revokeCapability({ path });
+      },
+    });
   }
 
   /** Remove an entry (exact path match, never prefix; defaults can only be shadowed). */
@@ -252,7 +272,7 @@ export class ItxHandle extends RpcTarget {
     const projectId = this.#projectId();
     return {
       access: this.#runtime.access,
-      capability: this.#runtime.capability,
+      capabilityPath: this.#runtime.capabilityPath,
       caps: projectId === null ? [] : await this.#itx().describe(),
       context: this.#runtime.contextId,
       project: projectId === null ? null : await this.#projectStub().describe(),
@@ -267,12 +287,13 @@ export class ItxHandle extends RpcTarget {
   }
 
   /**
-   * Create a child context under this one: same anatomy (registry, parent
-   * chain, audit stream), cheaper and disposable — an agent session, a REPL
-   * scratchpad. Returns a handle, because narrowing is construction (Law 4).
-   * Child caps shadow this context's; misses delegate up the chain.
+   * Extend this context with a child (prototype-chain intuition: children
+   * extend parents; resolution climbs upward): same anatomy (registry,
+   * parent chain, audit stream), cheaper and disposable — an agent session,
+   * a REPL scratchpad. Returns a handle, because narrowing is construction
+   * (Law 4). Child caps shadow this context's; misses delegate up the chain.
    */
-  async fork(opts: { name?: string } = {}): Promise<ItxHandle> {
+  async extend(opts: { name?: string } = {}): Promise<ItxHandle> {
     const projectId = this.#requireProjectId();
     const childId = typeid({
       env: { TYPEID_PREFIX: this.#runtime.config.typeIdPrefix },
@@ -290,17 +311,56 @@ export class ItxHandle extends RpcTarget {
       projectId,
     });
     // The child is NARROWER than its parent (Law 4): its access is exactly
-    // its owning project, never the parent's wider scope. So a session forked
-    // off an admin (access "all") handle still cannot reach sibling projects
-    // via itx.projects — same access a reconnect through /api/itx/ctx_… would
-    // resolve. (Matches the cursor/bugbot finding on fork scope.)
+    // its owning project, never the parent's wider scope. So a session
+    // extended off an admin (access "all") handle still cannot reach sibling
+    // projects via itx.projects — same access a reconnect through
+    // /api/itx/ctx_… would resolve.
     return new ItxHandle({
       ...this.#runtime,
       access: [projectId],
-      capability: undefined,
+      capabilityPath: undefined,
       contextId: childId,
       projectId,
     });
+  }
+
+  /**
+   * A handle on the PARENT context — the "call next()" of middleware: a
+   * `fetch` shadow delegates to the unshadowed pipe via
+   * `itx.parent.fetch(request)`. Returned as a path proxy (not a bare
+   * promise) so the dotted call pipelines over capnweb in one round trip;
+   * `await itx.parent` also works and yields the parent handle's surface.
+   *
+   * A project context has no parent to address yet — the platform defaults
+   * context becomes its parent when the journal wave lands (itx-next.md,
+   * "LOCKED: the final shape").
+   */
+  get parent(): ItxHandle {
+    const parentHandle = async (): Promise<ItxHandle> => {
+      const contextId = this.#runtime.contextId;
+      const address = contextId === GLOBAL_CONTEXT_ID ? null : contextAddressOf(contextId);
+      if (!address || !isChildContextAddress(address)) {
+        throw new ItxError({
+          code: "BAD_REQUEST",
+          message:
+            "This context has no addressable parent yet: the platform defaults context " +
+            "becomes the project's parent when the journal wave lands (itx-next.md).",
+        });
+      }
+      const descriptor = await dialContext(this.#runtime.env, address).descriptor!();
+      return new ItxHandle({
+        ...this.#runtime,
+        capabilityPath: undefined,
+        contextId: descriptor.parent.id,
+        projectId: descriptor.projectId,
+      });
+    };
+    return new PathProxy(async (call: PathCall) => {
+      const handle = await parentHandle();
+      // Empty path = `await itx.parent` pulled the proxy and called it — not
+      // meaningful; surface the handle's members via replay instead.
+      return await replayPathCall(handle, call);
+    }) as unknown as ItxHandle;
   }
 
   /**
@@ -389,6 +449,111 @@ export type Stubify<T> = T extends (...args: infer A) => infer R
   : T extends object
     ? { [K in keyof T]: Stubify<T[K]> }
     : never;
+
+/**
+ * What `provideCapability` returns over the wire: an RpcTarget so `revoke()`
+ * crosses capnweb/Workers RPC, with disposal semantics both transports
+ * propagate to the target.
+ *
+ * `Symbol.dispose` auto-revokes ONLY live provides. The asymmetry is the
+ * point: session teardown disposes every stub the session was handed, so a
+ * revoking disposer on a DURABLE provide would silently delete the entry the
+ * moment the providing connection drops — exactly what durable means it must
+ * survive. A live provide dies with the session anyway; eager revocation
+ * just removes the offline tombstone.
+ */
+export class CapabilityProvision extends RpcTarget {
+  readonly #live: boolean;
+  readonly #revoke: () => Promise<void>;
+
+  constructor(input: { live: boolean; revoke: () => Promise<void> }) {
+    super();
+    this.#live = input.live;
+    this.#revoke = input.revoke;
+  }
+
+  async revoke(): Promise<void> {
+    await this.#revoke();
+  }
+
+  [Symbol.dispose](): void {
+    if (this.#live) void this.#revoke().catch(() => {});
+  }
+}
+
+/**
+ * Normalize a live capability before it crosses to the context node. Bare
+ * functions auto-wrap with asPathCallable semantics — an empty remainder
+ * calls the function, a deeper remainder errors:
+ *
+ * - A LOCAL function (prototype Function/AsyncFunction.prototype — never
+ *   true of an RPC stub) wraps directly.
+ * - A capnweb stub of a REMOTE function is indistinguishable from an object
+ *   stub by type (every capnweb stub is a callable proxy), so it is probed:
+ *   `await stub.call` is a pure property pull (no user code runs) that
+ *   resolves `undefined` only when the remote target is a bare function —
+ *   a call-implementing provider yields its method. Probe failures fall
+ *   back to the historical call-convention dispatch.
+ */
+async function resolveLiveCapability(capability: Capability): Promise<Capability> {
+  if (isCapabilityAddress(capability)) return capability;
+  if (isLocalBareFunction(capability)) {
+    return new BareFunctionCapability(capability) as unknown as Capability;
+  }
+  if (typeof capability === "function" && (capability as object) instanceof RpcStub) {
+    const callMember = await Promise.resolve(
+      (capability as unknown as { call: unknown }).call,
+    ).then(
+      (value) => value,
+      () => "unprobeable" as const,
+    );
+    if (callMember === undefined) {
+      return new BareFunctionCapability(
+        capability as unknown as (...args: never[]) => unknown,
+      ) as unknown as Capability;
+    }
+    (callMember as Partial<Disposable> | null | undefined)?.[Symbol.dispose]?.();
+  }
+  return capability;
+}
+
+/**
+ * The wrap for a bare-function capability: speaks the one calling convention
+ * (`call({ path, args })`) by invoking the function for an empty remainder
+ * and refusing anything deeper. Extends RpcTarget so it crosses the
+ * worker → context-node hop as a stub while the function (local or a capnweb
+ * stub of the provider's process) stays callable right here.
+ */
+class BareFunctionCapability extends RpcTarget {
+  readonly #fn: (...args: never[]) => unknown;
+
+  constructor(fn: (...args: never[]) => unknown) {
+    super();
+    // Retain a dup when the function is itself a session stub: RPC disposes
+    // argument stubs when the provide call returns.
+    const dup = (fn as { dup?: () => (...args: never[]) => unknown }).dup;
+    this.#fn = typeof dup === "function" ? dup.call(fn) : fn;
+  }
+
+  call(input: PathCall): unknown {
+    if (input.path.length > 0) {
+      throw new Error(
+        `This capability is a bare function — it has no member "${input.path.join(".")}"; call it directly.`,
+      );
+    }
+    return this.#fn(...(input.args as never[]));
+  }
+
+  onRpcBroken(callback: (error: unknown) => void): void {
+    (this.#fn as { onRpcBroken?: (callback: (error: unknown) => void) => void }).onRpcBroken?.(
+      callback,
+    );
+  }
+
+  [Symbol.dispose](): void {
+    (this.#fn as Partial<Disposable>)[Symbol.dispose]?.();
+  }
+}
 
 type ProjectStub = DurableObjectStub<ProjectDurableObject>;
 type ContextStub = DurableObjectStub<ContextDO>;

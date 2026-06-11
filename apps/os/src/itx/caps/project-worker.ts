@@ -44,7 +44,7 @@ export type ProjectWorkerProps = {
   export?: string;
   /** How to call the user's export: members replay (default) or one call({path,args}). */
   invoke?: WorkerInvokeMode;
-  capability?: string;
+  capabilityPath?: string;
   context?: string;
 };
 
@@ -54,7 +54,14 @@ export class ProjectWorker extends WorkerEntrypoint<Env, ProjectWorkerProps> {
     if (!props.projectId) {
       throw new Error("ProjectWorker needs registry-injected projectId props.");
     }
-    const { capability, context, export: exportName, invoke, projectId, ...providerProps } = props;
+    const {
+      capabilityPath,
+      context,
+      export: exportName,
+      invoke,
+      projectId,
+      ...providerProps
+    } = props;
     const project = this.env.PROJECT.getByName(
       getProjectDurableObjectName(projectId),
     ) as unknown as ProjectDurableObject;
@@ -64,7 +71,7 @@ export class ProjectWorker extends WorkerEntrypoint<Env, ProjectWorkerProps> {
       invoke: invoke ?? "members",
       // The user's export sees its provider parameterization plus the same
       // attribution every dialable target gets.
-      props: { ...providerProps, capability, context, projectId },
+      props: { ...providerProps, capabilityPath, context, projectId },
     });
   }
 }

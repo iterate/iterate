@@ -134,7 +134,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
 
     await projectItx.provideCapability({
       name: "browserSlack",
-      provider: new BrowserSdk() as never,
+      capability: new BrowserSdk() as never,
     });
 
     const result = (await (

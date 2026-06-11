@@ -489,9 +489,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     const contextItx = (await contextStub.itx()) as unknown as ItxStub;
     for (const cap of caps) {
       await contextItx.provideCapability({
+        capability: cap.capability,
         instructions: cap.instructions,
         name: cap.name,
-        provider: cap.provider,
       });
     }
     // The LLM learns its tools from stream history: one rendered event per
@@ -709,7 +709,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   private agentContextCapabilities(params: AgentDurableObjectStructuredName): Array<{
     name: string;
     instructions: string;
-    provider: CapabilityAddress;
+    capability: CapabilityAddress;
   }> {
     const agentTool = (tool: "chat" | "debug"): CapabilityAddress => ({
       entrypoint: "AgentToolsCapability",
@@ -725,44 +725,44 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
               instructions:
                 "Use itx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
               name: "chat",
-              provider: agentTool("chat"),
+              capability: agentTool("chat"),
             },
           ]),
       {
         instructions:
           "Use itx.debug() to return OS debug information about the current agent stream.",
         name: "debug",
-        provider: agentTool("debug"),
+        capability: agentTool("debug"),
       },
       {
         instructions:
           "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
         name: "ai",
-        provider: { type: "rpc", worker: { binding: "AI", type: "binding" } },
+        capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
       },
       {
         instructions:
           "Project-bound OS API. Call itx.os.listProcedures() for the TypeScript surface, then itx.os.<path.to.procedure>({ …input }).",
         name: "os",
-        provider: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
+        capability: { entrypoint: "OrpcCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
           "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }).",
         name: "gmail",
-        provider: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
+        capability: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
           "Use itx.slack.<Slack Web API method path>(args), e.g. itx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If no reply is needed, do not call chat.postMessage. For legitimate long-running Slack replies, use Promise.all to send an immediate acknowledgment while doing the real work in parallel, then send the actual result afterwards.",
         name: "slack",
-        provider: { entrypoint: "SlackCapability", type: "rpc", worker: { type: "loopback" } },
+        capability: { entrypoint: "SlackCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
         instructions:
           "Use itx.agents.create() to get a promise-pipelineable subagent handle, e.g. await itx.agents.create().doThing(args).",
         name: "agents",
-        provider: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },
+        capability: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },
       },
     ];
   }

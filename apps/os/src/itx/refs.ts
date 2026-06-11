@@ -16,13 +16,13 @@
  *   may narrow to. Ignored (forced to the context's own project) on
  *   project-context handles, mirroring the old "project workers cannot
  *   escalate scopes" rule.
- * - `capability` is pure attribution: which capability's isolate this is. It
- *   grants nothing; it labels egress and audit records.
+ * - `capabilityPath` is pure attribution: which capability's isolate this is
+ *   (the dotted route). It grants nothing; it labels egress and audit records.
  */
 export type ItxProps = {
   context: string;
   access?: ProjectAccess;
-  capability?: string;
+  capabilityPath?: string;
 };
 
 export type ProjectAccess = "all" | string[];
