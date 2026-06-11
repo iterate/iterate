@@ -898,6 +898,97 @@ itIfSlackBotToken(
   180_000,
 );
 
+itIfSlackBotToken(
+  "schedules and completes an LLM request for a plain routed Slack message",
+  async () => {
+    // Regression test for the 2026-06-10 prod outage: on a freshly
+    // bootstrapped Slack thread stream, the slack-agent processor rendered
+    // the webhook into a triggering agent input before the agent processor's
+    // subscription was configured. The host anchored side effects at the
+    // subscription-configured offset, so the trigger was replayed as
+    // historical and no LLM request was ever scheduled — the agent never
+    // replied. The subscriber-connected reconciliation must recover the
+    // skipped trigger, so the LLM turn completes no matter which side wins
+    // the bootstrap race.
+    await using fixture = await createTestProjectFixture({ slugPrefix: "slack-agent-llm" });
+    const { client, project } = fixture;
+    const suffix = uniqueSuffix();
+    const slackChannelId = await requireSlackChannelId();
+    const rootText = `OS slack-agent llm trigger proof ${suffix}`;
+    const rootMessage = await postSlackMessage({
+      channel: slackChannelId,
+      text: rootText,
+      token: requireSlackToken(),
+    });
+    const routedAgentPath = slackAgentPath({
+      channel: slackChannelId,
+      threadTs: rootMessage.ts,
+    });
+
+    await client.project.streams.append({
+      projectSlugOrId: project.id,
+      streamPath: "/integrations/slack",
+      event: slackProcessorSubscriptionEvent({ projectId: project.id, suffix }),
+    });
+
+    await client.project.streams.append({
+      projectSlugOrId: project.id,
+      streamPath: "/integrations/slack",
+      event: {
+        type: "events.iterate.com/slack/webhook-received",
+        idempotencyKey: `slack-agent-e2e-llm-webhook:${suffix}`,
+        payload: {
+          slackTeamId: "T_E2E",
+          body: {
+            type: "event_callback",
+            team_id: "T_E2E",
+            event_id: `EvLlm${suffix}`,
+            event: {
+              type: "message",
+              channel: slackChannelId,
+              channel_type: "channel",
+              user: "U_E2E",
+              ts: rootMessage.ts,
+              event_ts: rootMessage.ts,
+              text: `please acknowledge: ${rootText}`,
+            },
+          },
+        },
+      },
+    });
+
+    const events = await readUntil({
+      agentPath: routedAgentPath,
+      client,
+      projectId: project.id,
+      afterOffset: "start",
+      predicate: (event) =>
+        event.type === "events.iterate.com/agent/llm-request-completed" &&
+        (event.payload as { result?: { status?: unknown } }).result?.status === "success",
+      timeoutMs: 150_000,
+    });
+
+    // The durable handoff chain the regression silently dropped: trigger →
+    // scheduled (keyed off the triggering input, so live path and recovery
+    // converge) → requested → completed.
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        idempotencyKey: expect.stringMatching(/^agent\/llm-request-scheduled@\d+$/),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-requested",
+      }),
+    );
+    expect(
+      events.filter((event) => event.type === "events.iterate.com/stream/error-occurred"),
+    ).toEqual([]);
+  },
+  180_000,
+);
+
 async function requireSlackChannelId() {
   const channels = await listSlackChannels(requireSlackToken());
   const channel = channels.find(

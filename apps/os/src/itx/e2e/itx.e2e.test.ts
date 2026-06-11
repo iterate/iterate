@@ -1,65 +1,117 @@
 // itx e2e: proves the spec against a REAL deployed worker (local dev server,
 // preview, or production — whatever APP_CONFIG_BASE_URL points at).
 //
-// The shared scripts in itx-scripts.ts run through every execution mode; the
+// The catalogue examples (src/itx/examples.ts — the same entries the REPL UI
+// shows) run through every server-side runtime via the matrix below; the
 // live-capability scenarios run from Node because they need a Node-side
-// RpcTarget provider. Browser mode joins when the REPL is rewired.
+// RpcTarget provider. The browser runtime runs the same catalogue in
+// itx.browser.test.ts.
 
 import { expect, test } from "vitest";
 import { RpcTarget } from "capnweb";
-import type { ItxClient } from "../client.ts";
 import { getItxErrorCode } from "../errors.ts";
+import { ITX_EXAMPLES } from "../examples.ts";
 import {
   adminApiSecret,
   baseUrl,
   connectGlobal,
   registerCreatedProjectCleanup,
 } from "./e2e-env.ts";
+import { EXAMPLE_CASES, EXAMPLE_IDS_WITHOUT_CASES } from "./example-cases.ts";
 import {
-  appendAndReadStream,
-  callPathCapability,
-  describeProject,
-  pathCallCapSource,
-  todoCapSource,
-  type ItxScript,
-} from "./itx-scripts.ts";
+  configWorkerRunnerSource,
+  MATRIX_RUNTIMES,
+  pushIterateConfigWorker,
+  runExampleCode,
+} from "./example-matrix.ts";
+import { pathCallCapSource, todoCapSource } from "./itx-scripts.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const PROJECT_SLUG = `itx-e2e-${RUN_SUFFIX}`;
 
 const createdProjectIds = registerCreatedProjectCleanup();
 
-test("itx scripts run identically over Cap'n Web and /api/itx/run", async () => {
-  using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: PROJECT_SLUG })) as {
-    id: string;
-    slug: string;
-  };
-  createdProjectIds.push(project.id);
-  expect(project.slug).toBe(PROJECT_SLUG);
+// ---- the catalogue matrix ---------------------------------------------------
+// One project, created here (the harness's job); every example then connects
+// INTO it and gets straight to work — itx.streams.get("/repl/demo"), no
+// narrowing boilerplate. The config-worker runtime needs the catalogue baked
+// into the project's worker.js, so the lazy setup pushes that once.
 
-  for (const mode of executionModes(itx)) {
-    const marker = `${mode.name}-${crypto.randomUUID().slice(0, 8)}`;
+const MATRIX_EXAMPLES = ITX_EXAMPLES.filter(
+  (example) =>
+    example.runtimes.some((runtime) => (MATRIX_RUNTIMES as readonly string[]).includes(runtime)) &&
+    EXAMPLE_CASES[example.id] !== undefined,
+);
 
-    const described = await mode.run(describeProject, { projectId: project.id });
-    expect(described).toMatchObject({
-      context: project.id,
-      projectId: project.id,
-      slug: PROJECT_SLUG,
-    });
-
-    const streamed = await mode.run(appendAndReadStream, {
-      eventType: "events.iterate.test/itx/e2e",
-      marker,
-      projectId: project.id,
-      streamPath: "/itx-e2e/log",
-    });
-    expect(streamed).toMatchObject({
-      appended: { marker, type: "events.iterate.test/itx/e2e" },
-    });
-    expect((streamed as { readBackMarkers: string[] }).readBackMarkers).toContain(marker);
+test("every catalogue example is either matrix-tested or explicitly excluded", () => {
+  for (const example of ITX_EXAMPLES) {
+    if (EXAMPLE_IDS_WITHOUT_CASES.has(example.id)) continue;
+    expect(
+      EXAMPLE_CASES[example.id],
+      `example "${example.id}" needs a case in example-cases.ts (or an explicit exclusion)`,
+    ).toBeDefined();
   }
 });
+
+let matrixSetupPromise: Promise<{ projectId: string }> | null = null;
+function ensureMatrixProject(): Promise<{ projectId: string }> {
+  matrixSetupPromise ??= (async () => {
+    using itx = connectGlobal();
+    const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-mx` })) as {
+      id: string;
+      slug: string;
+    };
+    createdProjectIds.push(project.id);
+    await pushIterateConfigWorker({
+      commitMessage: "bake catalogue examples into the config worker",
+      projectId: project.id,
+      projectSlug: project.slug,
+      workerSource: configWorkerRunnerSource(
+        MATRIX_EXAMPLES.filter((example) => example.runtimes.includes("config-worker")),
+      ),
+    });
+    return { projectId: project.id };
+  })();
+  return matrixSetupPromise;
+}
+
+for (const example of MATRIX_EXAMPLES) {
+  const exampleCase = EXAMPLE_CASES[example.id]!;
+  // Cold isolates, a config-worker rebuild per call, and a spawned CLI per
+  // cli-tagged example make these the slowest tests in the suite.
+  test(
+    `catalogue example "${example.id}" runs identically across runtimes`,
+    {
+      timeout: 240_000,
+    },
+    async () => {
+      const { projectId } = await ensureMatrixProject();
+      const runtimes = MATRIX_RUNTIMES.filter((runtime) => example.runtimes.includes(runtime));
+      expect(runtimes.length).toBeGreaterThan(0);
+
+      for (const runtime of runtimes) {
+        const ctx = { marker: `${runtime}-${crypto.randomUUID().slice(0, 8)}`, projectId };
+        const vars = exampleCase.vars?.(ctx) ?? {};
+        try {
+          const result = await runExampleCode(runtime, {
+            code: example.code,
+            id: example.id,
+            projectId,
+            vars,
+          });
+          exampleCase.assert(result, ctx);
+        } catch (error) {
+          throw new Error(
+            `example "${example.id}" failed in the ${runtime} runtime: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            { cause: error },
+          );
+        }
+      }
+    },
+  );
+}
 
 test("the five-step capability flow: provide live, call, promote durable, call from a script", async () => {
   using itx = connectGlobal();
@@ -109,13 +161,14 @@ test("the five-step capability flow: provide live, call, promote durable, call f
     },
   });
 
-  // (5) The SAME dotted call works from an itx script in a dynamic worker,
+  // (5) The SAME dotted call works from an itx script in other runtimes,
   // where the live provider (this Node process) is also still reachable.
-  for (const mode of executionModes(itx)) {
-    const viaDurable = await mode.run(callPathCapability, {
-      capName: "slackDurable",
+  const callPathCapabilityCode = `return await itx[vars.capName].chat.postMessage({ text: vars.text });`;
+  for (const runtime of ["node", "dynamic-worker"] as const) {
+    const viaDurable = await runExampleCode(runtime, {
+      code: callPathCapabilityCode,
       projectId: project.id,
-      text: `via-${mode.name}`,
+      vars: { capName: "slackDurable", text: `via-${runtime}` },
     });
     expect(viaDurable).toMatchObject({ marker, method: "chat.postMessage" });
   }
@@ -177,10 +230,22 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
       target: { entrypoint: "ItxEntrypoint", type: "rpc", worker: { type: "loopback" } },
     }),
   ).rejects.toThrow(/not dialable/);
+  // Durable Object refs name arbitrary instances across ALL projects, so the
+  // namespace allowlist defaults to empty — config has to opt in.
+  await expect(
+    projectItx.caps.define({
+      name: "sneakyDo",
+      target: {
+        type: "rpc",
+        worker: { binding: "PROJECT", name: "someone-elses-project", type: "durable-object" },
+      },
+    }),
+  ).rejects.toThrow(/not dialable/);
 
-  // describe() reports the new kinds and lifts instructions.
-  const caps = await projectItx.caps.describe();
-  expect(caps).toMatchObject([
+  // describe() reports the new kinds and lifts instructions (own rows only —
+  // inherited platform defaults carry their code context as owner).
+  const caps = (await projectItx.caps.describe()) as Array<{ owner: string }>;
+  expect(caps.filter((cap) => cap.owner === project.id)).toMatchObject([
     { instructions: "Workers AI. Use like the env.AI binding.", kind: "rpc", name: "ai" },
     { invoke: "path-call", kind: "rpc", name: "aiWrapped" },
   ]);
@@ -265,48 +330,12 @@ export class PetstoreClient extends WorkerEntrypoint {
 
   // The push runs as an itx script (the in-isolate path agents use); the
   // worker source travels via the endpoint's vars.
-  const pushScript = async ({
-    itx: scriptItx,
-    vars,
-  }: {
-    itx: Record<string, any>;
-    vars: { projectSlug: string; workerSource: string };
-  }) => {
-    const repo = await scriptItx.repos.ensureIterateConfigInfo({
-      projectSlug: vars.projectSlug,
-    });
-    const url = new URL(repo.remote);
-    url.username = "x";
-    url.password = repo.token.split("?")[0];
-    const dir = "/litmus-config";
-    await scriptItx.workspace.gitClone({
-      branch: repo.defaultBranch,
-      depth: 1,
-      dir,
-      url: url.toString(),
-    });
-    await scriptItx.workspace.writeFile(`${dir}/worker.js`, vars.workerSource);
-    await scriptItx.workspace.gitAdd({ dir, filepath: "worker.js" });
-    await scriptItx.workspace.gitCommit({
-      author: { email: "e2e@iterate.com", name: "itx e2e" },
-      dir,
-      message: "add PetstoreClient capability export",
-    });
-    await scriptItx.workspace.gitPush({ dir, ref: repo.defaultBranch, remote: "origin" });
-    return { pushed: true };
-  };
-  const pushResponse = await fetch(new URL("/api/itx/run", baseUrl()), {
-    body: JSON.stringify({
-      context: project.id,
-      functionSource: pushScript.toString(),
-      vars: { projectSlug: project.slug, workerSource: userWorker },
-    }),
-    headers: authHeaders(),
-    method: "POST",
+  await pushIterateConfigWorker({
+    commitMessage: "add PetstoreClient capability export",
+    projectId: project.id,
+    projectSlug: project.slug,
+    workerSource: userWorker,
   });
-  const pushBody = (await pushResponse.json()) as { error?: string; result?: unknown };
-  if (!pushResponse.ok) throw new Error(`push script failed: ${pushBody.error}`);
-  expect(pushBody.result).toEqual({ pushed: true });
 
   // (2) Point a cap at the user's export via the ProjectWorker forwarder —
   // props.export names THEIR class, props.invoke how to call it.
@@ -410,6 +439,12 @@ test("platform defaults arrive from the platform:project code context, and own r
     kind: "rpc",
     owner: "platform:project",
   });
+  // The whole migrated kernel arrives the same way (§8: cap #0 disappears).
+  for (const name of ["repos", "workspace", "worker"]) {
+    expect(before.caps.find((cap) => cap.name === name)).toMatchObject({
+      owner: "platform:project",
+    });
+  }
 
   // Defaults cannot be revoked — succeeding would lie (the default keeps
   // serving). Shadowing is the override mechanism.
@@ -725,65 +760,24 @@ test("revoked and offline caps fail with instructive errors", async () => {
     }),
   ).rejects.toThrow(/reserved/);
 
-  // itx.project IS the full Project DO surface (D17): any public method is
-  // callable, so a method added to the DO is instantly reachable here. But a
-  // hand-built reserved path through itxInvoke is still gated server-side, so
-  // the full surface can never be abused to reach prototype internals.
-  await projectItx.caps.define({
-    name: "probe",
-    target: {
-      type: "rpc",
-      worker: {
-        type: "source",
-        source: {
-          cacheKey: crypto.randomUUID(),
-          mainModule: "cap.js",
-          modules: {
-            "cap.js":
-              "import { WorkerEntrypoint } from 'cloudflare:workers'; export default class extends WorkerEntrypoint { ok() { return 1; } }",
-          },
-        },
-      },
-    },
-  });
-  const projectDo = (projectItx as unknown as { project: unknown }).project as {
-    itxInvoke(input: { args: unknown[]; name: string; path: string[] }): Promise<unknown>;
+  // itx.project IS the full Project DO surface (D17) — except the itx*
+  // registry verbs, which are node-to-node plumbing: itxInvoke carries the
+  // trusted chain-delegation `origin`, so exposing it would let any handle
+  // holder spoof another context's identity (a sibling fork's workspace).
+  // The proxy masks them; the registry's reserved-segment gate stays as
+  // defense in depth for paths arriving over the real chain.
+  const projectDo = (projectItx as { project: unknown }).project as {
+    itxInvoke(input: {
+      args: unknown[];
+      name: string;
+      origin?: string;
+      path: string[];
+    }): Promise<unknown>;
   };
   await expect(
-    projectDo.itxInvoke({ args: [], name: "probe", path: ["constructor"] }),
-  ).rejects.toThrow(/reserved/);
+    projectDo.itxInvoke({ args: [], name: "workspace", origin: "ctx_spoofed", path: ["readFile"] }),
+  ).rejects.toThrow(/internal registry plumbing/);
 });
-
-// ---- execution modes --------------------------------------------------------
-
-type ExecutionMode = {
-  name: string;
-  run<Vars extends Record<string, unknown>>(script: ItxScript<Vars>, vars: Vars): Promise<unknown>;
-};
-
-function executionModes(itx: ItxClient): ExecutionMode[] {
-  return [
-    {
-      name: "node-capnweb",
-      run: (script, vars) => Promise.resolve(script({ itx: itx as never, vars })),
-    },
-    {
-      name: "run-endpoint",
-      run: async (script, vars) => {
-        const response = await fetch(new URL("/api/itx/run", baseUrl()), {
-          body: JSON.stringify({ functionSource: script.toString(), vars }),
-          headers: authHeaders(),
-          method: "POST",
-        });
-        const body = (await response.json()) as { error?: string; result?: unknown };
-        if (!response.ok) {
-          throw new Error(`/api/itx/run failed: ${body.error ?? JSON.stringify(body)}`);
-        }
-        return body.result;
-      },
-    },
-  ];
-}
 
 function authHeaders() {
   return {

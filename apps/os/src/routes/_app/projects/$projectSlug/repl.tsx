@@ -36,6 +36,7 @@ function ProjectItxReplPage() {
       <div className="min-h-0 flex-1">
         <ItxReplPage
           connectSession={connectSession}
+          context="project"
           initialCode={PROJECT_REPL_INITIAL_CODE}
           scope={{ projectId: project.id }}
         />

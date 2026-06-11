@@ -1,5 +1,14 @@
 # Stream and StreamProcessorRunner design
 
+> **Status: historical design notes, partially superseded.** This captures the
+> original thinking; several decisions below never shipped under the names used
+> here (e.g. `implementProcessor`/`afterAppend`, `connectStream`). The
+> design-of-record is the code plus `README.md`, `CONTEXT.md`, and the ADRs in
+> `docs/adr/`. Where this document and the code disagree, the code wins. Factual
+> claims that are known-wrong against the current code are corrected inline; the
+> "Stream processor", "Resolved decisions", and "Next steps scratchpad" sections
+> are retained as history and flagged where they diverge.
+
 This document describes the design of the two principal abstractions in our stream processing system:
 
 1. Stream
@@ -23,9 +32,11 @@ Subscriber: a node outside the stream that can consume event batches from the st
 not a websocket, not a live connection, and not necessarily unique to one stream.
 
 Subscriber spec: the `subscriber` object inside a `subscription-configured` event. It tells the stream
-what kind of subscriber should exist and how to connect to it. The transport is a property of this
-object. For now outbound subscribers are same-account Workers RPC built-ins; later subscriber specs
-can describe dynamic workers, external URLs, webhooks, etc.
+what kind of subscriber should exist and how to connect to it. The only shipped shape is
+`{ type: "callable", callable }`, where `callable` (from `@iterate-com/shared/callable/types.ts`) names
+the host entrypoint/Durable Object and RPC method the stream dispatches with the handshake; the host
+then calls back `subscribeOutbound`. The earlier `built-in` / `workers-rpc` / `processorSlug` and
+external-URL/webhook shapes were never built.
 
 Subscription: the configured edge from a stream node to a subscriber node. `subscriptionKey` identifies
 this edge within one stream. The same subscriber implementation can appear behind many subscriptions.
@@ -88,7 +99,7 @@ Each stream is uniquely identified by a "path" that must start with a slash and 
 
 Each stream contains an append-only log of events with
 
-- `offset` (unique autoincrementing integer >= 0)
+- `offset` (unique autoincrementing integer >= 1; the first event is offset 1)
 - `type` (string)
 - `idempotencyKey?` (optional unique string) - if provided must be unique within the stream
 - `payload?` (optional object) - shape determined by the `type`
@@ -99,12 +110,12 @@ Each stream contains an append-only log of events with
 
 ### `events.iterate.com/stream/created`
 
-The first event in every stream. It has offset `0`, records the stream namespace/path, and lets the
+The first event in every stream. It has offset `1`, records the stream namespace/path, and lets the
 built-in core processor reduce `createdAt` from the event timestamp.
 
 ```ts
 {
-  offset: 0,
+  offset: 1,
   type: "events.iterate.com/stream/created",
   payload: {
     namespace: "stream",
@@ -121,7 +132,7 @@ debug output can distinguish persisted stream state from the currently running o
 
 ```ts
 {
-  offset: 1,
+  offset: 2,
   type: "events.iterate.com/stream/woken",
   payload: {
     incarnationId: "81e7f2f0-8f2d-47e6-a9d9-1df5a4ad33f0",
@@ -136,7 +147,7 @@ Updates stream-level configuration that belongs in reduced state.
 
 ```ts
 {
-  offset: 2,
+  offset: 3,
   type: "events.iterate.com/stream/configured",
   payload: {
     config: {
@@ -155,15 +166,16 @@ configure itself from committed stream state.
 
 ```ts
 {
-  offset: 3,
+  offset: 4,
   type: "events.iterate.com/stream/subscription-configured",
   idempotencyKey: "subscription:transcribe-audio",
   payload: {
     subscriptionKey: "transcribe-audio",
     subscriber: {
-      type: "built-in",
-      transport: "workers-rpc",
-      processorSlug: "transcribe-audio",
+      type: "callable",
+      callable: {
+        /* names the host entrypoint/DO + RPC method to dispatch */
+      },
     },
   },
   createdAt: "2026-06-01T12:00:00.003Z",
@@ -174,27 +186,11 @@ configure itself from committed stream state.
 within a stream. If a later `subscription-configured` event uses the same `subscriptionKey`, it replaces
 the previous configuration for that subscription. The same subscriber implementation can appear in
 multiple subscriptions.
-`subscriber` describes what kind of subscriber should be connected and how to connect to it. For now
-outbound delivery is Workers RPC only: `built-in` uses `processorSlug` to select a built-in stream
-processor runner. External websocket/http subscribers can come back when there is a concrete product
+`subscriber` describes what kind of subscriber should be connected and how to connect to it. The only
+shipped shape is `{ type: "callable", callable }`: the `callable` names the host entrypoint/Durable
+Object and RPC method the stream dispatches with the handshake, and the host calls back
+`subscribeOutbound`. External websocket/http subscribers can come back when there is a concrete product
 need.
-
-```ts
-{
-  type: "events.iterate.com/stream/subscription-configured",
-  payload: {
-    subscriptionKey: "external-runner",
-    subscriber: {
-      type: "built-in",
-      transport: "workers-rpc",
-      processorSlug: "external-runner",
-    },
-  },
-}
-```
-
-TODO: Add `dynamic-worker` only once a worker-name/entrypoint dialer exists.
-TODO: Add webhooks only if we want non-capnweb delivery semantics.
 
 ## Subscriptions
 
@@ -290,7 +286,10 @@ The failure of any one processor should not affect other processors. This means,
 
 ## Stream
 
-- Use the async KV API for storage because it allows us manual control over when writes are persisted to other edge locations (use `allowUnconfirmed: true` for this)
+- Store events in the Durable Object SQLite store via `ctx.storage.sql`. Events live in an
+  offset-keyed `events` index table plus an `event_chunks` table that splits each event's JSON into
+  512KB chunks, so a single event can exceed the per-row size limit. (The original async-KV plan was
+  not used.)
 
 - In general, DO NOT block durable object output gates on writes. Only block egress about the specific event that was just appended
 
@@ -338,11 +337,11 @@ The subscription request shape is:
 }
 ```
 
-`replayAfterOffset` is owned by the subscriber and is optional. If omitted, the stream treats it as
-`"start"`, meaning "start before the first event". For inbound subscriptions, the subscriber sends it
-directly to `subscribe()`. For outbound subscriptions, the subscriber returns it from
-`requestSubscription()` after looking at `runtimeState()` and the `subscription-configured` event.
-The stream then starts replay/live delivery from `replayAfterOffset + 1`.
+`replayAfterOffset` is owned by the subscriber and is optional (`replayAfterOffset?: number` — there
+is no `"start"` literal). It is exclusive: delivery starts from `replayAfterOffset + 1`. If omitted, it
+defaults to the stream's current `maxOffset`, i.e. live-tail from now with no historical replay; pass
+`0` to replay from the first event. For inbound subscriptions, the subscriber sends it directly to
+`subscribe()`.
 
 Not every capnweb session is a subscription connection. Debug and control clients can open
 capnweb sessions and call RPC methods without providing a batch callback. A capnweb session
@@ -403,6 +402,15 @@ We use the workers RPC API from other cloudflare workers. For example from the i
 Not a big deal, though, as this is an almost complete implementation of capnweb.
 
 # Stream processor
+
+> **Superseded.** The shipped model is a single `StreamProcessor` abstract class
+> (`src/stream-processor.ts`) extended by subclasses with a `defineProcessorContract`
+> contract; hooks are `reduce` / `processEvent` / `processEventBatch`, side-effect
+> helpers are `blockProcessorWhile` / `runInBackground`, and the checkpoint anchor is
+> `sideEffectsAfterOffset`. The `implementProcessor(contract, implementation)` /
+> `build(deps) -> { afterAppend }` split described below, and the claim that a base
+> class can't get contextual param typing, never shipped. See README.md §"Stream
+> Processor Abstraction" for the current model. The text below is retained as history.
 
 A stream processor is **two objects**, never fused:
 
@@ -535,11 +543,16 @@ appendedAtMs`. No correlation map, no await — `append` stays fire-and-forget. 
 - YOLO mode with configurable storage.sync() timing - we should be able to say globally or on a per-event basis that "we're okay with losing 100 events or maybe 30s worth of events", with individually overridable policies in .append()
 - Permissions / access control
 - Loop detection - like permissions / access control this MUST be in the stream durable object, as it _blocks_ appends
-- Split events across multiple kv sqlite rows to avoid 2mb limit
 - Store older events in R2
 - Different types of subscriptions - including those where the server keeps track of the offset for each consumer
 
 # Next steps scratchpad
+
+> **Superseded.** This scratchpad sketches a `connectStream` / `createStreamSubscription`
+> / `processorRunner.run` client library that never shipped under those names. The real
+> surfaces are `withStreamConnectionFromBrowser` + `acquireStreamRuntime` (browser) and
+> `createStreamProcessorHost` (workers); connections are synchronously `Disposable`, not
+> `AsyncDisposable`. Retained as history.
 
 ## Client libraries
 
@@ -786,8 +799,8 @@ This layer should share the contract-aware event resolution/parsing used by type
   Durable Object.
 - In the browser SQLite viewer, CapnWeb connections and subscriptions are deliberately separate:
   every tab gets its own stream connection for commands, but only one elected tab per stream path
-  should call `subscribe()` and project event batches into the shared SQLocal database. Other tabs
-  render through SQLocal cross-tab reactive queries.
+  should call `subscribe()` and project event batches into the shared OPFS SQLite mirror
+  (`@journeyapps/wa-sqlite`). Other tabs render through cross-tab reactive queries over that mirror.
 
 ## Later: metrics and ping
 

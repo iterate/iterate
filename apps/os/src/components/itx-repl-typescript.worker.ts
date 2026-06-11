@@ -23,17 +23,37 @@ const compilerOptions: ts.CompilerOptions = {
   target: ts.ScriptTarget.ES2022,
 };
 
+// REPL snippets are function BODIES at runtime (every runner wraps them in an
+// async function, so a trailing `return` is the documented way to produce a
+// result), but the language service sees them as a module — where TS1108
+// ("A 'return' statement can only be used within a function body.") fires.
+// Filter that one diagnostic instead of wrapping the file: wrapping would
+// shift every position the sync/lint/hover/completion extensions exchange.
+const IGNORED_DIAGNOSTIC_CODES = new Set([1108]);
+
 const worker = createWorker(async () => {
   const fsMap = await createDefaultMapFromCDN(compilerOptions, ts.version, false, ts);
   fsMap.set(REPL_TYPES_PATH, itxReplDeclaration);
   fsMap.set(REPL_SOURCE_PATH, "\n");
   const system = createSystem(fsMap);
-  return createVirtualTypeScriptEnvironment(
+  const env = createVirtualTypeScriptEnvironment(
     system,
     [REPL_TYPES_PATH, REPL_SOURCE_PATH],
     ts,
     compilerOptions,
   );
+
+  const languageService = env.languageService;
+  const keepDiagnostic = (diagnostic: ts.Diagnostic) =>
+    !IGNORED_DIAGNOSTIC_CODES.has(diagnostic.code);
+  const getSemanticDiagnostics = languageService.getSemanticDiagnostics.bind(languageService);
+  languageService.getSemanticDiagnostics = (fileName) =>
+    getSemanticDiagnostics(fileName).filter(keepDiagnostic);
+  const getSyntacticDiagnostics = languageService.getSyntacticDiagnostics.bind(languageService);
+  languageService.getSyntacticDiagnostics = (fileName) =>
+    getSyntacticDiagnostics(fileName).filter(keepDiagnostic);
+
+  return env;
 });
 
 Comlink.expose({

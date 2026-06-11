@@ -3,9 +3,6 @@
 // OpenAI Responses WebSocket mode uses `response.create` messages on a
 // WebSocket connection and emits the same streaming event family as ordinary
 // Responses streaming. https://developers.openai.com/api/docs/guides/websocket-mode
-//
-// Migrated from packages/shared/src/stream-processors/openai-ws/contract.ts.
-// Wire formats (event types and payload schemas) are unchanged.
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";

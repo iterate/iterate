@@ -74,6 +74,34 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   expect(reconnectedShadow.marker).toBe("child-level");
 });
 
+test("fork: the inherited workspace default is isolated per child context", async () => {
+  using itx = connectGlobal();
+  const project = (await itx.projects.create({ slug: `itx-fork-ws-${suffix()}` })) as {
+    id: string;
+  };
+  createdProjectIds.push(project.id);
+  using projectItx = await itx.projects.get(project.id);
+
+  // `workspace` is a platform:project default, but it is CONTEXT-scoped:
+  // chain delegation carries the originating context, so a child resolves
+  // its own workspace (itx:ctx_…), not the project's shared one.
+  using child = await projectItx.fork({ name: "e2e-ws" });
+  const handle = (target: unknown) => target as never as Record<string, any>;
+
+  const marker = suffix();
+  await handle(child).workspace.writeFile(`/isolation-${marker}.txt`, "child only");
+  await expect(handle(child).workspace.readFile(`/isolation-${marker}.txt`)).resolves.toBe(
+    "child only",
+  );
+
+  // The project context's workspace must NOT see the child's file…
+  await expect(handle(projectItx).workspace.readFile(`/isolation-${marker}.txt`)).rejects.toThrow();
+
+  // …and a sibling fork gets its own empty workspace too.
+  using sibling = await projectItx.fork({ name: "e2e-ws-sibling" });
+  await expect(handle(sibling).workspace.readFile(`/isolation-${marker}.txt`)).rejects.toThrow();
+});
+
 test("fork narrows access: a session cannot reach sibling projects", async () => {
   using itx = connectGlobal();
   // Two projects under an admin (access "all") handle.

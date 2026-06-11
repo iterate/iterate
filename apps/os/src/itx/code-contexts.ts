@@ -67,9 +67,12 @@ export function defineCodeContext(
 }
 
 /**
- * The defaults every project context delegates to (§8: "cap #0 disappears").
- * Code holds composition (Law 1): these are ordinary capability definitions
- * a context falls through to, shadowable per-context — which is the point.
+ * The defaults every project context delegates to (§8's "cap #0 disappears"
+ * direction). What was hardwired into the handle is now ordinary capability
+ * definitions: ai, repos, workspace, and the project worker. The remaining
+ * kernel — caps, streams, fetch, fork, project, projects, describe — is
+ * composition the registry cannot express (access checks, narrowing, the
+ * registry itself).
  */
 export const platformProjectContext = defineCodeContext("platform:project", (caps) => {
   caps.define({
@@ -83,6 +86,50 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
     target: {
       entrypoint: "BindingCapability",
       props: { binding: "AI" },
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    meta: {
+      instructions:
+        "The project's git repos: itx.repos.ensureIterateConfigInfo({ projectSlug }), " +
+        "list(), create({ slug }), get({ slug }) — repo handles expose commitFiles/readFiles/readLog.",
+    },
+    name: "repos",
+    target: {
+      entrypoint: "ReposCapability",
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    meta: {
+      instructions:
+        "A persistent workspace filesystem: itx.workspace.readFile/writeFile plus the flat " +
+        "git methods gitClone/gitAdd/gitCommit/gitPush/gitStatus. Project contexts share " +
+        "one workspace; forked child contexts each get their own.",
+    },
+    name: "workspace",
+    target: {
+      entrypoint: "WorkspaceCapability",
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+  });
+  caps.define({
+    // path-call: the cap's own invoke describes the forwarder hop; the
+    // members replay against the user's default export rides in props.
+    invoke: "path-call",
+    meta: {
+      instructions:
+        "The project's own iterate-config worker, rebuilt from the repo on every call: " +
+        "itx.worker.someExportedFunction(args) reaches any public method of its default export.",
+    },
+    name: "worker",
+    target: {
+      entrypoint: "ProjectWorker",
+      props: { invoke: "members" },
       type: "rpc",
       worker: { type: "loopback" },
     },
@@ -102,61 +149,6 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
       entrypoint: "EgressPipe",
       type: "rpc",
       worker: { type: "loopback" },
-    },
-  });
-  caps.define({
-    invoke: "members",
-    meta: {
-      instructions: "The project's git repos: itx.repos.list(), itx.repos.get({ slug }), …",
-    },
-    name: "repos",
-    target: {
-      entrypoint: "ReposCapability",
-      type: "rpc",
-      worker: { type: "loopback" },
-    },
-  });
-  caps.define({
-    invoke: "members",
-    meta: {
-      instructions:
-        "The project's workspace: readFile/writeFile and gitClone/gitAdd/" +
-        "gitCommit/gitPush/gitStatus.",
-    },
-    name: "workspace",
-    target: {
-      entrypoint: "WorkspaceCapability",
-      type: "rpc",
-      worker: { type: "loopback" },
-    },
-  });
-  caps.define({
-    invoke: "path-call",
-    meta: {
-      instructions:
-        "The project's own worker (built from its repo). Every export is " +
-        "callable: itx.worker.someTool(args), at any depth.",
-    },
-    name: "worker",
-    target: {
-      entrypoint: "ProjectWorker",
-      props: { invoke: "members" },
-      type: "rpc",
-      worker: { type: "loopback" },
-    },
-  });
-  caps.define({
-    invoke: "members",
-    meta: {
-      instructions:
-        "The Project Durable Object's whole surface (cap #0): " +
-        "itx.project.getSummary(), itx.project.processor.snapshot(), ….",
-    },
-    name: "project",
-    target: {
-      type: "rpc",
-      // Name omitted: the registry defaults it to the owning project id.
-      worker: { binding: "PROJECT", type: "durable-object" },
     },
   });
 });

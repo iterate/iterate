@@ -3,9 +3,9 @@
 // The chat surfaces append raw chat-domain events; this processor transcribes
 // them into Agent input rows.
 //
-// Migrated from packages/shared/src/stream-processors/agent-chat/implementation.ts.
-// All appended events keep their legacy types, payload shapes, and
-// idempotency-key derivations (`agent-chat/<key>@<sourceOffset>`).
+// Appended event types, payload shapes, and idempotency-key derivations
+// (`agent-chat/<key>@<sourceOffset>`) are stable wire formats — changing them
+// breaks dedup against events already committed to streams.
 
 import {
   assertNever,

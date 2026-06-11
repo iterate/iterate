@@ -25,7 +25,7 @@ import type {
 } from "@iterate-com/shared/streams/types";
 import { createD1Client } from "sqlfu";
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
-import { PathProxyRpcTarget } from "./path-proxy.ts";
+import { PathProxyRpcTarget, replayPathCall } from "./path-proxy.ts";
 import { ItxError } from "./errors.ts";
 import {
   GLOBAL_CONTEXT_ID,
@@ -144,29 +144,54 @@ export class Itx extends RpcTarget {
     return new ItxStreams(this.#runtime, GLOBAL_CONTEXT_ID);
   }
 
-  // repos, workspace, worker, and project are NOT here: they are ordinary
-  // capabilities on platform:project (code-contexts.ts), resolved through
-  // the same fallthrough as itx.slack — and therefore shadowable per
-  // context, which is the §8 point. itx.project still reaches the whole
-  // Project DO surface: its default is a durable-object ref whose calls
-  // replay server-side (replayPathCall awaits intermediate property
-  // segments), so deep one-expression traversal keeps working.
+  /**
+   * The project's own (cap #0) surface IS the Project Durable Object —
+   * adding a method/getter to ProjectDurableObject makes it instantly
+   * reachable as itx.project.newMethod() — zero forwarder code, nothing to
+   * keep in sync (the owner-chosen whole-surface posture, DECISIONS D17).
+   *
+   * Wrapped in a path proxy rather than handing out the raw stub: workerd
+   * does not pipeline calls through property accesses, so on a raw stub
+   * `stub.processor.snapshot()` throws. The proxy accumulates the path and
+   * replayPathCall awaits each intermediate segment, so deep traversal works
+   * in one expression: `await itx.project.processor.snapshot()`. Reserved/
+   * prototype path segments stay gated inside replayPathCall.
+   */
+  get project(): ProjectStub {
+    const stub = this.#projectStub();
+    return new PathProxyRpcTarget((call) => {
+      // The itx* verbs (itxInvoke, itxDefine, itxProjectWorkerCall, …) are
+      // node-to-node plumbing: chain delegation passes a TRUSTED `origin`
+      // and the forwarder passes registry-merged props. Reachable here,
+      // they would let any handle holder spoof another context's identity
+      // (e.g. read a sibling fork's workspace by faking origin). The proper
+      // doors are itx.caps and the caps themselves.
+      const head = call.path[0] ?? "";
+      if (/^itx[A-Z]/.test(head)) {
+        throw new ItxError({
+          code: "FORBIDDEN",
+          message: `${head} is internal registry plumbing, not part of the project surface — use itx.caps / itx.<cap> instead.`,
+        });
+      }
+      return replayPathCall(stub, call);
+    }) as unknown as ProjectStub;
+  }
 
   get projects(): ItxProjects {
     return new ItxProjects(this.#runtime);
   }
 
   /**
-   * Explicit project egress (Law 5): sugar for the `egress` capability —
-   * `fetch("https://api.x.com", { headers: { authorization:
-   * 'getSecret("X_TOKEN")' } })` never sees the material (the default
-   * EgressPipe substitutes it; a live `egress` provider sees placeholders
-   * raw). Isolates the platform loads get the same dispatch bound as their
-   * global fetch, so shadowing covers every door.
+   * Explicit project egress (Law 5). Secrets are substituted inside the
+   * Project DO's egress hop — `fetch("https://api.x.com", { headers: {
+   * authorization: 'getSecret("X_TOKEN")' } })` never sees the material.
+   * Isolates the platform loads get this same pipe bound as global fetch.
    */
   async fetch(input: Request | string, init?: RequestInit): Promise<Response> {
     const request = typeof input === "string" ? new Request(input, init) : input;
     this.#requireProjectId();
+    // Dispatch the `egress` capability so a live provider (caps.provide —
+    // the egress-intercept story) shadows the default EgressPipe.
     return (await this.#registryStub().itxInvoke({
       args: [request],
       name: "egress",

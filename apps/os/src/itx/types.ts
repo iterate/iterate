@@ -112,22 +112,33 @@ export interface ItxBuiltins {
    * is no separate "project object"; a narrowed itx IS the project. */
   readonly projects: ItxProjects;
 
-  // repos, workspace, worker, project, egress, and ai are NOT built-ins:
-  // they are ordinary capabilities defined on the platform:project code
-  // context (code-contexts.ts), resolved through the same fallthrough as any
-  // user-defined cap — and therefore SHADOWABLE per context (prototype
-  // semantics; §8). itx.project still reaches the Project Durable Object's
-  // whole surface: its default target is a durable-object ref whose calls
-  // replay server-side, so `await itx.project.processor.snapshot()` keeps
-  // working in one expression.
+  /** PLATFORM DEFAULT, not kernel (§8 shipped): the project's git repos —
+   * an ordinary `platform:project` cap definition (ReposCapability
+   * loopback), shadowable like any inherited cap. Surface unchanged. */
+  readonly repos: unknown;
+
+  /** PLATFORM DEFAULT, not kernel: workspace readFile/writeFile and the
+   * flat git methods (gitClone/gitAdd/gitCommit/gitPush/gitStatus — nested
+   * RpcTargets do not survive RPC boundaries). Context-scoped: chain
+   * delegation carries the ORIGINATING context, so a forked child context
+   * gets its own isolated workspace even though the definition lives on
+   * `platform:project`. */
+  readonly workspace: unknown;
+
+  /** PLATFORM DEFAULT, not kernel: the project's iterate-config worker via
+   * the ProjectWorker forwarder — `itx.worker.someTool(args)` reaches any
+   * public method of the default export, rebuilt from the repo per call. */
+  readonly worker: unknown;
+
+  /** The Project Durable Object stub, whole surface ("cap #0"). If your
+   * handle is on this project's context at all, you get all of it. */
+  readonly project: unknown;
 
   /**
-   * Explicit project egress: sugar for `itx.egress.fetch(request)`. The
-   * default pipe substitutes secret placeholders (`'Bearer getSecret({ key:
-   * "X_TOKEN" })'` never sees the material); a live `egress` provider —
-   * `itx.caps.provide({ name: "egress", … })`, the egress-intercept story —
-   * receives placeholders RAW. Isolates the platform loads get the same
-   * dispatch bound as their global `fetch`, so inside a capability or itx
+   * Explicit project egress. Secret placeholders are substituted inside the
+   * project's egress hop — `'Bearer getSecret({ key: "X_TOKEN" })'` in a
+   * header never sees the material. Isolates the platform loads get this
+   * same pipe bound as their global `fetch`, so inside a capability or itx
    * script, bare `fetch()` and `itx.fetch()` are the same door.
    */
   fetch(input: Request | string, init?: RequestInit): Promise<Response>;

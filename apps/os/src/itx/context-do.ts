@@ -40,7 +40,7 @@ export type ContextDescriptor = {
 /** The registry surface a context host exposes; chain calls use this shape. */
 type RegistryHostStub = {
   itxDescribe(): Promise<CapDescription[]>;
-  itxInvoke(input: PathCall & { name: string }): Promise<unknown>;
+  itxInvoke(input: PathCall & { name: string; origin?: string }): Promise<unknown>;
 };
 
 export class ContextDO extends DurableObject<Env> {
@@ -112,13 +112,22 @@ export class ContextDO extends DurableObject<Env> {
     return [...own, ...parentCaps.filter((cap) => !ownNames.has(cap.name))];
   }
 
-  async itxInvoke(input: PathCall & { name: string }): Promise<unknown> {
+  async itxInvoke(input: PathCall & { name: string; origin?: string }): Promise<unknown> {
     const registry = this.registry();
     if (registry.has(input.name)) {
-      return await registry.invoke(input.name, { args: input.args, path: input.path });
+      return await registry.invoke(
+        input.name,
+        { args: input.args, path: input.path },
+        input.origin,
+      );
     }
-    // Chain delegation: one extra hop per parent level, no cache to invalidate.
-    return await this.parentStub().itxInvoke(input);
+    // Chain delegation: one extra hop per parent level, no cache to
+    // invalidate. The ORIGIN context rides along so context-scoped caps
+    // resolved at an ancestor still bind to the caller's context.
+    return await this.parentStub().itxInvoke({
+      ...input,
+      origin: input.origin ?? this.descriptor().id,
+    });
   }
 
   private parentStub(): RegistryHostStub {

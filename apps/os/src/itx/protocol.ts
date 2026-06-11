@@ -85,7 +85,7 @@ export function capSourceCacheKey(source: CapSource): string {
 export type WorkerRef =
   | { type: "binding"; binding: string }
   | { type: "loopback" }
-  | { type: "durable-object"; binding: string; name?: string }
+  | { type: "durable-object"; binding: string; name: string }
   | { type: "source"; source: CapSource };
 
 /**
@@ -124,13 +124,6 @@ export type SerializableCapTarget =
  */
 export const DIALABLE_BINDINGS: ReadonlySet<string> = new Set(["AI"]);
 /**
- * Durable Object namespaces dialable via `{ type: "durable-object" }` refs.
- * Same trust rule as loopbacks: the target class must scope by its own name
- * (which the registry defaults to the owning project id), never by
- * definer-supplied props.
- */
-export const DIALABLE_DURABLE_OBJECTS: ReadonlySet<string> = new Set(["PROJECT"]);
-/**
  * Loopback entrypoints listed here MUST scope strictly by the dial-time
  * props the registry injects ({ cap, context, projectId }) — never by
  * definer-supplied props — because anyone with a handle on a context can
@@ -149,6 +142,16 @@ export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "SlackCapability",
   "WorkspaceCapability",
 ]);
+
+/**
+ * Durable Object namespace bindings dialable via `{ type: "durable-object" }`
+ * refs. Empty on purpose: a DO ref names an arbitrary instance
+ * (`binding` + `name`), and every platform namespace (PROJECT, STREAM, …) is
+ * keyed across ALL projects — allowlisting one would let any project handle
+ * dial any other project's objects. Deployments opt namespaces in via config
+ * once they have a namespace whose instances are safe to reach by name.
+ */
+export const DIALABLE_DURABLE_OBJECTS: ReadonlySet<string> = new Set();
 
 /** The dial allowlists a host resolves once (defaults ∪ deployment config). */
 export type DialableTargets = {
@@ -256,8 +259,12 @@ export function assertDefinableCapTarget(
     case "durable-object":
       if (!dialable.durableObjects.has(worker.binding)) {
         throw new Error(
-          `Capability "${name}": durable-object namespace "${worker.binding}" is not dialable.`,
+          `Capability "${name}": Durable Object namespace "${worker.binding}" is not dialable. ` +
+            `Dialable namespaces: ${[...dialable.durableObjects].join(", ") || "(none — opt in via APP_CONFIG_ITX)"}.`,
         );
+      }
+      if (!worker.name) {
+        throw new Error(`Capability "${name}": durable-object refs need a non-empty name.`);
       }
       return;
   }
@@ -301,15 +308,12 @@ export type CapDescription = {
  *   are capnweb stub controls, `constructor`/`__proto__` are prototype
  *   pollution vectors, `map` is capnweb's magic promise method.
  */
-// The irreducible kernel (§8): everything else — repos, workspace, worker,
-// project, egress, ai — is an ordinary capability on platform:project,
-// SHADOWABLE per context (prototype semantics; that is the point).
 const ITX_BUILTIN_NAMES = [
-  "cap",
   "caps",
   "describe",
   "fetch",
   "fork",
+  "project",
   "projects",
   "streams",
 ] as const;

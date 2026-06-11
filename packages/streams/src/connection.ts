@@ -48,16 +48,6 @@ export function toWebSocketUrl(url: string | URL) {
   return webSocketUrl;
 }
 
-export function waitForOpen(webSocket: WebSocket) {
-  if (webSocket.readyState === WebSocket.OPEN) return Promise.resolve();
-  return new Promise<void>((resolve, reject) => {
-    webSocket.addEventListener("open", () => resolve(), { once: true });
-    webSocket.addEventListener("error", () => reject(new Error("WebSocket connection failed")), {
-      once: true,
-    });
-  });
-}
-
 function emitFrame(
   listeners: Set<(frame: WebSocketFrame) => void>,
   direction: "in" | "out",

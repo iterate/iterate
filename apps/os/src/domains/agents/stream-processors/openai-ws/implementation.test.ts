@@ -1,8 +1,6 @@
-// Ported from packages/shared/src/stream-processors/openai-ws/implementation.test.ts
-// onto the class-based StreamProcessor model. The WebSocket connection is an
-// instance field on the processor class (the hosting DO is the connection
-// scope), so connection-reuse and wake semantics are exercised by reusing or
-// recreating processor instances.
+// The WebSocket connection is an instance field on the processor class (the
+// hosting DO is the connection scope), so connection-reuse and wake semantics
+// are exercised by reusing or recreating processor instances.
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -33,7 +31,7 @@ describe("OpenAiWsProcessor", () => {
     });
 
     const firstRequest = processor.ingest({
-      events: [llmRequestRequestedEvent({ content: "first", offset: 11 })],
+      events: [llmRequestRequestedEvent({ offset: 11 })],
       streamMaxOffset: 11,
     });
     await waitFor(() => sockets.length === 1);
@@ -43,7 +41,7 @@ describe("OpenAiWsProcessor", () => {
     await firstRequest;
 
     const secondRequest = processor.ingest({
-      events: [llmRequestRequestedEvent({ content: "second", offset: 22 })],
+      events: [llmRequestRequestedEvent({ offset: 22 })],
       streamMaxOffset: 22,
     });
     await waitFor(() => sockets[0]?.sent.length === 2);
@@ -76,6 +74,50 @@ describe("OpenAiWsProcessor", () => {
     expect(eventTypes(appended)).toContain("events.iterate.com/agent/llm-request-completed");
   });
 
+  it("rebuilds the request input from history up to the request's offset", async () => {
+    const { stream, appended } = memoryStream();
+    const sockets: FakeOpenAiResponsesWebSocket[] = [];
+    const processor = newProcessor({
+      stream,
+      appended,
+      sockets,
+      snapshot: { offset: 0, state: testState() },
+      // Request-by-reference: the requested event carries no body, so the
+      // frame's input is exactly the reduction of committed history up to the
+      // request's own offset — rows that landed after it are excluded.
+      readStreamEvents: async () => [
+        inputAddedEvent({ offset: 2, content: "hello" }),
+        llmRequestRequestedEvent({ offset: 11 }),
+        inputAddedEvent({ offset: 15, content: "landed after the request" }),
+      ],
+    });
+
+    const request = processor.ingest({
+      events: [llmRequestRequestedEvent({ offset: 11 })],
+      streamMaxOffset: 11,
+    });
+    await waitFor(() => sockets.length === 1);
+    sockets[0]?.open();
+    await waitFor(() => sockets[0]?.sent.length === 1);
+    completeResponse(sockets[0], { delta: "OK", responseId: "resp_rebuilt" });
+    await request;
+    await waitFor(() =>
+      eventTypes(appended).includes("events.iterate.com/agent/llm-request-completed"),
+    );
+
+    expect(sockets[0]?.sent[0]).toMatchObject({
+      type: "response.create",
+      instructions: "You are a helpful assistant. You can trust your user.",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "hello" }],
+        },
+      ],
+    });
+  });
+
   it("does not append agent output for a cancelled request", async () => {
     const { stream, appended } = memoryStream();
     const sockets: FakeOpenAiResponsesWebSocket[] = [];
@@ -86,13 +128,11 @@ describe("OpenAiWsProcessor", () => {
       snapshot: { offset: 0, state: testState() },
       // The stream's reduced agent state points at a NEWER request (offset 18),
       // so request 17's output must be dropped.
-      readStreamEvents: async () => [
-        llmRequestRequestedEvent({ content: "replacement", offset: 18 }),
-      ],
+      readStreamEvents: async () => [llmRequestRequestedEvent({ offset: 18 })],
     });
 
     const request = processor.ingest({
-      events: [llmRequestRequestedEvent({ content: "cancelled", offset: 17 })],
+      events: [llmRequestRequestedEvent({ offset: 17 })],
       streamMaxOffset: 17,
     });
     await waitFor(() => sockets.length === 1);
@@ -121,7 +161,7 @@ describe("OpenAiWsProcessor", () => {
     });
 
     const firstBatch = processor.ingest({
-      events: [llmRequestRequestedEvent({ content: "slow", offset: 11 })],
+      events: [llmRequestRequestedEvent({ offset: 11 })],
       streamMaxOffset: 11,
     });
     // The batch resolves (reduce + checkpoint) while the LLM request is still
@@ -161,7 +201,7 @@ describe("OpenAiWsProcessor", () => {
       snapshot: { offset: 0, state: testState() },
     });
     const firstRequest = firstProcessor.ingest({
-      events: [llmRequestRequestedEvent({ content: "first", offset: 11 })],
+      events: [llmRequestRequestedEvent({ offset: 11 })],
       streamMaxOffset: 11,
     });
     await waitFor(() => sockets.length === 1);
@@ -180,7 +220,7 @@ describe("OpenAiWsProcessor", () => {
       },
     });
     const secondRequest = processorAfterWake.ingest({
-      events: [llmRequestRequestedEvent({ content: "second", offset: 22 })],
+      events: [llmRequestRequestedEvent({ offset: 22 })],
       streamMaxOffset: 22,
     });
     await waitFor(() => sockets.length === 2);
@@ -211,7 +251,7 @@ describe("OpenAiWsProcessor", () => {
     });
 
     const request = processorAfterWake.ingest({
-      events: [llmRequestRequestedEvent({ content: "retry me", offset: 33 })],
+      events: [llmRequestRequestedEvent({ offset: 33 })],
       streamMaxOffset: 33,
     });
     await waitFor(() => sockets.length === 1);
@@ -243,9 +283,7 @@ describe("OpenAiWsProcessor", () => {
       },
       // History holds the original requested event at offset === llmRequestId
       // and the agent's reduced phase still points at it (current request).
-      readStreamEvents: async () => [
-        llmRequestRequestedEvent({ content: "recover me", offset: 33 }),
-      ],
+      readStreamEvents: async () => [llmRequestRequestedEvent({ offset: 33 })],
     });
 
     // The host re-handshakes after the crash; the only thing the stream
@@ -284,9 +322,7 @@ describe("OpenAiWsProcessor", () => {
         offset: 34,
         state: { ...testState(), requests: { "33": { status: "started" } } },
       },
-      readStreamEvents: async () => [
-        llmRequestRequestedEvent({ content: "recover me", offset: 33 }),
-      ],
+      readStreamEvents: async () => [llmRequestRequestedEvent({ offset: 33 })],
     });
 
     // An agent host re-handshake appends one connected event per co-hosted
@@ -326,9 +362,7 @@ describe("OpenAiWsProcessor", () => {
         offset: 34,
         state: { ...testState(), requests: { "33": { status: "started" } } },
       },
-      readStreamEvents: async () => [
-        llmRequestRequestedEvent({ content: "recover me", offset: 33 }),
-      ],
+      readStreamEvents: async () => [llmRequestRequestedEvent({ offset: 33 })],
     });
 
     // Recovery is connect-driven: a connected event is guaranteed on every
@@ -357,7 +391,7 @@ describe("OpenAiWsProcessor", () => {
     });
 
     await processor.ingest({
-      events: [llmRequestRequestedEvent({ content: "already done", offset: 17 })],
+      events: [llmRequestRequestedEvent({ offset: 17 })],
       streamMaxOffset: 17,
     });
 
@@ -399,22 +433,22 @@ function currentAgentRequestEvents(appended: readonly StreamEventInput[]): Strea
     .map((event) => (event.payload as { llmRequestId?: unknown }).llmRequestId)
     .findLast((value): value is number => typeof value === "number");
   if (llmRequestId == null) return [];
-  return [llmRequestRequestedEvent({ content: "current", offset: llmRequestId })];
+  return [llmRequestRequestedEvent({ offset: llmRequestId })];
 }
 
-function llmRequestRequestedEvent(args: { content: string; offset: number }): StreamEvent {
+function llmRequestRequestedEvent(args: { offset: number }): StreamEvent {
   return {
     type: "events.iterate.com/agent/llm-request-requested",
-    payload: {
-      model: "ignored-provider-owned-model",
-      body: {
-        messages: [
-          { role: "system" as const, content: "You are terse." },
-          { role: "user" as const, content: args.content },
-        ],
-      },
-      runOpts: {},
-    },
+    payload: { model: "ignored-provider-owned-model", runOpts: {} },
+    offset: args.offset,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+function inputAddedEvent(args: { offset: number; content: string }): StreamEvent {
+  return {
+    type: "events.iterate.com/agent/input-added",
+    payload: { content: args.content, llmRequestPolicy: { behaviour: "dont-trigger-request" } },
     offset: args.offset,
     createdAt: "2026-01-01T00:00:00.000Z",
   };
