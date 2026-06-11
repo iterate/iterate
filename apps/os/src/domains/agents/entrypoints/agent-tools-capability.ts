@@ -19,7 +19,7 @@ export type AgentToolsCapabilityProps = {
   agentPath: string;
   /** The tool namespace on the agent DO: "chat" or "debug". */
   tool: "chat" | "debug";
-  cap?: string;
+  capability?: string;
   context?: string;
 };
 

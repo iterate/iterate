@@ -19,7 +19,7 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
 
-type StreamsCapabilityEnv = {
+type StreamsBackendEnv = {
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
@@ -30,7 +30,7 @@ export type StreamAppendPolicy =
   | { mode: "any" }
   | { mode: "pattern"; pattern: string };
 
-export type StreamsCapabilityProps = {
+export type StreamsBackendProps = {
   appendMetadata?: Record<string, unknown>;
   appendPolicy?: StreamAppendPolicy;
   projectId: string;
@@ -82,8 +82,8 @@ export type StreamSubscribeBatch = {
 };
 
 export type StreamListChildrenInput = StreamPathInput;
-type StreamsCapabilityClient = Pick<
-  StreamsCapability,
+type StreamsBackendClient = Pick<
+  StreamsBackend,
   | "append"
   | "appendBatch"
   | "create"
@@ -105,10 +105,7 @@ type StreamsCapabilityClient = Pick<
  * props determine what the holder can do. In future, read and write policy for
  * streams will be expressed in these props.
  */
-export class StreamsCapability extends WorkerEntrypoint<
-  StreamsCapabilityEnv,
-  StreamsCapabilityProps
-> {
+export class StreamsBackend extends WorkerEntrypoint<StreamsBackendEnv, StreamsBackendProps> {
   async append(input: StreamAppendInput): Promise<Event> {
     const path = this.resolveNamespacePath(input);
     this.assertMayAppend(path);
@@ -323,24 +320,24 @@ export class StreamsCapability extends WorkerEntrypoint<
   }
 }
 
-export function getStreamsCapability(input: {
-  exports: Pick<Cloudflare.Exports, "StreamsCapability"> | undefined;
-  props: StreamsCapabilityProps;
-}): StreamsCapabilityClient {
+export function getStreamsBackend(input: {
+  exports: Pick<Cloudflare.Exports, "StreamsBackend"> | undefined;
+  props: StreamsBackendProps;
+}): StreamsBackendClient {
   if (!input.exports) {
-    throw new Error("StreamsCapability export is not available.");
+    throw new Error("StreamsBackend export is not available.");
   }
 
-  // Keep this as the only narrowing point for StreamsCapability loopback use.
+  // Keep this as the only narrowing point for StreamsBackend loopback use.
   // `input.exports` is still Cloudflare.Exports, so export-name drift is caught
   // at this property access. Assigning Cloudflare's full RPC loopback stub type
   // directly to a local function currently makes TypeScript expand the whole
   // Worker export graph and fail with TS2589. The public surface we need here is
   // intentionally smaller than the full Fetcher/RPC stub: construct the
   // capability with props, then call its stream methods.
-  const streamsCapability = input.exports.StreamsCapability as unknown as (options: {
-    props: StreamsCapabilityProps;
-  }) => StreamsCapabilityClient;
+  const streamsCapability = input.exports.StreamsBackend as unknown as (options: {
+    props: StreamsBackendProps;
+  }) => StreamsBackendClient;
 
   return streamsCapability({ props: input.props });
 }
@@ -499,7 +496,7 @@ async function* liveNamespaceStreamEvents(args: {
   handle = await streamStub.subscribe({
     processEventBatch: subscription.processEventBatch,
     replayAfterOffset: toAfterOffset(args.afterOffset),
-    subscriber: { description: "streams-capability" },
+    subscriber: { description: "streams-backend" },
   });
 
   for await (const batch of subscription) {

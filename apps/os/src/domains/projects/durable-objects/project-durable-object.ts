@@ -16,7 +16,7 @@
 // terminal pipe is the stateless EgressPipe: secrets are D1 rows, so
 // substitution + the real fetch happen in a plain isolate and secret
 // material never enters this DO. The old captun intercept tunnel is reborn
-// as `itx.caps.define({ name: "fetch", target: liveStub })`. This DO has NO
+// as `itx.provideCapability({ name: "fetch", target: liveStub })`. This DO has NO
 // fetch surface at all.
 //
 // State lives in the project's root event stream, projected by
@@ -68,18 +68,18 @@ import {
 import { ensureIterateConfigInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import { readRemoteBranchOid } from "~/domains/repos/repo-git.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
-import { ContextRegistry, type LiveCapTarget } from "~/itx/registry.ts";
+import { ContextRegistry, type LiveCapabilityTarget } from "~/itx/registry.ts";
 import { createContextRegistryHost } from "~/itx/registry-host.ts";
 import { platformProjectContext } from "~/itx/code-contexts.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
 import { ITX_AUDIT_STREAM_PATH } from "~/itx/protocol.ts";
 import { contextAddressOf, type ContextAddress } from "~/itx/addresses.ts";
 import type {
-  CapInvoke,
-  CapMeta,
+  CapabilityInvoke,
+  CapabilityMeta,
   PathCall,
   PathCallTarget,
-  SerializableCapTarget,
+  SerializableCapabilityTarget,
 } from "~/itx/protocol.ts";
 
 /** Project DOs are addressed by the plain project id. */
@@ -283,18 +283,18 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
 
   #itxRegistry: ContextRegistry | null = null;
 
-  async itxDefine(input: {
+  async itxProvideCapability(input: {
     name?: string;
     path?: string[];
-    target: SerializableCapTarget | LiveCapTarget;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
+    target: SerializableCapabilityTarget | LiveCapabilityTarget;
+    invoke?: CapabilityInvoke;
+    meta?: CapabilityMeta;
   }) {
-    return this.itxRegistry().define(input);
+    return this.itxRegistry().provideCapability(input);
   }
 
-  async itxRevoke(input: { name?: string; path?: string[] }) {
-    return this.itxRegistry().revoke(input);
+  async itxRevokeCapability(input: { name?: string; path?: string[] }) {
+    return this.itxRegistry().revokeCapability(input);
   }
 
   async itxDescribe() {
@@ -384,12 +384,12 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
    * space, same shape as first-party. The whole call arrives as data because
    * loader entrypoints cannot cross an RPC boundary; the entrypoint is
    * instantiated per call with the registry-merged props (definer
-   * parameterization + { cap, context, projectId } attribution).
+   * parameterization + { capability, context, projectId } attribution).
    */
   async itxProjectWorkerCall(input: {
     call: PathCall;
     entrypoint?: string;
-    invoke: CapInvoke;
+    invoke: CapabilityInvoke;
     props: Record<string, unknown>;
   }): Promise<unknown> {
     const summary = await this.requireSummary();

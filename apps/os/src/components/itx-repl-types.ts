@@ -37,12 +37,12 @@ import type * as itxTypes from "./itx-types.ts";
 declare module "./itx-types.ts" {
   /**
    * The editor's view of the capability fallthrough: unknown property names
-   * complete as callable capability paths. Merging this into KnownCaps means
+   * complete as callable capability paths. Merging this into KnownCapabilities means
    * EVERY handle carries it — including ones returned by \`fork()\` and
    * \`itx.projects.get()\`.
    */
-  interface KnownCaps {
-    [capability: string]: CapSurface;
+  interface KnownCapabilities {
+    [capability: string]: CapabilitySurface;
   }
 }
 
@@ -55,26 +55,26 @@ declare global {
    * fallthrough. Property access accumulates a path locally, then the
    * terminal call dispatches once: \`itx.slack.chat.postMessage(...)\`.
    */
-  type CapSurface = {
+  type CapabilitySurface = {
     (...args: any[]): Promise<unknown>;
-    [segment: string]: CapSurface;
+    [segment: string]: CapabilitySurface;
   };
 
   // The design-of-record types, exposed globally so snippets can annotate
   // with them without an import. Shapes live in ./itx-types.ts only.
   type Itx = itxTypes.Itx;
   type ItxBuiltins = itxTypes.ItxBuiltins;
-  type KnownCaps = itxTypes.KnownCaps;
+  type KnownCapabilities = itxTypes.KnownCapabilities;
   type ItxDescription = itxTypes.ItxDescription;
-  type CapTarget = itxTypes.CapTarget;
+  type CapabilityTarget = itxTypes.CapabilityTarget;
   type WorkerRef = itxTypes.WorkerRef;
-  type CapSource = itxTypes.CapSource;
-  type CapInvoke = itxTypes.CapInvoke;
+  type CapabilitySource = itxTypes.CapabilitySource;
+  type CapabilityInvoke = itxTypes.CapabilityInvoke;
   type PathCall = itxTypes.PathCall;
   type PathCallTarget = itxTypes.PathCallTarget;
   type LiveStub = itxTypes.LiveStub;
-  type CapMeta = itxTypes.CapMeta;
-  type CapDescription = itxTypes.CapDescription;
+  type CapabilityMeta = itxTypes.CapabilityMeta;
+  type CapabilityDescription = itxTypes.CapabilityDescription;
   type StreamRef = itxTypes.StreamRef;
   type StreamEvent = itxTypes.StreamEvent;
   type StreamEventInput = itxTypes.StreamEventInput;

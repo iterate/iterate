@@ -4,8 +4,8 @@
 // trust posture:
 //
 //   env.ITERATE    — an itx scoped to the isolate's HOME context (Law 4: a
-//                    cap can never reach wider than where it is defined);
-//                    `cap` is attribution.
+//                    cap can never reach wider than where it is provided);
+//                    `capability` is attribution.
 //   globalOutbound — PROJECT EGRESS (Law 5): bare fetch() inside the isolate,
 //                    including fetches made by bundled npm dependencies, rides
 //                    the egress pipe — secret placeholders are substituted
@@ -33,7 +33,7 @@ export type IsolateCode = {
 export function wireIsolateEnv(input: {
   loopback: IsolateLoopback;
   /** Attribution: which capability's isolate this is. */
-  cap: string;
+  capability: string;
   /** The isolate's home context — its ITERATE can never reach wider. */
   contextId: string;
   /** The owning project — egress (and its secrets) are scoped to it. */
@@ -47,12 +47,16 @@ export function wireIsolateEnv(input: {
     compatibilityFlags: input.code.compatibilityFlags ?? ISOLATE_COMPATIBILITY_FLAGS,
     env: {
       ITERATE: input.loopback("ItxEntrypoint", {
-        props: { cap: input.cap, context: input.contextId },
+        props: { capability: input.capability, context: input.contextId },
       }),
       ...input.extraEnv,
     },
     globalOutbound: input.loopback("ProjectEgress", {
-      props: { cap: input.cap, context: input.contextId, projectId: input.projectId },
+      props: {
+        capability: input.capability,
+        context: input.contextId,
+        projectId: input.projectId,
+      },
     }),
     mainModule: input.code.mainModule,
     modules: input.code.modules,

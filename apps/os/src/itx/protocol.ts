@@ -14,13 +14,13 @@
  *   may narrow to. Ignored (forced to the context's own project) on
  *   project-context handles, mirroring the old "project workers cannot
  *   escalate scopes" rule.
- * - `cap` is pure attribution: which capability's isolate this is. It grants
- *   nothing; it labels egress and audit records.
+ * - `capability` is pure attribution: which capability's isolate this is. It
+ *   grants nothing; it labels egress and audit records.
  */
 export type ItxProps = {
   context: string;
   access?: ProjectAccess;
-  cap?: string;
+  capability?: string;
 };
 
 export type ProjectAccess = "all" | string[];
@@ -38,7 +38,7 @@ export const GLOBAL_CONTEXT_ID = "global";
  *   the provider implements a single method and the public Slack SDK docs
  *   become the tool docs ("use itx.slack exactly like @slack/web-api").
  */
-export type CapInvoke = "members" | "path-call";
+export type CapabilityInvoke = "members" | "path-call";
 
 export type PathCall = { path: string[]; args: unknown[] };
 
@@ -46,14 +46,14 @@ export type PathCall = { path: string[]; args: unknown[] };
 export type PathCallTarget = { call(input: PathCall): unknown };
 
 /** A capability's kind is its target's type (design of record: types.ts). */
-export type CapKind = "live" | "rpc" | "url";
+export type CapabilityKind = "live" | "rpc" | "url";
 
 /**
  * Source for a `{ type: "source" }` worker ref. `cacheKey` MUST change
  * whenever the module contents change — the Worker Loader caches the
  * materialized isolate by it (a content hash is the ideal value).
  */
-export type CapSource = {
+export type CapabilitySource = {
   cacheKey?: string;
   mainModule: string;
   modules: Record<string, string>;
@@ -69,11 +69,11 @@ export type CapSource = {
   compatibilityDate?: string;
 };
 
-export function capSourceCacheKey(source: CapSource): string {
+export function capabilitySourceCacheKey(source: CapabilitySource): string {
   const key = source.cacheKey;
   if (!key) {
     throw new Error(
-      "CapSource needs a cacheKey (rotate it whenever modules change; a content hash is ideal).",
+      "CapabilitySource needs a cacheKey (rotate it whenever modules change; a content hash is ideal).",
     );
   }
   return key;
@@ -86,14 +86,14 @@ export type WorkerRef =
   | { type: "binding"; binding: string }
   | { type: "loopback" }
   | { type: "durable-object"; binding: string; name: string }
-  | { type: "source"; source: CapSource };
+  | { type: "source"; source: CapabilitySource };
 
 /**
  * The serializable capability targets — this realm's sturdy refs. The
  * non-serializable `live` kind never appears here: live stubs exist only in
  * the registry's in-memory connection table.
  */
-export type SerializableCapTarget =
+export type SerializableCapabilityTarget =
   | {
       type: "rpc";
       worker: WorkerRef;
@@ -101,7 +101,7 @@ export type SerializableCapTarget =
        * `source` refs the export is named by `source.entrypoint` instead. */
       entrypoint?: string;
       /** Instantiation props (the ProjectEgress pattern). The registry adds
-       * `{ cap, context }` attribution at dial time. */
+       * `{ capability, context }` attribution at dial time. */
       props?: Record<string, unknown>;
     }
   | {
@@ -117,7 +117,7 @@ export type SerializableCapTarget =
  * Which env bindings / loopback exports an rpc target may dial. Binding and
  * loopback refs reach PLATFORM resources, so an open list would let any
  * project handle reach e.g. the deployment D1, or mint itx handles on
- * arbitrary projects via ItxEntrypoint props. Checked at define time (fail
+ * arbitrary projects via ItxEntrypoint props. Checked at provide time (fail
  * fast) and again at dial time (authoritative). A deployment widens the
  * lists via config (`APP_CONFIG_ITX` → {@link DialableTargets}); the
  * hardcoded defaults always apply.
@@ -125,9 +125,9 @@ export type SerializableCapTarget =
 export const DIALABLE_BINDINGS: ReadonlySet<string> = new Set(["AI"]);
 /**
  * Loopback entrypoints listed here MUST scope strictly by the dial-time
- * props the registry injects ({ cap, context, projectId }) — never by
- * definer-supplied props — because anyone with a handle on a context can
- * define a cap dialing them.
+ * props the registry injects ({ capability, context, projectId }) — never by
+ * provider-supplied props — because anyone with a handle on a context can
+ * provide a cap dialing them.
  */
 export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "AgentCapability",
@@ -140,7 +140,7 @@ export const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "ProjectWorker",
   "ReposCapability",
   "SlackCapability",
-  "StreamsCap",
+  "StreamsCapability",
   "WorkspaceCapability",
 ]);
 
@@ -197,13 +197,14 @@ export function resolveDialableTargets(config?: {
 }
 
 /**
- * Define-time validation of a serializable target. The same checks run
+ * Provide-time validation of a serializable target. The same checks run
  * again at dial time inside the registry; this exists so misconfigured
- * targets fail at define() with a useful error instead of at first call.
+ * targets fail at provideCapability() with a useful error instead of at
+ * first call.
  */
-export function assertDefinableCapTarget(
+export function assertProvidableCapabilityTarget(
   name: string,
-  target: SerializableCapTarget,
+  target: SerializableCapabilityTarget,
   dialable: DialableTargets = DEFAULT_DIALABLE_TARGETS,
 ): void {
   if (target.type === "url") {
@@ -257,7 +258,7 @@ export function assertDefinableCapTarget(
             `"class X extends DurableObject" (default exports do not work as facet classes).`,
         );
       }
-      capSourceCacheKey(worker.source);
+      capabilitySourceCacheKey(worker.source);
       return;
     case "durable-object":
       if (!dialable.durableObjects.has(worker.binding)) {
@@ -279,25 +280,25 @@ export function assertDefinableCapTarget(
  * - `instructions`: a sentence for the human/agent who finds this cap.
  * - `http`: HTTP routing flags (spec §8).
  */
-export type CapMeta = {
+export type CapabilityMeta = {
   instructions?: string;
-  definedBy?: { type: "user" | "agent" | "system"; id: string };
+  providedBy?: { type: "user" | "agent" | "system"; id: string };
   http?: { expose: boolean; public?: boolean };
   [key: string]: unknown;
 };
 
 /** A registry entry as reported by describe(); never contains live stubs. */
-export type CapDescription = {
+export type CapabilityDescription = {
   name: string;
-  kind: CapKind;
-  invoke: CapInvoke;
+  kind: CapabilityKind;
+  invoke: CapabilityInvoke;
   /** Which context owns the entry — provenance for shadowing visibility. */
   owner: string;
   /** Live caps only: is the provider currently connected? */
   connected?: boolean;
   /** Lifted from meta for convenience: the one thing to read first. */
   instructions?: string;
-  meta: CapMeta;
+  meta: CapabilityMeta;
   updatedAtMs: number;
 };
 
@@ -312,11 +313,20 @@ export type CapDescription = {
  *   pollution vectors, `map` is capnweb's magic promise method.
  *
  * `fetch` is deliberately NOT here: project egress is a `platform:project`
- * default capability, and defining your own `fetch` (e.g. a live provider)
+ * default capability, and providing your own `fetch` (e.g. a live provider)
  * is how egress interception works. The handle's real `fetch` method still
  * wins property lookup; it routes through the registry anyway.
  */
-const ITX_BUILTIN_NAMES = ["define", "describe", "fork", "project", "projects", "revoke"] as const;
+const ITX_BUILTIN_NAMES = [
+  "capability",
+  "describe",
+  "fork",
+  "invoke",
+  "project",
+  "projects",
+  "provideCapability",
+  "revokeCapability",
+] as const;
 
 /**
  * Names that must never traverse a dynamic surface — prototype-pollution
@@ -351,7 +361,7 @@ export const RESERVED_PATH_SEGMENTS: ReadonlySet<string> = new Set([
 ]);
 
 /** A cap name may shadow neither an itx built-in nor a reserved path segment. */
-export const RESERVED_CAP_NAMES: ReadonlySet<string> = new Set([
+export const RESERVED_CAPABILITY_NAMES: ReadonlySet<string> = new Set([
   ...ITX_BUILTIN_NAMES,
   ...RESERVED_PATH_SEGMENTS,
 ]);
@@ -361,13 +371,13 @@ export const RESERVED_CAP_NAMES: ReadonlySet<string> = new Set([
  * the fallthrough proxy, and the dot-joined form stays unambiguous as the
  * registry's storage key.
  */
-export function assertValidCapName(name: string): void {
+export function assertValidCapabilityName(name: string): void {
   if (!/^[A-Za-z_$][\w$]*$/.test(name)) {
     throw new Error(
       `Capability name ${JSON.stringify(name)} must be a plain JavaScript identifier.`,
     );
   }
-  if (RESERVED_CAP_NAMES.has(name)) {
+  if (RESERVED_CAPABILITY_NAMES.has(name)) {
     throw new Error(`Capability name ${JSON.stringify(name)} is reserved.`);
   }
 }
@@ -379,11 +389,11 @@ export function assertValidCapName(name: string): void {
  * built-ins), deeper segments only need the protocol-level path filter — the
  * built-in names are perfectly good method names there.
  */
-export function assertValidCapPath(path: string[]): void {
+export function assertValidCapabilityPath(path: string[]): void {
   if (path.length === 0) {
     throw new Error("A capability path needs at least one segment.");
   }
-  assertValidCapName(path[0]!);
+  assertValidCapabilityName(path[0]!);
   for (const segment of path.slice(1)) {
     if (!/^[A-Za-z_$][\w$]*$/.test(segment)) {
       throw new Error(
@@ -397,11 +407,11 @@ export function assertValidCapPath(path: string[]): void {
 }
 
 /**
- * define/revoke address an entry by `name` (the common case — one segment)
- * OR `path` (multi-segment). Exactly one must be present; both normalize to
- * segments here.
+ * provideCapability/revokeCapability address an entry by `name` (the common
+ * case — one segment) OR `path` (multi-segment). Exactly one must be present;
+ * both normalize to segments here.
  */
-export function capPathFrom(input: { name?: string; path?: string[] }): string[] {
+export function capabilityPathFrom(input: { name?: string; path?: string[] }): string[] {
   if ((input.name === undefined) === (input.path === undefined)) {
     throw new Error("Provide exactly one of `name` or `path`.");
   }
@@ -413,20 +423,25 @@ export const ITX_AUDIT_STREAM_PATH = "/itx";
 
 /** Registry audit event types appended to the context stream (spec §4.2). */
 export const ITX_EVENT_TYPES = {
-  capDefined: "events.iterate.com/itx/cap-defined",
-  capProvided: "events.iterate.com/itx/cap-provided",
-  capRevoked: "events.iterate.com/itx/cap-revoked",
-  capDisconnected: "events.iterate.com/itx/cap-disconnected",
+  /**
+   * ONE provide event for every target kind: `kind` in the payload records
+   * what was provided — "live" (a session-bound provider stub) vs "rpc"/"url"
+   * (a durable serializable target). Durable payloads also carry the worker
+   * ref type and, for source refs, the cacheKey.
+   */
+  capabilityProvided: "events.iterate.com/itx/capability-provided",
+  capabilityRevoked: "events.iterate.com/itx/capability-revoked",
+  capabilityDisconnected: "events.iterate.com/itx/capability-disconnected",
   contextForked: "events.iterate.com/itx/context-forked",
   /**
    * Script execution record (itx-next.md §4, record-only mode): the runner
-   * appends `executionRequested` before the script starts and
-   * `executionCompleted` when it settles. The events are the durable record,
+   * appends `scriptExecutionRequested` before the script starts and
+   * `scriptExecutionCompleted` when it settles. The events are the durable record,
    * not the transport — everything between them is invisible to the stream.
    * These two events replace codemode's six-event execution protocol.
    */
-  executionRequested: "events.iterate.com/itx/execution-requested",
-  executionCompleted: "events.iterate.com/itx/execution-completed",
+  scriptExecutionRequested: "events.iterate.com/itx/script-execution-requested",
+  scriptExecutionCompleted: "events.iterate.com/itx/script-execution-completed",
 } as const;
 
 /** Child context ids: `ctx_…` TypeIDs; project contexts use the project id. */

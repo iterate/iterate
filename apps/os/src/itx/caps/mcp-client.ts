@@ -6,7 +6,7 @@
 // parameterized per server by props, it must have NO powers a user-space
 // equivalent (the same class exported from a project worker) couldn't have.
 //
-//   await itx.define({
+//   await itx.provideCapability({
 //     invoke: "path-call",
 //     name: "docs",
 //     target: {
@@ -38,12 +38,12 @@ import type { PathCall } from "../protocol.ts";
 import { connectMcp, executeMcpToolCall, listMcpTools } from "./mcp-client-core.ts";
 
 export type McpClientProps = {
-  /** The remote MCP server (streamable HTTP). Definer-supplied. */
+  /** The remote MCP server (streamable HTTP). Provider-supplied. */
   serverUrl: string;
   /** Sent on every request; values pass through egress secret substitution. */
   headers?: Record<string, string>;
   /** Attribution, injected by the registry at dial time. */
-  cap?: string;
+  capability?: string;
   context?: string;
 };
 
@@ -62,7 +62,7 @@ export class McpClient extends WorkerEntrypoint<Env, McpClientProps> {
     const itx = await resolveItx({
       env: this.env,
       exports: this.ctx.exports as unknown as ItxRuntime["exports"],
-      props: { cap: props.cap, context: props.context },
+      props: { capability: props.capability, context: props.context },
     });
 
     const client = await connectMcp({

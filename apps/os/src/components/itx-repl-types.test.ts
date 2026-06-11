@@ -37,8 +37,8 @@ describe("itx REPL TypeScript declarations", () => {
       context: { explicit: true, pos: "itx.".length },
     });
 
-    expect(result?.options.find((option) => option.label === "define")?.info).toContain(
-      "Register a capability",
+    expect(result?.options.find((option) => option.label === "provideCapability")?.info).toContain(
+      "Provide a capability",
     );
     expect(result?.options.find((option) => option.label === "describe")?.info).toContain(
       "Who/what am I holding?",
@@ -57,12 +57,13 @@ describe("itx REPL TypeScript declarations", () => {
     });
 
     // These strings exist only in ~/itx/types.ts, never in the REPL prelude:
-    // the define() doc's runSwiftOnMyMac example and revoke()'s shadow note.
-    expect(result?.options.find((option) => option.label === "define")?.info).toContain(
+    // the provideCapability() doc's runSwiftOnMyMac example and
+    // revokeCapability()'s shadow note.
+    expect(result?.options.find((option) => option.label === "provideCapability")?.info).toContain(
       "runSwiftOnMyMac",
     );
-    expect(result?.options.find((option) => option.label === "revoke")?.info).toContain(
-      "cannot be revoked, only shadowed",
+    expect(result?.options.find((option) => option.label === "revokeCapability")?.info).toContain(
+      "cannot be revoked, only",
     );
   });
 
@@ -112,8 +113,8 @@ describe("itx REPL TypeScript declarations", () => {
       context: { explicit: true, pos: code.length },
     });
 
-    expect(result?.options.find((option) => option.label === "define")?.info).toContain(
-      "Register a capability",
+    expect(result?.options.find((option) => option.label === "provideCapability")?.info).toContain(
+      "Provide a capability",
     );
     expect(result?.options.find((option) => option.label === "shareUrl")?.info).toContain(
       "signed, expiring URL",
@@ -123,7 +124,9 @@ describe("itx REPL TypeScript declarations", () => {
   test("CodeMirror completion source delegates to the REPL TypeScript worker", async () => {
     const result = {
       from: 4,
-      options: [{ label: "define", info: "Register a capability on this handle's context." }],
+      options: [
+        { label: "provideCapability", info: "Provide a capability on this handle's context." },
+      ],
     };
     const worker = {
       getAutocompletionWithDocs: vi.fn().mockResolvedValue(result),

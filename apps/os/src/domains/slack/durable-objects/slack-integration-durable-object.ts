@@ -29,7 +29,7 @@ import {
   SlackProcessorContract,
 } from "~/domains/slack/stream-processors/slack/implementation.ts";
 import { SlackAgentProcessorContract } from "~/domains/slack/stream-processors/slack-agent/contract.ts";
-import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-backend.ts";
 
 export { getSlackIntegrationDurableObjectName };
 

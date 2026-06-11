@@ -18,7 +18,7 @@ import {
 } from "@iterate-com/streams/workers/stream-processor-host";
 import { typeid } from "@iterate-com/shared/typeid";
 import type { ContextDO } from "~/itx/context-do.ts";
-import type { CapInvoke, SerializableCapTarget } from "~/itx/protocol.ts";
+import type { CapabilityInvoke, SerializableCapabilityTarget } from "~/itx/protocol.ts";
 import { contextAddressOf } from "~/itx/addresses.ts";
 import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
 import { AgentChatProcessor } from "~/domains/agents/stream-processors/agent-chat/implementation.ts";
@@ -48,7 +48,7 @@ import {
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
-import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-backend.ts";
 import {
   type WorkspaceDurableObject,
   type WorkspaceStructuredName,
@@ -132,8 +132,8 @@ const AgentLifecycleBase = createIterateDurableObjectBase<
   nameSchema: AgentDurableObjectStructuredName,
 });
 
-/** Bump when agentContextCaps changes shape or membership. */
-const AGENT_CONTEXT_CAPS_VERSION = "2";
+/** Bump when agentContextCapabilities changes shape or membership. */
+const AGENT_CONTEXT_CAPABILITIES_VERSION = "2";
 
 export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv> {
   host = createStreamProcessorHost(this.ctx);
@@ -455,9 +455,10 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
   /** The agent's itx child context: its tools live on it as caps, scripts
    * run against it, misses delegate up to the project context. Seeding is
-   * versioned: bump AGENT_CONTEXT_CAPS_VERSION when agentContextCaps
-   * changes so existing agents re-define caps (defines upsert; the
-   * capability-noted idempotency keys dedupe re-appends per cap name). */
+   * versioned: bump AGENT_CONTEXT_CAPABILITIES_VERSION when
+   * agentContextCapabilities changes so existing agents re-provide caps
+   * (provides upsert; the capability-noted idempotency keys dedupe
+   * re-appends per cap name). */
   async ensureItxContext(params: AgentDurableObjectStructuredName): Promise<string> {
     // Single-flight: the wake hook's workspace prep (waitUntil) and script
     // runs can call this concurrently; without memoization the interleaved
@@ -472,8 +473,8 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
   async #ensureItxContextOnce(params: AgentDurableObjectStructuredName): Promise<string> {
     const existing = await this.ctx.storage.get<string>("itxContextId");
-    const seededVersion = await this.ctx.storage.get<string>("itxContextCapsVersion");
-    if (existing && seededVersion === AGENT_CONTEXT_CAPS_VERSION) return existing;
+    const seededVersion = await this.ctx.storage.get<string>("itxContextCapabilitiesVersion");
+    if (existing && seededVersion === AGENT_CONTEXT_CAPABILITIES_VERSION) return existing;
 
     const config = this.getAppConfig();
     const contextId =
@@ -485,9 +486,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       parent: { id: params.projectId, address: contextAddressOf(params.projectId) },
       projectId: params.projectId,
     });
-    const caps = this.agentContextCaps(params);
+    const caps = this.agentContextCapabilities(params);
     for (const cap of caps) {
-      await contextStub.itxDefine({
+      await contextStub.itxProvideCapability({
         invoke: cap.invoke,
         meta: { instructions: cap.instructions },
         name: cap.name,
@@ -504,7 +505,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       })),
     });
     await this.ctx.storage.put("itxContextId", contextId);
-    await this.ctx.storage.put("itxContextCapsVersion", AGENT_CONTEXT_CAPS_VERSION);
+    await this.ctx.storage.put("itxContextCapabilitiesVersion", AGENT_CONTEXT_CAPABILITIES_VERSION);
     return contextId;
   }
 
@@ -706,13 +707,13 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     });
   }
 
-  private agentContextCaps(params: AgentDurableObjectStructuredName): Array<{
+  private agentContextCapabilities(params: AgentDurableObjectStructuredName): Array<{
     name: string;
     instructions: string;
-    invoke: CapInvoke;
-    target: SerializableCapTarget;
+    invoke: CapabilityInvoke;
+    target: SerializableCapabilityTarget;
   }> {
-    const agentTool = (tool: "chat" | "debug"): SerializableCapTarget => ({
+    const agentTool = (tool: "chat" | "debug"): SerializableCapabilityTarget => ({
       entrypoint: "AgentToolsCapability",
       props: { agentPath: params.agentPath, tool },
       type: "rpc",

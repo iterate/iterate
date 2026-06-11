@@ -2,7 +2,7 @@
 // (built from the project repo) a capability target — user space, same shape
 // as first-party (the §1 litmus test's second half).
 //
-//   await itx.define({
+//   await itx.provideCapability({
 //     invoke: "path-call",
 //     name: "petstore",
 //     target: {
@@ -22,20 +22,20 @@
 // THIS forwarder hop. props.projectId is registry-injected (spoof-proof).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import type { CapInvoke, PathCall } from "../protocol.ts";
+import type { CapabilityInvoke, PathCall } from "../protocol.ts";
 import {
   getProjectDurableObjectName,
   type ProjectDurableObject,
 } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 export type ProjectWorkerProps = {
-  /** Injected by the registry at dial time — never definer-supplied. */
+  /** Injected by the registry at dial time — never provider-supplied. */
   projectId?: string;
   /** The named export of the project worker to call (default export if omitted). */
   export?: string;
   /** How to call the user's export: members replay (default) or one call({path,args}). */
-  invoke?: CapInvoke;
-  cap?: string;
+  invoke?: CapabilityInvoke;
+  capability?: string;
   context?: string;
 };
 
@@ -45,7 +45,7 @@ export class ProjectWorker extends WorkerEntrypoint<Env, ProjectWorkerProps> {
     if (!props.projectId) {
       throw new Error("ProjectWorker needs registry-injected projectId props.");
     }
-    const { cap, context, export: exportName, invoke, projectId, ...definerProps } = props;
+    const { capability, context, export: exportName, invoke, projectId, ...providerProps } = props;
     const project = this.env.PROJECT.getByName(
       getProjectDurableObjectName(projectId),
     ) as unknown as ProjectDurableObject;
@@ -53,9 +53,9 @@ export class ProjectWorker extends WorkerEntrypoint<Env, ProjectWorkerProps> {
       call: input,
       entrypoint: exportName,
       invoke: invoke ?? "members",
-      // The user's export sees its definer parameterization plus the same
+      // The user's export sees its provider parameterization plus the same
       // attribution every dialable target gets.
-      props: { ...definerProps, cap, context, projectId },
+      props: { ...providerProps, capability, context, projectId },
     });
   }
 }

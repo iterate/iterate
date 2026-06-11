@@ -15,7 +15,7 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
-import type { CapDescription } from "./protocol.ts";
+import type { CapabilityDescription } from "./protocol.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { normalizeIngressHost } from "~/ingress/host-routing.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
@@ -26,7 +26,7 @@ import { parseConfig } from "~/config.ts";
 export const SHARE_TOKEN_PARAM = "itx_share";
 
 /** Hostname → routing rule for cap hosts; null when the host isn't one. */
-export async function getItxCapHostIngressRule(input: {
+export async function getItxCapabilityHostIngressRule(input: {
   bases: readonly string[];
   db: D1Database;
   host: string;
@@ -47,8 +47,8 @@ export async function getItxCapHostIngressRule(input: {
     // mis-parsing `ctxId--project` as a project identifier.
     const parts = prefix.split("--");
     if (parts.length !== 2) continue;
-    const [cap, projectIdentifier] = parts;
-    if (!cap || !projectIdentifier) continue;
+    const [capability, projectIdentifier] = parts;
+    if (!capability || !projectIdentifier) continue;
 
     const project = await input.db
       .prepare(`SELECT id FROM projects WHERE slug = ? OR id = ? LIMIT 1`)
@@ -61,13 +61,13 @@ export async function getItxCapHostIngressRule(input: {
       via: {
         type: "loopback-binding",
         bindingType: "service",
-        exportName: "ItxCapIngress",
-        props: { cap, projectId: project.id },
+        exportName: "ItxCapabilityIngress",
+        props: { capability, projectId: project.id },
       },
     } satisfies FetchCallable;
 
     return {
-      id: `itx-cap-host:${project.id}:${cap}`,
+      id: `itx-capability-host:${project.id}:${capability}`,
       host,
       projectId: project.id,
       priority: 60,
@@ -81,8 +81,8 @@ export async function getItxCapHostIngressRule(input: {
   return null;
 }
 
-export type ItxCapIngressProps = {
-  cap: string;
+export type ItxCapabilityIngressProps = {
+  capability: string;
   projectId: string;
 };
 
@@ -92,7 +92,7 @@ export type ItxCapIngressProps = {
  * exposes fetch() directly; a path-call cap sees { path: ["fetch"] } and can
  * implement HTTP however it likes.
  */
-export class ItxCapIngress extends WorkerEntrypoint<Env, ItxCapIngressProps> {
+export class ItxCapabilityIngress extends WorkerEntrypoint<Env, ItxCapabilityIngressProps> {
   async fetch(request: Request): Promise<Response> {
     const props = this.ctx.props;
     const config = parseConfig(this.env);
@@ -102,8 +102,8 @@ export class ItxCapIngress extends WorkerEntrypoint<Env, ItxCapIngressProps> {
     // may contain uppercase — match case-insensitively so `myCap` is routable
     // at `mycap--{project}`. (Collisions that differ only by case are the
     // owner's problem; first exposed match wins.)
-    const wanted = props.cap.toLowerCase();
-    const caps = (await project.itxDescribe()) as CapDescription[];
+    const wanted = props.capability.toLowerCase();
+    const caps = (await project.itxDescribe()) as CapabilityDescription[];
     const cap = caps.find((candidate) => candidate.name.toLowerCase() === wanted);
     if (!cap || cap.meta.http?.expose !== true) {
       return new Response("Not Found", { status: 404 });
@@ -116,7 +116,7 @@ export class ItxCapIngress extends WorkerEntrypoint<Env, ItxCapIngressProps> {
           config,
         }) ||
         (await verifyShareToken({
-          cap: cap.name,
+          capability: cap.name,
           projectId: props.projectId,
           secret: config.adminApiSecret?.exposeSecret() ?? "",
           token: new URL(request.url).searchParams.get(SHARE_TOKEN_PARAM),
@@ -142,20 +142,24 @@ export class ItxCapIngress extends WorkerEntrypoint<Env, ItxCapIngressProps> {
 // cap's HTTP surface until expiry, nothing else.
 
 export async function createShareToken(input: {
-  cap: string;
+  capability: string;
   expiresAtMs: number;
   projectId: string;
   secret: string;
 }): Promise<string> {
   const signature = await hmacSha256(
     input.secret,
-    sharePayload({ cap: input.cap, expiresAtMs: input.expiresAtMs, projectId: input.projectId }),
+    sharePayload({
+      capability: input.capability,
+      expiresAtMs: input.expiresAtMs,
+      projectId: input.projectId,
+    }),
   );
   return `${input.expiresAtMs}.${signature}`;
 }
 
 export async function verifyShareToken(input: {
-  cap: string;
+  capability: string;
   projectId: string;
   secret: string;
   token: string | null;
@@ -166,13 +170,13 @@ export async function verifyShareToken(input: {
   if (!Number.isFinite(expiresAtMs) || expiresAtMs < Date.now() || !signature) return false;
   const expected = await hmacSha256(
     input.secret,
-    sharePayload({ cap: input.cap, expiresAtMs, projectId: input.projectId }),
+    sharePayload({ capability: input.capability, expiresAtMs, projectId: input.projectId }),
   );
   return timingSafeEqual(signature, expected);
 }
 
-function sharePayload(input: { cap: string; expiresAtMs: number; projectId: string }) {
-  return `itx-share:${input.projectId}:${input.cap}:${input.expiresAtMs}`;
+function sharePayload(input: { capability: string; expiresAtMs: number; projectId: string }) {
+  return `itx-share:${input.projectId}:${input.capability}:${input.expiresAtMs}`;
 }
 
 async function hmacSha256(secret: string, payload: string): Promise<string> {

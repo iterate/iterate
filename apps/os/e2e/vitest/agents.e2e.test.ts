@@ -123,7 +123,7 @@ test("can configure Cloudflare AI Gateway as the provider for an agent path pref
   );
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/itx/execution-requested",
+      type: "events.iterate.com/itx/script-execution-requested",
     }),
   );
   expect(events).toContainEqual(
@@ -340,10 +340,10 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
     }),
   );
   const scriptRequested = events.find(
-    (event) => event.type === "events.iterate.com/itx/execution-requested",
+    (event) => event.type === "events.iterate.com/itx/script-execution-requested",
   );
   if (!scriptRequested) {
-    throw new Error("Expected itx/execution-requested after agent output.");
+    throw new Error("Expected itx/script-execution-requested after agent output.");
   }
   const scriptRequestDelayMs =
     new Date(scriptRequested.createdAt).getTime() - new Date(output.event.createdAt).getTime();
@@ -423,11 +423,11 @@ test("project config worker customizes fresh agents by appending events", async 
     client,
     projectId: project.id,
     afterOffset: "start",
-    predicate: (event) => event.type === "events.iterate.com/itx/execution-completed",
+    predicate: (event) => event.type === "events.iterate.com/itx/script-execution-completed",
     timeoutMs: 120_000,
   });
   expect(
-    requiredEvent(pushEvents, "events.iterate.com/itx/execution-completed").payload,
+    requiredEvent(pushEvents, "events.iterate.com/itx/script-execution-completed").payload,
   ).toMatchObject({ ok: true });
 
   // Phase 2: a FRESH agent path wakes. Its stream creation announces a
@@ -490,7 +490,7 @@ test("lets agent chat update iterate-config through the prepared workspace", asy
     projectId: project.id,
     afterOffset: "start",
     predicate: (event) =>
-      event.type === "events.iterate.com/itx/execution-completed" &&
+      event.type === "events.iterate.com/itx/script-execution-completed" &&
       (event.payload as { ok?: unknown }).ok === true,
     timeoutMs: 120_000,
   });
@@ -499,13 +499,19 @@ test("lets agent chat update iterate-config through the prepared workspace", asy
     client,
     projectId: project.id,
     afterOffset: "start",
-    predicate: (event) => event.type === "events.iterate.com/itx/execution-completed",
+    predicate: (event) => event.type === "events.iterate.com/itx/script-execution-completed",
     timeoutMs: 30_000,
   });
 
   const output = requiredEvent(events, "events.iterate.com/agent/output-added");
-  const scriptRequested = requiredEvent(events, "events.iterate.com/itx/execution-requested");
-  const scriptCompleted = requiredEvent(events, "events.iterate.com/itx/execution-completed");
+  const scriptRequested = requiredEvent(
+    events,
+    "events.iterate.com/itx/script-execution-requested",
+  );
+  const scriptCompleted = requiredEvent(
+    events,
+    "events.iterate.com/itx/script-execution-completed",
+  );
   const generatedCode = requiredStringPayload(output, "content");
   const requestedCode = requiredStringPayload(scriptRequested, "code");
 
@@ -543,7 +549,7 @@ test("renders codemode completions as direct auto-triggering agent inputs", asyn
     projectSlugOrId: project.id,
     streamPath: agentPath,
     event: {
-      type: "events.iterate.com/itx/execution-completed",
+      type: "events.iterate.com/itx/script-execution-completed",
       idempotencyKey: `agent-codemode-completion-returned:${suffix}`,
       payload: {
         durationMs: 12,
@@ -557,7 +563,7 @@ test("renders codemode completions as direct auto-triggering agent inputs", asyn
     projectSlugOrId: project.id,
     streamPath: agentPath,
     event: {
-      type: "events.iterate.com/itx/execution-completed",
+      type: "events.iterate.com/itx/script-execution-completed",
       idempotencyKey: `agent-codemode-completion-threw:${suffix}`,
       payload: {
         durationMs: 12,
@@ -661,7 +667,10 @@ itIfSlackBotToken(
         (event.payload as { message: string }).message.startsWith("posted slack "),
     });
     const output = requiredEvent(events, "events.iterate.com/agent/output-added");
-    const scriptRequested = requiredEvent(events, "events.iterate.com/itx/execution-requested");
+    const scriptRequested = requiredEvent(
+      events,
+      "events.iterate.com/itx/script-execution-requested",
+    );
 
     expect(events).toContainEqual(
       expect.objectContaining({
@@ -747,7 +756,7 @@ itIfSlackBotToken(
       projectId: project.id,
       afterOffset: "start",
       predicate: (event) =>
-        event.type === "events.iterate.com/itx/execution-completed" &&
+        event.type === "events.iterate.com/itx/script-execution-completed" &&
         (event.payload as { ok?: unknown }).ok === true,
     });
 
@@ -824,7 +833,7 @@ itIfSlackBotToken(
     ).toEqual([]);
     expect(events).toContainEqual(
       expect.objectContaining({
-        type: "events.iterate.com/itx/execution-requested",
+        type: "events.iterate.com/itx/script-execution-requested",
         payload: expect.objectContaining({
           code: expect.stringContaining("itx.slack.chat.postMessage"),
         }),
@@ -866,12 +875,12 @@ itIfSlackBotToken(
       projectId: project.id,
       afterOffset: debugAfterOffset,
       predicate: (event) =>
-        event.type === "events.iterate.com/itx/execution-completed" &&
+        event.type === "events.iterate.com/itx/script-execution-completed" &&
         (event.payload as { ok?: unknown }).ok === true,
     });
     expect(debugEvents).toContainEqual(
       expect.objectContaining({
-        type: "events.iterate.com/itx/execution-requested",
+        type: "events.iterate.com/itx/script-execution-requested",
         payload: expect.objectContaining({
           code: expect.stringContaining("const debug = await itx.debug();"),
         }),

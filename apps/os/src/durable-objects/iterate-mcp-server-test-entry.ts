@@ -12,7 +12,7 @@ export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.t
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
-export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";

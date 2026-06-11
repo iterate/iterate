@@ -53,7 +53,7 @@ export async function resolveItx(input: {
 
   return new Itx({
     access: contextId === GLOBAL_CONTEXT_ID ? (input.props.access ?? []) : [projectId!],
-    cap: input.props.cap,
+    capability: input.props.capability,
     config,
     contextId,
     env: input.env,
@@ -78,12 +78,12 @@ export class ItxEntrypoint extends WorkerEntrypoint<Env, ItxProps> {
 }
 
 export type ProjectEgressProps = {
-  /** The owning project. Registry-injected at dial time (never definer
+  /** The owning project. Registry-injected at dial time (never provider
    * props), so a `fetch` cap can only ever scope to its own project. */
   projectId: string;
   /** Attribution only: which context/cap is fetching (audit + future policy). */
   context?: string;
-  cap?: string;
+  capability?: string;
 };
 
 /**
@@ -119,11 +119,11 @@ export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
 }
 
 export type EgressPipeProps = {
-  /** Injected by the registry at dial time — never definer-supplied. */
+  /** Injected by the registry at dial time — never provider-supplied. */
   projectId?: string;
   /** Attribution only: which context/cap is fetching (audit + future policy). */
   context?: string;
-  cap?: string;
+  capability?: string;
 };
 
 /**
@@ -175,10 +175,10 @@ function isHttpRequestUrl(urlString: string) {
 }
 
 export type BindingCapabilityProps = {
-  /** Which env binding this instance wraps. Definer-supplied. */
+  /** Which env binding this instance wraps. Provider-supplied. */
   binding: string;
   /** Attribution, injected by the registry at dial time. */
-  cap?: string;
+  capability?: string;
   context?: string;
 };
 
@@ -186,7 +186,7 @@ export type BindingCapabilityProps = {
  * The thin policy wrapper for platform bindings (itx-next.md §2): a
  * loopback-dialable, path-call capability that applies the dotted path to
  * `env[props.binding]`, receiver-preserving. Today the only policy is the
- * DIALABLE_BINDINGS allowlist — props.binding is definer-controlled, so the
+ * DIALABLE_BINDINGS allowlist — props.binding is provider-controlled, so the
  * check HERE is the authoritative gate for which binding gets wrapped.
  * Gateway selection / attribution headers / quotas slot in here later.
  *

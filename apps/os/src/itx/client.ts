@@ -1,8 +1,8 @@
 // connectItx: hold an itx handle from outside the platform (Node programs,
 // e2e tests, your laptop daemon). This is "tier 3" hardware we don't load —
 // it gets project egress explicitly via itx.fetch(), and any live target it
-// define()s is session-bound: gone when this connection drops, back when the
-// provider reconnects and defines it again.
+// provideCapability()s is session-bound: gone when this connection drops,
+// back when the provider reconnects and provides it again.
 //
 // Node-only by import: passes a `ws` WebSocket into capnweb. Browser code
 // uses the same /api/itx endpoint with the admin-cookie bridge instead

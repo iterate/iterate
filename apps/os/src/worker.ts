@@ -55,16 +55,16 @@ export { BindingCapability, EgressPipe, ItxEntrypoint, ProjectEgress } from "~/i
 export { McpClient } from "~/itx/caps/mcp-client.ts";
 export { ProjectWorker } from "~/itx/caps/project-worker.ts";
 export { UrlDial } from "~/itx/caps/url-dial.ts";
-export { StreamsCap } from "~/itx/caps/streams.ts";
+export { StreamsCapability } from "~/itx/caps/streams.ts";
 export { ContextDO } from "~/itx/context-do.ts";
-export { ItxCapIngress } from "~/itx/http.ts";
+export { ItxCapabilityIngress } from "~/itx/http.ts";
 export { OpenApiBridge } from "~/rpc-targets/openapi-bridge.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
-export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 
 const CAPTUN_TUNNEL_ROUTE_PREFIX = "/__iterate/captun";

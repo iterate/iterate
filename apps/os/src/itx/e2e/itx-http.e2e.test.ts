@@ -17,7 +17,7 @@ test("facet caps keep private durable state across invocations", async () => {
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
-  await projectItx.define({
+  await projectItx.provideCapability({
     name: "counter",
     target: {
       type: "rpc",
@@ -63,7 +63,7 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
-  await projectItx.define({
+  await projectItx.provideCapability({
     meta: { http: { expose: true } },
     name: "hello",
     target: {
@@ -123,7 +123,7 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
   expect((await fetch(tampered)).status).toBe(401);
 
   // (5) public: true opens the cap to anyone, knowingly.
-  await projectItx.define({
+  await projectItx.provideCapability({
     meta: { http: { expose: true, public: true } },
     name: "hello",
     target: {
@@ -152,7 +152,7 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
   await expect(publicResponse.text()).resolves.toBe("hello, public internet");
 
   // (6) Unexposed caps do not exist as hostnames, even with admin auth.
-  await projectItx.define({
+  await projectItx.provideCapability({
     name: "internal",
     target: {
       type: "rpc",

@@ -9,18 +9,18 @@
 import {
   GLOBAL_CONTEXT_ID,
   isChildContextId,
-  type CapDescription,
-  type CapInvoke,
-  type CapMeta,
+  type CapabilityDescription,
+  type CapabilityInvoke,
+  type CapabilityMeta,
   type PathCall,
-  type SerializableCapTarget,
+  type SerializableCapabilityTarget,
 } from "./protocol.ts";
 import type { ContextDescriptor } from "./context-do.ts";
-import type { LiveCapTarget } from "./registry.ts";
+import type { LiveCapabilityTarget } from "./registry.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object.ts";
 
 /** A context's address IS a cap target — one data structure for everything. */
-export type ContextAddress = SerializableCapTarget;
+export type ContextAddress = SerializableCapabilityTarget;
 
 /** The Durable Object namespace bindings that host context nodes today. */
 const CHILD_CONTEXT_BINDING = "ITX_CONTEXT";
@@ -32,15 +32,15 @@ const PROJECT_CONTEXT_BINDING = "PROJECT";
  * Workers RPC.
  */
 export type ContextNodeStub = {
-  itxDefine(input: {
+  itxProvideCapability(input: {
     name?: string;
     path?: string[];
-    target: SerializableCapTarget | LiveCapTarget;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
+    target: SerializableCapabilityTarget | LiveCapabilityTarget;
+    invoke?: CapabilityInvoke;
+    meta?: CapabilityMeta;
   }): Promise<unknown>;
-  itxRevoke(input: { name?: string; path?: string[] }): Promise<unknown>;
-  itxDescribe(): Promise<CapDescription[]>;
+  itxRevokeCapability(input: { name?: string; path?: string[] }): Promise<unknown>;
+  itxDescribe(): Promise<CapabilityDescription[]>;
   itxInvoke(input: PathCall & { origin?: string }): Promise<unknown>;
   /** Child-context nodes (ContextDO) also expose their descriptor — the one
    * lookup a sturdy ref costs to learn the owning project. The Project DO
@@ -88,7 +88,7 @@ export function isChildContextAddress(address: ContextAddress): boolean {
  * The restore() half: resolve an address to a live stub speaking the context
  * protocol. This dial is KERNEL plumbing for addresses written by trusted
  * code (fork, the restorer) — it is deliberately NOT gated by the DIALABLE_*
- * allowlists: definer-supplied cap targets stay gated inside the registry;
+ * allowlists: provider-supplied cap targets stay gated inside the registry;
  * parent addresses are written only by kernel code, never by handle holders.
  */
 export function dialContext(env: Env, address: ContextAddress): ContextNodeStub {

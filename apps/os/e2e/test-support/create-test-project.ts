@@ -47,7 +47,7 @@ export async function createTestProjectFixture<
   let egressItx: ItxClient | null = null;
   try {
     if (egressFetch) {
-      egressItx = await defineLiveEgressFetchCap({
+      egressItx = await provideLiveEgressFetchCapability({
         baseUrl: project.baseUrl,
         fetch: egressFetch,
         projectId: project.project.id,
@@ -144,7 +144,7 @@ export async function createTestProject(opts: { slugPrefix: string }) {
  * (with getSecret() placeholders unsubstituted) for as long as the returned
  * itx session stays open. Dispose the session to drop the shadow.
  */
-async function defineLiveEgressFetchCap(input: {
+async function provideLiveEgressFetchCapability(input: {
   baseUrl: string;
   fetch: Fetch;
   projectId: string;
@@ -161,7 +161,7 @@ async function defineLiveEgressFetchCap(input: {
     token: requireAdminBearerToken(),
   });
   try {
-    await itx.define({
+    await itx.provideCapability({
       invoke: "path-call",
       name: "fetch",
       target: new LiveEgressFetch() as never,

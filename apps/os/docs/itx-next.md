@@ -790,8 +790,8 @@ it.** "Node", "global", "platform defaults", "live vs durable", and
 ### 1. A context's ADDRESS is a CapTarget
 
 A context is, operationally, anything that answers the context protocol
-(`itxInvoke / itxDefine / itxDescribe / itxRevoke` — the `RegistryStub`
-shape). A cap target is precisely "how to obtain an RPC surface". So
+(`itxInvoke / itxProvideCapability / itxDescribe / itxRevokeCapability` —
+the `RegistryStub` shape). A cap target is precisely "how to obtain an RPC surface". So
 context addresses ARE targets:
 
 ```ts
@@ -872,10 +872,10 @@ are read-only" (an earlier framing in this doc) was the wrong frame.
 
 The `caps` namespace exists to dodge name collisions, but reserved names
 already exist as a mechanism. Kernel flattens to root:
-`itx.define() / itx.revoke() / itx.describe() / itx.fork()` — the
-`ItxCaps` class dies, and the `itx.describe()` vs `caps.describe()`
-duplication resolves to one merged view. A handle is **an address, an
-access set, and four verbs**.
+`itx.provideCapability() / itx.revokeCapability() / itx.describe() /
+itx.fork() / itx.invoke()` — the `ItxCaps` class dies, and the
+`itx.describe()` vs `caps.describe()` duplication resolves to one merged
+view. A handle is **an address, an access set, and five verbs**.
 
 ### 4. Definitions live at PATHS — longest-prefix dispatch
 
@@ -885,7 +885,7 @@ about namespace organization and remains right for it; this is about
 
 ```ts
 // shadow ONE method of an inherited cap; everything else falls through
-await itx.define({ path: ["slack", "chat", "postMessage"], target: reviewQueue });
+await itx.provideCapability({ path: ["slack", "chat", "postMessage"], target: reviewQueue });
 
 await itx.slack.chat.postMessage({ … });  // → reviewQueue
 await itx.slack.users.list();             // → chain → the real slack cap
@@ -897,7 +897,8 @@ prefix → delegate the whole path up the chain. Still one deterministic
 lookup per node; the registry resolves prefixes it was explicitly given
 and never traverses provided objects — §4.5's actual concern survives.
 This is the per-method mock / approval-gate / fork-with-one-override
-story (`define({ path: ["workspace", "gitPush"], … })` on a session).
+story (`provideCapability({ path: ["workspace", "gitPush"], … })` on a
+session).
 
 ### Also queued from the same review (smaller, independent)
 
@@ -909,7 +910,7 @@ story (`define({ path: ["workspace", "gitPush"], … })` on a session).
   move. (`itx.worker` already fell to this treatment in §8.)
 - **Global streams** then either remains the one kernel exception or the
   dial-time injected props grow an `access` field alongside
-  `cap`/`context`/`projectId` — the same trusted-identity channel that
+  `capability`/`context`/`projectId` — the same trusted-identity channel that
   origin-carrying already established.
 
 ### 5. ItxProcessor: the stream is the journal, the core is pure (REVISED after review)
@@ -927,7 +928,7 @@ class Itx {                       // pure: no streams, no framework, no storage
 
 class ItxProcessor extends StreamProcessor<ITX_CONTRACT> {
   itx = new Itx(deps);
-  reduce()        // pure: cap-defined/revoked/provided/disconnected → caps state
+  reduce()        // pure: capability-provided/revoked/disconnected → caps state
   processEvent()  // side effects: script-execution-requested → runItxScript(this.itx, code)
 }
 
@@ -940,7 +941,7 @@ class GlobalItx extends WorkerEntrypoint {
   itx = new Itx(deps);            // stateless: no processor AT ALL — nothing fake
   constructor(ctx, env) {
     super(ctx, env);
-    this.itx.define({ path: ["projects"], target: … });    // defaults: literal code
+    this.itx.provideCapability({ path: ["projects"], target: … }); // defaults: literal code
   }
 }
 ```
@@ -996,11 +997,11 @@ What this dissolves:
 Final review round, locked:
 
 - **The core is `protected` inside the processor.** The processor's
-  public define/revoke are APPEND-ONLY facades (same signatures); the
-  core is mutated exclusively by event consumption. The "two initiators"
-  hazard dies by visibility, not discipline — an AgentDurableObject
-  constructor calls `this.itx.define(...)` "like normal" and is really
-  appending.
+  public provideCapability/revokeCapability are APPEND-ONLY facades (same
+  signatures); the core is mutated exclusively by event consumption. The
+  "two initiators" hazard dies by visibility, not discipline — an
+  AgentDurableObject constructor calls `this.itx.provideCapability(...)`
+  "like normal" and is really appending.
 - **Write path: append, then SELF-INGEST the same event synchronously.**
   `ingest` is the one consumption door; its checkpoint-offset bookkeeping
   makes the later subscription delivery of the same offsets a no-op, so
@@ -1074,6 +1075,26 @@ independently green.
   this in one place.
 
 ## Resolved (was open, now decided)
+
+- ~~Naming: `define`/`cap` vocabulary?~~ → The capability rename landed
+  (2026-06-11): `define` is dead as a verb everywhere — the handle root is
+  `provideCapability` / `revokeCapability` (ONE provide verb for durable AND
+  live targets; the target kind decides), plus a public root
+  `invoke({ path, args })` (the explicit dispatch form) and the explicit
+  accessor `capability(name)`. Wire verbs: `itxProvideCapability` /
+  `itxRevokeCapability` (itxDescribe/itxInvoke unchanged). Events:
+  `cap-defined` + `cap-provided` merged into ONE
+  `events.iterate.com/itx/capability-provided` (payload `kind` records
+  live vs durable), `cap-revoked`/`cap-disconnected` →
+  `capability-revoked`/`capability-disconnected`, and the script pair is
+  `script-execution-requested`/`script-execution-completed`. Every `Cap*`
+  identifier is spelled out (`CapabilityTarget`, `CapabilitySource`,
+  `CapabilityInvoke`, `RESERVED_CAPABILITY_NAMES`, …), the dial-time
+  attribution prop `cap` is now `capability`, the registry table is
+  `itx_capabilities`, and `ItxCapIngress` → `ItxCapabilityIngress`. The itx
+  streams loopback took the `StreamsCapability` name; the streams DOMAIN
+  entrypoint that previously held it is now `StreamsBackend`
+  (`getStreamsBackend`, `streams-backend.ts`).
 
 - ~~Script calling convention?~~ → ONE shape: `async (itx) => …`, the single
   argument is the handle. No conventions in the runner; parameterization is

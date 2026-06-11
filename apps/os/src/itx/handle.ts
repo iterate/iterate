@@ -9,10 +9,10 @@
 // (which IS the access check), or by the platform wiring a cap's isolate.
 //
 // Anatomy:
-//   - typed built-ins (the trust kernel): the four verbs define, revoke,
-//     fork, describe — plus streams, project, projects, and `fetch`, which is
-//     sugar dispatching through the registry's `fetch` capability (a
-//     shadowable platform default)
+//   - typed built-ins (the trust kernel): the verbs provideCapability,
+//     revokeCapability, describe, fork, invoke — plus streams, project,
+//     projects, and `fetch`, which is sugar dispatching through the
+//     registry's `fetch` capability (a shadowable platform default)
 //   - a fallthrough Proxy: any unknown name becomes a PathProxy whose
 //     terminal call dispatches to the context node's registry. itx.slack
 //     works because someone provided "slack", not because anything here
@@ -26,16 +26,16 @@ import { ItxError } from "./errors.ts";
 import { ItxStreams } from "./caps/streams.ts";
 import {
   GLOBAL_CONTEXT_ID,
-  RESERVED_CAP_NAMES,
-  type CapInvoke,
-  type CapMeta,
+  RESERVED_CAPABILITY_NAMES,
+  type CapabilityInvoke,
+  type CapabilityMeta,
   type ProjectAccess,
-  type SerializableCapTarget,
+  type SerializableCapabilityTarget,
 } from "./protocol.ts";
 import { contextAddressOf, dialContext } from "./addresses.ts";
 import type { ContextDO } from "./context-do.ts";
 import { createShareToken, SHARE_TOKEN_PARAM } from "./http.ts";
-import type { LiveCapTarget } from "./registry.ts";
+import type { LiveCapabilityTarget } from "./registry.ts";
 import type { AppConfig } from "~/config.ts";
 import {
   countAllProjects,
@@ -60,7 +60,7 @@ import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 export type ItxRuntime = {
   access: ProjectAccess;
   /** Attribution: which capability's isolate holds this handle, if any. */
-  cap?: string;
+  capability?: string;
   config: AppConfig;
   /** "global", a project id, or a ctx_… child context id. */
   contextId: string;
@@ -108,8 +108,8 @@ export class Itx extends RpcTarget {
           }
           return value;
         }
-        if (RESERVED_CAP_NAMES.has(prop)) return undefined;
-        return target.cap(prop);
+        if (RESERVED_CAPABILITY_NAMES.has(prop)) return undefined;
+        return target.capability(prop);
       },
     });
   }
@@ -117,37 +117,47 @@ export class Itx extends RpcTarget {
   // ---- the trust kernel ---------------------------------------------------
 
   /**
-   * Register a capability on this handle's context — THE verb: the target
-   * kind carries everything else. A live stub is session-bound (dies with
-   * your connection), an rpc/url target is durable. The entry lives at a
-   * PATH: `name` is the 1-segment sugar, `path` shadows one subtree of an
-   * inherited cap (longest-prefix dispatch) — exactly one of the two.
+   * Provide a capability on this handle's context — THE verb: the target
+   * kind carries everything else (durable or live). A live stub is
+   * session-bound (dies with your connection), an rpc/url target is durable.
+   * The entry lives at a PATH: `name` is the 1-segment sugar, `path` shadows
+   * one subtree of an inherited cap (longest-prefix dispatch) — exactly one
+   * of the two.
    */
-  async define(input: {
+  async provideCapability(input: {
     name?: string;
     path?: string[];
     /** The capability's target (types.ts): serializable rpc/url data, or
      * anything live — a stub, an RpcTarget, a function. */
-    target: SerializableCapTarget | LiveCapTarget;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
+    target: SerializableCapabilityTarget | LiveCapabilityTarget;
+    invoke?: CapabilityInvoke;
+    meta?: CapabilityMeta;
   }) {
-    return await this.#registryStub().itxDefine(input);
+    return await this.#registryStub().itxProvideCapability(input);
   }
 
   /** Remove an entry (exact path match, never prefix; defaults can only be shadowed). */
-  async revoke(input: { name?: string; path?: string[] }) {
-    return await this.#registryStub().itxRevoke(input);
+  async revokeCapability(input: { name?: string; path?: string[] }) {
+    return await this.#registryStub().itxRevokeCapability(input);
+  }
+
+  /**
+   * The explicit dispatch form of the fallthrough: one registry dispatch with
+   * the full call path. `itx.invoke({ path: ["slack", "chat", "postMessage"],
+   * args: [msg] })` ≡ `itx.slack.chat.postMessage(msg)`.
+   */
+  async invoke(input: { path: string[]; args: unknown[] }): Promise<unknown> {
+    return await this.#registryStub().itxInvoke({ args: input.args, path: input.path });
   }
 
   get streams(): ItxStreams {
     // Project handles resolve `streams` like any capability — it is a
-    // platform:project default (StreamsCap loopback), so a context can
+    // platform:project default (StreamsCapability loopback), so a context can
     // shadow it. The chained calls (get("/x").append(e)) ride RPC promise
     // pipelining across whichever boundary the caller came in over.
     const projectId = this.#projectId();
     if (projectId !== null) {
-      return this.cap("streams") as ItxStreams;
+      return this.capability("streams") as ItxStreams;
     }
     // The deployment-wide "global" namespace stays KERNEL: it is gated on
     // the connect-time access set ("all" = the admin API secret / admin
@@ -183,17 +193,18 @@ export class Itx extends RpcTarget {
   get project(): ProjectStub {
     const stub = this.#projectStub();
     return new PathProxyRpcTarget((call) => {
-      // The itx* verbs (itxInvoke, itxDefine, itxProjectWorkerCall, …) are
+      // The itx* verbs (itxInvoke, itxProvideCapability, itxProjectWorkerCall, …) are
       // node-to-node plumbing: chain delegation passes a TRUSTED `origin`
       // and the forwarder passes registry-merged props. Reachable here,
       // they would let any handle holder spoof another context's identity
       // (e.g. read a sibling fork's workspace by faking origin). The proper
-      // doors are the root verbs (define/revoke) and the caps themselves.
+      // doors are the root verbs (provideCapability/revokeCapability) and the
+      // caps themselves.
       const head = call.path[0] ?? "";
       if (/^itx[A-Z]/.test(head)) {
         throw new ItxError({
           code: "FORBIDDEN",
-          message: `${head} is internal registry plumbing, not part of the project surface — use itx.define / itx.<cap> instead.`,
+          message: `${head} is internal registry plumbing, not part of the project surface — use itx.provideCapability / itx.<cap> instead.`,
         });
       }
       // Same reasoning for the raw egress doors: now that `fetch` is a
@@ -220,7 +231,7 @@ export class Itx extends RpcTarget {
    * CAPABILITY (a platform:project default): the default pipe substitutes
    * secrets inside the Project DO — `fetch("https://api.x.com", { headers: {
    * authorization: 'getSecret("X_TOKEN")' } })` never sees the material —
-   * and a defined `fetch` shadow (e.g. a live provider) intercepts instead.
+   * and a provided `fetch` shadow (e.g. a live provider) intercepts instead.
    * Isolates the platform loads get this same dispatch as global fetch.
    */
   async fetch(input: Request | string, init?: RequestInit): Promise<Response> {
@@ -235,15 +246,15 @@ export class Itx extends RpcTarget {
     const projectId = this.#projectId();
     return {
       access: this.#runtime.access,
-      cap: this.#runtime.cap,
+      capability: this.#runtime.capability,
       caps: projectId === null ? [] : await this.#registryStub().itxDescribe(),
       context: this.#runtime.contextId,
       project: projectId === null ? null : await this.#projectStub().describe(),
     };
   }
 
-  /** Fallthrough target — also reachable explicitly as itx.cap("name"). */
-  cap(name: string): unknown {
+  /** Fallthrough target — also reachable explicitly as itx.capability("name"). */
+  capability(name: string): unknown {
     const registry = this.#registryStub();
     return new PathProxyRpcTarget(async ({ path, args }) => {
       return await registry.itxInvoke({ args, path: [name, ...path] });
@@ -281,7 +292,7 @@ export class Itx extends RpcTarget {
     return new Itx({
       ...this.#runtime,
       access: [projectId],
-      cap: undefined,
+      capability: undefined,
       contextId: childId,
       projectId,
     });
@@ -305,7 +316,12 @@ export class Itx extends RpcTarget {
 
     const ingress = new URL(await this.#projectStub().ingressUrl());
     const expiresAtMs = Date.now() + (input.ttlSeconds ?? 3600) * 1000;
-    const token = await createShareToken({ cap: input.name, expiresAtMs, projectId, secret });
+    const token = await createShareToken({
+      capability: input.name,
+      expiresAtMs,
+      projectId,
+      secret,
+    });
 
     const url = new URL(ingress);
     url.hostname = `${input.name}--${ingress.hostname}`;
@@ -360,7 +376,7 @@ export type ItxFn<R = unknown> = (itx: Itx) => Promise<R> | R;
 /**
  * Map an SDK's type surface onto its itx stub: every function becomes async,
  * everything else recurses. Cap lookups are untyped at runtime (the Proxy
- * fallthrough), so callers cast: `itx.cap("slack") as
+ * fallthrough), so callers cast: `itx.capability("slack") as
  * Stubify<import("@slack/web-api").WebClient>` gives the real SDK types while
  * the runtime stays a ten-line path-call forwarder.
  */
@@ -374,7 +390,10 @@ type ProjectStub = DurableObjectStub<ProjectDurableObject>;
 type ContextStub = DurableObjectStub<ContextDO>;
 
 /** The registry verbs every context node (project or child) exposes. */
-type RegistryStub = Pick<ProjectStub, "itxDefine" | "itxDescribe" | "itxInvoke" | "itxRevoke">;
+type RegistryStub = Pick<
+  ProjectStub,
+  "itxDescribe" | "itxInvoke" | "itxProvideCapability" | "itxRevokeCapability"
+>;
 
 function projectStub(env: Env, projectId: string): ProjectStub {
   return env.PROJECT.getByName(getProjectDurableObjectName(projectId)) as unknown as ProjectStub;

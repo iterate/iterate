@@ -112,10 +112,10 @@ class AnswerCapability extends RpcTarget {
   }
 }
 
-// define() is THE verb: a live stub is just another target. A live cap
-// disappears when this tab disconnects; reconnect and define() again to
-// restore it.
-await itx.define({ name: "answer", target: new AnswerCapability() });
+// provideCapability() is THE verb: a live stub is just another target. A live
+// cap disappears when this tab disconnects; reconnect and provideCapability()
+// again to restore it.
+await itx.provideCapability({ name: "answer", target: new AnswerCapability() });
 
 // Unknown names on the handle fall through to the registry, so the cap is
 // callable as if it were built in.
@@ -124,7 +124,7 @@ return await itx.answer.run();
   },
   {
     id: "provide-path-call-sdk",
-    title: "Define a live SDK-shaped capability (path-call)",
+    title: "Provide a live SDK-shaped capability (path-call)",
     description:
       "A path-call capability implements ONE method, call({ path, args }), and receives the whole dotted path as data. This is how 'use itx.slack exactly like @slack/web-api' works — the public SDK docs become the tool docs, with a ~10-line forwarder.",
     context: "project",
@@ -140,7 +140,7 @@ class FakeSlackSdk extends RpcTarget {
 
 // invoke: "path-call" tells the registry to deliver { path, args } in one
 // shot rather than replaying property access.
-await itx.define({
+await itx.provideCapability({
   name: "fakeSlack",
   invoke: "path-call",
   target: new FakeSlackSdk(),
@@ -151,8 +151,8 @@ return await itx.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" });
 `.trim(),
   },
   {
-    id: "define-durable-worker-cap",
-    title: "Define a durable worker capability from source",
+    id: "provide-durable-worker-cap",
+    title: "Provide a durable worker capability from source",
     description:
       "A serializable target stores source code as a DURABLE capability (a stateless dynamic worker), loaded on demand. Unlike a live stub target, it survives this session. Every public method on the WorkerEntrypoint is auto-proxied — add a method, call it instantly.",
     context: "project",
@@ -164,7 +164,7 @@ return await itx.fakeSlack.chat.postMessage({ channel: "C123", text: "hi" });
 // a content version: keep it stable while the source is unchanged (re-running
 // this snippet reuses the loaded worker) and bump it whenever you edit the
 // module text.
-await itx.define({
+await itx.provideCapability({
   name: "greeter",
   target: {
     type: "rpc",
@@ -202,7 +202,7 @@ return {
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-await itx.define({
+await itx.provideCapability({
   name: "todo",
   target: {
     type: "rpc",
@@ -248,7 +248,7 @@ return await itx.todo.list();
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-await itx.define({
+await itx.provideCapability({
   name: "kit",
   target: {
     type: "rpc",
@@ -288,7 +288,7 @@ return {
     runtimes: ALL_RUNTIMES,
     code: `
 // Provider cap.
-await itx.define({
+await itx.provideCapability({
   name: "inventory",
   target: {
     type: "rpc",
@@ -313,7 +313,7 @@ await itx.define({
 });
 
 // Consumer cap — a different dynamic worker that calls the first via itx.
-await itx.define({
+await itx.provideCapability({
   name: "report",
   target: {
     type: "rpc",
@@ -351,7 +351,7 @@ return await itx.report.build({ sku: "ABC" });
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-await itx.define({
+await itx.provideCapability({
   name: "counter",
   target: {
     type: "rpc",
@@ -389,12 +389,12 @@ return { current: await itx.counter.current() };   // 2, and it persists
     id: "fork-child-context",
     title: "Fork a child context (a session) with its own caps",
     description:
-      "itx.fork() makes a cheap, disposable child context under the project — an agent session or scratchpad. Its caps SHADOW the parent's; names it doesn't define delegate up the chain. describe() shows the merged view with provenance.",
+      "itx.fork() makes a cheap, disposable child context under the project — an agent session or scratchpad. Its caps SHADOW the parent's; names it doesn't provide delegate up the chain. describe() shows the merged view with provenance.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
 // A cap on the project — visible to every child through the chain.
-await itx.define({
+await itx.provideCapability({
   name: "shared",
   invoke: "path-call",
   target: new (class extends RpcTarget {
@@ -406,7 +406,7 @@ await itx.define({
 const child = await itx.fork({ name: "repl-scratch" });
 
 // The child can shadow 'shared' with its own definition...
-await child.define({
+await child.provideCapability({
   name: "shared",
   invoke: "path-call",
   target: new (class extends RpcTarget {
@@ -447,7 +447,7 @@ return { status: response.status, sawSubstitutedHeader: body.headers };
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-await itx.define({
+await itx.provideCapability({
   name: "hello",
   meta: { http: { expose: true } },   // routable; still admin-gated
   target: {

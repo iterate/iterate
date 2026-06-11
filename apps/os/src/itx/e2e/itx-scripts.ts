@@ -8,7 +8,7 @@
  * ONE method and callers get the whole dotted surface (the Slack SDK trick:
  * public SDK docs become the tool docs).
  */
-export function pathCallCapSource(input: { marker: string }) {
+export function pathCallCapabilitySource(input: { marker: string }) {
   return `
     import { WorkerEntrypoint } from "cloudflare:workers";
 
@@ -29,7 +29,7 @@ export function pathCallCapSource(input: { marker: string }) {
  * their own: a tiny todo tool storing items on a project stream via
  * env.ITERATE.context. Invoked with "members": itx.todo.add({ text }).
  */
-export function todoCapSource() {
+export function todoCapabilitySource() {
   return `
     import { WorkerEntrypoint } from "cloudflare:workers";
 

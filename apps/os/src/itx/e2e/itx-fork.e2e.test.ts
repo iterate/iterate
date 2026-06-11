@@ -21,7 +21,7 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
   using projectItx = await itx.projects.get(project.id);
 
   // A project-level cap every child should see through the chain.
-  await projectItx.define({
+  await projectItx.provideCapability({
     invoke: "path-call",
     name: "shared",
     target: pathCallTarget("project-level"),
@@ -51,7 +51,7 @@ test("fork: child caps shadow the parent, misses delegate up the chain", async (
 
   // (2) Child defines its own cap under the SAME name → shadows the parent,
   // visibly (describe reports the owner).
-  await child.define({
+  await child.provideCapability({
     invoke: "path-call",
     name: "shared",
     target: pathCallTarget("child-level"),
@@ -104,7 +104,7 @@ test("fork: a path define shadows ONE subtree of an inherited cap (longest-prefi
       return { from: this.from, method: path.join(".") };
     }
   }
-  await projectItx.define({
+  await projectItx.provideCapability({
     invoke: "path-call",
     name: "sdk",
     target: new MarkedSdk("base") as never,
@@ -113,7 +113,7 @@ test("fork: a path define shadows ONE subtree of an inherited cap (longest-prefi
   // The fork overrides exactly one method via a PATH define; the entry path
   // is consumed by resolution, so the override target sees the remainder.
   using child = await projectItx.fork({ name: "e2e-path-shadow" });
-  await child.define({
+  await child.provideCapability({
     invoke: "path-call",
     path: ["sdk", "chat", "postMessage"],
     target: new MarkedSdk("override") as never,
@@ -148,7 +148,7 @@ test("fork: a path define shadows ONE subtree of an inherited cap (longest-prefi
 
   // (4) Reserved segments are rejected per-segment at define time.
   await expect(
-    child.define({
+    child.provideCapability({
       invoke: "path-call",
       path: ["sdk", "constructor"],
       target: new MarkedSdk("nope") as never,
@@ -211,7 +211,7 @@ test("fork: child worker caps run with the owning project's authority", async ()
   using child = await projectItx.fork();
 
   // The child-scoped cap's own itx writes to the project's streams.
-  await child.define({
+  await child.provideCapability({
     name: "noter",
     target: {
       type: "rpc",

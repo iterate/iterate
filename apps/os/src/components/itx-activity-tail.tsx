@@ -17,11 +17,10 @@ import { useItx } from "~/itx/use-itx.ts";
 const MAX_BUFFERED_EVENTS = 500;
 
 const FRIENDLY_RENDERERS: Record<string, (payload: Record<string, unknown>) => string> = {
-  "events.iterate.com/itx/cap-provided": (p) => `capability "${p.name}" provided (live)`,
-  "events.iterate.com/itx/cap-defined": (p) =>
-    `capability "${p.name}" defined (${p.kind ?? "worker"})`,
-  "events.iterate.com/itx/cap-revoked": (p) => `capability "${p.name}" revoked`,
-  "events.iterate.com/itx/cap-disconnected": (p) => `capability "${p.name}" disconnected`,
+  "events.iterate.com/itx/capability-provided": (p) =>
+    `capability "${p.name}" provided (${p.kind ?? "worker"})`,
+  "events.iterate.com/itx/capability-revoked": (p) => `capability "${p.name}" revoked`,
+  "events.iterate.com/itx/capability-disconnected": (p) => `capability "${p.name}" disconnected`,
   "events.iterate.com/itx/context-forked": (p) => `context forked: ${p.id ?? ""}`,
 };
 
@@ -103,7 +102,8 @@ export function ItxActivityTail({ projectId }: { projectId: string }) {
           <p className="py-2 font-mono text-xs text-destructive">{error}</p>
         ) : rows.length === 0 ? (
           <p className="py-2 text-xs text-muted-foreground">
-            Nothing yet — define a capability from the repl (itx.define) and watch it land here.
+            Nothing yet — provide a capability from the repl (itx.provideCapability) and watch it
+            land here.
           </p>
         ) : (
           <ol className="space-y-1">

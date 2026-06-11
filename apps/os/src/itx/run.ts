@@ -3,8 +3,8 @@
 // One function runs a script in a loader isolate against a context and
 // leaves a durable two-event record on the owning project's /itx stream:
 //
-//   events.iterate.com/itx/execution-requested   { executionId, code, context }
-//   events.iterate.com/itx/execution-completed   { executionId, ok, result|error, durationMs, context }
+//   events.iterate.com/itx/script-execution-requested   { executionId, code, context }
+//   events.iterate.com/itx/script-execution-completed   { executionId, ok, result|error, durationMs, context }
 //
 // The events are the RECORD, not the transport: callers get the outcome from
 // the return value; everything between the two events is invisible to the
@@ -79,7 +79,7 @@ export async function runItxScript(input: {
 
   if (input.recordRequested !== false)
     await recordExecutionEvent(input.env, record, {
-      type: ITX_EVENT_TYPES.executionRequested,
+      type: ITX_EVENT_TYPES.scriptExecutionRequested,
       payload: {
         code: input.functionSource,
         context: input.props.context,
@@ -145,7 +145,7 @@ export async function runItxScript(input: {
   }
 
   await recordExecutionEvent(input.env, record, {
-    type: ITX_EVENT_TYPES.executionCompleted,
+    type: ITX_EVENT_TYPES.scriptExecutionCompleted,
     payload: {
       context: input.props.context,
       durationMs: outcome.durationMs,

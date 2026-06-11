@@ -15,7 +15,7 @@
 //
 // Headers ride the WebSocket handshake and pass through the SAME
 // getSecret() placeholder substitution as project egress (Law 5), resolved
-// via the SecretsCapability loopback — so a definer writes
+// via the SecretsCapability loopback — so a provider writes
 // `authorization: 'Bearer getSecret({ key: "REMOTE_TOKEN" })'` and the
 // secret material never appears in any registry row or describe() output.
 // Known gap: these dials bypass fetch-cap shadowing (the UrlDial → Project
@@ -23,19 +23,19 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
-import { RESERVED_PATH_SEGMENTS, type CapInvoke, type PathCall } from "../protocol.ts";
+import { RESERVED_PATH_SEGMENTS, type CapabilityInvoke, type PathCall } from "../protocol.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 
 export type UrlDialProps = {
-  /** The remote Cap'n Web server. Definer-supplied; http(s) or ws(s). */
+  /** The remote Cap'n Web server. Provider-supplied; http(s) or ws(s). */
   url: string;
   /** Handshake headers; values pass through egress secret substitution. */
   headers?: Record<string, string>;
   /** The cap's invoke mode, applied against the REMOTE main. */
-  invoke?: CapInvoke;
+  invoke?: CapabilityInvoke;
   /** Attribution + secret scope, injected by the registry at dial time. */
-  cap?: string;
+  capability?: string;
   context?: string;
   projectId?: string;
 };
@@ -109,7 +109,7 @@ export class UrlDial extends WorkerEntrypoint<Env, UrlDialProps> {
 
 /**
  * Workers dial WebSockets with an Upgrade fetch, which only accepts http(s)
- * URLs — ws(s) spellings normalize here so definers can use either.
+ * URLs — ws(s) spellings normalize here so providers can use either.
  */
 function dialableHttpUrl(raw: string): URL {
   const url = new URL(raw);

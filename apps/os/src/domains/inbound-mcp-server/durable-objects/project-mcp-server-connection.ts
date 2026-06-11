@@ -7,17 +7,17 @@ import { upsertD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/
 import { typeid } from "@iterate-com/shared/typeid";
 import packageJson from "../../../../package.json" with { type: "json" };
 import {
-  getStreamsCapability,
-  type StreamsCapabilityProps,
-} from "~/domains/streams/entrypoints/streams-capability.ts";
+  getStreamsBackend,
+  type StreamsBackendProps,
+} from "~/domains/streams/entrypoints/streams-backend.ts";
 import { parseConfig } from "~/config.ts";
 import type { ContextDO } from "~/itx/context-do.ts";
 import { contextAddressOf } from "~/itx/addresses.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
-import type { CapInvoke, SerializableCapTarget } from "~/itx/protocol.ts";
+import type { CapabilityInvoke, SerializableCapabilityTarget } from "~/itx/protocol.ts";
 import { runItxScript } from "~/itx/run.ts";
 
-export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 
 /**
  * Project-scoped MCP server connection for os.
@@ -98,8 +98,8 @@ const MCP_CONTEXT_CAPS_VERSION = "1";
 const SEEDED_CAPS: Array<{
   name: string;
   instructions: string;
-  invoke: CapInvoke;
-  target: SerializableCapTarget;
+  invoke: CapabilityInvoke;
+  target: SerializableCapabilityTarget;
 }> = [
   {
     instructions:
@@ -140,7 +140,7 @@ export class ProjectMcpServerConnection extends McpAgent<
         "",
         "exec_js runs JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async (itx) => { ... }` — the one argument is your iterate context handle.",
         "",
-        "The `itx` object is a handle on this session's iterate context: built-ins (itx.fetch, itx.streams, itx.define) plus every capability on the context, called as `itx.<cap>.<method>(args)`. Available capabilities are listed in the exec_js tool description.",
+        "The `itx` object is a handle on this session's iterate context: built-ins (itx.fetch, itx.streams, itx.provideCapability) plus every capability on the context, called as `itx.<cap>.<method>(args)`. Available capabilities are listed in the exec_js tool description.",
         "",
         "Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP requests (it rides project egress with secret substitution). The return value is sent back as the result. Do NOT write bare statements — always wrap in `async (itx) => { ... }`.",
       ].join("\n"),
@@ -345,7 +345,7 @@ export class ProjectMcpServerConnection extends McpAgent<
       projectId,
     });
     for (const cap of SEEDED_CAPS) {
-      await contextStub.itxDefine({
+      await contextStub.itxProvideCapability({
         invoke: cap.invoke,
         meta: { instructions: cap.instructions },
         name: cap.name,
@@ -369,7 +369,7 @@ export class ProjectMcpServerConnection extends McpAgent<
         return;
       }
 
-      await getStreamsCapability({
+      await getStreamsBackend({
         exports: this.workerExports(),
         props: streamCapabilityProps({
           projectId,
@@ -621,7 +621,7 @@ function serializeError(error: unknown) {
 function streamCapabilityProps(input: {
   projectId: string;
   streamPath: StreamPath;
-}): StreamsCapabilityProps {
+}): StreamsBackendProps {
   return {
     appendPolicy: { mode: "stream" },
     projectId: input.projectId,

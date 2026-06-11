@@ -159,7 +159,7 @@ export class ProjectDurableObject extends RealProjectDurableObject {
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
-export { StreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 export { OrpcCapability } from "~/rpc-targets/os-capabilities.ts";
 export { EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
@@ -255,7 +255,7 @@ export default {
         exports: ctx.exports as never,
         props: { context: "proj__local__test" },
       });
-      await itx.define({
+      await itx.provideCapability({
         invoke: "path-call",
         name: "fetch",
         target: new EchoEgressShadow() as never,
@@ -265,7 +265,7 @@ export default {
         const response = await itx.fetch(new Request(target, { headers: request.headers }));
         return Response.json(await response.json());
       } finally {
-        await itx.revoke({ name: "fetch" });
+        await itx.revokeCapability({ name: "fetch" });
       }
     }
 

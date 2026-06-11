@@ -12,15 +12,15 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { ContextRegistry, type LiveCapTarget } from "./registry.ts";
+import { ContextRegistry, type LiveCapabilityTarget } from "./registry.ts";
 import { createContextRegistryHost } from "./registry-host.ts";
 import { ITX_AUDIT_STREAM_PATH, ITX_EVENT_TYPES } from "./protocol.ts";
 import type {
-  CapDescription,
-  CapInvoke,
-  CapMeta,
+  CapabilityDescription,
+  CapabilityInvoke,
+  CapabilityMeta,
   PathCall,
-  SerializableCapTarget,
+  SerializableCapabilityTarget,
 } from "./protocol.ts";
 import {
   contextAddressOf,
@@ -104,22 +104,22 @@ export class ContextDO extends DurableObject<Env> {
     return contextAddressOf(this.descriptor().id);
   }
 
-  itxDefine(input: {
+  itxProvideCapability(input: {
     name?: string;
     path?: string[];
-    target: SerializableCapTarget | LiveCapTarget;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
+    target: SerializableCapabilityTarget | LiveCapabilityTarget;
+    invoke?: CapabilityInvoke;
+    meta?: CapabilityMeta;
   }) {
-    return this.registry().define(input);
+    return this.registry().provideCapability(input);
   }
 
-  itxRevoke(input: { name?: string; path?: string[] }) {
-    return this.registry().revoke(input);
+  itxRevokeCapability(input: { name?: string; path?: string[] }) {
+    return this.registry().revokeCapability(input);
   }
 
   /** Merged chain view: own caps first, then parents', shadowed names marked. */
-  async itxDescribe(): Promise<CapDescription[]> {
+  async itxDescribe(): Promise<CapabilityDescription[]> {
     const own = this.registry().describe();
     const ownNames = new Set(own.map((cap) => cap.name));
     const parentCaps = await this.parentStub().itxDescribe();

@@ -21,7 +21,7 @@ type WorkerMainModule = Pick<
     | "ReposCapability"
     | "SecretsCapability"
     | "SlackCapability"
-    | "StreamsCapability"
+    | "StreamsBackend"
     | "WorkspaceCapability"
   >
 >;

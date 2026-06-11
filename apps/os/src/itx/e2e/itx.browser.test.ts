@@ -132,7 +132,7 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
       }
     }
 
-    await projectItx.define({
+    await projectItx.provideCapability({
       invoke: "path-call",
       name: "browserSlack",
       target: new BrowserSdk() as never,

@@ -34,7 +34,7 @@ import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
 import { ITERATE_CONFIG_REPO_SLUG } from "~/domains/repos/iterate-config-repo.ts";
 import type { ItxProps } from "~/itx/protocol.ts";
 import type { ProjectEgressProps } from "~/itx/entrypoint.ts";
-import type { StreamsCapabilityProps } from "~/domains/streams/entrypoints/streams-capability.ts";
+import type { StreamsBackendProps } from "~/domains/streams/entrypoints/streams-backend.ts";
 import { wireIsolateEnv, type IsolateLoopback } from "~/itx/isolate.ts";
 
 export const WORKER_CONFIG_DIR = "/iterate-config";
@@ -130,7 +130,7 @@ export type WorkerWorkspace = {
 export type WorkerLoopbackExports = Cloudflare.Exports & {
   ItxEntrypoint(input: { props: ItxProps }): Fetcher;
   ProjectEgress(input: { props: ProjectEgressProps }): Fetcher;
-  StreamsCapability(input: { props: StreamsCapabilityProps }): Fetcher;
+  StreamsBackend(input: { props: StreamsBackendProps }): Fetcher;
 };
 
 export function readLoopbackExports(exports: unknown): WorkerLoopbackExports {
@@ -165,11 +165,11 @@ export function withWorkerEnv(input: {
     return factory(options);
   };
   return wireIsolateEnv({
-    cap: "worker",
+    capability: "worker",
     code: input.workerCode,
     contextId: input.projectId,
     extraEnv: {
-      STREAMS: input.exports.StreamsCapability({ props: { projectId: input.projectId } }),
+      STREAMS: input.exports.StreamsBackend({ props: { projectId: input.projectId } }),
     },
     loopback,
     projectId: input.projectId,

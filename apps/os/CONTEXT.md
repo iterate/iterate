@@ -340,7 +340,7 @@ _Avoid_: Session ID, stream path
 A scoped RPC capability handed to script executors and tool providers so they can interact with a Codemode Session.
 _Avoid_: RpcTarget, session stub, callback bundle
 
-**StreamsCapability**:
+**StreamsBackend**:
 A Project ID-backed RPC capability for stream operations. Its props bind the shared stream namespace to the Project ID, and optional `streamPath` props narrow calls to one namespace-local Event Stream Path.
 _Avoid_: Generic stream client, cross-app stream client
 
@@ -740,9 +740,9 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - For an **Event-Mediated Tool Provider**, the **Codemode Processor** appends the function-call-requested event, but the Tool Function Implementation owns appending the matching function-call-completed event.
 - `ctx.<provider>.<toolFunction>(payload)` calls a **Tool Function**.
 - Built-in stream operations, such as append, are ordinary **Tool Functions** under paths like `ctx.streams.append(...)`.
-- A **StreamsCapability** defaults operations to its narrowed **Event Stream Path** when the caller omits a path.
-- In a narrowed **StreamsCapability**, stream paths without a leading slash, including `./` paths, resolve relative to the narrowed **Event Stream Path**.
-- In a narrowed **StreamsCapability**, stream paths with a leading slash resolve as absolute project-scoped **Event Stream Paths** and remain subject to capability policy.
+- A **StreamsBackend** defaults operations to its narrowed **Event Stream Path** when the caller omits a path.
+- In a narrowed **StreamsBackend**, stream paths without a leading slash, including `./` paths, resolve relative to the narrowed **Event Stream Path**.
+- In a narrowed **StreamsBackend**, stream paths with a leading slash resolve as absolute project-scoped **Event Stream Paths** and remain subject to capability policy.
 - Navigating to an **Event Stream Path** in the Project Stream Explorer may initialize that stream; users do not need a separate create-stream command.
 - The **Project Stream Explorer** lists every initialized **Event Stream Path**, including `/`, as a flat list rather than a tree.
 - For the **Project Stream Explorer**, an Event Stream Path exists in reality when its Stream Durable Object is initialized and cataloged for the Project.

@@ -22,7 +22,7 @@ export type WorkspaceCapabilityProps = {
    * context, which is what makes this derivation correct for caps inherited
    * from platform:project. */
   context?: string;
-  cap?: string;
+  capability?: string;
 };
 
 /** Project contexts share one workspace; child contexts are isolated. */

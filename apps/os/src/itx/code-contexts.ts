@@ -13,23 +13,23 @@
 // migration of thousands of registries.
 
 import {
-  assertDefinableCapTarget,
-  assertValidCapName,
-  type CapInvoke,
-  type CapMeta,
-  type SerializableCapTarget,
+  assertProvidableCapabilityTarget,
+  assertValidCapabilityName,
+  type CapabilityInvoke,
+  type CapabilityMeta,
+  type SerializableCapabilityTarget,
 } from "./protocol.ts";
 
-export type CodeContextCap = {
-  invoke: CapInvoke;
-  meta: CapMeta;
-  target: SerializableCapTarget;
+export type CodeContextCapability = {
+  invoke: CapabilityInvoke;
+  meta: CapabilityMeta;
+  target: SerializableCapabilityTarget;
 };
 
 export type CodeContext = {
   /** The context's name — describe() provenance (`owner`) for its caps. */
   name: string;
-  caps: ReadonlyMap<string, CodeContextCap>;
+  caps: ReadonlyMap<string, CodeContextCapability>;
 };
 
 /**
@@ -40,21 +40,21 @@ export type CodeContext = {
 export function defineCodeContext(
   name: string,
   build: (caps: {
-    define(input: {
+    provideCapability(input: {
       name: string;
-      target: SerializableCapTarget;
-      invoke?: CapInvoke;
-      meta?: CapMeta;
+      target: SerializableCapabilityTarget;
+      invoke?: CapabilityInvoke;
+      meta?: CapabilityMeta;
     }): void;
   }) => void,
 ): CodeContext {
-  const caps = new Map<string, CodeContextCap>();
+  const caps = new Map<string, CodeContextCapability>();
   build({
-    define(input) {
-      assertValidCapName(input.name);
-      assertDefinableCapTarget(input.name, input.target);
+    provideCapability(input) {
+      assertValidCapabilityName(input.name);
+      assertProvidableCapabilityTarget(input.name, input.target);
       if (caps.has(input.name)) {
-        throw new Error(`Code context "${name}" defines "${input.name}" twice.`);
+        throw new Error(`Code context "${name}" provides "${input.name}" twice.`);
       }
       caps.set(input.name, {
         invoke: input.invoke ?? "members",
@@ -70,12 +70,13 @@ export function defineCodeContext(
  * The defaults every project context delegates to (§8's "cap #0 disappears"
  * direction). What was hardwired into the handle is now ordinary capability
  * definitions: ai, fetch, streams, repos, workspace, and the project
- * worker. The remaining kernel — caps, fork, project, projects, describe,
- * plus the GLOBAL streams namespace — is composition the registry cannot
- * express (access checks, narrowing, the registry itself).
+ * worker. The remaining kernel — provideCapability, revokeCapability,
+ * capability, invoke, fork, project, projects, describe, plus the GLOBAL
+ * streams namespace — is composition the registry cannot express (access
+ * checks, narrowing, the registry itself).
  */
 export const platformProjectContext = defineCodeContext("platform:project", (caps) => {
-  caps.define({
+  caps.provideCapability({
     invoke: "path-call",
     meta: {
       instructions:
@@ -90,7 +91,7 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
       worker: { type: "loopback" },
     },
   });
-  caps.define({
+  caps.provideCapability({
     // The DEFAULT egress pipe: itx.fetch(...) and bare fetch() in every
     // platform-loaded isolate dispatch through THIS registry entry. The
     // target is the terminal, stateless EgressPipe (path: [], args:
@@ -115,7 +116,7 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
       worker: { type: "loopback" },
     },
   });
-  caps.define({
+  caps.provideCapability({
     meta: {
       instructions:
         "Event streams in this project's namespace: itx.streams.get('/path') returns a " +
@@ -125,12 +126,12 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
     },
     name: "streams",
     target: {
-      entrypoint: "StreamsCap",
+      entrypoint: "StreamsCapability",
       type: "rpc",
       worker: { type: "loopback" },
     },
   });
-  caps.define({
+  caps.provideCapability({
     meta: {
       instructions:
         "The project's git repos: itx.repos.ensureIterateConfigInfo({ projectSlug }), " +
@@ -143,7 +144,7 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
       worker: { type: "loopback" },
     },
   });
-  caps.define({
+  caps.provideCapability({
     meta: {
       instructions:
         "A persistent workspace filesystem: itx.workspace.readFile/writeFile plus the flat " +
@@ -157,7 +158,7 @@ export const platformProjectContext = defineCodeContext("platform:project", (cap
       worker: { type: "loopback" },
     },
   });
-  caps.define({
+  caps.provideCapability({
     // path-call: the cap's own invoke describes the forwarder hop; the
     // members replay against the user's default export rides in props.
     invoke: "path-call",

@@ -1,6 +1,6 @@
 // Proves the itx stream-subscribe chain against a REAL Stream Durable Object:
 // test callback → Workers RPC → ItxStreamHarness (stand-in for the capnweb
-// session) → ItxStream.subscribe → ctx.exports loopback → StreamsCapability
+// session) → ItxStream.subscribe → ctx.exports loopback → StreamsBackend
 // .subscribe → Stream DO holds the wrapper. The key risk under test is
 // lifetime: deliveries must keep arriving after every initiating RPC call has
 // returned, for as long as the returned subscription handle is held.
@@ -273,7 +273,7 @@ describe("itx stream subscribe against a real Stream Durable Object", () => {
 describe("itx errors across real Workers RPC boundaries", () => {
   test("an ItxError's code and details survive the loopback and harness hops", async () => {
     const path = newStreamPath();
-    // The append-policy FORBIDDEN is thrown inside StreamsCapability, crosses
+    // The append-policy FORBIDDEN is thrown inside StreamsBackend, crosses
     // the ctx.exports loopback into the harness entrypoint, then the harness
     // RPC boundary into this test — two real Workers RPC serializations.
     const error = await harness.appendOutsidePolicy({ path }).then(

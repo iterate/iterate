@@ -124,8 +124,8 @@ Done:
   DECISIONS D19, PR #1457) — built, then superseded by D21 and deleted.
 
 Happening separately: codemode is deleted and replaced by the **itx
-processor** (`events.iterate.com/itx/execution-requested` /
-`execution-completed`) — see `tasks/os-codemode-to-itx-processor.md`.
+processor** (`events.iterate.com/itx/script-execution-requested` /
+`script-execution-completed`) — see `tasks/os-codemode-to-itx-processor.md`.
 
 Remaining: see `tasks/os-orpc-teardown.md`.
 

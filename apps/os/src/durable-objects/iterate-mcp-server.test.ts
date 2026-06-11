@@ -65,10 +65,10 @@ describe("ProjectMcpServerConnection inbound MCP", () => {
             }),
           }),
           expect.objectContaining({
-            type: "events.iterate.com/itx/execution-requested",
+            type: "events.iterate.com/itx/script-execution-requested",
           }),
           expect.objectContaining({
-            type: "events.iterate.com/itx/execution-completed",
+            type: "events.iterate.com/itx/script-execution-completed",
             payload: expect.objectContaining({
               logs: expect.arrayContaining([expect.stringContaining("hello from inbound mcp")]),
               ok: true,

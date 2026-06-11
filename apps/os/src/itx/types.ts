@@ -18,7 +18,7 @@
  * a context that nothing else needs to re-address can live entirely in a
  * connection, like the global handle does today.
  *
- * **A capability** is a name plus a {@link CapTarget}: either a live stub
+ * **A capability** is a name plus a {@link CapabilityTarget}: either a live stub
  * someone connected and handed us (inbound, lives as long as their
  * connection), or a serializable description of where to find the
  * implementation (outbound — an RPC target in some worker, or a URL across
@@ -29,10 +29,10 @@
  * **An itx** is a live handle on one context — the only thing user code
  * ever touches, identical in the browser, Node, the REPL, the project
  * worker (the worker built from the project's own repo), itx scripts, and
- * capabilities themselves. An itx is an address, an access set, and four
- * verbs: `define`, `revoke`, `describe`, `fork` (plus a few built-in
- * members — `projects`, `streams`, `fetch`); every other property falls
- * through to the context's capability registry.
+ * capabilities themselves. An itx is an address, an access set, and five
+ * verbs: `provideCapability`, `revokeCapability`, `describe`, `fork`,
+ * `invoke` (plus a few built-in members — `projects`, `streams`, `fetch`);
+ * every other property falls through to the context's capability registry.
  * Authority is the handle itself: auth happens once at connect, and which
  * context you hold — plus the principal it was minted for — is the whole
  * permission model. Narrowing is construction: a weaker handle is a new
@@ -46,7 +46,7 @@
  *
  * await itx.describe();                    // what am I holding? what can I call?
  *
- * await itx.slack.chat.postMessage({       // call a capability someone defined —
+ * await itx.slack.chat.postMessage({       // call a capability someone provided —
  *   channel: "C123", text: "hi",           // works because "slack" is in the
  * });                                      // registry, not because itx knows Slack
  *
@@ -55,7 +55,7 @@
  * });                                      // egress: the secret is substituted
  *                                          // server-side; this code never sees it
  *
- * await itx.define({                       // teach this context a new trick:
+ * await itx.provideCapability({            // teach this context a new trick:
  *   name: "ai",                            // itx.ai.run(model, input)
  *   target: { type: "rpc", worker: { type: "binding", binding: "AI" } },
  * });
@@ -83,11 +83,12 @@
  *
  * Unknown property names fall through to the context's capability registry
  * at runtime: `itx.slack.chat.postMessage(...)` works because someone
- * defined `slack`. Property access accumulates a path locally (zero round
+ * provided `slack`. Property access accumulates a path locally (zero round
  * trips); the terminal call dispatches once. Type known caps via
- * {@link KnownCaps} merging, or reach anything untyped via `itx.cap(name)`.
+ * {@link KnownCapabilities} merging, or reach anything untyped via
+ * `itx.capability(name)`.
  */
-export type Itx = ItxBuiltins & KnownCaps;
+export type Itx = ItxBuiltins & KnownCapabilities;
 
 /**
  * The built-in surface of every handle — the trust kernel. Everything else
@@ -99,31 +100,32 @@ export type Itx = ItxBuiltins & KnownCaps;
  */
 export interface ItxBuiltins {
   /**
-   * Register a capability on this handle's context — THE verb for every
-   * target kind: live targets are session-bound (re-define on reconnect);
-   * rpc/url targets are durable. The entry lives at a PATH: `name` is the
-   * common 1-segment case, `path` the multi-segment form (exactly one of
-   * the two). Dispatch is longest-prefix per context: `define({ path:
-   * ["slack", "chat", "postMessage"], … })` shadows ONE method of an
-   * inherited cap while every other `slack.*` call falls through the chain.
+   * Provide a capability on this handle's context — THE verb for every
+   * target kind, durable or live: live targets are session-bound (provide
+   * again on reconnect); rpc/url targets are durable. The entry lives at a
+   * PATH: `name` is the common 1-segment case, `path` the multi-segment form
+   * (exactly one of the two). Dispatch is longest-prefix per context:
+   * `provideCapability({ path: ["slack", "chat", "postMessage"], … })`
+   * shadows ONE method of an inherited cap while every other `slack.*` call
+   * falls through the chain.
    *
    * ```ts
    * // From a laptop/sandbox (inbound, lives while connected): a live
    * // target is the stub itself — a function, object, or RpcTarget.
-   * await itx.define({
+   * await itx.provideCapability({
    *   name: "runSwiftOnMyMac",
    *   target: async (src) => runSwift(src),
    *   meta: { instructions: "Compile-and-run Swift on Jonas's Mac." },
    * });
    *
    * // A raw platform binding (outbound, durable):
-   * await itx.define({
+   * await itx.provideCapability({
    *   name: "ai",
    *   target: { type: "rpc", worker: { type: "binding", binding: "AI" } },
    * });
    *
-   * // First-party MCP client, parameterized per server (see CapTarget):
-   * await itx.define({
+   * // First-party MCP client, parameterized per server (see CapabilityTarget):
+   * await itx.provideCapability({
    *   name: "docs",
    *   invoke: "path-call",
    *   target: {
@@ -138,23 +140,32 @@ export interface ItxBuiltins {
    * });
    *
    * // Shadow one method of an inherited cap on a session (a fork):
-   * await session.define({
+   * await session.provideCapability({
    *   path: ["workspace", "gitPush"],
    *   target: approvalGate,
    * });
    * ```
    */
-  define(input: {
+  provideCapability(input: {
     name?: string;
     path?: string[];
-    target: CapTarget;
-    invoke?: CapInvoke;
-    meta?: CapMeta;
+    target: CapabilityTarget;
+    invoke?: CapabilityInvoke;
+    meta?: CapabilityMeta;
   }): Promise<{ name: string; ok: true }>;
 
   /** Remove an entry — exact path match, never prefix; `name`/`path` as in
-   * {@link define}. Platform defaults cannot be revoked, only shadowed. */
-  revoke(input: { name?: string; path?: string[] }): Promise<{ name: string; ok: true }>;
+   * {@link provideCapability}. Platform defaults cannot be revoked, only
+   * shadowed. */
+  revokeCapability(input: { name?: string; path?: string[] }): Promise<{ name: string; ok: true }>;
+
+  /**
+   * The explicit dispatch form of the fallthrough: one registry dispatch
+   * with the full call path. `itx.invoke({ path: ["slack", "chat",
+   * "postMessage"], args: [msg] })` ≡ `itx.slack.chat.postMessage(msg)`.
+   * Useful when the path is computed.
+   */
+  invoke(input: { path: string[]; args: unknown[] }): Promise<unknown>;
 
   /**
    * "Let me show you something real quick": a signed, expiring URL for one
@@ -165,7 +176,7 @@ export interface ItxBuiltins {
 
   /**
    * Event streams, keyed by `(namespace, path)`. On a PROJECT handle this
-   * is a platform default cap (StreamsCap loopback, shadowable) pinned to
+   * is a platform default cap (StreamsCapability loopback, shadowable) pinned to
    * the project's namespace; on a GLOBAL handle it is kernel — the
    * deployment-wide `"global"` namespace gated on the connect-time access
    * set, which no cap definition can express. See {@link StreamRef} for
@@ -208,7 +219,7 @@ export interface ItxBuiltins {
    * bound as their global `fetch`, so inside a capability or itx script,
    * bare `fetch()` and `itx.fetch()` are the same door.
    *
-   * Because it is a capability, it is SHADOWABLE: define your own `fetch`
+   * Because it is a capability, it is SHADOWABLE: provide your own `fetch`
    * (e.g. a live provider implementing `call({ path: [], args: [request] })
    * → Response`) and ALL project egress flows through your provider while it
    * is connected; revoke it and the default resurfaces. A shadow provider
@@ -227,9 +238,9 @@ export interface ItxBuiltins {
    */
   describe(): Promise<ItxDescription>;
 
-  /** Explicit form of the fallthrough: `itx.cap("slack")` ≡ `itx.slack`.
-   * Useful when the name is computed or shadowed by a built-in. */
-  cap(name: string): unknown;
+  /** Explicit form of the fallthrough: `itx.capability("slack")` ≡
+   * `itx.slack`. Useful when the name is computed or shadowed by a built-in. */
+  capability(name: string): unknown;
 
   /**
    * Create a child context under this one: same anatomy, cheaper,
@@ -249,14 +260,14 @@ export interface ItxBuiltins {
  *
  * ```ts
  * declare module "~/itx/types.ts" {
- *   interface KnownCaps {
+ *   interface KnownCapabilities {
  *     slack: Stubify<import("@slack/web-api").WebClient>;
  *   }
  * }
  * ```
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- empty on purpose: this is the declaration-merge point
-export interface KnownCaps {}
+export interface KnownCapabilities {}
 
 /** What `describe()` returns. Aspirational contract: as many breadcrumbs as
  * we can possibly give you — this should always be the best starting point
@@ -267,11 +278,11 @@ export type ItxDescription = {
   /** Who this handle was minted for. */
   principal: ItxPrincipal;
   /** Attribution: which capability's isolate holds this handle, if any. */
-  cap?: string;
+  capability?: string;
   /** The merged capability chain (own caps first, ancestors' after,
    * shadowed names carry `owner` provenance), including each cap's
    * `instructions`. */
-  caps: CapDescription[];
+  caps: CapabilityDescription[];
   /** The bound project's own description, if this handle has one. */
   project: unknown | null;
 };
@@ -311,7 +322,7 @@ export type ItxDescription = {
  * (Possible later kind, deliberately absent until needed: a re-export of a
  * cap registered on another context.)
  */
-export type CapTarget =
+export type CapabilityTarget =
   | LiveStub
   | {
       type: "rpc";
@@ -321,7 +332,7 @@ export type CapTarget =
       entrypoint?: string;
       /** Instantiation props for the entrypoint (the ProjectEgress
        * pattern): serializable parameterization like a server URL or a
-       * gateway choice. The registry adds `{ context, cap }` attribution at
+       * gateway choice. The registry adds `{ context, capability }` attribution at
        * dial time. */
       props?: Record<string, unknown>;
     }
@@ -357,16 +368,16 @@ export type WorkerRef =
   | { type: "durable-object"; binding: string; name: string }
   /** A dynamic worker materialized on demand from stored source — code that
    * lives in the registry itself rather than in any deployed artifact. */
-  | { type: "source"; source: CapSource };
+  | { type: "source"; source: CapabilitySource };
 
 /**
  * Stored source for a `{ type: "source" }` worker. The platform materializes
  * it into an isolate on demand. Inside it: bare `fetch()` IS project egress
  * (secrets substituted server-side, never visible to this code), and
  * `env.ITERATE` is an itx scoped to the cap's home context — a capability
- * can never reach wider than where it is defined.
+ * can never reach wider than where it is provided.
  */
-export type CapSource = {
+export type CapabilitySource = {
   /**
    * The loader caches the materialized isolate by this string, so it MUST
    * change whenever `modules` change; a content hash is the ideal value.
@@ -413,7 +424,7 @@ export type CapSource = {
  * itx.slack.chat.postMessage({ … })   // → ONE call: call({ path: ["chat","postMessage"], … })
  * ```
  */
-export type CapInvoke = "members" | "path-call";
+export type CapabilityInvoke = "members" | "path-call";
 
 /** The wire shape of one dynamic-surface invocation. */
 export type PathCall = { path: string[]; args: unknown[] };
@@ -436,25 +447,25 @@ export type LiveStub = object;
  * following: `instructions`, a human/agent-readable sentence on what the
  * cap does and how to call it, shown by `describe()`.
  */
-export type CapMeta = {
+export type CapabilityMeta = {
   /** Shown in describe(); write it for the agent who finds this cap. */
   instructions?: string;
   [key: string]: unknown;
 };
 
 /** A registry entry as reported by `describe()`. Never contains live stubs. */
-export type CapDescription = {
+export type CapabilityDescription = {
   name: string;
   /** The target's kind: "live" | "rpc" | "url". */
   kind: "live" | "rpc" | "url";
-  invoke: CapInvoke;
+  invoke: CapabilityInvoke;
   /** Which context owns the entry — provenance for shadowing visibility. */
   owner: string;
   /** Live caps only: is the provider currently connected? */
   connected?: boolean;
   /** Lifted from meta for convenience: the one thing to read first. */
   instructions?: string;
-  meta: CapMeta;
+  meta: CapabilityMeta;
   updatedAtMs: number;
 };
 
@@ -585,7 +596,7 @@ export type ItxFn<R = unknown> = (itx: Itx) => Promise<R> | R;
 
 /**
  * Map an SDK's type surface onto its itx stub: every function becomes
- * async, everything else recurses. With this, {@link KnownCaps} merging
+ * async, everything else recurses. With this, {@link KnownCapabilities} merging
  * gives `itx.slack` the real @slack/web-api types while the runtime stays a
  * ten-line path-call forwarder.
  */
@@ -644,11 +655,11 @@ export type ItxPrincipal =
  * - `principal`: honored on global handles only; a project-context handle
  *   is always bound to exactly its own project regardless of what props
  *   claim.
- * - `cap`: pure attribution — which capability's isolate holds this handle.
- *   It grants nothing; it labels egress and audit records.
+ * - `capability`: pure attribution — which capability's isolate holds this
+ *   handle. It grants nothing; it labels egress and audit records.
  */
 export type ItxProps = {
   context: ContextRef;
   principal?: ItxPrincipal;
-  cap?: string;
+  capability?: string;
 };

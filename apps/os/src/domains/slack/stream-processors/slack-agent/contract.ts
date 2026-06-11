@@ -34,7 +34,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
   initialState: {},
   processorDeps: [AgentProcessorContract, SlackProcessorContract],
   events: {
-    "events.iterate.com/itx/execution-requested": {
+    "events.iterate.com/itx/script-execution-requested": {
       description:
         "An itx script execution record/queue entry on this stream. With `enqueued: true` the agent-host processor runs it; otherwise it is the runner's own record (itx-next.md §4).",
       payloadSchema: z.object({
@@ -45,7 +45,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
         vars: z.record(z.string(), z.unknown()).optional(),
       }),
     },
-    "events.iterate.com/itx/execution-completed": {
+    "events.iterate.com/itx/script-execution-completed": {
       description: "The settled outcome of an itx script execution on this stream.",
       payloadSchema: z.object({
         context: z.string().optional(),
@@ -63,13 +63,13 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     "events.iterate.com/slack/thread-route-configured",
     "events.iterate.com/slack/webhook-received",
     "events.iterate.com/agent/status-updated",
-    "events.iterate.com/itx/execution-requested",
-    "events.iterate.com/itx/execution-completed",
+    "events.iterate.com/itx/script-execution-requested",
+    "events.iterate.com/itx/script-execution-completed",
   ],
   emits: [
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/capability-noted",
-    "events.iterate.com/itx/execution-requested",
+    "events.iterate.com/itx/script-execution-requested",
   ],
 });
 

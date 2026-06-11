@@ -1,13 +1,13 @@
 // The streams surface as a CAPABILITY (itx-next.md §6/§8): `itx.streams` on
 // a project context is an ordinary platform:project definition dialing the
-// StreamsCap loopback below — shadowable like every other default. The
+// StreamsCapability loopback below — shadowable like every other default. The
 // collection/stream classes here are shared with the handle's GLOBAL branch
 // (the deployment-wide "global" namespace stays kernel: it is gated on the
 // connect-time access set, which no cap definition can express).
 //
 // Scope model: a StreamsScope carries the namespaces this surface may
 // resolve. The cap pins it to the owning project (registry-injected
-// projectId — a definer can never point it elsewhere); the global kernel
+// projectId — a provider can never point it elsewhere); the global kernel
 // branch passes the handle's access set through. Absolute refs
 // ("ns:/path") are sugar through ONE access check either way.
 //
@@ -26,10 +26,10 @@ import type {
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { ItxError } from "../errors.ts";
 import type { ProjectAccess } from "../protocol.ts";
-import { getStreamsCapability } from "~/domains/streams/entrypoints/streams-capability.ts";
+import { getStreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 
-type StreamsClient = ReturnType<typeof getStreamsCapability>;
-type StreamsExports = Parameters<typeof getStreamsCapability>[0]["exports"];
+type StreamsClient = ReturnType<typeof getStreamsBackend>;
+type StreamsExports = Parameters<typeof getStreamsBackend>[0]["exports"];
 
 /** What a streams surface needs: where to dial, and what it may resolve. */
 export type StreamsScope = {
@@ -37,20 +37,20 @@ export type StreamsScope = {
   exports: StreamsExports;
 };
 
-export type StreamsCapProps = {
-  /** The owning project — registry-injected at dial time, never definer
+export type StreamsCapabilityProps = {
+  /** The owning project — registry-injected at dial time, never provider
    * props, so a `streams` cap can only ever scope to its own namespace. */
   projectId?: string;
   /** Attribution, injected by the registry at dial time. */
   context?: string;
-  cap?: string;
+  capability?: string;
 };
 
 /**
  * The platform:project `streams` default. Members invoke: get/namespace/
  * create replay straight onto a project-pinned collection.
  */
-export class StreamsCap extends WorkerEntrypoint<Env, StreamsCapProps> {
+export class StreamsCapability extends WorkerEntrypoint<Env, StreamsCapabilityProps> {
   get(ref: string | { namespace?: string; path: string }): ItxStream {
     return this.#collection().get(ref);
   }
@@ -65,7 +65,7 @@ export class StreamsCap extends WorkerEntrypoint<Env, StreamsCapProps> {
 
   #collection(): ItxStreams {
     const projectId = this.ctx.props.projectId;
-    if (!projectId) throw new Error("StreamsCap needs registry-injected projectId props.");
+    if (!projectId) throw new Error("StreamsCapability needs registry-injected projectId props.");
     return new ItxStreams(
       { access: [projectId], exports: this.ctx.exports as unknown as StreamsExports },
       projectId,
@@ -122,7 +122,7 @@ export class ItxStreams extends RpcTarget {
   }
 
   private client(): StreamsClient {
-    return getStreamsCapability({
+    return getStreamsBackend({
       exports: this.scope.exports,
       props: { appendPolicy: { mode: "any" }, projectId: this.namespaceId },
     });
@@ -213,7 +213,7 @@ export class ItxStream extends RpcTarget {
     }) => unknown,
     opts: { afterOffset: StreamCursor; events?: boolean },
   ): Promise<ItxStreamSubscription> {
-    // Callback retention lives in StreamsCapability.subscribe: RPC layers
+    // Callback retention lives in StreamsBackend.subscribe: RPC layers
     // implicitly dispose stubs received as parameters when the call
     // completes, so the capability dup()s the callback its wrapper outlives
     // — without that, replay (delivered in-call) works but the first LIVE
@@ -246,7 +246,7 @@ export class ItxStream extends RpcTarget {
   }
 
   private client(): StreamsClient {
-    return getStreamsCapability({
+    return getStreamsBackend({
       exports: this.scope.exports,
       props: {
         appendPolicy: { mode: "stream" },

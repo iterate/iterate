@@ -48,7 +48,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toMatchObject({ method: "chat.postMessage", provider: "live-session" });
     },
   },
-  "define-durable-worker-cap": {
+  "provide-durable-worker-cap": {
     assert: (result) => {
       expect(result).toEqual({ greeting: "hello, world", sum: 5 });
     },
