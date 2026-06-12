@@ -145,7 +145,7 @@ const AgentLifecycleBase = createIterateDurableObjectBase<
 /** Bump when agentContextCapabilities changes — re-renders the capability-noted
  * tool list onto the agent stream (the LLM's view). The caps themselves are
  * code-rooted chain defaults, so a bump never touches stored capability state. */
-const AGENT_CONTEXT_CAPABILITIES_VERSION = "5";
+const AGENT_CONTEXT_CAPABILITIES_VERSION = "6";
 
 /** describe() provenance label for the agent's code-rooted default tools. */
 const AGENT_DEFAULTS_DESCRIBE_FROM = "agent-defaults";
@@ -838,59 +838,85 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
   private agentContextCapabilities(
     params: AgentDurableObjectStructuredName,
-    _contextId: string,
+    contextId: string,
   ): Array<{
     name: string;
     instructions: string;
     capability: CapabilityAddress;
   }> {
-    // An agent's ONLY per-agent tool is its CHANNEL — how it talks to its
-    // user. Everything else (ai, fetch, streams, secrets, repos, …) is a
-    // project default it already inherits through the chain. The channel is
-    // chosen by the agent's path: Slack agents post to Slack, every other
-    // agent renders a web-chat message. (Richer tools — gmail, a private
-    // workspace, subagents — are opt-in presets, not baseline.)
-    const debug = {
-      capability: {
-        entrypoint: "AgentToolsCapability",
-        props: { agentPath: params.agentPath, tool: "debug" },
-        type: "rpc",
-        worker: { type: "loopback" },
-      } satisfies CapabilityAddress,
-      instructions: "itx.debug() returns OS debug info about this agent stream.",
-      name: "debug",
-    };
-    if (isSlackAgentPath(params.agentPath)) {
-      return [
-        {
+    // Every agent gets a RICH toolset. The ONLY thing that varies by agent is
+    // the CHANNEL — how it talks to its user: a Slack agent gets `slack`, a
+    // web agent gets `chat`. (Channel-specific PROMPTING lives in the agent's
+    // system prompt — defaultAgentSystemPrompt, agent-presets.ts.) Everything
+    // else below is identical for all agents.
+    const channel = isSlackAgentPath(params.agentPath)
+      ? {
           capability: {
             entrypoint: "SlackCapability",
             type: "rpc",
             worker: { type: "loopback" },
-          },
+          } satisfies CapabilityAddress,
           instructions:
             "Use itx.slack.<Slack Web API method>(args), e.g. " +
-            "itx.slack.chat.postMessage({ channel, thread_ts, text }). Always reply on the " +
-            "same thread_ts you received. Only post when mentioned, asked, or the thread " +
-            "clearly calls for it.",
+            "itx.slack.chat.postMessage({ channel, thread_ts, text }). Always reply on the same " +
+            "thread_ts you received. Only post when mentioned, asked, or the thread clearly " +
+            "calls for it.",
           name: "slack",
-        },
-        debug,
-      ];
-    }
+        }
+      : {
+          capability: {
+            entrypoint: "AgentToolsCapability",
+            props: { agentPath: params.agentPath, tool: "chat" },
+            type: "rpc",
+            worker: { type: "loopback" },
+          } satisfies CapabilityAddress,
+          instructions:
+            "itx.chat.sendMessage({ message }) sends a visible reply to the user in the web chat.",
+          name: "chat",
+        };
+
     return [
+      channel,
       {
         capability: {
           entrypoint: "AgentToolsCapability",
-          props: { agentPath: params.agentPath, tool: "chat" },
+          props: { agentPath: params.agentPath, tool: "debug" },
+          type: "rpc",
+          worker: { type: "loopback" },
+        },
+        instructions: "itx.debug() returns OS debug info about this agent stream.",
+        name: "debug",
+      },
+      {
+        capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
+        instructions:
+          "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
+        name: "ai",
+      },
+      {
+        capability: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
+        instructions:
+          "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }).",
+        name: "gmail",
+      },
+      {
+        capability: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },
+        instructions:
+          "itx.agents.create() returns a promise-pipelineable subagent handle, e.g. await itx.agents.create().doThing(args).",
+        name: "agents",
+      },
+      {
+        capability: {
+          entrypoint: "WorkspaceCapability",
+          props: { workspaceId: contextId },
           type: "rpc",
           worker: { type: "loopback" },
         },
         instructions:
-          "itx.chat.sendMessage({ message }) sends a visible reply to the user in the web chat.",
-        name: "chat",
+          "This agent's private workspace filesystem: itx.workspace.readFile/writeFile plus the " +
+          "flat git methods gitClone/gitAdd/gitCommit/gitPush/gitStatus.",
+        name: "workspace",
       },
-      debug,
     ];
   }
 
