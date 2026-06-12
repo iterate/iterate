@@ -485,13 +485,32 @@ function createStreamRuntime(
         schemaVersion,
       }),
     });
+    // The leader chain calls into the server (reconcile's runtimeState, subscribe). When the
+    // far leg of a proxied connection dies mid-call — e.g. the page subscribed to a
+    // lazily-created agent stream and the agent machinery recreated it, killing the Stream DO
+    // behind the proxy hop without a close frame reaching the browser — those calls park
+    // forever and the page wedges on "connecting" with no error anywhere. Race each
+    // server-touching step against a deadline; the rejection lands in the catch below, which
+    // reconnects on a fresh socket to the live instance.
+    const SUBSCRIBE_STEP_TIMEOUT_MS = 15_000;
+    const withDeadline = <T>(step: string, promise: Promise<T> | T): Promise<T> =>
+      Promise.race([
+        Promise.resolve(promise),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`${step} timed out after ${SUBSCRIBE_STEP_TIMEOUT_MS}ms`)),
+            SUBSCRIBE_STEP_TIMEOUT_MS,
+          ),
+        ),
+      ]);
+
     void writerRole.whenWriter
       .then(async () => {
         clearTimeout(followerTimeout);
         if (!ownsRuntime()) return undefined;
         snapshot = { ...snapshot, subscriptionStatus: "leader" };
         emitSnapshot();
-        await reconcileLocalMirrorWithServer(election.connection.stream);
+        await withDeadline("reconcile", reconcileLocalMirrorWithServer(election.connection.stream));
         const processor = args.createProcessor({
           stream: election.connection.stream,
           sql,
@@ -512,12 +531,15 @@ function createStreamRuntime(
       })
       .then((ready) => {
         if (ready === undefined || !ownsRuntime()) return undefined;
-        return election.connection.stream.subscribe({
-          subscriptionKey,
-          processEventBatch: ready.processEventBatch,
-          replayAfterOffset: ready.replayAfterOffset,
-          subscriber: { description: "browser" },
-        });
+        return withDeadline(
+          "subscribe",
+          election.connection.stream.subscribe({
+            subscriptionKey,
+            processEventBatch: ready.processEventBatch,
+            replayAfterOffset: ready.replayAfterOffset,
+            subscriber: { description: "browser" },
+          }),
+        );
       })
       .then((handle) => {
         if (handle === undefined) return;
