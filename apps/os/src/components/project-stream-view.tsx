@@ -188,12 +188,18 @@ export function ProjectStreamView({
   const agentUiState = useAgentUiReducedState(store.streamDatabase);
   const metrics = useSimulatedRttMetrics();
 
-  const [selectedTab, setActiveTab] = useState<ProjectStreamViewTab>(
-    isAgentStream ? "agent" : "feed",
-  );
-  // Navigating between agent and non-agent streams keeps this component
-  // mounted; clamp a stale "agent" selection where that tab doesn't exist.
-  const activeTab = !isAgentStream && selectedTab === "agent" ? "feed" : selectedTab;
+  // Each stream's default tab: Agent for /agents streams, Feed otherwise.
+  const defaultTab: ProjectStreamViewTab = isAgentStream ? "agent" : "feed";
+  // The selection is scoped to the path it was made on: this component stays
+  // mounted across stream navigations (e.g. ⌘K), and a new stream should show
+  // ITS default — but an explicit tab choice on the current stream must stick.
+  const [tabSelection, setTabSelection] = useState<{ path: string; tab: ProjectStreamViewTab }>({
+    path: streamPathText,
+    tab: defaultTab,
+  });
+  const activeTab = tabSelection.path === streamPathText ? tabSelection.tab : defaultTab;
+  const setActiveTab = (tab: ProjectStreamViewTab) =>
+    setTabSelection({ path: streamPathText, tab });
   const [toolsOpen, setToolsOpen] = useState(false);
   const [feedSearch, setFeedSearch] = useState("");
   const [switcherOpen, setSwitcherOpen] = useState(false);
