@@ -112,6 +112,10 @@ export function ProjectStreamView({
   streamPath: StreamPath;
 }) {
   const streamPathText = streamPath.toString();
+  // The agent-ui processor (presence, live state) runs on every stream; the
+  // chat-shaped Agent view only makes sense for streams under /agents — those
+  // default to it, everything else defaults to the plain feed.
+  const isAgentStream = streamPathText.startsWith("/agents/");
   const store = useMemo(
     () =>
       acquireStreamRuntime({
@@ -184,7 +188,12 @@ export function ProjectStreamView({
   const agentUiState = useAgentUiReducedState(store.streamDatabase);
   const metrics = useSimulatedRttMetrics();
 
-  const [activeTab, setActiveTab] = useState<ProjectStreamViewTab>("agent");
+  const [selectedTab, setActiveTab] = useState<ProjectStreamViewTab>(
+    isAgentStream ? "agent" : "feed",
+  );
+  // Navigating between agent and non-agent streams keeps this component
+  // mounted; clamp a stale "agent" selection where that tab doesn't exist.
+  const activeTab = !isAgentStream && selectedTab === "agent" ? "feed" : selectedTab;
   const [toolsOpen, setToolsOpen] = useState(false);
   const [feedSearch, setFeedSearch] = useState("");
   const [switcherOpen, setSwitcherOpen] = useState(false);
@@ -337,9 +346,11 @@ export function ProjectStreamView({
             onValueChange={(value) => setActiveTab(value as ProjectStreamViewTab)}
           >
             <TabsList className="h-8">
-              <TabsTrigger value="agent" className="px-3 text-xs">
-                Agent
-              </TabsTrigger>
+              {isAgentStream ? (
+                <TabsTrigger value="agent" className="px-3 text-xs">
+                  Agent
+                </TabsTrigger>
+              ) : null}
               <TabsTrigger value="feed" className="px-3 text-xs">
                 Feed
               </TabsTrigger>
