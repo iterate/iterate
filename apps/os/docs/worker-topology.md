@@ -121,6 +121,13 @@ browser ──► <n> ────┼────────────► <n>
   dev/prod fork.
 - Project-host itx (`/__itx`) terminates in the project worker's stateless
   fetch (itx Law 7: Cap'n Web never terminates in a DO).
+- **Admin debug routes are app-host-only** (deliberate change from the
+  monolith, which incidentally served them on every hostname it routed):
+  `handleDebugRoutes` (`/__debug/*`, `/api/itx/egress-echo`,
+  `/api/itx/openapi-fixture`) runs only in the app worker, so the admin
+  debug surface no longer exists on customer-facing project/custom
+  hostnames. Operator tooling and the itx e2e fixtures already target the
+  app base URL.
 
 ## Local dev: one workerd, twelve workers
 

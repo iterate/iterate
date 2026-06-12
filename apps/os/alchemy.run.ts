@@ -414,114 +414,124 @@ const loopbackUnionBindings = {
   ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
 };
 
-const workspaceWorker = await osWorker("workspace", {
-  entrypoint: "./src/workers/workspace.ts",
-  // @cloudflare/shell needs Node APIs.
-  compatibilityFlags: ["nodejs_compat"],
-  bindings: { DO_CATALOG: db, WORKSPACE: workspace },
-});
-
-const slackAgentWorker = await osWorker("slackAgent", {
-  entrypoint: "./src/workers/slack-agent.ts",
-  bindings: {
-    DO_CATALOG: db,
-    SLACK_AGENT: slackAgent,
-    STREAM: stream,
-    ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
-  },
-});
-
-const repoWorker = await osWorker("repo", {
-  entrypoint: "./src/workers/repo.ts",
-  // isomorphic-git + @cloudflare/shell need Node APIs.
-  compatibilityFlags: ["nodejs_compat"],
-  eventSources: [artifactEventsQueue],
-  bindings: {
-    // The artifacts binding type only exists on deployed workers (the local
-    // dev pipeline has no Cloudflare Artifacts emulation); repo code
-    // feature-checks env.ARTIFACTS, same as before the worker split.
-    ...(ctx.app.local ? {} : { ARTIFACTS: Artifacts({ namespace: artifactsNamespace }) }),
-    ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
-    ARTIFACTS_NAMESPACE: artifactsNamespace,
-    DO_CATALOG: db,
-    GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
-    REPO: repo,
-    STREAM: stream,
-  },
-});
-
-const itxWorker = await osWorker("itx", {
-  entrypoint: "./src/workers/itx.ts",
-  // Own-zone fetches (UrlDial / EgressPipe dialing project hosts) must go
-  // through Worker routes, not origin — same reason as the app worker.
-  compatibilityFlags: ["global_fetch_strictly_public"],
-  bindings: loopbackUnionBindings,
-});
-
-const agentWorker = await osWorker("agent", {
-  entrypoint: "./src/workers/agent.ts",
-  // openai needs Node APIs.
-  compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
-  bindings: loopbackUnionBindings,
-});
-
-const slackIntegrationWorker = await osWorker("slackIntegration", {
-  entrypoint: "./src/workers/slack-integration.ts",
-  bindings: {
-    AGENT: agent,
-    DB: db,
-    DO_CATALOG: db,
-    SLACK_AGENT: slackAgent,
-    SLACK_INTEGRATION: slackIntegration,
-    STREAM: stream,
-    ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
-  },
-});
-
-const mcpWorker = await osWorker("mcp", {
-  entrypoint: "./src/workers/mcp.ts",
-  // McpAgent (agents) and @iterate-com/auth (better-auth) need Node APIs.
-  compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
-  bindings: {
-    ...loopbackUnionBindings,
-    PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
-  },
-});
-
-const projectWorker = await osWorker("project", {
-  entrypoint: "./src/workers/project.ts",
-  // nodejs_als for evlog's AsyncLocalStorage — full nodejs_compat not needed.
-  compatibilityFlags: ["nodejs_als", "global_fetch_strictly_public"],
-  bindings: loopbackUnionBindings,
-});
-
-const debugSubscriberWorker = ctx.app.local
-  ? await osWorker("debugSubscriber", {
-      entrypoint: "./src/workers/debug-append-chain-subscriber.ts",
-      bindings: {
-        DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber!,
-        STREAM: stream,
-      },
-    })
-  : undefined;
-
-// The stream worker is created AFTER its subscribers so a fresh-stage first
-// pass already finds their scripts and binds them all; only the subscribers'
-// STREAM bindings wait for the second pass.
-const streamWorker = await osWorker("stream", {
-  entrypoint: "./src/workers/stream.ts",
-  bindings: {
-    AGENT: agent,
-    PROJECT: project,
-    REPO: repo,
-    SLACK_AGENT: slackAgent,
-    SLACK_INTEGRATION: slackIntegration,
-    STREAM: stream,
-    ...(debugAppendChainSubscriber == null
-      ? {}
-      : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
-  },
-});
+// The Durable Object workers deploy CONCURRENTLY: cross-script DO bindings
+// are name-strings (no resource ordering), and the bootstrap filter works
+// off the missing-set computed above, so ordering between them never
+// matters. Only the app worker (service-binds mcp + project) and the
+// ingress worker (service-binds the app) order after them.
+const [
+  workspaceWorker,
+  slackAgentWorker,
+  repoWorker,
+  itxWorker,
+  agentWorker,
+  slackIntegrationWorker,
+  mcpWorker,
+  projectWorker,
+  debugSubscriberWorker,
+  streamWorker,
+] = await Promise.all([
+  osWorker("workspace", {
+    entrypoint: "./src/workers/workspace.ts",
+    // @cloudflare/shell needs Node APIs.
+    compatibilityFlags: ["nodejs_compat"],
+    bindings: { DO_CATALOG: db, WORKSPACE: workspace },
+  }),
+  osWorker("slackAgent", {
+    entrypoint: "./src/workers/slack-agent.ts",
+    bindings: {
+      DO_CATALOG: db,
+      SLACK_AGENT: slackAgent,
+      STREAM: stream,
+      ...(slackBotToken == null
+        ? {}
+        : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
+    },
+  }),
+  osWorker("repo", {
+    entrypoint: "./src/workers/repo.ts",
+    // isomorphic-git + @cloudflare/shell need Node APIs.
+    compatibilityFlags: ["nodejs_compat"],
+    eventSources: [artifactEventsQueue],
+    bindings: {
+      // The artifacts binding type only exists on deployed workers (the local
+      // dev pipeline has no Cloudflare Artifacts emulation); repo code
+      // feature-checks env.ARTIFACTS, same as before the worker split.
+      ...(ctx.app.local ? {} : { ARTIFACTS: Artifacts({ namespace: artifactsNamespace }) }),
+      ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
+      ARTIFACTS_NAMESPACE: artifactsNamespace,
+      DO_CATALOG: db,
+      GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
+      REPO: repo,
+      STREAM: stream,
+    },
+  }),
+  osWorker("itx", {
+    entrypoint: "./src/workers/itx.ts",
+    // Own-zone fetches (UrlDial / EgressPipe dialing project hosts) must go
+    // through Worker routes, not origin — same reason as the app worker.
+    compatibilityFlags: ["global_fetch_strictly_public"],
+    bindings: loopbackUnionBindings,
+  }),
+  osWorker("agent", {
+    entrypoint: "./src/workers/agent.ts",
+    // openai needs Node APIs.
+    compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
+    bindings: loopbackUnionBindings,
+  }),
+  osWorker("slackIntegration", {
+    entrypoint: "./src/workers/slack-integration.ts",
+    bindings: {
+      AGENT: agent,
+      DB: db,
+      DO_CATALOG: db,
+      SLACK_AGENT: slackAgent,
+      SLACK_INTEGRATION: slackIntegration,
+      STREAM: stream,
+      ...(slackBotToken == null
+        ? {}
+        : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
+    },
+  }),
+  osWorker("mcp", {
+    entrypoint: "./src/workers/mcp.ts",
+    // McpAgent (agents) and @iterate-com/auth (better-auth) need Node APIs.
+    compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
+    bindings: {
+      ...loopbackUnionBindings,
+      PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
+    },
+  }),
+  osWorker("project", {
+    entrypoint: "./src/workers/project.ts",
+    // nodejs_als for evlog's AsyncLocalStorage — full nodejs_compat not needed.
+    compatibilityFlags: ["nodejs_als", "global_fetch_strictly_public"],
+    bindings: loopbackUnionBindings,
+  }),
+  ctx.app.local
+    ? osWorker("debugSubscriber", {
+        entrypoint: "./src/workers/debug-append-chain-subscriber.ts",
+        bindings: {
+          DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber!,
+          STREAM: stream,
+        },
+      })
+    : Promise.resolve(undefined),
+  osWorker("stream", {
+    entrypoint: "./src/workers/stream.ts",
+    bindings: {
+      AGENT: agent,
+      PROJECT: project,
+      REPO: repo,
+      SLACK_AGENT: slackAgent,
+      SLACK_INTEGRATION: slackIntegration,
+      STREAM: stream,
+      ...(debugAppendChainSubscriber == null
+        ? {}
+        : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
+    },
+  }),
+]);
 
 // ---- The app worker (TanStack Start dashboard) -------------------------------
 
