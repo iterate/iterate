@@ -31,9 +31,10 @@ import { projectStreamRpcPath } from "~/lib/stream-links.ts";
 
 const USER_MESSAGE = "events.iterate.com/agent-chat/user-message-added";
 const ASSISTANT_RESPONSE = "events.iterate.com/agent-chat/assistant-response-added";
-// A finished LLM turn — emitted regardless of channel, so it ends "Thinking…"
-// even when the agent replied via Slack or produced no visible message.
-const LLM_REQUEST_COMPLETED = "events.iterate.com/agent/llm-request-completed";
+// The agent's authoritative busy/idle signal: it stays "working" across a
+// whole multi-round turn (LLM → code → LLM → …) and flips to "idle" only when
+// the turn is fully finished — channel-agnostic.
+const STATUS_UPDATED = "events.iterate.com/agent/status-updated";
 
 type ChatTurn = { offset: number; role: "user" | "agent"; text: string };
 
@@ -94,21 +95,27 @@ export function AgentChatView(props: {
     text: String((row.type === USER_MESSAGE ? row.content : row.message) ?? ""),
   }));
 
-  // "Thinking" must clear when the agent's LLM turn FINISHES, not only when it
-  // emits a chat reply — Slack agents reply via Slack (no chat event here) and
-  // a web turn can end with an empty code block. So: a reply is owed iff the
-  // newest user message is more recent than the newest turn-completion signal
-  // (an assistant reply OR an llm-request-completed).
+  // "Thinking" follows the agent's own busy/idle status — which spans a whole
+  // multi-round turn and is channel-agnostic (so it doesn't flicker between
+  // LLM rounds, hang after a Slack-only reply, or hang on an empty reply).
+  // Plus a bridge for the instant between "user just sent" and the agent
+  // flipping to "working": owed iff the newest user message is newer than both
+  // the latest status event and the latest visible reply.
   const progress = useStreamQuery(
     store.streamDatabase,
     `SELECT
        (SELECT MAX(offset) FROM events WHERE type = ?) AS last_user,
-       (SELECT MAX(offset) FROM events WHERE type IN (?, ?)) AS last_done`,
-    [USER_MESSAGE, ASSISTANT_RESPONSE, LLM_REQUEST_COMPLETED],
+       (SELECT MAX(offset) FROM events WHERE type = ?) AS last_reply,
+       (SELECT MAX(offset) FROM events WHERE type = ?) AS last_status,
+       (SELECT json_extract(raw_jsonb, '$.payload.status') FROM events
+          WHERE type = ? ORDER BY offset DESC LIMIT 1) AS status`,
+    [USER_MESSAGE, ASSISTANT_RESPONSE, STATUS_UPDATED, STATUS_UPDATED],
   );
   const lastUser = Number(progress.data[0]?.last_user ?? 0);
-  const lastDone = Number(progress.data[0]?.last_done ?? 0);
-  const awaitingReply = lastUser > 0 && lastUser > lastDone;
+  const lastReply = Number(progress.data[0]?.last_reply ?? 0);
+  const lastStatus = Number(progress.data[0]?.last_status ?? 0);
+  const working = progress.data[0]?.status === "working";
+  const awaitingReply = working || (lastUser > 0 && lastUser > lastStatus && lastUser > lastReply);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
