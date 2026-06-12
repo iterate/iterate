@@ -4,9 +4,8 @@
  * Requests to project hosts (`<slug>.iterate.app`, custom hostnames, itx
  * capability hosts) arrive here over the service binding from the ingress
  * worker (or the app worker in local dev), with the resolved ingress rule on
- * an internal header. This worker's stateless fetch is where project-host
- * itx Cap'n Web sessions terminate (Law 7 — never in a DO), and where the
- * rule's loopback callable is dispatched against ctx.exports.
+ * an internal header; the rule's loopback callable is dispatched against
+ * ctx.exports.
  *
  * This worker has no routes of its own — it is reachable only via service
  * bindings from workers that just resolved the rule, which is what makes the
@@ -21,7 +20,6 @@ import {
   normalizeIngressHost,
 } from "~/ingress/host-routing.ts";
 import { lookupIngressRule } from "~/ingress/lookup.ts";
-import { handleProjectHostItxFetch } from "~/itx/fetch.ts";
 
 export { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
@@ -39,24 +37,6 @@ export default {
           readResolvedIngressHeader(request) ?? (await deriveIngressMatch(request, env, config));
         if (!resolved) {
           return Response.json({ worker: "os-project" }, { status: 404 });
-        }
-
-        // After this, baseUrl is always set (same fallback as the app worker).
-        const requestConfig: AppConfig = config.baseUrl
-          ? config
-          : { ...config, baseUrl: new URL(request.url).origin as AppConfig["baseUrl"] };
-
-        // Project-host itx sessions terminate HERE in the stateless worker,
-        // never in the Project DO (itx Law 7 — the hibernation-ready seam).
-        if (resolved.rule.projectId) {
-          const projectItxResponse = await handleProjectHostItxFetch({
-            config: requestConfig,
-            env,
-            exports: ctx.exports,
-            projectId: resolved.rule.projectId,
-            request,
-          });
-          if (projectItxResponse) return projectItxResponse;
         }
 
         return await dispatchFetchCallable({

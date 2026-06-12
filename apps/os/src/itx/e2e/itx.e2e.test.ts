@@ -191,11 +191,11 @@ test("the five-step capability flow: provide live, call, promote durable, call f
     { kind: "rpc", name: "slackDurable", types: slackDurableTypes },
   ]);
 
-  // The journal is the only authority: both provides — the LIVE one
-  // included (the record outlives the session; only the stub is in-memory)
-  // — are capability-provided events on the project context's journal
-  // (/itx), readable like any other stream.
-  const journalEvents = (await projectItx.streams.get("/itx").read()) as Array<{
+  // The context's stream is the only authority: both provides — the LIVE
+  // one included (the record outlives the session; only the stub is
+  // in-memory) — are capability-provided events on the project context's
+  // own stream (the project root, "/"), readable like any other stream.
+  const journalEvents = (await projectItx.streams.get("/").read()) as Array<{
     payload: { path?: string[]; kind?: string };
     type: string;
   }>;
@@ -405,42 +405,6 @@ export class PetstoreClient extends WorkerEntrypoint {
   expect(echoed).toEqual({ marker, value: { hello: 1 } });
 });
 
-test("url caps dial a remote Cap'n Web server over a WebSocket session", async () => {
-  using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-url` })) as { id: string };
-  createdProjectIds.push(project.id);
-  using projectItx = await itx.projects.get(project.id);
-
-  // The remote server is THIS deployment's own /api/itx endpoint — the one
-  // Cap'n Web server every e2e target is guaranteed to have. Auth rides the
-  // WebSocket handshake headers, which is exactly what url-ref headers are
-  // for. (In production these would be getSecret() placeholders, substituted
-  // by the same egress path McpClient headers use.)
-  await projectItx.provideCapability({
-    meta: { instructions: "This deployment's own itx, dialed back over the network." },
-    name: "remoteItx",
-    capability: {
-      headers: { authorization: `Bearer ${adminApiSecret()}` },
-      type: "url",
-      url: new URL(`/api/itx/${project.id}`, baseUrl()).toString(),
-    },
-  });
-
-  // Members mode against the remote main: the path pipelines over the dial's
-  // own capnweb session and resolves on the remote handle. The remote handle
-  // describing a registry that contains the very cap being dialed is the
-  // round trip working end to end.
-  const handle = projectItx as never as Record<string, any>;
-  const described = (await handle.remoteItx.describe()) as {
-    capabilities: Array<{ name: string }>;
-    context: string;
-    project: { id: string };
-  };
-  expect(described.context).toBe(project.id);
-  expect(described.project.id).toBe(project.id);
-  expect(described.capabilities.map((entry) => entry.name)).toContain("remoteItx");
-});
-
 test("the defaults arrive from the code-rooted chain end, and own rows shadow them", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-def` })) as { id: string };
@@ -647,7 +611,7 @@ test("absolute stream refs are sugar through the one access check", async () => 
 
 // Cold first-run of the isolate + stream DO can take >45s on a fresh preview.
 test(
-  "script executions leave a two-event record on the /itx stream",
+  "script executions leave a two-event record on the context's stream",
   { timeout: 90_000 },
   async () => {
     using itx = connectGlobal();
@@ -669,7 +633,7 @@ test(
     expect(typeof body.executionId).toBe("string");
 
     using projectItx = await itx.projects.get(project.id);
-    const events = (await projectItx.streams.get("/itx").read()) as Array<{
+    const events = (await projectItx.streams.get("/").read()) as Array<{
       payload: Record<string, unknown>;
       type: string;
     }>;
@@ -683,7 +647,7 @@ test(
         event.type === "events.iterate.com/itx/script-execution-completed" &&
         event.payload.executionId === body.executionId,
     );
-    expect(requested?.payload).toMatchObject({ context: project.id });
+    expect(requested?.payload).toMatchObject({ context: `${project.id}:/` });
     expect(completed?.payload).toMatchObject({ ok: true, result: 42 });
   },
 );

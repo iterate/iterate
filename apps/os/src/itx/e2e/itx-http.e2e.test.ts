@@ -3,11 +3,11 @@
 //   facet caps   stored source exporting `extends DurableObject`, instantiated
 //                as a Durable Object Facet of the hosting context node — its
 //                own private SQLite database, zero provisioning
-//   cap hosts    {cap}--{project}.{base} routes to the cap's fetch surface,
-//                admin-gated by default, opt-in public, or via signed share URL
+//   cap hosts    {cap}--{project}.{base} routes to the cap's fetch surface;
+//                exposed caps are public, unexposed caps don't exist (404)
 
 import { expect, test } from "vitest";
-import { adminApiSecret, connectGlobal, registerCreatedProjectCleanup } from "./e2e-env.ts";
+import { connectGlobal, registerCreatedProjectCleanup } from "./e2e-env.ts";
 
 const createdProjectIds = registerCreatedProjectCleanup();
 
@@ -57,7 +57,7 @@ test("facet caps keep private durable state across invocations", async () => {
   await expect(counter.current()).resolves.toBe(2);
 });
 
-test("HTTP-exposed caps serve their own hostname: admin, share URL, public", async () => {
+test("HTTP-exposed caps serve their own hostname publicly; unexposed caps 404", async () => {
   using itx = connectGlobal();
   const slug = `itx-http-${suffix()}`;
   const project = (await itx.projects.create({ slug })) as { id: string };
@@ -102,59 +102,12 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
   const capUrl = new URL(ingress);
   capUrl.hostname = `hello--${ingress.hostname}`;
 
-  // (1) Routable ≠ public: anonymous is rejected…
-  const anonymous = await fetch(capUrl, { redirect: "manual" });
-  expect(anonymous.status).toBe(401);
+  // (1) Exposed = public: anonymous requests reach the cap's fetch surface.
+  const anonymous = await fetch(new URL("/demo", capUrl));
+  expect(anonymous.status).toBe(200);
+  await expect(anonymous.text()).resolves.toContain("hello from a routable cap at /demo");
 
-  // (2) …admin credentials pass…
-  const admin = await fetch(capUrl, {
-    headers: { authorization: `Bearer ${adminApiSecret()}` },
-  });
-  expect(admin.status).toBe(200);
-  await expect(admin.text()).resolves.toContain("hello from a routable cap");
-
-  // (3) …and a share URL admits whoever holds it, for one cap, until expiry.
-  const shareUrl = String(await projectItx.shareUrl({ name: "hello", path: "/demo" }));
-  const shared = await fetch(shareUrl);
-  expect(shared.status).toBe(200);
-  await expect(shared.text()).resolves.toContain("/demo");
-
-  // (4) Tampered tokens fail closed.
-  const tampered = new URL(shareUrl);
-  tampered.searchParams.set("itx_share", `${Date.now() + 60_000}.forged-signature`);
-  expect((await fetch(tampered)).status).toBe(401);
-
-  // (5) public: true opens the cap to anyone, knowingly.
-  await projectItx.provideCapability({
-    meta: { http: { expose: true, public: true } },
-    name: "hello",
-    capability: {
-      type: "rpc",
-      worker: {
-        type: "source",
-        source: {
-          type: "inline",
-          cacheKey: crypto.randomUUID(),
-          mainModule: "cap.js",
-          modules: {
-            "cap.js": `
-              import { WorkerEntrypoint } from "cloudflare:workers";
-              export default class extends WorkerEntrypoint {
-                async fetch() {
-                  return new Response("hello, public internet");
-                }
-              }
-            `,
-          },
-        },
-      },
-    },
-  });
-  const publicResponse = await fetch(capUrl);
-  expect(publicResponse.status).toBe(200);
-  await expect(publicResponse.text()).resolves.toBe("hello, public internet");
-
-  // (6) Unexposed caps do not exist as hostnames, even with admin auth.
+  // (2) Unexposed caps do not exist as hostnames at all.
   await projectItx.provideCapability({
     name: "internal",
     capability: {
@@ -179,9 +132,7 @@ test("HTTP-exposed caps serve their own hostname: admin, share URL, public", asy
   });
   const internalUrl = new URL(ingress);
   internalUrl.hostname = `internal--${ingress.hostname}`;
-  const internal = await fetch(internalUrl, {
-    headers: { authorization: `Bearer ${adminApiSecret()}` },
-  });
+  const internal = await fetch(internalUrl);
   expect(internal.status).toBe(404);
 });
 

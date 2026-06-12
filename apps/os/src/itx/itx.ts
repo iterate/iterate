@@ -1,28 +1,28 @@
 // The itx CORE: an Itx holds capabilities; everything else holds a stub of
 // one (itx-next.md, "The address unification" — the LOCKED final shape).
 //
-// ONE class: `Itx extends StreamProcessor`. The context's JOURNAL (an
-// ordinary event stream) is the only authority — provides and revokes APPEND
-// events and self-ingest them; `reduce` folds the journal into the
-// capability table; the checkpoint is a disposable cache of that fold. The
-// record and the state cannot disagree, because events are the only writes
+// ONE class: `Itx extends StreamProcessor`. The context's STREAM is the only
+// authority — provides and revokes APPEND events and self-ingest them;
+// `reduce` folds the stream into the capability table; the checkpoint is a
+// disposable cache of that fold. The record and the state cannot disagree,
+// because events are the only writes
 // (docs/domain-objects-and-stream-processors.md).
 //
 // The pure pieces stay module-level so they are provable without workerd or
-// streams: `reduceItxJournalEvent` (the fold), `resolveLongestProvidedPrefix`
+// streams: `reduceItxEvent` (the fold), `resolveLongestProvidedPrefix`
 // (dispatch), path validation, and the live-vs-address discriminator.
 //
 // Everything effectful is injected: `dial` turns a CapabilityAddress into
 // something speaking `call({ path, args })` (dial.ts builds it; the core
 // never touches env or a project id), `parentItx` is a stub of the parent
 // context's core (chain delegation — the defaults are simply the chain's
-// code-rooted final link, platform-context.ts), and the journal
+// code-rooted final link, platform-context.ts), and the stream's
 // append/read pair rides in as the processor's iterate context.
 //
-// Hosts: the Project DO and ItxDurableObject expose the core via an `itx()`
-// method — a method, not a property, because workerd does not pipeline calls
-// through property accesses, so the method form keeps `node.itx().invoke(…)`
-// a single pipelined round trip.
+// ONE host: ItxDurableObject (the generic context host) exposes the core via
+// an `itx()` method — a method, not a property, because workerd does not
+// pipeline calls through property accesses, so the method form keeps
+// `node.itx().invoke(…)` a single pipelined round trip.
 
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import type { StreamEvent } from "@iterate-com/streams/shared/event";
@@ -139,12 +139,12 @@ export class CapabilityOfflineError extends Error {
 }
 
 /**
- * The pure fold: one journal event into the next state. Module-level so the
+ * The pure fold: one stream event into the next state. Module-level so the
  * workshop and unit tests can run it without workerd, streams, or the class.
  * Defensive by design: a malformed payload keeps the current state — replay
  * must never wedge on a pre-deploy event shape.
  */
-export function reduceItxJournalEvent(
+export function reduceItxEvent(
   state: ItxState,
   event: { type: string; payload?: unknown },
 ): ItxState {
@@ -152,11 +152,10 @@ export function reduceItxJournalEvent(
   switch (event.type) {
     case ITX_EVENT_TYPES.contextCreated: {
       // The first birth certificate wins; later ones are inert (retried
-      // appends, replays) — exactly-once as a property of the fold.
+      // appends, re-creates) — exactly-once as a property of the fold, which
+      // is what makes creation get-or-create.
       if (state.context !== null) return state;
-      if (typeof payload.id !== "string") return state;
       const context = {
-        id: payload.id,
         name: typeof payload.name === "string" ? payload.name : null,
         parent: payload.parent ?? null,
       } as NonNullable<ItxState["context"]>;
@@ -166,14 +165,14 @@ export function reduceItxJournalEvent(
       const path = payload.path;
       if (!Array.isArray(path) || path.length === 0) return state;
       const kind = payload.kind;
-      if (kind !== "live" && kind !== "rpc" && kind !== "url") return state;
+      if (kind !== "live" && kind !== "rpc") return state;
       const name = path.join(".");
       const entry = {
         address: payload.address ?? null,
         kind,
         meta: payload.meta ?? {},
         name,
-        owner: typeof payload.owner === "string" ? payload.owner : (state.context?.id ?? ""),
+        owner: typeof payload.owner === "string" ? payload.owner : "",
         updatedAtMs: typeof payload.providedAtMs === "number" ? payload.providedAtMs : 0,
       } as ItxState["capabilities"][string];
       return {
@@ -211,32 +210,33 @@ export function reduceItxJournalEvent(
 
 // ---- the class ------------------------------------------------------------------
 
-/** The journal surface a host hands the core: its own stream's append/read. */
-export type ItxJournal = {
+/** The context's stream as the core consumes it: append + read. */
+export type ContextStream = {
   append(event: { type: string; payload: Record<string, unknown> }): Promise<{ offset: number }>;
   read(input: { afterOffset: number }): Promise<StreamEvent[]>;
 };
 
 export type ItxIterateContext = {
-  journal: ItxJournal;
+  stream: ContextStream;
 };
 
 export type ItxDeps = {
-  /** This context's identity — the journal records' owner field, origin id. */
-  contextId: string;
+  /** This context's identity — its coordinate ref (`<namespace>:<path>`),
+   * stamped as the owner of provides and as origin when delegating. */
+  contextRef: string;
   /** This context's own address — stamped as origin when delegating. */
   selfAddress: CapabilityAddress;
   /** THE only dial effect: address → something speaking call({ path, args }). */
   dial: CapabilityDial;
   /** The parent context's link, or null at the chain root. A function
    * because a generic context learns its parent from its own birth
-   * certificate (state), which exists only after the journal is consumed.
+   * certificate (state), which exists only after the stream is consumed.
    * `from` is how describe() labels entries inherited through this link —
    * the parent's context id, or "defaults" at the code root (the internal
    * platform:project id never leaves the chain). */
   parentItx: () => { from: string; stub: ItxStub } | null;
   /** Processor-mode execution: run one enqueued script-execution-requested
-   * event (the runner appends the completed event to this journal). */
+   * event (the runner appends the completed event to this context's stream). */
   runScript?: (input: { code: string; executionId: string }) => Promise<unknown>;
 };
 
@@ -259,18 +259,18 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
 
   /**
    * Register a capability — ONE verb for every capability kind, and ONE
-   * write path: append `capability-provided` to the journal, then
+   * write path: append `capability-provided` to the context's stream, then
    * self-ingest it (read-your-writes through the one consumption door;
    * the checkpoint's offset bookkeeping makes any later delivery of the
    * same offsets a no-op). A CapabilityAddress registers durably-shaped;
-   * anything else is LIVE — the EVENT is journaled (the record outlives the
+   * anything else is LIVE — the EVENT is appended (the record outlives the
    * session) while the stub stays an instance field. A live target needs no
    * wrapper: a plain object (or bare function) IS the capability — dispatch
    * replays paths onto its members; a target that implements `call({ path,
    * args })` itself owns its whole method-tree semantics instead (#borrow).
    *
    * Returns nothing: the HANDLE (handle.ts) builds the CapabilityProvision
-   * its callers hold — the core's provide is just the journaled write.
+   * its callers hold — the core's provide is just the appended write.
    */
   async provideCapability(input: ProvideCapabilityInput): Promise<void> {
     await this.#materialize();
@@ -298,7 +298,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       if (typeof type === "string") {
         throw new Error(
           `Capability "${name}": unknown target type ${JSON.stringify(type)} — ` +
-            `addresses are "rpc" or "url"; anything else must be a live capability.`,
+            `addresses are "rpc"; anything else must be a live capability.`,
         );
       }
       kind = "live";
@@ -308,7 +308,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       this.#registerLiveStub(name, live);
     }
 
-    // provide is a PURE JOURNAL APPEND — it never calls into provider code.
+    // provide is a PURE STREAM APPEND — it never calls into provider code.
     // (An earlier provide-time `describeItx` probe dialed the target to
     // auto-fill `types`; it was removed after it broke agents in prod: an
     // agent re-providing its tool caps re-entered its own Durable Object
@@ -320,7 +320,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
         address: kind === "live" ? null : (input.capability as CapabilityAddress),
         kind,
         meta: meta as Record<string, unknown>,
-        owner: this.deps.contextId,
+        owner: this.deps.contextRef,
         path,
         providedAtMs: Date.now(),
       });
@@ -379,7 +379,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       .map((entry): CapabilityDescription => {
         // `instructions`/`types` are LIFTED to the entry's top level and
         // removed from the projected meta — one place to read each fact.
-        // (The journal keeps the full meta verbatim; this is projection.)
+        // (The stream keeps the full meta verbatim; this is projection.)
         const { instructions, types, ...meta } = entry.meta as CapabilityMeta;
         return {
           connected: entry.kind === "live" ? this.#liveStubs.has(entry.name) : undefined,
@@ -419,7 +419,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    */
   async invoke(input: { path: string[]; args: unknown[]; origin?: ItxOrigin }): Promise<unknown> {
     await this.#materialize();
-    const origin = input.origin ?? { address: this.deps.selfAddress, id: this.deps.contextId };
+    const origin = input.origin ?? { address: this.deps.selfAddress, ref: this.deps.contextRef };
     const resolved = resolveLongestProvidedPrefix(this.state.capabilities, input.path);
     if (!resolved) {
       const parent = this.deps.parentItx();
@@ -427,7 +427,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
         return await parent.stub.invoke({ ...input, origin });
       }
       throw new Error(
-        `No capability named "${input.path[0] ?? ""}" in context ${this.deps.contextId}` +
+        `No capability named "${input.path[0] ?? ""}" in context ${this.deps.contextRef}` +
           (input.path.length > 1 ? ` (call path "${input.path.join(".")}").` : `.`),
       );
     }
@@ -443,7 +443,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       // masked as "internal error; reference = …", so the only place the
       // real failure is visible is here.
       console.error(
-        `[itx] cap "${entry.name}" (${entry.kind}) failed in ${this.deps.contextId} ` +
+        `[itx] cap "${entry.name}" (${entry.kind}) failed in ${this.deps.contextRef} ` +
           `at path ${remainder.join(".") || "<call>"}:`,
         error,
       );
@@ -453,7 +453,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     }
   }
 
-  /** The birth certificate, as folded from the journal (null for contexts
+  /** The birth certificate, as folded from the stream (null for contexts
    * born in code, like the project context). Hosts derive descriptor()
    * and parentage from this — there is no other record. */
   async contextRecord(): Promise<ItxState["context"]> {
@@ -464,13 +464,13 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
   // ---- processor hooks ------------------------------------------------------
 
   protected override reduce(args: Parameters<StreamProcessor<typeof ItxContract>["reduce"]>[0]) {
-    return reduceItxJournalEvent(args.state, args.event);
+    return reduceItxEvent(args.state, args.event);
   }
 
   /**
    * Processor-mode execution: an `enqueued: true` script-execution-requested
    * event IS a request for work — run it through the host's runner (which
-   * appends the completed event back onto this journal). Batch-level so the
+   * appends the completed event back onto this stream). Batch-level so the
    * dedupe can consult the BATCH-FINAL state: a requested event whose
    * completed is already in the same batch (or in history) is a replay, not
    * an obligation. Runs detached (`runInBackground`): the script's own
@@ -500,17 +500,17 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
 
   // ---- the write/consume seam -------------------------------------------------
 
-  /** Append one journal event, then catch up THROUGH the one consumption
+  /** Append one event to the context's stream, then catch up THROUGH the one
    * door — never reduce directly. Reading from the checkpoint (instead of
    * ingesting just the appended event) keeps consumption contiguous when
    * concurrent writers interleave offsets. */
   async #append(type: string, payload: Record<string, unknown>): Promise<void> {
-    await this.ctx.journal.append({ payload, type });
+    await this.ctx.stream.append({ payload, type });
     this.#appendCount += 1;
     await this.#catchUp();
   }
 
-  /** Lazy materialization: the context comes alive by consuming its journal.
+  /** Lazy materialization: the context comes alive by consuming its stream.
    * Once per instance — afterwards self-appends keep the fold current, and
    * events written by OTHER writers (the /api/itx/run record door) are
    * picked up by the next append's catch-up or the next wake. */
@@ -538,7 +538,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const done = (async () => {
       try {
         const { offset } = await this.snapshot();
-        const events = await this.ctx.journal.read({ afterOffset: offset });
+        const events = await this.ctx.stream.read({ afterOffset: offset });
         if (events.length > 0) {
           await this.ingest({ events, streamMaxOffset: events.at(-1)!.offset });
         }
@@ -582,7 +582,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const release = this.#liveStubReleases.get(name);
     this.#liveStubReleases.delete(name);
     if (opts.record) {
-      void this.ctx.journal
+      void this.ctx.stream
         .append({
           payload: { path: name.split(".") },
           type: ITX_EVENT_TYPES.capabilityDisconnected,
@@ -662,7 +662,6 @@ const ITX_BUILTIN_NAMES = [
   "projects",
   "provideCapability",
   "revokeCapability",
-  "shareUrl",
   "super",
 ] as const;
 
@@ -713,8 +712,8 @@ export function capabilityPathFrom(input: { name?: string; path?: string[] }): s
 
 /**
  * The live-vs-address discriminator: an ADDRESS is plain data — an object
- * whose prototype is Object.prototype (or null) carrying `type: "rpc" |
- * "url"`. Everything else — capnweb RpcStubs (callable function-proxies),
+ * whose prototype is Object.prototype (or null) carrying `type: "rpc"`.
+ * Everything else — capnweb RpcStubs (callable function-proxies),
  * workers-RPC stubs, RpcTarget instances, plain functions — is a LIVE
  * capability. The plainness check MUST come before any `.type` probe:
  * property access on a capnweb stub returns a truthy pipelined stub, so
@@ -723,7 +722,7 @@ export function capabilityPathFrom(input: { name?: string; path?: string[] }): s
 export function isCapabilityAddress(capability: CapabilityTarget): capability is CapabilityAddress {
   if (!isPlainObject(capability)) return false;
   const type = (capability as { type?: unknown }).type;
-  return type === "rpc" || type === "url";
+  return type === "rpc";
 }
 
 const ASYNC_FUNCTION_PROTOTYPE = Object.getPrototypeOf(async () => {}) as object;
@@ -823,26 +822,12 @@ function retainLiveProvider(provider: LiveProvider): {
 }
 
 /**
- * STRUCTURAL address validation only — URL parseability, required fields.
+ * STRUCTURAL address validation only — required fields and field exclusions.
  * Reachability (the dialable allowlists) is deliberately NOT checked here:
  * it is the dial's authority and surfaces at first invoke, so a deployment
  * widening its allowlists never strands rows provided before the widening.
  */
 function assertWellFormedCapabilityAddress(name: string, address: CapabilityAddress): void {
-  if (address.type === "url") {
-    let protocol: string;
-    try {
-      protocol = new URL(address.url).protocol;
-    } catch {
-      throw new Error(`Capability "${name}": ${JSON.stringify(address.url)} is not a valid URL.`);
-    }
-    if (!["http:", "https:", "ws:", "wss:"].includes(protocol)) {
-      throw new Error(
-        `Capability "${name}": url targets must be http(s) or ws(s), got ${JSON.stringify(address.url)}.`,
-      );
-    }
-    return;
-  }
   const worker = address.worker;
   switch (worker.type) {
     case "binding":
