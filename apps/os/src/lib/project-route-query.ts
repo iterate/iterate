@@ -31,13 +31,6 @@ export function projectLifecycleStateQueryOptions(projectId: string) {
   };
 }
 
-export function projectAgentsListQueryOptions(projectId: string) {
-  return {
-    ...orpc.project.agents.list.queryOptions({ input: { projectSlugOrId: projectId } }),
-    staleTime: PROJECT_CHILD_ROUTE_STALE_TIME,
-  };
-}
-
 export function projectAgentPresetsQueryOptions(projectId: string) {
   return {
     ...orpc.project.agents.listPresets.queryOptions({ input: { projectSlugOrId: projectId } }),

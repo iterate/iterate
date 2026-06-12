@@ -1,11 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { AgentChatView } from "~/components/agent-chat-view.tsx";
-import {
-  projectAgentRuntimeStateQueryOptions,
-  projectAgentsListQueryOptions,
-} from "~/lib/project-route-query.ts";
+import { projectAgentRuntimeStateQueryOptions } from "~/lib/project-route-query.ts";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { orpc } from "~/orpc/client.ts";
@@ -43,16 +40,10 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
 
 function ProjectAgentDetailPage() {
   const params = Route.useParams();
-  const queryClient = useQueryClient();
   const { project, streamPath } = Route.useLoaderData();
-  const agentsQueryOptions = projectAgentsListQueryOptions(project.id);
-  const sendMessage = useMutation(
-    orpc.project.agents.sendMessage.mutationOptions({
-      onSuccess: async () => {
-        await queryClient.invalidateQueries({ queryKey: agentsQueryOptions.queryKey });
-      },
-    }),
-  );
+  // The agent chat view subscribes to the stream live, so a send needs no
+  // cache invalidation — the new events arrive over the socket.
+  const sendMessage = useMutation(orpc.project.agents.sendMessage.mutationOptions());
 
   async function submitAgentMessage(message: string) {
     await sendMessage.mutateAsync({

@@ -91,10 +91,9 @@ export type AgentDurableObjectEnv = {
   AI: CloudflareAiBinding;
   APP_CONFIG: string;
   ITX_CONTEXT: DurableObjectNamespace<ItxDurableObject>;
-  // The DO object-catalog D1 — the project→agents enumeration index behind
-  // `project.agents.list`, plus the incidental `itx.debug()` project-slug read.
-  // It indexes agents by their stream coordinate; it has no bearing on how an
-  // agent is addressed (that derives from the self-describing name).
+  // Shared app D1 — read-only here, for the `itx.debug()` project-slug lookup.
+  // The agent writes NO object-catalog projection: it is listed by walking the
+  // /agents stream tree and addressed by its self-describing name.
   DO_CATALOG: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
@@ -129,21 +128,15 @@ type AgentStreamApi = Omit<
 
 // An agent IS a context, and its identity IS its stream coordinate:
 // `{projectId}:{agentPath}` (no opaque JSON name). The lifecycle base parses
-// that directly via the AgentDurableObjectName codec. The D1 object catalog is
-// retained ONLY as the project→agents enumeration index that
-// `project.agents.list` reads (the stream tree has no cheap createdAt/
-// lastWokenAt projection); it no longer has any bearing on how an agent is
-// addressed — that is fully derived from the self-describing name.
+// that directly via the AgentDurableObjectName codec. No D1 object catalog —
+// agents are listed by walking the `/agents` stream tree (the UI is just the
+// stream explorer scoped to /agents), and addressed by their self-describing
+// coordinate; nothing enumerates them through a catalog.
 const AgentLifecycleBase = createIterateDurableObjectBase<
   typeof AgentDurableObjectName,
-  Pick<AgentDurableObjectEnv, "DO_CATALOG">
+  AgentDurableObjectEnv
 >({
   className: "AgentDurableObject",
-  getDatabase: (env) => env.DO_CATALOG,
-  indexes: {
-    agentPath: (params) => params.agentPath,
-    projectId: (params) => params.projectId,
-  },
   nameSchema: AgentDurableObjectName,
 });
 

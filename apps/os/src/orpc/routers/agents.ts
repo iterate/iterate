@@ -1,5 +1,4 @@
 import { env } from "cloudflare:workers";
-import { listD1ObjectCatalogRecordsByIndex } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import {
@@ -14,7 +13,6 @@ import {
   type AgentLlmProvider,
 } from "~/domains/agents/agent-presets.ts";
 import {
-  type AgentDurableObjectStructuredName,
   AGENTS_STREAM_PATH,
   getAgentDurableObjectName,
 } from "~/domains/agents/durable-objects/agent-durable-object.ts";
@@ -22,30 +20,6 @@ import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
 
 export const projectAgentsRouter = {
-  list: os.project.agents.list.use(projectScopeMiddleware).handler(async ({ context }) => {
-    const project = requireProjectScope(context);
-    const records = await listD1ObjectCatalogRecordsByIndex<AgentDurableObjectStructuredName>(
-      env.DB,
-      {
-        className: "AgentDurableObject",
-        indexName: "projectId",
-        indexValue: project.id,
-      },
-    );
-
-    return {
-      agents: records
-        .filter((record) => record.structuredName.agentPath.startsWith("/agents/"))
-        .map((record) => ({
-          agentPath: record.structuredName.agentPath,
-          createdAt: record.createdAt,
-          lastWokenAt: record.lastWokenAt,
-          name: record.name,
-          projectId: record.structuredName.projectId,
-        })),
-    };
-  }),
-
   listPresets: os.project.agents.listPresets
     .use(projectScopeMiddleware)
     .handler(async ({ context }) => {
