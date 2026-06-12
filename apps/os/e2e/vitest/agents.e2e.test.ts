@@ -728,10 +728,12 @@ itIfSlackBotToken(
       projectSlugOrId: project.id,
       streamPath: "/integrations/slack/default",
       event: {
-        type: "events.iterate.com/slack/webhook-received",
+        type: "events.iterate.com/integration/event-received",
         idempotencyKey: `slack-agent-e2e-webhook:${suffix}`,
         payload: {
-          slackTeamId: "T_E2E",
+          integration: "slack",
+          transport: "webhook",
+          routingKey: "team:T_E2E",
           body: {
             type: "event_callback",
             team_id: "T_E2E",
@@ -846,10 +848,12 @@ itIfSlackBotToken(
       projectSlugOrId: project.id,
       streamPath: "/integrations/slack/default",
       event: {
-        type: "events.iterate.com/slack/webhook-received",
+        type: "events.iterate.com/integration/event-received",
         idempotencyKey: `slack-agent-e2e-debug-webhook:${suffix}`,
         payload: {
-          slackTeamId: "T_E2E",
+          integration: "slack",
+          transport: "webhook",
+          routingKey: "team:T_E2E",
           body: {
             type: "event_callback",
             team_id: "T_E2E",
@@ -944,10 +948,12 @@ itIfSlackBotToken(
       projectSlugOrId: project.id,
       streamPath: "/integrations/slack/default",
       event: {
-        type: "events.iterate.com/slack/webhook-received",
+        type: "events.iterate.com/integration/event-received",
         idempotencyKey: `slack-agent-e2e-llm-webhook:${suffix}`,
         payload: {
-          slackTeamId: "T_E2E",
+          integration: "slack",
+          transport: "webhook",
+          routingKey: "team:T_E2E",
           body: {
             type: "event_callback",
             team_id: "T_E2E",
