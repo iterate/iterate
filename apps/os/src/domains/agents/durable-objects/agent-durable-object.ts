@@ -69,6 +69,7 @@ import {
 import {
   AGENT_HOST_PROCESSOR_SLUG,
   AGENTS_STREAM_PATH,
+  AgentDurableObjectName,
   AgentDurableObjectStructuredName,
   agentLlmProcessorSlug,
   agentProcessorSubscriptionConfiguredEvents,
@@ -90,6 +91,9 @@ export type AgentDurableObjectEnv = {
   AI: CloudflareAiBinding;
   APP_CONFIG: string;
   ITX_CONTEXT: DurableObjectNamespace<ItxDurableObject>;
+  // Shared app D1 — read-only here, for the `itx.debug()` project-slug lookup.
+  // The agent writes NO object-catalog projection: it is listed by walking the
+  // /agents stream tree and addressed by its self-describing name.
   DO_CATALOG: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
@@ -122,17 +126,18 @@ type AgentStreamApi = Omit<
   }): Promise<Event[]>;
 };
 
+// An agent IS a context, and its identity IS its stream coordinate:
+// `{projectId}:{agentPath}` (no opaque JSON name). The lifecycle base parses
+// that directly via the AgentDurableObjectName codec. No D1 object catalog —
+// agents are listed by walking the `/agents` stream tree (the UI is just the
+// stream explorer scoped to /agents), and addressed by their self-describing
+// coordinate; nothing enumerates them through a catalog.
 const AgentLifecycleBase = createIterateDurableObjectBase<
-  typeof AgentDurableObjectStructuredName,
-  Pick<AgentDurableObjectEnv, "DO_CATALOG">
+  typeof AgentDurableObjectName,
+  AgentDurableObjectEnv
 >({
   className: "AgentDurableObject",
-  getDatabase: (env) => env.DO_CATALOG,
-  indexes: {
-    agentPath: (params) => params.agentPath,
-    projectId: (params) => params.projectId,
-  },
-  nameSchema: AgentDurableObjectStructuredName,
+  nameSchema: AgentDurableObjectName,
 });
 
 /** Bump when agentContextCapabilities changes — re-provides the agent's tools

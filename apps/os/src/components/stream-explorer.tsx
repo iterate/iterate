@@ -9,17 +9,24 @@ export function StreamExplorerTreePage({
   currentPath,
   header,
   onOpenPath,
+  rootPath,
   source,
 }: {
   currentPath?: StreamPathType;
   header?: ReactNode;
   onOpenPath: (streamPath: StreamPathType) => void;
+  rootPath?: StreamPathType;
   source: StreamTreeSource;
 }) {
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-3 p-4">
       {header == null ? null : <div className="min-w-0">{header}</div>}
-      <StreamTreeBrowser source={source} currentPath={currentPath} onOpenPath={onOpenPath} />
+      <StreamTreeBrowser
+        source={source}
+        currentPath={currentPath}
+        onOpenPath={onOpenPath}
+        rootPath={rootPath}
+      />
     </section>
   );
 }

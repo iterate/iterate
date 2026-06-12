@@ -1,13 +1,10 @@
 import { Suspense, useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { useItx } from "~/itx/use-itx.ts";
-import {
-  projectAgentRuntimeStateQueryOptions,
-  projectAgentsListQueryOptions,
-} from "~/lib/project-route-query.ts";
+import { projectAgentRuntimeStateQueryOptions } from "~/lib/project-route-query.ts";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { orpc } from "~/orpc/client.ts";
@@ -57,18 +54,12 @@ function ProjectAgentDetailPage() {
 function ProjectAgentDetailContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { project, streamPath } = Route.useLoaderData();
   const itx = useItx(project.id);
   const source = useMemo(() => (path: StreamPathType) => itx.streams.get(path), [itx]);
-  const agentsQueryOptions = projectAgentsListQueryOptions(project.id);
-  const sendMessage = useMutation(
-    orpc.project.agents.sendMessage.mutationOptions({
-      onSuccess: async () => {
-        await queryClient.invalidateQueries({ queryKey: agentsQueryOptions.queryKey });
-      },
-    }),
-  );
+  // The stream view subscribes live, so a send needs no cache invalidation —
+  // the new events arrive over the socket.
+  const sendMessage = useMutation(orpc.project.agents.sendMessage.mutationOptions());
 
   async function submitAgentMessage(message: string) {
     await sendMessage.mutateAsync({
