@@ -42,6 +42,7 @@ import {
 } from "~/domains/streams/stream-processor-do-helpers.ts";
 import { replayPathCall, type PathCall } from "~/itx/path-proxy.ts";
 import {
+  DEFAULT_INTEGRATION_ACCOUNT,
   integrationAccountStreamPath,
   integrationIngressStreamPath,
 } from "~/domains/integrations/integration-events.ts";
@@ -99,6 +100,42 @@ export async function listIntegrationAccounts(input: {
  * there is exactly one (slack accounts are team-derived), otherwise the
  * caller must address the instance explicitly.
  */
+export type IntegrationAccountState = {
+  account?: string;
+  connection: {
+    status: string;
+    externalId?: string;
+    displayName?: string;
+    routingKeys: string[];
+    providedSecretSlugs: string[];
+  };
+};
+
+/** The CONNECTED accounts of one integration in one project: the catalog
+ * scan plus each account's fold — catalog presence alone says only that a
+ * DO was ever touched, not that anything is connected. Sorted by account
+ * name so callers see a deterministic order. */
+export async function listConnectedIntegrationAccountStates(input: {
+  projectId: string;
+  integration: string;
+}): Promise<IntegrationAccountState[]> {
+  const accounts = await listIntegrationAccounts(input);
+  const states = await Promise.all(
+    accounts.map(async (account) => {
+      const stub = await ensureIntegrationStub({
+        account,
+        integration: input.integration,
+        projectId: input.projectId,
+      });
+      const { state } = (await stub.ensureReady()) as { state: IntegrationAccountState };
+      return { ...state, account: state.account ?? account };
+    }),
+  );
+  return states
+    .filter((state) => state.connection.status === "connected")
+    .sort((a, b) => (a.account ?? "").localeCompare(b.account ?? ""));
+}
+
 export class AmbiguousIntegrationAccountError extends Error {
   constructor(input: { integration: string; accounts: string[] }) {
     super(
@@ -113,10 +150,19 @@ export async function resolveImplicitAccount(input: {
   projectId: string;
   integration: string;
 }): Promise<string> {
-  const accounts = await listIntegrationAccounts(input);
-  if (accounts.length === 0 || accounts.includes("default")) return "default";
-  if (accounts.length === 1) return accounts[0]!;
-  throw new AmbiguousIntegrationAccountError({ integration: input.integration, accounts });
+  // Resolution is over CONNECTED accounts — a lingering disconnected
+  // "default" DO must not shadow the one workspace that actually works.
+  const connected = (await listConnectedIntegrationAccountStates(input)).map(
+    (state) => state.account ?? DEFAULT_INTEGRATION_ACCOUNT,
+  );
+  if (connected.length === 0 || connected.includes(DEFAULT_INTEGRATION_ACCOUNT)) {
+    return DEFAULT_INTEGRATION_ACCOUNT;
+  }
+  if (connected.length === 1) return connected[0]!;
+  throw new AmbiguousIntegrationAccountError({
+    integration: input.integration,
+    accounts: connected,
+  });
 }
 
 /** Mint an initialized integration DO stub from a trusted domain file (see lint rule). */

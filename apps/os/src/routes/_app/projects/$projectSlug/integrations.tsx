@@ -125,7 +125,7 @@ function ProjectIntegrationsPage() {
             <ItemTitle>Slack</ItemTitle>
             <ItemDescription>
               {slackConnection?.connected
-                ? `Connected to ${slackConnection.displayName ?? slackConnection.externalId}`
+                ? `Connected to ${connectedAccountNames(slackConnection)}`
                 : "Connect a Slack workspace to receive project webhooks and use Slack API tools."}
             </ItemDescription>
             <IntegrationMetadata connection={slackConnection} provider="slack" />
@@ -167,7 +167,7 @@ function ProjectIntegrationsPage() {
             <ItemTitle>Google</ItemTitle>
             <ItemDescription>
               {googleConnection?.connected
-                ? `Connected as ${googleConnection.displayName ?? googleConnection.externalId}`
+                ? `Connected as ${connectedAccountNames(googleConnection)}`
                 : "Connect Google for Gmail, Calendar, Docs, Sheets, and Drive API tools."}
             </ItemDescription>
             <IntegrationMetadata connection={googleConnection} provider="google" />
@@ -203,6 +203,21 @@ function ProjectIntegrationsPage() {
       </ItemGroup>
     </section>
   );
+}
+
+/** Every connected workspace/account, comma-joined — a project can hold
+ * several (e.g. multiple Slack workspaces). */
+function connectedAccountNames(connection: {
+  accounts: { account: string; displayName: string | null; externalId: string | null }[];
+  displayName: string | null;
+  externalId: string | null;
+}): string {
+  if (connection.accounts.length > 1) {
+    return connection.accounts
+      .map((each) => each.displayName ?? each.externalId ?? each.account)
+      .join(", ");
+  }
+  return connection.displayName ?? connection.externalId ?? "unknown";
 }
 
 function IntegrationMetadata({

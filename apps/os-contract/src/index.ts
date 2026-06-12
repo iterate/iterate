@@ -87,6 +87,15 @@ export const InboundMcpSession = z.object({
 export type InboundMcpSession = z.output<typeof InboundMcpSession>;
 
 export const ProjectIntegrationConnection = z.object({
+  /** EVERY connected account (workspace), deterministically ordered; the
+   * top-level fields below describe the first one. */
+  accounts: z.array(
+    z.object({
+      account: z.string(),
+      displayName: z.string().nullable(),
+      externalId: z.string().nullable(),
+    }),
+  ),
   connected: z.boolean(),
   externalId: z.string().nullable(),
   displayName: z.string().nullable(),

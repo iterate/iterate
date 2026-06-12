@@ -19,7 +19,11 @@ import {
   integrationAccountStreamPath,
   integrationIngressStreamPath,
 } from "~/domains/integrations/integration-events.ts";
-import { ensureIntegrationStub } from "~/domains/integrations/durable-objects/integration-durable-object.ts";
+import {
+  ensureIntegrationStub,
+  listConnectedIntegrationAccountStates,
+  type IntegrationAccountState,
+} from "~/domains/integrations/durable-objects/integration-durable-object.ts";
 import { ensureDiscordGatewayStub } from "~/domains/integrations/durable-objects/discord-gateway-durable-object.ts";
 import {
   buildSlackAuthorizationUrl,
@@ -262,13 +266,20 @@ async function connectionStatus(
   },
 ) {
   const project = requireProjectScope(context);
-  // Accounts are per-workspace now (any number of Slacks): discover them
-  // from the DO catalog and surface the first connected one. (The single-
-  // connection contract shape predates multi-account; a list view is the
-  // natural successor.)
-  const state = await firstConnectedAccountState(project.id, input.integration);
+  // Accounts are per-workspace now (any number of Slacks): discover every
+  // connected one (deterministically ordered) and surface them all. The
+  // top-level single-connection fields describe the FIRST account, for the
+  // existing card UI; `accounts` carries the full list.
+  const states = await allConnectedAccountStates(project.id, input.integration);
+  const state = states[0];
+  const accounts = states.map((each) => ({
+    account: each.account ?? DEFAULT_INTEGRATION_ACCOUNT,
+    displayName: each.connection.displayName ?? null,
+    externalId: each.connection.externalId ?? null,
+  }));
   if (state == null) {
     return {
+      accounts,
       connected: false,
       displayName: null,
       externalId: null,
@@ -293,6 +304,7 @@ async function connectionStatus(
     : null;
   const scopes = token?.metadata?.scopes;
   return {
+    accounts,
     connected: true,
     displayName: state.connection.displayName ?? null,
     externalId: state.connection.externalId ?? null,
@@ -309,51 +321,13 @@ async function connectionStatus(
   };
 }
 
-type AccountState = {
-  account?: string;
-  connection: {
-    status: string;
-    externalId?: string;
-    displayName?: string;
-    routingKeys: string[];
-    providedSecretSlugs: string[];
-  };
-};
+type AccountState = IntegrationAccountState;
 
 async function allConnectedAccountStates(
   projectId: string,
   integration: string,
 ): Promise<AccountState[]> {
-  const records = await listD1ObjectCatalogRecordsByIndex<{
-    account: string;
-    integration: string;
-    projectId: string;
-  }>((env as unknown as { DO_CATALOG: D1Database }).DO_CATALOG, {
-    className: "IntegrationDurableObject",
-    indexName: "projectIntegration",
-    indexValue: `${projectId}:${integration}`,
-  });
-  const states: AccountState[] = [];
-  for (const record of records) {
-    const stub = await ensureIntegrationStub({
-      account: record.structuredName.account,
-      integration,
-      projectId,
-    });
-    const { state } = (await stub.ensureReady()) as { state: AccountState };
-    if (state.connection.status === "connected") {
-      states.push({ ...state, account: state.account ?? record.structuredName.account });
-    }
-  }
-  return states;
-}
-
-async function firstConnectedAccountState(
-  projectId: string,
-  integration: string,
-): Promise<AccountState | null> {
-  const states = await allConnectedAccountStates(projectId, integration);
-  return states[0] ?? null;
+  return await listConnectedIntegrationAccountStates({ projectId, integration });
 }
 
 async function describeSecretOrNull(
