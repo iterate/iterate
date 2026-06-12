@@ -68,7 +68,7 @@ import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pi
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
 import { StreamSwitcherDialog } from "~/components/stream-switcher-dialog.tsx";
 import { sparklinePoints, useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
-import { recordRecentStream, type StreamNavigator } from "~/lib/stream-navigation.ts";
+import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 import { projectStreamRpcPath } from "~/lib/stream-links.ts";
 
 type ProjectStreamMessageComposer = {
@@ -203,10 +203,6 @@ export function ProjectStreamView({
   // range re-queries and flashes grey skeletons before SQLite returns the new
   // rows. Lives here (not in the raw view) so the composer can re-pin it.
   const rawStickToBottomRef = useRef(true);
-
-  useEffect(() => {
-    recordRecentStream(projectSlugOrId, streamPathText);
-  }, [projectSlugOrId, streamPathText]);
 
   useEffect(() => {
     if (toolsOpen) feedSearchInputRef.current?.focus();
@@ -474,7 +470,7 @@ export function ProjectStreamView({
           onOpenChange={setSwitcherOpen}
           currentPath={streamPath}
           navigator={streamNavigator}
-          recentsScope={projectSlugOrId}
+          scope={projectSlugOrId}
         />
       )}
     </section>

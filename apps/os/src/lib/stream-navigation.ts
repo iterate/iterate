@@ -1,5 +1,5 @@
 // Stream navigation helpers backing the ⌘K stream switcher: one-shot state
-// reads for lazy child loading, and best-effort localStorage recents.
+// reads for lazy tree-node loading.
 
 import {
   StreamState,
@@ -72,38 +72,4 @@ export function parentStreamPath(path: string): string {
   const trimmed = path.replace(/\/+$/, "");
   const parent = trimmed.slice(0, trimmed.lastIndexOf("/"));
   return parent === "" ? "/" : parent;
-}
-
-// ---------------------------------------------------------------------------
-// Recents (localStorage)
-// ---------------------------------------------------------------------------
-
-const MAX_RECENT_STREAMS = 8;
-
-function recentStreamsStorageKey(scope: string) {
-  return `iterate:recent-streams:${scope}`;
-}
-
-export function recordRecentStream(scope: string, streamPath: string) {
-  try {
-    const existing = readRecentStreams(scope).filter((path) => path !== streamPath);
-    window.localStorage.setItem(
-      recentStreamsStorageKey(scope),
-      JSON.stringify([streamPath, ...existing].slice(0, MAX_RECENT_STREAMS)),
-    );
-  } catch {
-    // Storage may be unavailable (private mode); recents are best-effort.
-  }
-}
-
-export function readRecentStreams(scope: string): string[] {
-  try {
-    const raw = window.localStorage.getItem(recentStreamsStorageKey(scope));
-    const parsed: unknown = raw == null ? [] : JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((path): path is string => typeof path === "string")
-      : [];
-  } catch {
-    return [];
-  }
 }
