@@ -359,8 +359,11 @@ by tier — material then never sits in D1 rows at all.
 - The identify frame needs the token as **bytes in a websocket message** —
   fetch substitution can't cover it. That requirement is what shaped the
   Secret DO's audited `revealForPlatformUse` trapdoor.
-- Flood control is open: the spike captures all dispatches under the
-  configured intents; a real version probably filters per connection.
+- Volume is accepted by design: capture everything verbatim, no edge
+  filtering — the GitHub App alone (28 installations incl. iterate's own CI)
+  will push thousands of check_run/workflow events a day at the capture
+  stream, and that's fine. Streams are built for appends; selectivity, if
+  ever needed, belongs downstream of capture, never at the door.
 
 ## Compared with executor (rhyssullivan/executor)
 
