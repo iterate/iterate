@@ -244,12 +244,21 @@ export function ProjectStreamView({
     }
   }
 
+  // The server is about to append: verify deliveries actually arrive and
+  // reconnect within seconds if the subscription died silently — instead of
+  // the user's message not appearing until the next paced probe (or a reload).
+  function nudgeDeliveries() {
+    void store.nudge();
+    void agentStore.nudge();
+  }
+
   async function submitMessage() {
     const trimmed = messageText.trim();
     if (!trimmed || messageComposer == null) return;
     await runSubmit(async () => {
       await messageComposer.onSubmit(trimmed);
       setMessageText("");
+      nudgeDeliveries();
     });
   }
 
@@ -262,6 +271,7 @@ export function ProjectStreamView({
         StreamEventInput.parse(event),
       );
       await store.appendBatch({ events });
+      nudgeDeliveries();
     });
   }
 

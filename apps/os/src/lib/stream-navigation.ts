@@ -66,10 +66,3 @@ export function readStreamStateOnce(
       });
   });
 }
-
-export function parentStreamPath(path: string): string {
-  if (path === "/" || !path.includes("/")) return "/";
-  const trimmed = path.replace(/\/+$/, "");
-  const parent = trimmed.slice(0, trimmed.lastIndexOf("/"));
-  return parent === "" ? "/" : parent;
-}

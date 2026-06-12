@@ -94,6 +94,12 @@ export type StreamBrowserStore = Disposable & {
   clearLocalDatabase(): Promise<void>;
   kill(): Promise<void>;
   reset(): Promise<void>;
+  /**
+   * On-demand delivery check for when the caller knows the server is about to
+   * (or just did) append — reconnects within seconds if the subscription is
+   * stale instead of waiting for the next paced probe.
+   */
+  nudge(): Promise<void>;
   getSnapshot(): StreamBrowserSnapshot;
   getServerSnapshot(): StreamBrowserSnapshot;
   subscribe(listener: () => void): () => void;
@@ -706,6 +712,56 @@ function createStreamRuntime(
     }
   }
 
+  // On-demand delivery check for moments the CALLER knows the server is about
+  // to (or just did) append — e.g. right after a composer submit. The paced
+  // probe takes up to an interval to notice an orphaned subscription; this
+  // collapses that to ~seconds exactly when a human is watching. One nudge at
+  // a time; nudging while disconnected is a no-op (reconnect is already the
+  // path that heals that state).
+  const NUDGE_GRACE_MS = 2_000;
+  let nudgeInFlight = false;
+
+  async function nudge(): Promise<void> {
+    const connection = stream;
+    if (connection === undefined || subscriptionHandle === undefined) return;
+    if (nudgeInFlight || disposed) return;
+    nudgeInFlight = true;
+    try {
+      const arrivalsBefore = deliveryArrivals;
+      const { coreProcessorState } = await raceWithTimeout(
+        Promise.resolve(connection.stream.runtimeState()),
+        LIVENESS_PROBE_TIMEOUT_MS,
+        "delivery nudge timed out",
+      );
+      if (disposed || stream !== connection) return;
+      if (
+        coreProcessorState.createdAt === reconciledIncarnation &&
+        coreProcessorState.maxOffset <= lastDeliveredOffset
+      ) {
+        return; // mirror is current
+      }
+      if (coreProcessorState.createdAt === reconciledIncarnation) {
+        // Server is ahead — give the in-flight delivery a moment before
+        // declaring the subscription dead.
+        await new Promise((resolve) => setTimeout(resolve, NUDGE_GRACE_MS));
+        if (disposed || stream !== connection) return;
+        if (deliveryArrivals !== arrivalsBefore) return; // deliveries flowing
+      }
+      stopLivenessProbe();
+      console.warn(
+        `[stream ${args.streamPath}] delivery nudge found a stale subscription; reconnecting`,
+      );
+      scheduleReconnect("delivery nudge found a stale subscription", 0);
+    } catch (error) {
+      if (disposed || stream !== connection) return;
+      stopLivenessProbe();
+      console.warn(`[stream ${args.streamPath}] delivery nudge failed; reconnecting`, error);
+      scheduleReconnect(`delivery nudge failed: ${errorMessage(error)}`, 0);
+    } finally {
+      nudgeInFlight = false;
+    }
+  }
+
   function teardown() {
     for (const timer of [connectTimer, reconnectTimer, databaseInfoTimer, databaseChangeTimer]) {
       if (timer !== undefined) clearTimeout(timer);
@@ -773,6 +829,7 @@ function createStreamRuntime(
     reset() {
       return runControlAndReconnect("reset");
     },
+    nudge,
     getSnapshot: () => snapshot,
     getServerSnapshot: () => snapshot,
     subscribe(listener) {
