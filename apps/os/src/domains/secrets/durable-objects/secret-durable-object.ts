@@ -9,14 +9,15 @@
 // audited revealForPlatformUse trapdoor. Both paths append a `secret/used`
 // audit event to the journal.
 //
-// DERIVED secrets live here too: a Secret whose journal carries a derivation
-// (secret-derivation.ts) recomputes its material from OTHER secrets — every
-// dereference goes through ensureFreshMaterial, so a stale 5-minute session
-// token re-derives INLINE on use (and proactively via the alarm), each run
-// appended as `secret/rotated`. Resolving a derivation's source keys dials the
-// siblings' own DOs, which ensure their own freshness first — derivations
-// chain, every hop audited. The journal stays the only write authority; this
-// DO is a fold plus a clock plus the one place plaintext exists.
+// The LOGIC lives in the secret PROCESSOR (stream-processors/secret), not
+// here: derivation runs are its reaction to `secret/derive-requested` events.
+// This DO is the processor's host and nothing more clever — it supplies the
+// capabilities only it has (the deployment encryption key, sibling-secret
+// dials), arms the expiry alarm the processor asks for, and exposes
+// request/response verbs that only APPEND FACTS AND READ THE FOLD: a stale
+// use appends derive-requested and waits for the fold to advance; the alarm
+// appends the same event. Concurrent stale uses dedupe to one derivation run
+// (version-keyed idempotency + the processor's fold gate).
 
 import { env } from "cloudflare:workers";
 import { z } from "zod";
@@ -41,7 +42,7 @@ import {
   encryptSecretMaterial,
   importSecretsKey,
 } from "~/domains/secrets/secret-crypto.ts";
-import { deriveViaHttpExchange, materialIsStale } from "~/domains/secrets/secret-derivation.ts";
+import { materialIsStale } from "~/domains/secrets/secret-derivation.ts";
 import { secretStreamPath } from "~/domains/secrets/stream-processors/secret/contract.ts";
 import {
   SecretProcessor,
@@ -111,6 +112,17 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
         const refreshAtMs = Date.parse(expiresAt) - refreshLeewaySeconds * 1000;
         if (!Number.isFinite(refreshAtMs)) return;
         void this.ctx.storage.setAlarm(Math.max(refreshAtMs, Date.now() + 1000));
+      },
+      // The two capabilities only the host has: the deployment key, and
+      // dials on sibling Secret DOs (derivation sources resolve through
+      // their own domain objects, freshness included).
+      encryptMaterial: async (material) =>
+        await encryptSecretMaterial({ key: await this.encryptionKey(), material }),
+      resolveSecretKey: async (key) => {
+        const params = await this.ensureParams();
+        return await getSecretStub({ projectId: params.projectId, slug: key }).revealForPlatformUse(
+          { usedBy: `secret:${params.slug}:derivation` },
+        );
       },
     });
   });
@@ -202,14 +214,12 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
     return material;
   }
 
+  /** The clock half of refresh: the alarm only appends the request fact;
+   * the processor reacts. */
   async alarm() {
     const { params, state } = await this.readyState();
     if (state.status !== "set" || state.derivation == null) return;
-    try {
-      await this.runDerivation({ params, state, reason: "alarm-refresh" });
-    } catch (error) {
-      console.warn("[secret] alarm derivation failed", { error, slug: params.slug });
-    }
+    await this.appendDeriveRequested({ params, state, reason: "alarm-refresh" });
   }
 
   async ensureReady() {
@@ -219,14 +229,17 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
     return await this.secret.snapshot();
   }
 
-  /** Stale material + a derivation = re-derive inline, on the very use that
-   * found it stale. This is what makes `getSecret({ key:
-   * "waitrose/access-token" })` Just Work against a 5-minute token. */
+  /** Stale material + a derivation = append `secret/derive-requested` and
+   * wait for the PROCESSOR's reaction to fold — this verb never derives
+   * itself. The request is idempotency-keyed by the stale version, so the
+   * very use that found it stale, a concurrent use, and the alarm all
+   * collapse into one derivation run. */
   private async ensureFreshMaterial(input: {
     params: SecretDurableObjectStructuredName;
     state: SecretState;
   }): Promise<string> {
-    const { params, state } = input;
+    const { params } = input;
+    let state = input.state;
     if (state.status !== "set") {
       throw new Error(`Secret ${params.slug} is ${state.status}.`);
     }
@@ -237,7 +250,8 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
       nowMs: Date.now(),
     });
     if (stale && state.derivation != null) {
-      return await this.runDerivation({ params, state, reason: "inline-refresh" });
+      await this.appendDeriveRequested({ params, state, reason: "inline-refresh" });
+      state = await this.waitForVersionAbove(params.slug, state.version);
     }
     if (state.encryptedMaterial == null) {
       throw new Error(`Secret ${params.slug} has no material and no derivation.`);
@@ -248,47 +262,32 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
     });
   }
 
-  /** Execute the derivation, append `secret/rotated`, return the material. */
-  private async runDerivation(input: {
+  private async appendDeriveRequested(input: {
     params: SecretDurableObjectStructuredName;
     state: SecretState;
     reason: string;
-  }): Promise<string> {
-    const { params, state } = input;
-    if (state.derivation == null) throw new Error(`Secret ${params.slug} has no derivation.`);
-    if (state.derivation.kind === "script") {
-      throw new Error(
-        "Script derivations are declared but not executable in this spike " +
-          "(they will dial the project worker's own capability).",
-      );
-    }
-
-    const derived = await deriveViaHttpExchange({
-      derivation: state.derivation,
-      // Source secrets resolve through their OWN DOs: freshness and audit
-      // compose — a derivation chain re-derives lazily, hop by hop.
-      resolveSecretKey: (key) =>
-        getSecretStub({ projectId: params.projectId, slug: key }).revealForPlatformUse({
-          usedBy: `secret:${params.slug}:derivation`,
-        }),
-      nowMs: Date.now(),
-    });
-
-    const stream = await this.secretStream(params);
+  }) {
+    const stream = await this.secretStream(input.params);
     await stream.append({
-      type: "events.iterate.com/secret/rotated",
-      idempotencyKey: `secret-rotated:${params.slug}:${crypto.randomUUID()}`,
+      type: "events.iterate.com/secret/derive-requested",
+      idempotencyKey: `secret-derive:${input.params.slug}:v${input.state.version}`,
       payload: {
-        slug: params.slug,
-        encryptedMaterial: await encryptSecretMaterial({
-          key: await this.encryptionKey(),
-          material: derived.material,
-        }),
-        ...(derived.expiresAt == null ? {} : { expiresAt: derived.expiresAt }),
+        slug: input.params.slug,
+        staleVersion: input.state.version,
         reason: input.reason,
       },
     });
-    return derived.material;
+  }
+
+  /** Poll the fold until the processor's rotation lands. */
+  private async waitForVersionAbove(slug: string, staleVersion: number): Promise<SecretState> {
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      const { state } = await this.secret.snapshot();
+      if (state.version > staleVersion) return state;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`Secret ${slug} derivation did not complete in time.`);
   }
 
   private async readyState() {

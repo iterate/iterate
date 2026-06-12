@@ -82,28 +82,19 @@ export async function setJournaledSecret(input: SetJournaledSecretInput) {
 }
 
 /**
- * Platform-trusted material dereference, used by first-party loopback
- * capabilities (e.g. IntegrationsCapability building an SDK client). Tries the
- * project's journaled Secret first; `fallbackEnvVar` covers first-party
- * deployment-level credentials (e.g. a shared bot token in Doppler) so dev
- * environments work before any per-project connect flow has run.
+ * Material dereference INSIDE the secret/egress trust zone — the two callers
+ * are the terminal egress pipe's resolver and the Discord gateway's identify
+ * frame (a websocket message has no fetch hop to substitute at). SDKs don't
+ * use this: they take getSecret placeholders and let egress substitute.
  */
 export async function revealJournaledSecretForPlatformUse(input: {
   projectId: string;
   slug: string;
   usedBy: string;
-  fallbackEnvVar?: string;
 }): Promise<string> {
-  const stub = getSecretStub({ projectId: input.projectId, slug: input.slug });
-  try {
-    return await stub.revealForPlatformUse({ usedBy: input.usedBy });
-  } catch (error) {
-    const fallback = input.fallbackEnvVar
-      ? (env as unknown as Record<string, string | undefined>)[input.fallbackEnvVar]
-      : undefined;
-    if (fallback) return fallback;
-    throw error;
-  }
+  return await getSecretStub({ projectId: input.projectId, slug: input.slug }).revealForPlatformUse(
+    { usedBy: input.usedBy },
+  );
 }
 
 /**

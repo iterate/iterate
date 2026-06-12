@@ -8,8 +8,10 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
+import { SecretProcessorContract } from "~/domains/secrets/stream-processors/secret/contract.ts";
 import {
   IntegrationConnectedPayload,
+  IntegrationConnectRequestedPayload,
   IntegrationDisconnectedPayload,
   IntegrationEventReceivedPayload,
 } from "~/domains/integrations/integration-events.ts";
@@ -36,7 +38,15 @@ export const IntegrationProcessorContract = defineProcessorContract({
     lastEventAt: z.string().optional(),
   }),
   initialState: {},
+  // The secret contract owns `events.iterate.com/secret/set`, which this
+  // processor emits onto /secrets/... paths during the connect choreography.
+  processorDeps: [SecretProcessorContract],
   events: {
+    "events.iterate.com/integration/connect-requested": {
+      description:
+        "Someone wants this account connected (OAuth callback, CLI, customer app registration) — ONE event carrying everything. This processor reacts with the whole choreography: secret/set appends to /secrets/..., the connected fact, and routing-key claims on the global capture stream.",
+      payloadSchema: IntegrationConnectRequestedPayload,
+    },
     "events.iterate.com/integration/connected": {
       description:
         "This project connected the integration — records ownership (first-party vs customer app), the provider-side identity, claimed routing keys, and provided Secret slugs.",
@@ -53,11 +63,12 @@ export const IntegrationProcessorContract = defineProcessorContract({
     },
   },
   consumes: [
+    "events.iterate.com/integration/connect-requested",
     "events.iterate.com/integration/connected",
     "events.iterate.com/integration/disconnected",
     "events.iterate.com/integration/event-received",
   ],
-  emits: [],
+  emits: ["events.iterate.com/secret/set", "events.iterate.com/integration/connected"],
 });
 
 export type IntegrationProcessorState = z.infer<typeof IntegrationProcessorContract.stateSchema>;

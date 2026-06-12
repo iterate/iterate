@@ -113,34 +113,29 @@ describe("discord ingress", () => {
 });
 
 describe("sdk factories (itx.integrations.{slug}.**)", () => {
-  it("github builds an octokit whose nested REST methods are path-reachable", async () => {
-    const requestedSecrets: string[] = [];
-    const sdk = await githubIntegration.createSdk({
-      projectId: "proj-a",
-      account: "default",
-      getSecretMaterial: async (name) => {
-        requestedSecrets.push(name);
-        return "ghp_test";
-      },
-    });
-    expect(requestedSecrets).toEqual(["access-token"]);
+  it("github's octokit holds only a placeholder token and fetches through the egress door", async () => {
+    const { ctx, outbound } = fakeSdkContext({ integration: "github", account: "default" });
+    const sdk = (await githubIntegration.createSdk(ctx)) as {
+      octokit: { rest: { meta: { getZen(): Promise<unknown> }; issues: { create: unknown } } };
+    };
     // The exact path itx.integrations.github.octokit.rest.issues.create takes.
-    const create = (sdk as { octokit: { rest: { issues: { create: unknown } } } }).octokit.rest
-      .issues.create;
-    expect(typeof create).toBe("function");
+    expect(typeof sdk.octokit.rest.issues.create).toBe("function");
+
+    // Drive a real octokit request into the fake egress fetch: the
+    // authorization header carries the PLACEHOLDER, never material.
+    await sdk.octokit.rest.meta.getZen();
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0]!.authorization).toBe(
+      'token getSecret({ key: "github/default/access-token" })',
+    );
   });
 
-  it("discord builds the @discordjs/core API with the bot token", async () => {
-    const requestedSecrets: string[] = [];
-    const sdk = (await discordIntegration.createSdk({
-      projectId: "proj-a",
-      account: "work-server",
-      getSecretMaterial: async (name) => {
-        requestedSecrets.push(name);
-        return "bot-token";
-      },
-    })) as { api: { channels: { createMessage: unknown } }; rest: unknown };
-    expect(requestedSecrets).toEqual(["bot-token"]);
+  it("discord's REST client holds only a placeholder token", async () => {
+    const { ctx } = fakeSdkContext({ integration: "discord", account: "work-server" });
+    const sdk = (await discordIntegration.createSdk(ctx)) as {
+      api: { channels: { createMessage: unknown } };
+      rest: unknown;
+    };
     expect(typeof sdk.api.channels.createMessage).toBe("function");
   });
 
@@ -156,6 +151,25 @@ describe("sdk factories (itx.integrations.{slug}.**)", () => {
     expect(calls).toEqual([{ owner: "iterate", repo: "iterate", title: "hi" }]);
   });
 });
+
+function fakeSdkContext(input: { integration: string; account: string }) {
+  const outbound: Array<{ url: string; authorization: string | null }> = [];
+  const ctx = {
+    projectId: "proj-a",
+    account: input.account,
+    secretRef: (name: string) =>
+      `getSecret({ key: "${input.integration}/${input.account}/${name}" })`,
+    fetch: (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(url, init);
+      outbound.push({
+        url: request.url,
+        authorization: request.headers.get("authorization"),
+      });
+      return Response.json({ ok: true });
+    }) as typeof fetch,
+  };
+  return { ctx, outbound };
+}
 
 function recordingCapture() {
   const captured: unknown[] = [];

@@ -72,18 +72,18 @@ export const discordIntegration: IntegrationDefinition = {
     {
       name: DISCORD_BOT_TOKEN_SECRET_NAME,
       description: "Discord bot token used by the gateway connection and itx.integrations.discord.",
-      firstPartyEnvFallback: "APP_CONFIG_DISCORD_BOT_TOKEN",
     },
   ],
 
   async createSdk(ctx) {
-    const token = await ctx.getSecretMaterial(DISCORD_BOT_TOKEN_SECRET_NAME);
-    // `makeRequest: fetch` per @discordjs/rest docs — the default transport is
-    // undici, which workerd does not ship.
+    // The "token" is a getSecret placeholder, substituted by ctx.fetch (the
+    // terminal egress pipe) on the way out — the REST client never holds
+    // material. makeRequest override per @discordjs/rest docs (the default
+    // transport is undici, which workerd does not ship).
     const rest = new REST({
       version: "10",
-      makeRequest: fetch as unknown as RESTOptions["makeRequest"],
-    }).setToken(token);
+      makeRequest: ctx.fetch as unknown as RESTOptions["makeRequest"],
+    }).setToken(ctx.secretRef(DISCORD_BOT_TOKEN_SECRET_NAME));
     return { api: new API(rest), rest };
   },
 };

@@ -53,11 +53,20 @@ export type IntegrationSdkContext = {
   /** Which ACCOUNT of the integration this SDK speaks for ("default" for the
    * unnamed common case) — the instance dimension. */
   account: string;
-  /** Audited material dereference via the Secret DO (platform-trusted only —
-   * this runs inside the integration's own Durable Object, never in project
-   * worker isolates). Takes the PROVIDED-SECRET NAME ("access-token"); the
-   * host composes the account-scoped slug ({slug}/{account}/{name}). */
-  getSecretMaterial(name: string): Promise<string>;
+  /**
+   * A PLACEHOLDER reference to a provided Secret — pretend it IS the secret.
+   * Hand it to the SDK as the token (`new Octokit({ auth:
+   * ctx.secretRef("access-token") })`); it substitutes (with inline
+   * derivation) at the egress hop `ctx.fetch` routes through. No SDK ever
+   * holds material — exactly the userspace convention, applied to
+   * first-party providers.
+   */
+  secretRef(name: string): string;
+  /** The substituting egress fetch — bind it into the SDK (octokit's
+   * `request.fetch`, discord REST's `makeRequest`). It IS the terminal
+   * egress pipe, so first-party SDK traffic leaves through the same door as
+   * project code's bare fetch(). */
+  fetch: typeof fetch;
 };
 
 export type ProvidedSecretSpec = {
@@ -65,9 +74,6 @@ export type ProvidedSecretSpec = {
    * `/secrets/{integration}/{account}/{name}` in the connected project. */
   name: string;
   description: string;
-  /** First-party deployment-level fallback (Doppler) so dev environments work
-   * before a per-project connect flow has run. */
-  firstPartyEnvFallback?: string;
 };
 
 /** The account-scoped Secret slug convention. */

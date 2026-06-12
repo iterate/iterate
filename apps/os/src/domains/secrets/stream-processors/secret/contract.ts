@@ -84,9 +84,19 @@ export const SecretProcessorContract = defineProcessorContract({
         source: z.record(z.string(), z.unknown()).optional(),
       }),
     },
+    "events.iterate.com/secret/derive-requested": {
+      description:
+        "Someone needs fresh material: a use that found the current version stale (inline refresh), or the proactive expiry alarm. The secret PROCESSOR reacts by running the journaled derivation and appending secret/rotated. Idempotency-keyed by the stale version, so concurrent stale uses collapse into ONE derivation run.",
+      payloadSchema: z.object({
+        slug: z.string(),
+        /** The material version observed stale — the dedup key. */
+        staleVersion: z.number(),
+        reason: z.string(),
+      }),
+    },
     "events.iterate.com/secret/rotated": {
       description:
-        "The Secret DO replaced its own material — a derivation run (inline on a stale use, or the proactive alarm). Appended by the DO itself.",
+        "The secret processor replaced the material — the reaction to a derive-requested event.",
       payloadSchema: z.object({
         slug: z.string(),
         encryptedMaterial: EncryptedMaterial,
@@ -112,11 +122,12 @@ export const SecretProcessorContract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/secret/set",
+    "events.iterate.com/secret/derive-requested",
     "events.iterate.com/secret/rotated",
     "events.iterate.com/secret/used",
     "events.iterate.com/secret/deleted",
   ],
-  emits: ["events.iterate.com/secret/rotated", "events.iterate.com/secret/used"],
+  emits: ["events.iterate.com/secret/rotated"],
 });
 
 export type SecretProcessorState = z.infer<typeof SecretProcessorContract.stateSchema>;

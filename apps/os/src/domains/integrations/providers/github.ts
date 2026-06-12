@@ -48,13 +48,18 @@ export const githubIntegration: IntegrationDefinition = {
       name: GITHUB_ACCESS_TOKEN_SECRET_NAME,
       description:
         "GitHub token used by itx.integrations.github (app installation token or PAT). " +
-        "Installation tokens expire hourly; the Secret DO's refresh loop owns rotation.",
-      firstPartyEnvFallback: "APP_CONFIG_GITHUB_TOKEN",
+        "Installation tokens expire hourly; the secret's derivation loop owns rotation.",
     },
   ],
 
   async createSdk(ctx) {
-    const auth = await ctx.getSecretMaterial(GITHUB_ACCESS_TOKEN_SECRET_NAME);
-    return { octokit: new Octokit({ auth }) };
+    // The "token" is a getSecret placeholder; ctx.fetch (the terminal egress
+    // pipe) substitutes it on the way out. Octokit never holds material.
+    return {
+      octokit: new Octokit({
+        auth: ctx.secretRef(GITHUB_ACCESS_TOKEN_SECRET_NAME),
+        request: { fetch: ctx.fetch },
+      }),
+    };
   },
 };

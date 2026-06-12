@@ -38,15 +38,21 @@ import {
   waitForProcessorCatchUp,
 } from "~/domains/streams/stream-processor-do-helpers.ts";
 import { replayPathCall, type PathCall } from "~/itx/path-proxy.ts";
-import { integrationAccountStreamPath } from "~/domains/integrations/integration-events.ts";
-import { getIntegrationDurableObjectName } from "~/domains/integrations/integration-naming.ts";
+import {
+  integrationAccountStreamPath,
+  integrationIngressStreamPath,
+} from "~/domains/integrations/integration-events.ts";
+import {
+  getIntegrationDurableObjectName,
+  getIntegrationIngressDurableObjectName,
+} from "~/domains/integrations/integration-naming.ts";
 import { getIntegration } from "~/domains/integrations/registry.ts";
 import { providedSecretSlug } from "~/domains/integrations/definition.ts";
 import {
   IntegrationProcessor,
   IntegrationProcessorContract,
 } from "~/domains/integrations/stream-processors/integration/implementation.ts";
-import { revealJournaledSecretForPlatformUse } from "~/domains/secrets/secret-streams.ts";
+import { ensureSecretStub } from "~/domains/secrets/durable-objects/secret-durable-object.ts";
 
 export { getIntegrationDurableObjectName };
 
@@ -70,7 +76,13 @@ export async function ensureIntegrationStub(input: IntegrationDurableObjectStruc
 
 type IntegrationEnv = {
   DO_CATALOG: D1Database;
+  GLOBAL_STREAM_NAMESPACE: string;
   INTEGRATION: DurableObjectNamespace<IntegrationDurableObject>;
+  // The ingress-router namespace is dialed by NAME here (not by module
+  // import) to avoid a module cycle: the ingress DO imports this one.
+  INTEGRATION_INGRESS: DurableObjectNamespace<
+    import("./integration-ingress-durable-object.ts").IntegrationIngressDurableObject
+  >;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
@@ -93,6 +105,38 @@ export class IntegrationDurableObject extends IntegrationLifecycleBase<Integrati
   integration = this.host.add(IntegrationProcessorContract.slug, (deps) => {
     return new IntegrationProcessor({
       ...deps,
+      // The two cross-boundary capabilities the processor can't reach
+      // itself; the connect choreography is processor code.
+      claimRoute: async ({ routingKey }) => {
+        const params = await this.ensureParams();
+        const ingressStream = await getInitializedStreamStub({
+          durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+          namespace: this.env.GLOBAL_STREAM_NAMESPACE,
+          path: integrationIngressStreamPath(params.integration),
+        });
+        await ingressStream.append({
+          type: "events.iterate.com/integration/route-registered",
+          idempotencyKey: `integration-route:${params.integration}:${routingKey}:${params.projectId}:${params.account}`,
+          payload: {
+            integration: params.integration,
+            routingKey,
+            projectId: params.projectId,
+            account: params.account,
+          },
+        });
+        // Wake the router so the claim folds before the next provider event.
+        const ingressName = getIntegrationIngressDurableObjectName({
+          integration: params.integration,
+        });
+        await this.env.INTEGRATION_INGRESS.getByName(ingressName).initialize({
+          name: ingressName,
+        });
+      },
+      ensureSecretHost: async ({ slug }) => {
+        const params = await this.ensureParams();
+        const stub = await ensureSecretStub({ projectId: params.projectId, slug });
+        await stub.ensureReady();
+      },
       // The fan-out seam stays open in the spike: routed events fold into
       // state and sit on the stream for any subscriber. The Slack thread
       // router becomes an onIntegrationEvent here when slack migrates.
@@ -123,45 +167,47 @@ export class IntegrationDurableObject extends IntegrationLifecycleBase<Integrati
 
   /**
    * The itx surface: itx.integrations.{slug}.<sdk path>(...) terminates here.
-   * The SDK is built fresh per call (it's a thin authenticated client), with
-   * material dereferenced through the Secret DOs — failures carry the
-   * connection state this DO's own fold knows.
+   * The SDK is built fresh per call (a thin client) and holds NO material:
+   * its token is a getSecret placeholder and its fetch is the terminal
+   * egress pipe, where substitution (with inline derivation) happens — the
+   * same convention userspace SDKs use.
    */
   async call(input: PathCall): Promise<unknown> {
     const params = await this.ensureParams();
     const definition = getIntegration(params.integration);
-    const secretSpecsByName = Object.fromEntries(
-      definition.providedSecrets.map((spec) => [spec.name, spec]),
-    );
     const sdk = await definition.createSdk({
       projectId: params.projectId,
       account: params.account,
-      getSecretMaterial: async (name) => {
-        const spec = secretSpecsByName[name];
-        const slug = providedSecretSlug({
+      secretRef: (name) =>
+        `getSecret({ key: "${providedSecretSlug({
           integration: definition.slug,
           account: params.account,
           name,
-        });
-        try {
-          return await revealJournaledSecretForPlatformUse({
-            projectId: params.projectId,
-            slug,
-            usedBy: `integration:${definition.slug}:${params.account}`,
-            fallbackEnvVar: spec?.firstPartyEnvFallback,
-          });
-        } catch (error) {
-          const { state } = await this.integration.snapshot();
-          throw new Error(
-            `Integration "${definition.slug}" (account "${params.account}") could not get its ` +
-              `"${slug}" Secret (connection: ${state.connection.status}). Connect the account` +
-              (spec?.firstPartyEnvFallback ? ` or set ${spec.firstPartyEnvFallback}.` : "."),
-            { cause: error },
-          );
-        }
-      },
+        })}" })`,
+      fetch: this.egressFetch(params),
     });
     return await replayPathCall(sdk, input);
+  }
+
+  /** The SDKs' outbound door: the SAME terminal egress pipe project code's
+   * bare fetch() leaves through, dialed as a loopback. Placeholders
+   * substitute there; this DO never holds material. */
+  private egressFetch(params: IntegrationDurableObjectStructuredName): typeof fetch {
+    const exports = this.ctx.exports as unknown as {
+      EgressPipe(options: { props: Record<string, unknown> }): {
+        call(input: { path: string[]; args: unknown[] }): Promise<Response>;
+      };
+    };
+    return (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request && init == null ? input : new Request(input, init);
+      const pipe = exports.EgressPipe({
+        props: {
+          projectId: params.projectId,
+          capabilityPath: `integrations.${params.integration}/${params.account}`,
+        },
+      });
+      return await pipe.call({ path: [], args: [request] });
+    }) as typeof fetch;
   }
 
   async ensureReady() {

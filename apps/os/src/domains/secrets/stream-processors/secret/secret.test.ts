@@ -127,23 +127,130 @@ describe("SecretProcessor", () => {
   });
 });
 
+describe("SecretProcessor derivation (the logic lives in the processor)", () => {
+  it("reacts to derive-requested by running the exchange and appending rotated", async () => {
+    const exchanges: string[] = [];
+    const { appended, processor } = createProcessor({
+      encryptMaterial: async (material) => await encrypted_(material),
+      resolveSecretKey: async (key) => `material-of-${key}`,
+      fetchImpl: (async (_url: string, init?: RequestInit) => {
+        exchanges.push(String(init?.body));
+        return Response.json({ data: { generateSession: { accessToken: "session-1" } } });
+      }) as typeof fetch,
+    });
+
+    await processor.ingest({
+      events: [
+        committedEvent({
+          offset: 1,
+          type: "events.iterate.com/secret/set",
+          payload: {
+            slug: "waitrose/default/access-token",
+            derivation: {
+              kind: "http-exchange",
+              request: {
+                url: "https://www.waitrose.com/api/graphql-prod/graph/live",
+                method: "POST",
+                body: 'u=getSecret({ key: "waitrose/default/username" })',
+              },
+              extract: {
+                materialPointer: "/data/generateSession/accessToken",
+                ttlSeconds: 300,
+              },
+              refreshLeewaySeconds: 30,
+            },
+          },
+        }),
+        committedEvent({
+          offset: 2,
+          type: "events.iterate.com/secret/derive-requested",
+          payload: {
+            slug: "waitrose/default/access-token",
+            staleVersion: 0,
+            reason: "inline-refresh",
+          },
+        }),
+      ],
+      streamMaxOffset: 2,
+    });
+
+    // Source secrets resolved through the host dep; exchange ran once.
+    expect(exchanges).toEqual(["u=material-of-waitrose/default/username"]);
+    expect(appended).toHaveLength(1);
+    const rotated = appended[0]!.event as {
+      type: string;
+      idempotencyKey: string;
+      payload: { slug: string; expiresAt?: string };
+    };
+    expect(rotated.type).toBe("events.iterate.com/secret/rotated");
+    expect(rotated.idempotencyKey).toBe("secret/derive@2");
+    expect(rotated.payload.slug).toBe("waitrose/default/access-token");
+    expect(rotated.payload.expiresAt).toBeDefined();
+  });
+
+  it("skips requests the fold already satisfied (the concurrent-staleness gate)", async () => {
+    const { appended, processor } = createProcessor({
+      encryptMaterial: async (material) => await encrypted_(material),
+      resolveSecretKey: async () => "unused",
+      fetchImpl: (async () => {
+        throw new Error("must not derive");
+      }) as typeof fetch,
+    });
+
+    await processor.ingest({
+      events: [
+        committedEvent({
+          offset: 1,
+          type: "events.iterate.com/secret/set",
+          payload: {
+            slug: "s",
+            encryptedMaterial: await encrypted_("fresh"),
+            derivation: {
+              kind: "http-exchange",
+              request: { url: "https://example.com", method: "POST" },
+              extract: { materialPointer: "/t" },
+              refreshLeewaySeconds: 30,
+            },
+          },
+        }),
+        // A request raised against version 0 — but version is already 1.
+        committedEvent({
+          offset: 2,
+          type: "events.iterate.com/secret/derive-requested",
+          payload: { slug: "s", staleVersion: 0, reason: "inline-refresh" },
+        }),
+      ],
+      streamMaxOffset: 2,
+    });
+
+    expect(appended).toEqual([]);
+  });
+});
+
 async function encrypted_(material: string): Promise<EncryptedMaterial> {
   const key = await importSecretsKey(generateSecretsKeyBase64());
   return await encryptSecretMaterial({ key, material });
 }
 
 function createProcessor(deps: SecretProcessorDeps = {}) {
+  const appended: Array<{ streamPath?: string; event: unknown }> = [];
   const processor = new SecretProcessor({
     iterateContext: {
       stream: {
-        append: async ({ event }) => committedEvent({ ...event, offset: 0 }),
-        appendBatch: async ({ events }) =>
-          events.map((event) => committedEvent({ ...event, offset: 0 })),
+        append: async ({ event, streamPath }) => {
+          appended.push({ event, streamPath });
+          return committedEvent({ ...event, offset: appended.length });
+        },
+        appendBatch: async ({ events, streamPath }) =>
+          events.map((event) => {
+            appended.push({ event, streamPath });
+            return committedEvent({ ...event, offset: appended.length });
+          }),
       },
     },
     ...deps,
   });
-  return { processor };
+  return { appended, processor };
 }
 
 async function flushBackgroundWork() {

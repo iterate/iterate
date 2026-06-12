@@ -74,9 +74,11 @@ so `itx.integrations.github.**` terminates in github-in-this-project's own DO,
 where its three faces meet:
 
 - its **journal**: connection lifecycle + every routed provider event;
-- its **SDK**: `call({ path, args })` builds the provider SDK next to the
-  fold, tokens via the Secret DOs — and failures carry the connection state
-  the fold knows ("connection: disconnected — connect the integration");
+- its **SDK**: `call({ path, args })` builds the provider SDK holding NO
+  material — its token is a `getSecret({ key })` placeholder and its fetch is
+  the terminal egress pipe (dialed as a loopback), where substitution with
+  inline derivation happens. First-party SDKs authenticate exactly like
+  userspace ones;
 - its **fan-out seam**: provider-specific reaction to routed events (the
   Slack thread-router pattern) plugs into the hosted processor.
 
@@ -94,6 +96,13 @@ DOs). The split of identities:
 | one credential                       | `SecretDurableObject` + `/secrets/{slug}`                     |
 | the deployment-wide routing table    | `IntegrationIngressDurableObject` + the global capture stream |
 | a userspace integration              | the project worker (the project's code-as-domain-object)      |
+
+The deeper rule the cleanup converged on: **the processor owns the logic,
+the DO is its host.** Requests are events (`connect-requested`,
+`derive-requested`); reactions live in `processEvent` (idempotency-keyed from
+the source event, fold-gated, replay-safe behind the side-effect anchor); DO
+RPC verbs only append facts and read folds, plus supply the deps only a host
+has (crypto keys, cross-namespace streams, sibling dials, alarms).
 
 Known trade-off: SDK calls serialize through the per-account DO. For a hot
 integration the SDK surface can move back to a stateless loopback that
@@ -162,10 +171,13 @@ integration that provided it).
   `fetchWithSecret({ request, usedBy })` substitutes `{{secret}}` in
   url/headers/body and performs the fetch inside the DO, returning a
   serializable response snapshot.
-- **The audited trapdoor.** Some platform-trusted consumers need bytes in hand
-  — Discord's identify frame, SDK constructors in first-party loopbacks.
-  `revealForPlatformUse({ usedBy })` exists for exactly that, and both paths
-  append `secret/used` audit events (who, which host, when — never material).
+- **The trapdoor is narrow.** SDKs do NOT need material in hand: they take the
+  placeholder as their token (octokit's `auth`, discord REST's `setToken`)
+  and a substituting fetch — pretend the placeholder IS the secret.
+  `revealForPlatformUse({ usedBy })` remains for exactly two callers inside
+  the secret/egress trust zone: the terminal pipe's own resolver, and the
+  Discord gateway's identify frame (a websocket message has no fetch hop to
+  substitute at). Both append `secret/used` audit events.
 - **Refresh is the DO's job** — via derivation (next section): a secret
   carrying a derivation re-derives inline whenever a use finds it stale, and
   proactively via an alarm at expiry-minus-leeway, each run appended as
@@ -193,15 +205,20 @@ waitrose/username + waitrose/password, ttlSeconds: 300)`.
   `sensitivity: "plain"` (still enveloped on the stream; `describe()` shows
   the value).
 
-Freshness is the Secret DO's job, twice over: **inline** — every dereference
-(fetch-with-substitution, egress placeholder resolution, platform reveal) goes
-through `ensureFreshMaterial`, so a stale token re-derives on the very request
-that found it stale — and **proactively** via the alarm at expiry-minus-leeway.
-Every run appends `secret/rotated`; every source dereference appends
-`secret/used` on the source's own stream. And because a derivation's
-`getSecret({ key })` references resolve through the SOURCE secrets' own DOs,
-**derivations chain**: a token derived from a token derived from a password,
-lazily, hop by hop, fully audited.
+Derivation is STREAM-PROCESSOR logic, not DO code: needing fresh material is
+itself an event. A stale use (or the expiry alarm) appends
+`secret/derive-requested` — idempotency-keyed by the stale version, so N
+concurrent stale uses collapse into ONE request — and the secret processor
+reacts: it checks the fold (already rotated past that version? request
+satisfied, do nothing), runs the http-exchange, and appends `secret/rotated`.
+The DO's verbs only append facts and read the fold; the DO supplies the two
+capabilities only a host has (the encryption key, sibling-secret dials) as
+processor deps. Every run is on the journal as a requested → rotated pair;
+every source dereference appends `secret/used` on the source's own stream.
+And because a derivation's `getSecret({ key })` references resolve through
+the SOURCE secrets' own domain objects, **derivations chain**: a token
+derived from a token derived from a password, lazily, hop by hop, fully
+audited.
 
 The placeholder language is the same one project egress speaks — derivation IS
 egress substitution, one hop further down, performed by the secret system on
@@ -272,20 +289,22 @@ userspace integration is structurally a customer-owned integration whose
 definition lives in the project repo instead of the platform registry. The
 promotion path (userspace → registry) is "move the provider file".
 
-## Connect: the symmetric heart
+## Connect: one event in, the choreography out
 
-`connect.ts:connectIntegration` is the whole choreography, for every provider
-and both ownership modes — three appends:
+Connecting an account is ONE append: `integration/connect-requested` on the
+account's stream, carrying everything (encrypted credentials, routing keys,
+identity). The integration PROCESSOR reacts with the whole choreography:
 
-1. each provided credential → `secret/set` on `/secrets/{slug}`
-2. the connection → `integration/connected` on `/integrations/{slug}`
-3. each routing-key claim → `integration/route-registered` on the global
-   capture stream
+1. each credential → `secret/set` cross-posted to `/secrets/{slug}/{account}/{name}`
+2. the account → `integration/connected` on its own stream
+3. each routing-key claim → the global capture stream (host dep)
 
-A provider OAuth callback should reduce to "exchange the code, then call
-`connectIntegration`". The spike exposes it directly via oRPC
-(`project.integrations.connect`) so you can connect GitHub with a PAT or
-Discord with a bot token from `pnpm cli rpc` and watch events flow.
+Every reaction append is idempotency-keyed from the source event, so replays
+dedupe instead of double-connecting. `connect.ts` is just the edge: encrypt
+the material, append the request, wait for the fold. A provider OAuth
+callback reduces to "exchange the code, append connect-requested". The spike
+exposes it via oRPC (`project.integrations.connect`) so you can connect
+GitHub with a PAT from `pnpm cli rpc` and watch events flow.
 
 ## First-party vs customer-owned
 

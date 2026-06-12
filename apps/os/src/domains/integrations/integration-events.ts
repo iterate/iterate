@@ -5,6 +5,12 @@
 
 import { z } from "zod";
 import { StreamPath } from "@iterate-com/shared/streams/types";
+import { EncryptedMaterial } from "~/domains/secrets/secret-crypto.ts";
+import { SecretDerivation } from "~/domains/secrets/secret-derivation.ts";
+import {
+  SecretSensitivity,
+  SecretTier,
+} from "~/domains/secrets/stream-processors/secret/contract.ts";
 
 /**
  * An integration ACCOUNT is the instance of an integration: "google" is the
@@ -57,6 +63,34 @@ export const IntegrationRouteRegisteredPayload = z.object({
 export const IntegrationRouteRemovedPayload = z.object({
   integration: z.string(),
   routingKey: z.string(),
+});
+
+/** The ONE connect fact: everything an account connection needs, in a single
+ * event on the account's own stream. The integration PROCESSOR reacts with
+ * the whole choreography (secret/set appends, the connected fact, routing-key
+ * claims) — provider OAuth callbacks, CLI pastes, and customer app
+ * registrations all reduce to appending this. Credential material rides
+ * encrypted, like every secret-bearing payload. */
+export const IntegrationConnectRequestedPayload = z.object({
+  integration: z.string(),
+  account: z.string(),
+  projectId: z.string(),
+  ownership: z.enum(["first-party", "customer"]),
+  externalId: z.string(),
+  displayName: z.string().optional(),
+  routingKeys: z.array(z.string()),
+  secrets: z.array(
+    z.object({
+      /** Provided-secret NAME; the slug composes as {slug}/{account}/{name}. */
+      name: z.string(),
+      encryptedMaterial: EncryptedMaterial.optional(),
+      metadata: z.record(z.string(), z.unknown()).optional(),
+      tier: SecretTier.optional(),
+      sensitivity: SecretSensitivity.optional(),
+      derivation: SecretDerivation.optional(),
+      expiresAt: z.string().optional(),
+    }),
+  ),
 });
 
 export const IntegrationConnectedPayload = z.object({
