@@ -58,6 +58,7 @@ import {
 import { EventsStreamLayoutMessageInput } from "@iterate-com/ui/components/events/stream-layout";
 import { StreamViewProcessorContract } from "@iterate-com/ui/components/events/stream-view-processor/contract";
 import { parse as parseYaml } from "yaml";
+import { projectStreamRpcPath } from "~/lib/stream-links.ts";
 
 type ProjectStreamMessageComposer = {
   placeholder?: string;
@@ -770,12 +771,4 @@ function Centered({ children }: { children: ReactNode }) {
       {children}
     </div>
   );
-}
-
-function projectStreamRpcPath(projectSlugOrId: string, streamPath: string) {
-  const normalized =
-    streamPath === "" ? "/" : streamPath.startsWith("/") ? streamPath : `/${streamPath}`;
-  return normalized === "/"
-    ? `/api/project-streams/${encodeURIComponent(projectSlugOrId)}`
-    : `/api/project-streams/${encodeURIComponent(projectSlugOrId)}/${encodeURIComponent(normalized)}`;
 }
