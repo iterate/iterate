@@ -17,13 +17,11 @@ import { StreamPath } from "@iterate-com/shared/streams/types";
 import { EncryptedMaterial } from "~/domains/secrets/secret-crypto.ts";
 import { SecretDerivation } from "~/domains/secrets/secret-derivation.ts";
 
-export const SECRETS_STREAM_PREFIX = "/secrets";
-
 /** A Secret's stream path inside its project's namespace. Slugs may be
  * segmented ("github/access-token") so an integration's provided secrets group
  * under `/secrets/{integration}/...`. */
 export function secretStreamPath(slug: string): StreamPath {
-  return StreamPath.parse(`${SECRETS_STREAM_PREFIX}/${slug}`);
+  return StreamPath.parse(`/secrets/${slug}`);
 }
 
 /**

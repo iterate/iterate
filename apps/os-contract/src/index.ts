@@ -488,6 +488,8 @@ export const osContract = oc.router({
         .input(
           ProjectScopedInput.extend({
             integration: z.string().trim().min(1),
+            /** The instance: a project can connect MANY accounts of one integration. */
+            account: z.string().trim().min(1).default("default"),
             ownership: z.enum(["first-party", "customer"]).default("first-party"),
             externalId: z.string().trim().min(1),
             displayName: z.string().optional(),
@@ -495,7 +497,7 @@ export const osContract = oc.router({
             secrets: z
               .array(
                 z.object({
-                  slug: z.string().trim().min(1),
+                  name: z.string().trim().min(1),
                   material: z.string().min(1),
                   expiresAt: z.string().optional(),
                 }),
@@ -503,15 +505,20 @@ export const osContract = oc.router({
               .default([]),
           }),
         )
-        .output(z.object({ integration: z.string(), projectId: z.string() })),
+        .output(z.object({ integration: z.string(), account: z.string(), projectId: z.string() })),
       getIntegrationState: oc
         .route({
           method: "GET",
           path: "/projects/{projectSlugOrId}/integrations/{integration}/state",
-          description: "Reduced state of a registry-driven integration's project stream",
+          description: "Reduced state of one integration account's project stream",
           tags: ["/project", "/integrations"],
         })
-        .input(ProjectScopedInput.extend({ integration: z.string().trim().min(1) }))
+        .input(
+          ProjectScopedInput.extend({
+            integration: z.string().trim().min(1),
+            account: z.string().trim().min(1).default("default"),
+          }),
+        )
         .output(z.unknown()),
       setJournaledSecret: oc
         .route({
@@ -553,6 +560,7 @@ export const osContract = oc.router({
         .input(
           ProjectScopedInput.extend({
             ownership: z.enum(["first-party", "customer"]).default("first-party"),
+            account: z.string().trim().min(1).default("default"),
           }),
         )
         .output(z.unknown()),

@@ -117,12 +117,13 @@ describe("sdk factories (itx.integrations.{slug}.**)", () => {
     const requestedSecrets: string[] = [];
     const sdk = await githubIntegration.createSdk({
       projectId: "proj-a",
-      getSecretMaterial: async (slug) => {
-        requestedSecrets.push(slug);
+      account: "default",
+      getSecretMaterial: async (name) => {
+        requestedSecrets.push(name);
         return "ghp_test";
       },
     });
-    expect(requestedSecrets).toEqual(["github/access-token"]);
+    expect(requestedSecrets).toEqual(["access-token"]);
     // The exact path itx.integrations.github.octokit.rest.issues.create takes.
     const create = (sdk as { octokit: { rest: { issues: { create: unknown } } } }).octokit.rest
       .issues.create;
@@ -133,12 +134,13 @@ describe("sdk factories (itx.integrations.{slug}.**)", () => {
     const requestedSecrets: string[] = [];
     const sdk = (await discordIntegration.createSdk({
       projectId: "proj-a",
-      getSecretMaterial: async (slug) => {
-        requestedSecrets.push(slug);
+      account: "work-server",
+      getSecretMaterial: async (name) => {
+        requestedSecrets.push(name);
         return "bot-token";
       },
     })) as { api: { channels: { createMessage: unknown } }; rest: unknown };
-    expect(requestedSecrets).toEqual(["discord/bot-token"]);
+    expect(requestedSecrets).toEqual(["bot-token"]);
     expect(typeof sdk.api.channels.createMessage).toBe("function");
   });
 

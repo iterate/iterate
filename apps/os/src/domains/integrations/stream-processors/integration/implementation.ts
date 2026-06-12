@@ -33,6 +33,7 @@ export class IntegrationProcessor extends StreamProcessor<
         return {
           ...state,
           integration: event.payload.integration,
+          account: event.payload.account,
           connection: {
             status: "connected",
             ownership: event.payload.ownership,

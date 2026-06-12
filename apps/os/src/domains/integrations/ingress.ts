@@ -23,10 +23,7 @@ import {
   integrationIngressStreamPath,
   type IntegrationEventReceivedPayload,
 } from "~/domains/integrations/integration-events.ts";
-import {
-  getIntegrationIngressDurableObjectName,
-  getIntegrationIngressStub,
-} from "~/domains/integrations/durable-objects/integration-ingress-durable-object.ts";
+import { ensureIntegrationIngressStub } from "~/domains/integrations/durable-objects/integration-ingress-durable-object.ts";
 import type { IntegrationTransport } from "~/domains/integrations/definition.ts";
 
 type IngressEnv = {
@@ -65,10 +62,7 @@ export async function captureIntegrationEvent(input: {
   });
 
   const wakeRouter = (async () => {
-    const ingress = getIntegrationIngressStub(input.integration);
-    await ingress.initialize({
-      name: getIntegrationIngressDurableObjectName({ integration: input.integration }),
-    });
+    const ingress = await ensureIntegrationIngressStub(input.integration);
     await ingress.ensureReady();
   })().catch((error) => {
     console.error(`[${input.integration}-ingress] router catch-up failed`, error);

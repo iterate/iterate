@@ -24,13 +24,14 @@ import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { GatewayIntentBits } from "discord-api-types/v10";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import type { StreamDurableObject } from "~/domains/streams/stream-runtime.ts";
+import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { getDiscordGatewayDurableObjectName } from "~/domains/integrations/integration-naming.ts";
 import { captureIntegrationEvent } from "~/domains/integrations/ingress.ts";
 import {
-  DISCORD_BOT_TOKEN_SECRET_SLUG,
+  DISCORD_BOT_TOKEN_SECRET_NAME,
   discordGatewayRoutingKey,
 } from "~/domains/integrations/providers/discord.ts";
+import { providedSecretSlug } from "~/domains/integrations/definition.ts";
 import { revealJournaledSecretForPlatformUse } from "~/domains/secrets/secret-streams.ts";
 
 export { getDiscordGatewayDurableObjectName };
@@ -42,19 +43,19 @@ export type DiscordGatewayDurableObjectStructuredName = z.infer<
   typeof DiscordGatewayDurableObjectStructuredName
 >;
 
-/** Mint a gateway DO stub from a trusted domain file (see lint rule). */
-export function getDiscordGatewayStub(scope: string) {
-  return (env as unknown as DiscordGatewayEnv).DISCORD_GATEWAY.getByName(
-    getDiscordGatewayDurableObjectName({ scope }),
-  );
+/** Mint an initialized gateway DO stub from a trusted domain file (see lint rule). */
+export async function ensureDiscordGatewayStub(scope: string) {
+  return await getInitializedDoStub({
+    allowCreate: true,
+    name: { scope },
+    namespace: (env as unknown as DiscordGatewayEnv).DISCORD_GATEWAY,
+  });
 }
 
 type DiscordGatewayEnv = {
   APP_CONFIG_DISCORD_BOT_TOKEN?: string;
   DISCORD_GATEWAY: DurableObjectNamespace<DiscordGatewayDurableObject>;
   DO_CATALOG: D1Database;
-  GLOBAL_STREAM_NAMESPACE: string;
-  STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 
 const DiscordGatewayLifecycleBase = createIterateDurableObjectBase<
@@ -210,11 +211,17 @@ export class DiscordGatewayDurableObject extends DiscordGatewayLifecycleBase<Dis
 
   private async botToken(params: DiscordGatewayDurableObjectStructuredName) {
     if (params.scope.startsWith("project:")) {
-      // Customer-owned bot: the token is that project's Secret — the gateway
-      // is a secret USER, dereferencing via the audited trapdoor.
+      // Customer-owned bot: scope is "project:{projectId}:{account}" and the
+      // token is that account's Secret — the gateway is a secret USER,
+      // dereferencing via the audited trapdoor.
+      const [, projectId, account = "default"] = params.scope.split(":");
       return await revealJournaledSecretForPlatformUse({
-        projectId: params.scope.slice("project:".length),
-        slug: DISCORD_BOT_TOKEN_SECRET_SLUG,
+        projectId: projectId!,
+        slug: providedSecretSlug({
+          integration: "discord",
+          account,
+          name: DISCORD_BOT_TOKEN_SECRET_NAME,
+        }),
         usedBy: "discord-gateway",
       });
     }

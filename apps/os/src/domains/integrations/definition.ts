@@ -50,20 +50,34 @@ export type IntegrationIngressContext = {
 
 export type IntegrationSdkContext = {
   projectId: string;
+  /** Which ACCOUNT of the integration this SDK speaks for ("default" for the
+   * unnamed common case) — the instance dimension. */
+  account: string;
   /** Audited material dereference via the Secret DO (platform-trusted only —
-   * this runs inside the IntegrationsCapability loopback, never in project
-   * worker isolates). */
-  getSecretMaterial(slug: string): Promise<string>;
+   * this runs inside the integration's own Durable Object, never in project
+   * worker isolates). Takes the PROVIDED-SECRET NAME ("access-token"); the
+   * host composes the account-scoped slug ({slug}/{account}/{name}). */
+  getSecretMaterial(name: string): Promise<string>;
 };
 
 export type ProvidedSecretSpec = {
-  /** Secret slug → stream `/secrets/{slug}` in the connected project. */
-  slug: string;
+  /** Name within the account: the Secret lives at
+   * `/secrets/{integration}/{account}/{name}` in the connected project. */
+  name: string;
   description: string;
   /** First-party deployment-level fallback (Doppler) so dev environments work
    * before a per-project connect flow has run. */
   firstPartyEnvFallback?: string;
 };
+
+/** The account-scoped Secret slug convention. */
+export function providedSecretSlug(input: {
+  integration: string;
+  account: string;
+  name: string;
+}): string {
+  return `${input.integration}/${input.account}/${input.name}`;
+}
 
 export type IntegrationDefinition = {
   slug: string;

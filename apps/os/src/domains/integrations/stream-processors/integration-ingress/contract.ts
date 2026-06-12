@@ -20,11 +20,15 @@ export const IntegrationIngressProcessorContract = defineProcessorContract({
   slug: "integration-ingress",
   version: "0.1.0",
   description:
-    "Routes captured provider events from the global ingress stream to the owning project's /integrations/{slug} stream, by routing key.",
+    "Routes captured provider events from the global ingress stream to the claiming account's /integrations/{slug}/{account} stream, by routing key.",
   stateSchema: z.object({
     integration: z.string().optional(),
-    /** routingKey (e.g. "installation:123", "guild:456") → projectId. */
-    routes: z.record(z.string(), z.string()).default({}),
+    /** routingKey (e.g. "installation:123", "guild:456") → the claiming
+     * integration ACCOUNT. One key, one owner — but one project can hold
+     * many accounts, each claiming its own keys. */
+    routes: z
+      .record(z.string(), z.object({ projectId: z.string(), account: z.string() }))
+      .default({}),
     dropped: z.number().default(0),
   }),
   initialState: {},

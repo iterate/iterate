@@ -6,7 +6,7 @@ import {
 } from "./implementation.ts";
 
 describe("IntegrationIngressProcessor", () => {
-  it("forwards captured events to the project that claimed the routing key", async () => {
+  it("forwards captured events to the ACCOUNT that claimed the routing key", async () => {
     const { forwarded, processor } = createProcessor();
 
     await processor.ingest({
@@ -18,6 +18,7 @@ describe("IntegrationIngressProcessor", () => {
             integration: "github",
             routingKey: "installation:1234",
             projectId: "proj-a",
+            account: "default",
           },
         }),
         committedEvent({
@@ -35,10 +36,13 @@ describe("IntegrationIngressProcessor", () => {
     });
     await flushBackgroundWork();
 
-    expect(processor.state.routes).toEqual({ "installation:1234": "proj-a" });
+    expect(processor.state.routes).toEqual({
+      "installation:1234": { projectId: "proj-a", account: "default" },
+    });
     expect(forwarded).toEqual([
       {
         projectId: "proj-a",
+        account: "default",
         event: {
           type: "events.iterate.com/integration/event-received",
           idempotencyKey: "integration-ingress/forward@2",
@@ -61,7 +65,12 @@ describe("IntegrationIngressProcessor", () => {
         committedEvent({
           offset: 1,
           type: "events.iterate.com/integration/route-registered",
-          payload: { integration: "discord", routingKey: "guild:42", projectId: "proj-b" },
+          payload: {
+            integration: "discord",
+            routingKey: "guild:42",
+            projectId: "proj-b",
+            account: "bot-two",
+          },
         }),
         committedEvent({
           offset: 2,
@@ -78,7 +87,9 @@ describe("IntegrationIngressProcessor", () => {
     });
     await flushBackgroundWork();
 
-    expect(forwarded.map((entry) => entry.projectId)).toEqual(["proj-b"]);
+    expect(forwarded.map((entry) => [entry.projectId, entry.account])).toEqual([
+      ["proj-b", "bot-two"],
+    ]);
   });
 
   it("drops events whose routing key nobody claimed, and counts them", async () => {
@@ -113,7 +124,12 @@ describe("IntegrationIngressProcessor", () => {
         committedEvent({
           offset: 1,
           type: "events.iterate.com/integration/route-registered",
-          payload: { integration: "github", routingKey: "installation:1", projectId: "proj-a" },
+          payload: {
+            integration: "github",
+            routingKey: "installation:1",
+            projectId: "proj-a",
+            account: "default",
+          },
         }),
         committedEvent({
           offset: 2,
@@ -141,7 +157,7 @@ describe("IntegrationIngressProcessor", () => {
 });
 
 function createProcessor(deps: Partial<IntegrationIngressProcessorDeps> = {}) {
-  const forwarded: Array<{ projectId: string; event: StreamEventInput }> = [];
+  const forwarded: Array<{ account: string; projectId: string; event: StreamEventInput }> = [];
   const processor = new IntegrationIngressProcessor({
     iterateContext: {
       stream: {
@@ -150,7 +166,7 @@ function createProcessor(deps: Partial<IntegrationIngressProcessorDeps> = {}) {
           events.map((event) => committedEvent({ ...event, offset: 0 })),
       },
     },
-    forwardToProject: async (input) => {
+    forwardToAccount: async (input) => {
       forwarded.push(input);
     },
     ...deps,

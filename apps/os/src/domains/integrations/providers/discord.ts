@@ -10,7 +10,7 @@ import { API } from "@discordjs/core/http-only";
 import type { IntegrationDefinition } from "~/domains/integrations/definition.ts";
 import { verifyEd25519Hex } from "~/domains/integrations/providers/verify.ts";
 
-export const DISCORD_BOT_TOKEN_SECRET_SLUG = "discord/bot-token";
+export const DISCORD_BOT_TOKEN_SECRET_NAME = "bot-token";
 
 /** Routing key for a raw gateway frame ({ op, t, s, d }) — exported for the
  * gateway DO so both transports key events identically. */
@@ -70,14 +70,14 @@ export const discordIntegration: IntegrationDefinition = {
 
   providedSecrets: [
     {
-      slug: DISCORD_BOT_TOKEN_SECRET_SLUG,
+      name: DISCORD_BOT_TOKEN_SECRET_NAME,
       description: "Discord bot token used by the gateway connection and itx.integrations.discord.",
       firstPartyEnvFallback: "APP_CONFIG_DISCORD_BOT_TOKEN",
     },
   ],
 
   async createSdk(ctx) {
-    const token = await ctx.getSecretMaterial(DISCORD_BOT_TOKEN_SECRET_SLUG);
+    const token = await ctx.getSecretMaterial(DISCORD_BOT_TOKEN_SECRET_NAME);
     // `makeRequest: fetch` per @discordjs/rest docs — the default transport is
     // undici, which workerd does not ship.
     const rest = new REST({

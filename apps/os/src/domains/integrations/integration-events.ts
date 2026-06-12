@@ -6,9 +6,28 @@
 import { z } from "zod";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 
-/** Project-namespace lifecycle stream: `{projectId}:/integrations/{slug}`. */
-export function integrationStreamPath(slug: string): StreamPath {
-  return StreamPath.parse(`/integrations/${slug}`);
+/**
+ * An integration ACCOUNT is the instance of an integration: "google" is the
+ * type, "google as jonas@nustom.com" is an account. A project can hold many
+ * accounts of the same integration; everything instance-shaped — the
+ * lifecycle stream, the domain object, provided secrets, routing claims, the
+ * itx address — is keyed by (integration, account). The unnamed common case
+ * connects as account "default", so single-account projects never see the
+ * dimension.
+ */
+export const IntegrationAccount = z
+  .string()
+  .trim()
+  .min(1)
+  .regex(/^[a-z0-9][a-z0-9-]*$/, "Account names are lowercase kebab-case")
+  .refine((value) => value !== "webhooks", "'webhooks' is reserved");
+export const DEFAULT_INTEGRATION_ACCOUNT = "default";
+
+/** Project-namespace lifecycle stream for ONE account:
+ * `{projectId}:/integrations/{slug}/{account}`. Accounts enumerate as the
+ * child paths of `/integrations/{slug}`. */
+export function integrationAccountStreamPath(slug: string, account: string): StreamPath {
+  return StreamPath.parse(`/integrations/${slug}/${IntegrationAccount.parse(account)}`);
 }
 
 /** GLOBAL-namespace ingress capture stream: `{global}:/integrations/{slug}/webhooks`.
@@ -18,12 +37,6 @@ export function integrationStreamPath(slug: string): StreamPath {
 export function integrationIngressStreamPath(slug: string): StreamPath {
   return StreamPath.parse(`/integrations/${slug}/webhooks`);
 }
-
-export const INTEGRATION_EVENT_RECEIVED = "events.iterate.com/integration/event-received";
-export const INTEGRATION_ROUTE_REGISTERED = "events.iterate.com/integration/route-registered";
-export const INTEGRATION_ROUTE_REMOVED = "events.iterate.com/integration/route-removed";
-export const INTEGRATION_CONNECTED = "events.iterate.com/integration/connected";
-export const INTEGRATION_DISCONNECTED = "events.iterate.com/integration/disconnected";
 
 export const IntegrationEventReceivedPayload = z.object({
   integration: z.string(),
@@ -38,6 +51,7 @@ export const IntegrationRouteRegisteredPayload = z.object({
   integration: z.string(),
   routingKey: z.string(),
   projectId: z.string(),
+  account: z.string(),
 });
 
 export const IntegrationRouteRemovedPayload = z.object({
@@ -47,19 +61,21 @@ export const IntegrationRouteRemovedPayload = z.object({
 
 export const IntegrationConnectedPayload = z.object({
   integration: z.string(),
+  account: z.string(),
   projectId: z.string(),
   /** Whose app registration backs this connection — see definition.ts. */
   ownership: z.enum(["first-party", "customer"]),
   externalId: z.string(),
   displayName: z.string().optional(),
-  /** Routing keys this connection claims on the global ingress stream. */
+  /** Routing keys this account claims on the global ingress stream. */
   routingKeys: z.array(z.string()),
-  /** Slugs of the Secrets this connection provided (streams under /secrets/). */
+  /** Slugs of the Secrets this account provided (streams under /secrets/). */
   providedSecretSlugs: z.array(z.string()),
 });
 
 export const IntegrationDisconnectedPayload = z.object({
   integration: z.string(),
+  account: z.string(),
   projectId: z.string(),
   externalId: z.string().optional(),
 });

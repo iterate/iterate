@@ -25,7 +25,7 @@ generic machinery interprets.
                               into routingKey → projectId
                                                 │  cross-namespace forward
                                                 ▼
-                 PROJECT ns  /integrations/{slug}                ← connected/disconnected/
+                 PROJECT ns  /integrations/{slug}/{account}      ← connected/disconnected/
                                                 │                  event-received
                               integration processor (IntegrationDO)
                               connection state + the fan-out seam
@@ -60,11 +60,73 @@ One file per provider (`domains/integrations/providers/{slug}.ts`) exporting an
 - **`createSdk(ctx)`** — builds the well-known SDK object that
   `itx.integrations.{slug}.**` path-replays into. GitHub returns
   `{ octokit: new Octokit(...) }`; Discord returns `{ api: new API(rest), rest }`
-  from @discordjs/core. The SDK is constructed inside the
-  `IntegrationsCapability` loopback (platform code); agents get its behavior,
-  never its token.
+  from @discordjs/core. Agents get the SDK's behavior, never its token.
 
 `registry.ts` is just the list. Adding Linear = one provider file + one line.
+
+## An integration IS a domain object
+
+A connected integration is a domain object in exactly the sense Secrets are:
+a journal (`{projectId}:/integrations/{slug}`) plus ONE Durable Object folding
+it — and after the cleanup pass, `IntegrationDurableObject` is genuinely the
+integration, not just a fold host. It implements the itx calling convention,
+so `itx.integrations.github.**` terminates in github-in-this-project's own DO,
+where its three faces meet:
+
+- its **journal**: connection lifecycle + every routed provider event;
+- its **SDK**: `call({ path, args })` builds the provider SDK next to the
+  fold, tokens via the Secret DOs — and failures carry the connection state
+  the fold knows ("connection: disconnected — connect the integration");
+- its **fan-out seam**: provider-specific reaction to routed events (the
+  Slack thread-router pattern) plugs into the hosted processor.
+
+`IntegrationsCapability` is now a thin ROUTER with no integration logic:
+registry slug → that integration's DO; anything else → the project's worker
+(userspace). What deliberately does NOT live in the DO: webhook signature
+checks (stateless, per-request), the global routing hop (one ingress-router
+DO per integration per deployment), and secret material at rest (the Secret
+DOs). The split of identities:
+
+| thing                                | identity                                                      |
+| ------------------------------------ | ------------------------------------------------------------- |
+| the provider TYPE ("what github is") | code — a provider file in the registry                        |
+| github IN A PROJECT                  | `IntegrationDurableObject` + its journal                      |
+| one credential                       | `SecretDurableObject` + `/secrets/{slug}`                     |
+| the deployment-wide routing table    | `IntegrationIngressDurableObject` + the global capture stream |
+| a userspace integration              | the project worker (the project's code-as-domain-object)      |
+
+Known trade-off: SDK calls serialize through the per-account DO. For a hot
+integration the SDK surface can move back to a stateless loopback that
+consults the DO's fold — the DO stays the identity either way.
+
+## Integration vs instance: ACCOUNTS
+
+"Google" is an integration; "google as jonas@nustom.com" is an **account** —
+and a project can hold many accounts of one integration. The account is the
+instance dimension, built into every identity from the start:
+
+- the domain object is the **(project, integration, account)** triple;
+- its journal is `/integrations/{slug}/{account}` (accounts enumerate as the
+  child paths of `/integrations/{slug}`);
+- provided secrets live at `/secrets/{slug}/{account}/{name}` — definitions
+  declare secret NAMES ("access-token"), the system composes account-scoped
+  slugs;
+- routing claims resolve a routing key to **(project, account)** — one key,
+  one owner, but a project's accounts each claim their own keys;
+- the itx address carries the account in its first segment:
+  `itx.integrations.google.**` is account `default`,
+  `itx.integrations["google:jonas"].**` is account `jonas`. The unnamed
+  single-account case never sees the dimension;
+- userspace mirrors it: the forwarded call carries `account`, and an app's
+  `integrations` entry can be a factory `(account) => sdk`
+  (`itx.integrations["waitrose:mum"]` in the template);
+- customer-owned gateway scopes are `project:{projectId}:{account}` — two
+  Discord bots, two sockets.
+
+`connectIntegration` takes `account` (default `"default"`): connecting a
+second Google account is the same three appends under a different account
+name. The two-account Waitrose flow is exercised end to end in
+`waitrose-userspace.test.ts`.
 
 ## The event flow
 
@@ -332,9 +394,10 @@ Worth stealing later:
 - Late route claims don't retroactively forward earlier captured events
   (claims are forward-looking, like Slack team claims today). Replay-on-claim
   is a possible upgrade since the capture stream has everything.
-- The capability dial currently exposes `itx.integrations.*` wherever itx
-  reaches; per-project "is this integration actually connected" gating should
-  consult the project's `/integrations/{slug}` fold before building SDKs.
+- Every secret dereference appends a `secret/used` audit event — unbounded
+  journal growth for hot secrets. A real version probably samples or folds
+  counters; the egress resolver also pays a DO-catalog D1 read per referenced
+  key per request.
 - No UI; the oRPC procedures (`connect`, `getIntegrationState`,
   `describeJournaledSecret`, `ensureDiscordGateway`) are the demo surface.
 
@@ -345,13 +408,14 @@ Worth stealing later:
 pnpm cli rpc project integrations connect \
   --project-slug-or-id my-project --integration github \
   --external-id installation-1234 --routing-keys '["installation:1234"]' \
-  --secrets '[{"slug":"github/access-token","material":"ghp_..."}]'
+  --secrets '[{"name":"access-token","material":"ghp_..."}]'
+# a SECOND github account: same command with --account work-org
 
 # watch state fold
 pnpm cli rpc project integrations getIntegrationState \
   --project-slug-or-id my-project --integration github
 pnpm cli rpc project integrations describeJournaledSecret \
-  --project-slug-or-id my-project --slug github/access-token
+  --project-slug-or-id my-project --slug github/default/access-token
 
 # in a project itx session:
 #   await itx.integrations.github.octokit.rest.issues.create({...})
@@ -367,7 +431,7 @@ pnpm cli rpc project integrations ensureDiscordGateway --project-slug-or-id my-p
 pnpm cli rpc project integrations setJournaledSecret \
   --project-slug-or-id my-project --slug waitrose/password --material 'hunter2'
 pnpm cli rpc project integrations describeJournaledSecret \
-  --project-slug-or-id my-project --slug waitrose/access-token   # audit + rotations, no material
+  --project-slug-or-id my-project --slug waitrose/default/access-token   # audit + rotations, no material
 ```
 
 Unit tests cover the symmetry contract, both providers' partial fetch

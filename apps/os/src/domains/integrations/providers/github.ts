@@ -6,7 +6,7 @@ import { Octokit } from "@octokit/rest";
 import type { IntegrationDefinition } from "~/domains/integrations/definition.ts";
 import { constantTimeEqual, hmacSha256Hex } from "~/domains/integrations/providers/verify.ts";
 
-export const GITHUB_ACCESS_TOKEN_SECRET_SLUG = "github/access-token";
+export const GITHUB_ACCESS_TOKEN_SECRET_NAME = "access-token";
 
 export const githubIntegration: IntegrationDefinition = {
   slug: "github",
@@ -45,7 +45,7 @@ export const githubIntegration: IntegrationDefinition = {
 
   providedSecrets: [
     {
-      slug: GITHUB_ACCESS_TOKEN_SECRET_SLUG,
+      name: GITHUB_ACCESS_TOKEN_SECRET_NAME,
       description:
         "GitHub token used by itx.integrations.github (app installation token or PAT). " +
         "Installation tokens expire hourly; the Secret DO's refresh loop owns rotation.",
@@ -54,7 +54,7 @@ export const githubIntegration: IntegrationDefinition = {
   ],
 
   async createSdk(ctx) {
-    const auth = await ctx.getSecretMaterial(GITHUB_ACCESS_TOKEN_SECRET_SLUG);
+    const auth = await ctx.getSecretMaterial(GITHUB_ACCESS_TOKEN_SECRET_NAME);
     return { octokit: new Octokit({ auth }) };
   },
 };

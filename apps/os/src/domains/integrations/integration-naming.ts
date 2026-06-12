@@ -9,14 +9,24 @@ export function getIntegrationIngressDurableObjectName(input: { integration: str
   });
 }
 
-export function getIntegrationDurableObjectName(input: { integration: string; projectId: string }) {
+/** One DO per integration ACCOUNT — the (project, integration, account)
+ * triple is the instance. */
+export function getIntegrationDurableObjectName(input: {
+  account: string;
+  integration: string;
+  projectId: string;
+}) {
   return deriveDurableObjectNameFromStructuredName({
-    structuredName: { integration: input.integration, projectId: input.projectId },
+    structuredName: {
+      account: input.account,
+      integration: input.integration,
+      projectId: input.projectId,
+    },
   });
 }
 
 /** One gateway connection per scope: "first-party" for the deployment-level
- * bot, "project:{projectId}" for a customer-owned bot. */
+ * bot, "project:{projectId}:{account}" for a customer-owned bot. */
 export function getDiscordGatewayDurableObjectName(input: { scope: string }) {
   return deriveDurableObjectNameFromStructuredName({
     structuredName: { scope: input.scope },

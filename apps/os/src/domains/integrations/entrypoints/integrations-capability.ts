@@ -1,27 +1,23 @@
-// The itx surface: `itx.integrations.{slug}.**` — one loopback capability
-// dialed with platform-injected props (projectId), so every integration's
-// well-known SDK hangs off one provided prefix.
+// The itx surface: `itx.integrations.{slug}.**` — a thin ROUTER, dialed with
+// platform-injected props (projectId). It owns no integration logic; it only
+// decides which domain object an integration call terminates in:
+//
+// - Slugs in the platform registry → that integration's OWN Durable Object
+//   (IntegrationDurableObject.call), where the SDK is built next to the
+//   connection fold and tokens come from the Secret DOs.
+// - Any other slug → the project's own worker, as one method call —
+//   `worker.integrations({ slug, path, args })` — the USERSPACE convention
+//   (one call, not a deep property walk: workerd RPC doesn't traverse
+//   instance fields). Userspace SDKs authenticate with getSecret({ key })
+//   placeholders in bare fetch() headers, substituted at the terminal egress
+//   pipe — so even the project's own integration code never holds tokens.
 //
 //   itx.integrations.github.octokit.rest.issues.create({...})
 //   itx.integrations.discord.api.channels.createMessage(channelId, {...})
-//   itx.integrations.waitrose.searchProducts("milk")        ← USERSPACE
-//
-// Two resolution tiers, same surface:
-//
-// - Slugs in the platform registry (registry.ts) build their SDK HERE, inside
-//   a first-party loopback, with material dereferenced through the Secret
-//   DO's audited trapdoor. Agents get the SDK's behavior, never its token.
-// - Any other slug is a USERSPACE integration: the call forwards to the
-//   project's OWN worker as one method call —
-//   `worker.integrations({ slug, path, args })` — and the project's code owns
-//   the SDK. Userspace SDKs authenticate with getSecret({ key }) placeholders
-//   in bare fetch() headers; the terminal egress pipe substitutes (with
-//   inline derivation), so even the project's own integration code never
-//   holds its tokens. One method call (not a deep property walk) because
-//   workerd RPC does not traverse instance fields.
+//   itx.integrations.waitrose.searchProducts("milk")        ← userspace
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { replayPathCall, type PathCall } from "~/itx/path-proxy.ts";
+import type { PathCall } from "~/itx/path-proxy.ts";
 import { makeDial, resolveDialableTargets } from "~/itx/dial.ts";
 import {
   PLATFORM_PROJECT_CONTEXT_ADDRESS,
@@ -31,7 +27,8 @@ import {
 import { projectContextAddress } from "~/itx/journal.ts";
 import { parseConfig } from "~/config.ts";
 import { INTEGRATIONS } from "~/domains/integrations/registry.ts";
-import { revealJournaledSecretForPlatformUse } from "~/domains/secrets/secret-streams.ts";
+import { DEFAULT_INTEGRATION_ACCOUNT } from "~/domains/integrations/integration-events.ts";
+import { ensureIntegrationStub } from "~/domains/integrations/durable-objects/integration-durable-object.ts";
 
 type IntegrationsCapabilityProps = {
   projectId?: string;
@@ -39,8 +36,8 @@ type IntegrationsCapabilityProps = {
 
 export class IntegrationsCapability extends WorkerEntrypoint<Env, IntegrationsCapabilityProps> {
   async call(input: PathCall): Promise<unknown> {
-    const [slug, ...sdkPath] = input.path;
-    if (slug == null) {
+    const [address, ...sdkPath] = input.path;
+    if (address == null) {
       return Object.values(INTEGRATIONS).map((definition) => ({
         slug: definition.slug,
         displayName: definition.displayName,
@@ -52,36 +49,27 @@ export class IntegrationsCapability extends WorkerEntrypoint<Env, IntegrationsCa
       throw new Error("IntegrationsCapability requires dial-injected projectId props.");
     }
 
-    const definition = INTEGRATIONS[slug];
-    if (!definition) {
-      return await this.callUserspaceIntegration({
-        projectId,
-        slug,
-        path: sdkPath,
-        args: input.args,
-      });
+    // The instance dimension rides in the address segment:
+    // "google" = account "default"; "google:jonas" = account "jonas".
+    const [slug, account = DEFAULT_INTEGRATION_ACCOUNT] = address.split(":", 2) as [
+      string,
+      string?,
+    ];
+    if (INTEGRATIONS[slug]) {
+      const stub = await ensureIntegrationStub({ account, integration: slug, projectId });
+      return await stub.call({ path: sdkPath, args: input.args });
     }
-
-    const secretSpecsBySlug = Object.fromEntries(
-      definition.providedSecrets.map((spec) => [spec.slug, spec]),
-    );
-    const sdk = await definition.createSdk({
+    return await this.callUserspaceIntegration({
+      account,
       projectId,
-      getSecretMaterial: async (secretSlug) => {
-        return await revealJournaledSecretForPlatformUse({
-          projectId,
-          slug: secretSlug,
-          usedBy: `itx:integrations.${definition.slug}`,
-          fallbackEnvVar: secretSpecsBySlug[secretSlug]?.firstPartyEnvFallback,
-        });
-      },
+      slug,
+      path: sdkPath,
+      args: input.args,
     });
-    return await replayPathCall(sdk, { path: sdkPath, args: input.args });
   }
 
-  /** Forward to the project worker's `integrations({ slug, path, args })`
-   * export — the userspace integration convention. */
   private async callUserspaceIntegration(input: {
+    account: string;
     projectId: string;
     slug: string;
     path: string[];
@@ -109,7 +97,7 @@ export class IntegrationsCapability extends WorkerEntrypoint<Env, IntegrationsCa
     try {
       return await borrowed.call({
         path: ["integrations"],
-        args: [{ slug: input.slug, path: input.path, args: input.args }],
+        args: [{ slug: input.slug, account: input.account, path: input.path, args: input.args }],
       });
     } finally {
       (borrowed as Partial<Disposable>)[Symbol.dispose]?.();

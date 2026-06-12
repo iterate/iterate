@@ -17,6 +17,7 @@ import {
   type SecretTier,
 } from "~/domains/secrets/stream-processors/secret/contract.ts";
 import {
+  ensureSecretStub,
   getSecretDurableObjectName,
   getSecretStub,
 } from "~/domains/secrets/durable-objects/secret-durable-object.ts";
@@ -74,10 +75,7 @@ export async function setJournaledSecret(input: SetJournaledSecretInput) {
   });
 
   // Wake the Secret DO so its subscription lands and refresh alarms arm.
-  const stub = getSecretStub({ projectId: input.projectId, slug: input.slug });
-  await stub.initialize({
-    name: getSecretDurableObjectName({ projectId: input.projectId, slug: input.slug }),
-  });
+  const stub = await ensureSecretStub({ projectId: input.projectId, slug: input.slug });
   await stub.ensureReady();
 
   return event;

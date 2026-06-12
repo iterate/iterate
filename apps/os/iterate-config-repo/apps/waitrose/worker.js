@@ -24,13 +24,19 @@ const NEW_SESSION_MUTATION =
   "mutation NewSession($input: SessionInput) { generateSession(session: $input) " +
   "{ accessToken failures { type message } } }";
 
-// One-time setup: itx.worker.connectWaitrose({ username: "...", password: "..." })
-export async function connectWaitrose({ username, password }) {
+// One-time setup: itx.worker.connectWaitrose({ username: "...", password: "..." }).
+// The ACCOUNT is the instance dimension — pass account: "mum" to connect a
+// second Waitrose login, then call itx.integrations["waitrose:mum"].…
+export async function connectWaitrose({ username, password, account = "default" }) {
   const itx = await env.ITERATE.context;
-  await itx.secrets.set({ slug: "waitrose/username", material: username, sensitivity: "plain" });
-  await itx.secrets.set({ slug: "waitrose/password", material: password });
   await itx.secrets.set({
-    slug: "waitrose/access-token",
+    slug: `waitrose/${account}/username`,
+    material: username,
+    sensitivity: "plain",
+  });
+  await itx.secrets.set({ slug: `waitrose/${account}/password`, material: password });
+  await itx.secrets.set({
+    slug: `waitrose/${account}/access-token`,
     derivation: {
       kind: "http-exchange",
       request: {
@@ -41,8 +47,8 @@ export async function connectWaitrose({ username, password }) {
           query: NEW_SESSION_MUTATION,
           variables: {
             input: {
-              username: 'getSecret({ key: "waitrose/username" })',
-              password: 'getSecret({ key: "waitrose/password" })',
+              username: `getSecret({ key: "waitrose/${account}/username" })`,
+              password: `getSecret({ key: "waitrose/${account}/password" })`,
               clientId: "ANDROID_APP",
             },
           },
@@ -57,13 +63,13 @@ export async function connectWaitrose({ username, password }) {
   return { connected: true };
 }
 
-const waitrose = {
+const waitrose = (account) => ({
   async searchProducts(searchTerm, options = {}) {
     const response = await fetch(`${SEARCH_API_URL}/search/-1?clientType=WEB_APP`, {
       method: "POST",
       headers: {
         // Substituted (and inline-refreshed) by project egress — never here.
-        authorization: 'Bearer getSecret({ key: "waitrose/access-token" })',
+        authorization: `Bearer getSecret({ key: "waitrose/${account}/access-token" })`,
         "content-type": "application/json",
         accept: "application/json",
       },
@@ -76,7 +82,7 @@ const waitrose = {
     if (!response.ok) throw new Error(`Waitrose search failed: HTTP ${response.status}`);
     return await response.json();
   },
-};
+});
 
 export default {
   integrations: { waitrose },

@@ -35,11 +35,3 @@ export function substituteSecretPlaceholders(
     ...(request.body == null ? {} : { body: substitute(request.body) }),
   };
 }
-
-export function requestReferencesSecret(request: SubstitutableRequest): boolean {
-  return (
-    request.url.includes(SECRET_PLACEHOLDER) ||
-    Object.values(request.headers ?? {}).some((value) => value.includes(SECRET_PLACEHOLDER)) ||
-    (request.body?.includes(SECRET_PLACEHOLDER) ?? false)
-  );
-}

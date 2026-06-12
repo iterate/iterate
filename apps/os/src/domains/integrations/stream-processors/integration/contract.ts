@@ -18,9 +18,10 @@ export const IntegrationProcessorContract = defineProcessorContract({
   slug: "integration",
   version: "0.1.0",
   description:
-    "Folds one integration's lifecycle inside a project: connection state and routed provider events on /integrations/{slug}.",
+    "Folds one integration ACCOUNT's lifecycle inside a project: connection state and routed provider events on /integrations/{slug}/{account}.",
   stateSchema: z.object({
     integration: z.string().optional(),
+    account: z.string().optional(),
     connection: z
       .object({
         status: z.enum(["connected", "disconnected"]).default("disconnected"),

@@ -18,9 +18,14 @@ export { IntegrationIngressProcessorContract } from "./contract.ts";
 export type IntegrationIngressProcessorContract = typeof IntegrationIngressProcessorContract;
 
 export type IntegrationIngressProcessorDeps = {
-  /** Append the forwarded event to `{projectId}:/integrations/{slug}` and
-   * pre-warm that project's integration DO. Supplied by the hosting DO. */
-  forwardToProject(input: { projectId: string; event: StreamEventInput }): Promise<void>;
+  /** Append the forwarded event to the claiming account's
+   * `{projectId}:/integrations/{slug}/{account}` stream and pre-warm its
+   * integration DO. Supplied by the hosting DO. */
+  forwardToAccount(input: {
+    account: string;
+    event: StreamEventInput;
+    projectId: string;
+  }): Promise<void>;
 };
 
 export class IntegrationIngressProcessor extends StreamProcessor<
@@ -38,7 +43,13 @@ export class IntegrationIngressProcessor extends StreamProcessor<
         return {
           ...state,
           integration: event.payload.integration,
-          routes: { ...state.routes, [event.payload.routingKey]: event.payload.projectId },
+          routes: {
+            ...state.routes,
+            [event.payload.routingKey]: {
+              projectId: event.payload.projectId,
+              account: event.payload.account,
+            },
+          },
         };
       case "events.iterate.com/integration/route-removed": {
         const { [event.payload.routingKey]: _removed, ...routes } = state.routes;
@@ -61,8 +72,8 @@ export class IntegrationIngressProcessor extends StreamProcessor<
     if (event.type !== "events.iterate.com/integration/event-received") return;
 
     const routingKey = event.payload.routingKey;
-    const projectId = routingKey == null ? undefined : state.routes[routingKey];
-    if (projectId == null) {
+    const route = routingKey == null ? undefined : state.routes[routingKey];
+    if (route == null) {
       // Unclaimed routing key: captured (durably, upstream of us) but not
       // forwarded. A later route-registered does NOT retroactively forward —
       // claims are forward-looking, like Slack team claims today.
@@ -79,7 +90,7 @@ export class IntegrationIngressProcessor extends StreamProcessor<
       payload: event.payload,
     };
     args.runInBackground(async () => {
-      await this.deps.forwardToProject({ projectId, event: forwarded });
+      await this.deps.forwardToAccount({ ...route, event: forwarded });
     });
   }
 }

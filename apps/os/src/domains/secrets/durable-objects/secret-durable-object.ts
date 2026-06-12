@@ -21,12 +21,16 @@
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import { NotInitializedError } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
+import {
+  ensureStartedOrInitializeFromRuntimeName,
+  waitForProcessorCatchUp,
+} from "~/domains/streams/stream-processor-do-helpers.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -57,11 +61,22 @@ const SecretDurableObjectStructuredName = z.object({
 });
 export type SecretDurableObjectStructuredName = z.infer<typeof SecretDurableObjectStructuredName>;
 
-/** Mint a Secret DO stub from a trusted domain file (see lint rule). */
+/** Mint a Secret DO stub from a trusted domain file (see lint rule). Plain
+ * getByName: the DO adopts its runtime name on first wake. */
 export function getSecretStub(input: SecretDurableObjectStructuredName) {
   return (env as unknown as SecretDurableObjectEnv).SECRET.getByName(
     getSecretDurableObjectName(input),
   );
+}
+
+/** As above, but through the lifecycle initialize path (creates the catalog
+ * record) — for write/setup flows. */
+export async function ensureSecretStub(input: SecretDurableObjectStructuredName) {
+  return await getInitializedDoStub({
+    allowCreate: true,
+    name: input,
+    namespace: (env as unknown as SecretDurableObjectEnv).SECRET,
+  });
 }
 
 type SecretDurableObjectEnv = {
@@ -107,9 +122,18 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
     });
   }
 
+  /** Closure-bridged because the lifecycle mixin's getDurableObjectName is protected. */
+  private ensureParams() {
+    return ensureStartedOrInitializeFromRuntimeName({
+      ensureStarted: () => this.ensureStarted(),
+      getDurableObjectName: () => this.getDurableObjectName(),
+      initialize: (input) => this.initialize(input),
+    });
+  }
+
   /** The stream subscription callable dials this (see `durableObjectProcessorSubscriber`). */
   async requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    await this.ensureStartedOrInitializeFromRuntimeName();
+    await this.ensureParams();
     return await this.host.requestStreamSubscription(args);
   }
 
@@ -178,16 +202,6 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
     return material;
   }
 
-  /** Run the derivation now regardless of staleness, journaling the result. */
-  async deriveNow(): Promise<{ derived: boolean; reason?: string }> {
-    const { params, state } = await this.readyState();
-    if (state.status !== "set" || state.derivation == null) {
-      return { derived: false, reason: "no derivation" };
-    }
-    await this.runDerivation({ params, state, reason: "derive-now" });
-    return { derived: true };
-  }
-
   async alarm() {
     const { params, state } = await this.readyState();
     if (state.status !== "set" || state.derivation == null) return;
@@ -199,7 +213,7 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
   }
 
   async ensureReady() {
-    const params = await this.ensureStartedOrInitializeFromRuntimeName();
+    const params = await this.ensureParams();
     await this.ensureSecretSubscription(params);
     await this.waitForCatchUp(params);
     return await this.secret.snapshot();
@@ -278,7 +292,7 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
   }
 
   private async readyState() {
-    const params = await this.ensureStartedOrInitializeFromRuntimeName();
+    const params = await this.ensureParams();
     await this.ensureSecretSubscription(params);
     await this.waitForCatchUp(params);
     const snapshot = await this.secret.snapshot();
@@ -321,27 +335,11 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
   }
 
   private async waitForCatchUp(params: SecretDurableObjectStructuredName) {
-    const stream = await this.secretStream(params);
-    const consumedTypes = new Set<string>(this.secret.contract.consumes);
-    const events = await stream.history({ before: "end" });
-    const maxConsumedOffset =
-      events.filter((event) => consumedTypes.has(event.type)).at(-1)?.offset ?? 0;
-    const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline) {
-      if ((await this.secret.snapshot()).offset >= maxConsumedOffset) return;
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-  }
-
-  private async ensureStartedOrInitializeFromRuntimeName() {
-    try {
-      return await this.ensureStarted();
-    } catch (error) {
-      if (!(error instanceof NotInitializedError)) throw error;
-      const runtimeName = this.getDurableObjectName();
-      if (runtimeName == null) throw error;
-      return await this.initialize({ name: runtimeName });
-    }
+    await waitForProcessorCatchUp({
+      consumes: this.secret.contract.consumes,
+      snapshot: () => this.secret.snapshot(),
+      stream: await this.secretStream(params),
+    });
   }
 
   private async ensureSecretSubscription(params: SecretDurableObjectStructuredName) {

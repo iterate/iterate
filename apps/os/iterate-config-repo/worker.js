@@ -17,12 +17,15 @@ export default {
 
   // USERSPACE integrations: itx.integrations.<slug>.<method>(...) calls that
   // the platform registry doesn't recognize land here as ONE call. Apps
-  // export `integrations: { <slug>: sdkObject }`; the path walks the sdk
-  // locally (where it is concrete) and calls the terminal method.
-  async integrations({ slug, path, args }) {
+  // export `integrations: { <slug>: sdkObject }` — or, for multi-ACCOUNT
+  // integrations (the instance dimension: itx.integrations["waitrose:mum"]),
+  // a factory `(account) => sdkObject`. The path walks the sdk locally
+  // (where it is concrete) and calls the terminal method.
+  async integrations({ slug, account = "default", path, args }) {
     for (const app of apps) {
-      const sdk = app.integrations?.[slug];
-      if (!sdk) continue;
+      const entry = app.integrations?.[slug];
+      if (!entry) continue;
+      const sdk = typeof entry === "function" ? entry(account) : entry;
       let parent = sdk;
       for (const segment of path.slice(0, -1)) parent = parent?.[segment];
       const method = path.at(-1);
