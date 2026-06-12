@@ -549,15 +549,13 @@ function createStreamRuntime(
         lastDeliveredOffset = checkpoint.offset;
         return {
           replayAfterOffset: checkpoint.offset,
-          processEventBatch: (batch: {
-            events: readonly StreamEvent[];
-            streamMaxOffset: number;
-          }) => {
-            deliveryArrivals += 1;
-            lastBatchEvents = batch.events.length;
-            totalDeliveredEvents += batch.events.length;
-            return ingestWithSelfHeal(processor, batch, election);
-          },
+          // Counters are bumped inside ingestWithSelfHeal, AFTER its
+          // supersede guard: a batch delivered to a replaced election is
+          // dropped and must not count as progress (it never advances
+          // lastDeliveredOffset), or the liveness probe would read a dead
+          // subscription's stale pushes as healthy.
+          processEventBatch: (batch: { events: readonly StreamEvent[]; streamMaxOffset: number }) =>
+            ingestWithSelfHeal(processor, batch, election),
         };
       })
       .then((ready) => {
@@ -613,8 +611,16 @@ function createStreamRuntime(
   ): Promise<void> {
     // A batch delivered to a superseded election must not be applied: its
     // processor's queued ingests would interleave with (and can regress the
-    // checkpoint of) the current election's processor on the same tables.
+    // checkpoint of) the current election's processor on the same tables — and
+    // it must not count as delivery progress either (see below).
     if (disposed || stream !== election.connection) return;
+    // Count the arrival HERE, for the current election only, and BEFORE the
+    // (possibly slow) ingest await: the liveness probe reads a bumped counter
+    // as "deliveries are flowing", so a long ingest must not look stalled,
+    // while a dropped stale batch (returned above) must not look like progress.
+    deliveryArrivals += 1;
+    lastBatchEvents = batch.events.length;
+    totalDeliveredEvents += batch.events.length;
     try {
       await processor.ingest(batch);
       ingestFailureCount = 0;
