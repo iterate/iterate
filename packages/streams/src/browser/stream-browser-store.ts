@@ -202,6 +202,13 @@ function createStreamRuntime(
   let readyWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
   // Self-heal backoff for browser-side ingest failures (C1).
   let ingestFailureCount = 0;
+  // The server incarnation this connection reconciled against, and how far deliveries have
+  // progressed on it. The liveness probe compares both against fresh runtimeState() so an
+  // orphaned-but-healthy-looking subscription (the stream was recreated underneath us, or the
+  // server moved ahead while deliveries silently stopped) reconnects instead of wedging.
+  let reconciledIncarnation: string | undefined;
+  let lastDeliveredOffset = -1;
+  let probePreviousDeliveredOffset = -1;
 
   function resolveReadyWaiters() {
     const waiters = readyWaiters;
@@ -368,6 +375,7 @@ function createStreamRuntime(
     const localMaxOffset = checkpoint.offset;
     const { coreProcessorState } = await rpc.runtimeState();
     const serverIncarnation = coreProcessorState.createdAt;
+    reconciledIncarnation = serverIncarnation;
     const localIncarnation = await streamDatabase.readMirrorIncarnation();
 
     if (localMaxOffset <= 0) {
@@ -486,6 +494,8 @@ function createStreamRuntime(
           subscriptionKey,
         });
         const checkpoint = await processor.snapshot();
+        lastDeliveredOffset = checkpoint.offset;
+        probePreviousDeliveredOffset = checkpoint.offset;
         return {
           replayAfterOffset: checkpoint.offset,
           processEventBatch: (batch: { events: readonly StreamEvent[]; streamMaxOffset: number }) =>
@@ -540,6 +550,7 @@ function createStreamRuntime(
     try {
       await processor.ingest(batch);
       ingestFailureCount = 0;
+      lastDeliveredOffset = Math.max(lastDeliveredOffset, batch.streamMaxOffset);
     } catch (error) {
       // Only the connection that is still current self-heals; a stale callback bails.
       if (disposed || stream !== election.connection) throw error;
@@ -598,16 +609,24 @@ function createStreamRuntime(
   // "subscribed" forever. Probe the live connection with a cheap RPC; a
   // probe that cannot answer within the deadline means the socket is dead —
   // reconnect, and the resubscribe replays from the persisted checkpoint.
+  //
+  // The probe's answer matters too: a subscription can be orphaned while the
+  // socket stays perfectly healthy. If the stream was recreated underneath us
+  // (incarnation changed — e.g. the browser subscribed to a lazily-created
+  // empty stream and the agent machinery then created it for real), or the
+  // server's maxOffset moved ahead while deliveries made no progress for a
+  // whole probe interval, the subscription is gone server-side — resubscribe.
   const LIVENESS_PROBE_INTERVAL_MS = 10_000;
   const LIVENESS_PROBE_TIMEOUT_MS = 5_000;
 
   function startLivenessProbe(connection: NonNullable<typeof stream>) {
     stopLivenessProbe();
+    probePreviousDeliveredOffset = lastDeliveredOffset;
     livenessTimer = setInterval(() => {
       void (async () => {
         try {
-          await Promise.race([
-            Promise.resolve(connection.stream.runtimeState()).then(() => undefined),
+          const { coreProcessorState } = await Promise.race([
+            Promise.resolve(connection.stream.runtimeState()),
             new Promise<never>((_, reject) =>
               setTimeout(
                 () => reject(new Error("liveness probe timed out")),
@@ -615,6 +634,21 @@ function createStreamRuntime(
               ),
             ),
           ]);
+          if (disposed || stream !== connection) return;
+          if (coreProcessorState.createdAt !== reconciledIncarnation) {
+            throw new Error(
+              `stream incarnation changed (${reconciledIncarnation} -> ${coreProcessorState.createdAt}); subscription is orphaned`,
+            );
+          }
+          const stalled =
+            coreProcessorState.maxOffset > lastDeliveredOffset &&
+            lastDeliveredOffset === probePreviousDeliveredOffset;
+          probePreviousDeliveredOffset = lastDeliveredOffset;
+          if (stalled) {
+            throw new Error(
+              `server is at offset ${coreProcessorState.maxOffset} but deliveries stalled at ${lastDeliveredOffset}; subscription is orphaned`,
+            );
+          }
         } catch (error) {
           if (disposed || stream !== connection) return;
           stopLivenessProbe();
