@@ -267,6 +267,52 @@ describe("the stream is the only authority", () => {
     );
   });
 
+  test("an rpc cap survives a COLD restart through a persisted checkpoint (host wiring)", async () => {
+    // The host wires the Itx checkpoint to durable storage (readState/
+    // writeState). This reproduces that EXACT wiring: provide on a warm
+    // instance, then build a FRESH instance from the SAME stream AND the
+    // SAME persisted checkpoint — the way a Durable Object comes back after
+    // eviction. The rpc cap must resolve, not vanish.
+    const { stream } = fakeStream();
+    let checkpoint: { offset: number; state: Itx["state"] } | undefined;
+    const CHAT_ADDRESS: CapabilityAddress = {
+      entrypoint: "AgentToolsCapability",
+      props: { agentPath: "/agents/asdasdasd", tool: "chat" },
+      type: "rpc",
+      worker: { type: "loopback" },
+    };
+    const build = (dial: CapabilityDial) =>
+      new Itx({
+        contextRef: "prj_1:/agents/asdasdasd",
+        dial,
+        iterateContext: { stream },
+        parentItx: () => null,
+        readState: async () => checkpoint,
+        selfAddress: SELF_ADDRESS,
+        writeState: async (snapshot) => {
+          checkpoint = snapshot as { offset: number; state: Itx["state"] };
+        },
+      });
+
+    const warm = build(fakeDial().dial);
+    await warm.provideCapability({
+      capability: CHAT_ADDRESS,
+      instructions: "Reply to the user.",
+      name: "chat",
+    });
+    // The provide must have flushed a checkpoint carrying the cap.
+    expect(checkpoint?.state.capabilities.chat).toMatchObject({ kind: "rpc", name: "chat" });
+
+    // Cold restart: a brand-new instance over the same stream + checkpoint.
+    const { dial, dialed } = fakeDial();
+    const cold = build(dial);
+    await cold.invoke({ args: [{ message: "hi" }], path: ["chat", "sendMessage"] });
+    expect(dialed.at(-1)).toMatchObject({
+      address: CHAT_ADDRESS,
+      call: { path: ["sendMessage"] },
+    });
+  });
+
   test("the creation event folds first-wins (get-or-create)", () => {
     const initial = { capabilities: {}, context: null, pendingExecutions: {} };
     const born = reduceItxEvent(initial, {

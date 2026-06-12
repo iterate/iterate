@@ -72,6 +72,7 @@ import {
 import {
   AGENT_HOST_PROCESSOR_SLUG,
   AGENTS_STREAM_PATH,
+  AgentDurableObjectName,
   AgentDurableObjectStructuredName,
   agentLlmProcessorSlug,
   agentProcessorSubscriptionConfiguredEvents,
@@ -93,6 +94,10 @@ export type AgentDurableObjectEnv = {
   AI: CloudflareAiBinding;
   APP_CONFIG: string;
   ITX_CONTEXT: DurableObjectNamespace<ItxDurableObject>;
+  // The DO object-catalog D1 — the project→agents enumeration index behind
+  // `project.agents.list`, plus the incidental `itx.debug()` project-slug read.
+  // It indexes agents by their stream coordinate; it has no bearing on how an
+  // agent is addressed (that derives from the self-describing name).
   DO_CATALOG: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
@@ -125,8 +130,15 @@ type AgentStreamApi = Omit<
   }): Promise<Event[]>;
 };
 
+// An agent IS a context, and its identity IS its stream coordinate:
+// `{projectId}:{agentPath}` (no opaque JSON name). The lifecycle base parses
+// that directly via the AgentDurableObjectName codec. The D1 object catalog is
+// retained ONLY as the project→agents enumeration index that
+// `project.agents.list` reads (the stream tree has no cheap createdAt/
+// lastWokenAt projection); it no longer has any bearing on how an agent is
+// addressed — that is fully derived from the self-describing name.
 const AgentLifecycleBase = createIterateDurableObjectBase<
-  typeof AgentDurableObjectStructuredName,
+  typeof AgentDurableObjectName,
   Pick<AgentDurableObjectEnv, "DO_CATALOG">
 >({
   className: "AgentDurableObject",
@@ -135,7 +147,7 @@ const AgentLifecycleBase = createIterateDurableObjectBase<
     agentPath: (params) => params.agentPath,
     projectId: (params) => params.projectId,
   },
-  nameSchema: AgentDurableObjectStructuredName,
+  nameSchema: AgentDurableObjectName,
 });
 
 /** Bump when agentContextCapabilities changes — re-provides the agent's tools
@@ -950,8 +962,9 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
 }
 
 /** AN AGENT IS A CONTEXT: its ref and address are projections of the
- * agent's stream coordinate — no mint, no catalog. The node is the generic
- * ItxDurableObject named with the ref. */
+ * agent's stream coordinate — no mint, no catalog. The agent DO's own name
+ * (#1513) is the SAME string: one coordinate, two doors. The context node
+ * is the generic ItxDurableObject named with the ref. */
 function agentContextRef(name: AgentDurableObjectStructuredName): string {
   return formatContextRef({ namespace: name.projectId, path: String(name.agentPath) });
 }
