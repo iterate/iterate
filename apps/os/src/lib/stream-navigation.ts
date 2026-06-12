@@ -2,7 +2,6 @@
 // reads for lazy child loading, and best-effort localStorage recents.
 
 import {
-  StreamPath,
   StreamState,
   type StreamPath as StreamPathType,
   type StreamState as StreamStateType,
@@ -56,10 +55,6 @@ export function parentStreamPath(path: string): string {
   const trimmed = path.replace(/\/+$/, "");
   const parent = trimmed.slice(0, trimmed.lastIndexOf("/"));
   return parent === "" ? "/" : parent;
-}
-
-export function parseStreamPath(path: string): StreamPathType {
-  return StreamPath.parse(path);
 }
 
 // ---------------------------------------------------------------------------

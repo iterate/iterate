@@ -1,12 +1,13 @@
-import { CheckIcon, ArrowUpIcon, FileCode2Icon, MessageSquareIcon, PlusIcon } from "lucide-react";
+import { ArrowUpIcon, FileCode2Icon, MessageSquareIcon, PlusIcon } from "lucide-react";
+import { Button } from "@iterate-com/ui/components/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@iterate-com/ui/components/dropdown-menu";
 import { Spinner } from "@iterate-com/ui/components/spinner";
-import { cn } from "@iterate-com/ui/lib/utils";
 
 export type AgentComposerMode = "message" | "raw";
 
@@ -62,50 +63,42 @@ export function AgentPillComposer({
           {error}
         </p>
       )}
-      <div
-        className={cn(
-          "flex items-end gap-2 bg-background py-2 pl-1.5 pr-2",
-          "shadow-[0_0_0_1px_var(--border),0_4px_16px_rgba(24,24,27,0.06)]",
-          activeMode === "raw" ? "rounded-3xl" : "rounded-[26px]",
-        )}
-      >
+      <div className="flex items-end gap-2 rounded-3xl border bg-background py-2 pl-1.5 pr-2 shadow-sm">
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="icon-lg"
                 title="Composer mode"
-                className="grid size-9 shrink-0 place-items-center rounded-full text-foreground hover:bg-muted"
+                className="rounded-full"
               />
             }
           >
             <PlusIcon className="size-4.5" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" side="top" className="w-60">
-            <DropdownMenuItem
-              disabled={message == null}
-              onClick={() => onModeChange("message")}
-              className="items-start gap-2.5"
+            <DropdownMenuRadioGroup
+              value={activeMode}
+              onValueChange={(value) => onModeChange(value as AgentComposerMode)}
             >
-              <MessageSquareIcon className="mt-0.5 size-4 text-muted-foreground" />
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="text-[13px] font-medium">Message</span>
-                <span className="text-[11px] text-muted-foreground">Chat with this agent</span>
-              </span>
-              {activeMode === "message" ? (
-                <CheckIcon className="size-3.5 text-emerald-600" />
-              ) : null}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => onModeChange("raw")} className="items-start gap-2.5">
-              <FileCode2Icon className="mt-0.5 size-4 text-muted-foreground" />
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="text-[13px] font-medium">Raw event</span>
-                <span className="text-[11px] text-muted-foreground">
-                  Append YAML or JSON events directly
+              <DropdownMenuRadioItem value="message" disabled={message == null}>
+                <MessageSquareIcon className="text-muted-foreground" />
+                <span className="flex min-w-0 flex-1 flex-col py-0.5">
+                  <span className="font-medium">Message</span>
+                  <span className="text-xs text-muted-foreground">Chat with this agent</span>
                 </span>
-              </span>
-              {activeMode === "raw" ? <CheckIcon className="size-3.5 text-emerald-600" /> : null}
-            </DropdownMenuItem>
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="raw">
+                <FileCode2Icon className="text-muted-foreground" />
+                <span className="flex min-w-0 flex-1 flex-col py-0.5">
+                  <span className="font-medium">Raw event</span>
+                  <span className="text-xs text-muted-foreground">
+                    Append YAML or JSON events directly
+                  </span>
+                </span>
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -129,29 +122,26 @@ export function AgentPillComposer({
             value={message?.value ?? ""}
             onChange={(event) => message?.onValueChange(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 submit();
               }
             }}
             rows={1}
             placeholder={message?.placeholder ?? "Message this stream"}
-            className="field-sizing-content max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-[15px] leading-snug outline-none"
+            className="field-sizing-content max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-snug outline-none"
           />
         )}
 
-        <button
-          type="button"
+        <Button
+          size="icon-lg"
           title={activeMode === "raw" ? "Append events (⌘↵)" : "Send message"}
           onClick={submit}
           disabled={!canSubmit}
-          className={cn(
-            "grid size-9 shrink-0 place-items-center rounded-full bg-foreground text-background transition-opacity",
-            canSubmit ? "hover:opacity-80" : "opacity-30",
-          )}
+          className="rounded-full"
         >
           {isSubmitting ? <Spinner className="size-4" /> : <ArrowUpIcon className="size-4" />}
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ChevronLeftIcon, XIcon } from "lucide-react";
+import { Button } from "@iterate-com/ui/components/button";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-processor/contract";
 import { cn } from "@iterate-com/ui/lib/utils";
 import {
@@ -70,7 +71,7 @@ export function StreamProcessorsPanel({
   const focused = presence.find((entry) => entry.subscriptionKey === focusKey) ?? null;
 
   return (
-    <aside className="absolute inset-y-0 right-0 z-30 flex w-full max-w-sm flex-col rounded-tl-2xl bg-background shadow-[-16px_0_44px_rgba(24,24,27,0.10)]">
+    <aside className="absolute inset-y-0 right-0 z-30 flex w-full max-w-sm flex-col rounded-tl-2xl bg-background shadow-2xl">
       {focused == null ? (
         <ProcessorsOverview
           presence={presence}
@@ -114,7 +115,7 @@ function ProcessorsOverview({
     <>
       <div className="flex shrink-0 items-center gap-2 px-5 pb-2 pt-4">
         <div className="min-w-0 flex-1">
-          <div className="text-[15px] font-semibold">Processors</div>
+          <div className="text-base font-semibold">Processors</div>
           <div className="text-xs text-muted-foreground">
             presence · metrics · state, per consumer
           </div>
@@ -124,7 +125,7 @@ function ProcessorsOverview({
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5 pt-2">
         <div className="rounded-2xl bg-muted/40 px-4 py-3.5">
           <div className="flex items-baseline justify-between">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Append round-trip
             </span>
             <span className="font-mono text-[10px] text-muted-foreground/70">simulated</span>
@@ -179,7 +180,7 @@ function ProcessorsOverview({
                       </span>
                       <span
                         className={cn(
-                          "block text-[11px]",
+                          "block text-xs",
                           entry.connected
                             ? busy && isLlmish(entry)
                               ? "text-amber-600"
@@ -195,12 +196,12 @@ function ProcessorsOverview({
                       </span>
                     </span>
                   </span>
-                  <span className="text-right font-mono text-[11px] text-muted-foreground">
+                  <span className="text-right font-mono text-xs text-muted-foreground">
                     {entry.connected ? `${fakeRtt(entry.subscriptionKey, metrics.rttNow)}ms` : "—"}
                   </span>
                   <span
                     className={cn(
-                      "text-right font-mono text-[11px]",
+                      "text-right font-mono text-xs",
                       fakeLag(entry, busy) === "0" ? "text-muted-foreground" : "text-amber-600",
                     )}
                   >
@@ -234,7 +235,7 @@ function MetricStat({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{label}</div>
-      <div className="mt-0.5 font-mono text-[13px]">{value}</div>
+      <div className="mt-0.5 font-mono text-sm">{value}</div>
     </div>
   );
 }
@@ -254,14 +255,9 @@ function ProcessorDetail({
   return (
     <>
       <div className="flex shrink-0 items-center gap-2.5 px-4 pb-2 pt-3.5">
-        <button
-          type="button"
-          title="All processors"
-          onClick={onBack}
-          className="grid size-7 shrink-0 place-items-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          <ChevronLeftIcon className="size-4" />
-        </button>
+        <Button variant="ghost" size="icon-sm" title="All processors" onClick={onBack}>
+          <ChevronLeftIcon />
+        </Button>
         <PresenceAvatar
           entry={entry}
           busy={busy && isLlmish(entry)}
@@ -269,9 +265,7 @@ function ProcessorDetail({
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5">
-            <span className="truncate font-mono text-[13px] font-semibold">
-              {presenceLabel(entry)}
-            </span>
+            <span className="truncate font-mono text-sm font-semibold">{presenceLabel(entry)}</span>
             {processor == null ? null : (
               <span className="font-mono text-[10px] text-muted-foreground/70">
                 v{processor.version}
@@ -280,7 +274,7 @@ function ProcessorDetail({
           </div>
           <div
             className={cn(
-              "text-[11px]",
+              "text-xs",
               entry.connected ? "text-emerald-600" : "text-muted-foreground/60",
             )}
           >
@@ -291,14 +285,12 @@ function ProcessorDetail({
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5 pt-2">
         {processor == null ? (
-          <p className="text-[13px] leading-relaxed text-muted-foreground">
+          <p className="text-sm leading-relaxed text-muted-foreground">
             {entry.description ?? "This subscriber did not announce a processor contract."}
           </p>
         ) : (
           <>
-            <p className="text-[13px] leading-relaxed text-foreground/70">
-              {processor.description}
-            </p>
+            <p className="text-sm leading-relaxed text-foreground/70">{processor.description}</p>
             <ContractEventChips heading="Consumes" types={processor.consumes} tone="muted" />
             <ContractEventChips heading="Emits" types={processor.emits} tone="blue" />
             <div>
@@ -309,11 +301,9 @@ function ProcessorDetail({
                 <div className="flex flex-col gap-1.5">
                   {processor.ownedEvents.map((owned) => (
                     <div key={owned.type} className="rounded-xl bg-muted/40 px-3 py-2">
-                      <div className="truncate font-mono text-[11px]">
-                        {shortEventType(owned.type)}
-                      </div>
+                      <div className="truncate font-mono text-xs">{shortEventType(owned.type)}</div>
                       {owned.description == null ? null : (
-                        <div className="truncate text-[11px] text-muted-foreground">
+                        <div className="truncate text-xs text-muted-foreground">
                           {owned.description}
                         </div>
                       )}
@@ -326,7 +316,7 @@ function ProcessorDetail({
         )}
         <div>
           <SectionHeading>Subscription</SectionHeading>
-          <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+          <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
             {entry.subscriptionKey}
           </div>
         </div>
@@ -372,7 +362,7 @@ function ContractEventChips({
 
 function SectionHeading({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+    <div className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground/70">
       {children}
     </div>
   );
@@ -384,13 +374,8 @@ function shortEventType(type: string): string {
 
 function PanelCloseButton({ onClose }: { onClose: () => void }) {
   return (
-    <button
-      type="button"
-      title="Close"
-      onClick={onClose}
-      className="grid size-7 shrink-0 place-items-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
-    >
+    <Button variant="ghost" size="icon-sm" title="Close" onClick={onClose}>
       <XIcon className="size-3.5" />
-    </button>
+    </Button>
   );
 }

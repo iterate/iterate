@@ -36,6 +36,7 @@ import {
   type StreamEvent,
 } from "@iterate-com/streams/shared/stream-processors";
 import type { Event, StreamPath } from "@iterate-com/shared/streams/types";
+import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
   Select,
@@ -234,6 +235,7 @@ export function ProjectStreamView({
       <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1 pt-2.5">
         <button
           type="button"
+          aria-haspopup="dialog"
           title={
             streamNavigator == null
               ? streamPathText
@@ -241,11 +243,11 @@ export function ProjectStreamView({
           }
           onClick={() => streamNavigator != null && setSwitcherOpen(true)}
           className={cn(
-            "flex h-[34px] min-w-0 items-center gap-2 rounded-full bg-muted px-3.5",
+            "flex h-9 min-w-0 items-center gap-2 rounded-full bg-muted px-3.5",
             streamNavigator != null && "cursor-pointer hover:bg-muted/70",
           )}
         >
-          <span className="truncate font-mono text-[13px]">{streamPathText}</span>
+          <span className="truncate font-mono text-sm">{streamPathText}</span>
           {streamNavigator == null ? null : (
             <>
               <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
@@ -279,11 +281,12 @@ export function ProjectStreamView({
               ) : null}
             </button>
           )}
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="sm"
             title="Stream health & metrics"
             onClick={() => setProcPanelOpen(true)}
-            className="flex h-8 items-center gap-1.5 rounded-lg px-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="font-mono text-xs font-normal text-muted-foreground"
           >
             <svg width="24" height="11" viewBox="0 0 26 12" className="shrink-0">
               <polyline
@@ -294,8 +297,8 @@ export function ProjectStreamView({
                 strokeLinejoin="round"
               />
             </svg>
-            <span className="font-mono text-[11.5px]">{metrics.rttNow}ms</span>
-          </button>
+            {metrics.rttNow}ms
+          </Button>
           <Tabs
             value={activeTab}
             onValueChange={(value) => setActiveTab(value as ProjectStreamViewTab)}
@@ -315,33 +318,32 @@ export function ProjectStreamView({
               </TabsTrigger>
             </TabsList>
           </Tabs>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon"
             title="Search & filter"
+            aria-expanded={toolsOpen}
             onClick={() => setToolsOpen((previous) => !previous)}
-            className={cn(
-              "grid size-8 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground",
-              toolsOpen && "bg-muted text-foreground",
-            )}
+            className="rounded-full text-muted-foreground"
           >
             <FilterIcon className="size-3.5" />
-          </button>
+          </Button>
         </div>
       </header>
       {headerAccessory == null ? null : <div className="shrink-0">{headerAccessory}</div>}
       {toolsOpen ? (
         <div className="flex shrink-0 items-center gap-3 px-4 pb-1.5 pt-1">
-          <div className="flex h-[34px] min-w-0 max-w-sm flex-1 items-center gap-2 rounded-full bg-muted px-3.5">
+          <div className="flex h-9 min-w-0 max-w-sm flex-1 items-center gap-2 rounded-full bg-muted px-3.5">
             <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
             <input
               ref={feedSearchInputRef}
               value={feedSearch}
               onChange={(event) => setFeedSearch(event.target.value)}
               placeholder="Search feed…"
-              className="min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-muted-foreground"
+              className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
           </div>
-          <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
+          <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
             {eventCount.toLocaleString()} events · {snapshot.connectionStatus}
           </span>
         </div>

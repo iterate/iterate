@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { ChevronRightIcon, CornerLeftUpIcon, HistoryIcon, FolderOpenIcon } from "lucide-react";
-import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import {
   CommandDialog,
   Command,
@@ -14,22 +15,15 @@ import {
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import {
   parentStreamPath,
-  parseStreamPath,
   readRecentStreams,
   readStreamStateOnce,
   type StreamNavigator,
 } from "~/lib/stream-navigation.ts";
 
-type ChildrenState =
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ok"; childPaths: string[] };
-
 /**
  * The streams command palette: recents on top, a lazily-loaded tree below.
- * Selecting a row opens that stream; the trailing chevron descends into it
- * without opening. Backed by shadcn Command (cmdk) for idiomatic filtering
- * and keyboard navigation.
+ * Enter opens the selected stream; → descends into it without opening.
+ * Backed by shadcn Command (cmdk) for filtering and keyboard navigation.
  */
 export function StreamSwitcherDialog({
   open,
@@ -46,8 +40,7 @@ export function StreamSwitcherDialog({
 }) {
   const [browsePath, setBrowsePath] = useState<string>("/");
   const [query, setQuery] = useState("");
-  const [children, setChildren] = useState<ChildrenState>({ status: "loading" });
-  const [countsByPath, setCountsByPath] = useState<ReadonlyMap<string, number>>(new Map());
+  const [selectedValue, setSelectedValue] = useState("");
 
   const recents = useMemo(
     () => (open ? readRecentStreams(recentsScope).filter((path) => path !== currentPath) : []),
@@ -62,51 +55,24 @@ export function StreamSwitcherDialog({
     setQuery("");
   }, [open, currentPath]);
 
-  useEffect(() => {
-    if (!open) return;
-    let disposed = false;
-    setChildren({ status: "loading" });
-    readStreamStateOnce(navigator.source, parseStreamPath(browsePath))
-      .then((state) => {
-        if (disposed) return;
-        setChildren({ status: "ok", childPaths: [...state.childPaths].sort() });
-        // Counts pop in asynchronously, one read per child.
-        for (const childPath of state.childPaths.slice(0, 48)) {
-          readStreamStateOnce(navigator.source, parseStreamPath(childPath))
-            .then((childState) => {
-              if (disposed) return;
-              setCountsByPath((previous) => {
-                const next = new Map(previous);
-                next.set(childPath, childState.eventCount);
-                return next;
-              });
-            })
-            .catch(() => {});
-        }
-      })
-      .catch((error: unknown) => {
-        if (disposed) return;
-        setChildren({
-          status: "error",
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
-    return () => {
-      disposed = true;
-    };
-  }, [open, browsePath, navigator.source]);
+  const children = useQuery({
+    queryKey: ["stream-switcher-children", recentsScope, browsePath],
+    queryFn: async () => {
+      const state = await readStreamStateOnce(navigator.source, StreamPath.parse(browsePath));
+      return [...state.childPaths].sort();
+    },
+    enabled: open,
+  });
 
   function openStream(path: string) {
     onOpenChange(false);
-    navigator.onOpenPath(parseStreamPath(path));
+    navigator.onOpenPath(StreamPath.parse(path));
   }
 
   function descendInto(path: string) {
     setBrowsePath(path);
     setQuery("");
   }
-
-  const showRecents = recents.length > 0;
 
   return (
     <CommandDialog
@@ -116,11 +82,22 @@ export function StreamSwitcherDialog({
       description="Search and navigate streams"
       className="sm:max-w-lg"
     >
-      <Command>
+      <Command
+        value={selectedValue}
+        onValueChange={setSelectedValue}
+        onKeyDown={(event) => {
+          // → descends into the highlighted child stream without opening it.
+          if (event.key !== "ArrowRight" || query !== "") return;
+          const childPath = children.data?.find((path) => path === selectedValue);
+          if (childPath == null) return;
+          event.preventDefault();
+          descendInto(childPath);
+        }}
+      >
         <CommandInput placeholder="Go to stream…" value={query} onValueChange={setQuery} />
         <CommandList>
           <CommandEmpty>No streams found.</CommandEmpty>
-          {showRecents ? (
+          {recents.length === 0 ? null : (
             <>
               <CommandGroup heading="Recent">
                 {recents.map((path) => (
@@ -136,7 +113,7 @@ export function StreamSwitcherDialog({
               </CommandGroup>
               <CommandSeparator />
             </>
-          ) : null}
+          )}
           <CommandGroup heading={browsePath}>
             {browsePath === "/" ? null : (
               <CommandItem
@@ -151,44 +128,26 @@ export function StreamSwitcherDialog({
               <FolderOpenIcon className="size-3.5 text-muted-foreground" />
               <span className="truncate font-mono text-xs">Open {browsePath}</span>
             </CommandItem>
-            {children.status === "loading" ? (
+            {children.isPending ? (
               <div className="flex items-center gap-2 px-2 py-2 text-xs text-muted-foreground">
                 <Spinner className="size-3" /> Loading child streams…
               </div>
-            ) : children.status === "error" ? (
-              <div className="px-2 py-2 text-xs text-destructive">{children.message}</div>
-            ) : children.childPaths.length === 0 ? (
+            ) : children.isError ? (
+              <div className="px-2 py-2 text-xs text-destructive">
+                {children.error instanceof Error ? children.error.message : "Failed to load"}
+              </div>
+            ) : children.data.length === 0 ? (
               <div className="px-2 py-2 text-xs text-muted-foreground">No child streams yet.</div>
             ) : (
-              children.childPaths.map((childPath) => (
-                <CommandItem
+              children.data.map((childPath) => (
+                <ChildStreamItem
                   key={childPath}
-                  value={childPath}
-                  onSelect={() => openStream(childPath)}
-                >
-                  <span className="truncate font-mono text-xs">
-                    {relativeStreamLabel(browsePath, childPath)}
-                  </span>
-                  <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                    {countsByPath.get(childPath) == null ? null : (
-                      <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
-                        {countsByPath.get(childPath)}
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      title={`Browse ${childPath}`}
-                      className="grid size-5 place-items-center rounded text-muted-foreground/60 hover:bg-muted hover:text-foreground"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        descendInto(childPath);
-                      }}
-                    >
-                      <ChevronRightIcon className="size-3.5" />
-                    </button>
-                  </span>
-                </CommandItem>
+                  browsePath={browsePath}
+                  childPath={childPath}
+                  navigator={navigator}
+                  recentsScope={recentsScope}
+                  onOpen={openStream}
+                />
               ))
             )}
           </CommandGroup>
@@ -196,10 +155,50 @@ export function StreamSwitcherDialog({
         <div className="flex items-center gap-3 border-t px-3 py-1.5 text-[10px] text-muted-foreground">
           <span>↑↓ navigate</span>
           <span>↵ open</span>
+          <span>→ browse</span>
           <span>esc close</span>
         </div>
       </Command>
     </CommandDialog>
+  );
+}
+
+function ChildStreamItem({
+  browsePath,
+  childPath,
+  navigator,
+  recentsScope,
+  onOpen,
+}: {
+  browsePath: string;
+  childPath: string;
+  navigator: StreamNavigator;
+  recentsScope: string;
+  onOpen: (path: string) => void;
+}) {
+  // Counts pop in asynchronously, one cached read per child path.
+  const count = useQuery({
+    queryKey: ["stream-switcher-count", recentsScope, childPath],
+    queryFn: async () => {
+      const state = await readStreamStateOnce(navigator.source, StreamPath.parse(childPath));
+      return state.eventCount;
+    },
+  });
+
+  return (
+    <CommandItem value={childPath} onSelect={() => onOpen(childPath)}>
+      <span className="truncate font-mono text-xs">
+        {relativeStreamLabel(browsePath, childPath)}
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-1.5">
+        {count.data == null ? null : (
+          <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
+            {count.data}
+          </span>
+        )}
+        <ChevronRightIcon className="size-3.5 text-muted-foreground/40" />
+      </span>
+    </CommandItem>
   );
 }
 

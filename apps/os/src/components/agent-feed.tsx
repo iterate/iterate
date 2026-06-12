@@ -14,6 +14,8 @@ import {
   MessageContent,
   MessageResponse,
 } from "@iterate-com/ui/components/ai-elements/message";
+import { Button } from "@iterate-com/ui/components/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -94,15 +96,13 @@ export function AgentFeedView({
     >
       <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
         {items.length === 0 && state.live == null ? (
-          <div className="grid min-h-48 place-items-center text-sm text-muted-foreground">
-            {isPending ? (
-              <span className="inline-flex items-center gap-2">
-                <Spinner className="size-4" /> Connecting to the stream
-              </span>
-            ) : (
-              emptyLabel
-            )}
-          </div>
+          <Empty className="min-h-48">
+            <EmptyHeader>
+              {isPending ? <Spinner className="size-4" /> : null}
+              <EmptyTitle>{isPending ? "Connecting to the stream" : "Nothing here yet"}</EmptyTitle>
+              {isPending ? null : <EmptyDescription>{emptyLabel}</EmptyDescription>}
+            </EmptyHeader>
+          </Empty>
         ) : null}
         <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
           {virtualItems.map((virtualItem) => {
@@ -138,9 +138,9 @@ export function AgentFeedView({
   );
 }
 
-function filterAgentItems(items: readonly AgentUiItem[], search: string): AgentUiItem[] {
+function filterAgentItems(items: readonly AgentUiItem[], search: string): readonly AgentUiItem[] {
   const query = search.trim().toLowerCase();
-  if (query === "") return [...items];
+  if (query === "") return items;
   return items.filter((item) => JSON.stringify(item).toLowerCase().includes(query));
 }
 
@@ -201,23 +201,23 @@ function AgentActivityRow({
 }) {
   return (
     <div className="flex flex-col py-0.5">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
+        aria-expanded={expanded}
         title="Agent activity — click to see what it did"
         onClick={() => onToggle(activity.id)}
-        className="-ml-1.5 flex h-7 items-center gap-2 self-start rounded-md px-1.5 text-left hover:bg-muted/50"
+        className="-ml-2.5 self-start font-medium text-muted-foreground"
       >
-        <CodeIcon className="size-3 shrink-0 text-muted-foreground/60" />
-        <span className="text-[13px] font-medium text-muted-foreground">
-          {activitySummary(activity)}
-        </span>
+        <CodeIcon className="size-3 text-muted-foreground/60" />
+        {activitySummary(activity)}
         <ChevronRightIcon
           className={cn(
-            "size-2.5 shrink-0 text-muted-foreground/50 transition-transform",
+            "size-2.5 text-muted-foreground/50 transition-transform",
             expanded && "rotate-90",
           )}
         />
-      </button>
+      </Button>
       {expanded ? (
         <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
           {activity.steps.map((step) => (
@@ -261,27 +261,29 @@ function AgentActivityStep({
 }) {
   return (
     <div className="flex flex-col">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="xs"
+        aria-expanded={expanded}
         onClick={() => onToggle(step.id)}
-        className="-ml-1.5 flex h-[26px] items-center gap-2 self-start rounded-md px-1.5 text-left hover:bg-muted/50"
+        className="-ml-2 self-start font-normal"
       >
         {step.kind === "llm" ? (
           <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
         ) : (
-          <CodeIcon className="size-3 shrink-0 text-muted-foreground" />
+          <CodeIcon className="size-3 text-muted-foreground" />
         )}
         <span className="font-mono text-xs text-foreground/70">{stepLabel(step)}</span>
-        <span className="font-mono text-[11px] text-muted-foreground/70">{stepMeta(step)}</span>
+        <span className="font-mono text-xs text-muted-foreground/70">{stepMeta(step)}</span>
         <ChevronRightIcon
           className={cn(
-            "size-2 shrink-0 text-muted-foreground/50 transition-transform",
+            "size-2 text-muted-foreground/50 transition-transform",
             expanded && "rotate-90",
           )}
         />
-      </button>
+      </Button>
       {expanded ? (
-        <div className="flex flex-col gap-2 pb-2.5 pl-[21px] pt-0.5">
+        <div className="flex flex-col gap-2 pb-2.5 pl-5 pt-0.5">
           {step.kind === "llm" ? <LlmStepDetail step={step} /> : <CodeStepDetail step={step} />}
         </div>
       ) : null}
@@ -394,7 +396,7 @@ function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
  * the live reduced state on every chunk: finished steps collapse upward into
  * quiet rows while the current step streams its thinking or code.
  */
-export function AgentLiveActivity({
+function AgentLiveActivity({
   live,
   expandedIds,
   onToggle,
@@ -408,9 +410,9 @@ export function AgentLiveActivity({
 
   return (
     <div className="flex flex-col py-0.5">
-      <div className="-ml-1.5 flex h-7 items-center gap-2 self-start px-1.5">
+      <div className="flex h-7 items-center gap-2 self-start px-0.5">
         <Spinner className="size-3 shrink-0 text-amber-600" />
-        <span className="text-[13px] font-medium text-amber-700 dark:text-amber-500">
+        <span className="text-sm font-medium text-amber-700 dark:text-amber-500">
           {liveActivityLabel(liveStep)}
         </span>
       </div>
@@ -448,13 +450,13 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
   return (
     <div className="flex flex-col gap-1.5 py-1">
       {step.thinkingText === "" && step.responseText === "" ? (
-        <div className="px-1.5 text-[13px] italic text-muted-foreground">
+        <div className="px-1.5 text-sm italic text-muted-foreground">
           Thinking
           <StreamingCursor />
         </div>
       ) : null}
       {step.thinkingText === "" ? null : (
-        <div className="max-w-[620px] whitespace-pre-wrap px-1.5 text-[13.5px] italic leading-relaxed text-muted-foreground">
+        <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm italic leading-relaxed text-muted-foreground">
           {step.thinkingText}
           {step.responseText === "" ? <StreamingCursor /> : null}
         </div>
@@ -478,7 +480,7 @@ function StreamingCursor({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        "ml-px inline-block h-[13px] w-[7px] animate-pulse bg-muted-foreground/40 align-[-2px]",
+        "ml-px inline-block h-3.5 w-[7px] animate-caret-blink bg-muted-foreground/40 align-[-2px]",
         className,
       )}
     />
@@ -491,7 +493,7 @@ function StreamingCursor({ className }: { className?: string }) {
 
 function ThinkingBlock({ children }: { children: ReactNode }) {
   return (
-    <div className="max-w-[620px] whitespace-pre-wrap rounded-xl bg-muted/50 px-4 py-3 text-[13px] italic leading-relaxed text-muted-foreground">
+    <div className="max-w-2xl whitespace-pre-wrap rounded-xl bg-muted/50 px-4 py-3 text-sm italic leading-relaxed text-muted-foreground">
       {children}
     </div>
   );
