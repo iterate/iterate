@@ -15,8 +15,8 @@
 // Everything effectful is injected: `dial` turns a CapabilityAddress into
 // something speaking `call({ path, args })` (dial.ts builds it; the core
 // never touches env or a project id), `parentItx` is a stub of the parent
-// context's core (chain delegation — the platform defaults are simply the
-// chain's code-rooted final link, platform-context.ts), and the journal
+// context's core (chain delegation — the defaults are simply the chain's
+// code-rooted final link, platform-context.ts), and the journal
 // append/read pair rides in as the processor's iterate context.
 //
 // Hosts: the Project DO and ItxDurableObject expose the core via an `itx()`
@@ -30,18 +30,20 @@ import { ItxContract, ITX_EVENT_TYPES, type ItxState } from "./contract.ts";
 import {
   replayPathCall,
   RESERVED_PATH_SEGMENTS,
+  SELF_DESCRIPTION_METHOD,
   type PathCall,
   type PathCallable,
 } from "./path-proxy.ts";
-import type {
-  CapabilityAddress,
-  CapabilityDescription,
-  CapabilityKind,
-  CapabilityMeta,
-  CapabilityTarget,
-  ItxOrigin,
-  WorkerRef,
-  WorkerSource,
+import {
+  DEFAULTS_DESCRIBE_FROM,
+  type CapabilityAddress,
+  type CapabilityDescription,
+  type CapabilityKind,
+  type CapabilityMeta,
+  type CapabilityTarget,
+  type ItxOrigin,
+  type WorkerRef,
+  type WorkerSource,
 } from "./types.ts";
 
 // Server-side one-stop: the calling-convention pieces live in path-proxy.ts
@@ -49,13 +51,14 @@ import type {
 // model lives in types.ts (the import-free design of record). Server code
 // imports all of it from here.
 export {
-  asPathCallable,
   replayPathCall,
   RESERVED_PATH_SEGMENTS,
+  SELF_DESCRIPTION_METHOD,
   type PathCall,
   type PathCallable,
 } from "./path-proxy.ts";
 export { ItxContract, ITX_EVENT_TYPES, type ItxState } from "./contract.ts";
+export { DEFAULTS_DESCRIBE_FROM } from "./types.ts";
 export type {
   CapabilityAddress,
   CapabilityDescription,
@@ -125,11 +128,23 @@ export type ItxStub = {
   invoke(input: { path: string[]; args: unknown[]; origin?: ItxOrigin }): Promise<unknown>;
 };
 
+/** How long a provide waits for a target's optional describeItx answer.
+ * Loopback dials get longer: a first-party client's first probe may ride a
+ * cold project chain and fetch real data (OpenApiClient fetches its spec);
+ * everything else stays snappy — a miss just means an unenriched provide. */
+const SELF_DESCRIPTION_TIMEOUT_MS = 3_000;
+const SELF_DESCRIPTION_LOOPBACK_TIMEOUT_MS = 15_000;
+
+/** Probe-derived strings are journaled forever; cap them so a pathological
+ * spec cannot bloat the record. Caller-supplied values are never touched. */
+const SELF_DESCRIPTION_META_BUDGET = 64 * 1024;
+
 export class CapabilityOfflineError extends Error {
   constructor(name: string) {
     super(
       `Capability "${name}" is registered but its provider is not connected. ` +
-        `Live capabilities last as long as the provider's session; the provider must reconnect and provide() again.`,
+        `Live capabilities last as long as the provider's session; the provider must ` +
+        `reconnect and call provideCapability() again.`,
     );
   }
 }
@@ -218,16 +233,19 @@ export type ItxIterateContext = {
 };
 
 export type ItxDeps = {
-  /** This context's identity — describe() owner label, origin id. */
+  /** This context's identity — the journal records' owner field, origin id. */
   contextId: string;
   /** This context's own address — stamped as origin when delegating. */
   selfAddress: CapabilityAddress;
   /** THE only dial effect: address → something speaking call({ path, args }). */
   dial: CapabilityDial;
-  /** The parent context's core, or null at the chain root. A function
+  /** The parent context's link, or null at the chain root. A function
    * because a generic context learns its parent from its own birth
-   * certificate (state), which exists only after the journal is consumed. */
-  parentItx: () => ItxStub | null;
+   * certificate (state), which exists only after the journal is consumed.
+   * `from` is how describe() labels entries inherited through this link —
+   * the parent's context id, or "defaults" at the code root (the internal
+   * platform:project id never leaves the chain). */
+  parentItx: () => { from: string; stub: ItxStub } | null;
   /** Processor-mode execution: run one enqueued script-execution-requested
    * event (the runner appends the completed event to this journal). */
   runScript?: (input: { code: string; executionId: string }) => Promise<unknown>;
@@ -240,6 +258,9 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    * In-memory on purpose: a connection cannot be persisted (workerd#6087
    * may change this) — replay marks live entries disconnected. */
   #liveStubs = new Map<string, LiveProvider>();
+  /** Releases everything a live registration dup-retained (the provider's
+   * own dup, or every member dup of a plain-object provider). */
+  #liveStubReleases = new Map<string, () => void>();
   #materialized = false;
   /** Monotonic append counter; #catchUp compares it against the counter a
    * sync STARTED at to guarantee read-your-writes. */
@@ -254,9 +275,10 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    * the checkpoint's offset bookkeeping makes any later delivery of the
    * same offsets a no-op). A CapabilityAddress registers durably-shaped;
    * anything else is LIVE — the EVENT is journaled (the record outlives the
-   * session) while the stub stays an instance field. A bare local FUNCTION
-   * is live by nature and auto-wraps with asPathCallable semantics (empty
-   * remainder calls the function; a deeper remainder errors).
+   * session) while the stub stays an instance field. A live target needs no
+   * wrapper: a plain object (or bare function) IS the capability — dispatch
+   * replays paths onto its members; a target that implements `call({ path,
+   * args })` itself owns its whole method-tree semantics instead (#borrow).
    *
    * Returns nothing: the HANDLE (handle.ts) builds the CapabilityProvision
    * its callers hold — the core's provide is just the journaled write.
@@ -292,9 +314,34 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       }
       kind = "live";
       const live = isLocalBareFunction(input.capability)
-        ? localFunctionCapability(input.capability)
+        ? localFunctionCapability(input.capability, name)
         : (input.capability as LiveProvider);
       this.#registerLiveStub(name, live);
+    }
+
+    // The self-description doctrine's provide-time hook: instructions +
+    // types belong in the journaled meta AT PROVIDE TIME, and the target
+    // knows its own surface best at exactly that moment. An rpc provide
+    // with no caller-supplied `types` is dialed ONCE and asked
+    // (`describeItx` — a reserved protocol name, so user paths can never
+    // collide); explicit caller values always win. The probe is a
+    // best-effort, SIDE-EFFECTFUL call into provider code at provide time
+    // (an OpenApiClient probe fetches its spec). Strictly best-effort:
+    // any failure or the timeout means the provide proceeds unenriched.
+    // Only call-implementing targets (OpenApiClient, …) can answer —
+    // member-shaped source caps hit replayPathCall's reserved gate, which
+    // is the collision protection doing its job.
+    if (kind === "rpc" && meta.types === undefined) {
+      const described = await this.#dialSelfDescription(
+        name,
+        input.capability as CapabilityAddress,
+      );
+      if (typeof described?.types === "string") {
+        meta.types = truncateSelfDescription(described.types);
+      }
+      if (typeof described?.instructions === "string" && meta.instructions === undefined) {
+        meta.instructions = truncateSelfDescription(described.instructions);
+      }
     }
 
     try {
@@ -315,7 +362,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
   /**
    * Remove an entry (exact path match, never prefix) by appending
    * `capability-revoked`. Only this context's OWN entries can be revoked:
-   * inherited entries (platform defaults, ancestors') resolve through the
+   * inherited entries (the defaults, ancestors') resolve through the
    * chain, so "revoking" one here would lie — shadow it instead. Revoking a
    * shadow resurfaces whatever the chain resolves, by construction.
    */
@@ -326,14 +373,17 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     if (!(name in this.state.capabilities)) {
       // Distinguish "never existed" (a no-op, matching the old semantics)
       // from "inherited through the chain" (refuse with the shadowing hint).
-      const inherited = (await this.deps.parentItx()?.describe())?.find(
+      const parent = this.deps.parentItx();
+      const inherited = (await parent?.stub.describe())?.find(
         (description) => description.name === name,
       );
       if (inherited) {
+        const from = inherited.from ?? parent!.from;
         throw new Error(
           `Capability "${name}" is not provided on this context — it is inherited from ` +
-            `${inherited.owner} (e.g. a platform default) and cannot be revoked here; ` +
-            `provide your own "${name}" to shadow it.`,
+            `${from === DEFAULTS_DESCRIBE_FROM ? "the defaults" : `context ${from}`} and cannot ` +
+            `be revoked here; provide your own "${name}" on this context to take its place; ` +
+            `the original stays on the parent.`,
         );
       }
       return;
@@ -343,36 +393,48 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
   }
 
   /**
-   * The merged chain view: own entries (each with its `owner` provenance),
-   * then the parent chain's — the platform defaults arrive from the chain's
-   * code-rooted final link like any other ancestor's. Suppression is
-   * deliberately EXACT-match only: a path provide ("sdk.chat.postMessage")
-   * shadows just its subtree — the parent's "sdk" stays live for every other
-   * path, so hiding it here would lie about what longest-prefix dispatch
-   * actually resolves.
+   * The merged chain view: own entries first (no provenance field — they are
+   * yours), then the parent chain's, each carrying `from` (the context the
+   * entry actually lives on; the defaults read `from: "defaults"`).
+   * Suppression is deliberately EXACT-match only: a path provide
+   * ("sdk.chat.postMessage") shadows just its subtree — the parent's "sdk"
+   * stays live for every other path, so hiding it here would lie about what
+   * longest-prefix dispatch actually resolves.
    */
   async describe(): Promise<CapabilityDescription[]> {
     await this.#materialize();
     const own = Object.values(this.state.capabilities)
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((entry): CapabilityDescription => {
-        const meta = entry.meta as CapabilityMeta;
+        // `instructions`/`types` are LIFTED to the entry's top level and
+        // removed from the projected meta — one place to read each fact.
+        // (The journal keeps the full meta verbatim; this is projection.)
+        const { instructions, types, ...meta } = entry.meta as CapabilityMeta;
         return {
           connected: entry.kind === "live" ? this.#liveStubs.has(entry.name) : undefined,
-          instructions: typeof meta.instructions === "string" ? meta.instructions : undefined,
+          instructions: typeof instructions === "string" ? instructions : undefined,
           kind: entry.kind,
           meta,
           name: entry.name,
-          owner: entry.owner,
-          types: typeof meta.types === "string" ? meta.types : undefined,
+          types: typeof types === "string" ? types : undefined,
           updatedAtMs: entry.updatedAtMs,
         };
       });
     const parent = this.deps.parentItx();
     if (!parent) return own;
     const shadowed = new Set(own.map((description) => description.name));
-    const inherited = await parent.describe();
-    return [...own, ...inherited.filter((description) => !shadowed.has(description.name))];
+    const inherited = await parent.stub.describe();
+    return [
+      ...own,
+      ...inherited
+        .filter((description) => !shadowed.has(description.name))
+        // Stamp `from` exactly one level below the owner: the parent's OWN
+        // entries arrive unstamped (own entries carry no provenance) and get
+        // this link's label; deeper ancestors' already carry theirs.
+        .map((description) =>
+          description.from === undefined ? { ...description, from: parent.from } : description,
+        ),
+    ];
   }
 
   /**
@@ -391,7 +453,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     if (!resolved) {
       const parent = this.deps.parentItx();
       if (parent) {
-        return await parent.invoke({ ...input, origin });
+        return await parent.stub.invoke({ ...input, origin });
       }
       throw new Error(
         `No capability named "${input.path[0] ?? ""}" in context ${this.deps.contextId}` +
@@ -417,6 +479,47 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       throw error;
     } finally {
       disposeIfPossible(borrowed);
+    }
+  }
+
+  /** Provide-time self-description (see provideCapability): one dial, one
+   * `describeItx` call, a short deadline, and null on ANY miss — never an
+   * error, never a hang. The losing in-flight call is observed so a late
+   * rejection cannot become unhandled. */
+  async #dialSelfDescription(
+    name: string,
+    address: CapabilityAddress,
+  ): Promise<{ instructions?: string; types?: string } | null> {
+    let borrowed: PathCallable | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      borrowed = this.deps.dial(address, {
+        capabilityPath: name,
+        origin: { address: this.deps.selfAddress, id: this.deps.contextId },
+      });
+      const call = Promise.resolve(borrowed.call({ args: [], path: [SELF_DESCRIPTION_METHOD] }));
+      call.catch(() => {});
+      const deadlineMs =
+        address.type === "rpc" && address.worker.type === "loopback"
+          ? SELF_DESCRIPTION_LOOPBACK_TIMEOUT_MS
+          : SELF_DESCRIPTION_TIMEOUT_MS;
+      const result = await Promise.race([
+        call,
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), deadlineMs);
+        }),
+      ]);
+      if (result == null || typeof result !== "object") return null;
+      const { instructions, types } = result as { instructions?: unknown; types?: unknown };
+      return {
+        ...(typeof instructions === "string" ? { instructions } : {}),
+        ...(typeof types === "string" ? { types } : {}),
+      };
+    } catch {
+      return null;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      if (borrowed) disposeIfPossible(borrowed);
     }
   }
 
@@ -521,10 +624,13 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
   #registerLiveStub(name: string, provider: LiveProvider): void {
     // RPC disposes argument stubs when the call returns; keep a duplicate
     // (and hand further dups to borrowers) — both directions of the dup()
-    // discipline from the original capnweb learnings.
-    const retained = provider.dup ? provider.dup() : provider;
+    // discipline from the original capnweb learnings. A PLAIN-object provider
+    // crosses RPC by value with its function members as stubs, so retention
+    // walks it and dups every member (retainLiveProvider).
+    const { onRpcBroken, release, retained } = retainLiveProvider(provider);
     this.#dropLiveStub(name, { record: false });
     this.#liveStubs.set(name, retained);
+    this.#liveStubReleases.set(name, release);
     // Best-effort teardown registration: capnweb stubs implement onRpcBroken
     // locally, but Workers-RPC stubs proxy EVERY property as a remote method,
     // so on a provider that doesn't implement it the call rejects with "does
@@ -533,7 +639,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const teardown = () => {
       if (this.#liveStubs.get(name) === retained) this.#dropLiveStub(name, { record: true });
     };
-    void Promise.resolve(retained.onRpcBroken?.(teardown) as unknown).catch(() => {});
+    void Promise.resolve(onRpcBroken?.(teardown) as unknown).catch(() => {});
   }
 
   /** Drop a live stub. `record: true` (session teardown) appends the
@@ -543,6 +649,8 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const stub = this.#liveStubs.get(name);
     if (!stub) return;
     this.#liveStubs.delete(name);
+    const release = this.#liveStubReleases.get(name);
+    this.#liveStubReleases.delete(name);
     if (opts.record) {
       void this.ctx.journal
         .append({
@@ -553,7 +661,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
           console.error(`[itx] capability-disconnected append failed for "${name}":`, error);
         });
     }
-    stub[Symbol.dispose]?.();
+    release?.();
   }
 
   /** The two-case shape: a capability is either held up by a live connection
@@ -562,7 +670,23 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     if (entry.kind === "live") {
       const stub = this.#liveStubs.get(entry.name);
       if (!stub) throw new CapabilityOfflineError(entry.name);
-      return (stub.dup ? stub.dup() : stub) as unknown as PathCallable;
+      const borrowed = (stub.dup ? stub.dup() : stub) as LiveProvider;
+      // Dispatch decides the live target's mode right here, by a free local
+      // property probe (never a round trip). A target implementing `call`
+      // owns its whole method-tree semantics (the SDK shape: one method
+      // receives { path, args } as data); anything else IS its member tree —
+      // replay the remaining path onto it. Plain objects always take the
+      // member branch: they cross sessions by value (the probe sees their
+      // real, absent `call`), and their retained member stubs are what the
+      // replay calls. Function-shaped targets always probe call-speaking —
+      // bare functions wrap at provide (localFunctionCapability / the
+      // handle's wrapper, live-target.ts), and a session-crossed stub
+      // materializes a callable proxy for any member name, `call` included.
+      if (typeof borrowed.call === "function") return borrowed as unknown as PathCallable;
+      return {
+        call: (input: PathCall) => replayPathCall(borrowed, input, { capability: entry.name }),
+        [Symbol.dispose]: () => disposeIfPossible(borrowed),
+      } as PathCallable;
     }
     return this.deps.dial(entry.address! as CapabilityAddress, {
       capabilityPath: entry.name,
@@ -595,7 +719,7 @@ export function resolveLongestProvidedPrefix<Entry>(
  * Names that may never be FIRST path segments: a cap must not shadow the
  * trust kernel (it is reachable as `itx.<name>`, so it competes with the
  * handle's built-ins). `fetch` and `streams` are deliberately NOT here:
- * both are shadowable platform default capabilities (providing your own
+ * both are shadowable default capabilities (providing your own
  * `fetch` is how egress interception works) — the handle's real members
  * still win property lookup; they route through the core anyway.
  */
@@ -689,17 +813,93 @@ export function isLocalBareFunction(
   return proto === Function.prototype || proto === ASYNC_FUNCTION_PROTOTYPE;
 }
 
+/** Cap one probe-derived string against the journaled-meta budget, with an
+ * honest note where the cut happened. */
+function truncateSelfDescription(value: string): string {
+  if (value.length <= SELF_DESCRIPTION_META_BUDGET) return value;
+  return (
+    value.slice(0, SELF_DESCRIPTION_META_BUDGET) +
+    "\n// … truncated by the platform: the describeItx answer exceeded the 64KB journaled-meta budget."
+  );
+}
+
 /** Wrap a bare local function so it speaks the one calling convention:
- * empty remainder calls the function, a deeper remainder errors (the
- * asPathCallable semantics, replayed in-process). */
-function localFunctionCapability(fn: (...args: never[]) => unknown): LiveProvider {
-  return { call: (input: PathCall) => replayPathCall(fn, input) } as LiveProvider;
+ * empty remainder calls the function, a deeper remainder errors (replayed
+ * in-process). The wrap exists because a bare function would otherwise look
+ * call-speaking to dispatch — `fn.call` IS a function (Function.prototype). */
+function localFunctionCapability(fn: (...args: never[]) => unknown, name: string): LiveProvider {
+  return {
+    call: (input: PathCall) => replayPathCall(fn, input, { capability: name }),
+  } as LiveProvider;
 }
 
 function isPlainObject(target: unknown): boolean {
   if (typeof target !== "object" || target === null) return false;
   const proto = Object.getPrototypeOf(target);
   return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Retention for a live provider, beyond the provide call that delivered it:
+ * RPC disposes argument stubs when the call returns, so anything stored must
+ * be a dup. Three shapes:
+ *
+ * - a stub with `.dup` (RpcTarget/function providers) retains via one dup;
+ * - a PLAIN object crosses RPC by value with its function members as session
+ *   stubs — retention deep-walks it and dups every stub-valued member (the
+ *   members are the things that die at call end, not the carrier object);
+ * - anything else (a local object) needs no retention.
+ *
+ * `release` disposes exactly what was dup'd here (#dropLiveStub calls it);
+ * `onRpcBroken` is the best teardown hook the shape offers — the provider's
+ * own, or any member stub's (members share the provider's session).
+ */
+function retainLiveProvider(provider: LiveProvider): {
+  retained: LiveProvider;
+  release: () => void;
+  onRpcBroken?: (callback: (error: unknown) => void) => void;
+} {
+  if (typeof provider.dup === "function") {
+    const retained = provider.dup();
+    return {
+      onRpcBroken: (callback) => retained.onRpcBroken?.(callback),
+      release: () => disposeIfPossible(retained),
+      retained,
+    };
+  }
+  if (!isPlainObject(provider)) {
+    return {
+      onRpcBroken: (callback) => provider.onRpcBroken?.(callback),
+      release: () => disposeIfPossible(provider),
+      retained: provider,
+    };
+  }
+  const memberDups: LiveProvider[] = [];
+  const walk = (node: Record<string, unknown>): Record<string, unknown> => {
+    const copy: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(node)) {
+      const dup = (value as { dup?: () => LiveProvider } | null)?.dup;
+      if (value !== null && typeof dup === "function") {
+        // Any member exposing dup() is a session stub — a function OR an
+        // object-shaped stub (e.g. a nested RpcTarget). Both die with the
+        // provide RPC unless retained here.
+        const duped = Reflect.apply(dup, value, []) as LiveProvider;
+        memberDups.push(duped);
+        copy[key] = duped;
+      } else if (isPlainObject(value)) {
+        copy[key] = walk(value as Record<string, unknown>);
+      } else {
+        copy[key] = value;
+      }
+    }
+    return copy;
+  };
+  const retained = walk(provider as Record<string, unknown>) as LiveProvider;
+  return {
+    onRpcBroken: memberDups[0] ? (callback) => memberDups[0]!.onRpcBroken?.(callback) : undefined,
+    release: () => memberDups.forEach((duped) => disposeIfPossible(duped)),
+    retained,
+  };
 }
 
 /**

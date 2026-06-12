@@ -50,6 +50,7 @@ export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-c
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { BindingCapability, EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { McpClient } from "~/itx/capabilities/mcp-client.ts";
+export { OpenApiClient } from "~/itx/capabilities/openapi-client.ts";
 export { UrlDial } from "~/itx/capabilities/url-dial.ts";
 export { StreamsCapability } from "~/itx/capabilities/streams.ts";
 export { ItxDurableObject } from "~/itx/itx-durable-object.ts";

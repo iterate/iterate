@@ -134,7 +134,7 @@ export function makeDial(host: DialHost): CapabilityDial {
         // The binding is a concrete env object that doesn't speak the calling
         // convention — wrap it here, where it is real. Env bindings are
         // long-lived host objects, never per-call borrows: no dispose.
-        return inProcessPathCallable(binding);
+        return inProcessPathCallable(binding, { capability: name });
       }
       case "loopback": {
         // First-party loopback entrypoints all implement call({ path, args })
@@ -183,7 +183,10 @@ export function makeDial(host: DialHost): CapabilityDial {
             }
             return { class: facetClass };
           });
-          return inProcessPathCallable(facetTarget, () => disposeIfPossible(facetTarget));
+          return inProcessPathCallable(facetTarget, {
+            capability: name,
+            dispose: () => disposeIfPossible(facetTarget),
+          });
         }
         const entrypoint = loadWorker(name, attribution.origin, source).then((worker) =>
           worker.getEntrypoint(source.entrypoint),
@@ -193,7 +196,7 @@ export function makeDial(host: DialHost): CapabilityDial {
         // path still awaits the original promise and gets the real error).
         entrypoint.catch(() => {});
         const borrowed: PathCallable & Disposable = {
-          call: async (input) => replayPathCall(await entrypoint, input),
+          call: async (input) => replayPathCall(await entrypoint, input, { capability: name }),
           [Symbol.dispose]: () => void entrypoint.then(disposeIfPossible, () => {}),
         };
         return borrowed;
@@ -241,10 +244,13 @@ export function sourceIsolateKey(input: {
  * on the concrete object the dial just resolved, and (optionally) disposes
  * the inner borrow when the core finishes the call. Never crosses RPC — the
  * core consumes it in-process, so no RpcTarget wrapper is needed. */
-function inProcessPathCallable(target: unknown, dispose?: () => void): PathCallable {
+function inProcessPathCallable(
+  target: unknown,
+  opts?: { capability?: string; dispose?: () => void },
+): PathCallable {
   return {
-    call: (input) => replayPathCall(target, input),
-    ...(dispose ? { [Symbol.dispose]: dispose } : {}),
+    call: (input) => replayPathCall(target, input, { capability: opts?.capability }),
+    ...(opts?.dispose ? { [Symbol.dispose]: opts.dispose } : {}),
   };
 }
 
@@ -300,7 +306,16 @@ const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "EgressPipe",
   "GmailCapability",
   "McpClient",
+  // Like McpClient: only provider props (specUrl/baseUrl/headers) + the
+  // dial-injected attribution — every fetch rides the originating project's
+  // egress, so a handle holder providing it grants nothing beyond HTTP
+  // through their own project's pipe.
+  "OpenApiClient",
   "ReposCapability",
+  // Scopes strictly by the dial-injected projectId (SecretsCapability reads
+  // ctx.props.projectId, which the injection spread always overwrites), so a
+  // provider can never point it at another project's secrets.
+  "SecretsCapability",
   "SlackCapability",
   "StreamsCapability",
   "WorkspaceCapability",

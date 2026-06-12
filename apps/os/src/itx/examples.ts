@@ -96,32 +96,38 @@ return { appended, count: events.length };
 `.trim(),
   },
   {
-    id: "provide-live-capability",
-    title: "Provide a live, browser-owned capability",
+    id: "provide-plain-object",
+    title: "Provide a plain object — it IS the capability",
     description:
-      "Registers a browser-owned object as a LIVE capability on the project (session-bound — it lives only while this REPL tab is connected), then calls it straight back through the itx fallthrough as itx.answer.run().",
+      "You pass your object; there is no client library between you and the capability table. A plain object of functions (nested at any depth) is a live capability: dotted calls replay onto its members, back in the provider's process — your browser tab or Node session. Live caps are session-bound: gone when the session disconnects, back when you reconnect and provide again.",
     context: "project",
-    runtimes: ["browser"],
+    runtimes: ["browser", "node", "cli"],
     code: `
-// A live capability is just an object you own. Its methods run HERE, in
-// the browser tab — the project calls back to you over the open session.
+// No wrapper, no base class, no registration ceremony — the object you
+// already have is the capability. Its methods run HERE, in your process;
+// the project calls back to you over the open session.
 const answer = {
-  async run() {
-    alert("The answer is 42");
-    return "alerted";
+  ultimate: () => 42,
+  deep: {
+    thought: async (question) => ({ answer: 42, question }),
   },
 };
 
-// provideCapability() is THE verb: a live stub is just another capability.
-// asPathCallable() makes a plain object-of-methods speak the one calling
-// convention (call({ path, args }) replayed back here on your object). A
-// live cap disappears when this tab disconnects; reconnect and
-// provideCapability() again to restore it.
-await itx.provideCapability({ name: "answer", capability: asPathCallable(answer) });
+await itx.provideCapability({
+  name: "answer",
+  instructions:
+    "The answer to everything: itx.answer.ultimate(), or itx.answer.deep.thought(question).",
+  capability: answer,
+});
 
-// Unknown names on the handle fall through to the capability table, so the cap is
-// callable as if it were built in.
-return await itx.answer.run();
+// Unknown names on the handle fall through to the capability table, so the
+// cap is callable as if it were built in — at any depth; each call runs
+// back here, where the object lives. (A live cap disappears when this
+// session disconnects; reconnect and provideCapability() again to restore it.)
+return {
+  ultimate: await itx.answer.ultimate(),
+  deep: await itx.answer.deep.thought("life, the universe, everything"),
+};
 `.trim(),
   },
   {
@@ -194,6 +200,63 @@ return {
   greeting: await itx.greeter.hello({ name: "world" }),
   sum: await itx.greeter.add({ a: 2, b: 3 }),
 };
+`.trim(),
+  },
+  {
+    id: "repo-sourced-capability",
+    title: "Code in your repo as a capability, built per commit",
+    description:
+      "The project's own git repo is a capability source: commit a module, then provide a { type: 'repo' } address pointing at the file. The platform builds it per COMMIT (memoized), never per call — 'latest' tracks pushes; a pinned sha makes the journal entry fully determine behavior. The `worker` default is exactly this pattern.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// (1) Commit a capability module into the project's own repo (the shared
+// workspace speaks git; repo.token authenticates the push).
+const { project } = await itx.describe();
+const repo = await itx.repos.ensureProjectRepoInfo({ projectSlug: project.slug });
+const url = new URL(repo.remote);
+url.username = "x";
+url.password = repo.token.split("?")[0];
+const dir = "/repo-cap-demo";
+await itx.workspace.gitClone({ branch: repo.defaultBranch, depth: 1, dir, url: url.toString() });
+await itx.workspace.writeFile(dir + "/caps/greeter.js", \`
+import { WorkerEntrypoint } from "cloudflare:workers";
+export class Greeter extends WorkerEntrypoint {
+  hello({ name }) { return "hello from the repo, " + name; }
+}
+\`);
+await itx.workspace.gitAdd({ dir, filepath: "caps/greeter.js" });
+await itx.workspace.gitCommit({
+  author: { email: "examples@iterate.com", name: "itx example" },
+  dir,
+  message: "add greeter capability",
+});
+await itx.workspace.gitPush({ dir, ref: repo.defaultBranch, remote: "origin" });
+
+// (2) The address points at the FILE; "latest" tracks pushes. (A fresh
+// push can take ~10s to be picked up by the "latest" probe.)
+await itx.provideCapability({
+  name: "repoGreeter",
+  instructions:
+    "Greeter built from caps/greeter.js in the project repo: itx.repoGreeter.hello({ name }).",
+  capability: {
+    type: "rpc",
+    worker: {
+      type: "source",
+      source: {
+        type: "repo",
+        repo: "project",
+        commit: "latest",
+        path: "caps/greeter.js",
+        entrypoint: "Greeter",
+        bundle: {},
+      },
+    },
+  },
+});
+
+// (3) Call it like any other capability.
+return await itx.repoGreeter.hello({ name: "world" });
 `.trim(),
   },
   {
@@ -396,34 +459,175 @@ return { current: await itx.counter.current() };   // 2, and it persists
     id: "extend-child-context",
     title: "Extend the context with its own caps",
     description:
-      "itx.extend() makes a cheap, disposable child context under the project — an agent session or scratchpad. Its caps SHADOW the parent's; names it doesn't provide delegate up the chain. describe() shows the merged view with provenance.",
+      "itx.extend() makes a cheap, disposable child context under the project — an agent session or scratchpad. Its caps SHADOW the parent's; names it doesn't provide delegate up the chain. describe() shows the merged view: own entries plain, inherited ones labeled from: <context>.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
-// A cap on the project — visible to every child through the chain.
+// A cap on the project — visible to every child through the chain. A plain
+// object is all a live capability takes.
 await itx.provideCapability({
   name: "shared",
-  capability: new (class extends RpcTarget {
-    async call({ path }) { return { from: "project", method: path.join(".") }; }
-  })(),
+  capability: { whoami: () => "project" },
 });
 
 // Extend a child. It's a full itx handle on a new itx_… context.
 const child = await itx.extend({ name: "repl-scratch" });
 
-// The child can shadow 'shared' with its own definition...
+// The child can shadow 'shared' with its own object...
 await child.provideCapability({
   name: "shared",
-  capability: new (class extends RpcTarget {
-    async call({ path }) { return { from: "child", method: path.join(".") }; }
-  })(),
+  capability: { whoami: () => "child" },
 });
 
 // ...so the child sees its own, while the project still sees its own.
+// In the merged describe(), the child's entries carry no provenance field;
+// inherited ones say from: <context> ("defaults" for the defaults).
 return {
-  fromChild: await child.shared.ping(),
+  fromChild: await child.shared.whoami(),
   capabilities: (await child.describe()).capabilities, // merged chain, child entries first
 };
+`.trim(),
+  },
+  {
+    id: "fetch-middleware",
+    title: "Middleware: shadow fetch, delegate via itx.super",
+    description:
+      "The middleware story in five lines: shadow `fetch` on an extended child with a plain function that stamps a header, then delegates to the parent chain's unshadowed pipe via itx.super.fetch. Bare fetch() inside the child's isolates flows through the same shadow; the parent is untouched.",
+    context: "project",
+    runtimes: ["browser", "node", "cli"],
+    code: `
+const session = await itx.extend({ name: "traced" });
+
+// The shadow is a PLAIN FUNCTION; itx.super is "call next()" — the parent
+// chain, where fetch is still the real egress pipe.
+await session.provideCapability({
+  name: "fetch",
+  instructions: "Project egress with an x-trace-id header stamped on every request.",
+  capability: async (request) => {
+    const traced = new Request(request.url ?? String(request), request);
+    traced.headers.set("x-trace-id", "itx-example-trace");
+    return await session.super.fetch(traced);
+  },
+});
+
+// Every egress on the session now carries the header. Revoke the shadow
+// and the real pipe resurfaces — middleware is just shadowing plus super.
+const echoed = await (await session.fetch("https://postman-echo.com/get")).json();
+return { traceHeaderSeen: echoed.headers["x-trace-id"] };
+`.trim(),
+  },
+  {
+    id: "journal-is-the-record",
+    title: "The journal IS the record: provide, revoke, read it back",
+    description:
+      "A context's capability table is replayed from an ordinary event stream — its journal at /itx. provideCapability and revokeCapability are appends; read the stream back and watch the record happen. There is no hidden registry to drift from it.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Use a unique name so the journal slice below is unambiguous.
+const name = vars.capName ?? "ephemeral";
+
+await itx.provideCapability({
+  name,
+  capability: { type: "rpc", worker: { type: "binding", binding: "AI" } },
+});
+await itx.revokeCapability({ name });
+
+// The context's journal is an ordinary stream — same read API as anything.
+const journal = await itx.streams.get("/itx").read();
+const record = journal
+  .filter((e) => Array.isArray(e.payload?.path) && e.payload.path.join(".") === name)
+  .map((e) => e.type.split("/").pop());
+return { record }; // ["capability-provided", "capability-revoked"]
+`.trim(),
+  },
+  {
+    id: "mcp-client",
+    title: "Connect a public MCP server",
+    description:
+      "Any remote MCP server (streamable HTTP) becomes a capability via the first-party McpClient: listTools() discovers the surface, and every tool is a dotted call. Cloudflare's docs server is public — no credentials needed. All transport HTTP rides the project egress pipe.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+await itx.provideCapability({
+  name: "cfdocs",
+  instructions: "Cloudflare's documentation MCP server. Call listTools() first.",
+  capability: {
+    type: "rpc",
+    worker: { type: "loopback" },
+    entrypoint: "McpClient",
+    props: { serverUrl: "https://docs.mcp.cloudflare.com/mcp" },
+  },
+});
+
+// Tools are dotted calls; listTools() is the discovery door.
+const { tools } = await itx.cfdocs.listTools();
+const answer = await itx.cfdocs.search_cloudflare_documentation({
+  query: "durable objects",
+});
+return { tools: tools.map((tool) => tool.name), snippet: String(answer).slice(0, 200) };
+`.trim(),
+  },
+  {
+    id: "mcp-authenticated",
+    title: "An authenticated MCP server via a project secret",
+    description:
+      "Connect a remote MCP server that needs an Authorization header — without the credential ever leaving the platform. The token lives as a PROJECT SECRET; the capability address carries only a getSecret(...) placeholder; substitution happens server-side on the egress path. This session, describe(), and the journal never see the material.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// Store the credential ONCE as a project secret (Settings → Secrets), e.g.
+// key "CLOUDFLARE_API_TOKEN". From here on, only the key travels.
+await itx.provideCapability({
+  path: ["mcp", "cloudflare"],
+  instructions: "Cloudflare's MCP server, authenticated via a project secret.",
+  capability: {
+    type: "rpc",
+    worker: { type: "loopback" },
+    entrypoint: "McpClient",
+    props: {
+      serverUrl: "https://bindings.mcp.cloudflare.com/mcp",
+      headers: { authorization: 'Bearer getSecret({ key: "CLOUDFLARE_API_TOKEN" })' },
+    },
+  },
+});
+
+// Every MCP request rides the project egress pipe, where the placeholder
+// becomes the real token — the connected agent/isolate never sees it.
+const { tools } = await itx.mcp.cloudflare.listTools();
+return tools.map((tool) => tool.name);
+`.trim(),
+  },
+  {
+    id: "openapi-client",
+    title: "Any OpenAPI API as an ergonomic capability",
+    description:
+      "Point OpenApiClient at an OpenAPI 3.x spec and every operation becomes a dotted call: itx.petstore.findPetsByStatus({ status }). One input object merges path params, query params, and body. The provider self-describes at provide time — describe() carries TypeScript declarations derived from the spec, with zero callsite ceremony. Auth headers take getSecret(...) placeholders, substituted on egress like everything else.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+await itx.provideCapability({
+  name: "petstore",
+  capability: {
+    type: "rpc",
+    worker: { type: "loopback" },
+    entrypoint: "OpenApiClient",
+    props: {
+      specUrl: "https://petstore3.swagger.io/api/v3/openapi.json",
+      // For authenticated APIs, add headers with a secret placeholder:
+      // headers: { authorization: 'Bearer getSecret({ key: "API_TOKEN" })' },
+    },
+  },
+});
+
+// Flat operationIds, one merged input object, through project egress.
+const pets = await itx.petstore.findPetsByStatus({ status: "available" });
+
+// describe() now carries spec-derived TypeScript — the provider answered
+// the platform's provide-time describeItx probe, no callsite ceremony.
+const { capabilities } = await itx.describe();
+const entry = capabilities.find((cap) => cap.name === "petstore");
+return { count: pets.length, types: entry.types.split("\\n").slice(0, 3) };
 `.trim(),
   },
   {
@@ -442,6 +646,28 @@ const response = await itx.fetch("https://postman-echo.com/get", {
 });
 const body = await response.json();
 return { status: response.status, sawSubstitutedHeader: body.headers };
+`.trim(),
+  },
+  {
+    id: "secrets-and-egress",
+    title: "Store a secret, then fetch with it",
+    description:
+      "The full credential lifecycle in one script: itx.secrets.setSecret() stores material in the project's secret store, and from then on a getSecret(...) placeholder in any egress header becomes the real value server-side — the script itself never round-trips the material again. This is how authenticated MCP/OpenAPI capability addresses stay credential-free.",
+    context: "project",
+    runtimes: ALL_RUNTIMES,
+    code: `
+// (1) Store the credential once. listSecrets() shows redacted summaries.
+await itx.secrets.setSecret({ key: "demo.api_key", material: "demo-" + crypto.randomUUID() });
+
+// (2) Use it by KEY: the placeholder substitutes inside the egress pipe.
+const response = await itx.fetch("https://postman-echo.com/get", {
+  headers: { "x-api-key": 'getSecret({ key: "demo.api_key" })' },
+});
+const echoed = await response.json();
+
+// (3) Clean up. The echo saw the real material; this script only saw the key.
+await itx.secrets.deleteSecret({ key: "demo.api_key" });
+return { status: response.status, echoedKeyHeader: echoed.headers["x-api-key"] };
 `.trim(),
   },
   {

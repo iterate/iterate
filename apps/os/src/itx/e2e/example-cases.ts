@@ -5,10 +5,34 @@
 // a runnable example is missing one (so examples can't silently rot).
 //
 // Not here by design:
-//   provide-live-capability        browser-only alert flow, asserted by its
-//                                  dedicated browser test (alert capture)
 //   egress-with-secret-substitution depends on an external echo service;
 //                                  covered by itx-egress.e2e.test.ts
+//   fetch-middleware               depends on the same external echo service;
+//                                  the middleware behavior itself (shadow +
+//                                  itx.super delegation, both egress doors) is
+//                                  the locked acceptance e2e in
+//                                  itx-extend.e2e.test.ts ("MIDDLEWARE — …")
+//   repo-sourced-capability        a real git push + per-commit build + the
+//                                  ~10s "latest" probe window — too slow/flaky
+//                                  for the per-runtime matrix; proven end to
+//                                  end by the litmus e2e in itx.e2e.test.ts
+//                                  ("user-space caps: repo-sourced code …")
+//   mcp-client                     depends on Cloudflare's live public docs
+//                                  MCP server; the same flow is the
+//                                  always-running e2e in itx-mcp-auth.e2e.test.ts
+//                                  ("public MCP: …")
+//   mcp-authenticated              needs a real Cloudflare API token stored as
+//                                  a project secret; proven end to end (incl.
+//                                  the placeholder-never-material negative
+//                                  controls) by itx-mcp-auth.e2e.test.ts
+//   secrets-and-egress             depends on the same external echo service;
+//                                  the setSecret → placeholder-fetch flow is
+//                                  the "itx.secrets" e2e in
+//                                  itx-egress.e2e.test.ts
+//   openapi-client                 the catalogue snippet points at the live
+//                                  petstore demo; the same flow is proven
+//                                  deterministically against the deployment's
+//                                  own fixture in itx-openapi.e2e.test.ts
 
 import { expect } from "vitest";
 
@@ -26,7 +50,12 @@ export type ExampleCase = {
 /** Example ids that intentionally have no matrix case (see header). */
 export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "egress-with-secret-substitution",
-  "provide-live-capability",
+  "fetch-middleware",
+  "mcp-authenticated",
+  "mcp-client",
+  "openapi-client",
+  "repo-sourced-capability",
+  "secrets-and-egress",
 ]);
 
 export const EXAMPLE_CASES: Record<string, ExampleCase> = {
@@ -41,6 +70,14 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     assert: (result, { marker }) => {
       expect(result).toMatchObject({ appended: { payload: { note: marker } } });
       expect((result as { count: number }).count).toBeGreaterThan(0);
+    },
+  },
+  "provide-plain-object": {
+    assert: (result) => {
+      expect(result).toEqual({
+        deep: { answer: 42, question: "life, the universe, everything" },
+        ultimate: 42,
+      });
     },
   },
   "provide-path-call-sdk": {
@@ -82,7 +119,21 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   },
   "extend-child-context": {
     assert: (result) => {
-      expect(result).toMatchObject({ fromChild: { from: "child", method: "ping" } });
+      expect(result).toMatchObject({ fromChild: "child" });
+      const capabilities = (result as { capabilities: Array<{ from?: string; name: string }> })
+        .capabilities;
+      // The shadow is the child's OWN entry (no provenance field); the
+      // defaults arrive through the chain labeled from: "defaults".
+      const shared = capabilities.filter((entry) => entry.name === "shared");
+      expect(shared).toHaveLength(1);
+      expect(shared[0]!.from).toBeUndefined();
+      expect(capabilities.find((entry) => entry.name === "fetch")?.from).toBe("defaults");
+    },
+  },
+  "journal-is-the-record": {
+    vars: ({ marker }) => ({ capName: `journal_${marker.replace(/-/g, "_")}` }),
+    assert: (result) => {
+      expect(result).toEqual({ record: ["capability-provided", "capability-revoked"] });
     },
   },
   "http-cap-and-share-url": {

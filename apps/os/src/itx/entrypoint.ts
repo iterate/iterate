@@ -120,14 +120,18 @@ export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
   async fetch(request: Request): Promise<Response> {
     // Dispatch at the ORIGINATING context node, not the project: a child
     // context's `fetch` shadow must catch its isolates' bare fetch() too —
-    // the chain (child → project → platform defaults) is what resolves the
+    // the chain (child → project → the defaults) is what resolves the
     // cap. The address rides in props so the hot path never needs the
     // context catalog.
     const address =
       (this.ctx.props.contextAddress as CapabilityAddress | null | undefined) ??
       projectContextAddress(this.ctx.props.projectId);
     const node = dialContext(this.env, address);
-    return (await node.itx().invoke({ args: [request], path: ["fetch"] })) as Response;
+    // The implicit door's signal strip — same reason as ItxHandle.fetch (the
+    // explicit door): an AbortSignal cannot cross the RPC hop to the node.
+    return (await node
+      .itx()
+      .invoke({ args: [new Request(request, { signal: null })], path: ["fetch"] })) as Response;
   }
 }
 
