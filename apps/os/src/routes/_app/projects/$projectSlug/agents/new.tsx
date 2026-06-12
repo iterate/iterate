@@ -95,8 +95,8 @@ function buildPreviewEvents(input: {
       values.provider === "cloudflare-ai" ? parseAgentRunOptsJson(values.runOpts) : {};
 
     // Tool capabilities are no longer compiled into stream events here: the
-    // Agent Durable Object seeds its itx context (and the matching
-    // capability-noted events) on first wake.
+    // Agent Durable Object provides its tools onto its own itx context (the
+    // itx/capability-provided events) on first wake.
     return {
       agentPath,
       events: [

@@ -142,15 +142,17 @@
         margin: 40px 0;
       }
       code {
-        background: #eef0f3;
-        padding: 1px 5px;
-        border-radius: 5px;
         font:
           0.86em ui-monospace,
           SFMono-Regular,
           Menlo,
           Consolas,
           monospace;
+      }
+      code:not(pre code) {
+        background: #eef0f3;
+        padding: 1px 5px;
+        border-radius: 5px;
       }
       strong code {
         font-weight: 600;
@@ -183,6 +185,14 @@
           Consolas,
           monospace;
         color: var(--code-ink);
+      }
+      figure.code pre code {
+        display: block;
+        background: transparent;
+        padding: 0;
+        border-radius: 0;
+        font-size: inherit;
+        color: inherit;
       }
       .tok-k {
         color: #82aaff;
@@ -3083,9 +3093,9 @@
             "<figcaption>" +
             escapeHtml(title) +
             "</figcaption>" +
-            "<pre><code>" +
+            "<pre>" +
             highlight(code) +
-            "</code></pre>";
+            "</pre>";
           return fig;
         }
 

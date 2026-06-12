@@ -249,17 +249,17 @@ describe("AgentProcessor", () => {
     expect(appended).toEqual([]);
   });
 
-  it("renders capability notes into model-visible instructions", async () => {
+  it("renders provided capabilities into model-visible instructions", async () => {
     const { stream, appended } = memoryStream();
     const processor = newAgentProcessor({ stream });
 
     await processor.ingest({
       events: [
         agentEvent({
-          type: "events.iterate.com/agent/capability-noted",
+          type: "events.iterate.com/itx/capability-provided",
           payload: {
-            instructions: "Use itx.chat.sendMessage({ message }) for chat output.",
-            name: "chat",
+            path: ["chat"],
+            meta: { instructions: "Use itx.chat.sendMessage({ message }) for chat output." },
           },
           offset: 44,
         }),
@@ -270,7 +270,7 @@ describe("AgentProcessor", () => {
     expect(appended).toHaveLength(2);
     expect(appended[1]).toMatchObject({
       type: "events.iterate.com/agent/input-added",
-      idempotencyKey: "agent/render-agent-capability-noted@44",
+      idempotencyKey: "agent/render-itx-capability-provided@44",
       payload: {
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },

@@ -69,6 +69,7 @@ import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-proce
 import { StreamSwitcherDialog } from "~/components/stream-switcher-dialog.tsx";
 import { sparklinePoints, useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import { recordRecentStream, type StreamNavigator } from "~/lib/stream-navigation.ts";
+import { projectStreamRpcPath } from "~/lib/stream-links.ts";
 
 type ProjectStreamMessageComposer = {
   placeholder?: string;
@@ -1001,12 +1002,4 @@ function Centered({ children }: { children: ReactNode }) {
       {children}
     </div>
   );
-}
-
-function projectStreamRpcPath(projectSlugOrId: string, streamPath: string) {
-  const normalized =
-    streamPath === "" ? "/" : streamPath.startsWith("/") ? streamPath : `/${streamPath}`;
-  return normalized === "/"
-    ? `/api/project-streams/${encodeURIComponent(projectSlugOrId)}`
-    : `/api/project-streams/${encodeURIComponent(projectSlugOrId)}/${encodeURIComponent(normalized)}`;
 }
