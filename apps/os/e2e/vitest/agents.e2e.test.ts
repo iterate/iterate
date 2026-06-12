@@ -333,9 +333,9 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
 
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/agent/capability-noted",
+      type: "events.iterate.com/itx/capability-provided",
       payload: expect.objectContaining({
-        name: "chat",
+        path: ["chat"],
       }),
     }),
   );
@@ -394,8 +394,8 @@ test("project config worker customizes fresh agents by appending events", async 
     "    await env.STREAMS.append({",
     "      streamPath: agentPath,",
     "      event: {",
-    '        type: "events.iterate.com/agent/capability-noted",',
-    `        payload: { name: ${JSON.stringify(capabilityName)}, instructions: "Use itx.worker.${capabilityName}() (custom ${suffix})." },`,
+    '        type: "events.iterate.com/itx/capability-provided",',
+    `        payload: { path: [${JSON.stringify(capabilityName)}], kind: "rpc", address: { type: "rpc", worker: { type: "loopback" }, entrypoint: "WorkerCapability" }, meta: { instructions: "Use itx.worker.${capabilityName}() (custom ${suffix})." } },`,
     "      },",
     "    });",
     "  },",
@@ -462,8 +462,8 @@ test("project config worker customizes fresh agents by appending events", async 
   expect(lastPromptText).toContain(customizedPath);
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/agent/capability-noted",
-      payload: expect.objectContaining({ name: capabilityName }),
+      type: "events.iterate.com/itx/capability-provided",
+      payload: expect.objectContaining({ path: [capabilityName] }),
     }),
   );
 }, 240_000);
@@ -674,9 +674,9 @@ itIfSlackBotToken(
 
     expect(events).toContainEqual(
       expect.objectContaining({
-        type: "events.iterate.com/agent/capability-noted",
+        type: "events.iterate.com/itx/capability-provided",
         payload: expect.objectContaining({
-          name: "slack",
+          path: ["slack"],
         }),
       }),
     );
@@ -800,9 +800,9 @@ itIfSlackBotToken(
     );
     expect(events).toContainEqual(
       expect.objectContaining({
-        type: "events.iterate.com/agent/capability-noted",
+        type: "events.iterate.com/itx/capability-provided",
         payload: expect.objectContaining({
-          name: "slack",
+          path: ["slack"],
         }),
       }),
     );
