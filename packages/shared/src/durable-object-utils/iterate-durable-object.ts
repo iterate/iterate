@@ -21,7 +21,13 @@ export type IterateDurableObjectBaseOptions<
   Env,
 > = {
   className: string;
-  getDatabase(env: Env): D1Database;
+  /**
+   * D1 object-catalog database. Omit to disable the catalog entirely
+   * (`d1ObjectCatalog: "none"`) — for objects whose name fully describes them
+   * and that are never enumerated through a catalog (e.g. agents, named
+   * `{projectId}:{agentPath}` and listed by walking their stream tree).
+   */
+  getDatabase?(env: Env): D1Database;
   indexes?: D1ObjectCatalogIndexDefinitions<StructuredNameFromSchema<NameSchema>>;
   nameSchema: NameSchema;
 };
@@ -51,12 +57,15 @@ export function withIterateDurableObjectStack<
   Env,
 >(options: IterateDurableObjectBaseOptions<NameSchema, Env>) {
   return function <TBase extends DurableObjectClass>(Base: TBase) {
+    const getDatabase = options.getDatabase;
     const CatalogBase = withLifecycleHooks<StructuredNameFromSchema<NameSchema>, undefined, Env>({
-      d1ObjectCatalog: {
-        className: options.className,
-        getDatabase: options.getDatabase,
-        indexes: options.indexes,
-      },
+      d1ObjectCatalog: getDatabase
+        ? {
+            className: options.className,
+            getDatabase,
+            indexes: options.indexes,
+          }
+        : "none",
       nameSchema: options.nameSchema as unknown as z.ZodType<StructuredNameFromSchema<NameSchema>>,
     })(withDurableObjectCore(Base));
     const CatalogBaseWithCore = CatalogBase as typeof CatalogBase &
