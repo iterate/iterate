@@ -1048,8 +1048,8 @@ deep: { thought: (q) => … } } })` works directly, callable at any depth
   `call({ path, args })` owns the whole method tree — the SDK shape); a
   bare function still auto-wraps (empty remainder calls it).
 - **describe() dropped the owner noise.** Own entries carry NO provenance
-  field; inherited entries carry `from: <owner>`, and the platform context
-  renders as `"platform"` (PLATFORM_PROJECT_CONTEXT_ID stays internal).
+  field; inherited entries carry `from: <owner>`, and the defaults
+  render as `"defaults"` (PLATFORM_PROJECT_CONTEXT_ID stays internal).
   Journal records keep their `owner` field unchanged — this is a
   describe()-projection change only.
 
