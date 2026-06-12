@@ -16,10 +16,12 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
-import { createD1Client } from "sqlfu";
 import type { ItxDurableObject } from "~/itx/itx-durable-object.ts";
-import type { CapabilityAddress } from "~/itx/itx.ts";
-import { dialContext, extendContext, projectContextAddress } from "~/itx/journal.ts";
+import { Itx, type CapabilityAddress, type ItxStub } from "~/itx/itx.ts";
+import { makeDial, durableObjectFacetsHook, resolveDialableTargets } from "~/itx/dial.ts";
+import { dialContext, journalStream, projectContextAddress } from "~/itx/journal.ts";
+import { runItxScript } from "~/itx/run.ts";
+import type { ItxRuntime } from "~/itx/handle.ts";
 import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
 import { AgentChatProcessor } from "~/domains/agents/stream-processors/agent-chat/implementation.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
@@ -70,6 +72,7 @@ import {
   AgentDurableObjectStructuredName,
   agentLlmProcessorSlug,
   agentProcessorSubscriptionConfiguredEvents,
+  getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
 
@@ -185,9 +188,10 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       new AgentHostProcessor({
         ...deps,
         agentNamespace: this.env.AGENT,
-        getItxContextId: async () => {
+        getItxContext: async () => {
           const params = await this.ensureStartedOrInitializeFromRuntimeName();
-          return await this.ensureItxContext(params);
+          const { context, contextAddress } = await this.ensureItxContext(params);
+          return { context, contextAddress, projectId: params.projectId };
         },
         getStreamContext: () => this.subscribedStreamContext(AGENT_HOST_PROCESSOR_SLUG),
         runnerEnv: this.env as unknown as Env,
@@ -466,46 +470,115 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     }
   }
 
-  /** The agent's itx child context: its tools live on it as caps, scripts
-   * run against it, misses delegate up to the project context. Seeding is
-   * versioned: bump AGENT_CONTEXT_CAPABILITIES_VERSION when
-   * agentContextCapabilities changes so existing agents re-provide caps
-   * (provides upsert; the capability-noted idempotency keys dedupe
-   * re-appends per cap name). */
-  async ensureItxContext(params: AgentDurableObjectStructuredName): Promise<string> {
+  #agentItx: Itx | null = null;
+
+  /**
+   * The agent's itx context — AN AGENT IS A CONTEXT. Its journal is the
+   * agent's OWN stream (`<agentPath>` in the project namespace): there is no
+   * `extend`, no minted child id, no D1 catalog row, no `/itx` sub-journal.
+   * Identity, journal, and self-address all DERIVE from the agent's
+   * coordinate; the parent is the project context (a miss delegates up to
+   * the project's defaults — fetch/streams/repos/…). Mirrors
+   * ProjectDurableObject.itx(); the checkpoint is a disposable cache of the
+   * fold in this DO's storage.
+   */
+  itx(): Itx {
+    if (this.#agentItx) return this.#agentItx;
+    const params = this.structuredName;
+    const { agentPath, projectId } = params;
+    const contextId = agentContextId(params);
+    const selfAddress = agentContextAddress(params);
+    const journal = { namespace: projectId, path: String(agentPath) };
+    this.#agentItx = new Itx({
+      contextId,
+      dial: makeDial({
+        allowlists: resolveDialableTargets(parseConfig(this.env).itx),
+        contextAddress: selfAddress,
+        contextId,
+        env: this.env,
+        exports: this.ctx.exports as unknown as Parameters<typeof makeDial>[0]["exports"],
+        facets: durableObjectFacetsHook(this.ctx),
+        loader: (this.env as { LOADER?: unknown }).LOADER as Parameters<
+          typeof makeDial
+        >[0]["loader"],
+        projectId,
+      }),
+      iterateContext: { journal: journalStream(this.env as unknown as Env, journal) },
+      keepAliveWhile: (work) => this.ctx.waitUntil(work()),
+      // Parent = the PROJECT context, derivable from the agent's own
+      // coordinate (same projectId) — so parentage needs no birth
+      // certificate. describe() labels inherited entries `from` the project.
+      parentItx: (): { from: string; stub: ItxStub } => {
+        const node = () =>
+          dialContext(this.env as unknown as Env, projectContextAddress(projectId));
+        return {
+          from: projectId,
+          stub: {
+            describe: () => node().itx().describe(),
+            invoke: (input) => node().itx().invoke(input),
+            provideCapability: (input) => node().itx().provideCapability(input),
+            revokeCapability: (input) => node().itx().revokeCapability(input),
+          },
+        };
+      },
+      readState: async () =>
+        await this.ctx.storage.get<{ offset: number; state: Itx["state"] }>("itx-checkpoint"),
+      runScript: (input) =>
+        runItxScript({
+          contextAddress: selfAddress,
+          env: this.env as unknown as Env,
+          executionId: input.executionId,
+          exports: this.ctx.exports as unknown as ItxRuntime["exports"],
+          functionSource: input.code,
+          projectId,
+          props: { context: contextId, contextAddress: selfAddress, projectId },
+          record: journal,
+          recordRequested: false,
+        }),
+      selfAddress,
+      writeState: async (snapshot) => {
+        await this.ctx.storage.put("itx-checkpoint", snapshot);
+      },
+    });
+    return this.#agentItx;
+  }
+
+  /**
+   * Seed the agent's default tool capabilities onto its own context (idempotent,
+   * version-gated). Returns the derived context coordinate — NO extend, NO
+   * mint, NO catalog: an agent's itx is just the agent's itx.
+   */
+  async ensureItxContext(
+    params: AgentDurableObjectStructuredName,
+  ): Promise<{ context: string; contextAddress: CapabilityAddress }> {
     // Single-flight: the wake hook's workspace prep (waitUntil) and script
-    // runs can call this concurrently; without memoization the interleaved
-    // storage get/put could mint two different context ids.
+    // runs can call this concurrently; the version gate makes the work itself
+    // idempotent, but the lock avoids redundant provide loops.
     this.#ensureItxContextPromise ??= this.#ensureItxContextOnce(params).finally(() => {
       this.#ensureItxContextPromise = undefined;
     });
     return await this.#ensureItxContextPromise;
   }
 
-  #ensureItxContextPromise: Promise<string> | undefined;
+  #ensureItxContextPromise:
+    | Promise<{ context: string; contextAddress: CapabilityAddress }>
+    | undefined;
 
-  async #ensureItxContextOnce(params: AgentDurableObjectStructuredName): Promise<string> {
-    const existing = await this.ctx.storage.get<string>("itxContextId");
+  async #ensureItxContextOnce(
+    params: AgentDurableObjectStructuredName,
+  ): Promise<{ context: string; contextAddress: CapabilityAddress }> {
+    const context = agentContextId(params);
+    const contextAddress = agentContextAddress(params);
     const seededVersion = await this.ctx.storage.get<string>("itxContextCapabilitiesVersion");
-    if (existing && seededVersion === AGENT_CONTEXT_CAPABILITIES_VERSION) return existing;
+    if (seededVersion === AGENT_CONTEXT_CAPABILITIES_VERSION) return { context, contextAddress };
 
-    // Creation is an event: extend the project context with this agent's
-    // path as the journal base, so the agent's whole subtree (its stream,
-    // its context journal at <agentPath>/itx/<id>) reads as one directory.
-    const config = this.getAppConfig();
-    const created = await extendContext({
-      base: params.agentPath,
-      db: createD1Client(this.env.DO_CATALOG),
-      env: this.env as unknown as Env,
-      name: `agent:${params.agentPath}`,
-      parent: { address: projectContextAddress(params.projectId), id: params.projectId },
-      projectId: params.projectId,
-      typeIdPrefix: config.typeIdPrefix,
-    });
-    const caps = this.agentContextCapabilities(params, created.contextId);
-    const contextItx = dialContext(this.env as unknown as Env, created.address).itx();
+    // Provide the default tools onto the agent's OWN context (this.itx()).
+    // Each provide is a plain journal append on the agent's stream — no
+    // network call into provider code, no extend.
+    const caps = this.agentContextCapabilities(params, context);
+    const itx = this.itx();
     for (const cap of caps) {
-      await contextItx.provideCapability({
+      await itx.provideCapability({
         capability: cap.capability,
         instructions: cap.instructions,
         name: cap.name,
@@ -520,9 +593,8 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         payload: { instructions: cap.instructions, name: cap.name },
       })),
     });
-    await this.ctx.storage.put("itxContextId", created.contextId);
     await this.ctx.storage.put("itxContextCapabilitiesVersion", AGENT_CONTEXT_CAPABILITIES_VERSION);
-    return created.contextId;
+    return { context, contextAddress };
   }
 
   private async ensureAgentWorkspace(params: AgentDurableObjectStructuredName) {
@@ -586,7 +658,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   private async getAgentWorkspace(params: AgentDurableObjectStructuredName) {
-    const contextId = await this.ensureItxContext(params);
+    const { context: contextId } = await this.ensureItxContext(params);
     return await getInitializedDoStub({
       allowCreate: true,
       namespace: this.env.WORKSPACE,
@@ -934,6 +1006,20 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
   return StreamPath.parse(
     input.basePath === "/" ? `/${relativePath}` : `${input.basePath}/${relativePath}`,
   );
+}
+
+/** The agent context's id and address — both DERIVED from the agent's
+ * coordinate (no mint, no catalog): the agent DO hosts its own context, so
+ * the address is the agent DO itself and the id is its derived name. */
+function agentContextId(name: AgentDurableObjectStructuredName): string {
+  return getAgentDurableObjectName(name);
+}
+
+function agentContextAddress(name: AgentDurableObjectStructuredName): CapabilityAddress {
+  return {
+    type: "rpc",
+    worker: { binding: "AGENT", name: getAgentDurableObjectName(name), type: "durable-object" },
+  };
 }
 
 function agentWorkspaceName(input: {
