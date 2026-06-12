@@ -879,7 +879,10 @@ function retainLiveProvider(provider: LiveProvider): {
     const copy: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(node)) {
       const dup = (value as { dup?: () => LiveProvider } | null)?.dup;
-      if (typeof value === "function" && typeof dup === "function") {
+      if (value !== null && typeof dup === "function") {
+        // Any member exposing dup() is a session stub — a function OR an
+        // object-shaped stub (e.g. a nested RpcTarget). Both die with the
+        // provide RPC unless retained here.
         const duped = Reflect.apply(dup, value, []) as LiveProvider;
         memberDups.push(duped);
         copy[key] = duped;

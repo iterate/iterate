@@ -188,8 +188,15 @@ async function executeOperation(args: {
       );
       delete input[parameter.name];
     } else if (parameter.in === "query") {
-      // Consumed by name even when absent/null — a null query param is
-      // simply not sent, never mistaken for a body property.
+      // Consumed by name even when absent/null — a null optional query param
+      // is simply not sent, never mistaken for a body property. A missing
+      // REQUIRED one fails here, locally and instructively, exactly like a
+      // missing path param — not as a remote API error.
+      if (value == null && parameter.required) {
+        throw new Error(
+          `Operation "${operation.operationId}" needs query parameter "${parameter.name}".`,
+        );
+      }
       if (value != null) query.push([parameter.name, String(value)]);
       delete input[parameter.name];
     }
