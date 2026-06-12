@@ -474,6 +474,15 @@ Worth stealing later:
 
 ## Spike boundaries / open questions
 
+- **Routing-claim verification is best-effort, by choice.** Connect fails
+  loudly when a requested routing key is already owned (the pre-append guard
+  - the takeover interstitial), but the guard is a snapshot read: two
+    _simultaneous_ connects for the same key can both pass it, and the ingress
+    fold settles the tie (first claim wins) without the loser hearing about it.
+    Closing that window means tracking the claim's offset and waiting for the
+    router's checkpoint to pass it on every connect — cross-DO latency for a
+    millisecond race whose recovery path (the takeover flow) already exists.
+    Revisit if connected-but-not-receiving ever shows up in practice.
 - ~~Slack and Google still run their bespoke wiring~~ — DONE: both are
   provider files in the registry now. Slack's thread router is the
   `slack-route` processor on the account stream (the slack-agent pipeline
