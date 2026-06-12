@@ -83,9 +83,24 @@ export async function connectIntegration(input: ConnectIntegrationInput) {
     namespace: input.projectId,
     path: integrationAccountStreamPath(definition.slug, account),
   });
+  // Idempotency keyed by a digest of the connect CONTENT (computed over the
+  // plaintext inputs, before per-encryption IVs make ciphertexts unique):
+  // a retried connect with identical inputs dedupes to one event; a genuine
+  // reconnect with new credentials digests differently and re-runs the
+  // choreography.
+  const contentDigest = await sha256Hex(
+    JSON.stringify({
+      integration: definition.slug,
+      account,
+      ownership: input.ownership,
+      externalId: input.externalId,
+      routingKeys: input.routingKeys,
+      secrets: input.secrets,
+    }),
+  );
   await accountStream.append({
     type: "events.iterate.com/integration/connect-requested",
-    idempotencyKey: `integration-connect:${definition.slug}:${account}:${input.externalId}:${crypto.randomUUID()}`,
+    idempotencyKey: `integration-connect:${definition.slug}:${account}:${contentDigest}`,
     payload: {
       integration: definition.slug,
       account,
@@ -108,4 +123,9 @@ export async function connectIntegration(input: ConnectIntegrationInput) {
   await stub.ensureReady();
 
   return { integration: definition.slug, account, projectId: input.projectId };
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }

@@ -720,13 +720,13 @@ itIfSlackBotToken(
 
     await client.project.streams.append({
       projectSlugOrId: project.id,
-      streamPath: "/integrations/slack",
+      streamPath: "/integrations/slack/default",
       event: slackProcessorSubscriptionEvent({ projectId: project.id, suffix }),
     });
 
     await client.project.streams.append({
       projectSlugOrId: project.id,
-      streamPath: "/integrations/slack",
+      streamPath: "/integrations/slack/default",
       event: {
         type: "events.iterate.com/slack/webhook-received",
         idempotencyKey: `slack-agent-e2e-webhook:${suffix}`,
@@ -844,7 +844,7 @@ itIfSlackBotToken(
     const debugMessageTs = `${Date.now()}.123456`;
     await client.project.streams.append({
       projectSlugOrId: project.id,
-      streamPath: "/integrations/slack",
+      streamPath: "/integrations/slack/default",
       event: {
         type: "events.iterate.com/slack/webhook-received",
         idempotencyKey: `slack-agent-e2e-debug-webhook:${suffix}`,
@@ -936,13 +936,13 @@ itIfSlackBotToken(
 
     await client.project.streams.append({
       projectSlugOrId: project.id,
-      streamPath: "/integrations/slack",
+      streamPath: "/integrations/slack/default",
       event: slackProcessorSubscriptionEvent({ projectId: project.id, suffix }),
     });
 
     await client.project.streams.append({
       projectSlugOrId: project.id,
-      streamPath: "/integrations/slack",
+      streamPath: "/integrations/slack/default",
       event: {
         type: "events.iterate.com/slack/webhook-received",
         idempotencyKey: `slack-agent-e2e-llm-webhook:${suffix}`,
@@ -1129,9 +1129,9 @@ function slackProcessorSubscriptionEvent(input: { projectId: string; suffix: str
     type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
     idempotencyKey: `slack-integration-e2e-subscription:${input.projectId}:${input.suffix}`,
     payload: {
-      // Mirrors SlackIntegrationDurableObject.ensureIntegrationSubscription:
-      // a callable subscriber that dials the SLACK_INTEGRATION host DO.
-      subscriptionKey: `slack:${input.projectId}`,
+      // Mirrors IntegrationDurableObject.ensureIntegrationSubscription for
+      // slack: the slack-route processor on the ACCOUNT stream.
+      subscriptionKey: `slack-route:${input.projectId}:slack:default`,
       subscriber: durableObjectProcessorSubscriber({
         bindingName: "INTEGRATION",
         durableObjectName: getIntegrationDurableObjectName({
@@ -1139,7 +1139,7 @@ function slackProcessorSubscriptionEvent(input: { projectId: string; suffix: str
           integration: "slack",
           projectId: input.projectId,
         }),
-        processorName: "slack",
+        processorName: "slack-route",
       }),
     },
   } as const;

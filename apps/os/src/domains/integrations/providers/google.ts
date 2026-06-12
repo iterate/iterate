@@ -109,6 +109,10 @@ export const googleIntegration: IntegrationDefinition = {
     const account = "default";
     const refreshTokenRef = `getSecret({ key: "${providedSecretSlug({ integration: "google", account, name: GOOGLE_REFRESH_TOKEN_SECRET_NAME })}" })`;
     const clientSecretRef = `getSecret({ key: "${providedSecretSlug({ integration: "google", account, name: GOOGLE_CLIENT_SECRET_SECRET_NAME })}" })`;
+    // The derivation (and the client-secret sibling it references) only make
+    // sense when Google returned a refresh token; without one the access
+    // token is a plain expiring fact and reconnect is the refresh path.
+    const canDerive = tokenData.refresh_token != null;
     await ctx.connect({
       account,
       projectId: stateData.projectId,
@@ -117,21 +121,21 @@ export const googleIntegration: IntegrationDefinition = {
       displayName: userInfo.email ?? userInfo.id,
       routingKeys: [],
       secrets: [
-        ...(tokenData.refresh_token == null
-          ? []
-          : [
+        ...(canDerive
+          ? [
               {
                 name: GOOGLE_REFRESH_TOKEN_SECRET_NAME,
-                material: tokenData.refresh_token,
+                material: tokenData.refresh_token!,
                 metadata: { provider: "google", email: userInfo.email },
               },
-            ]),
-        {
-          name: GOOGLE_CLIENT_SECRET_SECRET_NAME,
-          material: google.oauthClientSecret.exposeSecret(),
-          tier: "iterate" as const,
-          metadata: { provider: "google", description: "iterate's OAuth client secret" },
-        },
+              {
+                name: GOOGLE_CLIENT_SECRET_SECRET_NAME,
+                material: google.oauthClientSecret.exposeSecret(),
+                tier: "iterate" as const,
+                metadata: { provider: "google", description: "iterate's OAuth client secret" },
+              },
+            ]
+          : []),
         {
           name: GOOGLE_ACCESS_TOKEN_SECRET_NAME,
           material: tokenData.access_token,
@@ -143,19 +147,23 @@ export const googleIntegration: IntegrationDefinition = {
             email: userInfo.email,
             scopes: tokenData.scope?.split(" ") ?? google.scopes,
           },
-          derivation: {
-            kind: "http-exchange" as const,
-            request: {
-              url: "https://oauth2.googleapis.com/token",
-              method: "POST",
-              headers: { "content-type": "application/x-www-form-urlencoded" },
-              body:
-                `grant_type=refresh_token&refresh_token=${refreshTokenRef}` +
-                `&client_id=${google.oauthClientId}&client_secret=${clientSecretRef}`,
-            },
-            extract: { materialPointer: "/access_token", expiresInPointer: "/expires_in" },
-            refreshLeewaySeconds: 300,
-          },
+          ...(canDerive
+            ? {
+                derivation: {
+                  kind: "http-exchange" as const,
+                  request: {
+                    url: "https://oauth2.googleapis.com/token",
+                    method: "POST",
+                    headers: { "content-type": "application/x-www-form-urlencoded" },
+                    body:
+                      `grant_type=refresh_token&refresh_token=${refreshTokenRef}` +
+                      `&client_id=${google.oauthClientId}&client_secret=${clientSecretRef}`,
+                  },
+                  extract: { materialPointer: "/access_token", expiresInPointer: "/expires_in" },
+                  refreshLeewaySeconds: 300,
+                },
+              }
+            : {}),
         },
       ],
     });
