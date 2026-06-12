@@ -17,14 +17,7 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
 import type { ItxDurableObject } from "~/itx/itx-durable-object.ts";
-import {
-  Itx,
-  resolveLongestProvidedPrefix,
-  type CapabilityAddress,
-  type CapabilityDescription,
-  type ItxOrigin,
-  type ItxStub,
-} from "~/itx/itx.ts";
+import { Itx, type CapabilityAddress, type ItxStub } from "~/itx/itx.ts";
 import { makeDial, durableObjectFacetsHook, resolveDialableTargets } from "~/itx/dial.ts";
 import { dialContext, journalStream, projectContextAddress } from "~/itx/journal.ts";
 import { runItxScript } from "~/itx/run.ts";
@@ -142,13 +135,10 @@ const AgentLifecycleBase = createIterateDurableObjectBase<
   nameSchema: AgentDurableObjectStructuredName,
 });
 
-/** Bump when agentContextCapabilities changes — re-renders the capability-noted
- * tool list onto the agent stream (the LLM's view). The caps themselves are
- * code-rooted chain defaults, so a bump never touches stored capability state. */
-const AGENT_CONTEXT_CAPABILITIES_VERSION = "6";
-
-/** describe() provenance label for the agent's code-rooted default tools. */
-const AGENT_DEFAULTS_DESCRIBE_FROM = "agent-defaults";
+/** Bump when agentContextCapabilities changes — re-provides the agent's tools
+ * onto its own context (each provide appends an itx/capability-provided event
+ * that both folds into the capability table and renders into the LLM's view). */
+const AGENT_CONTEXT_CAPABILITIES_VERSION = "7";
 
 export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv> {
   host = createStreamProcessorHost(this.ctx);
@@ -503,15 +493,17 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       dial,
       iterateContext: { journal: journalStream(this.env as unknown as Env, journal) },
       keepAliveWhile: (work) => this.ctx.waitUntil(work()),
-      // The agent's chain: its OWN context (durable — holds caps the agent
-      // provides at runtime) → its DEFAULTS (code, below) → the project
-      // context → the platform defaults. The default tools are CODE, not
-      // seeded journal events: always resolvable through the chain, exactly
-      // like the project's fetch/streams/repos defaults — no per-agent
-      // seeding, no fold of the agent's own stream to find them.
+      // The agent's chain: its OWN context (its capability table, folded from
+      // its stream — where its tools live, provided ONCE in ensureItxContext
+      // via the one and only door, provideCapability) → the project context →
+      // the platform defaults. A miss on the agent's own caps delegates
+      // straight up to the project, exactly like any context's parent link.
+      // There is no special "defaults" layer: an agent tool is a provided
+      // capability like any other (live or sturdy ref), resolved through the
+      // same table every other capability uses.
       parentItx: (): { from: string; stub: ItxStub } => ({
-        from: AGENT_DEFAULTS_DESCRIBE_FROM,
-        stub: this.#agentDefaultsStub(params, contextId, selfAddress, dial),
+        from: "project",
+        stub: dialContext(this.env as unknown as Env, projectContextAddress(projectId)).itx(),
       }),
       readState: async () =>
         await this.ctx.storage.get<{ offset: number; state: Itx["state"] }>("itx-checkpoint"),
@@ -536,71 +528,11 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   /**
-   * The agent's DEFAULT capabilities as a code-rooted chain link: the agent's
-   * tools (chat/debug/ai/gmail/slack/agents/workspace) resolve from CODE here,
-   * and anything else delegates up to the project context. Read-only — the
-   * agent's runtime provides land on its own durable context (this.itx()),
-   * which shadows these.
-   */
-  #agentDefaultsStub(
-    params: AgentDurableObjectStructuredName,
-    contextId: string,
-    selfAddress: CapabilityAddress,
-    dial: ReturnType<typeof makeDial>,
-  ): ItxStub {
-    const byName = Object.fromEntries(
-      this.agentContextCapabilities(params, contextId).map((cap) => [
-        cap.name,
-        { address: cap.capability, instructions: cap.instructions, name: cap.name },
-      ]),
-    );
-    const project = () =>
-      dialContext(this.env as unknown as Env, projectContextAddress(params.projectId)).itx();
-    const defaultOrigin: ItxOrigin = { address: selfAddress, id: contextId };
-    return {
-      describe: async (): Promise<CapabilityDescription[]> => {
-        const own = Object.values(byName).map(
-          (cap): CapabilityDescription => ({
-            instructions: cap.instructions,
-            kind: cap.address.type,
-            meta: {},
-            name: cap.name,
-            updatedAtMs: 0,
-          }),
-        );
-        // These tools SHADOW project entries of the same name (ai/workspace),
-        // so suppress the shadowed inherited ones — exact-name shadowing, the
-        // same rule Itx.describe applies at every chain link.
-        const shadowed = new Set(own.map((d) => d.name));
-        const inherited = (await project().describe()).filter((d) => !shadowed.has(d.name));
-        return [...own, ...inherited];
-      },
-      invoke: async (input) => {
-        const resolved = resolveLongestProvidedPrefix(byName, input.path);
-        if (!resolved) return await project().invoke(input);
-        const origin = input.origin ?? defaultOrigin;
-        const borrowed = dial(resolved.entry.address, {
-          capabilityPath: resolved.entry.name,
-          origin,
-        });
-        try {
-          return await borrowed.call({ args: input.args, path: resolved.remainder });
-        } finally {
-          (borrowed as Partial<Disposable>)[Symbol.dispose]?.();
-        }
-      },
-      // Provides/revokes are never delegated here in practice (they land on
-      // the agent's own context); forward to the project for completeness.
-      provideCapability: (input) => project().provideCapability(input),
-      revokeCapability: (input) => project().revokeCapability(input),
-    };
-  }
-
-  /**
    * Returns the agent's derived itx context coordinate, and (once per version)
-   * renders its tool list onto the agent stream so the LLM can see what it can
-   * call. NO extend, NO mint, NO catalog, NO capability seeding — the tools
-   * themselves are code-rooted chain defaults (see #agentDefaultsStub).
+   * PROVIDES the agent's tools onto its own context via itx.provideCapability —
+   * the one door. NO extend, NO mint, NO catalog: the agent's stream IS its
+   * journal, and the provide events fold into its capability table (resolution)
+   * while the agent processor renders them for the LLM (visibility).
    */
   async ensureItxContext(
     params: AgentDurableObjectStructuredName,
@@ -623,17 +555,22 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     const seededVersion = await this.ctx.storage.get<string>("itxContextCapabilitiesVersion");
     if (seededVersion === AGENT_CONTEXT_CAPABILITIES_VERSION) return { context, contextAddress };
 
-    // The LLM learns its tools from stream history: one rendered event per
-    // cap (the agent processor rewrites these into the visible context). This
-    // is the ONLY first-events work now — the caps themselves are code.
+    // Provide the agent's tools onto its OWN context — the one and only door
+    // (itx.provideCapability), exactly how every other capability in the
+    // system is registered. Each provide appends an itx/capability-provided
+    // event to the agent's stream: the fold projects it into the capability
+    // table (so `itx.<name>` resolves through the normal path), AND the agent
+    // processor renders that same event into the LLM's visible context (so the
+    // model knows the tool exists). One abstraction, one event, two readers.
+    const itx = this.itx();
     const caps = this.agentContextCapabilities(params, context);
-    await this.streamsEntrypoint(params.agentPath).appendBatch({
-      events: caps.map((cap) => ({
-        type: "events.iterate.com/agent/capability-noted",
-        idempotencyKey: `agent-capability-noted:${cap.name}`,
-        payload: { instructions: cap.instructions, name: cap.name },
-      })),
-    });
+    for (const cap of caps) {
+      await itx.provideCapability({
+        capability: cap.capability,
+        instructions: cap.instructions,
+        name: cap.name,
+      });
+    }
     await this.ctx.storage.put("itxContextCapabilitiesVersion", AGENT_CONTEXT_CAPABILITIES_VERSION);
     return { context, contextAddress };
   }
