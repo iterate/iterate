@@ -94,6 +94,12 @@ export type StreamBrowserStore = Disposable & {
   clearLocalDatabase(): Promise<void>;
   kill(): Promise<void>;
   reset(): Promise<void>;
+  /**
+   * On-demand delivery check for when the caller knows the server is about to
+   * (or just did) append — reconnects within seconds if the subscription is
+   * stale instead of waiting for the next paced probe.
+   */
+  nudge(): Promise<void>;
   getSnapshot(): StreamBrowserSnapshot;
   getServerSnapshot(): StreamBrowserSnapshot;
   subscribe(listener: () => void): () => void;
@@ -127,6 +133,15 @@ function acquireDatabase(namespace: string, streamPath: string) {
 }
 
 const runtimeRegistry = new Map<string, StreamBrowserStore>();
+
+// Console-accessible view of every live runtime's internals
+// (`__streamRuntimeDebug()` in devtools): which runtimes exist, their
+// connection/subscription status, and how far deliveries have progressed.
+// Exists because this exact information was uninspectable while debugging
+// silent per-runtime delivery stalls in deployed environments.
+const debugRegistry = new Map<string, () => Record<string, unknown>>();
+(globalThis as { __streamRuntimeDebug?: () => Record<string, unknown> }).__streamRuntimeDebug =
+  () => Object.fromEntries([...debugRegistry].map(([key, read]) => [key, read()]));
 
 /** Get (or lazily create) the shared runtime for one (path, processor). */
 export function acquireStreamRuntime(
@@ -191,6 +206,7 @@ function createStreamRuntime(
   let databaseInfoTimer: ReturnType<typeof setTimeout> | undefined;
   let databaseChangeTimer: ReturnType<typeof setTimeout> | undefined;
   let disposeTimer: ReturnType<typeof setTimeout> | undefined;
+  let livenessTimer: ReturnType<typeof setInterval> | undefined;
   let disposed = false;
   let started = false;
   // Bumped on every connect() so a stale connection's late callbacks (status changes,
@@ -201,6 +217,24 @@ function createStreamRuntime(
   let readyWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
   // Self-heal backoff for browser-side ingest failures (C1).
   let ingestFailureCount = 0;
+  // The server incarnation this connection reconciled against, how far deliveries have
+  // progressed, and a counter bumped every time a delivery ARRIVES (before the possibly-slow
+  // ingest). The liveness probe compares these against fresh runtimeState() so an
+  // orphaned-but-healthy-looking subscription (the stream was recreated underneath us, or the
+  // server moved ahead while deliveries silently stopped) reconnects instead of wedging.
+  // Arrival — not ingest completion — is the aliveness signal: a large replay batch can take
+  // longer than a probe interval to apply, and that must not read as "orphaned".
+  let reconciledIncarnation: string | undefined;
+  let lastDeliveredOffset = -1;
+  let deliveryArrivals = 0;
+  let probePreviousArrivals = 0;
+  // Debug counters (surfaced via __streamRuntimeDebug): how many EVENTS the
+  // deliveries actually carried — distinguishes "no deliveries" from
+  // "deliveries arrive but carry no events" from "events arrive but writes
+  // produce nothing".
+  let totalDeliveredEvents = 0;
+  let lastBatchEvents = 0;
+  let ingestFailures = 0;
 
   function resolveReadyWaiters() {
     const waiters = readyWaiters;
@@ -271,7 +305,10 @@ function createStreamRuntime(
       })
       .catch((error: unknown) => {
         if (disposed) return;
-        console.error(`[stream ${args.streamPath}] local database info refresh failed`, error);
+        console.error(
+          `[stream ${args.streamPath} ${slug}] local database info refresh failed`,
+          error,
+        );
         snapshot = { ...snapshot, connectionError: "local database error: " + errorMessage(error) };
         emitSnapshot();
       });
@@ -295,7 +332,7 @@ function createStreamRuntime(
 
   function onMirrorWriteError(error: unknown): never {
     if (!disposed) {
-      console.error(`[stream ${args.streamPath}] local mirror write failed`, error);
+      console.error(`[stream ${args.streamPath} ${slug}] local mirror write failed`, error);
       snapshot = {
         ...snapshot,
         connectionError: `local mirror write failed: ${errorMessage(error)}`,
@@ -315,6 +352,7 @@ function createStreamRuntime(
   function scheduleReconnect(connectionError: string, delayMs: number) {
     if (disposed) return;
     connectionEpoch += 1;
+    stopLivenessProbe();
     stopSubscriptionElection();
     stream?.[Symbol.dispose]();
     stream = undefined;
@@ -366,11 +404,12 @@ function createStreamRuntime(
     const localMaxOffset = checkpoint.offset;
     const { coreProcessorState } = await rpc.runtimeState();
     const serverIncarnation = coreProcessorState.createdAt;
-    const localIncarnation = await streamDatabase.readMirrorIncarnation();
+    reconciledIncarnation = serverIncarnation;
+    const localIncarnation = await streamDatabase.readMirrorIncarnation(slug);
 
     if (localMaxOffset <= 0) {
       // Fresh mirror: nothing to discard, just record which incarnation we are tracking.
-      await streamDatabase.writeMirrorIncarnation(serverIncarnation);
+      await streamDatabase.writeMirrorIncarnation(slug, serverIncarnation);
       return;
     }
 
@@ -380,23 +419,23 @@ function createStreamRuntime(
       // can't trust the offset comparison — a reset that caught back up to the same maxOffset
       // would otherwise be kept with stale rows — so rebuild from scratch.
       console.warn(
-        `[stream ${args.streamPath}] Cannot verify local ${slug} mirror against server incarnation (changed or unrecorded); rebuilding.`,
+        `[stream ${args.streamPath} ${slug}] Cannot verify local ${slug} mirror against server incarnation (changed or unrecorded); rebuilding.`,
         { localIncarnation, serverIncarnation, localMaxOffset },
       );
       await discardLocalMirror();
-      await streamDatabase.writeMirrorIncarnation(serverIncarnation);
+      await streamDatabase.writeMirrorIncarnation(slug, serverIncarnation);
       return;
     }
 
     if (coreProcessorState.maxOffset < localMaxOffset) {
       console.warn(
-        `[stream ${args.streamPath}] Server has fewer events than the local mirror; discarding local ${slug} tables.`,
+        `[stream ${args.streamPath} ${slug}] Server has fewer events than the local mirror; discarding local ${slug} tables.`,
         { serverMaxOffset: coreProcessorState.maxOffset, localMaxOffset },
       );
       await discardLocalMirror();
     }
     // Record (or backfill) the incarnation we are now reconciled against.
-    await streamDatabase.writeMirrorIncarnation(serverIncarnation);
+    await streamDatabase.writeMirrorIncarnation(slug, serverIncarnation);
   }
 
   function connect() {
@@ -471,33 +510,65 @@ function createStreamRuntime(
         schemaVersion,
       }),
     });
+    // The leader chain calls into the server (reconcile's runtimeState, subscribe). When the
+    // far leg of a proxied connection dies mid-call — e.g. the page subscribed to a
+    // lazily-created agent stream and the agent machinery recreated it, killing the Stream DO
+    // behind the proxy hop without a close frame reaching the browser — those calls park
+    // forever and the page wedges on "connecting" with no error anywhere. Race each
+    // server-touching step against a deadline; the rejection lands in the catch below, which
+    // reconnects on a fresh socket to the live instance.
+    const SUBSCRIBE_STEP_TIMEOUT_MS = 15_000;
+    const withDeadline = <T>(step: string, promise: Promise<T> | T): Promise<T> =>
+      raceWithTimeout(
+        Promise.resolve(promise),
+        SUBSCRIBE_STEP_TIMEOUT_MS,
+        `${step} timed out after ${SUBSCRIBE_STEP_TIMEOUT_MS}ms`,
+      );
+
     void writerRole.whenWriter
       .then(async () => {
         clearTimeout(followerTimeout);
         if (!ownsRuntime()) return undefined;
         snapshot = { ...snapshot, subscriptionStatus: "leader" };
         emitSnapshot();
-        await reconcileLocalMirrorWithServer(election.connection.stream);
+        await withDeadline("reconcile", reconcileLocalMirrorWithServer(election.connection.stream));
+        // Re-check after every await: a step that settles late (after this
+        // election was superseded) must not write runtime-wide fields like
+        // lastDeliveredOffset over the current election's values.
+        if (!ownsRuntime()) return undefined;
         const processor = args.createProcessor({
           stream: election.connection.stream,
           sql,
           subscriptionKey,
         });
-        const checkpoint = await processor.snapshot();
+        // The checkpoint read goes to the shared db worker; an un-deadlined
+        // hang here would park the runtime as a forever-"leader" with no
+        // subscription, no probe, and no error.
+        const checkpoint = await withDeadline("checkpoint read", processor.snapshot());
+        if (!ownsRuntime()) return undefined;
+        lastDeliveredOffset = checkpoint.offset;
         return {
           replayAfterOffset: checkpoint.offset,
+          // Counters are bumped inside ingestWithSelfHeal, AFTER its
+          // supersede guard: a batch delivered to a replaced election is
+          // dropped and must not count as progress (it never advances
+          // lastDeliveredOffset), or the liveness probe would read a dead
+          // subscription's stale pushes as healthy.
           processEventBatch: (batch: { events: readonly StreamEvent[]; streamMaxOffset: number }) =>
             ingestWithSelfHeal(processor, batch, election),
         };
       })
       .then((ready) => {
         if (ready === undefined || !ownsRuntime()) return undefined;
-        return election.connection.stream.subscribe({
-          subscriptionKey,
-          processEventBatch: ready.processEventBatch,
-          replayAfterOffset: ready.replayAfterOffset,
-          subscriber: { description: "browser" },
-        });
+        return withDeadline(
+          "subscribe",
+          election.connection.stream.subscribe({
+            subscriptionKey,
+            processEventBatch: ready.processEventBatch,
+            replayAfterOffset: ready.replayAfterOffset,
+            subscriber: { description: "browser" },
+          }),
+        );
       })
       .then((handle) => {
         if (handle === undefined) return;
@@ -508,6 +579,7 @@ function createStreamRuntime(
         subscriptionHandle = handle;
         snapshot = { ...snapshot, connectionError: undefined, connectionStatus: "subscribed" };
         emitSnapshot();
+        startLivenessProbe(election.connection);
         // Note: we deliberately do NOT reset ingestFailureCount here. A clean resubscribe does
         // not mean the batch that failed will now succeed, so resetting would let a poison
         // batch busy-loop at the floor delay. ingestFailureCount only resets on a successful
@@ -515,8 +587,11 @@ function createStreamRuntime(
       })
       .catch((error: unknown) => {
         clearTimeout(followerTimeout);
-        if (disposed) return;
-        console.error(`[stream ${args.streamPath}] subscribe failed`, error);
+        // A late rejection from a superseded election (its connection was already
+        // replaced — e.g. a parked subscribe's deadline firing after a reset
+        // reconnected us) must not tear down the healthy current subscription (B1).
+        if (disposed || !ownsRuntime()) return;
+        console.error(`[stream ${args.streamPath} ${slug}] subscribe failed`, error);
         scheduleReconnect(`subscribe failed: ${errorMessage(error)}`, 1_000);
       });
   }
@@ -534,15 +609,29 @@ function createStreamRuntime(
     batch: { events: readonly StreamEvent[]; streamMaxOffset: number },
     election: { connection: Awaited<ReturnType<typeof withStreamConnectionFromBrowser>> },
   ): Promise<void> {
+    // A batch delivered to a superseded election must not be applied: its
+    // processor's queued ingests would interleave with (and can regress the
+    // checkpoint of) the current election's processor on the same tables — and
+    // it must not count as delivery progress either (see below).
+    if (disposed || stream !== election.connection) return;
+    // Count the arrival HERE, for the current election only, and BEFORE the
+    // (possibly slow) ingest await: the liveness probe reads a bumped counter
+    // as "deliveries are flowing", so a long ingest must not look stalled,
+    // while a dropped stale batch (returned above) must not look like progress.
+    deliveryArrivals += 1;
+    lastBatchEvents = batch.events.length;
+    totalDeliveredEvents += batch.events.length;
     try {
       await processor.ingest(batch);
       ingestFailureCount = 0;
+      lastDeliveredOffset = Math.max(lastDeliveredOffset, batch.streamMaxOffset);
     } catch (error) {
       // Only the connection that is still current self-heals; a stale callback bails.
       if (disposed || stream !== election.connection) throw error;
       ingestFailureCount += 1;
+      ingestFailures += 1;
       console.error(
-        `[stream ${args.streamPath}] local mirror ingest failed (attempt ${ingestFailureCount}); resubscribing from last applied offset`,
+        `[stream ${args.streamPath} ${slug}] local mirror ingest failed (attempt ${ingestFailureCount}); resubscribing from last applied offset`,
         error,
       );
       // Drop the connection and reconnect with bounded exponential backoff (capped 30s). The
@@ -589,11 +678,146 @@ function createStreamRuntime(
     }, 0);
   }
 
+  // A dead-but-open WebSocket (the worker behind a dev proxy restarted, a
+  // Durable Object was evicted mid-connection) hangs silently: the browser
+  // never gets a close frame, deliveries just stop, and the UI stays
+  // "subscribed" forever. Probe the live connection with a cheap RPC; a
+  // probe that cannot answer within the deadline means the socket is dead —
+  // reconnect, and the resubscribe replays from the persisted checkpoint.
+  //
+  // The probe's answer matters too: a subscription can be orphaned while the
+  // socket stays perfectly healthy. If the stream was recreated underneath us
+  // (incarnation changed — e.g. the browser subscribed to a lazily-created
+  // empty stream and the agent machinery then created it for real), or the
+  // server's maxOffset moved ahead while deliveries made no progress for a
+  // whole probe interval, the subscription is gone server-side — resubscribe.
+  const LIVENESS_PROBE_INTERVAL_MS = 10_000;
+  const LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+
+  function startLivenessProbe(connection: NonNullable<typeof stream>) {
+    stopLivenessProbe();
+    probePreviousArrivals = deliveryArrivals;
+    // A single slow runtimeState() answer (cold DO, busy worker) is not a dead
+    // socket — only consecutive timeouts are. Definitive signals (incarnation
+    // change, stalled deliveries) still reconnect on the first hit.
+    let timeoutStrikes = 0;
+    livenessTimer = setInterval(() => {
+      void (async () => {
+        try {
+          let coreProcessorState;
+          try {
+            ({ coreProcessorState } = await raceWithTimeout(
+              Promise.resolve(connection.stream.runtimeState()),
+              LIVENESS_PROBE_TIMEOUT_MS,
+              "liveness probe timed out",
+            ));
+          } catch (error) {
+            timeoutStrikes += 1;
+            if (timeoutStrikes < 2) return;
+            throw error;
+          }
+          timeoutStrikes = 0;
+          if (disposed || stream !== connection) return;
+          if (coreProcessorState.createdAt !== reconciledIncarnation) {
+            throw new Error(
+              `stream incarnation changed (${reconciledIncarnation} -> ${coreProcessorState.createdAt}); subscription is orphaned`,
+            );
+          }
+          const stalled =
+            coreProcessorState.maxOffset > lastDeliveredOffset &&
+            deliveryArrivals === probePreviousArrivals;
+          probePreviousArrivals = deliveryArrivals;
+          if (stalled) {
+            throw new Error(
+              `server is at offset ${coreProcessorState.maxOffset} but no delivery arrived since the last probe (applied through ${lastDeliveredOffset}); subscription is orphaned`,
+            );
+          }
+        } catch (error) {
+          if (disposed || stream !== connection) return;
+          stopLivenessProbe();
+          console.warn(
+            `[stream ${args.streamPath} ${slug}] connection failed its liveness probe; reconnecting`,
+            error,
+          );
+          scheduleReconnect(`liveness probe failed: ${errorMessage(error)}`, 250);
+        }
+      })();
+    }, LIVENESS_PROBE_INTERVAL_MS);
+  }
+
+  function stopLivenessProbe() {
+    if (livenessTimer !== undefined) {
+      clearInterval(livenessTimer);
+      livenessTimer = undefined;
+    }
+  }
+
+  // On-demand delivery check for moments the CALLER knows the server is about
+  // to (or just did) append — e.g. right after a composer submit. The paced
+  // probe takes up to an interval to notice an orphaned subscription; this
+  // collapses that to ~seconds exactly when a human is watching. One nudge at
+  // a time; nudging while disconnected is a no-op (reconnect is already the
+  // path that heals that state).
+  const NUDGE_GRACE_MS = 2_000;
+  let nudgeInFlight = false;
+
+  async function nudge(): Promise<void> {
+    const connection = stream;
+    if (connection === undefined || subscriptionHandle === undefined) {
+      // Not the writer (or not connected): we can't resubscribe, but say so —
+      // a silently inert nudge made follower-side stalls undiagnosable.
+      console.warn(
+        `[stream ${args.streamPath} ${slug}] nudge skipped: ${connection === undefined ? "no connection" : `no subscription (status ${snapshot.subscriptionStatus})`}`,
+      );
+      return;
+    }
+    if (nudgeInFlight || disposed) return;
+    nudgeInFlight = true;
+    try {
+      const arrivalsBefore = deliveryArrivals;
+      const { coreProcessorState } = await raceWithTimeout(
+        Promise.resolve(connection.stream.runtimeState()),
+        LIVENESS_PROBE_TIMEOUT_MS,
+        "delivery nudge timed out",
+      );
+      if (disposed || stream !== connection) return;
+      if (
+        coreProcessorState.createdAt === reconciledIncarnation &&
+        coreProcessorState.maxOffset <= lastDeliveredOffset
+      ) {
+        return; // mirror is current
+      }
+      if (coreProcessorState.createdAt === reconciledIncarnation) {
+        // Server is ahead — give the in-flight delivery a moment before
+        // declaring the subscription dead.
+        await new Promise((resolve) => setTimeout(resolve, NUDGE_GRACE_MS));
+        if (disposed || stream !== connection) return;
+        if (deliveryArrivals !== arrivalsBefore) return; // deliveries flowing
+      }
+      stopLivenessProbe();
+      console.warn(
+        `[stream ${args.streamPath} ${slug}] delivery nudge found a stale subscription; reconnecting`,
+      );
+      scheduleReconnect("delivery nudge found a stale subscription", 0);
+    } catch (error) {
+      if (disposed || stream !== connection) return;
+      stopLivenessProbe();
+      console.warn(
+        `[stream ${args.streamPath} ${slug}] delivery nudge failed; reconnecting`,
+        error,
+      );
+      scheduleReconnect(`delivery nudge failed: ${errorMessage(error)}`, 0);
+    } finally {
+      nudgeInFlight = false;
+    }
+  }
+
   function teardown() {
     for (const timer of [connectTimer, reconnectTimer, databaseInfoTimer, databaseChangeTimer]) {
       if (timer !== undefined) clearTimeout(timer);
     }
     connectTimer = reconnectTimer = databaseInfoTimer = databaseChangeTimer = undefined;
+    stopLivenessProbe();
     stopSubscriptionElection();
     stream?.[Symbol.dispose]();
     stream = undefined;
@@ -602,8 +826,26 @@ function createStreamRuntime(
     args.onDispose?.();
   }
 
+  debugRegistry.set(`${args.namespace} ${args.streamPath} ${slug}`, () => ({
+    connectionStatus: snapshot.connectionStatus,
+    subscriptionStatus: snapshot.subscriptionStatus,
+    connectionError: snapshot.connectionError,
+    lastDeliveredOffset,
+    deliveryArrivals,
+    totalDeliveredEvents,
+    lastBatchEvents,
+    ingestFailures,
+    reconciledIncarnation,
+    started,
+    disposed,
+    hasConnection: stream !== undefined,
+    hasSubscription: subscriptionHandle !== undefined,
+    listeners: listeners.size,
+  }));
+
   function dispose() {
     listeners.clear();
+    debugRegistry.delete(`${args.namespace} ${args.streamPath} ${slug}`);
     if (disposed) return;
     if (disposeTimer !== undefined) {
       clearTimeout(disposeTimer);
@@ -655,6 +897,7 @@ function createStreamRuntime(
     reset() {
       return runControlAndReconnect("reset");
     },
+    nudge,
     getSnapshot: () => snapshot,
     getServerSnapshot: () => snapshot,
     subscribe(listener) {
@@ -682,6 +925,21 @@ function createStreamRuntime(
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Promise.race against a deadline, with the loser's timer cleared when the
+ * race settles — a bare setTimeout-rejection branch would otherwise fire an
+ * unhandled rejection after every SUCCESSFUL call.
+ */
+function raceWithTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 function isWriteStatement(sql: string) {

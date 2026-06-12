@@ -43,6 +43,15 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
         runOpts: z.json().default({}),
       }),
     },
+    "events.iterate.com/cloudflare-ai/llm-response-chunk": {
+      description:
+        "One verbatim streaming chunk from a Cloudflare AI request (the parsed SSE data payload, provider-shaped). High volume by design — subscribers like the browser agent UI render text and thinking deltas from these; the terminal llm-request-completed event remains the authoritative result.",
+      payloadSchema: z.object({
+        llmRequestId: LlmRequestId,
+        sequence: z.number().int().nonnegative(),
+        chunk: z.json(),
+      }),
+    },
     "events.iterate.com/cloudflare-ai/llm-request-completed": {
       description:
         "The Cloudflare AI processor finished executing an agent LLM request with either success or failure.",
@@ -77,6 +86,7 @@ export const CloudflareAiProcessorContract = defineProcessorContract({
   emits: [
     "events.iterate.com/cloudflare-ai/llm-request-started",
     "events.iterate.com/cloudflare-ai/llm-request-attempt-failed",
+    "events.iterate.com/cloudflare-ai/llm-response-chunk",
     "events.iterate.com/cloudflare-ai/llm-request-completed",
     "events.iterate.com/agent/output-added",
     "events.iterate.com/agent/llm-request-completed",

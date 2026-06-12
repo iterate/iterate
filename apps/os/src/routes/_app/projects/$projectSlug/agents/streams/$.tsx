@@ -1,13 +1,17 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { Suspense, useMemo } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
-import { buttonVariants } from "@iterate-com/ui/components/button";
-import { AgentChatView } from "~/components/agent-chat-view.tsx";
+import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
+import { getBrowserItx } from "~/itx/use-itx.ts";
+import type { StreamTreeSource } from "~/components/stream-tree-browser.tsx";
 import { projectAgentRuntimeStateQueryOptions } from "~/lib/project-route-query.ts";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { orpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams/$")({
+  staticData: { hideAppHeader: true },
   params: {
     parse: (raw) => ({
       _splat: streamPathFromSplat(raw._splat),
@@ -39,10 +43,35 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
 });
 
 function ProjectAgentDetailPage() {
+  // The boundary is only for the lazily-loaded ProjectStreamView chunk. The
+  // feed itself does NOT depend on itx — it mirrors the project-streams socket
+  // directly — so a dropped itx connection must never blank this page.
+  return (
+    <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading…</div>}>
+      <ProjectAgentDetailContent />
+    </Suspense>
+  );
+}
+
+function ProjectAgentDetailContent() {
   const params = Route.useParams();
+  const navigate = useNavigate();
   const { project, streamPath } = Route.useLoaderData();
-  // The agent chat view subscribes to the stream live, so a send needs no
-  // cache invalidation — the new events arrive over the socket.
+  // itx backs ONLY the ⌘K stream tree, and is dialed lazily when the tree
+  // subscribes (not via the suspending useItx) so itx being slow or down
+  // degrades just the navigator, never the feed. getBrowserItx shares the
+  // same pooled socket useItx would.
+  const source = useMemo<StreamTreeSource>(
+    () => (path: StreamPathType) => ({
+      async onStateChange(onState) {
+        const itx = await getBrowserItx(project.id);
+        return itx.streams.get(path).onStateChange(onState);
+      },
+    }),
+    [project.id],
+  );
+  // The stream view subscribes live, so a send needs no cache invalidation —
+  // the new events arrive over the socket.
   const sendMessage = useMutation(orpc.project.agents.sendMessage.mutationOptions());
 
   async function submitAgentMessage(message: string) {
@@ -53,23 +82,27 @@ function ProjectAgentDetailPage() {
     });
   }
 
+  function openStream(path: StreamPathType) {
+    void navigate({
+      to: "/projects/$projectSlug/agents/streams/$",
+      params: {
+        projectSlug: params.projectSlug,
+        _splat: path,
+      },
+    });
+  }
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-end border-b px-3 py-1.5">
-        {/* The raw event firehose stays one click away for debugging. */}
-        <Link
-          to="/projects/$projectSlug/streams/$"
-          params={{ _splat: streamPath, projectSlug: params.projectSlug }}
-          className={buttonVariants({ size: "sm", variant: "ghost" })}
-        >
-          View raw stream
-        </Link>
-      </div>
-      <AgentChatView
-        agentPath={String(streamPath)}
-        onSend={submitAgentMessage}
-        projectSlugOrId={project.id}
-      />
-    </div>
+    <ProjectStreamView
+      emptyLabel="No events on this agent stream yet."
+      messageComposer={{
+        onSubmit: submitAgentMessage,
+        placeholder: "Message this agent",
+      }}
+      projectSlug={params.projectSlug}
+      projectSlugOrId={project.id}
+      streamPath={streamPath}
+      streamNavigator={{ source, onOpenPath: openStream }}
+    />
   );
 }
