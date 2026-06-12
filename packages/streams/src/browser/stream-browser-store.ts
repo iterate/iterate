@@ -228,6 +228,13 @@ function createStreamRuntime(
   let lastDeliveredOffset = -1;
   let deliveryArrivals = 0;
   let probePreviousArrivals = 0;
+  // Debug counters (surfaced via __streamRuntimeDebug): how many EVENTS the
+  // deliveries actually carried — distinguishes "no deliveries" from
+  // "deliveries arrive but carry no events" from "events arrive but writes
+  // produce nothing".
+  let totalDeliveredEvents = 0;
+  let lastBatchEvents = 0;
+  let ingestFailures = 0;
 
   function resolveReadyWaiters() {
     const waiters = readyWaiters;
@@ -298,7 +305,10 @@ function createStreamRuntime(
       })
       .catch((error: unknown) => {
         if (disposed) return;
-        console.error(`[stream ${args.streamPath}] local database info refresh failed`, error);
+        console.error(
+          `[stream ${args.streamPath} ${slug}] local database info refresh failed`,
+          error,
+        );
         snapshot = { ...snapshot, connectionError: "local database error: " + errorMessage(error) };
         emitSnapshot();
       });
@@ -322,7 +332,7 @@ function createStreamRuntime(
 
   function onMirrorWriteError(error: unknown): never {
     if (!disposed) {
-      console.error(`[stream ${args.streamPath}] local mirror write failed`, error);
+      console.error(`[stream ${args.streamPath} ${slug}] local mirror write failed`, error);
       snapshot = {
         ...snapshot,
         connectionError: `local mirror write failed: ${errorMessage(error)}`,
@@ -409,7 +419,7 @@ function createStreamRuntime(
       // can't trust the offset comparison — a reset that caught back up to the same maxOffset
       // would otherwise be kept with stale rows — so rebuild from scratch.
       console.warn(
-        `[stream ${args.streamPath}] Cannot verify local ${slug} mirror against server incarnation (changed or unrecorded); rebuilding.`,
+        `[stream ${args.streamPath} ${slug}] Cannot verify local ${slug} mirror against server incarnation (changed or unrecorded); rebuilding.`,
         { localIncarnation, serverIncarnation, localMaxOffset },
       );
       await discardLocalMirror();
@@ -419,7 +429,7 @@ function createStreamRuntime(
 
     if (coreProcessorState.maxOffset < localMaxOffset) {
       console.warn(
-        `[stream ${args.streamPath}] Server has fewer events than the local mirror; discarding local ${slug} tables.`,
+        `[stream ${args.streamPath} ${slug}] Server has fewer events than the local mirror; discarding local ${slug} tables.`,
         { serverMaxOffset: coreProcessorState.maxOffset, localMaxOffset },
       );
       await discardLocalMirror();
@@ -536,6 +546,8 @@ function createStreamRuntime(
             streamMaxOffset: number;
           }) => {
             deliveryArrivals += 1;
+            lastBatchEvents = batch.events.length;
+            totalDeliveredEvents += batch.events.length;
             return ingestWithSelfHeal(processor, batch, election);
           },
         };
@@ -573,7 +585,7 @@ function createStreamRuntime(
         // replaced — e.g. a parked subscribe's deadline firing after a reset
         // reconnected us) must not tear down the healthy current subscription (B1).
         if (disposed || !ownsRuntime()) return;
-        console.error(`[stream ${args.streamPath}] subscribe failed`, error);
+        console.error(`[stream ${args.streamPath} ${slug}] subscribe failed`, error);
         scheduleReconnect(`subscribe failed: ${errorMessage(error)}`, 1_000);
       });
   }
@@ -599,8 +611,9 @@ function createStreamRuntime(
       // Only the connection that is still current self-heals; a stale callback bails.
       if (disposed || stream !== election.connection) throw error;
       ingestFailureCount += 1;
+      ingestFailures += 1;
       console.error(
-        `[stream ${args.streamPath}] local mirror ingest failed (attempt ${ingestFailureCount}); resubscribing from last applied offset`,
+        `[stream ${args.streamPath} ${slug}] local mirror ingest failed (attempt ${ingestFailureCount}); resubscribing from last applied offset`,
         error,
       );
       // Drop the connection and reconnect with bounded exponential backoff (capped 30s). The
@@ -705,7 +718,7 @@ function createStreamRuntime(
           if (disposed || stream !== connection) return;
           stopLivenessProbe();
           console.warn(
-            `[stream ${args.streamPath}] connection failed its liveness probe; reconnecting`,
+            `[stream ${args.streamPath} ${slug}] connection failed its liveness probe; reconnecting`,
             error,
           );
           scheduleReconnect(`liveness probe failed: ${errorMessage(error)}`, 250);
@@ -732,7 +745,14 @@ function createStreamRuntime(
 
   async function nudge(): Promise<void> {
     const connection = stream;
-    if (connection === undefined || subscriptionHandle === undefined) return;
+    if (connection === undefined || subscriptionHandle === undefined) {
+      // Not the writer (or not connected): we can't resubscribe, but say so —
+      // a silently inert nudge made follower-side stalls undiagnosable.
+      console.warn(
+        `[stream ${args.streamPath} ${slug}] nudge skipped: ${connection === undefined ? "no connection" : `no subscription (status ${snapshot.subscriptionStatus})`}`,
+      );
+      return;
+    }
     if (nudgeInFlight || disposed) return;
     nudgeInFlight = true;
     try {
@@ -758,13 +778,16 @@ function createStreamRuntime(
       }
       stopLivenessProbe();
       console.warn(
-        `[stream ${args.streamPath}] delivery nudge found a stale subscription; reconnecting`,
+        `[stream ${args.streamPath} ${slug}] delivery nudge found a stale subscription; reconnecting`,
       );
       scheduleReconnect("delivery nudge found a stale subscription", 0);
     } catch (error) {
       if (disposed || stream !== connection) return;
       stopLivenessProbe();
-      console.warn(`[stream ${args.streamPath}] delivery nudge failed; reconnecting`, error);
+      console.warn(
+        `[stream ${args.streamPath} ${slug}] delivery nudge failed; reconnecting`,
+        error,
+      );
       scheduleReconnect(`delivery nudge failed: ${errorMessage(error)}`, 0);
     } finally {
       nudgeInFlight = false;
@@ -791,6 +814,9 @@ function createStreamRuntime(
     connectionError: snapshot.connectionError,
     lastDeliveredOffset,
     deliveryArrivals,
+    totalDeliveredEvents,
+    lastBatchEvents,
+    ingestFailures,
     reconciledIncarnation,
     started,
     disposed,
