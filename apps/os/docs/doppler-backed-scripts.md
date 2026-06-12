@@ -73,9 +73,10 @@ bridge. The bridge forwards only the `Set-Cookie` header to your browser and
 then redirects back to OS:
 
 ```bash
-doppler run --project os --config dev_localhost -- node -e '
+doppler run --project os --config dev -- node -e '
 const http = require("node:http");
-const target = "http://127.0.0.1:5177";
+const { baseUrl } = require("./.alchemy/dev-server.json");
+const target = baseUrl;
 const port = 5199;
 const server = http.createServer(async (_req, res) => {
   const response = await fetch(`${target}/api/itx/admin-cookie`, {
@@ -91,12 +92,12 @@ const server = http.createServer(async (_req, res) => {
   server.close();
 });
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Open http://127.0.0.1:${port}/ once in your browser.`);
+  console.log(`Open http://localhost:${port}/ once in your browser.`);
 });
 setTimeout(() => server.close(), 60000).unref();
 '
 ```
 
-Adjust `target`, `port`, and the Doppler config for the environment you are
-testing. The cookie is host-scoped, not port-scoped, so setting it from
-`127.0.0.1:5199` also makes it available to `127.0.0.1:5177`.
+Adjust `port` and the Doppler config for the environment you are testing. The
+cookie is host-scoped, not port-scoped, so setting it from `localhost:5199`
+also makes it available to `localhost:<dev-port>`.

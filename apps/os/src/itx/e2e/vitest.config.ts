@@ -9,8 +9,10 @@ import {
 } from "@iterate-com/shared/test-support/vitest-e2e";
 import { E2E_REPO_ROOT_KEY, E2E_RUN_SLUG_KEY } from "../../../e2e/test-support/provide-keys.ts";
 import { createVitestRunSlug } from "../../../e2e/test-support/vitest-naming.ts";
+import { localDevServerBaseUrl } from "../../../e2e/test-support/dev-server.ts";
 
 const e2eRoot = fileURLToPath(new URL("../../../e2e", import.meta.url));
+const appRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const repoRoot = fileURLToPath(new URL("../../../../..", import.meta.url));
 const vitestRunSlug = process.env.OS_E2E_RUN_SLUG?.trim() || createVitestRunSlug();
 const vitestRunRoot = createVitestRunRoot("os-itx-e2e-");
@@ -18,6 +20,7 @@ const ITX_ADMIN_AUTH_COOKIE = "iterate-admin-auth";
 const baseUrl =
   process.env.OS_ITX_E2E_BASE_URL?.trim().replace(/\/+$/, "") ||
   process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "") ||
+  localDevServerBaseUrl(appRoot) ||
   "";
 
 console.log(`[vitest-artifacts] run root: ${vitestRunRoot}`);

@@ -14,11 +14,12 @@ Common target modes:
 # Local dev through your configured tunnel. Requires `pnpm dev` and a healthy tunnel.
 pnpm cli rpc --help
 
-# Direct local dev server. Use when the tunnel hostname is not reachable.
-doppler run --config dev_jonas -- pnpm cli --base-url http://localhost:5173 rpc --help
+# Fully-local dev server. Requires `doppler run --config dev -- pnpm dev`;
+# the CLI reads .alchemy/dev-server.json for the selected port.
+doppler run --config dev -- pnpm cli rpc --help
 
-# Localhost-specific config. Requires `pnpm dev:localhost`.
-doppler run --config dev_localhost -- pnpm cli rpc --help
+# Explicit local override, if you are not using the discovery file.
+doppler run --config dev -- pnpm cli --base-url http://localhost:<port> rpc --help
 
 # Production.
 doppler run --config prd -- pnpm cli rpc --help

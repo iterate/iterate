@@ -205,7 +205,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
       .first<{ custom_hostname: string | null }>();
     const host = row?.custom_hostname?.trim().toLowerCase() || summary.defaultHost;
     // Local dev serves project hosts on the dev server's port
-    // (<slug>.os.localhost:<port>), so carry the base URL's port, not just
+    // (<slug>.localhost:<port>), so carry the base URL's port, not just
     // its protocol.
     const base = config.baseUrl ? new URL(config.baseUrl) : null;
     const protocol = base?.protocol ?? "https:";

@@ -14,6 +14,7 @@ describe("project host routing", () => {
     expect(resolveProjectSlugFromHostname("alpha.os.iterate.com", ["os.iterate.com"])).toBe(
       "alpha",
     );
+    expect(resolveProjectSlugFromHostname("alpha.localhost", ["localhost"])).toBe("alpha");
     expect(resolveProjectSlugFromHostname("my-project.os.iterate.com", ["*.os.iterate.com"])).toBe(
       "my-project",
     );
@@ -114,6 +115,16 @@ describe("buildProjectWorkerUrl", () => {
         projectHostnameBases: ["iterate.app"],
       }),
     ).toBe("https://demo.iterate.app");
+  });
+
+  it("builds localhost project worker URLs using the app port", () => {
+    expect(
+      buildProjectWorkerUrl({
+        appBaseUrl: "http://localhost:51234",
+        projectSlug: "demo",
+        projectHostnameBases: ["localhost"],
+      }),
+    ).toBe("http://demo.localhost:51234");
   });
 
   it("prefers a custom hostname", () => {

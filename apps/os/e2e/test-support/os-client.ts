@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
 import { OpenAPILink } from "@orpc/openapi-client/fetch";
@@ -6,20 +7,26 @@ import type { RouterClient } from "@orpc/server";
 import WebSocket from "ws";
 import { osContract } from "@iterate-com/os-contract";
 import type { Event } from "@iterate-com/shared/streams/types";
+import { localDevServerBaseUrl } from "./dev-server.ts";
 import type { appRouter } from "~/orpc/root.ts";
 
 export type OsClient = RouterClient<typeof appRouter>;
+const appRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 export function requireBaseUrl() {
   let baseUrl = process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "");
+  baseUrl ||= localDevServerBaseUrl(appRoot);
   if (!baseUrl) {
     console.log(`No base URL found in environment, reading from Doppler.`);
     const dopplerEnv = execSync(`doppler run -- node -p 'JSON.stringify(process.env)'`);
     Object.assign(process.env, JSON.parse(dopplerEnv.toString()), process.env);
     baseUrl = process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "");
+    baseUrl ||= localDevServerBaseUrl(appRoot);
   }
   if (!baseUrl) {
-    throw new Error("APP_CONFIG_BASE_URL is required for os e2e tests.");
+    throw new Error(
+      "APP_CONFIG_BASE_URL is required for os e2e tests, or start local dev with `pnpm dev` first.",
+    );
   }
   return baseUrl;
 }

@@ -176,16 +176,15 @@ const env: Record<string, string | undefined> = {
 };
 
 // Fully-local default dev (config `dev`): no tunnel, no per-user domain. Picks
-// a free port, bakes APP_CONFIG_BASE_URL=http://os.localhost:<port>, and
-// writes .alchemy/dev-server.json so CLIs can find the running server. No-op
-// for configs that set APP_CONFIG_BASE_URL (tunnel-backed dev_<user>,
-// dev_localhost, deploys).
-const localDevServer = await prepareLocalDevServer(env, { appSlug: "os" });
+// a free port, bakes APP_CONFIG_BASE_URL=http://localhost:<port>, and writes
+// .alchemy/dev-server.json so CLIs can find the running server. No-op for
+// configs that set APP_CONFIG_BASE_URL (tunnel-backed dev_<user>, deploys, or
+// explicit one-off overrides).
+const localDevServer = await prepareLocalDevServer(env);
 if (localDevServer && !env.APP_CONFIG_PROJECT_HOSTNAME_BASES) {
-  // Project hosts resolve as <proj-slug>.os.localhost:<port> in the browser.
-  env.APP_CONFIG_PROJECT_HOSTNAME_BASES = JSON.stringify([
-    new URL(localDevServer.baseUrl).hostname,
-  ]);
+  // Project hosts resolve as <proj-slug>.localhost:<port> in browsers. The app
+  // base URL stays plain localhost so curl/Node clients work without local DNS.
+  env.APP_CONFIG_PROJECT_HOSTNAME_BASES = JSON.stringify(["localhost"]);
 }
 if (localDevServer) {
   // The OAuth resource (RFC 8707) must be a registered audience at the auth

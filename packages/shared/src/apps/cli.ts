@@ -11,6 +11,7 @@ import * as prompts from "@clack/prompts";
 import { createCli, parseRouter, type AnyRouter } from "trpc-cli";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
 import { parse as parseYaml } from "yaml";
+import { readLocalDevServerInfo } from "../alchemy/local-dev-server.ts";
 
 const DEFAULT_DISCOVERY_PATH = "/__internal/trpc-cli-procedures";
 const DEFAULT_RPC_PATH = "/orpc/";
@@ -82,6 +83,7 @@ export async function runAppCli() {
     baseUrlFlag ??
     process.env.APP_CONFIG_BASE_URL ??
     process.env[config.remote.baseUrlEnvVar] ??
+    readLocalDevServerInfo(cwd, { requireLive: true })?.baseUrl ??
     config.remote.defaultBaseUrl;
   const rpcRequested = firstNonFlagArgument(process.argv.slice(2)) === REMOTE_GROUP_NAME;
 
