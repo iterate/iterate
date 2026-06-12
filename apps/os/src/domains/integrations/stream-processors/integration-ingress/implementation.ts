@@ -39,7 +39,20 @@ export class IntegrationIngressProcessor extends StreamProcessor<
   ): IntegrationIngressProcessorState {
     const { event, state } = args;
     switch (event.type) {
-      case "events.iterate.com/integration/route-registered":
+      case "events.iterate.com/integration/route-registered": {
+        // FIRST claim wins: a routing key (Slack team, GitHub installation)
+        // belongs to exactly one account until route-removed frees it — a
+        // later claim by a different owner must not silently steal webhooks.
+        // The losing claim event stays on the journal as evidence; connect
+        // flows can pre-check the fold to fail loudly instead.
+        const existing = state.routes[event.payload.routingKey];
+        if (
+          existing != null &&
+          (existing.projectId !== event.payload.projectId ||
+            existing.account !== event.payload.account)
+        ) {
+          return { ...state, integration: event.payload.integration };
+        }
         return {
           ...state,
           integration: event.payload.integration,
@@ -51,6 +64,7 @@ export class IntegrationIngressProcessor extends StreamProcessor<
             },
           },
         };
+      }
       case "events.iterate.com/integration/route-removed": {
         const { [event.payload.routingKey]: _removed, ...routes } = state.routes;
         return { ...state, routes };
@@ -69,6 +83,22 @@ export class IntegrationIngressProcessor extends StreamProcessor<
     args: Parameters<StreamProcessor<IntegrationIngressProcessorContract>["processEvent"]>[0],
   ): void {
     const { event, state } = args;
+
+    if (event.type === "events.iterate.com/integration/route-registered") {
+      const claimed = state.routes[event.payload.routingKey];
+      if (
+        claimed == null ||
+        claimed.projectId !== event.payload.projectId ||
+        claimed.account !== event.payload.account
+      ) {
+        console.warn("[integration-ingress] routing key already claimed; claim rejected", {
+          routingKey: event.payload.routingKey,
+          rejected: { projectId: event.payload.projectId, account: event.payload.account },
+          owner: claimed,
+        });
+      }
+      return;
+    }
     if (event.type !== "events.iterate.com/integration/event-received") return;
 
     const routingKey = event.payload.routingKey;
@@ -89,7 +119,11 @@ export class IntegrationIngressProcessor extends StreamProcessor<
       }),
       payload: event.payload,
     };
-    args.runInBackground(async () => {
+    // BLOCK the checkpoint on the forward: the router's only job is the
+    // global → account copy, so an event must not be checkpointed past until
+    // its copy landed. A failed forward wedges and replays instead of being
+    // logged-and-lost.
+    args.blockProcessorWhile(async () => {
       await this.deps.forwardToAccount({ ...route, event: forwarded });
     });
   }

@@ -56,11 +56,14 @@ export async function captureIntegrationEvent(input: {
     routingKey: input.routingKey,
     body: input.body,
   };
+  // Providers without a delivery id fall back to a CONTENT digest, so a
+  // provider retrying the same delivery still dedupes (a random key would
+  // append a duplicate fact on every retry).
+  const idempotencyKey =
+    input.idempotencyKey ?? `body:${await sha256Hex(JSON.stringify(input.body))}`;
   await stream.append({
     type: "events.iterate.com/integration/event-received",
-    idempotencyKey: `${input.integration}-${input.transport}:${
-      input.idempotencyKey ?? crypto.randomUUID()
-    }`,
+    idempotencyKey: `${input.integration}-${input.transport}:${idempotencyKey}`,
     payload,
   });
 
@@ -75,6 +78,11 @@ export async function captureIntegrationEvent(input: {
   } else {
     await wakeRouter;
   }
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export async function handleIntegrationIngress(input: {

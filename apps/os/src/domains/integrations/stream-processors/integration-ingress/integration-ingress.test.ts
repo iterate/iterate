@@ -116,6 +116,88 @@ describe("IntegrationIngressProcessor", () => {
     expect(processor.state.dropped).toBe(1);
   });
 
+  it("rejects a conflicting claim: the FIRST owner keeps the routing key", async () => {
+    const { forwarded, processor } = createProcessor();
+
+    await processor.ingest({
+      events: [
+        committedEvent({
+          offset: 1,
+          type: "events.iterate.com/integration/route-registered",
+          payload: {
+            integration: "slack",
+            routingKey: "team:T1",
+            projectId: "proj-first",
+            account: "default",
+          },
+        }),
+        // A different project tries to claim the same team — silently kept
+        // on the journal, but the fold keeps the first owner.
+        committedEvent({
+          offset: 2,
+          type: "events.iterate.com/integration/route-registered",
+          payload: {
+            integration: "slack",
+            routingKey: "team:T1",
+            projectId: "proj-thief",
+            account: "default",
+          },
+        }),
+        committedEvent({
+          offset: 3,
+          type: "events.iterate.com/integration/event-received",
+          payload: { integration: "slack", transport: "webhook", routingKey: "team:T1", body: {} },
+        }),
+      ],
+      streamMaxOffset: 3,
+    });
+    await flushBackgroundWork();
+
+    expect(processor.state.routes).toEqual({
+      "team:T1": { projectId: "proj-first", account: "default" },
+    });
+    expect(forwarded.map((entry) => entry.projectId)).toEqual(["proj-first"]);
+  });
+
+  it("frees a routing key for a new owner after route-removed", async () => {
+    const { processor } = createProcessor();
+
+    await processor.ingest({
+      events: [
+        committedEvent({
+          offset: 1,
+          type: "events.iterate.com/integration/route-registered",
+          payload: {
+            integration: "slack",
+            routingKey: "team:T1",
+            projectId: "proj-a",
+            account: "default",
+          },
+        }),
+        committedEvent({
+          offset: 2,
+          type: "events.iterate.com/integration/route-removed",
+          payload: { integration: "slack", routingKey: "team:T1" },
+        }),
+        committedEvent({
+          offset: 3,
+          type: "events.iterate.com/integration/route-registered",
+          payload: {
+            integration: "slack",
+            routingKey: "team:T1",
+            projectId: "proj-b",
+            account: "default",
+          },
+        }),
+      ],
+      streamMaxOffset: 3,
+    });
+
+    expect(processor.state.routes).toEqual({
+      "team:T1": { projectId: "proj-b", account: "default" },
+    });
+  });
+
   it("stops forwarding after route-removed", async () => {
     const { forwarded, processor } = createProcessor();
 
