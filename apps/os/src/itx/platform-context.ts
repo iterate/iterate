@@ -2,7 +2,7 @@
 // capability chain (itx-next.md, "LOCKED: the final shape" — "Defaults live
 // on the parent chain; the root of every chain is code").
 //
-//   itx_a1b2 → project → platform:project (THIS, code)
+//   <prj>:/itx/<x> → <prj>:/ → platform:project (THIS, code)
 //
 // There is exactly ONE capability map per context; the defaults are
 // not a layer inside any instance — they are this context's provides,
@@ -28,7 +28,7 @@ import {
   type ProvideCapabilityInput,
 } from "./itx.ts";
 import { makeDial, resolveDialableTargets } from "./dial.ts";
-import { projectContextAddress } from "./journal.ts";
+import { contextAddress, projectContextRef } from "./coordinates.ts";
 import { parseConfig } from "~/config.ts";
 
 export const PLATFORM_PROJECT_CONTEXT_ID = "platform:project";
@@ -200,13 +200,13 @@ export class PlatformContext extends WorkerEntrypoint<Env, PlatformContextProps>
       );
     }
     const origin = input.origin ?? {
-      address: projectContextAddress(projectId),
-      id: projectId,
+      address: contextAddress(projectContextRef(projectId)),
+      ref: projectContextRef(projectId),
     };
     const dial = makeDial({
       allowlists: resolveDialableTargets(parseConfig(this.env).itx),
       contextAddress: PLATFORM_PROJECT_CONTEXT_ADDRESS,
-      contextId: PLATFORM_PROJECT_CONTEXT_ID,
+      contextRef: PLATFORM_PROJECT_CONTEXT_ID,
       env: this.env,
       exports: this.ctx.exports as unknown as Parameters<typeof makeDial>[0]["exports"],
       // The `worker` default is a repo SOURCE, so the chain's code root must

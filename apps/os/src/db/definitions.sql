@@ -61,11 +61,3 @@ create table oauth_states (
 
 create index idx_oauth_states_expires_at on oauth_states (expires_at);
 
-create table itx_contexts (
-  id text primary key not null,
-  project_id text not null references projects (id) on delete cascade,
-  journal_path text not null,
-  created_at text not null default current_timestamp
-);
-
-create index idx_itx_contexts_project_id on itx_contexts (project_id);

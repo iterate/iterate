@@ -29,13 +29,9 @@ const STREAM_CHILD_STREAM_CREATED_TYPE = "events.iterate.com/stream/child-stream
 
 export type AgentHostProcessorDeps = {
   agentNamespace: DurableObjectNamespace<AgentDurableObject> | undefined;
-  /** Ensures (and returns) the agent's own itx context coordinate — the
-   * address lets scripts resolve it without a catalog round-trip. */
-  getItxContext: () => Promise<{
-    context: string;
-    contextAddress: import("~/itx/itx.ts").CapabilityAddress;
-    projectId: string;
-  }>;
+  /** Ensures (and returns) the agent's own itx context ref — identity,
+   * address, and owning project are all projections of it. */
+  getItxContext: () => Promise<{ context: string }>;
   /** The worker env + exports the script runner needs (LOADER/STREAM/exports). */
   runnerEnv: Env;
   workerExports: unknown;
@@ -207,7 +203,7 @@ export async function runAgentItxScript(args: {
   recordRequested?: boolean;
   streamPath: StreamPath;
 }) {
-  const { context, contextAddress } = await args.deps.getItxContext();
+  const { context } = await args.deps.getItxContext();
   await runItxScript({
     // The runner's one shape is `async (itx) => …`; the model's code goes
     // through verbatim (older histories say `async (ctx) =>` — the parameter
@@ -218,11 +214,10 @@ export async function runAgentItxScript(args: {
     exports: args.deps.workerExports as ItxRuntime["exports"],
     functionSource: args.code,
     projectId: args.projectId,
-    // The agent's context is hosted by the agent DO and DERIVED from its
-    // coordinate — pass the address so the script resolves it directly, no
-    // catalog. The record (script-execution events) lands on the agent
-    // stream, which IS the agent context's journal.
-    props: { context, contextAddress, projectId: args.projectId },
+    // The agent's context ref IS its coordinate — the script resolves it
+    // directly. The record (script-execution events) lands on the agent
+    // stream, which IS the agent context's stream.
+    props: { context },
     record: { namespace: args.projectId, path: args.streamPath },
   });
 }

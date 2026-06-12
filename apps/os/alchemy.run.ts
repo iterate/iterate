@@ -468,7 +468,7 @@ const [
   }),
   osWorker("itx", {
     entrypoint: "./src/workers/itx.ts",
-    // Own-zone fetches (UrlDial / EgressPipe dialing project hosts) must go
+    // Own-zone fetches (EgressPipe dialing project hosts) must go
     // through Worker routes, not origin — same reason as the app worker.
     compatibilityFlags: ["global_fetch_strictly_public"],
     bindings: loopbackUnionBindings,
@@ -521,6 +521,9 @@ const [
     entrypoint: "./src/workers/stream.ts",
     bindings: {
       AGENT: agent,
+      // Context streams dial their ItxDurableObject subscriber through this
+      // binding (itx/coordinates.ts createContext).
+      ITX_CONTEXT: itxContext,
       PROJECT: project,
       REPO: repo,
       SLACK_AGENT: slackAgent,

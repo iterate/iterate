@@ -14,7 +14,7 @@
 // Loaders differ only in their loopback accessor (a DO's ctx.exports vs the
 // dial's host.loopback).
 
-import type { CapabilityAddress } from "./itx.ts";
+import { projectIdOfContextRef } from "./coordinates.ts";
 
 export const ISOLATE_COMPATIBILITY_DATE = "2026-04-27";
 export const ISOLATE_COMPATIBILITY_FLAGS = ["nodejs_compat"];
@@ -35,16 +35,13 @@ export function wireIsolateEnv(input: {
   loopback: IsolateLoopback;
   /** Attribution: which capability's isolate this is. */
   capabilityPath: string;
-  /** The isolate's home context — its ITERATE can never reach wider. */
-  contextId: string;
-  /** The home context's ADDRESS: how the egress dispatcher and the restorer
-   * dial the context node without a directory lookup on the hot path.
-   * null falls back to the project context. */
-  contextAddress?: CapabilityAddress | null;
-  /** The owning project — egress (and its secrets) are scoped to it. */
-  projectId: string;
+  /** The isolate's home context ref (`<namespace>:<path>`) — its ITERATE can
+   * never reach wider, and its address and owning project are projections
+   * of the ref. */
+  contextRef: string;
   code: IsolateCode;
 }) {
+  const projectId = projectIdOfContextRef(input.contextRef);
   return {
     compatibilityDate: input.code.compatibilityDate ?? ISOLATE_COMPATIBILITY_DATE,
     compatibilityFlags: input.code.compatibilityFlags ?? ISOLATE_COMPATIBILITY_FLAGS,
@@ -52,24 +49,21 @@ export function wireIsolateEnv(input: {
       ITERATE: input.loopback("ItxEntrypoint", {
         props: {
           capabilityPath: input.capabilityPath,
-          context: input.contextId,
-          contextAddress: input.contextAddress ?? null,
-          projectId: input.projectId,
+          context: input.contextRef,
         },
       }),
       // The project's streams, same posture in EVERY isolate (the project
       // worker, source caps, scripts): identical env means identical
       // loader-cache entries, so all load sites share warm isolates.
       STREAMS: input.loopback("StreamsBackend", {
-        props: { projectId: input.projectId },
+        props: { projectId },
       }),
     },
     globalOutbound: input.loopback("ProjectEgress", {
       props: {
         capabilityPath: input.capabilityPath,
-        context: input.contextId,
-        contextAddress: input.contextAddress ?? null,
-        projectId: input.projectId,
+        context: input.contextRef,
+        projectId,
       },
     }),
     mainModule: input.code.mainModule,

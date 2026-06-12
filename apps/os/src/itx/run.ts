@@ -1,7 +1,7 @@
 // The itx script runner (the synchronous door).
 //
 // One function runs a script in a loader isolate against a context and
-// leaves a durable two-event record on the context's JOURNAL stream:
+// leaves a durable two-event record on the context's OWN stream:
 //
 //   events.iterate.com/itx/script-execution-requested   { executionId, code, context }
 //   events.iterate.com/itx/script-execution-completed   { executionId, ok, result|error, durationMs, context }
@@ -19,8 +19,7 @@
 
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import type { ItxRuntime } from "./handle.ts";
-import { ITX_EVENT_TYPES, type CapabilityAddress } from "./itx.ts";
-import { ownJournalPath } from "./journal.ts";
+import { ITX_EVENT_TYPES } from "./itx.ts";
 import type { ItxProps } from "./refs.ts";
 import {
   getInitializedStreamStub,
@@ -54,13 +53,8 @@ export async function runItxScript(input: {
   /** The owning project; null only for global-context scripts (no egress
    * pipe, no event record — admin-only by construction). */
   projectId: string | null;
-  /** The context's address, wired into the isolate's egress so bare fetch()
-   * dispatches at the originating context node (a child's `fetch` shadow
-   * catches it) without a directory lookup. null = the project context. */
-  contextAddress?: CapabilityAddress | null;
-  /** Where the two-event record lands. Defaults to the owning project
-   * context's journal (/itx); callers whose record lives elsewhere — a child
-   * context's journal, an agent stream — point this there. */
+  /** Where the two-event record lands. Defaults to the context's own stream
+   * (props.context parsed as a coordinate); global scripts have none. */
   record?: { namespace: string; path: string };
   /** Use a caller-minted id (e.g. when the requested event already exists). */
   executionId?: string;
@@ -81,8 +75,7 @@ export async function runItxScript(input: {
   const executionId = input.executionId ?? crypto.randomUUID();
   const startedAtMs = Date.now();
   const record =
-    input.record ??
-    (input.projectId === null ? null : { namespace: input.projectId, path: ownJournalPath("/") });
+    input.record ?? (input.projectId === null ? null : { namespace: input.projectId, path: "/" });
 
   if (input.recordRequested !== false)
     await recordExecutionEvent(input.env, record, {
@@ -109,11 +102,7 @@ export async function runItxScript(input: {
       compatibilityDate: "2026-04-27",
       env: {
         ITERATE: exports.ItxEntrypoint!({
-          props: {
-            ...(input.props as Record<string, unknown>),
-            contextAddress: input.contextAddress ?? null,
-            projectId: input.projectId,
-          },
+          props: { ...(input.props as Record<string, unknown>) },
         }),
       },
       // Project scripts get the egress pipe as their global fetch; global
@@ -124,7 +113,6 @@ export async function runItxScript(input: {
             globalOutbound: exports.ProjectEgress!({
               props: {
                 context: input.props.context,
-                contextAddress: input.contextAddress ?? null,
                 projectId: input.projectId,
               },
             }) as Fetcher,
