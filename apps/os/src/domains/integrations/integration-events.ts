@@ -48,6 +48,9 @@ export const IntegrationEventReceivedPayload = z.object({
   integration: z.string(),
   transport: z.enum(["webhook", "gateway"]),
   routingKey: z.string().nullable(),
+  /** Stamped by the ingress router when forwarding to the claiming account
+   * (absent on the global capture stream, where routing hasn't happened). */
+  account: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   body: z.unknown(),
 });
@@ -58,6 +61,10 @@ export const IntegrationRouteRegisteredPayload = z.object({
   routingKey: z.string(),
   projectId: z.string(),
   account: z.string(),
+  /** A consented TAKEOVER: the user explicitly confirmed moving this routing
+   * key from its current owner (the interstitial flow). Without it, a claim
+   * on an owned key is rejected by the router's fold. */
+  takeover: z.boolean().optional(),
 });
 
 export const IntegrationRouteRemovedPayload = z.object({
@@ -79,6 +86,8 @@ export const IntegrationConnectRequestedPayload = z.object({
   externalId: z.string(),
   displayName: z.string().optional(),
   routingKeys: z.array(z.string()),
+  /** Claims are takeovers (consented) rather than first-claim-rejected. */
+  takeover: z.boolean().optional(),
   secrets: z.array(
     z.object({
       /** Provided-secret NAME; the slug composes as {slug}/{account}/{name}. */

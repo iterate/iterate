@@ -198,6 +198,8 @@ function ingressCtx(input: {
     baseUrl: "https://os.iterate.com",
     oauthState: { sign: async () => "signed-state", verify: async () => null },
     connect: async () => ({}),
+    routeOwner: async () => null,
+    sealPendingConnect: async () => "sealed-pending-connect",
   };
 }
 

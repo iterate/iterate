@@ -13,6 +13,7 @@ import {
 } from "@iterate-com/streams/shared/stream-processors";
 import type { StreamEventInput } from "@iterate-com/streams/shared/event";
 import { SlackRouteProcessorContract, type SlackRouteProcessorState } from "./contract.ts";
+import { DEFAULT_INTEGRATION_ACCOUNT } from "~/domains/integrations/integration-events.ts";
 export { SlackRouteProcessorContract } from "./contract.ts";
 
 export type SlackRouteProcessorContract = typeof SlackRouteProcessorContract;
@@ -72,7 +73,11 @@ export class SlackRouteProcessor extends StreamProcessor<
      * should be forwarded?
      */
     const slackBody = event.payload.body;
-    const route = slackRouteFromWebhookBody(slackBody);
+    // Thread streams nest under the ACCOUNT (stamped by the ingress router
+    // on forward), so any number of connected workspaces coexist:
+    // /agents/slack/{account}/{channel}/ts-{ts}.
+    const account = event.payload.account ?? DEFAULT_INTEGRATION_ACCOUNT;
+    const route = slackRouteFromWebhookBody(slackBody, account);
     if (route == null) return;
 
     const streamPath = state.routes[route.key] ?? route.streamPath;
@@ -143,7 +148,7 @@ type SlackRoute = {
   threadTs: string;
 };
 
-function slackRouteFromWebhookBody(body: unknown): SlackRoute | null {
+function slackRouteFromWebhookBody(body: unknown, account: string): SlackRoute | null {
   const parsed = z
     .object({
       type: z.literal("event_callback"),
@@ -152,12 +157,15 @@ function slackRouteFromWebhookBody(body: unknown): SlackRoute | null {
     .loose()
     .safeParse(body);
   if (parsed.success) {
-    return slackRouteFromEvent(parsed.data.event);
+    return slackRouteFromEvent(parsed.data.event, account);
   }
-  return slackRouteFromInteraction(body);
+  return slackRouteFromInteraction(body, account);
 }
 
-function slackRouteFromEvent(slackEvent: Record<string, unknown>): SlackRoute | null {
+function slackRouteFromEvent(
+  slackEvent: Record<string, unknown>,
+  account: string,
+): SlackRoute | null {
   const item = readRecord(slackEvent.item);
   if (item != null && typeof item.channel === "string" && typeof item.ts === "string") {
     return {
@@ -184,13 +192,14 @@ function slackRouteFromEvent(slackEvent: Record<string, unknown>): SlackRoute | 
   if (slackThreadTs == null) return null;
 
   return routeFromChannelAndThread({
+    account,
     canCreateRoute: true,
     channel: slackEvent.channel,
     threadTs: slackThreadTs,
   });
 }
 
-function slackRouteFromInteraction(body: unknown): SlackRoute | null {
+function slackRouteFromInteraction(body: unknown, account: string): SlackRoute | null {
   const interaction = readRecord(body);
   if (interaction == null) return null;
 
@@ -205,6 +214,7 @@ function slackRouteFromInteraction(body: unknown): SlackRoute | null {
   if (channel == null || threadTs == null) return null;
 
   return routeFromChannelAndThread({
+    account,
     canCreateRoute: true,
     channel,
     threadTs,
@@ -212,6 +222,7 @@ function slackRouteFromInteraction(body: unknown): SlackRoute | null {
 }
 
 function routeFromChannelAndThread(input: {
+  account: string;
   canCreateRoute: boolean;
   channel: string;
   threadTs: string;
@@ -220,7 +231,7 @@ function routeFromChannelAndThread(input: {
     canCreateRoute: input.canCreateRoute,
     channel: input.channel,
     key: `${input.channel}:${input.threadTs}`,
-    streamPath: `/agents/slack/${sanitizePathPart(input.channel)}/ts-${sanitizePathPart(input.threadTs)}`,
+    streamPath: `/agents/slack/${sanitizePathPart(input.account)}/${sanitizePathPart(input.channel)}/ts-${sanitizePathPart(input.threadTs)}`,
     threadTs: input.threadTs,
   };
 }

@@ -99,6 +99,8 @@ const IntegrationLifecycleBase = createIterateDurableObjectBase<
   getDatabase: (env) => env.DO_CATALOG,
   indexes: {
     projectId: (params) => params.projectId,
+    // Accounts of one integration in one project enumerate from here.
+    projectIntegration: (params) => `${params.projectId}:${params.integration}`,
   },
   nameSchema: IntegrationDurableObjectStructuredName,
 });
@@ -112,7 +114,7 @@ export class IntegrationDurableObject extends IntegrationLifecycleBase<Integrati
       ...deps,
       // The two cross-boundary capabilities the processor can't reach
       // itself; the connect choreography is processor code.
-      claimRoute: async ({ routingKey }) => {
+      claimRoute: async ({ routingKey, takeover }) => {
         const params = await this.ensureParams();
         const ingressStream = await getInitializedStreamStub({
           durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
@@ -121,12 +123,15 @@ export class IntegrationDurableObject extends IntegrationLifecycleBase<Integrati
         });
         await ingressStream.append({
           type: "events.iterate.com/integration/route-registered",
-          idempotencyKey: `integration-route:${params.integration}:${routingKey}:${params.projectId}:${params.account}`,
+          // Takeovers get their own idempotency lineage so a consented
+          // re-claim isn't deduped against the original rejected claim.
+          idempotencyKey: `integration-route:${params.integration}:${routingKey}:${params.projectId}:${params.account}${takeover ? ":takeover" : ""}`,
           payload: {
             integration: params.integration,
             routingKey,
             projectId: params.projectId,
             account: params.account,
+            ...(takeover === true ? { takeover: true } : {}),
           },
         });
         // Wake the router so the claim folds before the next provider event.

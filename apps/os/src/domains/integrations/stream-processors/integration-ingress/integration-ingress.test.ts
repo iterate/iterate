@@ -50,6 +50,8 @@ describe("IntegrationIngressProcessor", () => {
             integration: "github",
             transport: "webhook",
             routingKey: "installation:1234",
+            // The forwarded copy is enriched with its routing outcome.
+            account: "default",
             body: { action: "opened", installation: { id: 1234 } },
           },
         },
@@ -157,6 +159,41 @@ describe("IntegrationIngressProcessor", () => {
       "team:T1": { projectId: "proj-first", account: "default" },
     });
     expect(forwarded.map((entry) => entry.projectId)).toEqual(["proj-first"]);
+  });
+
+  it("honors a consented TAKEOVER: the new owner gets the routing key", async () => {
+    const { processor } = createProcessor();
+
+    await processor.ingest({
+      events: [
+        committedEvent({
+          offset: 1,
+          type: "events.iterate.com/integration/route-registered",
+          payload: {
+            integration: "slack",
+            routingKey: "team:T1",
+            projectId: "proj-old",
+            account: "t1",
+          },
+        }),
+        committedEvent({
+          offset: 2,
+          type: "events.iterate.com/integration/route-registered",
+          payload: {
+            integration: "slack",
+            routingKey: "team:T1",
+            projectId: "proj-new",
+            account: "t1",
+            takeover: true,
+          },
+        }),
+      ],
+      streamMaxOffset: 2,
+    });
+
+    expect(processor.state.routes).toEqual({
+      "team:T1": { projectId: "proj-new", account: "t1" },
+    });
   });
 
   it("frees a routing key for a new owner after route-removed", async () => {

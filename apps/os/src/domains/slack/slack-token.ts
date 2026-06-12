@@ -16,6 +16,16 @@ type SlackTokenEnv = {
   SLACK_BOT_TOKEN?: string;
 };
 
+/** Thread streams live at /agents/slack/{account}/{channel}/ts-{ts}; the
+ * slack-agent host recovers its workspace ACCOUNT from its own path. */
+export function slackAccountFromStreamPath(streamPath: string): string {
+  const segments = streamPath.split("/").filter(Boolean);
+  if (segments[0] === "agents" && segments[1] === "slack" && segments.length >= 5) {
+    return segments[2]!;
+  }
+  return DEFAULT_INTEGRATION_ACCOUNT;
+}
+
 export async function readSlackToken(input: {
   projectId: string;
   account?: string;

@@ -15,7 +15,7 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
 import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
-import { readSlackToken } from "~/domains/slack/slack-token.ts";
+import { readSlackToken, slackAccountFromStreamPath } from "~/domains/slack/slack-token.ts";
 import {
   SlackAgentProcessor,
   SlackAgentProcessorContract,
@@ -64,7 +64,10 @@ export class SlackAgentDurableObject extends SlackAgentLifecycleBase<SlackAgentE
       ...deps,
       callSlackApi: async (method, body) => {
         const { projectId, streamPath } = await this.ensureStartedOrInitializeFromRuntimeName();
-        const token = await readSlackToken({ projectId });
+        const token = await readSlackToken({
+          projectId,
+          account: slackAccountFromStreamPath(streamPath),
+        });
         if (!token) return;
         try {
           await callSlackWebApi({ body, method, token });

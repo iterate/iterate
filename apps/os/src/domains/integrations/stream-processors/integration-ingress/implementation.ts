@@ -43,11 +43,14 @@ export class IntegrationIngressProcessor extends StreamProcessor<
         // FIRST claim wins: a routing key (Slack team, GitHub installation)
         // belongs to exactly one account until route-removed frees it — a
         // later claim by a different owner must not silently steal webhooks.
-        // The losing claim event stays on the journal as evidence; connect
-        // flows can pre-check the fold to fail loudly instead.
+        // The ONE exception is a consented TAKEOVER (payload.takeover), the
+        // outcome of the interstitial "this workspace is connected to
+        // project X — really move it?" flow. The losing claim event stays on
+        // the journal as evidence either way.
         const existing = state.routes[event.payload.routingKey];
         if (
           existing != null &&
+          event.payload.takeover !== true &&
           (existing.projectId !== event.payload.projectId ||
             existing.account !== event.payload.account)
         ) {
@@ -87,9 +90,10 @@ export class IntegrationIngressProcessor extends StreamProcessor<
     if (event.type === "events.iterate.com/integration/route-registered") {
       const claimed = state.routes[event.payload.routingKey];
       if (
-        claimed == null ||
-        claimed.projectId !== event.payload.projectId ||
-        claimed.account !== event.payload.account
+        event.payload.takeover !== true &&
+        (claimed == null ||
+          claimed.projectId !== event.payload.projectId ||
+          claimed.account !== event.payload.account)
       ) {
         console.warn("[integration-ingress] routing key already claimed; claim rejected", {
           routingKey: event.payload.routingKey,
@@ -117,7 +121,10 @@ export class IntegrationIngressProcessor extends StreamProcessor<
         key: "forward",
         sourceEvent: event,
       }),
-      payload: event.payload,
+      // The forwarded copy is the envelope ENRICHED with its routing outcome
+      // — account-aware consumers (slack-route's per-account thread paths)
+      // read it from here.
+      payload: { ...event.payload, account: route.account },
     };
     // BLOCK the checkpoint on the forward: the router's only job is the
     // global → account copy, so an event must not be checkpointed past until

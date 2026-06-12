@@ -28,7 +28,7 @@ describe("SlackRouteProcessor", () => {
     });
     await flushBackgroundWork();
 
-    const expectedStreamPath = "/agents/slack/c123/ts-1772136258-963519";
+    const expectedStreamPath = "/agents/slack/default/c123/ts-1772136258-963519";
     expect(bootstrapCalls).toEqual([
       { channel: "C123", streamPath: expectedStreamPath, threadTs: "1772136258.963519" },
     ]);
@@ -142,7 +142,22 @@ describe("SlackRouteProcessor", () => {
     await flushBackgroundWork();
 
     expect(acknowledged).toEqual([{ body: slackBody("hello") }]);
-    expect(prewarmed).toEqual(["/agents/slack/c123/ts-1772136258-963519"]);
+    expect(prewarmed).toEqual(["/agents/slack/default/c123/ts-1772136258-963519"]);
+  });
+
+  it("nests thread streams under the workspace ACCOUNT — multiple Slacks coexist", async () => {
+    const { appended, processor } = createProcessor({
+      createRoutedStreamBootstrapEvents: () => [],
+    });
+
+    await processor.ingest({
+      events: [envelopeEvent({ offset: 9, text: "hi from second workspace", account: "t9zz" })],
+      streamMaxOffset: 9,
+    });
+    await flushBackgroundWork();
+
+    const routed = appended.find((entry) => entry.streamPath != null);
+    expect(routed?.streamPath).toBe("/agents/slack/t9zz/c123/ts-1772136258-963519");
   });
 });
 
@@ -190,7 +205,7 @@ function slackBody(text: string) {
   };
 }
 
-function envelopeEvent(args: { offset: number; text: string }) {
+function envelopeEvent(args: { offset: number; text: string; account?: string }) {
   return committedEvent({
     offset: args.offset,
     type: "events.iterate.com/integration/event-received",
@@ -198,6 +213,7 @@ function envelopeEvent(args: { offset: number; text: string }) {
       integration: "slack",
       transport: "webhook" as const,
       routingKey: "team:T1",
+      ...(args.account == null ? {} : { account: args.account }),
       body: slackBody(args.text),
     },
   });

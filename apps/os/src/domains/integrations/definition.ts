@@ -86,6 +86,24 @@ export type IntegrationIngressContext = {
   /** The ONE connect choreography: appends integration/connect-requested for
    * this integration; the account's processor does the rest. */
   connect(input: IntegrationConnectInput): Promise<unknown>;
+  /** Who currently owns a routing key (the ingress router's fold) — the
+   * conflict check behind the takeover interstitial. */
+  routeOwner(input: { routingKey: string }): Promise<{ projectId: string; account: string } | null>;
+  /** Seal a PendingConnect for the takeover interstitial: the callback
+   * already exchanged the code (codes are single-use), so the full connect
+   * input — credentials included — rides encrypted to the UI and back. */
+  sealPendingConnect(input: PendingConnect): Promise<string>;
+};
+
+/** A connect that paused for user consent: the routing key is owned by a
+ * different project, and moving it needs the explicit takeover interstitial. */
+export type PendingConnect = {
+  integration: string;
+  connect: IntegrationConnectInput;
+  conflict: {
+    routingKey: string;
+    owner: { projectId: string; account: string };
+  };
 };
 
 export type IntegrationSdkContext = {

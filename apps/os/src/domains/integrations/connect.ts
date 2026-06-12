@@ -40,6 +40,8 @@ export type ConnectIntegrationInput = {
   displayName?: string;
   /** Routing keys this account claims (e.g. ["installation:123"]). */
   routingKeys: string[];
+  /** Consented takeover of already-owned routing keys (the interstitial). */
+  takeover?: boolean;
   /** Secrets this account provides, by PROVIDED-SECRET NAME (the definition's
    * providedSecrets); slugs compose as {integration}/{account}/{name}. */
   secrets: {
@@ -95,6 +97,7 @@ export async function connectIntegration(input: ConnectIntegrationInput) {
       ownership: input.ownership,
       externalId: input.externalId,
       routingKeys: input.routingKeys,
+      takeover: input.takeover === true,
       secrets: input.secrets,
     }),
   );
@@ -109,6 +112,7 @@ export async function connectIntegration(input: ConnectIntegrationInput) {
       externalId: input.externalId,
       ...(input.displayName == null ? {} : { displayName: input.displayName }),
       routingKeys: input.routingKeys,
+      ...(input.takeover === true ? { takeover: true } : {}),
       secrets,
     },
   });

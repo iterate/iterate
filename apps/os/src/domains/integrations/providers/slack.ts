@@ -16,6 +16,13 @@ export function slackTeamRoutingKey(teamId: string): string {
   return `team:${teamId}`;
 }
 
+/** The ACCOUNT for a workspace derives from its team id — deterministic, so
+ * reconnecting the same workspace updates the same account while a second
+ * workspace becomes a second account. Any number of Slacks just works. */
+export function slackAccountForTeam(teamId: string): string {
+  return teamId.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+}
+
 /** Pure URL builder — the oRPC start-flow procedure uses it too. */
 export function buildSlackAuthorizationUrl(input: {
   clientId: string;
@@ -193,13 +200,14 @@ async function handleSlackOAuthCallback(
     return redirectWithError(stateData.callbackUrl, tokenData.error ?? "slack_oauth_failed");
   }
 
-  // The whole connection is ONE append from here.
-  await ctx.connect({
+  const routingKey = slackTeamRoutingKey(tokenData.team.id);
+  const connectInput = {
+    account: slackAccountForTeam(tokenData.team.id),
     projectId: stateData.projectId,
-    ownership: "first-party",
+    ownership: "first-party" as const,
     externalId: tokenData.team.id,
     displayName: tokenData.team.name ?? tokenData.team.id,
-    routingKeys: [slackTeamRoutingKey(tokenData.team.id)],
+    routingKeys: [routingKey],
     secrets: [
       {
         name: SLACK_ACCESS_TOKEN_SECRET_NAME,
@@ -212,7 +220,25 @@ async function handleSlackOAuthCallback(
         },
       },
     ],
-  });
+  };
+
+  // The workspace may already be routed to ANOTHER project (one shared
+  // first-party Slack app). Moving it needs explicit consent: pause the
+  // connect into a sealed token and bounce to the takeover interstitial.
+  const owner = await ctx.routeOwner({ routingKey });
+  if (owner != null && owner.projectId !== stateData.projectId) {
+    const pending = await ctx.sealPendingConnect({
+      integration: "slack",
+      connect: connectInput,
+      conflict: { routingKey, owner },
+    });
+    const target = new URL(stateData.callbackUrl ?? "/", ctx.baseUrl);
+    target.searchParams.set("pending_connect", pending);
+    return Response.redirect(target.toString(), 302);
+  }
+
+  // The whole connection is ONE append from here.
+  await ctx.connect(connectInput);
   return Response.redirect(stateData.callbackUrl ?? "/", 302);
 }
 

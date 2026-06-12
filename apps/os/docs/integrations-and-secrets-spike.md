@@ -140,6 +140,26 @@ second Google account is the same three appends under a different account
 name. The two-account Waitrose flow is exercised end to end in
 `waitrose-userspace.test.ts`.
 
+**Multiple Slacks just work**: the Slack callback derives the account from
+the workspace's team id (deterministic — reconnecting the same workspace
+updates the same account; a second workspace becomes a second account), the
+ingress router stamps the claiming account onto every forwarded envelope,
+and thread streams nest under it: `/agents/slack/{account}/{channel}/ts-{ts}`.
+The slack-agent host recovers its workspace account from its own stream path
+to pick the right bot token.
+
+**Routing-key TAKEOVER is consented, never silent.** The router fold rejects
+a claim on an owned key (first claim wins) unless the claim carries
+`takeover: true` — the outcome of the interstitial flow: when the OAuth
+callback finds the workspace already routed to a different project, it pauses
+the connect into a SEALED token (same AES-GCM envelope as OAuth state, the
+exchanged credentials ride encrypted — codes are single-use, so the connect
+can't be redone later) and bounces to the integrations page, which shows
+"workspace X is connected to project A — really move it to project B?" with
+explicit confirm/cancel. Confirming replays the sealed connect with
+`takeover: true`. Both paths are journaled; the losing claim stays on the
+stream as evidence.
+
 ## The event flow
 
 1. **Capture, globally, before anything else.** Provider events land verbatim

@@ -32,9 +32,13 @@ export type OAuthStatePayload = z.infer<typeof OAuthStatePayload>;
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
-export async function signOAuthState(input: {
+/** Generic sealed short-lived token: AES-GCM over JSON, base64url
+ * `iv.ciphertext`. OAuth state and pending-connect interstitials both ride
+ * this. */
+export async function sealJson(input: {
   key: string;
-  payload: Omit<OAuthStatePayload, "expiresAtMs">;
+  payload: Record<string, unknown>;
+  ttlMs: number;
   nowMs: number;
 }): Promise<string> {
   const cryptoKey = await importSecretsKey(input.key);
@@ -43,18 +47,18 @@ export async function signOAuthState(input: {
     { name: "AES-GCM", iv },
     cryptoKey,
     new TextEncoder().encode(
-      JSON.stringify({ ...input.payload, expiresAtMs: input.nowMs + OAUTH_STATE_TTL_MS }),
+      JSON.stringify({ ...input.payload, expiresAtMs: input.nowMs + input.ttlMs }),
     ),
   );
   return `${base64UrlEncode(iv)}.${base64UrlEncode(new Uint8Array(ciphertext))}`;
 }
 
-export async function verifyOAuthState(input: {
+export async function unsealJson(input: {
   key: string;
-  state: string;
+  token: string;
   nowMs: number;
-}): Promise<OAuthStatePayload | null> {
-  const [iv, ciphertext] = input.state.split(".");
+}): Promise<Record<string, unknown> | null> {
+  const [iv, ciphertext] = input.token.split(".");
   if (!iv || !ciphertext) return null;
   try {
     const cryptoKey = await importSecretsKey(input.key);
@@ -63,14 +67,37 @@ export async function verifyOAuthState(input: {
       cryptoKey,
       base64UrlDecode(ciphertext) as BufferSource,
     );
-    const payload = OAuthStatePayload.safeParse(JSON.parse(new TextDecoder().decode(plaintext)));
-    if (!payload.success) return null;
-    if (input.nowMs > payload.data.expiresAtMs) return null;
-    return payload.data;
+    const payload = JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>;
+    if (typeof payload.expiresAtMs !== "number" || input.nowMs > payload.expiresAtMs) return null;
+    return payload;
   } catch {
     // Tampered or wrong-key tokens fail GCM authentication.
     return null;
   }
+}
+
+export async function signOAuthState(input: {
+  key: string;
+  payload: Omit<OAuthStatePayload, "expiresAtMs">;
+  nowMs: number;
+}): Promise<string> {
+  return await sealJson({
+    key: input.key,
+    payload: input.payload,
+    ttlMs: OAUTH_STATE_TTL_MS,
+    nowMs: input.nowMs,
+  });
+}
+
+export async function verifyOAuthState(input: {
+  key: string;
+  state: string;
+  nowMs: number;
+}): Promise<OAuthStatePayload | null> {
+  const unsealed = await unsealJson({ key: input.key, token: input.state, nowMs: input.nowMs });
+  if (unsealed == null) return null;
+  const payload = OAuthStatePayload.safeParse(unsealed);
+  return payload.success ? payload.data : null;
 }
 
 function base64UrlEncode(bytes: Uint8Array): string {

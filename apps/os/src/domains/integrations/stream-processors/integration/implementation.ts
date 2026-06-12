@@ -32,7 +32,7 @@ export type IntegrationProcessorContract = typeof IntegrationProcessorContract;
 export type IntegrationProcessorDeps = {
   /** Claim a routing key on the GLOBAL capture stream — cross-namespace, so
    * the host supplies it (stream appends are namespace-local). */
-  claimRoute?(input: { routingKey: string }): Promise<void>;
+  claimRoute?(input: { routingKey: string; takeover?: boolean }): Promise<void>;
   /** Wake a Secret's domain object so its subscription lands on the freshly
    * created /secrets/... stream. */
   ensureSecretHost?(input: { slug: string }): Promise<void>;
@@ -159,7 +159,10 @@ export class IntegrationProcessor extends StreamProcessor<
 
         // 3. Routing-key claims on the global capture stream.
         for (const routingKey of payload.routingKeys) {
-          await this.deps.claimRoute?.({ routingKey });
+          await this.deps.claimRoute?.({
+            routingKey,
+            ...(payload.takeover === true ? { takeover: true } : {}),
+          });
         }
       });
       return;

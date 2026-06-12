@@ -15,7 +15,7 @@
 import { env } from "cloudflare:workers";
 import { parseConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
-import { signOAuthState, verifyOAuthState } from "~/domains/secrets/oauth-state.ts";
+import { sealJson, signOAuthState, verifyOAuthState } from "~/domains/secrets/oauth-state.ts";
 import { connectIntegration } from "~/domains/integrations/connect.ts";
 import {
   getInitializedStreamStub,
@@ -117,6 +117,22 @@ export async function handleIntegrationIngress(input: {
       },
       connect: (connectInput) =>
         connectIntegration({ ...connectInput, integration: integration.slug }),
+      routeOwner: async ({ routingKey }) => {
+        const router = await ensureIntegrationIngressStub(integration.slug);
+        const snapshot = (await router.ensureReady()) as {
+          state: { routes: Record<string, { projectId: string; account: string }> };
+        };
+        return snapshot.state.routes[routingKey] ?? null;
+      },
+      sealPendingConnect: async (pending) => {
+        if (!stateKey) throw new Error("SECRETS_ENCRYPTION_KEY is required for pending connects.");
+        return await sealJson({
+          key: stateKey,
+          payload: pending as unknown as Record<string, unknown>,
+          ttlMs: 10 * 60 * 1000,
+          nowMs: Date.now(),
+        });
+      },
     });
     if (response) return response;
   }

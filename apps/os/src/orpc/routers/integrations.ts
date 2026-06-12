@@ -6,6 +6,10 @@
 
 import { env } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
+import { listD1ObjectCatalogRecordsByIndex } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import { getProjectById } from "~/db/queries/.generated/index.ts";
+import type { PendingConnect } from "~/domains/integrations/definition.ts";
+import { unsealJson } from "~/domains/secrets/oauth-state.ts";
 import type { RequestContext } from "~/request-context.ts";
 import { connectIntegration } from "~/domains/integrations/connect.ts";
 import { getIntegration } from "~/domains/integrations/registry.ts";
@@ -113,6 +117,40 @@ export const projectIntegrationsRouter = {
       const stub = await ensureSecretStub({ projectId: project.id, slug: input.slug });
       return await stub.describe();
     }),
+  describePendingConnect: os.project.integrations.describePendingConnect
+    .use(projectScopeMiddleware)
+    .handler(async ({ context, input }) => {
+      const project = requireProjectScope(context);
+      const pending = await unsealPendingConnect(input.token, project.id);
+      const ownerProject = await getProjectById(context.db, {
+        id: pending.conflict.owner.projectId,
+      });
+      return {
+        integration: pending.integration,
+        account: pending.connect.account ?? DEFAULT_INTEGRATION_ACCOUNT,
+        externalId: pending.connect.externalId,
+        displayName: pending.connect.displayName ?? null,
+        routingKey: pending.conflict.routingKey,
+        currentOwner: {
+          projectId: pending.conflict.owner.projectId,
+          projectSlug: ownerProject?.slug ?? null,
+          account: pending.conflict.owner.account,
+        },
+        targetProjectId: pending.connect.projectId,
+      };
+    }),
+  confirmPendingConnect: os.project.integrations.confirmPendingConnect
+    .use(projectScopeMiddleware)
+    .handler(async ({ context, input }) => {
+      const project = requireProjectScope(context);
+      const pending = await unsealPendingConnect(input.token, project.id);
+      const result = await connectIntegration({
+        ...pending.connect,
+        integration: pending.integration,
+        takeover: true,
+      });
+      return result;
+    }),
   ensureDiscordGateway: os.project.integrations.ensureDiscordGateway
     .use(projectScopeMiddleware)
     .handler(async ({ context, input }) => {
@@ -217,13 +255,12 @@ async function connectionStatus(
   },
 ) {
   const project = requireProjectScope(context);
-  const stub = await ensureIntegrationStub({
-    account: DEFAULT_INTEGRATION_ACCOUNT,
-    integration: input.integration,
-    projectId: project.id,
-  });
-  const { state } = await stub.ensureReady();
-  if (state.connection.status !== "connected") {
+  // Accounts are per-workspace now (any number of Slacks): discover them
+  // from the DO catalog and surface the first connected one. (The single-
+  // connection contract shape predates multi-account; a list view is the
+  // natural successor.)
+  const state = await firstConnectedAccountState(project.id, input.integration);
+  if (state == null) {
     return {
       connected: false,
       displayName: null,
@@ -234,13 +271,16 @@ async function connectionStatus(
     };
   }
 
+  const account = state.account ?? DEFAULT_INTEGRATION_ACCOUNT;
   const token = await describeSecretOrNull(project.id, {
     integration: input.integration,
+    account,
     name: input.tokenSecretName,
   });
   const refresh = input.refreshSecretName
     ? await describeSecretOrNull(project.id, {
         integration: input.integration,
+        account,
         name: input.refreshSecretName,
       })
     : null;
@@ -262,13 +302,52 @@ async function connectionStatus(
   };
 }
 
-async function describeSecretOrNull(projectId: string, ref: { integration: string; name: string }) {
+type AccountState = {
+  account?: string;
+  connection: {
+    status: string;
+    externalId?: string;
+    displayName?: string;
+    routingKeys: string[];
+    providedSecretSlugs: string[];
+  };
+};
+
+async function firstConnectedAccountState(
+  projectId: string,
+  integration: string,
+): Promise<AccountState | null> {
+  const records = await listD1ObjectCatalogRecordsByIndex<{
+    account: string;
+    integration: string;
+    projectId: string;
+  }>((env as unknown as { DO_CATALOG: D1Database }).DO_CATALOG, {
+    className: "IntegrationDurableObject",
+    indexName: "projectIntegration",
+    indexValue: `${projectId}:${integration}`,
+  });
+  for (const record of records) {
+    const stub = await ensureIntegrationStub({
+      account: record.structuredName.account,
+      integration,
+      projectId,
+    });
+    const { state } = (await stub.ensureReady()) as { state: AccountState };
+    if (state.connection.status === "connected") return state;
+  }
+  return null;
+}
+
+async function describeSecretOrNull(
+  projectId: string,
+  ref: { integration: string; account: string; name: string },
+) {
   try {
     const stub = await ensureSecretStub({
       projectId,
       slug: providedSecretSlug({
         integration: ref.integration,
-        account: DEFAULT_INTEGRATION_ACCOUNT,
+        account: ref.account,
         name: ref.name,
       }),
     });
@@ -283,10 +362,10 @@ async function describeSecretOrNull(projectId: string, ref: { integration: strin
  * stream, route claims released on the global stream, secrets deleted. */
 async function disconnectAccount(projectId: string, integration: string) {
   const integrationsEnv = env as unknown as IntegrationsEnv;
-  const account = DEFAULT_INTEGRATION_ACCOUNT;
-  const stub = await ensureIntegrationStub({ account, integration, projectId });
-  const { state } = await stub.ensureReady();
-  if (state.connection.status !== "connected") return { success: true };
+  const connected = await firstConnectedAccountState(projectId, integration);
+  if (connected == null) return { success: true };
+  const account = connected.account ?? DEFAULT_INTEGRATION_ACCOUNT;
+  const state = connected;
 
   const accountStream = await getInitializedStreamStub({
     durableObjectNamespace: integrationsEnv.STREAM,
@@ -354,6 +433,28 @@ async function signState(payload: {
     });
   }
   return await signOAuthState({ key, payload, nowMs: Date.now() });
+}
+
+/** Unseal + authorize a pending connect: it must belong to the scoped
+ * project (the sealed payload is tamper-proof; this binds it to the caller). */
+async function unsealPendingConnect(token: string, projectId: string): Promise<PendingConnect> {
+  const key = (env as unknown as IntegrationsEnv).SECRETS_ENCRYPTION_KEY;
+  if (!key) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "SECRETS_ENCRYPTION_KEY is required for pending connects.",
+    });
+  }
+  const unsealed = await unsealJson({ key, token, nowMs: Date.now() });
+  if (unsealed == null) {
+    throw new ORPCError("BAD_REQUEST", { message: "Pending connect is invalid or expired." });
+  }
+  const pending = unsealed as unknown as PendingConnect;
+  if (pending.connect?.projectId !== projectId) {
+    throw new ORPCError("FORBIDDEN", {
+      message: "Pending connect belongs to a different project.",
+    });
+  }
+  return pending;
 }
 
 function requireUserId(context: RequestContext) {

@@ -548,6 +548,39 @@ export const osContract = oc.router({
         })
         .input(ProjectScopedInput.extend({ slug: z.string().trim().min(1) }))
         .output(z.unknown()),
+      describePendingConnect: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/integrations/pending-connect/describe",
+          description:
+            "Describe a paused connect (the takeover interstitial): the workspace, its current owner project, and the target project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput.extend({ token: z.string().trim().min(1) }))
+        .output(
+          z.object({
+            integration: z.string(),
+            account: z.string(),
+            externalId: z.string(),
+            displayName: z.string().nullable(),
+            routingKey: z.string(),
+            currentOwner: z.object({
+              projectId: z.string(),
+              projectSlug: z.string().nullable(),
+              account: z.string(),
+            }),
+            targetProjectId: z.string(),
+          }),
+        ),
+      confirmPendingConnect: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/integrations/pending-connect/confirm",
+          description: "Complete a paused connect as a consented routing-key TAKEOVER",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput.extend({ token: z.string().trim().min(1) }))
+        .output(z.object({ integration: z.string(), account: z.string(), projectId: z.string() })),
       ensureDiscordGateway: oc
         .route({
           method: "POST",
