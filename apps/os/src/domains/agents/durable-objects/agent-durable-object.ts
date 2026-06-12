@@ -145,7 +145,7 @@ const AgentLifecycleBase = createIterateDurableObjectBase<
 /** Bump when agentContextCapabilities changes — re-renders the capability-noted
  * tool list onto the agent stream (the LLM's view). The caps themselves are
  * code-rooted chain defaults, so a bump never touches stored capability state. */
-const AGENT_CONTEXT_CAPABILITIES_VERSION = "4";
+const AGENT_CONTEXT_CAPABILITIES_VERSION = "5";
 
 /** describe() provenance label for the agent's code-rooted default tools. */
 const AGENT_DEFAULTS_DESCRIBE_FROM = "agent-defaults";
@@ -838,75 +838,59 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
   private agentContextCapabilities(
     params: AgentDurableObjectStructuredName,
-    contextId: string,
+    _contextId: string,
   ): Array<{
     name: string;
     instructions: string;
     capability: CapabilityAddress;
   }> {
-    const agentTool = (tool: "chat" | "debug"): CapabilityAddress => ({
-      entrypoint: "AgentToolsCapability",
-      props: { agentPath: params.agentPath, tool },
-      type: "rpc",
-      worker: { type: "loopback" },
-    });
+    // An agent's ONLY per-agent tool is its CHANNEL — how it talks to its
+    // user. Everything else (ai, fetch, streams, secrets, repos, …) is a
+    // project default it already inherits through the chain. The channel is
+    // chosen by the agent's path: Slack agents post to Slack, every other
+    // agent renders a web-chat message. (Richer tools — gmail, a private
+    // workspace, subagents — are opt-in presets, not baseline.)
+    const debug = {
+      capability: {
+        entrypoint: "AgentToolsCapability",
+        props: { agentPath: params.agentPath, tool: "debug" },
+        type: "rpc",
+        worker: { type: "loopback" },
+      } satisfies CapabilityAddress,
+      instructions: "itx.debug() returns OS debug info about this agent stream.",
+      name: "debug",
+    };
+    if (isSlackAgentPath(params.agentPath)) {
+      return [
+        {
+          capability: {
+            entrypoint: "SlackCapability",
+            type: "rpc",
+            worker: { type: "loopback" },
+          },
+          instructions:
+            "Use itx.slack.<Slack Web API method>(args), e.g. " +
+            "itx.slack.chat.postMessage({ channel, thread_ts, text }). Always reply on the " +
+            "same thread_ts you received. Only post when mentioned, asked, or the thread " +
+            "clearly calls for it.",
+          name: "slack",
+        },
+        debug,
+      ];
+    }
     return [
-      ...(isSlackAgentPath(params.agentPath)
-        ? []
-        : [
-            {
-              instructions:
-                "Use itx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
-              name: "chat",
-              capability: agentTool("chat"),
-            },
-          ]),
       {
-        instructions:
-          "Use itx.debug() to return OS debug information about the current agent stream.",
-        name: "debug",
-        capability: agentTool("debug"),
-      },
-      {
-        instructions:
-          "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
-        name: "ai",
-        capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
-      },
-      {
-        instructions:
-          "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }).",
-        name: "gmail",
-        capability: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
-      },
-      {
-        instructions:
-          "Use itx.slack.<Slack Web API method path>(args), e.g. itx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If no reply is needed, do not call chat.postMessage. For legitimate long-running Slack replies, use Promise.all to send an immediate acknowledgment while doing the real work in parallel, then send the actual result afterwards.",
-        name: "slack",
-        capability: { entrypoint: "SlackCapability", type: "rpc", worker: { type: "loopback" } },
-      },
-      {
-        instructions:
-          "Use itx.agents.create() to get a promise-pipelineable subagent handle, e.g. await itx.agents.create().doThing(args).",
-        name: "agents",
-        capability: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },
-      },
-      {
-        // Workspaces are not itx's concern: this HOST decides its context
-        // gets a private workspace and provides one bound to the context's
-        // identity. Plain extensions of the project share the project
-        // workspace through the chain instead.
-        instructions:
-          "This agent's private workspace filesystem: itx.workspace.readFile/writeFile plus " +
-          "the flat git methods gitClone/gitAdd/gitCommit/gitPush/gitStatus.",
-        name: "workspace",
         capability: {
-          entrypoint: "WorkspaceCapability",
-          props: { workspaceId: contextId },
+          entrypoint: "AgentToolsCapability",
+          props: { agentPath: params.agentPath, tool: "chat" },
           type: "rpc",
           worker: { type: "loopback" },
         },
+        instructions:
+          "itx.chat.sendMessage({ message }) sends a visible reply to the user in the web chat.",
+        name: "chat",
       },
+      debug,
     ];
   }
 
