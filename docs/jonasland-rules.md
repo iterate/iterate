@@ -108,7 +108,7 @@ The good thing about orpc procedures is
 - you can call the script across the network
 - with our cli you can call them from the terminal
 
-For example, if a service has some database seeding logic, you can just stick in in an orpc procedure called "seedDatabase" and then call that from wherever you'd call your seed script.
+For example, if a service has some database seeding logic, you can just stick it in an orpc procedure called "seedDatabase" and then call that from wherever you'd call your seed script.
 
 ESPECIALLY code that runs inside a project deployment machine (e.g. fly or docker container) should be an orpc procedure.
 
