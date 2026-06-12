@@ -104,7 +104,14 @@ export function StreamSwitcherDialog({
             <StreamTreeItem
               path="/"
               depth={0}
-              tree={{ currentPath, expandedPaths, navigator, scope, onOpen: openStream }}
+              tree={{
+                currentPath,
+                expandedPaths,
+                navigator,
+                scope,
+                onOpen: openStream,
+                onToggle: (path) => setExpanded(path, !expandedPaths.has(path)),
+              }}
             />
           </CommandGroup>
           <CommandGroup heading="New">
@@ -143,6 +150,7 @@ type StreamTreeContext = {
   navigator: StreamNavigator;
   scope: string;
   onOpen: (path: string) => void;
+  onToggle: (path: string) => void;
 };
 
 /**
@@ -179,11 +187,22 @@ function StreamTreeItem({
       >
         <span style={{ width: depth * 14 }} className="shrink-0" />
         {childPaths.length > 0 ? (
-          expanded ? (
-            <ChevronDownIcon className="size-3.5 text-muted-foreground/60" />
-          ) : (
-            <ChevronRightIcon className="size-3.5 text-muted-foreground/60" />
-          )
+          // The chevron is its own click target so mouse users can browse a
+          // branch without opening (selecting the row still opens).
+          <span
+            className="-m-1 shrink-0 rounded p-1 hover:bg-accent"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              tree.onToggle(path);
+            }}
+          >
+            {expanded ? (
+              <ChevronDownIcon className="size-3.5 text-muted-foreground/60" />
+            ) : (
+              <ChevronRightIcon className="size-3.5 text-muted-foreground/60" />
+            )}
+          </span>
         ) : (
           <span className="size-3.5 shrink-0" />
         )}

@@ -217,21 +217,25 @@ export class StreamBrowserDatabase implements Disposable {
    * The server stream incarnation (its `created` identity) this mirror was last built
    * against, or undefined if never recorded. Used to detect a server reset()/reincarnation
    * so the mirror is rebuilt rather than reconciled by an offset that restarted.
+   *
+   * Keyed per processor slug: multiple runtimes share this database and each
+   * reconciles (and discards) its own tables independently — a shared key would
+   * let the first runtime's rebuild mask another runtime's pending discard.
    */
-  async readMirrorIncarnation(): Promise<string | undefined> {
+  async readMirrorIncarnation(slug: string): Promise<string | undefined> {
     await this.#ensureMirrorMetaSchema();
-    const [row] = await this.exec(
-      `SELECT value FROM mirror_meta WHERE key = 'incarnation' LIMIT 1`,
-    );
+    const [row] = await this.exec(`SELECT value FROM mirror_meta WHERE key = ? LIMIT 1`, [
+      `incarnation:${slug}`,
+    ]);
     return typeof row?.value === "string" ? row.value : undefined;
   }
 
-  async writeMirrorIncarnation(incarnation: string): Promise<void> {
+  async writeMirrorIncarnation(slug: string, incarnation: string): Promise<void> {
     await this.#ensureMirrorMetaSchema();
     await this.exec(
-      `INSERT INTO mirror_meta (key, value) VALUES ('incarnation', ?)
+      `INSERT INTO mirror_meta (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      [incarnation],
+      [`incarnation:${slug}`, incarnation],
     );
   }
 

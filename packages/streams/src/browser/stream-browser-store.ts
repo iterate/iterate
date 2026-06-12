@@ -380,11 +380,11 @@ function createStreamRuntime(
     const { coreProcessorState } = await rpc.runtimeState();
     const serverIncarnation = coreProcessorState.createdAt;
     reconciledIncarnation = serverIncarnation;
-    const localIncarnation = await streamDatabase.readMirrorIncarnation();
+    const localIncarnation = await streamDatabase.readMirrorIncarnation(slug);
 
     if (localMaxOffset <= 0) {
       // Fresh mirror: nothing to discard, just record which incarnation we are tracking.
-      await streamDatabase.writeMirrorIncarnation(serverIncarnation);
+      await streamDatabase.writeMirrorIncarnation(slug, serverIncarnation);
       return;
     }
 
@@ -398,7 +398,7 @@ function createStreamRuntime(
         { localIncarnation, serverIncarnation, localMaxOffset },
       );
       await discardLocalMirror();
-      await streamDatabase.writeMirrorIncarnation(serverIncarnation);
+      await streamDatabase.writeMirrorIncarnation(slug, serverIncarnation);
       return;
     }
 
@@ -410,7 +410,7 @@ function createStreamRuntime(
       await discardLocalMirror();
     }
     // Record (or backfill) the incarnation we are now reconciled against.
-    await streamDatabase.writeMirrorIncarnation(serverIncarnation);
+    await streamDatabase.writeMirrorIncarnation(slug, serverIncarnation);
   }
 
   function connect() {
@@ -494,15 +494,11 @@ function createStreamRuntime(
     // reconnects on a fresh socket to the live instance.
     const SUBSCRIBE_STEP_TIMEOUT_MS = 15_000;
     const withDeadline = <T>(step: string, promise: Promise<T> | T): Promise<T> =>
-      Promise.race([
+      raceWithTimeout(
         Promise.resolve(promise),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error(`${step} timed out after ${SUBSCRIBE_STEP_TIMEOUT_MS}ms`)),
-            SUBSCRIBE_STEP_TIMEOUT_MS,
-          ),
-        ),
-      ]);
+        SUBSCRIBE_STEP_TIMEOUT_MS,
+        `${step} timed out after ${SUBSCRIBE_STEP_TIMEOUT_MS}ms`,
+      );
 
     void writerRole.whenWriter
       .then(async () => {
@@ -664,15 +660,11 @@ function createStreamRuntime(
         try {
           let coreProcessorState;
           try {
-            ({ coreProcessorState } = await Promise.race([
+            ({ coreProcessorState } = await raceWithTimeout(
               Promise.resolve(connection.stream.runtimeState()),
-              new Promise<never>((_, reject) =>
-                setTimeout(
-                  () => reject(new Error("liveness probe timed out")),
-                  LIVENESS_PROBE_TIMEOUT_MS,
-                ),
-              ),
-            ]));
+              LIVENESS_PROBE_TIMEOUT_MS,
+              "liveness probe timed out",
+            ));
           } catch (error) {
             timeoutStrikes += 1;
             if (timeoutStrikes < 2) return;
@@ -808,6 +800,21 @@ function createStreamRuntime(
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Promise.race against a deadline, with the loser's timer cleared when the
+ * race settles — a bare setTimeout-rejection branch would otherwise fire an
+ * unhandled rejection after every SUCCESSFUL call.
+ */
+function raceWithTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 function isWriteStatement(sql: string) {
