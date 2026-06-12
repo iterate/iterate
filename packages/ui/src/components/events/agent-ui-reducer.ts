@@ -1,5 +1,3 @@
-import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
 import type { Event } from "@iterate-com/shared/streams/types";
 
 // ---------------------------------------------------------------------------
@@ -94,13 +92,9 @@ export type AgentUiState = {
   presence: AgentUiPresenceEntry[];
 };
 
-function createInitialAgentUiState(): AgentUiState {
+export function initialAgentUiState(): AgentUiState {
   return { items: [], live: null, eventCount: 0, presence: [] };
 }
-
-const AgentUiStateSchema = z
-  .custom<AgentUiState>((value) => value != null && typeof value === "object")
-  .default(createInitialAgentUiState);
 
 // ---------------------------------------------------------------------------
 // Event types
@@ -127,35 +121,6 @@ const CODEMODE_SCRIPT_EXECUTION_COMPLETED =
 const STREAM_SUBSCRIBER_CONNECTED = "events.iterate.com/stream/subscriber-connected";
 const STREAM_SUBSCRIBER_DISCONNECTED = "events.iterate.com/stream/subscriber-disconnected";
 const STREAM_WOKEN = "events.iterate.com/stream/woken";
-
-// ---------------------------------------------------------------------------
-// Contract
-// ---------------------------------------------------------------------------
-
-const AgentUiProcessorContractBase = defineProcessorContract({
-  slug: "agent-ui",
-  version: "0.1.0",
-  description:
-    "Browser-side processor that reduces an agent stream — including partial LLM streaming chunks — into a clean chat view state: settled user/assistant messages and activity groups, plus a live in-flight activity with streaming thinking and response text.",
-  stateSchema: AgentUiStateSchema,
-  events: {
-    "events.iterate.com/agent-ui/any-event": {
-      description: "Synthetic catch-all to satisfy the consumes type constraint.",
-      payloadSchema: z.unknown(),
-    },
-  },
-  consumes: ["events.iterate.com/agent-ui/any-event"],
-  emits: [],
-  reduce({ state, event: consumedEvent }) {
-    // consumesAllEvents delivers every stream event here regardless of type.
-    const event = consumedEvent as unknown as Event;
-    return reduceAgentUiEvent(state, event);
-  },
-});
-
-export const AgentUiProcessorContract = Object.assign(AgentUiProcessorContractBase, {
-  consumesAllEvents: true as const,
-});
 
 // ---------------------------------------------------------------------------
 // Reducer

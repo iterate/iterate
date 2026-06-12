@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ChevronLeftIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
-import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-processor/contract";
+import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { cn } from "@iterate-com/ui/lib/utils";
 import {
   hashString,

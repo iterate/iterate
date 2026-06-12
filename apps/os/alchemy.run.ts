@@ -640,15 +640,6 @@ export const workers = {
   workspace: workspaceWorker,
 };
 
-console.dir(
-  {
-    config: ctx.runtimeConfig,
-    url: ctx.runtimeConfig.baseUrl ?? appWorker.url,
-    workers: workerNames,
-  },
-  { depth: null },
-);
-
 await ctx.app.finalize();
 await afterFinalize();
 

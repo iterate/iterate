@@ -11,6 +11,8 @@
     "alchemy:down": "tsx ./alchemy.run.ts --destroy",
     "cli": "tsx ./scripts/cli.ts",
     "dev": "CFG=\"${DOPPLER_CONFIG:-$(doppler configure get config --plain 2>/dev/null)}\"; doppler run --project os --config \"${CFG:-dev}\" -- tsx ./alchemy.run.ts",
+    "dev:kill": "pnpm cli dev kill",
+    "dev:restart": "pnpm cli dev restart",
     "dev:local": "tsx ./alchemy.run.ts",
     "dev:localhost": "doppler run --project os --config dev_localhost -- tsx ./alchemy.run.ts",
     "build": "doppler run -- pnpm exec vite build",

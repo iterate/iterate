@@ -6,14 +6,12 @@
 import { describe, expect, it } from "vitest";
 import type { Event } from "@iterate-com/shared/streams/types";
 import {
-  AgentUiProcessorContract,
+  initialAgentUiState,
   reduceAgentUiEvent,
-  type AgentUiState,
-} from "@iterate-com/ui/components/events/agent-ui-processor/contract";
-import { getInitialProcessorState } from "@iterate-com/streams/shared/stream-processors";
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 function reduceAll(events: Array<Partial<Event> & { type: string; payload?: unknown }>) {
-  let state = getInitialProcessorState(AgentUiProcessorContract) as AgentUiState;
+  let state = initialAgentUiState();
   let offset = 0;
   for (const partial of events) {
     offset += 1;

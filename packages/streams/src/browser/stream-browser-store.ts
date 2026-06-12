@@ -191,6 +191,7 @@ function createStreamRuntime(
   let databaseInfoTimer: ReturnType<typeof setTimeout> | undefined;
   let databaseChangeTimer: ReturnType<typeof setTimeout> | undefined;
   let disposeTimer: ReturnType<typeof setTimeout> | undefined;
+  let livenessTimer: ReturnType<typeof setInterval> | undefined;
   let disposed = false;
   let started = false;
   // Bumped on every connect() so a stale connection's late callbacks (status changes,
@@ -315,6 +316,7 @@ function createStreamRuntime(
   function scheduleReconnect(connectionError: string, delayMs: number) {
     if (disposed) return;
     connectionEpoch += 1;
+    stopLivenessProbe();
     stopSubscriptionElection();
     stream?.[Symbol.dispose]();
     stream = undefined;
@@ -508,6 +510,7 @@ function createStreamRuntime(
         subscriptionHandle = handle;
         snapshot = { ...snapshot, connectionError: undefined, connectionStatus: "subscribed" };
         emitSnapshot();
+        startLivenessProbe(election.connection);
         // Note: we deliberately do NOT reset ingestFailureCount here. A clean resubscribe does
         // not mean the batch that failed will now succeed, so resetting would let a poison
         // batch busy-loop at the floor delay. ingestFailureCount only resets on a successful
@@ -589,11 +592,55 @@ function createStreamRuntime(
     }, 0);
   }
 
+  // A dead-but-open WebSocket (the worker behind a dev proxy restarted, a
+  // Durable Object was evicted mid-connection) hangs silently: the browser
+  // never gets a close frame, deliveries just stop, and the UI stays
+  // "subscribed" forever. Probe the live connection with a cheap RPC; a
+  // probe that cannot answer within the deadline means the socket is dead —
+  // reconnect, and the resubscribe replays from the persisted checkpoint.
+  const LIVENESS_PROBE_INTERVAL_MS = 10_000;
+  const LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+
+  function startLivenessProbe(connection: NonNullable<typeof stream>) {
+    stopLivenessProbe();
+    livenessTimer = setInterval(() => {
+      void (async () => {
+        try {
+          await Promise.race([
+            Promise.resolve(connection.stream.runtimeState()).then(() => undefined),
+            new Promise<never>((_, reject) =>
+              setTimeout(
+                () => reject(new Error("liveness probe timed out")),
+                LIVENESS_PROBE_TIMEOUT_MS,
+              ),
+            ),
+          ]);
+        } catch (error) {
+          if (disposed || stream !== connection) return;
+          stopLivenessProbe();
+          console.warn(
+            `[stream ${args.streamPath}] connection failed its liveness probe; reconnecting`,
+            error,
+          );
+          scheduleReconnect(`liveness probe failed: ${errorMessage(error)}`, 250);
+        }
+      })();
+    }, LIVENESS_PROBE_INTERVAL_MS);
+  }
+
+  function stopLivenessProbe() {
+    if (livenessTimer !== undefined) {
+      clearInterval(livenessTimer);
+      livenessTimer = undefined;
+    }
+  }
+
   function teardown() {
     for (const timer of [connectTimer, reconnectTimer, databaseInfoTimer, databaseChangeTimer]) {
       if (timer !== undefined) clearTimeout(timer);
     }
     connectTimer = reconnectTimer = databaseInfoTimer = databaseChangeTimer = undefined;
+    stopLivenessProbe();
     stopSubscriptionElection();
     stream?.[Symbol.dispose]();
     stream = undefined;

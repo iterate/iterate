@@ -2,7 +2,7 @@
 // and the processors panel.
 
 import { useEffect, useMemo, useState } from "react";
-import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-processor/contract";
+import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 // ---------------------------------------------------------------------------
 // Simulated round-trip metrics (per design — real data comes later)

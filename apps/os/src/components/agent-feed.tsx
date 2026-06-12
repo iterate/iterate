@@ -8,7 +8,7 @@ import type {
   AgentUiLlmStep,
   AgentUiState,
   AgentUiStep,
-} from "@iterate-com/ui/components/events/agent-ui-processor/contract";
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
   Message,
   MessageContent,

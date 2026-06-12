@@ -55,10 +55,10 @@ import {
 } from "@iterate-com/ui/components/events/stream-feed";
 import { StreamViewProcessorContract } from "@iterate-com/ui/components/events/stream-view-processor/contract";
 import {
-  AgentUiProcessorContract,
+  initialAgentUiState,
   reduceAgentUiEvent,
   type AgentUiState,
-} from "@iterate-com/ui/components/events/agent-ui-processor/contract";
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { parse as parseYaml } from "yaml";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
@@ -535,14 +535,10 @@ function useAgentUiState(args: {
   return useReducedStreamState<AgentUiState>({
     database: args.database,
     reductionKey: args.reductionKey,
-    cacheScope: AgentUiProcessorContract.slug,
+    cacheScope: "agent-ui",
     initialState: initialAgentUiState,
     reduceEvent: reduceAgentUiEvent,
   });
-}
-
-function initialAgentUiState(): AgentUiState {
-  return getInitialProcessorState(AgentUiProcessorContract);
 }
 
 function initialStreamViewState(): EventsStreamViewState {

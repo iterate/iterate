@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 
@@ -15,12 +15,13 @@ import { join } from "node:path";
  * The port is picked at startup and baked into `APP_CONFIG_BASE_URL` (env is
  * the source of truth — request-sniffing doesn't work for cron/scheduled
  * work). `.alchemy/dev-server.json` records {pid, port, baseUrl} so CLIs and
- * scripts can find "the" dev server without flags. One dev server per
- * worktree: a second `pnpm dev` refuses to start while the recorded pid is
- * alive.
+ * scripts can find "the" dev server without flags. The file intentionally
+ * survives shutdown so the next `pnpm dev` can reuse the same port when it is
+ * still free. One dev server per worktree: a second `pnpm dev` refuses to
+ * start while the recorded pid is alive.
  */
 
-type DevServerInfo = {
+export type DevServerInfo = {
   pid: number;
   port: number;
   baseUrl: string;
@@ -29,11 +30,11 @@ type DevServerInfo = {
 
 const DEV_SERVER_INFO_FILENAME = "dev-server.json";
 
-function devServerInfoPath(appDir: string) {
+export function devServerInfoPath(appDir: string) {
   return join(appDir, ".alchemy", DEV_SERVER_INFO_FILENAME);
 }
 
-function readDevServerInfoFile(appDir: string): DevServerInfo | null {
+export function readDevServerInfoFile(appDir: string): DevServerInfo | null {
   const path = devServerInfoPath(appDir);
   if (!existsSync(path)) return null;
   try {
@@ -51,7 +52,7 @@ function readDevServerInfoFile(appDir: string): DevServerInfo | null {
   }
 }
 
-function isPidAlive(pid: number) {
+export function isPidAlive(pid: number) {
   try {
     process.kill(pid, 0);
     return true;
@@ -90,6 +91,65 @@ async function pickFreePort(preferred?: number) {
   });
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForPidExit(pid: number, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isPidAlive(pid)) return true;
+    await sleep(100);
+  }
+  return !isPidAlive(pid);
+}
+
+export type KillLocalDevServerResult =
+  | { status: "missing"; path: string }
+  | { status: "stale"; path: string; info: DevServerInfo }
+  | { status: "killed"; path: string; info: DevServerInfo; signal: NodeJS.Signals }
+  | { status: "force-killed"; path: string; info: DevServerInfo };
+
+export async function killLocalDevServer(
+  opts: {
+    appDir?: string;
+    signal?: NodeJS.Signals;
+    timeoutMs?: number;
+    forceAfterTimeout?: boolean;
+  } = {},
+): Promise<KillLocalDevServerResult> {
+  const appDir = opts.appDir ?? process.cwd();
+  const path = devServerInfoPath(appDir);
+  const info = readDevServerInfoFile(appDir);
+  if (!info) return { status: "missing", path };
+  if (!isPidAlive(info.pid)) return { status: "stale", path, info };
+
+  const signal = opts.signal ?? "SIGTERM";
+  const timeoutMs = opts.timeoutMs ?? 5_000;
+  try {
+    process.kill(info.pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+      return { status: "stale", path, info };
+    }
+    throw error;
+  }
+
+  if (await waitForPidExit(info.pid, timeoutMs)) {
+    return { status: "killed", path, info, signal };
+  }
+
+  const shouldForceKill = opts.forceAfterTimeout ?? signal !== "SIGKILL";
+  if (shouldForceKill) {
+    process.kill(info.pid, "SIGKILL");
+    if (await waitForPidExit(info.pid, timeoutMs)) {
+      return { status: "force-killed", path, info };
+    }
+  }
+
+  throw new Error(`Timed out waiting for dev server pid ${info.pid} to exit.`);
+}
+
 /**
  * Prepare the fully-local dev flow. No-op (returns null) unless this is a
  * local run (`ALCHEMY_LOCAL`) without an explicit `APP_CONFIG_BASE_URL` —
@@ -97,8 +157,9 @@ async function pickFreePort(preferred?: number) {
  * existing behavior untouched.
  *
  * Mutates `env`: sets `PORT`, `HOST`, and `APP_CONFIG_BASE_URL`
- * (`http://<app>.localhost:<port>`), writes the discovery file, and installs
- * exit handlers that clean it up.
+ * (`http://<app>.localhost:<port>`) and writes the discovery file. The
+ * discovery file is not removed at exit; a stale file is how the next run
+ * remembers the preferred port.
  */
 export async function prepareLocalDevServer(
   env: Record<string, string | undefined>,
@@ -142,26 +203,6 @@ export async function prepareLocalDevServer(
   const path = devServerInfoPath(appDir);
   mkdirSync(join(appDir, ".alchemy"), { recursive: true });
   writeFileSync(path, `${JSON.stringify(info, null, 2)}\n`);
-
-  const cleanup = () => {
-    try {
-      const current = readDevServerInfoFile(appDir);
-      if (current?.pid === process.pid) {
-        rmSync(path, { force: true });
-      }
-    } catch {
-      // best effort — a stale file is detected by pid liveness anyway
-    }
-  };
-  process.once("exit", cleanup);
-  process.once("SIGINT", () => {
-    cleanup();
-    process.exit(130);
-  });
-  process.once("SIGTERM", () => {
-    cleanup();
-    process.exit(143);
-  });
 
   console.log(`Local dev server: ${baseUrl} (discovery file: ${path})`);
   return info;
