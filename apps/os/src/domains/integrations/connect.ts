@@ -14,6 +14,7 @@ import {
 import { getIntegration } from "~/domains/integrations/registry.ts";
 import {
   DEFAULT_INTEGRATION_ACCOUNT,
+  IntegrationAccount,
   integrationAccountStreamPath,
 } from "~/domains/integrations/integration-events.ts";
 import { ensureIntegrationStub } from "~/domains/integrations/durable-objects/integration-durable-object.ts";
@@ -81,7 +82,7 @@ export class RoutingKeyConflictError extends Error {
 
 export async function connectIntegration(input: ConnectIntegrationInput) {
   const definition = getIntegration(input.integration);
-  const account = input.account ?? DEFAULT_INTEGRATION_ACCOUNT;
+  const account = IntegrationAccount.parse(input.account ?? DEFAULT_INTEGRATION_ACCOUNT);
   const connectEnv = env as unknown as ConnectEnv;
 
   // Fail loudly on routing-key theft BEFORE journaling anything: the ingress

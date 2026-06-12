@@ -569,8 +569,14 @@ export const osContract = oc.router({
         .input(
           ProjectScopedInput.extend({
             integration: z.string().trim().min(1),
-            /** The instance: a project can connect MANY accounts of one integration. */
-            account: z.string().trim().min(1).default("default"),
+            /** The instance: a project can connect MANY accounts of one
+             * integration. Same grammar as the account stream path. */
+            account: z
+              .string()
+              .trim()
+              .regex(/^[a-z0-9][a-z0-9-]*$/, "Account names are lowercase kebab-case")
+              .refine((value) => value !== "webhooks", "'webhooks' is reserved")
+              .default("default"),
             ownership: z.enum(["first-party", "customer"]).default("first-party"),
             externalId: z.string().trim().min(1),
             displayName: z.string().optional(),

@@ -16,6 +16,20 @@
 import type { IntegrationDefinition } from "~/domains/integrations/definition.ts";
 import { providedSecretSlug } from "~/domains/integrations/definition.ts";
 
+/** Accounts are USER-derived (the Slack team-id pattern): one connected
+ * Google identity = one account, so a second Google user adds a second
+ * account instead of overwriting the first's journal and secrets. The
+ * sanitized email gives a readable itx address
+ * (itx.integrations["google/jonas-nustom-com"]); the stable numeric id is
+ * the fallback when Google omits the email claim. */
+export function googleAccountForUser(user: { email?: string; id: string }): string {
+  const base = (user.email ?? user.id)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return base.length > 0 ? base : "default";
+}
+
 export const GOOGLE_ACCESS_TOKEN_SECRET_NAME = "access-token";
 export const GOOGLE_REFRESH_TOKEN_SECRET_NAME = "refresh-token";
 export const GOOGLE_CLIENT_SECRET_SECRET_NAME = "oauth-client-secret";
@@ -106,7 +120,7 @@ export const googleIntegration: IntegrationDefinition = {
       return redirectWithError(stateData.callbackUrl, "google_userinfo_failed");
     }
 
-    const account = "default";
+    const account = googleAccountForUser({ email: userInfo.email, id: userInfo.id });
     const refreshTokenRef = `getSecret({ key: "${providedSecretSlug({ integration: "google", account, name: GOOGLE_REFRESH_TOKEN_SECRET_NAME })}" })`;
     const clientSecretRef = `getSecret({ key: "${providedSecretSlug({ integration: "google", account, name: GOOGLE_CLIENT_SECRET_SECRET_NAME })}" })`;
     // The derivation (and the client-secret sibling it references) only make
