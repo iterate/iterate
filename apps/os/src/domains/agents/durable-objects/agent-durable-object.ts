@@ -558,8 +558,8 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       dialContext(this.env as unknown as Env, projectContextAddress(params.projectId)).itx();
     const defaultOrigin: ItxOrigin = { address: selfAddress, id: contextId };
     return {
-      describe: async (): Promise<CapabilityDescription[]> => [
-        ...Object.values(byName).map(
+      describe: async (): Promise<CapabilityDescription[]> => {
+        const own = Object.values(byName).map(
           (cap): CapabilityDescription => ({
             instructions: cap.instructions,
             kind: cap.address.type,
@@ -567,9 +567,14 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
             name: cap.name,
             updatedAtMs: 0,
           }),
-        ),
-        ...(await project().describe()),
-      ],
+        );
+        // These tools SHADOW project entries of the same name (ai/workspace),
+        // so suppress the shadowed inherited ones — exact-name shadowing, the
+        // same rule Itx.describe applies at every chain link.
+        const shadowed = new Set(own.map((d) => d.name));
+        const inherited = (await project().describe()).filter((d) => !shadowed.has(d.name));
+        return [...own, ...inherited];
+      },
       invoke: async (input) => {
         const resolved = resolveLongestProvidedPrefix(byName, input.path);
         if (!resolved) return await project().invoke(input);
