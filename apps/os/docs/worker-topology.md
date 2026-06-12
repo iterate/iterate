@@ -140,8 +140,8 @@ browser ──► <n> ────┼────────────► <n>
    it in its own miniflare.
 2. `vite.config.ts` reads the manifest and passes the configs as
    `auxiliaryWorkers`.
-3. The browser talks to vite directly (`http://os.localhost:<port>`,
-   project hosts as `<slug>.os.localhost:<port>`); the app worker's embedded
+3. The browser talks to vite directly (`http://localhost:<port>`,
+   project hosts as `<slug>.localhost:<port>`); the app worker's embedded
    router handles the project-host/MCP lanes over the same service bindings
    the ingress uses in production. The ingress worker isn't part of the dev
    loop (it would be a no-op hop in front of vite).

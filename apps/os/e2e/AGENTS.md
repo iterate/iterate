@@ -17,17 +17,16 @@ deployment (dev tunnel, preview, or prod).
 
 ## Lanes
 
-All Vitest lanes require `APP_CONFIG_BASE_URL` plus an admin credential (one of
+All Vitest lanes require a base URL plus an admin credential (one of
 `OS_E2E_ADMIN_API_SECRET`, `OS_ADMIN_API_SECRET`, `APP_CONFIG_ADMIN_API_SECRET`; some helpers also
 accept `OS_E2E_BEARER_TOKEN` or `OS_E2E_COOKIE`). The usual invocation is
 `doppler run --config <config> -- pnpm e2e [-t <filter>]` from `apps/os` — the config supplies the
 base URL: `prd` → `os.iterate.com`, `preview_N` → `os.iterate-preview-N.com`, `dev_<you>` → your
-tunnel, `dev_localhost` → `http://localhost:<port>`.
+tunnel. For fully-local `dev`, the helpers read `.alchemy/dev-server.json` from the running
+`pnpm dev` process.
 
-Exception: the fully-local `dev` config (random port, parallel-safe) has **no** `APP_CONFIG_BASE_URL`,
-so `doppler run --config dev -- pnpm e2e` fails the base-URL check. Target a `dev_<you>` tunnel or
-`dev_localhost` instead, or override explicitly:
-`OS_ITX_E2E_BASE_URL=http://os.localhost:<port> doppler run --config dev -- pnpm e2e`.
+If you need to target something other than the discovered local server, override explicitly:
+`OS_ITX_E2E_BASE_URL=http://localhost:<port> doppler run --config dev -- pnpm e2e`.
 
 - Live deployment tests: `pnpm e2e` (agents, admin-project suites).
 - Egress interception: itx script `fetch` rides project egress; the fetch-cap shadowing coverage
