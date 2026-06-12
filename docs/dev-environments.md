@@ -49,7 +49,7 @@ pnpm dev          # fully-local OS dev server on http://os.localhost:<port>
 
   `dev_<you>` is not a different kind of environment; it is `dev` plus
   precisely two things: a _tunnel identity_ (`APP_CONFIG_BASE_URL =
-  https://os.iterate-dev-<you>.com`, fixed port 5173, a cloudflared tunnel
+https://os.iterate-dev-<you>.com`, fixed port 5173, a cloudflared tunnel
   claiming that hostname, `iterate-dev-<you>.app` project hostnames) and your
   _personal Slack app credentials_ (`APP_CONFIG_INTEGRATIONS__SLACK`, whose
   delivery URL on Slack's side points at that tunnel hostname). Auth is
@@ -65,6 +65,7 @@ pnpm dev          # fully-local OS dev server on http://os.localhost:<port>
   session — login just bounces back to `/sign-in` with no error. (This broke
   all `dev_<user>` and preview logins once; cleaned out of `dev_*` and the
   `preview` root on 2026-06-12.)
+
 - The chosen port is baked into the env (`APP_CONFIG_BASE_URL`) at startup and
   recorded in **`apps/os/.alchemy/dev-server.json`** (`{pid, port, baseUrl}`).
   Scripts and CLIs that need "the local dev server" read that file — no
