@@ -11,6 +11,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { getAgentDurableObjectName } from "../agent-stream-subscriptions.ts";
 import type { AgentDurableObject } from "../durable-objects/agent-durable-object.ts";
 import type { PathCall } from "~/itx/itx.ts";
+import { SELF_DESCRIPTION_METHOD } from "~/itx/path-proxy.ts";
 
 export type AgentToolsCapabilityProps = {
   /** Injected by the dial — never definer-supplied. */
@@ -26,6 +27,14 @@ export type AgentToolsCapabilityProps = {
 export class AgentToolsCapability extends WorkerEntrypoint<Env, AgentToolsCapabilityProps> {
   async call(input: PathCall): Promise<unknown> {
     const props = this.ctx.props;
+    // The provide-time self-description probe must fail fast WITHOUT touching
+    // the agent DO: the probe runs while the agent's own wake hook may hold
+    // the DO's input gate (providing these very capabilities), so dialing in
+    // here would stall until the probe deadline — and for the debug tool it
+    // would even execute a debug snapshot as a probe side effect.
+    if (input.path.length === 1 && input.path[0] === SELF_DESCRIPTION_METHOD) {
+      throw new Error("AgentToolsCapability does not self-describe.");
+    }
     if (!props.projectId) {
       throw new Error("AgentToolsCapability needs dial-injected projectId props.");
     }

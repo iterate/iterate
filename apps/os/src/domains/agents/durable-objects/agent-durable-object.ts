@@ -218,7 +218,18 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
           agentLlmProcessorSlug(llmProvider),
           AGENT_HOST_PROCESSOR_SLUG,
         ]);
-        await this.ensureItxContext(params);
+        // Deliberately NOT awaited: context provisioning probes each rpc
+        // capability for self-description, and those loopback dials can only
+        // make progress once this wake hook releases the input gate — awaiting
+        // here deadlocks until the probes' deadlines and blows the 30s
+        // blockConcurrencyWhile budget. Script runs ensure the context lazily
+        // via getItxContextId() (single-flighted), so nothing needs it
+        // synchronously at wake.
+        this.ctx.waitUntil(
+          this.ensureItxContext(params).catch((error) => {
+            console.error("[agent-itx-context-setup] failed", error);
+          }),
+        );
       }
       // Deliberately no catch-up wait here: wake hooks run inside
       // `blockConcurrencyWhile`, and the processors are co-hosted on this DO,
