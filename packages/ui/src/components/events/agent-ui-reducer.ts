@@ -164,8 +164,13 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     case AGENT_CHAT_USER_MESSAGE_ADDED: {
       const text = readString(event, "content");
       if (text == null) return state;
-      const settled = settleLive(state, timestampMs, ops);
-      return emitItem(settled, ops, {
+      // A user message while steps are still running must not archive those
+      // steps as finished — the agent is still working. Only a quiescent live
+      // activity settles here; an active one keeps streaming and settles on
+      // its own terminal event.
+      const hasRunningStep = state.live?.steps.some((step) => step.status === "running") ?? false;
+      const base = hasRunningStep ? state : settleLive(state, timestampMs, ops);
+      return emitItem(base, ops, {
         kind: "user",
         id: `user-${event.offset}`,
         text,

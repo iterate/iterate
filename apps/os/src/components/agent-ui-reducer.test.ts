@@ -228,4 +228,24 @@ describe("agent-ui reducer", () => {
     expect(state.items).toHaveLength(1);
     expect(state.items[0]).toMatchObject({ kind: "activity", status: "done" });
   });
+
+  it("keeps a running activity live when a user message arrives mid-turn", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 7,
+        payload: { model: "gpt-test", runOpts: {} },
+      },
+      {
+        type: "events.iterate.com/agent-chat/user-message-added",
+        payload: { channel: "web", content: "also, one more thing" },
+      },
+    ]);
+
+    // The interjected message is a settled row, but the in-flight step keeps
+    // running — it must not be archived as done by the interruption.
+    expect(state.items).toHaveLength(1);
+    expect(state.items[0]).toMatchObject({ kind: "user", text: "also, one more thing" });
+    expect(state.live?.steps[0]).toMatchObject({ kind: "llm", status: "running" });
+  });
 });

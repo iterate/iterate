@@ -377,10 +377,10 @@ export class CloudflareAiProcessor extends StreamProcessor<
     try {
       if (streamed == null) {
         assistantText = extractCloudflareAssistantText(raw);
-      } else if (streamed.text.length > 0) {
-        assistantText = streamed.text;
       } else {
-        throw new Error("Cloudflare AI stream contained no assistant text.");
+        // A stream that carried no text deltas (usage-only, or a model that
+        // produced no content) is an empty completion, not a failure.
+        assistantText = streamed.text;
       }
     } catch (error) {
       const rawResponse = streamed == null ? toJsonValue(raw) : streamedRawResponse(streamed);

@@ -83,10 +83,19 @@ export function AgentFeedView({
     query === "" ? [first, last + 1] : [`%${query}%`, Math.max(0, last + 1 - first), first],
   );
   // Retain the last committed rows across range re-queries so already-visible
-  // rows don't flash to skeletons while the shifted window's SQL runs.
-  const lastRowsRef = useRef<Map<number, AgentUiItem>>(new Map());
+  // rows don't flash to skeletons while the shifted window's SQL runs. The
+  // retained rows are only valid for the search they were fetched under —
+  // reusing them across a filter change would briefly show unfiltered rows.
+  const lastRowsRef = useRef<{ query: string; rows: Map<number, AgentUiItem> }>({
+    query: "",
+    rows: new Map(),
+  });
   const itemsByIndex = useMemo(() => {
-    if (rowsResult.status !== "ok") return lastRowsRef.current;
+    if (rowsResult.status !== "ok") {
+      return lastRowsRef.current.query === query
+        ? lastRowsRef.current.rows
+        : new Map<number, AgentUiItem>();
+    }
     const rows = new Map<number, AgentUiItem>();
     rowsResult.data.forEach((row, position) => {
       const index = query === "" ? Number(row.local_index) : first + position;
@@ -96,7 +105,7 @@ export function AgentFeedView({
         // Skip unparseable rows; the row stays a skeleton.
       }
     });
-    lastRowsRef.current = rows;
+    lastRowsRef.current = { query, rows };
     return rows;
   }, [rowsResult.data, rowsResult.status, query, first]);
 
@@ -451,7 +460,7 @@ function AgentLiveActivity({
       <div className="flex h-7 items-center gap-2 self-start px-0.5">
         <Spinner className="size-3 shrink-0 text-amber-600" />
         <span className="text-sm font-medium text-amber-700 dark:text-amber-500">
-          {liveActivityLabel(liveStep)}
+          {liveActivityLabel(live, liveStep)}
         </span>
       </div>
       <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
@@ -469,11 +478,20 @@ function AgentLiveActivity({
   );
 }
 
-function liveActivityLabel(liveStep: AgentUiStep | undefined): string {
-  if (liveStep == null) return "Thinking…";
+function liveActivityLabel(live: AgentUiActivity, liveStep: AgentUiStep | undefined): string {
+  // Steps exist but none is running: the turn is between steps (or waiting to
+  // settle) — "Working…", not "Thinking…".
+  if (liveStep == null) return live.steps.length > 0 ? "Working…" : "Thinking…";
   if (liveStep.kind === "code") return "Running code…";
-  if (liveStep.responseText !== "") return "Writing code…";
+  if (liveStep.responseText !== "") {
+    return looksLikeCode(liveStep.responseText) ? "Writing code…" : "Responding…";
+  }
   return "Thinking…";
+}
+
+/** Code-mode agents stream itx code as their response; chat agents stream prose. */
+function looksLikeCode(text: string): boolean {
+  return text.includes("```") || /^\s*(async|await|function|const|let|import)\b/.test(text);
 }
 
 function LiveStepStream({ step }: { step: AgentUiStep }) {
@@ -499,7 +517,14 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
           {step.responseText === "" ? <StreamingCursor /> : null}
         </div>
       )}
-      {step.responseText === "" ? null : <StreamingCodeBlock code={step.responseText} />}
+      {step.responseText === "" ? null : looksLikeCode(step.responseText) ? (
+        <StreamingCodeBlock code={step.responseText} />
+      ) : (
+        <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed">
+          {step.responseText}
+          <StreamingCursor />
+        </div>
+      )}
     </div>
   );
 }

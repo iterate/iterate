@@ -27,15 +27,31 @@ export function readStreamStateOnce(
   source: StreamTreeSource,
   streamPath: StreamPathType,
 ): Promise<StreamStateType> {
+  const READ_STATE_TIMEOUT_MS = 10_000;
   return new Promise((resolve, reject) => {
     let done = false;
     let release: (() => void) | null = null;
-    const finish = () => release?.();
+    const finish = () => {
+      clearTimeout(deadline);
+      release?.();
+    };
+    // Subscribe can succeed without a state push ever arriving (a wedged
+    // stream); bound the wait so the ⌘K child query errors instead of hanging.
+    const deadline = setTimeout(() => {
+      if (done) return;
+      done = true;
+      reject(new Error(`timed out reading state for ${streamPath}`));
+      finish();
+    }, READ_STATE_TIMEOUT_MS);
     source(streamPath)
       .onStateChange((state) => {
         if (done) return;
         done = true;
-        resolve(StreamState.parse(state));
+        try {
+          resolve(StreamState.parse(state));
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
         finish();
       })
       .then((subscription) => {
@@ -46,6 +62,7 @@ export function readStreamStateOnce(
         if (done) return;
         done = true;
         reject(error instanceof Error ? error : new Error(String(error)));
+        finish();
       });
   });
 }

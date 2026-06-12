@@ -652,18 +652,30 @@ function createStreamRuntime(
   function startLivenessProbe(connection: NonNullable<typeof stream>) {
     stopLivenessProbe();
     probePreviousArrivals = deliveryArrivals;
+    // A single slow runtimeState() answer (cold DO, busy worker) is not a dead
+    // socket — only consecutive timeouts are. Definitive signals (incarnation
+    // change, stalled deliveries) still reconnect on the first hit.
+    let timeoutStrikes = 0;
     livenessTimer = setInterval(() => {
       void (async () => {
         try {
-          const { coreProcessorState } = await Promise.race([
-            Promise.resolve(connection.stream.runtimeState()),
-            new Promise<never>((_, reject) =>
-              setTimeout(
-                () => reject(new Error("liveness probe timed out")),
-                LIVENESS_PROBE_TIMEOUT_MS,
+          let coreProcessorState;
+          try {
+            ({ coreProcessorState } = await Promise.race([
+              Promise.resolve(connection.stream.runtimeState()),
+              new Promise<never>((_, reject) =>
+                setTimeout(
+                  () => reject(new Error("liveness probe timed out")),
+                  LIVENESS_PROBE_TIMEOUT_MS,
+                ),
               ),
-            ),
-          ]);
+            ]));
+          } catch (error) {
+            timeoutStrikes += 1;
+            if (timeoutStrikes < 2) return;
+            throw error;
+          }
+          timeoutStrikes = 0;
           if (disposed || stream !== connection) return;
           if (coreProcessorState.createdAt !== reconciledIncarnation) {
             throw new Error(

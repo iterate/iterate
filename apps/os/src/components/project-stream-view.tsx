@@ -176,7 +176,11 @@ export function ProjectStreamView({
       }),
     [projectSlugOrId, streamPathText, streamUrl],
   );
-  useSyncExternalStore(agentStore.subscribe, agentStore.getSnapshot, agentStore.getServerSnapshot);
+  const agentSnapshot = useSyncExternalStore(
+    agentStore.subscribe,
+    agentStore.getSnapshot,
+    agentStore.getServerSnapshot,
+  );
   const agentUiState = useAgentUiReducedState(store.streamDatabase);
   const metrics = useSimulatedRttMetrics();
 
@@ -366,16 +370,20 @@ export function ProjectStreamView({
       {headerAccessory == null ? null : <div className="shrink-0">{headerAccessory}</div>}
       {toolsOpen ? (
         <div className="flex shrink-0 items-center gap-3 px-4 pb-1.5 pt-1">
-          <div className="flex h-9 min-w-0 max-w-sm flex-1 items-center gap-2 rounded-full bg-muted px-3.5">
-            <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
-            <input
-              ref={feedSearchInputRef}
-              value={feedSearch}
-              onChange={(event) => setFeedSearch(event.target.value)}
-              placeholder="Search feed…"
-              className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-            />
-          </div>
+          {/* Search filters the agent feed's SQL; the other tabs don't take a
+              filter yet, so don't offer a no-op input there. */}
+          {activeTab === "agent" ? (
+            <div className="flex h-9 min-w-0 max-w-sm flex-1 items-center gap-2 rounded-full bg-muted px-3.5">
+              <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <input
+                ref={feedSearchInputRef}
+                value={feedSearch}
+                onChange={(event) => setFeedSearch(event.target.value)}
+                placeholder="Search feed…"
+                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              />
+            </div>
+          ) : null}
           <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
             {eventCount.toLocaleString()} events · {snapshot.connectionStatus}
           </span>
@@ -389,7 +397,10 @@ export function ProjectStreamView({
             liveState={agentUiState}
             search={feedSearch}
             emptyLabel={connectionLabel}
-            isPending={agentUiState == null}
+            // The reduced-state row only exists once the processor has
+            // checkpointed; an already-subscribed empty stream is "nothing
+            // here yet", not "connecting".
+            isPending={agentUiState == null && agentSnapshot.connectionStatus !== "subscribed"}
           />
         ) : activeTab === "feed" ? (
           <ProjectStreamFeedView
@@ -569,7 +580,10 @@ function useReducedStreamState<TState>(args: {
 function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState | null {
   const result = useStreamQuery(
     database,
-    `SELECT reduced_state FROM processor_state WHERE processor_slug = ?`,
+    // subscription_key is part of the primary key, so multiple rows can exist
+    // for the slug (e.g. after a key-format change); read the most advanced one.
+    `SELECT reduced_state FROM processor_state WHERE processor_slug = ?
+     ORDER BY max_offset DESC LIMIT 1`,
     [AgentUiProcessorContract.slug],
   );
   return useMemo(() => {
