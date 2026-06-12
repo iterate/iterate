@@ -17,6 +17,7 @@ import {
   integrationAccountStreamPath,
 } from "~/domains/integrations/integration-events.ts";
 import { ensureIntegrationStub } from "~/domains/integrations/durable-objects/integration-durable-object.ts";
+import { ensureIntegrationIngressStub } from "~/domains/integrations/durable-objects/integration-ingress-durable-object.ts";
 import { encryptSecretMaterial, importSecretsKey } from "~/domains/secrets/secret-crypto.ts";
 import { SecretDerivation } from "~/domains/secrets/secret-derivation.ts";
 import type {
@@ -55,10 +56,57 @@ export type ConnectIntegrationInput = {
   }[];
 };
 
+/** A requested routing key is already owned by someone else and the connect
+ * didn't carry consent (`takeover: true`) — the caller must run the takeover
+ * interstitial (or pass takeover explicitly from a trusted path). */
+export class RoutingKeyConflictError extends Error {
+  readonly routingKey: string;
+  readonly owner: { projectId: string; account: string };
+
+  constructor(input: {
+    integration: string;
+    routingKey: string;
+    owner: { projectId: string; account: string };
+  }) {
+    super(
+      `Routing key "${input.routingKey}" for ${input.integration} is already connected to ` +
+        `project ${input.owner.projectId} (account "${input.owner.account}"). ` +
+        `Reconnecting it here requires an explicit takeover.`,
+    );
+    this.name = "RoutingKeyConflictError";
+    this.routingKey = input.routingKey;
+    this.owner = input.owner;
+  }
+}
+
 export async function connectIntegration(input: ConnectIntegrationInput) {
   const definition = getIntegration(input.integration);
   const account = input.account ?? DEFAULT_INTEGRATION_ACCOUNT;
   const connectEnv = env as unknown as ConnectEnv;
+
+  // Fail loudly on routing-key theft BEFORE journaling anything: the ingress
+  // fold is still the authority (first claim wins there regardless), but
+  // without this guard a conflicting connect would report success while the
+  // provider's events kept routing to the existing owner. Reads of the route
+  // table are best-effort (two simultaneous connects can both pass); the
+  // fold settles ties. The OAuth interstitial path passes takeover: true
+  // after the user consents.
+  if (input.takeover !== true && input.routingKeys.length > 0) {
+    const router = await ensureIntegrationIngressStub(definition.slug);
+    const snapshot = (await router.ensureReady()) as {
+      state: { routes: Record<string, { projectId: string; account: string }> };
+    };
+    for (const routingKey of input.routingKeys) {
+      const owner = snapshot.state.routes[routingKey];
+      if (owner != null && (owner.projectId !== input.projectId || owner.account !== account)) {
+        throw new RoutingKeyConflictError({
+          integration: definition.slug,
+          routingKey,
+          owner,
+        });
+      }
+    }
+  }
 
   // Encrypt at the edge: plaintext never rides on the stream, even inside
   // the connect request.

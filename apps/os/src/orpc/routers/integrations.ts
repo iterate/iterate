@@ -11,7 +11,7 @@ import { getProjectById } from "~/db/queries/.generated/index.ts";
 import type { PendingConnect } from "~/domains/integrations/definition.ts";
 import { unsealJson } from "~/domains/secrets/oauth-state.ts";
 import type { RequestContext } from "~/request-context.ts";
-import { connectIntegration } from "~/domains/integrations/connect.ts";
+import { connectIntegration, RoutingKeyConflictError } from "~/domains/integrations/connect.ts";
 import { getIntegration } from "~/domains/integrations/registry.ts";
 import { providedSecretSlug } from "~/domains/integrations/definition.ts";
 import {
@@ -64,16 +64,23 @@ export const projectIntegrationsRouter = {
           });
         }
       }
-      return await connectIntegration({
-        integration: definition.slug,
-        account: input.account,
-        projectId: project.id,
-        ownership: input.ownership,
-        externalId: input.externalId,
-        ...(input.displayName == null ? {} : { displayName: input.displayName }),
-        routingKeys: input.routingKeys,
-        secrets: input.secrets,
-      });
+      try {
+        return await connectIntegration({
+          integration: definition.slug,
+          account: input.account,
+          projectId: project.id,
+          ownership: input.ownership,
+          externalId: input.externalId,
+          ...(input.displayName == null ? {} : { displayName: input.displayName }),
+          routingKeys: input.routingKeys,
+          secrets: input.secrets,
+        });
+      } catch (error) {
+        if (error instanceof RoutingKeyConflictError) {
+          throw new ORPCError("CONFLICT", { message: error.message });
+        }
+        throw error;
+      }
     }),
   getIntegrationState: os.project.integrations.getIntegrationState
     .use(projectScopeMiddleware)
