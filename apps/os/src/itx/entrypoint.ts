@@ -42,18 +42,19 @@ export async function resolveItx(input: {
     // node to dial yet.
     projectId = null;
     contextAddress = null;
+  } else if (input.props.contextAddress && input.props.projectId) {
+    // An explicitly-addressed context — agent contexts (hosted by the agent
+    // DO, identity DERIVED from the agent's coordinate) and extended children
+    // both pass their coordinate, so trust it and skip the catalog entirely.
+    contextAddress = input.props.contextAddress as CapabilityAddress;
+    projectId = input.props.projectId;
   } else if (isChildContextId(contextId)) {
-    if (input.props.contextAddress && input.props.projectId) {
-      contextAddress = input.props.contextAddress as CapabilityAddress;
-      projectId = input.props.projectId;
-    } else {
-      const resolved = await lookupContext(createD1Client(input.env.DB), contextId);
-      if (!resolved) {
-        throw new Error(`Context ${contextId} is not in the context catalog.`);
-      }
-      contextAddress = resolved.address;
-      projectId = resolved.projectId;
+    const resolved = await lookupContext(createD1Client(input.env.DB), contextId);
+    if (!resolved) {
+      throw new Error(`Context ${contextId} is not in the context catalog.`);
     }
+    contextAddress = resolved.address;
+    projectId = resolved.projectId;
   } else {
     // A project context's identity IS its project.
     projectId = contextId;
