@@ -6,6 +6,7 @@
 // folds to the same state).
 
 import { describe, expect, test, vi } from "vitest";
+import { newMessagePortRpcSession, RpcTarget } from "capnweb";
 import type { StreamEvent } from "@iterate-com/streams/shared/event";
 import {
   ITX_EVENT_TYPES,
@@ -15,6 +16,7 @@ import {
   type CapabilityDial,
   type ItxOrigin,
   type ItxStub,
+  type ProvideCapabilityInput,
 } from "./itx.ts";
 
 const AI_ADDRESS: CapabilityAddress = {
@@ -89,6 +91,8 @@ function makeItx(
     dial?: CapabilityDial;
     journal?: ReturnType<typeof fakeJournal>["journal"];
     parent?: ItxStub | null;
+    /** describe()'s label for entries inherited through the parent link. */
+    parentFrom?: string;
     runScript?: (input: { code: string; executionId: string }) => Promise<unknown>;
   } = {},
 ) {
@@ -96,7 +100,8 @@ function makeItx(
     contextId: input.contextId ?? "prj_1",
     dial: input.dial ?? fakeDial().dial,
     iterateContext: { journal: input.journal ?? fakeJournal().journal },
-    parentItx: () => input.parent ?? null,
+    parentItx: () =>
+      input.parent ? { from: input.parentFrom ?? "prj_1", stub: input.parent } : null,
     runScript: input.runScript,
     selfAddress: SELF_ADDRESS,
   });
@@ -111,8 +116,14 @@ describe("provide + longest-prefix invoke", () => {
     const result = await itx.invoke({ args: [{ text: "hi" }], path: ["slack", "chat", "post"] });
 
     expect(result).toMatchObject({ path: ["chat", "post"] });
-    expect(dialed).toHaveLength(1);
+    // Two dials: the provide-time describeItx probe (self-description hook;
+    // a typeless rpc provide always asks once), then the invoke itself.
+    expect(dialed).toHaveLength(2);
     expect(dialed[0]).toMatchObject({
+      call: { args: [], path: ["describeItx"] },
+      disposed: true,
+    });
+    expect(dialed.at(-1)).toMatchObject({
       address: AI_ADDRESS,
       attribution: { capabilityPath: "slack", origin: { address: SELF_ADDRESS, id: "prj_1" } },
       call: { args: [{ text: "hi" }], path: ["chat", "post"] },
@@ -155,7 +166,113 @@ describe("provide + longest-prefix invoke", () => {
       id: "itx_child",
     };
     await itx.invoke({ args: [], origin, path: ["workspace", "readFile"] });
-    expect(dialed[0]!.attribution).toEqual({ capabilityPath: "workspace", origin });
+    expect(dialed.at(-1)!.attribution).toEqual({ capabilityPath: "workspace", origin });
+  });
+});
+
+describe("provide-time self-description (describeItx)", () => {
+  /** A dial whose target answers the probe — and records every call. */
+  function selfDescribingDial(answer: unknown) {
+    const calls: Array<{ path: string[]; args: unknown[] }> = [];
+    const dial: CapabilityDial = () => ({
+      call: async (input: { path: string[]; args: unknown[] }) => {
+        calls.push(input);
+        if (input.path.join(".") === "describeItx") return answer;
+        return "called";
+      },
+    });
+    return { calls, dial };
+  }
+
+  test("a typeless rpc provide journals the target's own types + instructions", async () => {
+    const { calls, dial } = selfDescribingDial({
+      instructions: "Petstore. listOperations() first.",
+      types: "declare function findPetsByStatus(input: { status: string }): Promise<unknown>;",
+    });
+    const { events, journal } = fakeJournal();
+    const itx = makeItx({ dial, journal });
+
+    await itx.provideCapability({ capability: LOOPBACK_ADDRESS, name: "petstore" });
+    expect(calls).toEqual([{ args: [], path: ["describeItx"] }]);
+    // The enrichment is IN the journaled event — the record, not a patch.
+    expect(events[0]!.payload).toMatchObject({
+      meta: {
+        instructions: "Petstore. listOperations() first.",
+        types: expect.stringContaining("declare function findPetsByStatus"),
+      },
+    });
+    expect(await itx.describe()).toMatchObject([
+      { instructions: "Petstore. listOperations() first.", name: "petstore" },
+    ]);
+  });
+
+  test("explicit caller values win; caller-supplied types skip the probe entirely", async () => {
+    const { calls, dial } = selfDescribingDial({ instructions: "theirs", types: "their types" });
+    const itx = makeItx({ dial });
+
+    await itx.provideCapability({
+      capability: LOOPBACK_ADDRESS,
+      instructions: "mine",
+      name: "a",
+    });
+    expect(await itx.describe()).toMatchObject([
+      { instructions: "mine", name: "a", types: "their types" },
+    ]);
+
+    calls.length = 0;
+    await itx.provideCapability({ capability: LOOPBACK_ADDRESS, name: "b", types: "mine" });
+    expect(calls).toEqual([]); // no probe — nothing to fill
+    expect(await itx.describe()).toMatchObject([{ name: "a" }, { name: "b", types: "mine" }]);
+  });
+
+  test("a throwing or garbage-answering target never blocks or fails the provide", async () => {
+    const throwingDial: CapabilityDial = () => ({
+      call: async () => {
+        throw new Error("no such method");
+      },
+    });
+    const itx = makeItx({ dial: throwingDial });
+    await itx.provideCapability({ capability: AI_ADDRESS, name: "ai" });
+    expect(await itx.describe()).toMatchObject([{ name: "ai", types: undefined }]);
+
+    const garbage = makeItx({ dial: selfDescribingDial(42).dial });
+    await garbage.provideCapability({ capability: AI_ADDRESS, name: "ai" });
+    expect(await garbage.describe()).toMatchObject([{ name: "ai", types: undefined }]);
+  });
+
+  test("an oversized describeItx answer is truncated before it is journaled", async () => {
+    const { dial } = selfDescribingDial({ types: "x".repeat(80 * 1024) });
+    const { events, journal } = fakeJournal();
+    const itx = makeItx({ dial, journal });
+    await itx.provideCapability({ capability: LOOPBACK_ADDRESS, name: "huge" });
+
+    const journaled = (events[0]!.payload as { meta: { types: string } }).meta.types;
+    expect(journaled.length).toBeLessThan(65 * 1024);
+    expect(journaled).toContain("truncated by the platform");
+    // Caller-supplied values are the caller's business — never truncated.
+    await itx.provideCapability({
+      capability: LOOPBACK_ADDRESS,
+      name: "mine",
+      types: "y".repeat(80 * 1024),
+    });
+    expect((events[1]!.payload as { meta: { types: string } }).meta.types).toHaveLength(80 * 1024);
+  });
+
+  test("live provides are never probed", async () => {
+    const dial = vi.fn();
+    const itx = makeItx({ dial: dial as unknown as CapabilityDial });
+    await itx.provideCapability({ capability: { run: async () => 1 }, name: "live" });
+    expect(dial).not.toHaveBeenCalled();
+  });
+
+  test("describeItx is reserved: not as a capability path, not as a dispatch segment", async () => {
+    const itx = makeItx();
+    await expect(
+      itx.provideCapability({ capability: AI_ADDRESS, name: "describeItx" }),
+    ).rejects.toThrow(/reserved/);
+    await expect(
+      itx.provideCapability({ capability: AI_ADDRESS, path: ["x", "describeItx"] }),
+    ).rejects.toThrow(/reserved/);
   });
 });
 
@@ -171,12 +288,15 @@ describe("the journal is the only authority", () => {
     });
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
+      // The JOURNAL record keeps its internal owner field (data) …
       payload: { address: AI_ADDRESS, kind: "rpc", owner: "prj_1", path: ["ai"] },
       type: ITX_EVENT_TYPES.capabilityProvided,
     });
-    expect(await itx.describe()).toMatchObject([
-      { instructions: "Workers AI.", kind: "rpc", name: "ai", owner: "prj_1" },
-    ]);
+    // … while describe() — the projection — shows an OWN entry with no
+    // provenance field at all (`from` is for inherited entries only).
+    const described = await itx.describe();
+    expect(described).toMatchObject([{ instructions: "Workers AI.", kind: "rpc", name: "ai" }]);
+    expect(described[0]).not.toHaveProperty("from");
   });
 
   test("a fresh instance over the same journal folds to the same state; live entries replay disconnected", async () => {
@@ -235,8 +355,11 @@ describe("chain delegation", () => {
   function parentStub() {
     return {
       describe: vi.fn(async () => [
-        { kind: "rpc" as const, meta: {}, name: "ai", owner: "platform:project", updatedAtMs: 0 },
-        { kind: "rpc" as const, meta: {}, name: "inherited", owner: "prj_1", updatedAtMs: 1 },
+        // The parent's own merged view: `ai` arrived from ITS parent (the
+        // defaults link, already stamped); `inherited` is the parent's own
+        // entry, so it carries no provenance field yet.
+        { from: "defaults", kind: "rpc" as const, meta: {}, name: "ai", updatedAtMs: 0 },
+        { kind: "rpc" as const, meta: {}, name: "inherited", updatedAtMs: 1 },
       ]),
       invoke: vi.fn(async () => "from-parent"),
       provideCapability: vi.fn(async () => {}),
@@ -280,19 +403,28 @@ describe("chain delegation", () => {
     );
   });
 
-  test("describe merges the parent chain with exact-match suppression", async () => {
+  test("describe merges the parent chain: own entries unstamped, inherited carry `from`", async () => {
     const parent = parentStub();
-    const itx = makeItx({ contextId: "itx_a", parent });
-    await itx.provideCapability({ capability: AI_ADDRESS, name: "ai" }); // shadows the parent's
+    const itx = makeItx({ contextId: "itx_a", parent, parentFrom: "prj_1" });
 
-    const described = await itx.describe();
-    expect(described.map(({ name, owner }) => ({ name, owner }))).toEqual([
-      { name: "ai", owner: "itx_a" },
-      { name: "inherited", owner: "prj_1" },
+    // Before any own provide: everything is inherited. A deeper ancestor's
+    // stamp ("defaults") survives verbatim; the parent's own entry is
+    // stamped with this link's label, exactly one level below its owner.
+    expect((await itx.describe()).map(({ from, name }) => ({ from, name }))).toEqual([
+      { from: "defaults", name: "ai" },
+      { from: "prj_1", name: "inherited" },
     ]);
+
+    await itx.provideCapability({ capability: AI_ADDRESS, name: "ai" }); // shadows the parent's
+    const described = await itx.describe();
+    expect(described.map(({ from, name }) => ({ from, name }))).toEqual([
+      { from: undefined, name: "ai" }, // own — no provenance field
+      { from: "prj_1", name: "inherited" },
+    ]);
+    expect(described[0]).not.toHaveProperty("from");
   });
 
-  test("platform defaults shadow and resurface as chain consequences", async () => {
+  test("the defaults shadow and resurface as chain consequences", async () => {
     const parent = parentStub();
     const { dial, dialed } = fakeDial();
     const itx = makeItx({ dial, parent });
@@ -310,7 +442,9 @@ describe("chain delegation", () => {
     expect(parent.invoke).toHaveBeenCalledTimes(1);
 
     // Revoking the INHERITED entry itself refuses with the shadowing hint.
-    await expect(itx.revokeCapability({ name: "ai" })).rejects.toThrow(/platform default/);
+    await expect(itx.revokeCapability({ name: "ai" })).rejects.toThrow(
+      /inherited from the defaults/,
+    );
     // Revoking something that exists nowhere stays a no-op.
     await expect(itx.revokeCapability({ name: "neverExisted" })).resolves.toBeUndefined();
   });
@@ -399,11 +533,137 @@ describe("bare-function capabilities", () => {
 
     await expect(itx.invoke({ args: [1, "two"], path: ["probe"] })).resolves.toEqual({ ok: true });
     expect(seen).toEqual([[1, "two"]]);
-    // asPathCallable semantics: a bare function has no member tree.
+    // A bare function has no member tree — a deeper path is a plain miss.
     await expect(itx.invoke({ args: [], path: ["probe", "deeper"] })).rejects.toThrow(
       /did not resolve to a function/,
     );
     expect(await itx.describe()).toMatchObject([{ connected: true, kind: "live", name: "probe" }]);
+  });
+});
+
+describe("plain objects ARE capabilities", () => {
+  test("a plain object-of-methods dispatches by member path, at any depth, with no wrapper", async () => {
+    const itx = makeItx();
+    await itx.provideCapability({
+      capability: {
+        deep: { thought: (question: string) => ({ answer: 42, question }) },
+        ultimate: () => 42,
+      },
+      name: "answer",
+    });
+
+    await expect(itx.invoke({ args: [], path: ["answer", "ultimate"] })).resolves.toBe(42);
+    // Depth: the fallthrough replays ["deep", "thought"] onto the object's
+    // members — itx.answer.deep.thought("…") with zero client-side wrapping.
+    await expect(
+      itx.invoke({
+        args: ["what do you get if you multiply six by nine"],
+        path: ["answer", "deep", "thought"],
+      }),
+    ).resolves.toEqual({ answer: 42, question: "what do you get if you multiply six by nine" });
+    // A member miss inside the object is an instructive path error.
+    await expect(itx.invoke({ args: [], path: ["answer", "nope"] })).rejects.toThrow(
+      /did not resolve to a function/,
+    );
+    expect(await itx.describe()).toMatchObject([{ connected: true, kind: "live", name: "answer" }]);
+  });
+
+  test("member stubs are dup-retained at registration; revoke releases exactly the dups", async () => {
+    // Plain objects cross RPC by value with their function members as
+    // session stubs, and RPC disposes argument stubs when the provide call
+    // returns — so the core must store DUPS of the members, never the
+    // originals. This fake mirrors a member stub's protocol surface.
+    const disposed: string[] = [];
+    const memberStub = (label: string) => {
+      const fn = (...args: unknown[]) => ({ args, from: label });
+      return Object.assign(fn, {
+        dup: () => memberStub(`${label}+dup`),
+        [Symbol.dispose]: () => disposed.push(label),
+      });
+    };
+    const ultimate = memberStub("ultimate");
+    const thought = memberStub("thought");
+    const itx = makeItx();
+    await itx.provideCapability({
+      capability: { deep: { thought }, ultimate },
+      name: "answer",
+    });
+
+    // Simulate the RPC layer disposing the provide call's argument stubs.
+    ultimate[Symbol.dispose]();
+    thought[Symbol.dispose]();
+    // Dispatch runs on the retained dups, at any depth.
+    await expect(itx.invoke({ args: [1], path: ["answer", "ultimate"] })).resolves.toEqual({
+      args: [1],
+      from: "ultimate+dup",
+    });
+    await expect(itx.invoke({ args: [], path: ["answer", "deep", "thought"] })).resolves.toEqual({
+      args: [],
+      from: "thought+dup",
+    });
+
+    // Revoke releases exactly what registration dup'd — nothing else.
+    await itx.revokeCapability({ name: "answer" });
+    expect(disposed).toEqual(["ultimate", "thought", "thought+dup", "ultimate+dup"]);
+  });
+
+  test("members survive a REAL capnweb session's provide (argument stubs die at call end)", async () => {
+    const itx = makeItx();
+    // The context node's protocol surface, exposed over a real Cap'n Web
+    // session pair (in-memory MessagePorts — same wire discipline as the
+    // WebSocket sessions production uses).
+    class CoreMain extends RpcTarget {
+      provideCapability(input: ProvideCapabilityInput) {
+        return itx.provideCapability(input);
+      }
+      invoke(input: { path: string[]; args: unknown[] }) {
+        return itx.invoke(input);
+      }
+    }
+    const channel = new MessageChannel();
+    try {
+      newMessagePortRpcSession(channel.port1 as never, new CoreMain());
+      const remote = newMessagePortRpcSession<CoreMain>(channel.port2 as never);
+      await remote.provideCapability({
+        capability: {
+          deep: { thought: async (question: string) => ({ answer: 42, question }) },
+          ultimate: () => 42,
+        },
+        name: "answer",
+      } as never);
+
+      // The provide RPC has RETURNED — capnweb disposed its argument stubs.
+      // Dispatch must run on the core's retained dups, back in the provider.
+      await expect(remote.invoke({ args: [], path: ["answer", "ultimate"] })).resolves.toBe(42);
+      await expect(
+        remote.invoke({ args: ["life"], path: ["answer", "deep", "thought"] }),
+      ).resolves.toEqual({ answer: 42, question: "life" });
+    } finally {
+      channel.port1.close();
+      channel.port2.close();
+    }
+  });
+
+  test("a call-implementing provider still receives ONE call({ path, args }) — members are never traversed", async () => {
+    const itx = makeItx();
+    const calls: unknown[] = [];
+    await itx.provideCapability({
+      capability: {
+        call: (input: { path: string[]; args: unknown[] }) => {
+          calls.push(input);
+          return "from-call";
+        },
+        // A decoy member tree: implementing `call` means the provider owns
+        // its whole method-tree semantics, so this must never run.
+        chat: { post: () => "member tree, must not run" },
+      },
+      name: "sdk",
+    });
+
+    await expect(
+      itx.invoke({ args: [{ text: "hi" }], path: ["sdk", "chat", "post"] }),
+    ).resolves.toBe("from-call");
+    expect(calls).toEqual([{ args: [{ text: "hi" }], path: ["chat", "post"] }]);
   });
 });
 

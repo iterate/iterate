@@ -1,27 +1,39 @@
 // The client-safe half of the ONE calling convention (Law 6).
 //
 // The kernel (itx.ts) dispatches every capability as `target.call({ path,
-// args })`. This module owns the three pure pieces of that convention that
+// args })`. This module owns the two pure pieces of that convention that
 // must load OUTSIDE workerd — withItx providers in Node and the browser
 // REPL import them at runtime, so nothing here may touch cloudflare:workers
 // (itx.ts re-exports all of it for server-side imports):
 //
 //   - PathProxy        dots → data (consumer side, zero round trips)
 //   - replayPathCall   data → dots (receiver-preserving replay)
-//   - asPathCallable   wrap a concrete object so it speaks the convention
+//
+// There is deliberately NO callsite wrapper here: a plain object (or bare
+// function) IS a live capability — the core's dispatch replays paths onto
+// its members (itx.ts). The only things at an itx callsite are capnweb /
+// Workers RPC stubs and your own objects.
 //
 // This is the only place in the codebase that plays reserved-name games.
 // Capability *names* are validated at registration time instead (itx.ts), so
 // the proxy only needs to protect protocol-level names on intermediate path
 // segments.
 
-import { RpcTarget } from "capnweb";
-import type { PathCall, PathCallable } from "./types.ts";
+import type { PathCall } from "./types.ts";
 
 // The ONE calling convention's shapes (PathCall, PathCallable) are declared
 // in types.ts — the design of record — and re-exported here for runtime
 // importers.
 export type { PathCall, PathCallable } from "./types.ts";
+
+/**
+ * The optional self-description method the core probes at provide time
+ * (itx.ts): a call-implementing target answering `call({ path:
+ * ["describeItx"], args: [] })` with `{ types?, instructions? }` describes
+ * itself into the journaled meta. Reserved below so user capability paths
+ * can never collide with the protocol name.
+ */
+export const SELF_DESCRIPTION_METHOD = "describeItx";
 
 /**
  * Names that must never traverse a dynamic surface — prototype-pollution
@@ -31,6 +43,7 @@ export type { PathCall, PathCallable } from "./types.ts";
  * `invoke` directly is filtered identically.
  */
 export const RESERVED_PATH_SEGMENTS: ReadonlySet<string> = new Set([
+  SELF_DESCRIPTION_METHOD,
   "__defineGetter__",
   "__defineSetter__",
   "__lookupGetter__",
@@ -123,7 +136,11 @@ function pathNode(callPath: PathProxyCall, path: string[]): Function {
  * detaching them can make workerd try to transfer the entrypoint
  * (capnweb LEARNINGS, "Preserve Receivers").
  */
-export async function replayPathCall(target: unknown, call: PathCall): Promise<unknown> {
+export async function replayPathCall(
+  target: unknown,
+  call: PathCall,
+  context?: { capability?: string },
+): Promise<unknown> {
   // Filter the path here too, not just in the consumer proxy: `invoke` is a
   // public verb, so a caller can hand-build a `path` and reach this directly.
   // This is the authoritative reserved-name gate.
@@ -133,9 +150,18 @@ export async function replayPathCall(target: unknown, call: PathCall): Promise<u
     }
   }
 
+  // A replay MISS on a known capability points the caller back at discovery
+  // — the suffix is only honest when a name exists for describe() to show.
+  const miss = (message: string) =>
+    new Error(
+      context?.capability
+        ? `${message} (capability "${context.capability}") — describe() lists what exists.`
+        : message,
+    );
+
   if (call.path.length === 0) {
     if (typeof target !== "function") {
-      throw new Error("Capability invoked as a function but the target is not callable.");
+      throw miss("Capability invoked as a function but the target is not callable.");
     }
     return await target(...call.args);
   }
@@ -144,44 +170,14 @@ export async function replayPathCall(target: unknown, call: PathCall): Promise<u
   for (const segment of call.path.slice(0, -1)) {
     parent = await (parent as Record<string, unknown>)[segment];
     if (parent == null) {
-      throw new Error(`Capability path ${call.path.join(".")} hit ${String(parent)}.`);
+      throw miss(`Capability path ${call.path.join(".")} hit ${String(parent)}.`);
     }
   }
 
   const method = call.path.at(-1)!;
   const holder = parent as Record<string, (...args: unknown[]) => unknown>;
   if (typeof holder[method] !== "function") {
-    throw new Error(`Capability path ${call.path.join(".")} did not resolve to a function.`);
+    throw miss(`Capability path ${call.path.join(".")} did not resolve to a function.`);
   }
   return await holder[method](...call.args);
-}
-
-/**
- * Make a member-shaped object speak the kernel's ONE calling convention:
- * `asPathCallable(obj).call({ path, args })` replays the path on `obj` via
- * {@link replayPathCall} — in THIS process, where `obj` is concrete.
- *
- * This is the CLIENT-side wrapper: a live provider wraps a plain
- * object-of-methods (or a bare function) before provideCapability()ing it —
- * the wrapper extends capnweb's RpcTarget so it crosses the session as a
- * stub, and the replay then runs back in the provider's process. Providers
- * that implement `call` themselves (the SDK-shaped FakeSlackSdk pattern)
- * don't need it. (The dial wraps the concrete objects it resolves itself with
- * plain in-process wrappers — dial.ts.)
- */
-export function asPathCallable(target: unknown): PathCallable {
-  return new ClientPathCallable(target);
-}
-
-class ClientPathCallable extends RpcTarget {
-  readonly #target: unknown;
-
-  constructor(target: unknown) {
-    super();
-    this.#target = target;
-  }
-
-  call(input: PathCall): Promise<unknown> {
-    return replayPathCall(this.#target, input);
-  }
 }

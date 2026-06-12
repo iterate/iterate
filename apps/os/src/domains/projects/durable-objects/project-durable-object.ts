@@ -57,7 +57,7 @@ import {
   loadProjectWorker,
 } from "~/domains/projects/project-worker-runtime.ts";
 import { type RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-import { Itx, type CapabilityAddress } from "~/itx/itx.ts";
+import { DEFAULTS_DESCRIBE_FROM, Itx, type CapabilityAddress } from "~/itx/itx.ts";
 import { durableObjectFacetsHook, makeDial, resolveDialableTargets } from "~/itx/dial.ts";
 import { journalStream, ownJournalPath, projectContextAddress } from "~/itx/journal.ts";
 import { getPlatformContext } from "~/itx/platform-context.ts";
@@ -229,8 +229,8 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   // pipeline calls through property accesses, see `processor` above). The
   // context's journal is the project's /itx stream — the only authority;
   // this DO's storage holds the fold's disposable checkpoint. The parent
-  // link is the in-process platform context: the chain's code root, where
-  // the platform defaults live.
+  // link is the in-process defaults context: the chain's code root, where
+  // the defaults live.
 
   #itx: Itx | null = null;
 
@@ -259,13 +259,17 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
       }),
       iterateContext: { journal: journalStream(this.env as unknown as Env, journal) },
       keepAliveWhile: (work) => this.ctx.waitUntil(work()),
-      parentItx: () =>
-        getPlatformContext({
+      parentItx: () => ({
+        // describe() labels entries inherited through this link "defaults";
+        // the internal platform:project chain id stays internal.
+        from: DEFAULTS_DESCRIBE_FROM,
+        stub: getPlatformContext({
           exports: this.ctx.exports as unknown as Parameters<
             typeof getPlatformContext
           >[0]["exports"],
           projectId,
         }),
+      }),
       readState: async () =>
         await this.ctx.storage.get<{ offset: number; state: Itx["state"] }>("itx-checkpoint"),
       // Processor-mode execution: an enqueued script-execution-requested on

@@ -1,6 +1,8 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { createD1Client } from "sqlfu";
+import { resolveItxSecretsMethod } from "./secrets-capability-call.ts";
 import { parseConfig } from "~/config.ts";
+import type { PathCall } from "~/itx/itx.ts";
 import {
   deleteProjectSecretById,
   deleteProjectSecret,
@@ -37,6 +39,18 @@ export class SecretsCapability extends WorkerEntrypoint<
   SecretsCapabilityEnv,
   SecretsCapabilityProps
 > {
+  /**
+   * The itx calling convention (dial.ts dispatches loopback caps as
+   * `call({ path, args })`). Only the write-and-summary surface is reachable
+   * this way — see secrets-capability-call.ts for the allowlist and why the
+   * material-returning methods are not on it. The full method set below
+   * stays for platform code (egress substitution, the oRPC/admin surface).
+   */
+  async call(input: PathCall): Promise<unknown> {
+    const method = resolveItxSecretsMethod(input.path);
+    return await (this[method] as (arg?: unknown) => Promise<unknown>).call(this, input.args[0]);
+  }
+
   async getSecret(input: { key: string }) {
     const secret = await getProjectSecret(this.db(), {
       key: input.key,

@@ -11,6 +11,7 @@ type WorkerMainModule = Pick<
     | "GmailCapability"
     | "ItxEntrypoint"
     | "EgressPipe"
+    | "OpenApiClient"
     | "ProjectEgress"
     | "ProjectIngressEntrypoint"
     | "ProjectMcpServerEntrypoint"
