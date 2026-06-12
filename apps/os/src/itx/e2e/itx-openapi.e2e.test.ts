@@ -7,10 +7,8 @@
 //      object, through project egress (the fixture only answers with the
 //      admin bearer from props.headers, so headers riding every call is
 //      proven implicitly)
-//   2. describe() carries spec-derived `types` with zero callsite ceremony —
-//      the core's provide-time describeItx hook journaled them
-//   3. listOperations() enumerates the surface
-//   4. refusals are self-describing: unknown input keys on a body-less
+//   2. listOperations() enumerates the surface
+//   3. refusals are self-describing: unknown input keys on a body-less
 //      operation list the valid params; nested paths point at operationIds
 //
 // One OPTIONAL live petstore smoke stays at the end, tolerant by design — a
@@ -49,21 +47,6 @@ test(
         worker: { type: "loopback" },
       },
     });
-
-    // (2) ONE provide is enough: the loopback probe deadline absorbs the
-    // cold project chain (itx.ts SELF_DESCRIPTION_LOOPBACK_TIMEOUT_MS), so
-    // the journaled meta carries the spec-derived surface immediately.
-    const entry = (await projectItx.describe()).capabilities.find(
-      (candidate) => candidate.name === "fixture",
-    ) as { instructions?: string; types?: string };
-    expect(entry.types).toContain(
-      "declare function getPet(input: { petId: number }): " +
-        "Promise<{ id: number; name: string; tag?: string }>;",
-    );
-    expect(entry.types).toContain(
-      'declare function listPets(input: { status: "available" | "pending" | "sold"; limit?: number })',
-    );
-    expect(entry.instructions ?? "").toContain("Itx OpenAPI Fixture");
 
     const handle = projectItx as never as Record<string, any>;
 

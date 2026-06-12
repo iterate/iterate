@@ -623,11 +623,9 @@ await itx.provideCapability({
 // Flat operationIds, one merged input object, through project egress.
 const pets = await itx.petstore.findPetsByStatus({ status: "available" });
 
-// describe() now carries spec-derived TypeScript — the provider answered
-// the platform's provide-time describeItx probe, no callsite ceremony.
-const { capabilities } = await itx.describe();
-const entry = capabilities.find((cap) => cap.name === "petstore");
-return { count: pets.length, types: entry.types.split("\\n").slice(0, 3) };
+// listOperations() enumerates the surface the spec describes.
+const operations = await itx.petstore.listOperations();
+return { count: pets.length, operations: operations.slice(0, 3) };
 `.trim(),
   },
   {
