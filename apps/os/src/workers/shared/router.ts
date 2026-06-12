@@ -20,6 +20,10 @@
  */
 
 import type { AppConfig } from "~/config.ts";
+import {
+  matchMcpRequestUrl,
+  publicMcpRequestUrl,
+} from "~/domains/inbound-mcp-server/mcp-url-routing.ts";
 import { lookupIngressRule } from "~/ingress/lookup.ts";
 import { ingressHostnameFromRequest, normalizeIngressHost } from "~/ingress/host-headers.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
@@ -57,13 +61,20 @@ export async function routeOsRequest(input: {
 }): Promise<Response | null> {
   const { config, request, targets } = input;
 
-  const mcpHostname = config.mcp?.baseUrl ? new URL(config.mcp.baseUrl).hostname : null;
-  const requestHost = normalizeIngressHost(ingressHostnameFromRequest(request));
-
-  if (mcpHostname && requestHost === mcpHostname.toLowerCase()) {
+  // The same gate handleMcpFetch uses — covers both the dedicated MCP
+  // hostname (config.mcp.baseUrl) and the localhost path-mounted endpoint
+  // (/api/__mcp) used when no explicit MCP base URL is configured.
+  const mcpMatch = matchMcpRequestUrl({
+    appBaseUrl: config.baseUrl,
+    mcpBaseUrl: config.mcp?.baseUrl,
+    requestUrl: publicMcpRequestUrl(request),
+  });
+  if (mcpMatch) {
     if (!targets.MCP) return null; // no MCP lane wired (tests) — let the caller decide
     return await targets.MCP.fetch(request);
   }
+
+  const requestHost = normalizeIngressHost(ingressHostnameFromRequest(request));
 
   // When baseUrl is not configured (dev tunnels, previews), the request
   // origin is the app's own URL — same fallback the app pipeline uses.
