@@ -13,6 +13,7 @@ import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { orpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams/$")({
+  staticData: { hideAppHeader: true },
   params: {
     parse: (raw) => ({
       _splat: streamPathFromSplat(raw._splat),

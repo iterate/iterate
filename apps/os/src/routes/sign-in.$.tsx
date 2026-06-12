@@ -1,7 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
-import { useAuthClient } from "@iterate-com/auth/client";
-import { Button } from "@iterate-com/ui/components/button";
+import { buttonVariants } from "@iterate-com/ui/components/button";
 import {
   Card,
   CardContent,
@@ -18,9 +17,9 @@ export const Route = createFileRoute("/sign-in/$")({
 });
 
 function SignInRoute() {
-  const { signIn } = useAuthClient();
   const { redirect_url: redirectUrl } = Route.useSearch();
   const returnTo = safeRedirectPath(redirectUrl);
+  const signInUrl = `/api/iterate-auth/login?return_to=${encodeURIComponent(returnTo)}`;
 
   return (
     <main className="grid min-h-svh place-items-center bg-background p-4">
@@ -30,9 +29,13 @@ function SignInRoute() {
           <CardDescription>Continue with Iterate to open your projects.</CardDescription>
         </CardHeader>
         <CardContent>
-          <Button className="w-full" size="lg" onClick={() => signIn({ returnTo })}>
+          <a
+            data-slot="button"
+            className={buttonVariants({ className: "w-full", size: "lg" })}
+            href={signInUrl}
+          >
             Continue with Iterate
-          </Button>
+          </a>
         </CardContent>
       </Card>
     </main>

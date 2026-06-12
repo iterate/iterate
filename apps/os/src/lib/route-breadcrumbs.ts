@@ -2,6 +2,12 @@ import type { StreamPath } from "@iterate-com/shared/streams/types";
 
 export type RouteBreadcrumbStaticData = {
   breadcrumb?: string;
+  /**
+   * Hides the app shell's breadcrumbs header row. Stream pages set this —
+   * the ⌘K path pill in the stream header replaces breadcrumbs there, and
+   * the stream view renders its own SidebarTrigger.
+   */
+  hideAppHeader?: boolean;
 };
 
 export type RouteBreadcrumbLoaderData = {

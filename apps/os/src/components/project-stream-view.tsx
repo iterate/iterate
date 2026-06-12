@@ -38,6 +38,7 @@ import {
 import type { Event, StreamPath } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
+import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import {
   Select,
   SelectContent,
@@ -233,6 +234,7 @@ export function ProjectStreamView({
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-background">
       <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1 pt-2.5">
+        <SidebarTrigger className="-ml-1" />
         <button
           type="button"
           aria-haspopup="dialog"
