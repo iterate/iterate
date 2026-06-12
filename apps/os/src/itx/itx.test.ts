@@ -267,6 +267,52 @@ describe("the journal is the only authority", () => {
     );
   });
 
+  test("an rpc cap survives a COLD restart through a persisted checkpoint (agent DO wiring)", async () => {
+    // The agent DO wires the Itx checkpoint to ctx.storage (readState/
+    // writeState, key "itx-checkpoint"). This reproduces that EXACT wiring:
+    // provide on a warm instance, then build a FRESH instance from the SAME
+    // journal AND the SAME persisted checkpoint — the way a Durable Object
+    // comes back after eviction. The rpc cap must resolve, not vanish.
+    const { journal } = fakeJournal();
+    let checkpoint: { offset: number; state: Itx["state"] } | undefined;
+    const CHAT_ADDRESS: CapabilityAddress = {
+      entrypoint: "AgentToolsCapability",
+      props: { agentPath: "/agents/asdasdasd", tool: "chat" },
+      type: "rpc",
+      worker: { type: "loopback" },
+    };
+    const build = (dial: CapabilityDial) =>
+      new Itx({
+        contextId: "prj_1",
+        dial,
+        iterateContext: { journal },
+        parentItx: () => null,
+        readState: async () => checkpoint,
+        selfAddress: SELF_ADDRESS,
+        writeState: async (snapshot) => {
+          checkpoint = snapshot as { offset: number; state: Itx["state"] };
+        },
+      });
+
+    const warm = build(fakeDial().dial);
+    await warm.provideCapability({
+      capability: CHAT_ADDRESS,
+      instructions: "Reply to the user.",
+      name: "chat",
+    });
+    // The provide must have flushed a checkpoint carrying the cap.
+    expect(checkpoint?.state.capabilities.chat).toMatchObject({ kind: "rpc", name: "chat" });
+
+    // Cold restart: a brand-new instance over the same journal + checkpoint.
+    const { dial, dialed } = fakeDial();
+    const cold = build(dial);
+    await cold.invoke({ args: [{ message: "hi" }], path: ["chat", "sendMessage"] });
+    expect(dialed.at(-1)).toMatchObject({
+      address: CHAT_ADDRESS,
+      call: { path: ["sendMessage"] },
+    });
+  });
+
   test("the birth certificate folds first-wins", () => {
     const initial = { capabilities: {}, context: null, pendingExecutions: {} };
     const born = reduceItxJournalEvent(initial, {
