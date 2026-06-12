@@ -30,7 +30,7 @@
       {
         "name": "STREAM",
         "class_name": "StreamDurableObject",
-        "script_name": "os-prd",
+        "script_name": "os-prd-stream",
       },
       { "name": "STREAM_PROCESSOR_RUNNER", "class_name": "StreamProcessorRunner" },
     ],

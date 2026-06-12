@@ -12,10 +12,8 @@
 // filesystem.
 
 import type { WorkerSource } from "./itx.ts";
-import {
-  getRepoDurableObjectName,
-  type RepoDurableObject,
-} from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import { getRepoDurableObjectName } from "~/domains/repos/repo-durable-object-name.ts";
 import { RepoEmptyError } from "~/domains/repos/repo-errors.ts";
 
 /**

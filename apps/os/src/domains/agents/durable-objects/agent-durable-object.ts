@@ -55,7 +55,7 @@ import {
   type WorkspaceDurableObject,
   type WorkspaceStructuredName,
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
-import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
+import { stripArtifactTokenQuery } from "~/domains/repos/artifact-token.ts";
 import {
   DEFAULT_AGENT_LLM_PROVIDER,
   defaultAgentSetupEvents,

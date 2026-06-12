@@ -7,7 +7,7 @@ import type { Principal } from "~/auth/principal.ts";
 
 /**
  * Per-request server context, passed to TanStack Start's server handler in
- * `worker.ts` and from there into server routes, server functions, and oRPC
+ * `workers/app.ts` and from there into server routes, server functions, and oRPC
  * procedures (https://tanstack.com/start/latest/docs/framework/react/guide/server-routes).
  *
  * This holds request-scoped state only. Worker bindings (durable object
@@ -78,7 +78,7 @@ declare module "@tanstack/react-router" {
  * `undefined` because of a type-level bug in start-client-core's
  * `AssignAllServerRequestContext` when the generated routeTree.gen.ts footer
  * registers `config` on the Register interface (`AssignAllMiddleware<[]>`
- * degenerates to `never`). The runtime value is exactly the context worker.ts
+ * degenerates to `never`). The runtime value is exactly the context workers/app.ts
  * passes to `handler.fetch`, merged with what the auth request middleware adds
  * — both shapes are fields of RequestContext, so this cast states the truth.
  */
@@ -86,7 +86,7 @@ export function getRequestContext(): RequestContext | undefined {
   return getGlobalStartContext() as RequestContext | undefined;
 }
 
-/** Like getRequestContext, but for paths where worker.ts guarantees a context. */
+/** Like getRequestContext, but for paths where workers/app.ts guarantees a context. */
 export function requireRequestContext(context?: RequestContext): RequestContext {
   const resolved = context ?? (getGlobalStartContext() as RequestContext | undefined);
   if (!resolved) {

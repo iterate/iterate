@@ -1,6 +1,6 @@
 import { getProjectPlatformHostIngressRule } from "~/ingress/project-platform-host-routing.ts";
 import { getProjectCustomHostnameIngressRule } from "~/ingress/project-custom-hostname-routing.ts";
-import { getItxCapabilityHostIngressRule } from "~/itx/http.ts";
+import { getItxCapabilityHostIngressRule } from "~/itx/cap-host-ingress.ts";
 import type { ExactHostIngressRule } from "~/ingress/types.ts";
 
 /**
@@ -13,7 +13,7 @@ import type { ExactHostIngressRule } from "~/ingress/types.ts";
  *
  * All three resolve against the `projects` table in D1. Returns null for the
  * dashboard host (and anything else unrecognized), which falls through to the
- * regular TanStack Start app in worker.ts.
+ * regular TanStack Start app (the app lane in workers/shared/router.ts).
  */
 export async function lookupIngressRule(input: {
   appHostname: string | null;
