@@ -99,9 +99,21 @@ browser ──► <n> ────┼────────────► <n>
 ```
 
 - The matched rule is forwarded on `x-iterate-resolved-ingress` so the
-  project worker doesn't repeat the D1 lookup. The header is trustworthy
-  because the project worker has **no routes** — it is only reachable via
-  service bindings from workers that just resolved the rule.
+  project worker doesn't repeat the D1 lookup. The internal headers are
+  trustworthy because (a) the ingress worker strips them from inbound
+  requests — it is the trust boundary — and (b) the app/project/mcp workers
+  have **no routes and no workers.dev URL**: they are only reachable via
+  service bindings from workers that just resolved the rule. This matches
+  Cloudflare's own framing of bindings as capability grants ("a named
+  entrypoint is only accessible to Workers which have explicitly declared a
+  binding to it").
+- Deviation from first-party guidance worth knowing: Cloudflare recommends
+  RPC named entrypoints over `fetch()` forwarding for worker-to-worker
+  calls. The router lanes use default-entrypoint `fetch()` deliberately —
+  whole-request forwarding is the documented use case for the HTTP
+  interface, and alchemy 0.83's local dev drops `__entrypoint__` on
+  named-entrypoint service bindings (see `Worker.experimentalEntrypoint`).
+  Revisit if that lands upstream.
 - App-lane requests get `x-iterate-routed-lane: app`, so the app worker
   skips re-routing.
 - The **app worker runs the same router first** when a request reaches it

@@ -543,6 +543,10 @@ const appWorker = await IterateAppWorker(ctx, {
   // origin, which breaks auth-worker discovery on production iterate.com
   // hostnames.
   compatibilityFlags: ["global_fetch_strictly_public"],
+  // No workers.dev URL: the app worker is reachable only through the ingress
+  // worker's service binding, which is what makes the internal routing
+  // headers (workers/shared/router.ts) trustworthy.
+  url: false,
 });
 
 // ---- The ingress router -------------------------------------------------------

@@ -91,6 +91,13 @@ export type IterateAppProps<B extends Bindings> = {
   wranglerTransform?: (
     spec: Record<string, unknown>,
   ) => Record<string, unknown> | Promise<Record<string, unknown>>;
+  /**
+   * Whether the worker gets a public workers.dev URL (alchemy default when
+   * unset). Apps fronted by a router worker (apps/os) pass `false` so the
+   * app worker is reachable only via service bindings — that unreachability
+   * is what makes the router's internal headers trustworthy.
+   */
+  url?: boolean;
 };
 
 export async function IterateApp<B extends Bindings>(ctx: IterateCtx, props: IterateAppProps<B>) {
@@ -140,6 +147,7 @@ export async function IterateAppWorker<B extends Bindings>(
     // Needed because dev/preview workers persist across alchemy runs.
     // See https://alchemy.run/concepts/resources/ (adopt section)
     adopt: true,
+    ...(props.url === undefined ? {} : { url: props.url }),
     compatibilityDate: props.compatibilityDate,
     compatibilityFlags,
     eventSources: props.eventSources,
