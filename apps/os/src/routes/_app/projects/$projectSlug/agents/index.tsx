@@ -1,7 +1,8 @@
 import { Suspense, useMemo } from "react";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { buttonVariants } from "@iterate-com/ui/components/button";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
 import { useItx } from "~/itx/use-itx.ts";
 
@@ -36,15 +37,47 @@ function ProjectAgentsIndexContent() {
   const itx = useItx(project.id);
   const source = useMemo(() => (streamPath: StreamPathType) => itx.streams.get(streamPath), [itx]);
 
-  function openAgent(streamPath: StreamPathType) {
+  function openPath(streamPath: StreamPathType) {
+    // /agents itself is not an agent — open its raw stream. Anything under it
+    // is an agent: open the chat view.
+    if (streamPath === AGENTS_ROOT) {
+      void navigate({
+        to: "/projects/$projectSlug/streams/$",
+        params: { projectSlug: params.projectSlug, _splat: streamPath },
+      });
+      return;
+    }
     void navigate({
       to: "/projects/$projectSlug/agents/streams/$",
-      params: {
-        projectSlug: params.projectSlug,
-        _splat: streamPath,
-      },
+      params: { projectSlug: params.projectSlug, _splat: streamPath },
     });
   }
 
-  return <StreamExplorerTreePage source={source} rootPath={AGENTS_ROOT} onOpenPath={openAgent} />;
+  const header = (
+    <div className="flex items-center gap-2">
+      <Link
+        to="/projects/$projectSlug/agents/new"
+        params={{ projectSlug: params.projectSlug }}
+        className={buttonVariants({ size: "sm" })}
+      >
+        New agent
+      </Link>
+      <Link
+        to="/projects/$projectSlug/agents/new-preset"
+        params={{ projectSlug: params.projectSlug }}
+        className={buttonVariants({ size: "sm", variant: "outline" })}
+      >
+        New preset
+      </Link>
+    </div>
+  );
+
+  return (
+    <StreamExplorerTreePage
+      header={header}
+      source={source}
+      rootPath={AGENTS_ROOT}
+      onOpenPath={openPath}
+    />
+  );
 }
