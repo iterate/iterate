@@ -65,7 +65,12 @@ export const discordIntegration: IntegrationDefinition = {
       idempotencyKey: body.id == null ? null : `interaction:${body.id}`,
       body,
     });
-    return Response.json({ ok: true });
+    // Capture gates the ack, but Discord only accepts interaction CALLBACKS
+    // here: autocomplete (4) must answer inline (no suggestions), components
+    // (3) defer their message update, everything else defers a fresh
+    // response — the real answer follows over REST.
+    if (body.type === 4) return Response.json({ type: 8, data: { choices: [] } });
+    return Response.json({ type: body.type === 3 ? 6 : 5 });
   },
 
   providedSecrets: [

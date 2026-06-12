@@ -17,6 +17,7 @@
 //   itx.integrations.waitrose.searchProducts("milk")        ← userspace
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { listD1ObjectCatalogRecordsByIndex } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { PathCall } from "~/itx/path-proxy.ts";
 import { makeDial, resolveDialableTargets } from "~/itx/dial.ts";
 import {
@@ -29,6 +30,7 @@ import { parseConfig } from "~/config.ts";
 import { INTEGRATIONS } from "~/domains/integrations/registry.ts";
 import { DEFAULT_INTEGRATION_ACCOUNT } from "~/domains/integrations/integration-events.ts";
 import {
+  AmbiguousIntegrationAccountError,
   ensureIntegrationStub,
   resolveImplicitAccount,
 } from "~/domains/integrations/durable-objects/integration-durable-object.ts";
@@ -66,13 +68,49 @@ export class IntegrationsCapability extends WorkerEntrypoint<Env, IntegrationsCa
       const stub = await ensureIntegrationStub({ account, integration: slug, projectId });
       return await stub.call({ path: sdkPath, args: input.args });
     }
-    const account = explicitAccount ?? DEFAULT_INTEGRATION_ACCOUNT;
+    const account =
+      explicitAccount ?? (await this.resolveImplicitUserspaceAccount({ projectId, slug }));
     return await this.callUserspaceIntegration({
       account,
       projectId,
       slug,
       path: sdkPath,
       args: input.args,
+    });
+  }
+
+  /**
+   * Userspace integrations have no IntegrationDurableObject; their accounts
+   * are implied by their journaled Secrets (/secrets/{slug}/{account}/{name},
+   * the connect convention the Waitrose case establishes). Same resolution
+   * rule as registry slugs: "default" if present, the sole account, loud
+   * ambiguity otherwise. A slug with no secrets at all resolves "default" —
+   * the project worker may not need credentials.
+   */
+  private async resolveImplicitUserspaceAccount(input: {
+    projectId: string;
+    slug: string;
+  }): Promise<string> {
+    const records = await listD1ObjectCatalogRecordsByIndex<{ projectId: string; slug: string }>(
+      (this.env as { DO_CATALOG: D1Database }).DO_CATALOG,
+      {
+        className: "SecretDurableObject",
+        indexName: "projectId",
+        indexValue: input.projectId,
+      },
+    );
+    const accounts = new Set<string>();
+    for (const record of records) {
+      const segments = record.structuredName.slug.split("/");
+      if (segments.length >= 3 && segments[0] === input.slug) accounts.add(segments[1]!);
+    }
+    if (accounts.size === 0 || accounts.has(DEFAULT_INTEGRATION_ACCOUNT)) {
+      return DEFAULT_INTEGRATION_ACCOUNT;
+    }
+    if (accounts.size === 1) return [...accounts][0]!;
+    throw new AmbiguousIntegrationAccountError({
+      integration: input.slug,
+      accounts: [...accounts].sort(),
     });
   }
 

@@ -106,6 +106,15 @@ const SEEDED_CAPS: Array<{
     name: "ai",
     capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
   },
+  {
+    instructions:
+      'Connected third-party services. itx.integrations.google.gmail.request({ path: "/messages", query: { q: "is:unread" } }) ' +
+      "calls Gmail as the connected account (self-refreshing token); itx.integrations.github.octokit is a ready-authenticated Octokit; " +
+      'itx.integrations["google/<account>"] addresses a specific account when several are connected. ' +
+      "Call itx.integrations() to list platform integrations; unknown slugs forward to the project worker's own integrations export (userspace).",
+    name: "integrations",
+    capability: { entrypoint: "IntegrationsCapability", type: "rpc", worker: { type: "loopback" } },
+  },
 ];
 
 export class ProjectMcpServerConnection extends McpAgent<
