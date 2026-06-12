@@ -77,23 +77,10 @@ export class SlackAgentProcessor extends StreamProcessor<
     const { event, state } = args;
     switch (event.type) {
       case "events.iterate.com/slack/thread-route-configured":
-        args.runInBackground(async () => {
-          await this.ctx.stream.append({
-            event: {
-              type: "events.iterate.com/agent/capability-noted",
-              idempotencyKey: buildProcessorIdempotencyKey({
-                processor: this.contract,
-                key: "register-slack-agent-tool-provider",
-                sourceEvent: event,
-              }),
-              payload: {
-                name: "slack",
-                instructions:
-                  "Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. Normal Slack replies use channel/thread_ts from the webhook event directly.",
-              },
-            },
-          });
-        });
+        // Route context (channel/thread_ts/streamPath) is captured in reduce().
+        // The `slack` capability itself is provided on the agent's own context
+        // (agentContextCapabilities → provideCapability), the one door — there
+        // is nothing to announce here.
         return;
       case "events.iterate.com/slack/webhook-received": {
         const appendAgentInput = async () => {

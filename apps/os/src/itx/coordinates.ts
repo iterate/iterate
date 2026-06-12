@@ -110,9 +110,9 @@ export type ContextDescriptor = {
  * the dialable allowlists: provider-supplied cap addresses stay gated inside
  * the capability dial; context refs are written only by kernel code.
  *
- * Only durable-object context addresses dial here; the platform-defaults
- * loopback parent is dialed by the host that holds `ctx.exports`
- * (itx-durable-object.ts) — code, not coordinates.
+ * Only durable-object context addresses dial here; CODE parents (loopback
+ * entrypoints answering the context protocol) dial via
+ * {@link dialCodeContext} on a host that holds `ctx.exports`.
  */
 export function dialContext(env: Env, target: string | CapabilityAddress): ContextNodeStub {
   const ref = typeof target === "string" ? target : contextRefOfAddress(target);
@@ -123,6 +123,30 @@ export function dialContext(env: Env, target: string | CapabilityAddress): Conte
     throw new Error(`The ${ITX_CONTEXT_BINDING} binding is not available on this host.`);
   }
   return namespace.getByName(ref) as ContextNodeStub;
+}
+
+/**
+ * Dial a CODE context — a loopback entrypoint answering the context protocol
+ * (`PlatformContext`, `AgentDefaultsContext`), recorded as a parent address
+ * in a creation event. Props baked into the address win; `projectId` rides
+ * along as the default every code context needs.
+ */
+export function dialCodeContext(input: {
+  address: CapabilityAddress;
+  exports: Record<string, (options: { props: Record<string, unknown> }) => unknown>;
+  projectId: string;
+}): import("./itx.ts").ItxStub {
+  const address = input.address;
+  if (address.worker.type !== "loopback" || !address.entrypoint) {
+    throw new Error("A code-context address must be a loopback ref with an entrypoint.");
+  }
+  const factory = input.exports[address.entrypoint];
+  if (typeof factory !== "function") {
+    throw new Error(`Code-context loopback export ${address.entrypoint} is not available.`);
+  }
+  return factory({
+    props: { projectId: input.projectId, ...address.props },
+  }) as import("./itx.ts").ItxStub;
 }
 
 // ---- the context's stream --------------------------------------------------------

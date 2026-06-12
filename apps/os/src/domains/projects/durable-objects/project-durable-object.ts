@@ -52,10 +52,8 @@ import {
 } from "~/domains/projects/project-worker-runtime.ts";
 import { type RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { createContext } from "~/itx/coordinates.ts";
-import {
-  PLATFORM_PROJECT_CONTEXT_ADDRESS,
-  PLATFORM_PROJECT_CONTEXT_ID,
-} from "~/itx/platform-context.ts";
+import { PLATFORM_PROJECT_CONTEXT_ADDRESS } from "~/itx/platform-context.ts";
+import { DEFAULTS_DESCRIBE_FROM } from "~/itx/types.ts";
 import {
   getProjectDurableObjectName,
   getProjectDurableObjectStub,
@@ -170,7 +168,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
       env: this.env as unknown as Env,
       name: input.slug,
       namespace: input.projectId,
-      parent: { address: PLATFORM_PROJECT_CONTEXT_ADDRESS, ref: PLATFORM_PROJECT_CONTEXT_ID },
+      parent: { address: PLATFORM_PROJECT_CONTEXT_ADDRESS, ref: DEFAULTS_DESCRIBE_FROM },
       path: "/",
     });
     const stream = await this.projectStream(input.projectId);

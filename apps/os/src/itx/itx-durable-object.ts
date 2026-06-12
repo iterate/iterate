@@ -27,13 +27,12 @@ import { makeDial, durableObjectFacetsHook, resolveDialableTargets } from "./dia
 import {
   contextAddress,
   contextStream,
+  dialCodeContext,
   dialContext,
   isContextNodeAddress,
   parseContextRef,
   type ContextDescriptor,
 } from "./coordinates.ts";
-import { getPlatformContext } from "./platform-context.ts";
-import { DEFAULTS_DESCRIBE_FROM } from "./types.ts";
 import { runItxScript } from "./run.ts";
 import type { ItxRuntime } from "./handle.ts";
 import { parseConfig } from "~/config.ts";
@@ -68,15 +67,17 @@ export class ItxDurableObject extends DurableObject<Env> {
         const parent = this.#itx.state.context?.parent;
         if (!parent) return null;
         const address = parent.address as CapabilityAddress;
-        // The chain's code root: the platform defaults are a loopback
-        // entrypoint, dialed in-process via ctx.exports — the one parent
-        // that is code, not a coordinate. Everything else is a context node.
+        // A CODE parent (the platform defaults, the agent defaults): a
+        // loopback entrypoint answering the context protocol, dialed
+        // in-process via ctx.exports with the props the creation event
+        // baked in. Everything else is a context node.
         if (!isContextNodeAddress(address)) {
           return {
-            from: DEFAULTS_DESCRIBE_FROM,
-            stub: getPlatformContext({
+            from: parent.ref,
+            stub: dialCodeContext({
+              address,
               exports: this.ctx.exports as unknown as Parameters<
-                typeof getPlatformContext
+                typeof dialCodeContext
               >[0]["exports"],
               projectId,
             }),

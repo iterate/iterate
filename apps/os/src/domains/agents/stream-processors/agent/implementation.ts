@@ -143,17 +143,20 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         }
         return;
       }
-      case "events.iterate.com/agent/capability-noted":
+      case "events.iterate.com/itx/capability-provided":
         // Blocking: these context rows must land before the checkpoint so a
         // failed append is retried instead of silently dropped from history.
         args.blockProcessorWhile(async () => {
           await this.#appendEventTypeExplanation({ eventType: event.type });
           await this.#appendRewrite({
             event,
-            key: "render-agent-capability-noted",
-            content: capabilityNotedEventBlock({
-              instructions: event.payload.instructions,
-              name: event.payload.name,
+            key: "render-itx-capability-provided",
+            content: capabilityProvidedEventBlock({
+              instructions:
+                typeof event.payload.meta?.instructions === "string"
+                  ? event.payload.meta.instructions
+                  : "",
+              name: (event.payload.path ?? []).join("."),
               offset: event.offset,
               type: event.type,
             }),
@@ -617,7 +620,7 @@ function eventTypeExplanation(eventType: string): string | null {
       meaning: "The current LLM request was interrupted by user input.",
     });
   }
-  if (eventType === "events.iterate.com/agent/capability-noted") {
+  if (eventType === "events.iterate.com/itx/capability-provided") {
     return eventTypeExplanationBlock({
       type: eventType,
       meaning:
@@ -658,7 +661,7 @@ function yamlBlockScalar(key: string, value: string): string[] {
   return [`  ${key}: |-`, ...value.split("\n").map((line) => `    ${line}`)];
 }
 
-function capabilityNotedEventBlock(args: {
+function capabilityProvidedEventBlock(args: {
   instructions: string;
   name: string;
   offset: number;

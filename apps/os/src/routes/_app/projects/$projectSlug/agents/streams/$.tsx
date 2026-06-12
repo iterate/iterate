@@ -1,6 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
+import { buttonVariants } from "@iterate-com/ui/components/button";
+import { AgentChatView } from "~/components/agent-chat-view.tsx";
 import {
   projectAgentRuntimeStateQueryOptions,
   projectAgentsListQueryOptions,
@@ -62,15 +63,22 @@ function ProjectAgentDetailPage() {
   }
 
   return (
-    <ProjectStreamView
-      emptyLabel="No events on this agent stream yet."
-      messageComposer={{
-        onSubmit: submitAgentMessage,
-        placeholder: "Message this agent",
-      }}
-      projectSlug={params.projectSlug}
-      projectSlugOrId={project.id}
-      streamPath={streamPath}
-    />
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-end border-b px-3 py-1.5">
+        {/* The raw event firehose stays one click away for debugging. */}
+        <Link
+          to="/projects/$projectSlug/streams/$"
+          params={{ _splat: streamPath, projectSlug: params.projectSlug }}
+          className={buttonVariants({ size: "sm", variant: "ghost" })}
+        >
+          View raw stream
+        </Link>
+      </div>
+      <AgentChatView
+        agentPath={String(streamPath)}
+        onSend={submitAgentMessage}
+        projectSlugOrId={project.id}
+      />
+    </div>
   );
 }

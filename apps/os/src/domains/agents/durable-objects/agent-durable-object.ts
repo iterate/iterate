@@ -138,10 +138,10 @@ const AgentLifecycleBase = createIterateDurableObjectBase<
   nameSchema: AgentDurableObjectStructuredName,
 });
 
-/** Bump when agentContextCapabilities changes shape or membership. A bump
- * mints a FRESH context (journal, workspace and all) — contexts are
- * erasable; the agent's durable record is its own stream. */
-const AGENT_CONTEXT_CAPABILITIES_VERSION = "3";
+/** Bump when agentContextCapabilities changes — re-provides the agent's tools
+ * onto its own context (each provide appends an itx/capability-provided event
+ * that both folds into the capability table and renders into the LLM's view). */
+const AGENT_CONTEXT_CAPABILITIES_VERSION = "8";
 
 export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv> {
   host = createStreamProcessorHost(this.ctx);
@@ -463,16 +463,17 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   /**
-   * Seed the agent's default tool capabilities onto its own context (idempotent,
-   * version-gated). Returns the derived context coordinate — NO extend, NO
-   * mint, NO catalog: an agent's itx is just the agent's itx.
+   * AN AGENT IS A CONTEXT: its coordinate is the agent's own stream, its
+   * node the generic ItxDurableObject at that coordinate. This DO is the
+   * CREATOR — it appends the subscription + creation events (parent: the
+   * project context) and, once per version, PROVIDES the agent's tools onto
+   * its context via itx.provideCapability — the one door. NO mint, NO
+   * catalog: the provide events fold into the capability table (resolution)
+   * while the agent processor renders them for the LLM (visibility).
    */
   async ensureItxContext(
     params: AgentDurableObjectStructuredName,
   ): Promise<{ context: string; contextAddress: CapabilityAddress }> {
-    // Single-flight: the wake hook's workspace prep (waitUntil) and script
-    // runs can call this concurrently; the version gate makes the work itself
-    // idempotent, but the lock avoids redundant provide loops.
     this.#ensureItxContextPromise ??= this.#ensureItxContextOnce(params).finally(() => {
       this.#ensureItxContextPromise = undefined;
     });
@@ -493,11 +494,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       return { context, contextAddress: selfAddress };
     }
 
-    // AN AGENT IS A CONTEXT: its coordinate is the agent's own stream, its
-    // node the generic ItxDurableObject at that coordinate. This DO is the
-    // CREATOR — it appends the subscription + creation events (parent: the
-    // project context) and provides the agent's default tools by dialing
-    // the node. Each provide is a stream append; re-creation is inert.
+    // Creation: the standard two appends (subscription + creation event) by
+    // this DO, the creator — idempotent, so re-creation is inert. The
+    // parent is the project context.
     await createContext({
       env: this.env as unknown as Env,
       name: String(params.agentPath),
@@ -508,8 +507,16 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       },
       path: String(params.agentPath),
     });
-    const caps = this.agentContextCapabilities(params, context);
+
+    // Provide the agent's tools onto its OWN context — the one and only door
+    // (itx.provideCapability), exactly how every other capability in the
+    // system is registered. Each provide appends an itx/capability-provided
+    // event to the agent's stream: the fold projects it into the capability
+    // table (so `itx.<name>` resolves through the normal path), AND the agent
+    // processor renders that same event into the LLM's visible context (so the
+    // model knows the tool exists). One abstraction, one event, two readers.
     const node = dialContext(this.env as unknown as Env, selfAddress).itx();
+    const caps = this.agentContextCapabilities(params, context);
     for (const cap of caps) {
       await node.provideCapability({
         capability: cap.capability,
@@ -517,15 +524,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         name: cap.name,
       });
     }
-    // The LLM learns its tools from stream history: one rendered event per
-    // cap (the agent processor rewrites these into the visible context).
-    await this.streamsEntrypoint(params.agentPath).appendBatch({
-      events: caps.map((cap) => ({
-        type: "events.iterate.com/agent/capability-noted",
-        idempotencyKey: `agent-capability-noted:${cap.name}`,
-        payload: { instructions: cap.instructions, name: cap.name },
-      })),
-    });
     await this.ctx.storage.put("itxContextCapabilitiesVersion", AGENT_CONTEXT_CAPABILITIES_VERSION);
     return { context, contextAddress: selfAddress };
   }
@@ -736,68 +734,78 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     instructions: string;
     capability: CapabilityAddress;
   }> {
-    const agentTool = (tool: "chat" | "debug"): CapabilityAddress => ({
-      entrypoint: "AgentToolsCapability",
-      props: { agentPath: params.agentPath, tool },
-      type: "rpc",
-      worker: { type: "loopback" },
-    });
+    // Every agent gets a RICH toolset. The ONLY thing that varies by agent is
+    // the CHANNEL — how it talks to its user: a Slack agent gets `slack`, a
+    // web agent gets `chat`. (Channel-specific PROMPTING lives in the agent's
+    // system prompt — defaultAgentSystemPrompt, agent-presets.ts.) Everything
+    // else below is identical for all agents.
+    const channel = isSlackAgentPath(params.agentPath)
+      ? {
+          capability: {
+            entrypoint: "SlackCapability",
+            type: "rpc",
+            worker: { type: "loopback" },
+          } satisfies CapabilityAddress,
+          instructions:
+            "Use itx.slack.<Slack Web API method>(args), e.g. " +
+            "itx.slack.chat.postMessage({ channel, thread_ts, text }). Always reply on the same " +
+            "thread_ts you received. Only post when mentioned, asked, or the thread clearly " +
+            "calls for it.",
+          name: "slack",
+        }
+      : {
+          capability: {
+            entrypoint: "AgentToolsCapability",
+            props: { agentPath: params.agentPath, tool: "chat" },
+            type: "rpc",
+            worker: { type: "loopback" },
+          } satisfies CapabilityAddress,
+          instructions:
+            "itx.chat.sendMessage({ message }) sends a visible reply to the user in the web chat.",
+          name: "chat",
+        };
+
     return [
-      ...(isSlackAgentPath(params.agentPath)
-        ? []
-        : [
-            {
-              instructions:
-                "Use itx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
-              name: "chat",
-              capability: agentTool("chat"),
-            },
-          ]),
+      channel,
       {
-        instructions:
-          "Use itx.debug() to return OS debug information about the current agent stream.",
+        capability: {
+          entrypoint: "AgentToolsCapability",
+          props: { agentPath: params.agentPath, tool: "debug" },
+          type: "rpc",
+          worker: { type: "loopback" },
+        },
+        instructions: "itx.debug() returns OS debug info about this agent stream.",
         name: "debug",
-        capability: agentTool("debug"),
       },
       {
+        capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
         instructions:
           "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
         name: "ai",
-        capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
       },
       {
+        capability: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
         instructions:
           "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }).",
         name: "gmail",
-        capability: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
-        instructions:
-          "Use itx.slack.<Slack Web API method path>(args), e.g. itx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If no reply is needed, do not call chat.postMessage. For legitimate long-running Slack replies, use Promise.all to send an immediate acknowledgment while doing the real work in parallel, then send the actual result afterwards.",
-        name: "slack",
-        capability: { entrypoint: "SlackCapability", type: "rpc", worker: { type: "loopback" } },
-      },
-      {
-        instructions:
-          "Use itx.agents.create() to get a promise-pipelineable subagent handle, e.g. await itx.agents.create().doThing(args).",
-        name: "agents",
         capability: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },
+        instructions:
+          "itx.agents.create() returns a promise-pipelineable subagent handle, e.g. await itx.agents.create().doThing(args).",
+        name: "agents",
       },
       {
-        // Workspaces are not itx's concern: this HOST decides its context
-        // gets a private workspace and provides one bound to the context's
-        // identity. Plain extensions of the project share the project
-        // workspace through the chain instead.
-        instructions:
-          "This agent's private workspace filesystem: itx.workspace.readFile/writeFile plus " +
-          "the flat git methods gitClone/gitAdd/gitCommit/gitPush/gitStatus.",
-        name: "workspace",
         capability: {
           entrypoint: "WorkspaceCapability",
           props: { workspaceId: contextId },
           type: "rpc",
           worker: { type: "loopback" },
         },
+        instructions:
+          "This agent's private workspace filesystem: itx.workspace.readFile/writeFile plus the " +
+          "flat git methods gitClone/gitAdd/gitCommit/gitPush/gitStatus.",
+        name: "workspace",
       },
     ];
   }
