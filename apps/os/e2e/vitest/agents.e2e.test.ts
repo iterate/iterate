@@ -359,7 +359,10 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
   );
 });
 
-test("project config worker customizes fresh agents by appending events", async () => {
+// DEFERRED: agents’ private workspace/repo cap is an opt-in preset now, not
+// baseline (itx-simplify-agent-channel) — an agent’s only per-agent tool is
+// its channel (chat|slack). Restore when the workspace preset lands.
+test.skip("project config worker customizes fresh agents by appending events", async () => {
   await using fixture = await createTestProjectFixture({ slugPrefix: "agent-context-config" });
   const { client, project } = fixture;
   const suffix = uniqueSuffix();
@@ -468,7 +471,10 @@ test("project config worker customizes fresh agents by appending events", async 
   );
 }, 240_000);
 
-test("lets agent chat update the project repo through the prepared workspace", async () => {
+// DEFERRED: agents’ private workspace/repo cap is an opt-in preset now, not
+// baseline (itx-simplify-agent-channel) — an agent’s only per-agent tool is
+// its channel (chat|slack). Restore when the workspace preset lands.
+test.skip("lets agent chat update the project repo through the prepared workspace", async () => {
   await using fixture = await createTestProjectFixture({ slugPrefix: "agent-workspace" });
   const { client, project } = fixture;
   const suffix = uniqueSuffix();
