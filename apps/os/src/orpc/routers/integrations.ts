@@ -313,10 +313,10 @@ type AccountState = {
   };
 };
 
-async function firstConnectedAccountState(
+async function allConnectedAccountStates(
   projectId: string,
   integration: string,
-): Promise<AccountState | null> {
+): Promise<AccountState[]> {
   const records = await listD1ObjectCatalogRecordsByIndex<{
     account: string;
     integration: string;
@@ -326,6 +326,7 @@ async function firstConnectedAccountState(
     indexName: "projectIntegration",
     indexValue: `${projectId}:${integration}`,
   });
+  const states: AccountState[] = [];
   for (const record of records) {
     const stub = await ensureIntegrationStub({
       account: record.structuredName.account,
@@ -333,9 +334,19 @@ async function firstConnectedAccountState(
       projectId,
     });
     const { state } = (await stub.ensureReady()) as { state: AccountState };
-    if (state.connection.status === "connected") return state;
+    if (state.connection.status === "connected") {
+      states.push({ ...state, account: state.account ?? record.structuredName.account });
+    }
   }
-  return null;
+  return states;
+}
+
+async function firstConnectedAccountState(
+  projectId: string,
+  integration: string,
+): Promise<AccountState | null> {
+  const states = await allConnectedAccountStates(projectId, integration);
+  return states[0] ?? null;
 }
 
 async function describeSecretOrNull(
@@ -358,14 +369,20 @@ async function describeSecretOrNull(
   }
 }
 
-/** Disconnect = the mirror choreography: the disconnected fact on the account
- * stream, route claims released on the global stream, secrets deleted. */
+/** Disconnect = the mirror choreography for EVERY connected account of the
+ * integration: the disconnected fact on each account stream, route claims
+ * released on the global stream, secrets deleted. */
 async function disconnectAccount(projectId: string, integration: string) {
+  const states = await allConnectedAccountStates(projectId, integration);
+  for (const state of states) {
+    await disconnectOneAccount(projectId, integration, state);
+  }
+  return { success: true };
+}
+
+async function disconnectOneAccount(projectId: string, integration: string, state: AccountState) {
   const integrationsEnv = env as unknown as IntegrationsEnv;
-  const connected = await firstConnectedAccountState(projectId, integration);
-  if (connected == null) return { success: true };
-  const account = connected.account ?? DEFAULT_INTEGRATION_ACCOUNT;
-  const state = connected;
+  const account = state.account ?? DEFAULT_INTEGRATION_ACCOUNT;
 
   const accountStream = await getInitializedStreamStub({
     durableObjectNamespace: integrationsEnv.STREAM,
@@ -408,7 +425,6 @@ async function disconnectAccount(projectId: string, integration: string) {
       payload: { slug },
     });
   }
-  return { success: true };
 }
 
 function requestBaseUrl(context: RequestContext) {

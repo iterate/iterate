@@ -22,7 +22,10 @@
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
+import {
+  getInitializedDoStub,
+  listD1ObjectCatalogRecordsByIndex,
+} from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import {
   createStreamProcessorHost,
@@ -69,6 +72,41 @@ const IntegrationDurableObjectStructuredName = z.object({
 export type IntegrationDurableObjectStructuredName = z.infer<
   typeof IntegrationDurableObjectStructuredName
 >;
+
+/** The accounts of one integration in one project, from the DO catalog. */
+export async function listIntegrationAccounts(input: {
+  projectId: string;
+  integration: string;
+}): Promise<string[]> {
+  const records = await listD1ObjectCatalogRecordsByIndex<IntegrationDurableObjectStructuredName>(
+    (env as unknown as IntegrationEnv).DO_CATALOG,
+    {
+      className: "IntegrationDurableObject",
+      indexName: "projectIntegration",
+      indexValue: `${input.projectId}:${input.integration}`,
+    },
+  );
+  return records.map((record) => record.structuredName.account);
+}
+
+/**
+ * Resolve the account a BARE address means (itx.integrations.slack with no
+ * explicit "slug/account"): "default" when it exists, the sole account when
+ * there is exactly one (slack accounts are team-derived), otherwise the
+ * caller must address the instance explicitly.
+ */
+export async function resolveImplicitAccount(input: {
+  projectId: string;
+  integration: string;
+}): Promise<string> {
+  const accounts = await listIntegrationAccounts(input);
+  if (accounts.length === 0 || accounts.includes("default")) return "default";
+  if (accounts.length === 1) return accounts[0]!;
+  throw new Error(
+    `Integration "${input.integration}" has ${accounts.length} accounts (${accounts.join(", ")}) — ` +
+      `address one explicitly: itx.integrations["${input.integration}/${accounts[0]}"].`,
+  );
+}
 
 /** Mint an initialized integration DO stub from a trusted domain file (see lint rule). */
 export async function ensureIntegrationStub(input: IntegrationDurableObjectStructuredName) {

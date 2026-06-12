@@ -28,7 +28,10 @@ import { projectContextAddress } from "~/itx/journal.ts";
 import { parseConfig } from "~/config.ts";
 import { INTEGRATIONS } from "~/domains/integrations/registry.ts";
 import { DEFAULT_INTEGRATION_ACCOUNT } from "~/domains/integrations/integration-events.ts";
-import { ensureIntegrationStub } from "~/domains/integrations/durable-objects/integration-durable-object.ts";
+import {
+  ensureIntegrationStub,
+  resolveImplicitAccount,
+} from "~/domains/integrations/durable-objects/integration-durable-object.ts";
 
 type IntegrationsCapabilityProps = {
   projectId?: string;
@@ -50,18 +53,20 @@ export class IntegrationsCapability extends WorkerEntrypoint<Env, IntegrationsCa
     }
 
     // The address under itx.integrations IS the journal path under
-    // /integrations: "google" = /integrations/google/default,
-    // "google/jonas" = /integrations/google/jonas. (Same coordinates, two
-    // views: itx.integrations[...] is the account's behavior; the same path
-    // through itx.streams.get("/integrations/google/jonas") is its facts.)
-    const [slug, account = DEFAULT_INTEGRATION_ACCOUNT] = address.split("/", 2) as [
-      string,
-      string?,
-    ];
+    // /integrations: "google/jonas" = /integrations/google/jonas. (Same
+    // coordinates, two views: itx.integrations[...] is the account's
+    // behavior; the same path through
+    // itx.streams.get("/integrations/google/jonas") is its facts.) A BARE
+    // slug resolves the implicit account: "default" if present, the sole
+    // account otherwise (slack accounts are team-derived).
+    const [slug, explicitAccount] = address.split("/", 2) as [string, string?];
     if (INTEGRATIONS[slug]) {
+      const account =
+        explicitAccount ?? (await resolveImplicitAccount({ projectId, integration: slug }));
       const stub = await ensureIntegrationStub({ account, integration: slug, projectId });
       return await stub.call({ path: sdkPath, args: input.args });
     }
+    const account = explicitAccount ?? DEFAULT_INTEGRATION_ACCOUNT;
     return await this.callUserspaceIntegration({
       account,
       projectId,
