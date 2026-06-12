@@ -558,7 +558,10 @@ function createStreamRuntime(
       })
       .catch((error: unknown) => {
         clearTimeout(followerTimeout);
-        if (disposed) return;
+        // A late rejection from a superseded election (its connection was already
+        // replaced — e.g. a parked subscribe's deadline firing after a reset
+        // reconnected us) must not tear down the healthy current subscription (B1).
+        if (disposed || !ownsRuntime()) return;
         console.error(`[stream ${args.streamPath}] subscribe failed`, error);
         scheduleReconnect(`subscribe failed: ${errorMessage(error)}`, 1_000);
       });
