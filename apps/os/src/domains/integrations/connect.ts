@@ -167,6 +167,13 @@ export async function connectIntegration(input: ConnectIntegrationInput) {
 
   // Wake the account's domain object and wait for its processor to run the
   // choreography (blockProcessorWhile means catch-up implies completion).
+  // Routing freshness: that completion includes the claimRoute append, so by
+  // the time connect returns, `route-registered` is DURABLY on the global
+  // capture stream. The ingress router makes its per-event routing decision
+  // against the fold at each event's offset — every webhook captured after
+  // that append routes correctly regardless of when the router's checkpoint
+  // catches up, so waiting on the global fold here would add cross-DO
+  // latency without changing any outcome.
   const stub = await ensureIntegrationStub({
     account,
     integration: definition.slug,

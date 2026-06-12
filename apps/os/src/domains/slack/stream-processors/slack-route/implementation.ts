@@ -116,7 +116,13 @@ export class SlackRouteProcessor extends StreamProcessor<
       args.runInBackground(async () => {
         await this.deps.prewarmRoutedStreamHosts?.({ streamPath });
       });
-      args.runInBackground(async () => {
+      // Forwarding BLOCKS the checkpoint (like integration-ingress and
+      // github-route): the event can't be checkpointed past until its copy
+      // landed on the thread stream, so a crash mid-forward replays instead
+      // of silently dropping the turn. The eyes-ack above already raced
+      // ahead — blocking here costs no user-visible latency, since the agent
+      // can't react before the forward lands anyway.
+      args.blockProcessorWhile(async () => {
         await this.ctx.stream.append({ event: routeEvent });
         await this.ctx.stream.appendBatch({
           streamPath,
@@ -134,7 +140,7 @@ export class SlackRouteProcessor extends StreamProcessor<
       return;
     }
 
-    args.runInBackground(async () => {
+    args.blockProcessorWhile(async () => {
       await this.ctx.stream.append({ streamPath, event: forwardedWebhookEvent });
     });
   }
