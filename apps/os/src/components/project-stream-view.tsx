@@ -54,11 +54,13 @@ import {
   type EventsStreamRendererMode,
 } from "@iterate-com/ui/components/events/stream-feed";
 import { StreamViewProcessorContract } from "@iterate-com/ui/components/events/stream-view-processor/contract";
+import type { AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
-  initialAgentUiState,
-  reduceAgentUiEvent,
-  type AgentUiState,
-} from "@iterate-com/ui/components/events/agent-ui-reducer";
+  AGENT_UI_FEED_TABLE,
+  AGENT_UI_SCHEMA_VERSION,
+  AgentUiProcessor,
+  AgentUiProcessorContract,
+} from "@iterate-com/ui/components/events/agent-ui-processor";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { parse as parseYaml } from "yaml";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
@@ -143,10 +145,38 @@ export function ProjectStreamView({
   const eventCount = Number(countResult.data[0]?.count ?? 0);
   const reductionKey = `${projectSlugOrId}:${streamPathText}`;
 
-  // The agent-ui reduction runs at this level (not inside the agent tab)
-  // because the header chrome — presence avatars, busy indicator — is derived
-  // from the same reduced state on every tab.
-  const agentUi = useAgentUiState({ database: store.streamDatabase, reductionKey });
+  // A second browser-hosted processor on the same stream (and same per-path
+  // SQLite database): folds agent events into settled `agent_feed_items` rows
+  // plus a live in-flight activity persisted in its reduced state. Runs at
+  // this level (not inside the agent tab) because the header chrome —
+  // presence avatars, busy indicator — derives from the same state.
+  const agentStore = useMemo(
+    () =>
+      acquireStreamRuntime({
+        namespace: projectSlugOrId,
+        streamPath: streamPathText,
+        streamUrl: streamUrl ?? projectStreamRpcPath(projectSlugOrId, streamPathText),
+        slug: AgentUiProcessorContract.slug,
+        schemaVersion: AGENT_UI_SCHEMA_VERSION,
+        tables: [AGENT_UI_FEED_TABLE],
+        createProcessor({ stream, sql, subscriptionKey }) {
+          const storage = browserProcessorStateStorage<AgentUiState>({
+            sql,
+            processorSlug: AgentUiProcessorContract.slug,
+            subscriptionKey,
+          });
+          return new AgentUiProcessor({
+            iterateContext: { stream },
+            sql,
+            readState: storage.readState,
+            writeState: storage.writeState,
+          });
+        },
+      }),
+    [projectSlugOrId, streamPathText, streamUrl],
+  );
+  useSyncExternalStore(agentStore.subscribe, agentStore.getSnapshot, agentStore.getServerSnapshot);
+  const agentUiState = useAgentUiReducedState(store.streamDatabase);
   const metrics = useSimulatedRttMetrics();
 
   const [activeTab, setActiveTab] = useState<ProjectStreamViewTab>("agent");
@@ -228,8 +258,8 @@ export function ProjectStreamView({
   const connectionLabel =
     snapshot.connectionError ??
     (snapshot.connectionStatus === "subscribed" ? emptyLabel : snapshot.connectionStatus);
-  const agentBusy = agentUi.state.live != null;
-  const presence = agentUi.state.presence;
+  const agentBusy = agentUiState?.live != null;
+  const presence = agentUiState?.presence ?? [];
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-background">
@@ -354,10 +384,11 @@ export function ProjectStreamView({
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {activeTab === "agent" ? (
           <AgentFeedView
-            state={agentUi.state}
+            database={store.streamDatabase}
+            liveState={agentUiState}
             search={feedSearch}
             emptyLabel={connectionLabel}
-            isPending={agentUi.status === "pending" && agentUi.state.eventCount === 0}
+            isPending={agentUiState == null}
           />
         ) : activeTab === "feed" ? (
           <ProjectStreamFeedView
@@ -528,17 +559,27 @@ function useReducedStreamState<TState>(args: {
   }, [rowsResult, cacheKey, initialState, reduceEvent]);
 }
 
-function useAgentUiState(args: {
-  database: StreamBrowserDatabase;
-  reductionKey: string;
-}): ReducedStreamState<AgentUiState> {
-  return useReducedStreamState<AgentUiState>({
-    database: args.database,
-    reductionKey: args.reductionKey,
-    cacheScope: "agent-ui",
-    initialState: initialAgentUiState,
-    reduceEvent: reduceAgentUiEvent,
-  });
+/**
+ * The agent-ui processor persists its reduced state (live activity with
+ * streaming text, presence roster) to `processor_state` on every checkpoint;
+ * reading it reactively is how the live tail re-renders per delta batch.
+ * Null until the processor's first checkpoint lands.
+ */
+function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState | null {
+  const result = useStreamQuery(
+    database,
+    `SELECT reduced_state FROM processor_state WHERE processor_slug = ?`,
+    [AgentUiProcessorContract.slug],
+  );
+  return useMemo(() => {
+    const raw = result.data[0]?.reduced_state;
+    if (typeof raw !== "string") return null;
+    try {
+      return JSON.parse(raw) as AgentUiState;
+    } catch {
+      return null;
+    }
+  }, [result.data]);
 }
 
 function initialStreamViewState(): EventsStreamViewState {

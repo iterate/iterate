@@ -7,24 +7,25 @@ import { describe, expect, it } from "vitest";
 import type { Event } from "@iterate-com/shared/streams/types";
 import {
   initialAgentUiState,
-  reduceAgentUiEvent,
+  planAgentUiOps,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 function reduceAll(events: Array<Partial<Event> & { type: string; payload?: unknown }>) {
-  let state = initialAgentUiState();
   let offset = 0;
-  for (const partial of events) {
+  const fullEvents = events.map((partial) => {
     offset += 1;
-    const event = {
+    return {
       offset: partial.offset ?? offset,
       createdAt: partial.createdAt ?? `2026-06-11T00:00:${String(offset).padStart(2, "0")}.000Z`,
       streamPath: "/agents/test",
       payload: partial.payload ?? {},
       ...partial,
     } as unknown as Event;
-    state = reduceAgentUiEvent(state, event);
-  }
-  return state;
+  });
+  const { endState, ops } = planAgentUiOps(initialAgentUiState(), fullEvents);
+  // Settled items live in SQLite rows (one op per dense local_index); tests
+  // assert over the materialized list the virtualizer would render.
+  return { ...endState, items: ops.map((op) => op.item) };
 }
 
 describe("agent-ui reducer", () => {

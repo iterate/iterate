@@ -9,6 +9,9 @@ import type {
   AgentUiState,
   AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { AGENT_UI_FEED_TABLE } from "@iterate-com/ui/components/events/agent-ui-processor";
+import { useStreamQuery } from "@iterate-com/streams/browser/hooks/use-stream-query";
+import type { StreamBrowserDatabase } from "@iterate-com/streams/browser/stream-browser-db";
 import {
   Message,
   MessageContent,
@@ -24,40 +27,85 @@ import { cn } from "@iterate-com/ui/lib/utils";
  * The clean agent chat feed: user message → activity ("Ran code 2× · 3
  * requests · 7.4 s") → assistant message.
  *
- * Settled items render through a TanStack virtual list; the in-flight
- * activity — with live-streaming thinking and response text — renders as one
- * element below the list that receives the current reduced state as props.
+ * Settled items are `agent_feed_items` rows written by the agent-ui
+ * processor; the TanStack virtual list windows over them with reactive
+ * SQLite queries. The in-flight activity — with live-streaming thinking and
+ * response text — renders as one element below the list, straight from the
+ * processor's reduced state.
  */
 export function AgentFeedView({
-  state,
+  database,
+  liveState,
   search = "",
   emptyLabel = "No messages yet.",
   isPending = false,
 }: {
-  state: AgentUiState;
+  database: StreamBrowserDatabase;
+  liveState: AgentUiState | null;
   search?: string;
   emptyLabel?: string;
   isPending?: boolean;
 }) {
-  const items = useMemo(() => filterAgentItems(state.items, search), [state.items, search]);
+  const query = search.trim().toLowerCase();
+  const countResult = useStreamQuery(
+    database,
+    query === ""
+      ? `SELECT COUNT(*) AS count FROM ${AGENT_UI_FEED_TABLE}`
+      : `SELECT COUNT(*) AS count FROM ${AGENT_UI_FEED_TABLE} WHERE json(data) LIKE ?`,
+    query === "" ? [] : [`%${query}%`],
+  );
+  const itemCount = Number(countResult.data[0]?.count ?? 0);
+  const live = liveState?.live ?? null;
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(new Set());
 
   const virtualizer = useVirtualizer({
-    count: items.length,
+    count: itemCount,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (index) => (items[index]?.kind === "activity" ? 36 : 64),
-    getItemKey: (index) => items[index]?.id ?? index,
+    estimateSize: () => 56,
     overscan: 16,
   });
 
+  const virtualItems = virtualizer.getVirtualItems();
+  const first = virtualItems[0]?.index ?? 0;
+  const last = virtualItems.at(-1)?.index ?? -1;
+  const rowsResult = useStreamQuery(
+    database,
+    query === ""
+      ? `SELECT local_index, json(data) AS data FROM ${AGENT_UI_FEED_TABLE}
+         WHERE local_index >= ? AND local_index < ?
+         ORDER BY local_index ASC`
+      : `SELECT local_index, json(data) AS data FROM ${AGENT_UI_FEED_TABLE}
+         WHERE json(data) LIKE ?
+         ORDER BY local_index ASC
+         LIMIT ? OFFSET ?`,
+    query === "" ? [first, last + 1] : [`%${query}%`, Math.max(0, last + 1 - first), first],
+  );
+  // Retain the last committed rows across range re-queries so already-visible
+  // rows don't flash to skeletons while the shifted window's SQL runs.
+  const lastRowsRef = useRef<Map<number, AgentUiItem>>(new Map());
+  const itemsByIndex = useMemo(() => {
+    if (rowsResult.status !== "ok") return lastRowsRef.current;
+    const rows = new Map<number, AgentUiItem>();
+    rowsResult.data.forEach((row, position) => {
+      const index = query === "" ? Number(row.local_index) : first + position;
+      try {
+        rows.set(index, JSON.parse(String(row.data)) as AgentUiItem);
+      } catch {
+        // Skip unparseable rows; the row stays a skeleton.
+      }
+    });
+    lastRowsRef.current = rows;
+    return rows;
+  }, [rowsResult.data, rowsResult.status, query, first]);
+
   // Follow new content down while the reader is pinned to the bottom — both
-  // when settled items land and on every live streaming tick.
+  // when settled rows land and on every live streaming tick.
   const liveSignature =
-    state.live == null
+    live == null
       ? ""
-      : state.live.steps
+      : live.steps
           .map((step) =>
             step.kind === "llm"
               ? `${step.id}:${step.thinkingText.length}:${step.responseText.length}:${step.status}`
@@ -72,7 +120,7 @@ export function AgentFeedView({
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [items.length, liveSignature]);
+  }, [itemCount, liveSignature]);
 
   function toggleExpanded(id: string) {
     setExpandedIds((previous) => {
@@ -82,8 +130,6 @@ export function AgentFeedView({
       return next;
     });
   }
-
-  const virtualItems = virtualizer.getVirtualItems();
 
   return (
     <div
@@ -95,7 +141,7 @@ export function AgentFeedView({
       }}
     >
       <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
-        {items.length === 0 && state.live == null ? (
+        {itemCount === 0 && live == null ? (
           <Empty className="min-h-48">
             <EmptyHeader>
               {isPending ? <Spinner className="size-4" /> : null}
@@ -106,7 +152,7 @@ export function AgentFeedView({
         ) : null}
         <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
           {virtualItems.map((virtualItem) => {
-            const item = items[virtualItem.index];
+            const item = itemsByIndex.get(virtualItem.index);
             return (
               <div
                 key={virtualItem.key}
@@ -115,7 +161,9 @@ export function AgentFeedView({
                 className="absolute left-0 top-0 w-full"
                 style={{ transform: `translateY(${virtualItem.start}px)` }}
               >
-                {item == null ? null : (
+                {item == null ? (
+                  <div className="my-2 h-10 rounded-xl bg-muted/40" />
+                ) : (
                   <AgentFeedItemRow
                     item={item}
                     expandedIds={expandedIds}
@@ -126,22 +174,12 @@ export function AgentFeedView({
             );
           })}
         </div>
-        {state.live == null ? null : (
-          <AgentLiveActivity
-            live={state.live}
-            expandedIds={expandedIds}
-            onToggle={toggleExpanded}
-          />
+        {live == null ? null : (
+          <AgentLiveActivity live={live} expandedIds={expandedIds} onToggle={toggleExpanded} />
         )}
       </div>
     </div>
   );
-}
-
-function filterAgentItems(items: readonly AgentUiItem[], search: string): readonly AgentUiItem[] {
-  const query = search.trim().toLowerCase();
-  if (query === "") return items;
-  return items.filter((item) => JSON.stringify(item).toLowerCase().includes(query));
 }
 
 function AgentFeedItemRow({

@@ -1,14 +1,20 @@
 import type { Event } from "@iterate-com/shared/streams/types";
 
 // ---------------------------------------------------------------------------
-// Reduced state model
+// Reduced state model + pure batch planner
 //
 // The agent UI is a clean chat: user message → activity ("Ran code 2× · 3
-// requests · 7.4 s") → assistant message. Settled items live in `items` (their
-// identity is stable, so a virtualized list can render them cheaply); the
-// in-flight activity — including partially streamed thinking and response
-// text — lives in `live` and is rendered as one element at the bottom of the
-// list that receives the whole live state as props.
+// requests · 7.4 s") → assistant message. SETTLED items are emitted as ops
+// that the agent-ui processor writes into the `agent_feed_items` SQLite
+// table (the TanStack virtual list reads those rows); the reduced state holds
+// only what is still in flight — the live activity with partially streamed
+// thinking/response text, the presence roster, and the next dense row index.
+// The live part renders as one element below the list, straight from this
+// state.
+//
+// Mirrors `browser-event-feed`'s planFeedOps contract: `reduce` advances
+// state one event at a time, `processEventBatch` plans the whole batch from
+// the same entry state to produce one idempotent SQLite transaction.
 // ---------------------------------------------------------------------------
 
 export type AgentUiLlmStep = {
@@ -83,17 +89,41 @@ export type AgentUiPresenceEntry = {
 };
 
 export type AgentUiState = {
-  /** Settled feed items in stream order. */
-  items: AgentUiItem[];
   /** The running activity (streaming thinking/code), or null when idle. */
   live: AgentUiActivity | null;
   eventCount: number;
   /** Connection roster reduced from subscriber-connected/disconnected facts. */
   presence: AgentUiPresenceEntry[];
+  /** Dense, monotonically increasing next agent_feed_items local_index. */
+  nextLocalIndex: number;
 };
 
 export function initialAgentUiState(): AgentUiState {
-  return { items: [], live: null, eventCount: 0, presence: [] };
+  return { live: null, eventCount: 0, presence: [], nextLocalIndex: 0 };
+}
+
+/** One settled item to upsert at a dense list position. */
+export type AgentUiOp = { localIndex: number; item: AgentUiItem };
+
+/**
+ * Fold a batch of events into settled-item ops + the resulting state.
+ * Idempotent by construction: replaying the same events from the same entry
+ * state yields the same ops, and the processor upserts by local_index.
+ */
+export function planAgentUiOps(
+  start: AgentUiState,
+  events: readonly Event[],
+): { endState: AgentUiState; ops: AgentUiOp[] } {
+  const ops: AgentUiOp[] = [];
+  let state = start;
+  for (const event of events) state = reduceAgentUiEvent(state, event, ops);
+  return { endState: state, ops };
+}
+
+/** Append a settled item op at the next dense position. */
+function emitItem(state: AgentUiState, ops: AgentUiOp[], item: AgentUiItem): AgentUiState {
+  ops.push({ localIndex: state.nextLocalIndex, item });
+  return { ...state, nextLocalIndex: state.nextLocalIndex + 1 };
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +156,7 @@ const STREAM_WOKEN = "events.iterate.com/stream/woken";
 // Reducer
 // ---------------------------------------------------------------------------
 
-export function reduceAgentUiEvent(previous: AgentUiState, event: Event): AgentUiState {
+function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp[]): AgentUiState {
   const state: AgentUiState = { ...previous, eventCount: previous.eventCount + 1 };
   const timestampMs = Date.parse(event.createdAt);
 
@@ -134,24 +164,25 @@ export function reduceAgentUiEvent(previous: AgentUiState, event: Event): AgentU
     case AGENT_CHAT_USER_MESSAGE_ADDED: {
       const text = readString(event, "content");
       if (text == null) return state;
-      const settled = settleLive(state, timestampMs);
-      return {
-        ...settled,
-        items: [...settled.items, { kind: "user", id: `user-${event.offset}`, text, timestampMs }],
-      };
+      const settled = settleLive(state, timestampMs, ops);
+      return emitItem(settled, ops, {
+        kind: "user",
+        id: `user-${event.offset}`,
+        text,
+        timestampMs,
+      });
     }
 
     case AGENT_CHAT_ASSISTANT_RESPONSE_ADDED: {
       const text = readString(event, "message");
       if (text == null) return state;
-      const settled = settleLive(state, timestampMs);
-      return {
-        ...settled,
-        items: [
-          ...settled.items,
-          { kind: "assistant", id: `assistant-${event.offset}`, text, timestampMs },
-        ],
-      };
+      const settled = settleLive(state, timestampMs, ops);
+      return emitItem(settled, ops, {
+        kind: "assistant",
+        id: `assistant-${event.offset}`,
+        text,
+        timestampMs,
+      });
     }
 
     case AGENT_LLM_REQUEST_REQUESTED: {
@@ -304,7 +335,7 @@ export function reduceAgentUiEvent(previous: AgentUiState, event: Event): AgentU
 
     case AGENT_STATUS_UPDATED: {
       if (readString(event, "status") !== "idle") return state;
-      return settleLive(state, timestampMs);
+      return settleLive(state, timestampMs, ops);
     }
 
     case STREAM_SUBSCRIBER_CONNECTED: {
@@ -380,8 +411,8 @@ function ensureLive(state: AgentUiState, offset: number, startedAtMs: number): A
   );
 }
 
-/** Closes the live activity (if any) and appends it to the settled items. */
-function settleLive(state: AgentUiState, endedAtMs: number): AgentUiState {
+/** Closes the live activity (if any) and emits it as a settled item. */
+function settleLive(state: AgentUiState, endedAtMs: number, ops: AgentUiOp[]): AgentUiState {
   if (state.live == null) return state;
   if (state.live.steps.length === 0) return { ...state, live: null };
   const settled: AgentUiActivity = {
@@ -392,7 +423,7 @@ function settleLive(state: AgentUiState, endedAtMs: number): AgentUiState {
       step.status === "running" ? ({ ...step, status: "done" } as AgentUiStep) : step,
     ),
   };
-  return { ...state, items: [...state.items, settled], live: null };
+  return emitItem({ ...state, live: null }, ops, settled);
 }
 
 function updateLlmStep(
