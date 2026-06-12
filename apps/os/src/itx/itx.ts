@@ -128,17 +128,6 @@ export type ItxStub = {
   invoke(input: { path: string[]; args: unknown[]; origin?: ItxOrigin }): Promise<unknown>;
 };
 
-/** How long a provide waits for a target's optional describeItx answer.
- * Loopback dials get longer: a first-party client's first probe may ride a
- * cold project chain and fetch real data (OpenApiClient fetches its spec);
- * everything else stays snappy — a miss just means an unenriched provide. */
-const SELF_DESCRIPTION_TIMEOUT_MS = 3_000;
-const SELF_DESCRIPTION_LOOPBACK_TIMEOUT_MS = 15_000;
-
-/** Probe-derived strings are journaled forever; cap them so a pathological
- * spec cannot bloat the record. Caller-supplied values are never touched. */
-const SELF_DESCRIPTION_META_BUDGET = 64 * 1024;
-
 export class CapabilityOfflineError extends Error {
   constructor(name: string) {
     super(
@@ -319,31 +308,13 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       this.#registerLiveStub(name, live);
     }
 
-    // The self-description doctrine's provide-time hook: instructions +
-    // types belong in the journaled meta AT PROVIDE TIME, and the target
-    // knows its own surface best at exactly that moment. An rpc provide
-    // with no caller-supplied `types` is dialed ONCE and asked
-    // (`describeItx` — a reserved protocol name, so user paths can never
-    // collide); explicit caller values always win. The probe is a
-    // best-effort, SIDE-EFFECTFUL call into provider code at provide time
-    // (an OpenApiClient probe fetches its spec). Strictly best-effort:
-    // any failure or the timeout means the provide proceeds unenriched.
-    // Only call-implementing targets (OpenApiClient, …) can answer —
-    // member-shaped source caps hit replayPathCall's reserved gate, which
-    // is the collision protection doing its job.
-    if (kind === "rpc" && meta.types === undefined) {
-      const described = await this.#dialSelfDescription(
-        name,
-        input.capability as CapabilityAddress,
-      );
-      if (typeof described?.types === "string") {
-        meta.types = truncateSelfDescription(described.types);
-      }
-      if (typeof described?.instructions === "string" && meta.instructions === undefined) {
-        meta.instructions = truncateSelfDescription(described.instructions);
-      }
-    }
-
+    // provide is a PURE JOURNAL APPEND — it never calls into provider code.
+    // (An earlier provide-time `describeItx` probe dialed the target to
+    // auto-fill `types`; it was removed after it broke agents in prod: an
+    // agent re-providing its tool caps re-entered its own Durable Object
+    // mid-wake through the probe. Self-description stays caller-supplied:
+    // pass `instructions`/`types` at provide time. `describeItx` remains a
+    // reserved protocol name.)
     try {
       await this.#append(ITX_EVENT_TYPES.capabilityProvided, {
         address: kind === "live" ? null : (input.capability as CapabilityAddress),
@@ -479,47 +450,6 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       throw error;
     } finally {
       disposeIfPossible(borrowed);
-    }
-  }
-
-  /** Provide-time self-description (see provideCapability): one dial, one
-   * `describeItx` call, a short deadline, and null on ANY miss — never an
-   * error, never a hang. The losing in-flight call is observed so a late
-   * rejection cannot become unhandled. */
-  async #dialSelfDescription(
-    name: string,
-    address: CapabilityAddress,
-  ): Promise<{ instructions?: string; types?: string } | null> {
-    let borrowed: PathCallable | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      borrowed = this.deps.dial(address, {
-        capabilityPath: name,
-        origin: { address: this.deps.selfAddress, id: this.deps.contextId },
-      });
-      const call = Promise.resolve(borrowed.call({ args: [], path: [SELF_DESCRIPTION_METHOD] }));
-      call.catch(() => {});
-      const deadlineMs =
-        address.type === "rpc" && address.worker.type === "loopback"
-          ? SELF_DESCRIPTION_LOOPBACK_TIMEOUT_MS
-          : SELF_DESCRIPTION_TIMEOUT_MS;
-      const result = await Promise.race([
-        call,
-        new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), deadlineMs);
-        }),
-      ]);
-      if (result == null || typeof result !== "object") return null;
-      const { instructions, types } = result as { instructions?: unknown; types?: unknown };
-      return {
-        ...(typeof instructions === "string" ? { instructions } : {}),
-        ...(typeof types === "string" ? { types } : {}),
-      };
-    } catch {
-      return null;
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-      if (borrowed) disposeIfPossible(borrowed);
     }
   }
 
@@ -811,16 +741,6 @@ export function isLocalBareFunction(
   if (typeof capability !== "function") return false;
   const proto = Object.getPrototypeOf(capability) as object | null;
   return proto === Function.prototype || proto === ASYNC_FUNCTION_PROTOTYPE;
-}
-
-/** Cap one probe-derived string against the journaled-meta budget, with an
- * honest note where the cut happened. */
-function truncateSelfDescription(value: string): string {
-  if (value.length <= SELF_DESCRIPTION_META_BUDGET) return value;
-  return (
-    value.slice(0, SELF_DESCRIPTION_META_BUDGET) +
-    "\n// … truncated by the platform: the describeItx answer exceeded the 64KB journaled-meta budget."
-  );
 }
 
 /** Wrap a bare local function so it speaks the one calling convention:

@@ -36,8 +36,8 @@ describe("resolveItxSecretsMethod", () => {
       /got "setSecret\.deeper"/,
     );
     expect(() => resolveItxSecretsMethod([])).toThrow(/itx\.secrets exposes/);
-    // The provide-time describeItx probe is best-effort; a refusal here just
-    // leaves the provide unenriched (itx.ts #dialSelfDescription).
+    // describeItx is a reserved protocol name, not an allowlisted method —
+    // itx.secrets refuses it like any other non-allowlisted path.
     expect(() => resolveItxSecretsMethod(["describeItx"])).toThrow(/itx\.secrets exposes/);
   });
 });
