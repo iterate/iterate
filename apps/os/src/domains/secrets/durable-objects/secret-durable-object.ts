@@ -42,7 +42,10 @@ import {
   encryptSecretMaterial,
   importSecretsKey,
 } from "~/domains/secrets/secret-crypto.ts";
-import { materialIsStale } from "~/domains/secrets/secret-derivation.ts";
+import {
+  materialIsStale,
+  substituteKnownSecretKeyReferences,
+} from "~/domains/secrets/secret-derivation.ts";
 import { secretStreamPath } from "~/domains/secrets/stream-processors/secret/contract.ts";
 import {
   SecretProcessor,
@@ -198,6 +201,51 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
       headers: Object.fromEntries(response.headers.entries()),
       body,
     };
+  }
+
+  /**
+   * One hop of the egress substitution CHAIN. The terminal egress pipe never
+   * sees material: it parses a request's getSecret({ key }) references and
+   * delegates here — this DO substitutes ITS OWN reference (re-deriving
+   * first if stale) and either forwards the request to the next referenced
+   * secret's DO or, as the last hop, performs the outbound fetch itself.
+   * Material only ever exists inside Secret DOs and the wire to the API.
+   *
+   * `keys` is the remaining chain, self first — computed ONCE by the pipe,
+   * never re-parsed, so substituted material can't inject new hops.
+   */
+  async egressFetch(input: { request: Request; keys: string[] }): Promise<Response> {
+    const { params, state } = await this.readyState();
+    const [self, ...rest] = input.keys;
+    if (self !== params.slug) {
+      throw new Error(`Secret ${params.slug} received an egress chain for "${self}".`);
+    }
+    const material = await this.ensureFreshMaterial({ params, state });
+
+    const headers = new Headers(input.request.headers);
+    for (const [name, value] of input.request.headers) {
+      headers.set(
+        name,
+        substituteKnownSecretKeyReferences(value, (key) => (key === params.slug ? material : null)),
+      );
+    }
+    const request = new Request(input.request, { headers });
+
+    await this.appendUsedEvent({
+      params,
+      usage: "fetch",
+      usedBy: "egress-pipe",
+      urlHost: new URL(request.url).hostname,
+    });
+
+    const next = rest[0];
+    if (next != null) {
+      return await getSecretStub({ projectId: params.projectId, slug: next }).egressFetch({
+        request,
+        keys: rest,
+      });
+    }
+    return await fetch(request);
   }
 
   /**

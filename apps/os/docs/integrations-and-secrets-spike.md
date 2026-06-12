@@ -173,11 +173,12 @@ integration that provided it).
   serializable response snapshot.
 - **The trapdoor is narrow.** SDKs do NOT need material in hand: they take the
   placeholder as their token (octokit's `auth`, discord REST's `setToken`)
-  and a substituting fetch — pretend the placeholder IS the secret.
-  `revealForPlatformUse({ usedBy })` remains for exactly two callers inside
-  the secret/egress trust zone: the terminal pipe's own resolver, and the
-  Discord gateway's identify frame (a websocket message has no fetch hop to
-  substitute at). Both append `secret/used` audit events.
+  and a substituting fetch — pretend the placeholder IS the secret. And the
+  egress pipe doesn't need it either: it delegates the fetch into the Secret
+  DO chain. `revealForPlatformUse({ usedBy })` remains for the Discord
+  gateway's identify frame (a websocket message has no fetch hop to
+  substitute at) and sibling DOs resolving derivation sources — both inside
+  the secret system, both audited.
 - **Refresh is the DO's job** — via derivation (next section): a secret
   carrying a derivation re-derives inline whenever a use finds it stale, and
   proactively via an alarm at expiry-minus-leeway, each run appended as
@@ -228,11 +229,16 @@ bodies carry escaped quotes, so the reference parser accepts
 the fully general escape hatch where project code computes
 `{ material, expiresAt }`.
 
-The terminal EgressPipe now resolves `getSecret({ key })` placeholders against
-journaled Secrets first (falling back to legacy D1 rows), which is what makes
-the headline work: a project worker writes
-`authorization: Bearer getSecret({ key: "waitrose/access-token" })` and gets
-automatic inline token refresh without ever holding a credential.
+The terminal EgressPipe never touches journaled material: it parses
+`getSecret({ key })` references and DELEGATES the request into the referenced
+secrets' own DOs — each hop substitutes its own reference (re-deriving inline
+if stale) and the LAST hop performs the outbound fetch. Material only ever
+exists inside Secret DOs and on the wire to the API. (Legacy D1 rows still
+substitute in the pipe and die with the migration.) That is what makes the
+headline work: a project worker writes
+`authorization: Bearer getSecret({ key: "waitrose/default/access-token" })`
+and gets automatic inline token refresh without any isolate outside the
+secret system ever holding a credential.
 
 ## Userspace integrations — the Waitrose case
 

@@ -82,10 +82,12 @@ export async function setJournaledSecret(input: SetJournaledSecretInput) {
 }
 
 /**
- * Material dereference INSIDE the secret/egress trust zone — the two callers
- * are the terminal egress pipe's resolver and the Discord gateway's identify
- * frame (a websocket message has no fetch hop to substitute at). SDKs don't
- * use this: they take getSecret placeholders and let egress substitute.
+ * Material dereference INSIDE the secret system's trust zone. After the
+ * egress pipe learned to DELEGATE (the secrets' own DOs substitute and
+ * fetch), the callers are down to: the Discord gateway's identify frame (a
+ * websocket message has no fetch hop to substitute at) and sibling Secret
+ * DOs resolving derivation sources. SDKs and the egress pipe never see
+ * material.
  */
 export async function revealJournaledSecretForPlatformUse(input: {
   projectId: string;
@@ -98,31 +100,44 @@ export async function revealJournaledSecretForPlatformUse(input: {
 }
 
 /**
- * Egress-substitution resolver over journaled Secrets, for the terminal
- * EgressPipe: `getSecret({ key })` placeholders resolve to a Secret DO's
- * material — INCLUDING inline derivation, so a project worker writing
- * `authorization: Bearer getSecret({ key: "waitrose/access-token" })` gets a
- * freshly derived 5-minute token without ever seeing it. Keys with no
- * journaled Secret return null so the caller can fall back (legacy D1 rows).
+ * The pipe-side half of egress DELEGATION. The terminal pipe never touches
+ * journaled material: it splits a request's `getSecret({ key })` references
+ * into journaled keys (each backed by a Secret DO) and legacy D1 keys, and
+ * hands the request into the journaled CHAIN — the first secret's DO
+ * substitutes its own reference (re-deriving inline if stale) and forwards;
+ * the LAST hop performs the outbound fetch. Material only exists inside
+ * Secret DOs and the wire to the API.
  *
- * Existence is checked against the DO catalog first — probing an arbitrary
- * key must not mint an empty Secret DO (and its stream) as a side effect.
+ * Existence is checked against the DO catalog — probing an arbitrary key
+ * must not mint an empty Secret DO (and its stream) as a side effect.
  */
-export function journaledSecretEgressResolver(input: { projectId: string }) {
+export async function splitJournaledSecretKeys(input: {
+  projectId: string;
+  keys: string[];
+}): Promise<{ journaled: string[]; legacy: string[] }> {
   const secretsEnv = env as unknown as SecretsEnv;
-  return {
-    async getSecretOrNull(query: { key: string }): Promise<{ material: string } | null> {
-      if (!secretsEnv.DO_CATALOG) return null;
-      const record = await getD1ObjectCatalogRecord(secretsEnv.DO_CATALOG, {
-        className: "SecretDurableObject",
-        name: getSecretDurableObjectName({ projectId: input.projectId, slug: query.key }),
-      });
-      if (record == null) return null;
-      const material = await getSecretStub({
-        projectId: input.projectId,
-        slug: query.key,
-      }).revealForPlatformUse({ usedBy: "egress-pipe" });
-      return { material };
-    },
-  };
+  const journaled: string[] = [];
+  const legacy: string[] = [];
+  for (const key of input.keys) {
+    const record = secretsEnv.DO_CATALOG
+      ? await getD1ObjectCatalogRecord(secretsEnv.DO_CATALOG, {
+          className: "SecretDurableObject",
+          name: getSecretDurableObjectName({ projectId: input.projectId, slug: key }),
+        })
+      : null;
+    (record == null ? legacy : journaled).push(key);
+  }
+  return { journaled, legacy };
+}
+
+/** Hand the request to the chain's first Secret DO; the last hop fetches. */
+export async function delegateEgressFetchToSecretChain(input: {
+  projectId: string;
+  keys: string[];
+  request: Request;
+}): Promise<Response> {
+  return await getSecretStub({ projectId: input.projectId, slug: input.keys[0]! }).egressFetch({
+    request: input.request,
+    keys: input.keys,
+  });
 }

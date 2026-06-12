@@ -82,6 +82,23 @@ export async function substituteSecretKeyReferences(
   return text.replace(SECRET_KEY_REFERENCE, (_match, _quote, key: string) => materials.get(key)!);
 }
 
+/**
+ * SELECTIVE substitution: replace only the references `resolve` knows
+ * (non-null), leave the rest verbatim. This is what lets a request pass
+ * through a CHAIN of substitution hops — each Secret DO replaces its own
+ * reference and forwards the request, placeholders for later hops intact.
+ * Deliberately does not re-parse its own output, so substituted material can
+ * never inject new references.
+ */
+export function substituteKnownSecretKeyReferences(
+  text: string,
+  resolve: (key: string) => string | null,
+): string {
+  return text.replace(SECRET_KEY_REFERENCE, (match, _quote, key: string) => {
+    return resolve(key) ?? match;
+  });
+}
+
 export async function deriveViaHttpExchange(input: {
   derivation: HttpExchangeDerivation;
   resolveSecretKey(key: string): Promise<string>;
