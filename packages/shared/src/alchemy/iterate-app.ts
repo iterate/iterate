@@ -78,6 +78,12 @@ export type IterateAppProps<B extends Bindings> = {
   extraRouteHostnames?: string[];
   /** Worker entry module (default: `./src/entry.workerd.ts`). */
   main?: string;
+  /**
+   * Deployed worker name (default: `ctx.workerName`). Apps fronted by a
+   * router worker (apps/os) give the router the canonical `ctx.workerName`
+   * and pass a distinct name here (e.g. `${ctx.workerName}-app`).
+   */
+  name?: string;
   /** Override build command (default: `pnpm exec vite build --config vite.config.ts`). */
   build?: string;
   /** Override dev command (default: `pnpm exec vite dev --config vite.config.ts`). */
@@ -134,7 +140,8 @@ export async function IterateAppWorker<B extends Bindings>(
   ctx: IterateCtx,
   props: Omit<IterateAppProps<B>, "extraRouteHostnames">,
 ) {
-  const { app, workerName, rawRuntimeConfig, slug } = ctx;
+  const { app, rawRuntimeConfig, slug } = ctx;
+  const workerName = props.name ?? ctx.workerName;
   const compatibilityFlags = [...new Set(["nodejs_compat", ...(props.compatibilityFlags ?? [])])];
   const buildCommand = withSequentialCloudflareAssetPreupload({
     command: props.build ?? "pnpm exec vite build --config vite.config.ts",

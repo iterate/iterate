@@ -519,6 +519,9 @@ if (ctx.app.local) {
 }
 
 const appWorker = await IterateAppWorker(ctx, {
+  // `${ctx.workerName}` itself is the ingress router (it owns the routes);
+  // the dashboard app deploys under its own name.
+  name: workerNames.app,
   main: "./src/workers/app.ts",
   bindings: {
     ...loopbackUnionBindings,
