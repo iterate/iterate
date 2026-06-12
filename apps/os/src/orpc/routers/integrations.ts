@@ -6,7 +6,6 @@
 
 import { env } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
-import { listD1ObjectCatalogRecordsByIndex } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { getProjectById } from "~/db/queries/.generated/index.ts";
 import type { PendingConnect } from "~/domains/integrations/definition.ts";
 import { unsealJson } from "~/domains/secrets/oauth-state.ts";
