@@ -17,17 +17,20 @@ export const githubIntegration: IntegrationDefinition = {
     "Inbound GitHub webhooks land on this project's /integrations/github stream.",
 
   // The partial fetch function: GitHub webhooks, verified and captured.
-  async fetch({ request, env, capture }) {
+  async fetch({ request, config, capture }) {
     if (new URL(request.url).pathname !== "/api/integrations/github/webhook") return null;
 
-    const signingSecret = env.GITHUB_WEBHOOK_SECRET;
-    if (!signingSecret) {
+    const github = config.integrations.github;
+    if (!github) {
       return Response.json({ error: "GitHub webhook ingress is not configured." }, { status: 503 });
     }
 
     const bodyText = await request.text();
     const signature = request.headers.get("x-hub-signature-256");
-    const expected = `sha256=${await hmacSha256Hex({ secret: signingSecret, message: bodyText })}`;
+    const expected = `sha256=${await hmacSha256Hex({
+      secret: github.webhookSigningSecret.exposeSecret(),
+      message: bodyText,
+    })}`;
     if (!signature || !constantTimeEqual(expected, signature)) {
       return Response.json({ error: "Invalid GitHub webhook signature." }, { status: 401 });
     }

@@ -239,7 +239,6 @@ const discordGateway = DurableObjectNamespace<DiscordGatewayDurableObject>("disc
   sqlite: true,
 });
 const secretsEncryptionKey = process.env.SECRETS_ENCRYPTION_KEY;
-const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
 const discordPublicKey = process.env.DISCORD_PUBLIC_KEY;
 const discordBotToken = process.env.APP_CONFIG_DISCORD_BOT_TOKEN;
 const artifactEventsQueue = await Queue("artifact-events", {
@@ -293,9 +292,6 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     ...(secretsEncryptionKey == null
       ? {}
       : { SECRETS_ENCRYPTION_KEY: alchemy.secret(secretsEncryptionKey) }),
-    ...(githubWebhookSecret == null
-      ? {}
-      : { GITHUB_WEBHOOK_SECRET: alchemy.secret(githubWebhookSecret) }),
     ...(discordPublicKey == null ? {} : { DISCORD_PUBLIC_KEY: discordPublicKey }),
     ...(discordBotToken == null
       ? {}

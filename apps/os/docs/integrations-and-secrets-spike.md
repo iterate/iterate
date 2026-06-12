@@ -423,7 +423,12 @@ Worth stealing later:
   carry subscriptions dialing the deleted SLACK_INTEGRATION namespace —
   per the no-backcompat rule, prd gets a stage reset rather than a bridge.
 - GitHub App installation-token minting (app JWT → hourly token) isn't
-  implemented; the Secret refresh loop is where it belongs.
+  implemented; the Secret refresh loop is where it belongs. The app's REAL
+  credentials (appId, appSlug, oauth client, private key, webhook signing
+  secret — recovered from the os-legacy-backup Doppler project) now live in
+  os dev/preview/prd as `APP_CONFIG_INTEGRATIONS__GITHUB`, parsed at
+  `config.integrations.github` — so webhook verification works on deploy and
+  JWT minting has its key waiting.
 - Late route claims don't retroactively forward earlier captured events
   (claims are forward-looking, like Slack team claims today). Replay-on-claim
   is a possible upgrade since the capture stream has everything.

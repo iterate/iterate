@@ -30,7 +30,7 @@ describe("github ingress (partial fetch function)", () => {
     const response = await githubIntegration.fetch!(
       ingressCtx({
         request: new Request("https://os.iterate.com/api/anything-else"),
-        env: { GITHUB_WEBHOOK_SECRET: "shh" },
+        config: githubConfig("shh"),
         capture,
       }),
     );
@@ -49,7 +49,7 @@ describe("github ingress (partial fetch function)", () => {
           headers: { "x-hub-signature-256": signature, "x-github-delivery": "delivery-1" },
           body: bodyText,
         }),
-        env: { GITHUB_WEBHOOK_SECRET: "shh" },
+        config: githubConfig("shh"),
         capture,
       }),
     );
@@ -74,7 +74,7 @@ describe("github ingress (partial fetch function)", () => {
           headers: { "x-hub-signature-256": "sha256=ffff" },
           body: "{}",
         }),
-        env: { GITHUB_WEBHOOK_SECRET: "shh" },
+        config: githubConfig("shh"),
         capture,
       }),
     );
@@ -186,15 +186,31 @@ function fakeSdkContext(input: { integration: string; account: string }) {
 
 function ingressCtx(input: {
   request: Request;
-  env: Record<string, string | undefined>;
+  env?: Record<string, string | undefined>;
+  config?: unknown;
   capture: CaptureIntegrationEvent;
 }): IntegrationIngressContext {
   return {
-    ...input,
-    config: { integrations: {} } as IntegrationIngressContext["config"],
+    request: input.request,
+    env: input.env ?? {},
+    capture: input.capture,
+    config: (input.config ?? { integrations: {} }) as IntegrationIngressContext["config"],
     baseUrl: "https://os.iterate.com",
     oauthState: { sign: async () => "signed-state", verify: async () => null },
     connect: async () => ({}),
+  };
+}
+
+/** The redacted-wrapper shape config secrets carry, faked for tests. */
+function fakeSecretValue(value: string) {
+  return { exposeSecret: () => value };
+}
+
+function githubConfig(signingSecret: string) {
+  return {
+    integrations: {
+      github: { webhookSigningSecret: fakeSecretValue(signingSecret) },
+    },
   };
 }
 
