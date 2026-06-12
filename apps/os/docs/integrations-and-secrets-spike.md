@@ -474,6 +474,11 @@ Worth stealing later:
 
 ## Spike boundaries / open questions
 
+- **Per-workspace management UI.** The connection status now lists every
+  connected account, but the cards still act on the set as a whole
+  (disconnect tears down all accounts; token metadata shows the first).
+  Per-account disconnect and per-account token detail are the natural next
+  step once multi-workspace projects are common.
 - **Routing-claim verification is best-effort, by choice.** Connect fails
   loudly when a requested routing key is already owned (the pre-append guard
   - the takeover interstitial), but the guard is a snapshot read: two
