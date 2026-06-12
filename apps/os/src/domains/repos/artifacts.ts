@@ -1,5 +1,8 @@
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
+import { stripArtifactTokenQuery } from "~/domains/repos/artifact-token.ts";
+
+export { stripArtifactTokenQuery };
 export { repoArtifactName } from "./repo-artifact-name.ts";
 
 export type CloudflareArtifactTokenScope = "read" | "write";
@@ -179,10 +182,6 @@ function normalizeTokenExpiresAt(value: string | number | Date | null): string |
 function expiresAtFromTokenQuery(token: string): number | null {
   const match = /[?&]expires=(\d+)/.exec(token);
   return match ? Number(match[1]) : null;
-}
-
-export function stripArtifactTokenQuery(token: string) {
-  return token.split("?expires=")[0] ?? token;
 }
 
 function withRestRepoMethods(

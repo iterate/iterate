@@ -59,10 +59,8 @@ import {
   insertProject,
   listAllProjects,
 } from "~/db/queries/.generated/index.ts";
-import {
-  getProjectDurableObjectName,
-  type ProjectDurableObject,
-} from "~/domains/projects/durable-objects/project-durable-object.ts";
+import type { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object-ref.ts";
 import { isProjectId } from "~/domains/projects/project-id.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 

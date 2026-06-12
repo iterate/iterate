@@ -157,3 +157,28 @@ index 43dfd76..ea4821b 100644
 -//# sourceMappingURL=wrangler.json.js.map
 \ No newline at end of file
 +//# sourceMappingURL=wrangler.json.js.map
+diff --git a/lib/cloudflare/miniflare/build-worker-options.js b/lib/cloudflare/miniflare/build-worker-options.js
+--- a/lib/cloudflare/miniflare/build-worker-options.js
++++ b/lib/cloudflare/miniflare/build-worker-options.js
+@@ -124,11 +124,16 @@
+                 };
+                 // This matches Wrangler configuration for exposing durable objects as an entrypoint.
+                 // See https://github.com/cloudflare/workers-sdk/blob/ae0c806087c203da6a3d7da450e8fabe0d81c987/packages/wrangler/src/dev/miniflare/index.ts#L1266
+-                options.unsafeDirectSockets.push({
+-                    entrypoint: binding.className,
+-                    serviceName: binding.scriptName,
+-                    proxy: true,
+-                });
++                // Wrangler only exposes a worker's OWN durable object classes this way
++                // (cross-script bindings resolve through the dev registry proxy). Pushing a
++                // direct socket for a cross-script binding points workerd at a service that
++                // may not exist in this Miniflare instance and fails config assembly.
++                if (binding.scriptName == null || binding.scriptName === input.name) {
++                    options.unsafeDirectSockets.push({
++                        entrypoint: binding.className,
++                        proxy: true,
++                    });
++                }
+                 break;
+             }
+             case "hyperdrive": {

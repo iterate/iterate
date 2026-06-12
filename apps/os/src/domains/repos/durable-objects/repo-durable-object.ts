@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
-import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
@@ -46,11 +45,12 @@ import {
   RepoStreamProcessorContract,
   repoStreamPath,
 } from "~/domains/repos/stream-processors/repo-stream-processor.ts";
+import {
+  getRepoDurableObjectName,
+  type RepoStructuredName,
+} from "~/domains/repos/repo-durable-object-name.ts";
 
-export type RepoStructuredName = {
-  projectId: string;
-  repoSlug: string;
-};
+export { getRepoDurableObjectName, type RepoStructuredName };
 
 export type RepoInfo = {
   defaultBranch: string;
@@ -519,12 +519,6 @@ type RepoProcessorRuntimeState = {
 
 function repoProcessorSubscriptionKey(input: RepoStructuredName) {
   return `repo:${input.projectId}:${input.repoSlug}`;
-}
-
-export function getRepoDurableObjectName(name: RepoStructuredName) {
-  return deriveDurableObjectNameFromStructuredName({
-    structuredName: name,
-  });
 }
 
 function gitInfo(input: { defaultBranch: string; remote: string; slug: string; token: string }) {

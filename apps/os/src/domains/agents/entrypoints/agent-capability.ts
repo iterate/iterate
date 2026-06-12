@@ -1,10 +1,8 @@
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import {
-  type AgentDurableObject,
-  getAgentDurableObjectName,
-} from "../durable-objects/agent-durable-object.ts";
+import type { AgentDurableObject } from "../durable-objects/agent-durable-object.ts";
+import { getAgentDurableObjectName } from "../agent-stream-subscriptions.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
 import type { PathCall } from "~/itx/itx.ts";
 

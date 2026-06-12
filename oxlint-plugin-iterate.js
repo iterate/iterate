@@ -52,7 +52,7 @@ function isAllowedRawDurableObjectBindingAccessFile(filename) {
 
   if (!path.includes("/apps/os/src/")) return true;
   if (path.includes("/apps/os/docs/")) return true;
-  if (path.endsWith("/apps/os/src/worker.ts")) return true;
+  if (path.includes("/apps/os/src/workers/")) return true;
   // src/itx is THE capability layer (apps/os/docs/itx-spec.md): the handle,
   // restorer, and egress entrypoint legitimately mint Project DO stubs.
   if (path.includes("/apps/os/src/itx/")) return true;

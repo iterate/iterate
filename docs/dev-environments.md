@@ -15,7 +15,10 @@ Local dev is **fully local**: D1/DOs run in miniflare inside your worktree's
 `.alchemy/`, the server listens on a random free port at
 `http://os.localhost:<port>` (browsers resolve `*.localhost` to loopback — no
 DNS, no certs), and the only external dependency is the shared dev auth at
-`https://auth.iterate-dev.com`. Nothing is contested between worktrees: twenty
+`https://auth.iterate-dev.com`. OS's full worker topology (the per-DO
+workers, see `apps/os/docs/worker-topology.md`) runs inside vite's single
+workerd as auxiliary workers — one process, production-shaped cross-script
+bindings. Nothing is contested between worktrees: twenty
 agents on one machine each run their own isolated environment with the same
 shared `dev` config.
 
