@@ -219,9 +219,14 @@ export async function runAgentItxScript(args: {
     functionSource: args.code,
     projectId: args.projectId,
     // The agent's context is hosted by the agent DO and DERIVED from its
-    // coordinate — pass the address so the script resolves it directly, no
-    // catalog. The record (script-execution events) lands on the agent
-    // stream, which IS the agent context's journal.
+    // coordinate — pass the address (TOP-LEVEL, the field runItxScript reads;
+    // a copy in props would be clobbered) so the script's handle dials the
+    // AGENT node directly. Without it the runner falls back to treating the
+    // agent's context id as a project id and dispatches against an empty
+    // project context ("No capability named chat"). The record
+    // (script-execution events) lands on the agent stream, which IS the agent
+    // context's journal.
+    contextAddress,
     props: { context, contextAddress, projectId: args.projectId },
     record: { namespace: args.projectId, path: args.streamPath },
   });
