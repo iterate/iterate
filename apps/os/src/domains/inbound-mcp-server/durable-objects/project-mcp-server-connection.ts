@@ -202,7 +202,7 @@ export class ProjectMcpServerConnection extends McpAgent<
           "Available capabilities on itx:",
           providerDocs,
           "",
-          'Example: async (itx) => { const msgs = await itx.gmail.request({ path: "/gmail/v1/users/me/messages", query: { maxResults: 5 } }); return msgs.data; }',
+          'Example: async (itx) => { const msgs = await itx.integrations.google.gmail.request({ path: "/messages", query: { maxResults: "5" } }); return msgs; }',
         ].join("\n"),
         inputSchema: schema,
       },

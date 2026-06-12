@@ -130,6 +130,7 @@ export const projectIntegrationsRouter = {
       return await connectionStatus(context, {
         integration: "slack",
         tokenSecretName: SLACK_ACCESS_TOKEN_SECRET_NAME,
+        scopeSeparator: ",",
       });
     }),
   startSlackOAuthFlow: os.project.integrations.startSlackOAuthFlow
@@ -168,6 +169,7 @@ export const projectIntegrationsRouter = {
         integration: "google",
         tokenSecretName: GOOGLE_ACCESS_TOKEN_SECRET_NAME,
         refreshSecretName: GOOGLE_REFRESH_TOKEN_SECRET_NAME,
+        scopeSeparator: " ",
       });
     }),
   startGoogleOAuthFlow: os.project.integrations.startGoogleOAuthFlow
@@ -206,7 +208,13 @@ export const projectIntegrationsRouter = {
 
 async function connectionStatus(
   context: RequestContext,
-  input: { integration: string; tokenSecretName: string; refreshSecretName?: string },
+  input: {
+    integration: string;
+    tokenSecretName: string;
+    refreshSecretName?: string;
+    /** Provider scope-list convention (slack joins with ",", google with " "). */
+    scopeSeparator: "," | " ";
+  },
 ) {
   const project = requireProjectScope(context);
   const stub = await ensureIntegrationStub({
@@ -242,7 +250,7 @@ async function connectionStatus(
     displayName: state.connection.displayName ?? null,
     externalId: state.connection.externalId ?? null,
     metadata: (token?.metadata ?? {}) as Record<string, unknown>,
-    scopes: Array.isArray(scopes) ? scopes.join(",") : null,
+    scopes: Array.isArray(scopes) ? scopes.join(input.scopeSeparator) : null,
     token:
       token == null
         ? null
