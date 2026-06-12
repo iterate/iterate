@@ -7,8 +7,8 @@ import type { RouterClient } from "@orpc/server";
 import WebSocket from "ws";
 import { osContract } from "@iterate-com/os-contract";
 import type { Event } from "@iterate-com/shared/streams/types";
-import type { appRouter } from "~/orpc/root.ts";
 import { localDevServerBaseUrl } from "./dev-server.ts";
+import type { appRouter } from "~/orpc/root.ts";
 
 export type OsClient = RouterClient<typeof appRouter>;
 const appRoot = fileURLToPath(new URL("../..", import.meta.url));
