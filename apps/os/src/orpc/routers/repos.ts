@@ -1,6 +1,7 @@
 import { ORPCError } from "@orpc/server";
 import type { RequestContext } from "~/request-context.ts";
 import { getReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
+import { resolveImplicitAccount } from "~/domains/integrations/durable-objects/integration-durable-object.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
 
@@ -33,6 +34,42 @@ export const projectReposRouter = {
       throw toRepoORPCError(error);
     }
   }),
+  configureGithubRemote: os.project.repos.configureGithubRemote
+    .use(projectScopeMiddleware)
+    .handler(async ({ context, input }) => {
+      const project = requireProjectScope(context);
+      try {
+        const account =
+          input.account ??
+          (await resolveImplicitAccount({ projectId: project.id, integration: "github" }));
+        const handle = await getProjectReposCapability(context, project.id).get({
+          slug: input.repoSlug,
+        });
+        return await handle.configureRemote({
+          provider: "github",
+          account,
+          owner: input.owner,
+          repo: input.repo,
+          ...(input.branch == null ? {} : { branch: input.branch }),
+          sync: input.sync,
+        });
+      } catch (error) {
+        throw toRepoORPCError(error);
+      }
+    }),
+  getSyncState: os.project.repos.getSyncState
+    .use(projectScopeMiddleware)
+    .handler(async ({ context, input }) => {
+      const project = requireProjectScope(context);
+      try {
+        const handle = await getProjectReposCapability(context, project.id).get({
+          slug: input.repoSlug,
+        });
+        return await handle.getSyncState();
+      } catch (error) {
+        throw toRepoORPCError(error);
+      }
+    }),
 };
 
 function getProjectReposCapability(context: RequestContext, projectId: string) {

@@ -176,6 +176,44 @@ stream as evidence.
    and routed events. Its `onIntegrationEvent` dep is the seam where
    provider-specific fan-out (the Slack thread-router → agent streams pattern)
    plugs in; the spike leaves it open.
+4. **Fan out per provider.** Provider-specific routing is just _another
+   processor on the account stream_: `slack-route` forwards events to
+   per-thread agent streams, `github-route` forwards them to per-repo repo
+   streams. Same shape, different destination.
+
+## GitHub as a repo REMOTE
+
+The first real consumer of the github fan-out: an iterate repo can declare a
+GitHub repository as its **remote** — push to GitHub and the repo's Cloudflare
+artifact mirrors automatically. The whole feature is stream-processor land;
+durable events trigger everything.
+
+```
+POST /repos/{slug}/remotes/github          (oRPC configureGithubRemote)
+  └─ repo/remote-configured ──────────────▶ {project}:/repos/{slug}
+       └─ REPO processor reacts: github/repo-route-configured
+            ─────────────────────────────▶ {project}:/integrations/github/{account}
+
+git push (GitHub) ─▶ webhook ─▶ global capture ─▶ ingress route
+  ─▶ {project}:/integrations/github/{account}
+       └─ GITHUB-ROUTE processor folds the declared links and forwards the
+          envelope ─────────────────────▶ {project}:/repos/{slug}
+            └─ REPO processor: push to the mirrored branch + pull policy
+               "auto" ─▶ repo/remote-sync-requested (net changed paths,
+               typed by @octokit/webhooks-types)
+                 └─ host dep pullFromGithub: octokit.rest.repos.getContent
+                    per changed file at the push's headSha, chain-fetched
+                    through the Secret DO (the token is a getSecret
+                    placeholder — the repo host never holds it), then ONE
+                    artifact commit ─▶ repo/remote-synced | remote-sync-failed
+```
+
+The remote is journaled configuration (`RepoRemote`: owner/repo, integration
+account, optional branch pin, `sync.pull`/`sync.push` policies, last write
+wins). `repo/remote-push-requested` is the reverse-mirror seam — the event and
+the `pushToGithub` dep exist, the transport lands with workspace-git wiring.
+Every reaction is idempotency-keyed from its source event, so webhook
+redeliveries and journal replays dedupe instead of double-committing.
 
 ## Secrets as domain objects
 

@@ -9,6 +9,7 @@ import type {
   RepoDurableObject,
   RepoStructuredName,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import type { RepoRemote } from "~/domains/repos/stream-processors/repo-stream-processor.ts";
 import { getRepoDurableObjectName } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import {
   isRepoAlreadyExistsError,
@@ -86,6 +87,14 @@ export class RepoHandle extends RpcTarget {
 
   getArtifact() {
     return this.#repo.getArtifact();
+  }
+
+  async configureRemote(input: RepoRemote) {
+    return await this.#repo.configureRemote(input);
+  }
+
+  async getSyncState() {
+    return await this.#repo.getSyncState();
   }
 }
 

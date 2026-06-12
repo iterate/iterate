@@ -64,6 +64,8 @@
     "@iterate-com/ui": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@octokit/rest": "^22.0.1",
+    "@octokit/webhooks-methods": "^6.0.0",
+    "@octokit/webhooks-types": "^7.6.1",
     "@opentui/core": "0.1.102",
     "@opentui/react": "0.1.102",
     "@orpc/client": "1.13.14",

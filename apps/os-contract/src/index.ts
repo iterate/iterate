@@ -148,6 +148,22 @@ export const RepoInfo = z.object({
 });
 export type RepoInfo = z.output<typeof RepoInfo>;
 
+/** A GitHub repository configured as a REMOTE of an iterate repo. */
+export const RepoGithubRemote = z.object({
+  provider: z.literal("github"),
+  /** github integration ACCOUNT whose installation/token covers the repo. */
+  account: z.string(),
+  owner: z.string(),
+  repo: z.string(),
+  /** Branch to mirror; defaults to the repository's default branch. */
+  branch: z.string().optional(),
+  sync: z.object({
+    pull: z.enum(["auto", "manual"]),
+    push: z.enum(["auto", "manual"]),
+  }),
+});
+export type RepoGithubRemote = z.output<typeof RepoGithubRemote>;
+
 /**
  * Shared source of truth for the OS app's typed RPC surface.
  *
@@ -404,6 +420,64 @@ export const osContract = oc.router({
           }),
         )
         .output(RepoInfo),
+      configureGithubRemote: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/repos/{repoSlug}/remotes/github",
+          description:
+            "Configure a GitHub repository as a remote of an iterate repo — pushes to GitHub then mirror into the repo's artifact automatically (sync.pull: auto)",
+          tags: ["/project", "/repos"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            repoSlug: z
+              .string()
+              .trim()
+              .min(1, "Repo slug is required")
+              .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Repo slug must be lowercase kebab-case"),
+            owner: z.string().trim().min(1),
+            repo: z.string().trim().min(1),
+            /** Defaults to the project's implicit github account. */
+            account: z.string().trim().min(1).optional(),
+            branch: z.string().trim().min(1).optional(),
+            sync: z
+              .object({
+                pull: z.enum(["auto", "manual"]).default("auto"),
+                push: z.enum(["auto", "manual"]).default("manual"),
+              })
+              .default({ pull: "auto", push: "manual" }),
+          }),
+        )
+        .output(z.object({ remoteKey: z.string(), remote: RepoGithubRemote })),
+      getSyncState: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/repos/{repoSlug}/remotes",
+          description: "Read a repo's configured remotes and last mirror sync outcome",
+          tags: ["/project", "/repos"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            repoSlug: z
+              .string()
+              .trim()
+              .min(1, "Repo slug is required")
+              .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Repo slug must be lowercase kebab-case"),
+          }),
+        )
+        .output(
+          z.object({
+            remotes: z.record(z.string(), RepoGithubRemote),
+            lastSync: z
+              .object({
+                headSha: z.string(),
+                at: z.string(),
+                status: z.enum(["synced", "failed"]),
+                reason: z.string().optional(),
+              })
+              .optional(),
+          }),
+        ),
     },
     inboundMcpServer: {
       listSessions: oc

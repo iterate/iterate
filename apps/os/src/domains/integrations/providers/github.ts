@@ -3,8 +3,8 @@
 // project's `github/access-token` Secret.
 
 import { Octokit } from "@octokit/rest";
+import { verify as verifyGithubSignature } from "@octokit/webhooks-methods";
 import type { IntegrationDefinition } from "~/domains/integrations/definition.ts";
-import { constantTimeEqual, hmacSha256Hex } from "~/domains/integrations/providers/verify.ts";
 
 export const GITHUB_ACCESS_TOKEN_SECRET_NAME = "access-token";
 
@@ -27,11 +27,14 @@ export const githubIntegration: IntegrationDefinition = {
 
     const bodyText = await request.text();
     const signature = request.headers.get("x-hub-signature-256");
-    const expected = `sha256=${await hmacSha256Hex({
-      secret: github.webhookSigningSecret.exposeSecret(),
-      message: bodyText,
-    })}`;
-    if (!signature || !constantTimeEqual(expected, signature)) {
+    const valid =
+      signature != null &&
+      (await verifyGithubSignature(
+        github.webhookSigningSecret.exposeSecret(),
+        bodyText,
+        signature,
+      ).catch(() => false));
+    if (!valid) {
       return Response.json({ error: "Invalid GitHub webhook signature." }, { status: 401 });
     }
 

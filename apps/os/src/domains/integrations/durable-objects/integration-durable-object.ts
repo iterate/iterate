@@ -61,6 +61,10 @@ import {
   SlackRouteProcessorContract,
 } from "~/domains/slack/stream-processors/slack-route/implementation.ts";
 import { slackRouteProcessorDeps } from "~/domains/slack/slack-route-host.ts";
+import {
+  GithubRouteProcessor,
+  GithubRouteProcessorContract,
+} from "~/domains/integrations/stream-processors/github-route/implementation.ts";
 
 export { getIntegrationDurableObjectName };
 
@@ -211,6 +215,14 @@ export class IntegrationDurableObject extends IntegrationLifecycleBase<Integrati
     });
   });
 
+  // GitHub's fan-out: repository webhooks route to the linked repos' streams
+  // (the github-route processor; route memory comes from the repo processor's
+  // remote-configured reaction).
+  githubRoute = this.host.add(
+    GithubRouteProcessorContract.slug,
+    (deps) => new GithubRouteProcessor(deps),
+  );
+
   constructor(ctx: DurableObjectState, env: IntegrationEnv) {
     super(ctx, env);
     this.registerOnFirstInitialize(async (params) => {
@@ -301,8 +313,9 @@ export class IntegrationDurableObject extends IntegrationLifecycleBase<Integrati
     const stream = await this.integrationStream(params);
     const processorSlugs = [
       IntegrationProcessorContract.slug,
-      // Slack's thread router subscribes alongside the generic processor.
+      // Provider-specific routers subscribe alongside the generic processor.
       ...(params.integration === "slack" ? [SlackRouteProcessorContract.slug] : []),
+      ...(params.integration === "github" ? [GithubRouteProcessorContract.slug] : []),
     ];
     for (const processorName of processorSlugs) {
       await stream.append({
