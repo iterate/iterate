@@ -83,16 +83,20 @@ function useLiveStreamState(input: {
 export function StreamTreeBrowser({
   currentPath,
   onOpenPath,
+  rootPath = StreamPath.parse("/"),
   source,
 }: {
   currentPath?: StreamPathType;
   onOpenPath: (streamPath: StreamPathType) => void;
+  /** The stream the tree is rooted at — defaults to the project root. Pass a
+   * subtree (e.g. `/agents`) to scope the browser to it. */
+  rootPath?: StreamPathType;
   source: StreamTreeSource;
 }) {
   const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<StreamPathType>>(
-    () => new Set<StreamPathType>(["/"]),
+    () => new Set<StreamPathType>([rootPath]),
   );
-  const root = useLiveStreamState({ enabled: true, source, streamPath: StreamPath.parse("/") });
+  const root = useLiveStreamState({ enabled: true, source, streamPath: rootPath });
 
   function toggleExpanded(path: StreamPathType) {
     setExpandedPaths((previous) => {
@@ -148,7 +152,7 @@ export function StreamTreeBrowser({
           onToggleExpanded={toggleExpanded}
           source={source}
           state={root.node.state}
-          streamPath={StreamPath.parse("/")}
+          streamPath={rootPath}
         />
       </div>
     </div>
