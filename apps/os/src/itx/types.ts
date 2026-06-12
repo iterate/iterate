@@ -206,7 +206,7 @@ export interface ItxBuiltins {
   }): Promise<CapabilityProvision>;
 
   /** Remove an entry — exact path match, never prefix; `name`/`path` as in
-   * {@link provideCapability}. Platform defaults cannot be revoked, only
+   * {@link provideCapability}. The defaults cannot be revoked, only
    * shadowed (revoking a shadow resurfaces the default). */
   revokeCapability(input: { name?: string; path?: string[] }): Promise<void>;
 
@@ -227,7 +227,7 @@ export interface ItxBuiltins {
 
   /**
    * Event streams, keyed by `(namespace, path)`. On a PROJECT handle this
-   * is a platform default cap (StreamsCapability loopback, shadowable) pinned to
+   * is a default cap (StreamsCapability loopback, shadowable) pinned to
    * the project's namespace; on a GLOBAL handle it is kernel — the
    * deployment-wide `"global"` namespace gated on the connect-time access
    * set, which no cap definition can express. See {@link StreamRef} for
@@ -239,12 +239,12 @@ export interface ItxBuiltins {
    * is no separate "project object"; a narrowed itx IS the project. */
   readonly projects: ItxProjects;
 
-  /** PLATFORM DEFAULT, not kernel (§8 shipped): the project's git repos —
+  /** A DEFAULT, not kernel (§8 shipped): the project's git repos —
    * an ordinary `platform:project` cap definition (ReposCapability
    * loopback), shadowable like any inherited cap. Surface unchanged. */
   readonly repos: unknown;
 
-  /** PLATFORM DEFAULT, not kernel: workspace readFile/writeFile and the
+  /** A DEFAULT, not kernel: workspace readFile/writeFile and the
    * flat git methods (gitClone/gitAdd/gitCommit/gitPush/gitStatus — nested
    * RpcTargets do not survive RPC boundaries). Context-scoped: chain
    * delegation carries the ORIGINATING context, so an extended child context
@@ -252,7 +252,7 @@ export interface ItxBuiltins {
    * `platform:project`. */
   readonly workspace: unknown;
 
-  /** PLATFORM DEFAULT, not kernel: the project's own worker — an ordinary
+  /** A DEFAULT, not kernel: the project's own worker — an ordinary
    * `{ type: "repo" }` source provide pointed at the project repo, built
    * per commit. `itx.worker.someTool(args)` reaches any public method of
    * its default export. */
@@ -263,7 +263,7 @@ export interface ItxBuiltins {
   readonly project: unknown;
 
   /**
-   * PLATFORM DEFAULT, not kernel: explicit project egress, as sugar over the
+   * A DEFAULT, not kernel: explicit project egress, as sugar over the
    * context's `fetch` capability (`platform:project` defines the default).
    * The default pipe substitutes secret placeholders inside the project's
    * egress hop — `'Bearer getSecret({ key: "X_TOKEN" })'` in a header never
@@ -307,8 +307,8 @@ export interface ItxBuiltins {
    * A handle on the PARENT context — the "call next()" of middleware: a
    * `fetch` shadow delegates to the unshadowed pipe via
    * `itx.super.fetch(request)`. An extension's parent comes from its birth
-   * certificate; the project context's parent is the platform context (the
-   * chain's read-only code root).
+   * certificate; the project context's parent is the defaults (the chain's
+   * read-only code root).
    */
   readonly super: ItxHandle;
 }
@@ -574,14 +574,21 @@ export type CapabilityMeta = {
 /** A capability's kind is its provider's kind. */
 export type CapabilityKind = "live" | "rpc" | "url";
 
+/** How describe() labels entries inherited from the defaults — the
+ * code-rooted final link of every chain (platform-context.ts). The internal
+ * chain id stays internal plumbing; handles, agents, and the REPL see plain
+ * `from: "defaults"`: an inherited default you can shadow. */
+export const DEFAULTS_DESCRIBE_FROM = "defaults";
+
 /** A capability entry as reported by `describe()`. Never contains live stubs. */
 export type CapabilityDescription = {
   name: string;
   /** The target's kind: "live" | "rpc" | "url". */
   kind: CapabilityKind;
   /** INHERITED entries only: which chain link the entry comes from — a
-   * context id, or `"platform"` for the code-rooted defaults. The described
-   * context's own entries carry no provenance field at all. */
+   * context id, or `"defaults"` ({@link DEFAULTS_DESCRIBE_FROM}) for the
+   * code-rooted defaults. The described context's own entries carry no
+   * provenance field at all. */
   from?: string;
   /** Live caps only: is the provider currently connected? */
   connected?: boolean;

@@ -183,7 +183,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
   }
 
   // Own rows carry NO provenance field — `from` marks inherited entries
-  // only (platform defaults like `ai` appear with from: "platform").
+  // only (defaults like `ai` appear with from: "defaults").
   // `types` is lifted from meta like instructions.
   const description = (await projectItx.describe()).capabilities as Array<{ from?: string }>;
   expect(description.filter((entry) => entry.from === undefined)).toMatchObject([
@@ -279,7 +279,7 @@ test("platform bindings are dialable capabilities (raw + wrapped)", async () => 
   await expect(handle.sneakyDo.anything()).rejects.toThrow(/not dialable/);
 
   // describe() reports the new kinds and lifts instructions (own rows only —
-  // they carry no `from`; inherited platform defaults read from: "platform").
+  // they carry no `from`; the inherited defaults read from: "defaults").
   // The unreachable-but-provided rows from (3) appear too: provide is structural.
   const caps = (await projectItx.describe()).capabilities as Array<{ from?: string }>;
   expect(caps.filter((entry) => entry.from === undefined)).toMatchObject([
@@ -441,31 +441,33 @@ test("url caps dial a remote Cap'n Web server over a WebSocket session", async (
   expect(described.capabilities.map((entry) => entry.name)).toContain("remoteItx");
 });
 
-test("platform defaults arrive from the platform code context, and own rows shadow them", async () => {
+test("the defaults arrive from the code-rooted chain end, and own rows shadow them", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-def` })) as { id: string };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
   // A fresh project has zero rows of its own, but `ai` is already there —
-  // inherited from the code-defined parent context, labeled from: "platform"
+  // inherited from the code-defined parent context, labeled from: "defaults"
   // (the internal chain id never leaves the chain).
   type Described = { capabilities: Array<{ from?: string; name: string }> };
   const before = (await projectItx.describe()) as Described;
   expect(before.capabilities.find((entry) => entry.name === "ai")).toMatchObject({
-    from: "platform",
+    from: "defaults",
     kind: "rpc",
   });
   // The whole migrated kernel arrives the same way (§8: cap #0 disappears).
   for (const name of ["repos", "streams", "workspace", "worker"]) {
     expect(before.capabilities.find((entry) => entry.name === name)).toMatchObject({
-      from: "platform",
+      from: "defaults",
     });
   }
 
   // Defaults cannot be revoked — succeeding would lie (the default keeps
   // serving). Shadowing is the override mechanism.
-  await expect(projectItx.revokeCapability({ name: "ai" })).rejects.toThrow(/platform default/);
+  await expect(projectItx.revokeCapability({ name: "ai" })).rejects.toThrow(
+    /inherited from the defaults/,
+  );
 
   // Shadowing is prototype semantics: a row of this context's own wins, and
   // describe() shows exactly one `ai` — an OWN entry, so no `from` field.
@@ -496,11 +498,11 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
-  // (1) Fresh project: `fetch` is a platform default, not kernel.
+  // (1) Fresh project: `fetch` is a default, not kernel.
   type Described = { capabilities: Array<{ from?: string; name: string }> };
   const before = (await projectItx.describe()) as Described;
   expect(before.capabilities.find((entry) => entry.name === "fetch")).toMatchObject({
-    from: "platform",
+    from: "defaults",
   });
 
   // (2) A Node-side shadow provider: the whole intercept is ONE call method.
@@ -555,7 +557,7 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
   await projectItx.revokeCapability({ name: "fetch" });
   const after = (await projectItx.describe()) as Described;
   expect(after.capabilities.find((entry) => entry.name === "fetch")).toMatchObject({
-    from: "platform",
+    from: "defaults",
   });
   await expect(projectItx.fetch("https://intercept-probe.invalid/x")).rejects.toThrow();
 

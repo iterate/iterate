@@ -136,7 +136,11 @@ function pathNode(callPath: PathProxyCall, path: string[]): Function {
  * detaching them can make workerd try to transfer the entrypoint
  * (capnweb LEARNINGS, "Preserve Receivers").
  */
-export async function replayPathCall(target: unknown, call: PathCall): Promise<unknown> {
+export async function replayPathCall(
+  target: unknown,
+  call: PathCall,
+  context?: { capability?: string },
+): Promise<unknown> {
   // Filter the path here too, not just in the consumer proxy: `invoke` is a
   // public verb, so a caller can hand-build a `path` and reach this directly.
   // This is the authoritative reserved-name gate.
@@ -146,9 +150,18 @@ export async function replayPathCall(target: unknown, call: PathCall): Promise<u
     }
   }
 
+  // A replay MISS on a known capability points the caller back at discovery
+  // — the suffix is only honest when a name exists for describe() to show.
+  const miss = (message: string) =>
+    new Error(
+      context?.capability
+        ? `${message} (capability "${context.capability}") — describe() lists what exists.`
+        : message,
+    );
+
   if (call.path.length === 0) {
     if (typeof target !== "function") {
-      throw new Error("Capability invoked as a function but the target is not callable.");
+      throw miss("Capability invoked as a function but the target is not callable.");
     }
     return await target(...call.args);
   }
@@ -157,14 +170,14 @@ export async function replayPathCall(target: unknown, call: PathCall): Promise<u
   for (const segment of call.path.slice(0, -1)) {
     parent = await (parent as Record<string, unknown>)[segment];
     if (parent == null) {
-      throw new Error(`Capability path ${call.path.join(".")} hit ${String(parent)}.`);
+      throw miss(`Capability path ${call.path.join(".")} hit ${String(parent)}.`);
     }
   }
 
   const method = call.path.at(-1)!;
   const holder = parent as Record<string, (...args: unknown[]) => unknown>;
   if (typeof holder[method] !== "function") {
-    throw new Error(`Capability path ${call.path.join(".")} did not resolve to a function.`);
+    throw miss(`Capability path ${call.path.join(".")} did not resolve to a function.`);
   }
   return await holder[method](...call.args);
 }

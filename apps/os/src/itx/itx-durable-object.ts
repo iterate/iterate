@@ -9,7 +9,7 @@
 // checkpoint — a disposable cache of the fold.
 //
 // Capability resolution walks the chain child → parent (→ … → the
-// platform context): the core delegates a miss per call through the parent
+// defaults): the core delegates a miss per call through the parent
 // address recorded in the birth certificate. Shadowing is allowed and
 // VISIBLE: describe() returns the merged chain — inherited entries carry
 // `from`, own entries carry no provenance field.

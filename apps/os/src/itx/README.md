@@ -292,7 +292,7 @@ A context is a Durable Object with a stream. Two hosts, one anatomy:
   `itx()` returns its core (a method, not a property — workerd does not
   pipeline calls through property accesses, so `node.itx().invoke(…)` stays
   one round trip). Journal: `(projectId, "/itx")`. Its `parentItx` is the
-  platform context (⑧).
+  defaults (⑧).
 - **`ItxDurableObject`** (`itx-durable-object.ts`) is the GENERIC host — one
   instance per extension. It holds NO configuration: its DO **name IS the
   journal coordinate** (`<namespace>:<journalPath>`), so identity, journal
@@ -304,8 +304,8 @@ A context is a Durable Object with a stream. Two hosts, one anatomy:
   their own context instances today.)
 
 Workspaces are deliberately NOT the kernel's concern: `WorkspaceCapability`
-takes an explicit provider-chosen `workspaceId`. The platform context
-provides the shared project workspace; the AGENT host provides its own
+takes an explicit provider-chosen `workspaceId`. The defaults
+provide the shared project workspace; the AGENT host provides its own
 `workspace` capability bound to its context's identity, on its context's
 journal. Plain extensions share the project workspace through the chain.
 
@@ -342,7 +342,7 @@ Client plumbing: `client.ts` (`withItx` for Node, Scene 2), `use-itx.ts`
 (`ItxError` codes that survive capnweb's name-dropping reconstruction, plus
 existence-masking — missing and forbidden are byte-identical NOT_FOUND).
 
-## ⑧ The platform chain: defaults are a parent written in code (`platform-context.ts`)
+## ⑧ The defaults: a parent written in code (`platform-context.ts`)
 
 Every chain roots in code: **everything WRITABLE is durable; the root of
 every chain is code.**
@@ -363,7 +363,7 @@ repo (slug `project`). Shipping a new default is a deploy, not a migration:
 the chain sees it immediately; journaled rows shadow it; revoking a shadow
 resurfaces it. There is no defaults mechanism — only the chain.
 
-Egress, both doors — `fetch` is itself a shadowable platform default:
+Egress, both doors — `fetch` is itself a shadowable default:
 
 ```text
 bare fetch() in ANY loaded isolate ─► ProjectEgress.fetch (origin's node) ─┐

@@ -5,8 +5,6 @@
 // a runnable example is missing one (so examples can't silently rot).
 //
 // Not here by design:
-//   provide-live-capability        browser-only alert flow, asserted by its
-//                                  dedicated browser test (alert capture)
 //   egress-with-secret-substitution depends on an external echo service;
 //                                  covered by itx-egress.e2e.test.ts
 //   fetch-middleware               depends on the same external echo service;
@@ -56,7 +54,6 @@ export const EXAMPLE_IDS_WITHOUT_CASES = new Set([
   "mcp-authenticated",
   "mcp-client",
   "openapi-client",
-  "provide-live-capability",
   "repo-sourced-capability",
   "secrets-and-egress",
 ]);
@@ -125,12 +122,12 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toMatchObject({ fromChild: "child" });
       const capabilities = (result as { capabilities: Array<{ from?: string; name: string }> })
         .capabilities;
-      // The shadow is the child's OWN entry (no provenance field); platform
-      // defaults arrive through the chain labeled from: "platform".
+      // The shadow is the child's OWN entry (no provenance field); the
+      // defaults arrive through the chain labeled from: "defaults".
       const shared = capabilities.filter((entry) => entry.name === "shared");
       expect(shared).toHaveLength(1);
       expect(shared[0]!.from).toBeUndefined();
-      expect(capabilities.find((entry) => entry.name === "fetch")?.from).toBe("platform");
+      expect(capabilities.find((entry) => entry.name === "fetch")?.from).toBe("defaults");
     },
   },
   "journal-is-the-record": {

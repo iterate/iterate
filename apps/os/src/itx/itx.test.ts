@@ -356,9 +356,9 @@ describe("chain delegation", () => {
     return {
       describe: vi.fn(async () => [
         // The parent's own merged view: `ai` arrived from ITS parent (the
-        // platform link, already stamped); `inherited` is the parent's own
+        // defaults link, already stamped); `inherited` is the parent's own
         // entry, so it carries no provenance field yet.
-        { from: "platform", kind: "rpc" as const, meta: {}, name: "ai", updatedAtMs: 0 },
+        { from: "defaults", kind: "rpc" as const, meta: {}, name: "ai", updatedAtMs: 0 },
         { kind: "rpc" as const, meta: {}, name: "inherited", updatedAtMs: 1 },
       ]),
       invoke: vi.fn(async () => "from-parent"),
@@ -408,10 +408,10 @@ describe("chain delegation", () => {
     const itx = makeItx({ contextId: "itx_a", parent, parentFrom: "prj_1" });
 
     // Before any own provide: everything is inherited. A deeper ancestor's
-    // stamp ("platform") survives verbatim; the parent's own entry is
+    // stamp ("defaults") survives verbatim; the parent's own entry is
     // stamped with this link's label, exactly one level below its owner.
     expect((await itx.describe()).map(({ from, name }) => ({ from, name }))).toEqual([
-      { from: "platform", name: "ai" },
+      { from: "defaults", name: "ai" },
       { from: "prj_1", name: "inherited" },
     ]);
 
@@ -424,7 +424,7 @@ describe("chain delegation", () => {
     expect(described[0]).not.toHaveProperty("from");
   });
 
-  test("platform defaults shadow and resurface as chain consequences", async () => {
+  test("the defaults shadow and resurface as chain consequences", async () => {
     const parent = parentStub();
     const { dial, dialed } = fakeDial();
     const itx = makeItx({ dial, parent });
@@ -442,7 +442,9 @@ describe("chain delegation", () => {
     expect(parent.invoke).toHaveBeenCalledTimes(1);
 
     // Revoking the INHERITED entry itself refuses with the shadowing hint.
-    await expect(itx.revokeCapability({ name: "ai" })).rejects.toThrow(/platform default/);
+    await expect(itx.revokeCapability({ name: "ai" })).rejects.toThrow(
+      /inherited from the defaults/,
+    );
     // Revoking something that exists nowhere stays a no-op.
     await expect(itx.revokeCapability({ name: "neverExisted" })).resolves.toBeUndefined();
   });

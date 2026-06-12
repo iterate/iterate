@@ -478,14 +478,13 @@ const persisted = answer();
     }
   });
 
-  test("live-capability example registers and calls a session-owned target", async () => {
+  test("plain-object example registers and calls a session-owned target", async () => {
     // Mirrors a PROJECT-scoped itx handle: provideCapability() with a live
     // capability registers it, and unknown names on the handle fall through
     // to a path proxy whose terminal call dispatches exactly like the core:
     // a call-implementing target receives the path as data; a plain object
     // (no `call`) has the path replayed onto its members.
     const providedTargets = new Map<string, Record<string, unknown>>();
-    const alert = vi.fn();
     const itx = new Proxy(
       {
         provideCapability(input: { name: string; capability: Record<string, unknown> }) {
@@ -508,18 +507,20 @@ const persisted = answer();
     );
 
     const example = ITX_EXAMPLES.find((candidate) => {
-      return candidate.id === "provide-live-capability";
+      return candidate.id === "provide-plain-object";
     });
-    if (!example) throw new Error("Missing provide-live-capability example.");
+    if (!example) throw new Error("Missing provide-plain-object example.");
 
     await expect(
       evalBrowserReplSessionCode({
         code: example.code,
         itx,
-        scope: { ...createBrowserReplScope(), alert },
+        scope: createBrowserReplScope(),
       }),
-    ).resolves.toBe("alerted");
-    expect(alert).toHaveBeenCalledWith("The answer is 42");
+    ).resolves.toEqual({
+      deep: { answer: 42, question: "life, the universe, everything" },
+      ultimate: 42,
+    });
   });
 
   test("snippets ending in a top-level return produce that value", async () => {

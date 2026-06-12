@@ -161,7 +161,7 @@ test("extend: workspaces are HOST-provided — plain extensions share the projec
   using projectItx = await itx.projects.get(project.id);
 
   // Workspaces are not itx's concern (no per-context derivation magic): the
-  // platform context provides the PROJECT workspace explicitly, so a plain
+  // defaults provide the PROJECT workspace explicitly, so a plain
   // extension inherits that same workspace through the chain…
   using child = await projectItx.extend({ name: "e2e-ws" });
   const handle = (target: unknown) => target as never as Record<string, any>;
@@ -295,7 +295,7 @@ test(
         seen.push(url);
         // Middleware: delegate to the UNSHADOWED pipe — itx.super is the
         // "call next()" of the chain (the parent context has no shadow, so
-        // its `fetch` resolves the platform default).
+        // its `fetch` resolves the default).
         const delegated = (await childHandle.super.fetch(url)) as Response;
         return new Response(JSON.stringify({ delegatedStatus: delegated.status, shadowed: true }), {
           headers: { "content-type": "application/json" },

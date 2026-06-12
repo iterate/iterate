@@ -15,8 +15,8 @@
 // Everything effectful is injected: `dial` turns a CapabilityAddress into
 // something speaking `call({ path, args })` (dial.ts builds it; the core
 // never touches env or a project id), `parentItx` is a stub of the parent
-// context's core (chain delegation — the platform defaults are simply the
-// chain's code-rooted final link, platform-context.ts), and the journal
+// context's core (chain delegation — the defaults are simply the chain's
+// code-rooted final link, platform-context.ts), and the journal
 // append/read pair rides in as the processor's iterate context.
 //
 // Hosts: the Project DO and ItxDurableObject expose the core via an `itx()`
@@ -34,15 +34,16 @@ import {
   type PathCall,
   type PathCallable,
 } from "./path-proxy.ts";
-import type {
-  CapabilityAddress,
-  CapabilityDescription,
-  CapabilityKind,
-  CapabilityMeta,
-  CapabilityTarget,
-  ItxOrigin,
-  WorkerRef,
-  WorkerSource,
+import {
+  DEFAULTS_DESCRIBE_FROM,
+  type CapabilityAddress,
+  type CapabilityDescription,
+  type CapabilityKind,
+  type CapabilityMeta,
+  type CapabilityTarget,
+  type ItxOrigin,
+  type WorkerRef,
+  type WorkerSource,
 } from "./types.ts";
 
 // Server-side one-stop: the calling-convention pieces live in path-proxy.ts
@@ -57,6 +58,7 @@ export {
   type PathCallable,
 } from "./path-proxy.ts";
 export { ItxContract, ITX_EVENT_TYPES, type ItxState } from "./contract.ts";
+export { DEFAULTS_DESCRIBE_FROM } from "./types.ts";
 export type {
   CapabilityAddress,
   CapabilityDescription,
@@ -241,7 +243,7 @@ export type ItxDeps = {
    * because a generic context learns its parent from its own birth
    * certificate (state), which exists only after the journal is consumed.
    * `from` is how describe() labels entries inherited through this link —
-   * the parent's context id, or "platform" at the code root (the internal
+   * the parent's context id, or "defaults" at the code root (the internal
    * platform:project id never leaves the chain). */
   parentItx: () => { from: string; stub: ItxStub } | null;
   /** Processor-mode execution: run one enqueued script-execution-requested
@@ -312,7 +314,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       }
       kind = "live";
       const live = isLocalBareFunction(input.capability)
-        ? localFunctionCapability(input.capability)
+        ? localFunctionCapability(input.capability, name)
         : (input.capability as LiveProvider);
       this.#registerLiveStub(name, live);
     }
@@ -360,7 +362,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
   /**
    * Remove an entry (exact path match, never prefix) by appending
    * `capability-revoked`. Only this context's OWN entries can be revoked:
-   * inherited entries (platform defaults, ancestors') resolve through the
+   * inherited entries (the defaults, ancestors') resolve through the
    * chain, so "revoking" one here would lie — shadow it instead. Revoking a
    * shadow resurfaces whatever the chain resolves, by construction.
    */
@@ -379,8 +381,9 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
         const from = inherited.from ?? parent!.from;
         throw new Error(
           `Capability "${name}" is not provided on this context — it is inherited from ` +
-            `${from === "platform" ? "the platform defaults" : `context ${from}`} and cannot ` +
-            `be revoked here; provide your own "${name}" to shadow it.`,
+            `${from === DEFAULTS_DESCRIBE_FROM ? "the defaults" : `context ${from}`} and cannot ` +
+            `be revoked here; provide your own "${name}" on this context to take its place; ` +
+            `the original stays on the parent.`,
         );
       }
       return;
@@ -392,7 +395,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
   /**
    * The merged chain view: own entries first (no provenance field — they are
    * yours), then the parent chain's, each carrying `from` (the context the
-   * entry actually lives on; the platform defaults read `from: "platform"`).
+   * entry actually lives on; the defaults read `from: "defaults"`).
    * Suppression is deliberately EXACT-match only: a path provide
    * ("sdk.chat.postMessage") shadows just its subtree — the parent's "sdk"
    * stays live for every other path, so hiding it here would lie about what
@@ -681,7 +684,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       // materializes a callable proxy for any member name, `call` included.
       if (typeof borrowed.call === "function") return borrowed as unknown as PathCallable;
       return {
-        call: (input: PathCall) => replayPathCall(borrowed, input),
+        call: (input: PathCall) => replayPathCall(borrowed, input, { capability: entry.name }),
         [Symbol.dispose]: () => disposeIfPossible(borrowed),
       } as PathCallable;
     }
@@ -716,7 +719,7 @@ export function resolveLongestProvidedPrefix<Entry>(
  * Names that may never be FIRST path segments: a cap must not shadow the
  * trust kernel (it is reachable as `itx.<name>`, so it competes with the
  * handle's built-ins). `fetch` and `streams` are deliberately NOT here:
- * both are shadowable platform default capabilities (providing your own
+ * both are shadowable default capabilities (providing your own
  * `fetch` is how egress interception works) — the handle's real members
  * still win property lookup; they route through the core anyway.
  */
@@ -824,8 +827,10 @@ function truncateSelfDescription(value: string): string {
  * empty remainder calls the function, a deeper remainder errors (replayed
  * in-process). The wrap exists because a bare function would otherwise look
  * call-speaking to dispatch — `fn.call` IS a function (Function.prototype). */
-function localFunctionCapability(fn: (...args: never[]) => unknown): LiveProvider {
-  return { call: (input: PathCall) => replayPathCall(fn, input) } as LiveProvider;
+function localFunctionCapability(fn: (...args: never[]) => unknown, name: string): LiveProvider {
+  return {
+    call: (input: PathCall) => replayPathCall(fn, input, { capability: name }),
+  } as LiveProvider;
 }
 
 function isPlainObject(target: unknown): boolean {

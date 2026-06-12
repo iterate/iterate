@@ -120,7 +120,7 @@ export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
   async fetch(request: Request): Promise<Response> {
     // Dispatch at the ORIGINATING context node, not the project: a child
     // context's `fetch` shadow must catch its isolates' bare fetch() too —
-    // the chain (child → project → platform defaults) is what resolves the
+    // the chain (child → project → the defaults) is what resolves the
     // cap. The address rides in props so the hot path never needs the
     // context catalog.
     const address =

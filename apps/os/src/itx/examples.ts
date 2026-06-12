@@ -96,44 +96,16 @@ return { appended, count: events.length };
 `.trim(),
   },
   {
-    id: "provide-live-capability",
-    title: "Provide a live, browser-owned capability",
-    description:
-      "Registers a browser-owned object as a LIVE capability on the project (session-bound — it lives only while this REPL tab is connected), then calls it straight back through the itx fallthrough as itx.answer.run().",
-    context: "project",
-    runtimes: ["browser"],
-    code: `
-// A live capability is just an object you own. Its methods run HERE, in
-// the browser tab — the project calls back to you over the open session.
-const answer = {
-  async run() {
-    alert("The answer is 42");
-    return "alerted";
-  },
-};
-
-// provideCapability() is THE verb, and you pass your object DIRECTLY —
-// there is no client library between you and the capability table. Dotted
-// calls replay onto its members, back here where they live. A live cap
-// disappears when this tab disconnects; reconnect and provideCapability()
-// again to restore it.
-await itx.provideCapability({ name: "answer", capability: answer });
-
-// Unknown names on the handle fall through to the capability table, so the cap is
-// callable as if it were built in.
-return await itx.answer.run();
-`.trim(),
-  },
-  {
     id: "provide-plain-object",
     title: "Provide a plain object — it IS the capability",
     description:
-      "You pass your object; there is no client library between you and the capability table. A plain object of functions (nested at any depth) is a live capability: dotted calls replay onto its members, back in the provider's process. Session-bound, like every live cap.",
+      "You pass your object; there is no client library between you and the capability table. A plain object of functions (nested at any depth) is a live capability: dotted calls replay onto its members, back in the provider's process — your browser tab or Node session. Live caps are session-bound: gone when the session disconnects, back when you reconnect and provide again.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
 // No wrapper, no base class, no registration ceremony — the object you
-// already have is the capability.
+// already have is the capability. Its methods run HERE, in your process;
+// the project calls back to you over the open session.
 const answer = {
   ultimate: () => 42,
   deep: {
@@ -148,8 +120,10 @@ await itx.provideCapability({
   capability: answer,
 });
 
-// Methods are reachable at ANY depth through the fallthrough; each call
-// runs back here, where the object lives.
+// Unknown names on the handle fall through to the capability table, so the
+// cap is callable as if it were built in — at any depth; each call runs
+// back here, where the object lives. (A live cap disappears when this
+// session disconnects; reconnect and provideCapability() again to restore it.)
 return {
   ultimate: await itx.answer.ultimate(),
   deep: await itx.answer.deep.thought("life, the universe, everything"),
@@ -232,7 +206,7 @@ return {
     id: "repo-sourced-capability",
     title: "Code in your repo as a capability, built per commit",
     description:
-      "The project's own git repo is a capability source: commit a module, then provide a { type: 'repo' } address pointing at the file. The platform builds it per COMMIT (memoized), never per call — 'latest' tracks pushes; a pinned sha makes the journal entry fully determine behavior. The platform `worker` default is exactly this pattern.",
+      "The project's own git repo is a capability source: commit a module, then provide a { type: 'repo' } address pointing at the file. The platform builds it per COMMIT (memoized), never per call — 'latest' tracks pushes; a pinned sha makes the journal entry fully determine behavior. The `worker` default is exactly this pattern.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -507,7 +481,7 @@ await child.provideCapability({
 
 // ...so the child sees its own, while the project still sees its own.
 // In the merged describe(), the child's entries carry no provenance field;
-// inherited ones say from: <context> ("platform" for the defaults).
+// inherited ones say from: <context> ("defaults" for the defaults).
 return {
   fromChild: await child.shared.whoami(),
   capabilities: (await child.describe()).capabilities, // merged chain, child entries first
@@ -546,7 +520,7 @@ return { traceHeaderSeen: echoed.headers["x-trace-id"] };
     id: "journal-is-the-record",
     title: "The journal IS the record: provide, revoke, read it back",
     description:
-      "A context's capability table is a fold of an ordinary event stream — its journal at /itx. provideCapability and revokeCapability are appends; read the stream back and watch the record happen. There is no hidden registry to drift from it.",
+      "A context's capability table is replayed from an ordinary event stream — its journal at /itx. provideCapability and revokeCapability are appends; read the stream back and watch the record happen. There is no hidden registry to drift from it.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `

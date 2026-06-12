@@ -12,7 +12,7 @@
 //   - typed built-ins (the trust kernel): the verbs provideCapability,
 //     revokeCapability, describe, extend, invoke — plus super, streams,
 //     project, projects, and `fetch`, which is sugar dispatching through the
-//     core's `fetch` capability (a shadowable platform default)
+//     core's `fetch` capability (a shadowable default)
 //   - a fallthrough Proxy: any unknown name becomes a PathProxy whose
 //     terminal call dispatches to the context node's core (node.itx()).
 //     itx.slack works because someone provided "slack", not because anything
@@ -346,8 +346,8 @@ export class ItxHandle extends RpcTarget {
    * `await itx.super` also works and yields the parent handle's surface.
    *
    * An extension's parent comes from its birth certificate; the project
-   * context's parent IS the platform context (the chain's code root); the
-   * platform context is the end of the line.
+   * context's parent IS the defaults (the chain's code root); the
+   * defaults are the end of the line.
    */
   get super(): ItxHandle {
     const parentHandle = async (): Promise<ItxHandle> => {
@@ -373,11 +373,11 @@ export class ItxHandle extends RpcTarget {
       if (this.#runtime.contextId === PLATFORM_PROJECT_CONTEXT_ID) {
         throw new ItxError({
           code: "BAD_REQUEST",
-          message: "The platform context is the chain root — it has no parent.",
+          message: "The defaults are the chain root — they have no parent.",
         });
       }
-      // The project context's parent IS the platform defaults link: a
-      // read-only code context, dialed in-process.
+      // The project context's parent IS the defaults link: a read-only code
+      // context, dialed in-process.
       return new ItxHandle({
         ...this.#runtime,
         capabilityPath: undefined,
@@ -436,7 +436,7 @@ export class ItxHandle extends RpcTarget {
    * project contexts, an ItxDurableObject for extended children — both
    * expose it via itx() (a method, so `node.itx().invoke(...)` pipelines in
    * ONE round trip; workerd does not pipeline calls through property
-   * accesses) — or the in-process platform context at the chain root. The
+   * accesses) — or the in-process defaults context at the chain root. The
    * runtime carries the ADDRESS; global handles get the narrow-first error.
    */
   #itx(): ItxStub {

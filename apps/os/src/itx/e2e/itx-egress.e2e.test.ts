@@ -128,7 +128,7 @@ test("bare fetch() inside a worker cap goes through egress (implicit door)", asy
   expect(echoedHeader(probe.body)).toContain(SECRET_MATERIAL);
 });
 
-test("itx.secrets: set a secret through the platform default, then fetch with its placeholder", async () => {
+test("itx.secrets: set a secret through the default, then fetch with its placeholder", async () => {
   using itx = connectGlobal();
   const project = (await itx.projects.create({ slug: `itx-secrets-${suffix()}` })) as {
     id: string;
@@ -138,7 +138,7 @@ test("itx.secrets: set a secret through the platform default, then fetch with it
   await waitForProjectReady(projectItx);
 
   // The secrets-and-egress catalogue example's flow: store material once via
-  // the `secrets` platform default, reference it by KEY in an egress header,
+  // the `secrets` default, reference it by KEY in an egress header,
   // and the pipe substitutes server-side.
   const handle = projectItx as never as Record<string, any>;
   const material = `lifecycle-${crypto.randomUUID()}`;
