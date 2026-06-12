@@ -3,8 +3,12 @@
 // suite cannot read process.env, so vitest.config.ts injects the same values
 // there via `define` (__ITX_BROWSER_E2E__) instead of importing this file.
 
+import { fileURLToPath } from "node:url";
 import { afterAll } from "vitest";
 import { withItx, type ItxClient } from "../client.ts";
+import { localDevServerBaseUrl } from "../../../e2e/test-support/dev-server.ts";
+
+const appRoot = fileURLToPath(new URL("../../..", import.meta.url));
 
 export function adminApiSecret() {
   const secret =
@@ -20,8 +24,13 @@ export function baseUrl() {
   const url =
     process.env.OS_ITX_E2E_BASE_URL?.trim().replace(/\/+$/, "") ||
     process.env.APP_CONFIG_BASE_URL?.trim().replace(/\/+$/, "") ||
+    localDevServerBaseUrl(appRoot) ||
     "";
-  if (!url) throw new Error("APP_CONFIG_BASE_URL is required for itx e2e tests.");
+  if (!url) {
+    throw new Error(
+      "APP_CONFIG_BASE_URL is required for itx e2e tests, or start local dev with `pnpm dev` first.",
+    );
+  }
   return url;
 }
 

@@ -161,7 +161,7 @@ const env: Record<string, string | undefined> = {
 // a free port, bakes APP_CONFIG_BASE_URL=http://os.localhost:<port>, and
 // writes .alchemy/dev-server.json so CLIs can find the running server. No-op
 // for configs that set APP_CONFIG_BASE_URL (tunnel-backed dev_<user>,
-// dev_localhost, deploys).
+// deploys, or explicit one-off overrides).
 const localDevServer = await prepareLocalDevServer(env, { appSlug: "os" });
 if (localDevServer && !env.APP_CONFIG_PROJECT_HOSTNAME_BASES) {
   // Project hosts resolve as <proj-slug>.os.localhost:<port> in the browser.

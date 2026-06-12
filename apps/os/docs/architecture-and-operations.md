@@ -153,7 +153,7 @@ OS has two MCP flows:
 - Inbound MCP: external MCP clients connect to the canonical MCP endpoint.
   `handleMcpFetch` (`src/domains/inbound-mcp-server/mcp-handler.ts`) matches
   the URL from `APP_CONFIG_MCP__BASE_URL` (for example
-  `https://mcp.iterate.com`; localhost-oriented dev defaults to
+  `https://mcp.iterate.com`; fully-local dev defaults to
   `<baseUrl>/api/__mcp`) and delegates session state to the
   `ProjectMcpServerConnection` Durable Object via `McpAgent.serve`.
 - Outbound MCP: a codemode session uses an external MCP server as a Tool

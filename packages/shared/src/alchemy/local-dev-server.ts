@@ -14,26 +14,35 @@ import { join } from "node:path";
  *
  * The port is picked at startup and baked into `APP_CONFIG_BASE_URL` (env is
  * the source of truth — request-sniffing doesn't work for cron/scheduled
- * work). `.alchemy/dev-server.json` records {pid, port, baseUrl} so CLIs and
- * scripts can find "the" dev server without flags. One dev server per
- * worktree: a second `pnpm dev` refuses to start while the recorded pid is
+ * work). `.alchemy/dev-server.json` records {pid, port, baseUrl, logPath} so
+ * CLIs and scripts can find "the" dev server without flags. One dev server
+ * per worktree: a second `pnpm dev` refuses to start while the recorded pid is
  * alive.
  */
 
-type DevServerInfo = {
+export type DevServerInfo = {
   pid: number;
   port: number;
   baseUrl: string;
+  logPath?: string;
   startedAt: string;
 };
 
 const DEV_SERVER_INFO_FILENAME = "dev-server.json";
+const DEV_SERVER_LOG_FILENAME = "dev-server.log";
 
 function devServerInfoPath(appDir: string) {
   return join(appDir, ".alchemy", DEV_SERVER_INFO_FILENAME);
 }
 
-function readDevServerInfoFile(appDir: string): DevServerInfo | null {
+export function localDevServerLogPath(appDir: string) {
+  return join(appDir, ".alchemy", DEV_SERVER_LOG_FILENAME);
+}
+
+export function readLocalDevServerInfo(
+  appDir: string,
+  opts: { requireLive?: boolean } = {},
+): DevServerInfo | null {
   const path = devServerInfoPath(appDir);
   if (!existsSync(path)) return null;
   try {
@@ -45,6 +54,7 @@ function readDevServerInfoFile(appDir: string): DevServerInfo | null {
     ) {
       return null;
     }
+    if (opts.requireLive && !isPidAlive(parsed.pid)) return null;
     return parsed;
   } catch {
     return null;
@@ -109,7 +119,7 @@ export async function prepareLocalDevServer(
   if (env.APP_CONFIG_BASE_URL?.trim()) return null;
 
   const appDir = opts.appDir ?? process.cwd();
-  const existing = readDevServerInfoFile(appDir);
+  const existing = readLocalDevServerInfo(appDir);
   if (existing && existing.pid !== process.pid && isPidAlive(existing.pid)) {
     throw new Error(
       `A dev server for this worktree is already running (pid ${existing.pid}, ${existing.baseUrl}). ` +
@@ -124,6 +134,7 @@ export async function prepareLocalDevServer(
   const port = await pickFreePort(envPort ?? existing?.port);
 
   const baseUrl = `http://${opts.appSlug}.localhost:${port}`;
+  const logPath = env.DEV_SERVER_LOG_PATH?.trim() || localDevServerLogPath(appDir);
   env.PORT = String(port);
   env.HOST ||= "127.0.0.1";
   env.APP_CONFIG_BASE_URL = baseUrl;
@@ -136,6 +147,7 @@ export async function prepareLocalDevServer(
     pid: process.pid,
     port,
     baseUrl,
+    logPath,
     startedAt: new Date().toISOString(),
   };
 
@@ -145,7 +157,7 @@ export async function prepareLocalDevServer(
 
   const cleanup = () => {
     try {
-      const current = readDevServerInfoFile(appDir);
+      const current = readLocalDevServerInfo(appDir);
       if (current?.pid === process.pid) {
         rmSync(path, { force: true });
       }

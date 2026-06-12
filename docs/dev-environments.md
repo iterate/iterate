@@ -70,12 +70,17 @@ https://os.iterate-dev-<you>.com`, fixed port 5173, a cloudflared tunnel
   `preview` root on 2026-06-12.)
 
 - The chosen port is baked into the env (`APP_CONFIG_BASE_URL`) at startup and
-  recorded in **`apps/os/.alchemy/dev-server.json`** (`{pid, port, baseUrl}`).
+  recorded in **`apps/os/.alchemy/dev-server.json`**
+  (`{pid, port, baseUrl, logPath}`).
   Scripts and CLIs that need "the local dev server" read that file — no
   flags, no guessing. One dev server per worktree: a second `pnpm dev` refuses
   while the first is alive. The file appears ~10–15s before the port actually
   accepts connections (Vite is still booting) — poll the base URL until it
   returns a response before driving it.
+- Dev server output is mirrored to the gitignored
+  **`apps/os/.alchemy/dev-server.log`**. Tail it from another terminal with
+  `tail -f apps/os/.alchemy/dev-server.log` from the repo root, or
+  `tail -f .alchemy/dev-server.log` from `apps/os`.
 - Project hosts work in the browser as `<proj-slug>.os.localhost:<port>`.
   (curl/Node don't resolve `*.localhost` — use `127.0.0.1:<port>` with a Host
   header, or plain `localhost:<port>`.)

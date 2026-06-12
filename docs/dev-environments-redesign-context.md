@@ -252,7 +252,7 @@ agent configs. The decision tree:
     and it triggers an approval popup that hangs unattended agents. The doc includes the
     golden-path instructions for this case too, so when it _is_ requested it's done right.
     Sign-in for any of these: the minted `session-from-token` URL.
-    C. **Kill list (same PR or fast-follow):** `dev-all` script, `dev_localhost` config,
+    C. **Kill list (same PR or fast-follow):** `dev-all` script, legacy localhost-only config,
     `ensureLocalDevOAuthClient` + `sync-auth-clients.ts` (superseded by seed + loopback
     client), `ITERATE_OAUTH_*`/`ITERATE_AUTH_*` aliases (and the
     `APP_CONFIG_ITERATE_AUTH__*` → `APP_CONFIG_AUTH__*` rename), **cloudflared entirely**
