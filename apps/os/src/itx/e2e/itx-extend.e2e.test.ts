@@ -49,7 +49,8 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
   expect(viaChain.marker).toBe("project-level");
 
   // (2) The child provides its own capability under the SAME name → shadows
-  // visibly (describe reports the owner).
+  // visibly: exactly one `shared` survives, and it is an OWN entry (no
+  // `from` — that field marks inherited entries only).
   await child.provideCapability({
     name: "shared",
     capability: chatPostTarget("child-level"),
@@ -59,10 +60,10 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
   })) as { marker: string };
   expect(viaShadow.marker).toBe("child-level");
 
-  const merged = (await child.describe()).capabilities as Array<{ name: string; owner: string }>;
+  const merged = (await child.describe()).capabilities as Array<{ from?: string; name: string }>;
   const shared = merged.filter((entry) => entry.name === "shared");
   expect(shared).toHaveLength(1);
-  expect(String(shared[0]!.owner)).toMatch(/^itx_/);
+  expect(shared[0]!.from).toBeUndefined();
 
   // (3) The parent is untouched — and a sibling extension sees the parent's cap.
   using sibling = await projectItx.extend();
@@ -160,7 +161,7 @@ test("extend: workspaces are HOST-provided — plain extensions share the projec
   using projectItx = await itx.projects.get(project.id);
 
   // Workspaces are not itx's concern (no per-context derivation magic): the
-  // platform context provides the PROJECT workspace explicitly, so a plain
+  // defaults provide the PROJECT workspace explicitly, so a plain
   // extension inherits that same workspace through the chain…
   using child = await projectItx.extend({ name: "e2e-ws" });
   const handle = (target: unknown) => target as never as Record<string, any>;
@@ -282,7 +283,7 @@ test(
     // genuine default pipe.
     const probeUrl = new URL("/api/itx", baseUrl()).toString();
 
-    // The shadow is a BARE FUNCTION — no RpcTarget, no asPathCallable. It
+    // The shadow is a BARE FUNCTION — no RpcTarget, no wrapper of any kind. It
     // crosses the provide input nested inside a plain object, which is the
     // bare-nested-function-over-capnweb serialization proof: capnweb stubs
     // the function, the platform probes the stub (a pure property pull) and
@@ -294,7 +295,7 @@ test(
         seen.push(url);
         // Middleware: delegate to the UNSHADOWED pipe — itx.super is the
         // "call next()" of the chain (the parent context has no shadow, so
-        // its `fetch` resolves the platform default).
+        // its `fetch` resolves the default).
         const delegated = (await childHandle.super.fetch(url)) as Response;
         return new Response(JSON.stringify({ delegatedStatus: delegated.status, shadowed: true }), {
           headers: { "content-type": "application/json" },

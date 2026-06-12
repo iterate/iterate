@@ -1,10 +1,10 @@
-// The platform context: the code-rooted FINAL LINK of every project's
+// The defaults: the code-rooted FINAL LINK of every project's
 // capability chain (itx-next.md, "LOCKED: the final shape" — "Defaults live
 // on the parent chain; the root of every chain is code").
 //
 //   itx_a1b2 → project → platform:project (THIS, code)
 //
-// There is exactly ONE capability map per context; the platform defaults are
+// There is exactly ONE capability map per context; the defaults are
 // not a layer inside any instance — they are this context's provides,
 // reached by ordinary chain delegation. Shadowing, revoke-resurfaces-
 // the-default, and deploy-updates are consequences of the chain, not rules:
@@ -47,7 +47,7 @@ export const PROJECT_WORKER_SOURCE = {
   type: "repo",
 } as const satisfies import("./itx.ts").WorkerSource;
 
-/** The platform context's own address — pure code behind a loopback name. */
+/** The defaults context's own address — pure code behind a loopback name. */
 export const PLATFORM_PROJECT_CONTEXT_ADDRESS: CapabilityAddress = {
   entrypoint: "PlatformContext",
   type: "rpc",
@@ -105,6 +105,21 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     name: "streams",
   },
   {
+    // The project's secret store — the WRITE half of the placeholder design:
+    // store material once (itx.secrets.setSecret), then reference it in any
+    // egress header as getSecret({ key }) and the egress pipe substitutes it
+    // server-side. The itx surface is writes + redacted summaries ONLY —
+    // material never crosses an itx boundary (secrets-capability-call.ts).
+    address: { entrypoint: "SecretsCapability", type: "rpc", worker: { type: "loopback" } },
+    instructions:
+      "Project secrets: itx.secrets.setSecret({ key, material }), listSecrets() " +
+      "(redacted summaries), getSecretSummaryByKey({ key }), deleteSecret({ key }). " +
+      'Reference a stored secret in any outbound-HTTP header as getSecret({ key: "…" }) ' +
+      "— the platform substitutes the real value inside its own outbound-HTTP layer; " +
+      "your code only ever sees the placeholder.",
+    name: "secrets",
+  },
+  {
     address: { entrypoint: "ReposCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
       "The project's git repos: itx.repos.ensureProjectRepoInfo({ projectSlug }), " +
@@ -155,12 +170,14 @@ export type PlatformContextProps = {
  */
 export class PlatformContext extends WorkerEntrypoint<Env, PlatformContextProps> {
   async describe(): Promise<CapabilityDescription[]> {
+    // These are this context's OWN entries, so no `from` here — the project
+    // core stamps `from: "defaults"` (DEFAULTS_DESCRIBE_FROM, types.ts) when
+    // it merges them into a chain view (Itx.describe).
     return PLATFORM_PROJECT_CAPABILITIES.map((capability) => ({
       instructions: capability.instructions,
       kind: capability.address.type,
-      meta: { instructions: capability.instructions },
+      meta: {},
       name: capability.name,
-      owner: PLATFORM_PROJECT_CONTEXT_ID,
       updatedAtMs: 0,
     }));
   }
@@ -173,9 +190,13 @@ export class PlatformContext extends WorkerEntrypoint<Env, PlatformContextProps>
     );
     const resolved = resolveLongestProvidedPrefix(byName, input.path);
     if (!resolved) {
+      // This is the error every FULL-chain miss surfaces to the caller (the
+      // chain root answers last), so it must read as "nothing anywhere",
+      // not name internal plumbing like the platform:project chain id.
       throw new Error(
-        `No capability named "${input.path[0] ?? ""}" in context ${PLATFORM_PROJECT_CONTEXT_ID}` +
-          (input.path.length > 1 ? ` (call path "${input.path.join(".")}").` : `.`),
+        `No capability named "${input.path[0] ?? ""}" on this context or anywhere up its chain` +
+          (input.path.length > 1 ? ` (call path "${input.path.join(".")}").` : `.`) +
+          ` describe() lists what exists.`,
       );
     }
     const origin = input.origin ?? {
@@ -190,7 +211,7 @@ export class PlatformContext extends WorkerEntrypoint<Env, PlatformContextProps>
       exports: this.ctx.exports as unknown as Parameters<typeof makeDial>[0]["exports"],
       // The `worker` default is a repo SOURCE, so the chain's code root must
       // be able to load isolates (no facets: this entrypoint is stateless,
-      // and no platform default is a durable-object source).
+      // and no default is a durable-object source).
       loader: (this.env as { LOADER?: unknown }).LOADER as Parameters<typeof makeDial>[0]["loader"],
       projectId,
     });
@@ -207,21 +228,21 @@ export class PlatformContext extends WorkerEntrypoint<Env, PlatformContextProps>
 
   async provideCapability(_input: ProvideCapabilityInput): Promise<never> {
     throw new Error(
-      "The platform context is read-only — its capabilities ship with the deploy. " +
+      "The defaults are read-only — they ship with the deploy. " +
         "Provide on your own context to shadow a default.",
     );
   }
 
   async revokeCapability(_input: { name?: string; path?: string[] }): Promise<never> {
     throw new Error(
-      "The platform context is read-only — its capabilities ship with the deploy " +
+      "The defaults are read-only — they ship with the deploy " +
         "and cannot be revoked; shadow them on your own context instead.",
     );
   }
 }
 
 /** The in-process parent link a project context's core delegates to: the
- * loopback dial of the platform context, parameterized by project. */
+ * loopback dial of the defaults context, parameterized by project. */
 export function getPlatformContext(input: {
   exports: Record<string, (options: { props: Record<string, unknown> }) => unknown>;
   projectId: string;

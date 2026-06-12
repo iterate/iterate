@@ -11,6 +11,8 @@ export async function connectMcp(input: {
   /** All transport HTTP goes through this (e.g. the project egress pipe). */
   fetch?: McpFetch;
   headers?: Record<string, string>;
+  /** Per-request deadline for the initialize handshake. */
+  requestOptions?: McpRequestOptions;
   serverUrl: string;
 }): Promise<Client> {
   const transport = new StreamableHTTPClientTransport(new URL(input.serverUrl), {
@@ -19,7 +21,7 @@ export async function connectMcp(input: {
   });
   const client = new Client({ name: "itx-mcp-client", version: "1.0.0" });
   try {
-    await client.connect(transport);
+    await client.connect(transport, input.requestOptions);
   } catch (error) {
     // A partial handshake can leave server-side session state dangling.
     await client.close().catch(() => {});
@@ -28,8 +30,10 @@ export async function connectMcp(input: {
   return client;
 }
 
-export async function listMcpTools(client: Client) {
-  const response = await client.listTools();
+export type McpRequestOptions = { timeout?: number };
+
+export async function listMcpTools(client: Client, options?: McpRequestOptions) {
+  const response = await client.listTools(undefined, options);
   return {
     tools: response.tools.map((tool) => ({
       name: tool.name,
@@ -42,6 +46,7 @@ export async function listMcpTools(client: Client) {
 export async function executeMcpToolCall(input: {
   args: unknown[];
   client: Client;
+  options?: McpRequestOptions;
   path: string[];
 }) {
   const toolName = input.path[0];
@@ -55,7 +60,11 @@ export async function executeMcpToolCall(input: {
       ? (firstArg as Record<string, unknown>)
       : {};
 
-  const result = await input.client.callTool({ name: toolName, arguments: args });
+  const result = await input.client.callTool(
+    { name: toolName, arguments: args },
+    undefined,
+    input.options,
+  );
 
   if (result.structuredContent != null) return result.structuredContent;
 

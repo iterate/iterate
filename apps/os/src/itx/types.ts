@@ -206,7 +206,7 @@ export interface ItxBuiltins {
   }): Promise<CapabilityProvision>;
 
   /** Remove an entry — exact path match, never prefix; `name`/`path` as in
-   * {@link provideCapability}. Platform defaults cannot be revoked, only
+   * {@link provideCapability}. The defaults cannot be revoked, only
    * shadowed (revoking a shadow resurfaces the default). */
   revokeCapability(input: { name?: string; path?: string[] }): Promise<void>;
 
@@ -227,7 +227,7 @@ export interface ItxBuiltins {
 
   /**
    * Event streams, keyed by `(namespace, path)`. On a PROJECT handle this
-   * is a platform default cap (StreamsCapability loopback, shadowable) pinned to
+   * is a default cap (StreamsCapability loopback, shadowable) pinned to
    * the project's namespace; on a GLOBAL handle it is kernel — the
    * deployment-wide `"global"` namespace gated on the connect-time access
    * set, which no cap definition can express. See {@link StreamRef} for
@@ -239,12 +239,12 @@ export interface ItxBuiltins {
    * is no separate "project object"; a narrowed itx IS the project. */
   readonly projects: ItxProjects;
 
-  /** PLATFORM DEFAULT, not kernel (§8 shipped): the project's git repos —
+  /** A DEFAULT, not kernel (§8 shipped): the project's git repos —
    * an ordinary `platform:project` cap definition (ReposCapability
    * loopback), shadowable like any inherited cap. Surface unchanged. */
   readonly repos: unknown;
 
-  /** PLATFORM DEFAULT, not kernel: workspace readFile/writeFile and the
+  /** A DEFAULT, not kernel: workspace readFile/writeFile and the
    * flat git methods (gitClone/gitAdd/gitCommit/gitPush/gitStatus — nested
    * RpcTargets do not survive RPC boundaries). Context-scoped: chain
    * delegation carries the ORIGINATING context, so an extended child context
@@ -252,7 +252,7 @@ export interface ItxBuiltins {
    * `platform:project`. */
   readonly workspace: unknown;
 
-  /** PLATFORM DEFAULT, not kernel: the project's own worker — an ordinary
+  /** A DEFAULT, not kernel: the project's own worker — an ordinary
    * `{ type: "repo" }` source provide pointed at the project repo, built
    * per commit. `itx.worker.someTool(args)` reaches any public method of
    * its default export. */
@@ -263,7 +263,7 @@ export interface ItxBuiltins {
   readonly project: unknown;
 
   /**
-   * PLATFORM DEFAULT, not kernel: explicit project egress, as sugar over the
+   * A DEFAULT, not kernel: explicit project egress, as sugar over the
    * context's `fetch` capability (`platform:project` defines the default).
    * The default pipe substitutes secret placeholders inside the project's
    * egress hop — `'Bearer getSecret({ key: "X_TOKEN" })'` in a header never
@@ -307,8 +307,8 @@ export interface ItxBuiltins {
    * A handle on the PARENT context — the "call next()" of middleware: a
    * `fetch` shadow delegates to the unshadowed pipe via
    * `itx.super.fetch(request)`. An extension's parent comes from its birth
-   * certificate; the project context's parent is the platform context (the
-   * chain's read-only code root).
+   * certificate; the project context's parent is the defaults (the chain's
+   * read-only code root).
    */
   readonly super: ItxHandle;
 }
@@ -354,9 +354,8 @@ export type ItxDescription = {
   /** Attribution: which capability's isolate holds this handle, if any
    * (the dotted route). */
   capabilityPath?: string;
-  /** The merged capability chain (own caps first, ancestors' after,
-   * shadowed names carry `owner` provenance), including each cap's
-   * `instructions`. */
+  /** The merged capability chain (own caps first, ancestors' after —
+   * inherited entries carry `from`), including each cap's `instructions`. */
   capabilities: CapabilityDescription[];
   /** The bound project's own description, if this handle has one. */
   project: unknown | null;
@@ -502,29 +501,36 @@ export type WorkerSource = (
  * The kernel knows exactly ONE calling convention: every capability is
  * dispatched as `target.call({ path, args })`. Whether a dotted path is
  * replayed onto a real member tree is decided at the EDGE where the
- * concrete object lives, never by core data:
+ * concrete object lives, never by core data — and the default is always
+ * "your object IS the capability":
  *
- * - The dial wraps the objects it resolves itself — env bindings, loader
- *   entrypoints, facets — with its own plain in-process wrapper (dial.ts),
- *   so a source cap just exports methods and its whole public surface is
- *   replayed:
+ * - A LIVE provider is just the value you pass: a plain object of methods
+ *   (nested as deep as you like) has the dotted path replayed onto its
+ *   members, back in the process where they live; a bare function is called
+ *   directly. No wrapper, no client library:
  *
  * ```ts
- * // source worker: class extends WorkerEntrypoint { add({a,b}) { … } }
- * itx.myCap.add({ a: 1, b: 2 })  // → wrap replays ["add"] on the entrypoint
+ * await itx.provideCapability({
+ *   name: "answer",
+ *   capability: { ultimate: () => 42, deep: { thought: (q) => think(q) } },
+ * });
+ * itx.answer.deep.thought("…")   // replays ["deep","thought"] on YOUR object
  * ```
  *
- * - A LIVE provider either implements `call` itself (the SDK shape — own
- *   your method-tree semantics; the public SDK docs become the tool docs)
- *   or wraps a plain object-of-methods with `asPathCallable` before
- *   providing (the replay then runs back in the provider's process):
+ * - A live provider that implements `call` itself owns its whole
+ *   method-tree semantics instead (the SDK shape — the public SDK docs
+ *   become the tool docs, with a ten-line forwarder):
  *
  * ```ts
  * // provider: class { call({ path, args }) { return slackApi(path.join("."), args[0]); } }
  * itx.slack.chat.postMessage({ … })   // → ONE call: call({ path: ["chat","postMessage"], … })
- *
- * await itx.provideCapability({ name: "mac", capability: asPathCallable({ run(src) { … } }) });
  * ```
+ *
+ * - The dial wraps the objects it resolves itself — env bindings, loader
+ *   entrypoints, facets — with its own plain in-process wrapper (dial.ts),
+ *   so a source cap just exports methods and its whole public surface is
+ *   replayed: `itx.myCap.add({ a: 1, b: 2 })` replays ["add"] on the
+ *   entrypoint.
  *
  * - Forwarders pick their INNER mode themselves: UrlDial always replays
  *   the path as capnweb member pipelining against the remote main.
@@ -548,8 +554,9 @@ export type LiveStub = object;
  * surfaces it in `describe()` — there is no schema. Two conventions worth
  * following, a pair: `instructions` for the human/agent (a sentence on what
  * the cap does and how to call it) and `types` for the machine/editor
- * (TypeScript declarations of the cap's surface). Both are lifted by
- * `describe()`.
+ * (TypeScript declarations of the cap's surface). Both are LIFTED to the
+ * entry's top level by `describe()` and removed from the projected meta —
+ * each fact appears once (the journal record keeps the full meta).
  */
 export type CapabilityMeta = {
   /** Shown in describe(); write it for the agent who finds this cap. */
@@ -567,19 +574,30 @@ export type CapabilityMeta = {
 /** A capability's kind is its provider's kind. */
 export type CapabilityKind = "live" | "rpc" | "url";
 
+/** How describe() labels entries inherited from the defaults — the
+ * code-rooted final link of every chain (platform-context.ts). The internal
+ * chain id stays internal plumbing; handles, agents, and the REPL see plain
+ * `from: "defaults"`: an inherited default you can shadow. */
+export const DEFAULTS_DESCRIBE_FROM = "defaults";
+
 /** A capability entry as reported by `describe()`. Never contains live stubs. */
 export type CapabilityDescription = {
   name: string;
   /** The target's kind: "live" | "rpc" | "url". */
   kind: CapabilityKind;
-  /** Which context owns the entry — provenance for shadowing visibility. */
-  owner: string;
+  /** INHERITED entries only: which chain link the entry comes from — a
+   * context id, or `"defaults"` ({@link DEFAULTS_DESCRIBE_FROM}) for the
+   * code-rooted defaults. The described context's own entries carry no
+   * provenance field at all. */
+  from?: string;
   /** Live caps only: is the provider currently connected? */
   connected?: boolean;
-  /** Lifted from meta for convenience: the one thing to read first. */
+  /** Lifted from meta: the one thing to read first. */
   instructions?: string;
   /** Lifted from meta: TypeScript declarations for the cap's surface. */
   types?: string;
+  /** The provide's remaining meta (e.g. `http`); `instructions`/`types`
+   * live at the top level, not in here. */
   meta: CapabilityMeta;
   updatedAtMs: number;
 };
