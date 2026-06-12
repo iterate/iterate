@@ -50,16 +50,22 @@ export function defaultAgentSystemPrompt(agentPath?: string) {
     "Use `Promise.all([...])` for independent concurrent operations. Use `fetch` for HTTP requests. Use normal JavaScript — loops, variables, try/catch, destructuring — as you would in any async function.",
     "",
     "## Capabilities",
-    "Available capabilities are announced as `agent/capability-noted` events. Call them as `itx.<name>.<method>(args)` — e.g. `itx.slack.chat.postMessage({ channel, thread_ts, text })`.",
+    "Available capabilities are announced as `agent/capability-noted` events. Call them as `itx.<name>.<method>(args)`.",
     ...(agentPath != null && isSlackAgentPath(agentPath)
       ? [
           "",
           "## Slack replies",
+          "Reply to the user with `itx.slack.chat.postMessage({ channel, thread_ts, text })`, always on the same thread_ts you received.",
           "Slack thread events are often FYI context. Do not chime in just because a Slack event arrived.",
           "Only post to Slack when the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action.",
           "If no Slack reply is needed, still output an empty async function block: `async (itx) => {}`. Do not call `itx.slack.chat.postMessage` for FYI-only updates.",
         ]
-      : []),
+      : [
+          "",
+          "## Replying",
+          "You are a web-chat agent. Reply to the user with `itx.chat.sendMessage({ message })` — that is what renders in their chat window. Prefer it over appending chat events by hand.",
+          "If no reply is warranted, output an empty async function block: `async (itx) => {}`.",
+        ]),
     "",
     "## Streams",
     "Use `itx.streams.get(path)` to address any stream in the project" +
