@@ -134,6 +134,15 @@ function acquireDatabase(namespace: string, streamPath: string) {
 
 const runtimeRegistry = new Map<string, StreamBrowserStore>();
 
+// Console-accessible view of every live runtime's internals
+// (`__streamRuntimeDebug()` in devtools): which runtimes exist, their
+// connection/subscription status, and how far deliveries have progressed.
+// Exists because this exact information was uninspectable while debugging
+// silent per-runtime delivery stalls in deployed environments.
+const debugRegistry = new Map<string, () => Record<string, unknown>>();
+(globalThis as { __streamRuntimeDebug?: () => Record<string, unknown> }).__streamRuntimeDebug =
+  () => Object.fromEntries([...debugRegistry].map(([key, read]) => [key, read()]));
+
 /** Get (or lazily create) the shared runtime for one (path, processor). */
 export function acquireStreamRuntime(
   args: { streamPath: string } & BrowserProcessorConfig & BrowserStreamConnectionConfig,
@@ -776,8 +785,23 @@ function createStreamRuntime(
     args.onDispose?.();
   }
 
+  debugRegistry.set(`${args.namespace} ${args.streamPath} ${slug}`, () => ({
+    connectionStatus: snapshot.connectionStatus,
+    subscriptionStatus: snapshot.subscriptionStatus,
+    connectionError: snapshot.connectionError,
+    lastDeliveredOffset,
+    deliveryArrivals,
+    reconciledIncarnation,
+    started,
+    disposed,
+    hasConnection: stream !== undefined,
+    hasSubscription: subscriptionHandle !== undefined,
+    listeners: listeners.size,
+  }));
+
   function dispose() {
     listeners.clear();
+    debugRegistry.delete(`${args.namespace} ${args.streamPath} ${slug}`);
     if (disposed) return;
     if (disposeTimer !== undefined) {
       clearTimeout(disposeTimer);
