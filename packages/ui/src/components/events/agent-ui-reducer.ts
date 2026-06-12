@@ -56,7 +56,11 @@ export type AgentUiStep = AgentUiLlmStep | AgentUiCodeStep;
 export type AgentUiActivity = {
   kind: "activity";
   id: string;
-  status: "running" | "done";
+  /**
+   * "waiting" = the agent went idle but no chat message has settled the
+   * activity yet — further rounds roll into it ("Ran code 3× · 3 requests").
+   */
+  status: "running" | "waiting" | "done";
   steps: AgentUiStep[];
   startedAtMs: number;
   endedAtMs?: number;
@@ -340,7 +344,11 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
 
     case AGENT_STATUS_UPDATED: {
       if (readString(event, "status") !== "idle") return state;
-      return settleLive(state, timestampMs, ops);
+      // Idle does NOT settle: rounds within one conversation roll into a
+      // single activity, and only chat messages break it up. Mark the live
+      // activity waiting so the UI can park the spinner until the next round.
+      if (state.live == null) return state;
+      return { ...state, live: { ...state.live, status: "waiting" } };
     }
 
     case STREAM_SUBSCRIBER_CONNECTED: {
@@ -405,15 +413,15 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
 // ---------------------------------------------------------------------------
 
 function ensureLive(state: AgentUiState, offset: number, startedAtMs: number): AgentUiActivity {
-  return (
-    state.live ?? {
-      kind: "activity",
-      id: `activity-${offset}`,
-      status: "running",
-      steps: [],
-      startedAtMs,
-    }
-  );
+  // A new step resumes a waiting activity — that's the roll-up.
+  if (state.live != null) return { ...state.live, status: "running" };
+  return {
+    kind: "activity",
+    id: `activity-${offset}`,
+    status: "running",
+    steps: [],
+    startedAtMs,
+  };
 }
 
 /** Closes the live activity (if any) and emits it as a settled item. */

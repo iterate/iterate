@@ -211,7 +211,50 @@ describe("agent-ui reducer", () => {
     expect(state.presence[1]).toMatchObject({ subscriptionKey: "browser:tab-1", connected: false });
   });
 
-  it("settles a running activity when the agent goes idle", () => {
+  it("rolls multiple rounds into one activity; only chat messages settle it", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 7,
+        payload: { model: "gpt-test", runOpts: {} },
+      },
+      {
+        type: "events.iterate.com/itx/script-execution-requested",
+        payload: { executionId: "exec-1", code: "1+1" },
+      },
+      {
+        type: "events.iterate.com/itx/script-execution-completed",
+        payload: { executionId: "exec-1", outcome: { status: "success" } },
+      },
+      // The agent goes idle between rounds — the activity waits, not settles.
+      {
+        type: "events.iterate.com/agent/status-updated",
+        payload: { status: "idle", reason: "round complete" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 20,
+        payload: { model: "gpt-test", runOpts: {} },
+      },
+      {
+        type: "events.iterate.com/itx/script-execution-requested",
+        payload: { executionId: "exec-2", code: "2+2" },
+      },
+      {
+        type: "events.iterate.com/agent-chat/assistant-response-added",
+        payload: { message: "all done" },
+      },
+    ]);
+
+    // One settled activity carrying every round's steps, then the reply.
+    expect(state.live).toBeNull();
+    expect(state.items.map((item) => item.kind)).toEqual(["activity", "assistant"]);
+    const activity = state.items[0];
+    expect(activity).toMatchObject({ kind: "activity", status: "done" });
+    expect(activity?.kind === "activity" ? activity.steps : []).toHaveLength(4);
+  });
+
+  it("marks the live activity waiting on idle and resumes it on the next round", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -224,9 +267,8 @@ describe("agent-ui reducer", () => {
       },
     ]);
 
-    expect(state.live).toBeNull();
-    expect(state.items).toHaveLength(1);
-    expect(state.items[0]).toMatchObject({ kind: "activity", status: "done" });
+    expect(state.items).toHaveLength(0);
+    expect(state.live).toMatchObject({ kind: "activity", status: "waiting" });
   });
 
   it("keeps a running activity live when a user message arrives mid-turn", () => {

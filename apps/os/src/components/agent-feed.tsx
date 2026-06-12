@@ -458,15 +458,20 @@ function AgentLiveActivity({
 }) {
   const liveStep = live.steps.findLast((step) => step.status === "running");
   const doneSteps = live.steps.filter((step) => step.status === "done");
+  // A waiting activity (agent idle, no chat message yet) keeps its steps on
+  // screen — the next round rolls into it — but parks the spinner.
+  const working = liveStep != null || live.status === "running";
 
   return (
     <div className="flex flex-col py-0.5">
-      <div className="flex h-7 items-center gap-2 self-start px-0.5">
-        <Spinner className="size-3 shrink-0 text-amber-600" />
-        <span className="text-sm font-medium text-amber-700 dark:text-amber-500">
-          {liveActivityLabel(live, liveStep)}
-        </span>
-      </div>
+      {working ? (
+        <div className="flex h-7 items-center gap-2 self-start px-0.5">
+          <Spinner className="size-3 shrink-0 text-amber-600" />
+          <span className="text-sm font-medium text-amber-700 dark:text-amber-500">
+            {liveActivityLabel(live, liveStep)}
+          </span>
+        </div>
+      ) : null}
       <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
         {doneSteps.map((step) => (
           <AgentActivityStep

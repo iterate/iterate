@@ -1,11 +1,11 @@
-// Regression coverage for the recursive child-stream storm: the agent-host
-// must never boot an agent on itx context streams. An agent on
-// `<agent>/itx/...` creates its own itx context, whose child-stream-created
-// events boot more agents, recursively flooding every journal under /agents.
+// The agent-host boots an agent for every child stream of an agent — child
+// streams under /agents are agents (or sub-agents) by definition since #1510
+// moved itx contexts off the agent subtree (an agent's context IS its own
+// stream; anonymous extensions live under the project-root /itx).
 
 import { describe, expect, it } from "vitest";
 import type { Event } from "@iterate-com/shared/streams/types";
-import { ensureChildAgentRunner, isItxInfrastructurePath } from "./implementation.ts";
+import { ensureChildAgentRunner } from "./implementation.ts";
 
 function childCreatedEvent(childPath: string): Event {
   return {
@@ -28,42 +28,15 @@ function fakeAgentNamespace(initialized: string[]) {
 }
 
 describe("agent-host child agent booting", () => {
-  it("boots an agent for real child agent streams", async () => {
+  it("boots an agent for child agent streams", async () => {
     const initialized: string[] = [];
-    await ensureChildAgentRunner({
-      agentNamespace: fakeAgentNamespace(initialized),
-      event: childCreatedEvent("/agents/demo/sub-agent"),
-      projectId: "prj_test",
-    });
-    expect(initialized).toHaveLength(1);
-  });
-
-  it("never boots agents on itx context streams", async () => {
-    const initialized: string[] = [];
-    for (const childPath of [
-      "/agents/demo/itx",
-      "/agents/demo/itx/itx__os__01ktx8j7scecrsm5wqt2dcg8y5",
-      "/agents/demo/itx/itx/itx__os__01ktx8j7vdecrsm5x2tgwvvcjm/itx",
-    ]) {
+    for (const childPath of ["/agents/demo/sub-agent", "/agents/itx"]) {
       await ensureChildAgentRunner({
         agentNamespace: fakeAgentNamespace(initialized),
         event: childCreatedEvent(childPath),
         projectId: "prj_test",
       });
     }
-    expect(initialized).toEqual([]);
-  });
-});
-
-describe("isItxInfrastructurePath", () => {
-  it("matches itx segments below the first level only", () => {
-    expect(isItxInfrastructurePath("/agents/demo/itx")).toBe(true);
-    expect(isItxInfrastructurePath("/agents/demo/itx/itx__os__abc")).toBe(true);
-    expect(isItxInfrastructurePath("/agents/demo")).toBe(false);
-    expect(isItxInfrastructurePath("/agents/itx-fan")).toBe(false);
-    // An agent literally named "itx" lives directly under the agents root —
-    // itx context trees only ever hang below an agent's own stream.
-    expect(isItxInfrastructurePath("/agents/itx")).toBe(false);
-    expect(isItxInfrastructurePath("/agents/itx/itx")).toBe(true);
+    expect(initialized).toHaveLength(2);
   });
 });

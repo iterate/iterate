@@ -154,7 +154,6 @@ export async function ensureChildAgentRunner(args: {
   const payload = args.event.payload as { childPath?: unknown };
   const childPath = StreamPathSchema.safeParse(payload.childPath);
   if (!childPath.success) return;
-  if (isItxInfrastructurePath(childPath.data)) return;
 
   const name = getAgentDurableObjectName({
     agentPath: childPath.data,
@@ -162,21 +161,6 @@ export async function ensureChildAgentRunner(args: {
   });
   const stub = args.agentNamespace.getByName(name);
   await stub.initialize({ name });
-}
-
-/**
- * itx context streams (`<agent>/itx/...`) are execution infrastructure, never
- * agents. Booting an agent on one creates that agent's own itx context, whose
- * child-stream-created events boot more agents — an unbounded recursive
- * child-stream storm that floods every journal under `/agents`.
- *
- * itx trees always hang BELOW an agent's own stream, and agents live directly
- * under the agents root — so `/agents/itx` is a legitimate agent name and only
- * deeper `itx` segments count. (`itx` is effectively a reserved name below the
- * first level.)
- */
-export function isItxInfrastructurePath(streamPath: string): boolean {
-  return streamPath.split("/").some((segment, index) => segment === "itx" && index >= 3);
 }
 
 // Ensures the AgentDurableObject for the stream the host processor is running on is initialized.
@@ -194,9 +178,6 @@ export async function ensureAgentRunnerForOwnStream(args: {
   if (args.agentNamespace === undefined) return;
   // The `/agents` root DO is created explicitly by the project lifecycle; it is not an agent.
   if (args.streamPath === AGENTS_STREAM_PATH) return;
-  // Defense in depth against environments already polluted with agent-host
-  // subscriptions on itx context streams (see isItxInfrastructurePath).
-  if (isItxInfrastructurePath(args.streamPath)) return;
 
   const name = getAgentDurableObjectName({
     agentPath: args.streamPath,
