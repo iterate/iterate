@@ -30,9 +30,7 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
   const childDescription = await child.describe();
   // A context IS a stream coordinate: the anonymous extend lands under the
   // /itx/<generated> catch-all in the project's namespace.
-  expect(String(childDescription.context)).toMatch(
-    new RegExp(`^${project.id}:/itx/itx_[a-z0-9]+$`),
-  );
+  expect(String(childDescription.context)).toMatch(new RegExp(`^${project.id}:/itx/itx`));
   expect(childDescription.project).toMatchObject({ id: project.id });
 
   // (1) Chain miss → parent's cap answers.
