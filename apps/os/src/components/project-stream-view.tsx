@@ -10,9 +10,9 @@ import {
 } from "react";
 import { Link } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { ChevronDownIcon, FilterIcon, SearchIcon } from "lucide-react";
 import {
   acquireStreamRuntime,
-  type StreamBrowserSnapshot,
   type StreamBrowserStore,
   type StreamRuntimeState,
 } from "@iterate-com/streams/browser/stream-browser-store";
@@ -47,24 +47,31 @@ import {
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type { EventsStreamViewState } from "@iterate-com/ui/components/events/feed-items";
 import {
-  EventsStreamComposer,
-  type EventsStreamComposerMode,
-} from "@iterate-com/ui/components/events/stream-composer";
-import {
   EventsStreamView,
   type EventsStreamElementType,
   type EventsStreamRendererMode,
 } from "@iterate-com/ui/components/events/stream-feed";
-import { EventsStreamLayoutMessageInput } from "@iterate-com/ui/components/events/stream-layout";
 import { StreamViewProcessorContract } from "@iterate-com/ui/components/events/stream-view-processor/contract";
+import {
+  AgentUiProcessorContract,
+  reduceAgentUiEvent,
+  type AgentUiState,
+} from "@iterate-com/ui/components/events/agent-ui-processor/contract";
+import { cn } from "@iterate-com/ui/lib/utils";
 import { parse as parseYaml } from "yaml";
+import { AgentFeedView } from "~/components/agent-feed.tsx";
+import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
+import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
+import { StreamSwitcherDialog } from "~/components/stream-switcher-dialog.tsx";
+import { sparklinePoints, useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
+import { recordRecentStream, type StreamNavigator } from "~/lib/stream-navigation.ts";
 
 type ProjectStreamMessageComposer = {
   placeholder?: string;
   onSubmit: (message: string) => Promise<void>;
 };
 
-type ProjectStreamViewTab = "feed" | "raw" | "state";
+type ProjectStreamViewTab = "agent" | "feed" | "raw" | "state";
 type StreamPathLinkRenderer = (input: {
   children: ReactNode;
   className?: string;
@@ -74,6 +81,8 @@ type StreamPathLinkRenderer = (input: {
 const DEFAULT_RAW_EVENT_YAML =
   "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
 
+const MAX_PRESENCE_AVATARS = 4;
+
 export function ProjectStreamView({
   defaultComposerMode,
   emptyLabel = "No events in this stream yet.",
@@ -82,6 +91,7 @@ export function ProjectStreamView({
   projectSlug,
   projectSlugOrId,
   renderStreamPathLink,
+  streamNavigator,
   streamUrl,
   streamPath,
 }: {
@@ -92,6 +102,7 @@ export function ProjectStreamView({
   projectSlug: string;
   projectSlugOrId: string;
   renderStreamPathLink?: StreamPathLinkRenderer;
+  streamNavigator?: StreamNavigator;
   streamUrl?: string;
   streamPath: StreamPath;
 }) {
@@ -128,9 +139,21 @@ export function ProjectStreamView({
   );
   const countResult = useStreamQuery(store.streamDatabase, `SELECT COUNT(*) AS count FROM events`);
   const eventCount = Number(countResult.data[0]?.count ?? 0);
+  const reductionKey = `${projectSlugOrId}:${streamPathText}`;
 
-  const [activeTab, setActiveTab] = useState<ProjectStreamViewTab>("feed");
-  const [composerMode, setComposerMode] = useState<EventsStreamComposerMode>(
+  // The agent-ui reduction runs at this level (not inside the agent tab)
+  // because the header chrome — presence avatars, busy indicator — is derived
+  // from the same reduced state on every tab.
+  const agentUi = useAgentUiState({ database: store.streamDatabase, reductionKey });
+  const metrics = useSimulatedRttMetrics();
+
+  const [activeTab, setActiveTab] = useState<ProjectStreamViewTab>("agent");
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [feedSearch, setFeedSearch] = useState("");
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [procPanelOpen, setProcPanelOpen] = useState(false);
+  const feedSearchInputRef = useRef<HTMLInputElement>(null);
+  const [composerMode, setComposerMode] = useState<AgentComposerMode>(
     defaultComposerMode ?? (messageComposer ? "message" : "raw"),
   );
   const [messageText, setMessageText] = useState("");
@@ -143,6 +166,26 @@ export function ProjectStreamView({
   // range re-queries and flashes grey skeletons before SQLite returns the new
   // rows. Lives here (not in the raw view) so the composer can re-pin it.
   const rawStickToBottomRef = useRef(true);
+
+  useEffect(() => {
+    recordRecentStream(projectSlugOrId, streamPathText);
+  }, [projectSlugOrId, streamPathText]);
+
+  useEffect(() => {
+    if (toolsOpen) feedSearchInputRef.current?.focus();
+  }, [toolsOpen]);
+
+  useEffect(() => {
+    if (streamNavigator == null) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && (event.key === "k" || event.key === "K")) {
+        event.preventDefault();
+        setSwitcherOpen((previous) => !previous);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [streamNavigator]);
 
   async function runSubmit(action: () => Promise<void>) {
     setIsSubmitting(true);
@@ -183,67 +226,176 @@ export function ProjectStreamView({
   const connectionLabel =
     snapshot.connectionError ??
     (snapshot.connectionStatus === "subscribed" ? emptyLabel : snapshot.connectionStatus);
+  const agentBusy = agentUi.state.live != null;
+  const presence = agentUi.state.presence;
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-background">
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b px-4 py-2">
-        <div className="min-w-0">
-          <h1 className="truncate font-mono text-sm font-semibold">{streamPathText}</h1>
-          <StreamStatus count={eventCount} snapshot={snapshot} />
-        </div>
-        <Tabs
-          value={activeTab}
-          onValueChange={(value) => setActiveTab(value as ProjectStreamViewTab)}
-        >
-          <TabsList className="h-8">
-            <TabsTrigger value="feed" className="px-3 text-xs">
-              Feed
-            </TabsTrigger>
-            <TabsTrigger value="raw" className="px-3 text-xs">
-              Raw
-            </TabsTrigger>
-            <TabsTrigger value="state" className="px-3 text-xs">
-              State
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-      </header>
-      {headerAccessory == null ? null : <div className="shrink-0 border-b">{headerAccessory}</div>}
-      {activeTab === "feed" ? (
-        <ProjectStreamFeedView
-          database={store.streamDatabase}
-          emptyLabel={connectionLabel}
-          renderStreamPathLink={
-            renderStreamPathLink ??
-            (({ path, children, className }) => (
-              <Link
-                to="/projects/$projectSlug/streams/$"
-                params={{ projectSlug, _splat: path }}
-                {...(className == null ? {} : { className })}
-              >
-                {children}
-              </Link>
-            ))
+      <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1 pt-2.5">
+        <button
+          type="button"
+          title={
+            streamNavigator == null
+              ? streamPathText
+              : `${streamPathText} — click or ⌘K to switch streams`
           }
-          reductionKey={`${projectSlugOrId}:${streamPathText}`}
-        />
-      ) : activeTab === "raw" ? (
-        <ProjectStreamRawView
-          database={store.streamDatabase}
-          emptyLabel={connectionLabel}
-          stickToBottomRef={rawStickToBottomRef}
-        />
-      ) : (
-        <ProjectStreamStateView store={store} />
-      )}
-      {activeTab === "state" ? null : (
-        <EventsStreamLayoutMessageInput className="px-3 py-3">
-          {submitError == null ? null : (
-            <p className="mb-2 truncate font-mono text-xs text-destructive" role="alert">
-              {submitError}
-            </p>
+          onClick={() => streamNavigator != null && setSwitcherOpen(true)}
+          className={cn(
+            "flex h-[34px] min-w-0 items-center gap-2 rounded-full bg-muted px-3.5",
+            streamNavigator != null && "cursor-pointer hover:bg-muted/70",
           )}
-          <EventsStreamComposer
+        >
+          <span className="truncate font-mono text-[13px]">{streamPathText}</span>
+          {streamNavigator == null ? null : (
+            <>
+              <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
+              <kbd className="hidden shrink-0 rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground sm:inline">
+                ⌘K
+              </kbd>
+            </>
+          )}
+        </button>
+
+        <div className="ml-auto flex items-center gap-3">
+          {presence.length === 0 ? null : (
+            <button
+              type="button"
+              title="Stream processors & presence"
+              onClick={() => setProcPanelOpen(true)}
+              className="flex items-center pl-1.5"
+            >
+              {presence.slice(0, MAX_PRESENCE_AVATARS).map((entry) => (
+                <PresenceAvatar
+                  key={entry.subscriptionKey}
+                  entry={entry}
+                  busy={agentBusy}
+                  className="-ml-1.5 border-2 border-background"
+                />
+              ))}
+              {presence.length > MAX_PRESENCE_AVATARS ? (
+                <span className="-ml-1.5 grid size-6 place-items-center rounded-full border-2 border-background bg-muted font-mono text-[9px] font-bold text-muted-foreground">
+                  +{presence.length - MAX_PRESENCE_AVATARS}
+                </span>
+              ) : null}
+            </button>
+          )}
+          <button
+            type="button"
+            title="Stream health & metrics"
+            onClick={() => setProcPanelOpen(true)}
+            className="flex h-8 items-center gap-1.5 rounded-lg px-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <svg width="24" height="11" viewBox="0 0 26 12" className="shrink-0">
+              <polyline
+                points={sparklinePoints(metrics.spark.slice(-12), 26, 12)}
+                fill="none"
+                className="stroke-emerald-600"
+                strokeWidth="1.4"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <span className="font-mono text-[11.5px]">{metrics.rttNow}ms</span>
+          </button>
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => setActiveTab(value as ProjectStreamViewTab)}
+          >
+            <TabsList className="h-8">
+              <TabsTrigger value="agent" className="px-3 text-xs">
+                Agent
+              </TabsTrigger>
+              <TabsTrigger value="feed" className="px-3 text-xs">
+                Feed
+              </TabsTrigger>
+              <TabsTrigger value="raw" className="px-3 text-xs">
+                Raw
+              </TabsTrigger>
+              <TabsTrigger value="state" className="px-3 text-xs">
+                State
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <button
+            type="button"
+            title="Search & filter"
+            onClick={() => setToolsOpen((previous) => !previous)}
+            className={cn(
+              "grid size-8 place-items-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground",
+              toolsOpen && "bg-muted text-foreground",
+            )}
+          >
+            <FilterIcon className="size-3.5" />
+          </button>
+        </div>
+      </header>
+      {headerAccessory == null ? null : <div className="shrink-0">{headerAccessory}</div>}
+      {toolsOpen ? (
+        <div className="flex shrink-0 items-center gap-3 px-4 pb-1.5 pt-1">
+          <div className="flex h-[34px] min-w-0 max-w-sm flex-1 items-center gap-2 rounded-full bg-muted px-3.5">
+            <SearchIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <input
+              ref={feedSearchInputRef}
+              value={feedSearch}
+              onChange={(event) => setFeedSearch(event.target.value)}
+              placeholder="Search feed…"
+              className="min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+          <span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
+            {eventCount.toLocaleString()} events · {snapshot.connectionStatus}
+          </span>
+        </div>
+      ) : null}
+
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        {activeTab === "agent" ? (
+          <AgentFeedView
+            state={agentUi.state}
+            search={feedSearch}
+            emptyLabel={connectionLabel}
+            isPending={agentUi.status === "pending" && agentUi.state.eventCount === 0}
+          />
+        ) : activeTab === "feed" ? (
+          <ProjectStreamFeedView
+            database={store.streamDatabase}
+            emptyLabel={connectionLabel}
+            renderStreamPathLink={
+              renderStreamPathLink ??
+              (({ path, children, className }) => (
+                <Link
+                  to="/projects/$projectSlug/streams/$"
+                  params={{ projectSlug, _splat: path }}
+                  {...(className == null ? {} : { className })}
+                >
+                  {children}
+                </Link>
+              ))
+            }
+            reductionKey={reductionKey}
+          />
+        ) : activeTab === "raw" ? (
+          <ProjectStreamRawView
+            database={store.streamDatabase}
+            emptyLabel={connectionLabel}
+            stickToBottomRef={rawStickToBottomRef}
+          />
+        ) : (
+          <ProjectStreamStateView store={store} />
+        )}
+        {procPanelOpen ? (
+          <StreamProcessorsPanel
+            presence={presence}
+            metrics={metrics}
+            eventCount={eventCount}
+            busy={agentBusy}
+            onClose={() => setProcPanelOpen(false)}
+          />
+        ) : null}
+      </div>
+
+      {activeTab === "state" ? null : (
+        <div className="shrink-0 px-4 pb-4 pt-2.5">
+          <AgentPillComposer
             mode={composerMode}
             onModeChange={setComposerMode}
             {...(messageComposer == null
@@ -264,11 +416,142 @@ export function ProjectStreamView({
               onSubmit: submitRawEvents,
             }}
             isSubmitting={isSubmitting}
+            {...(submitError == null ? {} : { error: submitError })}
           />
-        </EventsStreamLayoutMessageInput>
+        </div>
+      )}
+
+      {streamNavigator == null ? null : (
+        <StreamSwitcherDialog
+          open={switcherOpen}
+          onOpenChange={setSwitcherOpen}
+          currentPath={streamPath}
+          navigator={streamNavigator}
+          recentsScope={projectSlugOrId}
+        />
       )}
     </section>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Incremental browser-side reduction over the SQLite raw-event mirror
+// ---------------------------------------------------------------------------
+
+type ReducedStreamState<TState> = {
+  status: SqliteQueryStatus;
+  error?: string;
+  state: TState;
+  events: Event[];
+};
+
+type ReductionCache<TState> = {
+  key: string;
+  rowCount: number;
+  lastOffset: number;
+  state: TState;
+  events: Event[];
+};
+
+/**
+ * Reduce the SQLite raw-event mirror into a processor's reduced state.
+ *
+ * The reduction is incremental: appends only reduce the new tail rows on top
+ * of the cached state, so live streams (including high-volume LLM chunk
+ * deltas) don't replay the whole history on every event. Any non-append
+ * change (clear, reset, truncation) recomputes from scratch.
+ */
+function useReducedStreamState<TState>(args: {
+  database: StreamBrowserDatabase;
+  reductionKey: string;
+  /** Distinguishes caches when several reductions share one reductionKey. */
+  cacheScope: string;
+  initialState: () => TState;
+  reduceEvent: (state: TState, event: Event) => TState;
+}): ReducedStreamState<TState> {
+  const rowsResult = useStreamQuery(
+    args.database,
+    `SELECT offset, json(raw_jsonb) AS raw_json FROM events ORDER BY local_index ASC`,
+  );
+  const cacheRef = useRef<ReductionCache<TState> | null>(null);
+  const cacheKey = `${args.cacheScope}:${args.reductionKey}`;
+  const { initialState, reduceEvent } = args;
+
+  return useMemo(() => {
+    const cached = cacheRef.current?.key === cacheKey ? cacheRef.current : null;
+
+    if (rowsResult.status !== "ok") {
+      return {
+        status: rowsResult.status,
+        ...(rowsResult.error == null ? {} : { error: rowsResult.error.message }),
+        state: cached?.state ?? initialState(),
+        events: cached?.events ?? [],
+      };
+    }
+
+    const rows = rowsResult.data;
+    const canExtend =
+      cached != null &&
+      rows.length >= cached.rowCount &&
+      (cached.rowCount === 0 || Number(rows[cached.rowCount - 1]?.offset) === cached.lastOffset);
+
+    const startIndex = canExtend ? cached.rowCount : 0;
+    let state = canExtend ? cached.state : initialState();
+    const events = canExtend ? [...cached.events] : [];
+
+    for (let index = startIndex; index < rows.length; index++) {
+      const rawJson = rows[index]?.raw_json;
+      if (typeof rawJson !== "string") continue;
+      let event: Event;
+      try {
+        event = JSON.parse(rawJson) as Event;
+      } catch {
+        continue;
+      }
+      events.push(event);
+      state = reduceEvent(state, event);
+    }
+
+    cacheRef.current = {
+      key: cacheKey,
+      rowCount: rows.length,
+      lastOffset: events.length === 0 ? -1 : events[events.length - 1]!.offset,
+      state,
+      events,
+    };
+
+    return { status: "ok" as const, state, events };
+  }, [rowsResult, cacheKey, initialState, reduceEvent]);
+}
+
+function useAgentUiState(args: {
+  database: StreamBrowserDatabase;
+  reductionKey: string;
+}): ReducedStreamState<AgentUiState> {
+  return useReducedStreamState<AgentUiState>({
+    database: args.database,
+    reductionKey: args.reductionKey,
+    cacheScope: AgentUiProcessorContract.slug,
+    initialState: initialAgentUiState,
+    reduceEvent: reduceAgentUiEvent,
+  });
+}
+
+function initialAgentUiState(): AgentUiState {
+  return getInitialProcessorState(AgentUiProcessorContract);
+}
+
+function initialStreamViewState(): EventsStreamViewState {
+  return getInitialProcessorState(StreamViewProcessorContract);
+}
+
+function reduceStreamViewEvent(state: EventsStreamViewState, event: Event): EventsStreamViewState {
+  const reduction = runProcessorReduce({
+    processor: { contract: StreamViewProcessorContract },
+    event: event as unknown as StreamEvent,
+    state,
+  });
+  return reduction?.state ?? state;
 }
 
 // ---------------------------------------------------------------------------
@@ -286,14 +569,20 @@ function ProjectStreamFeedView({
   renderStreamPathLink: StreamPathLinkRenderer;
   reductionKey: string;
 }) {
-  const feed = useStreamFeedState({ database, reductionKey });
+  const feed = useReducedStreamState<EventsStreamViewState>({
+    database,
+    reductionKey,
+    cacheScope: StreamViewProcessorContract.slug,
+    initialState: initialStreamViewState,
+    reduceEvent: reduceStreamViewEvent,
+  });
   const [rendererMode, setRendererMode] = useState<EventsStreamRendererMode>("raw-pretty");
   const [hiddenElementTypes, setHiddenElementTypes] = useState<EventsStreamElementType[]>([]);
   const [openEventOffset, setOpenEventOffset] = useState<number | undefined>(undefined);
 
   const displayState = useMemo(
-    () => applyRendererMode({ viewState: feed.viewState, events: feed.events, rendererMode }),
-    [feed.viewState, feed.events, rendererMode],
+    () => applyRendererMode({ viewState: feed.state, events: feed.events, rendererMode }),
+    [feed.state, feed.events, rendererMode],
   );
 
   return (
@@ -313,95 +602,6 @@ function ProjectStreamFeedView({
       renderStreamPathLink={renderStreamPathLink}
     />
   );
-}
-
-type StreamFeedReduction = {
-  status: SqliteQueryStatus;
-  error?: string;
-  viewState: EventsStreamViewState;
-  events: Event[];
-};
-
-type StreamFeedReductionCache = {
-  key: string;
-  rowCount: number;
-  lastOffset: number;
-  viewState: EventsStreamViewState;
-  events: Event[];
-};
-
-/**
- * Reduce the SQLite raw-event mirror into renderable stream view state.
- *
- * The reduction is incremental: appends only reduce the new tail rows on top
- * of the cached state, so live streams don't replay the whole history on every
- * event. Any non-append change (clear, reset, truncation) recomputes from
- * scratch.
- */
-function useStreamFeedState(args: {
-  database: StreamBrowserDatabase;
-  reductionKey: string;
-}): StreamFeedReduction {
-  const rowsResult = useStreamQuery(
-    args.database,
-    `SELECT offset, json(raw_jsonb) AS raw_json FROM events ORDER BY local_index ASC`,
-  );
-  const cacheRef = useRef<StreamFeedReductionCache | null>(null);
-
-  return useMemo(() => {
-    const cached = cacheRef.current?.key === args.reductionKey ? cacheRef.current : null;
-
-    if (rowsResult.status !== "ok") {
-      return {
-        status: rowsResult.status,
-        ...(rowsResult.error == null ? {} : { error: rowsResult.error.message }),
-        viewState: cached?.viewState ?? initialStreamViewState(),
-        events: cached?.events ?? [],
-      };
-    }
-
-    const rows = rowsResult.data;
-    const canExtend =
-      cached != null &&
-      rows.length >= cached.rowCount &&
-      (cached.rowCount === 0 || Number(rows[cached.rowCount - 1]?.offset) === cached.lastOffset);
-
-    const startIndex = canExtend ? cached.rowCount : 0;
-    let viewState = canExtend ? cached.viewState : initialStreamViewState();
-    const events = canExtend ? [...cached.events] : [];
-
-    for (let index = startIndex; index < rows.length; index++) {
-      const rawJson = rows[index]?.raw_json;
-      if (typeof rawJson !== "string") continue;
-      let event: Event;
-      try {
-        event = JSON.parse(rawJson) as Event;
-      } catch {
-        continue;
-      }
-      events.push(event);
-      const reduction = runProcessorReduce({
-        processor: { contract: StreamViewProcessorContract },
-        event: event as unknown as StreamEvent,
-        state: viewState,
-      });
-      viewState = reduction?.state ?? viewState;
-    }
-
-    cacheRef.current = {
-      key: args.reductionKey,
-      rowCount: rows.length,
-      lastOffset: events.length === 0 ? -1 : events[events.length - 1]!.offset,
-      viewState,
-      events,
-    };
-
-    return { status: "ok", viewState, events };
-  }, [rowsResult, args.reductionKey]);
-}
-
-function initialStreamViewState(): EventsStreamViewState {
-  return getInitialProcessorState(StreamViewProcessorContract);
 }
 
 /**
@@ -495,7 +695,7 @@ function ProjectStreamRawView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2">
+      <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-2">
         <Select
           value={eventTypeFilter}
           onValueChange={(value) => setEventTypeFilter(value ?? ALL_EVENT_TYPES)}
@@ -728,14 +928,14 @@ function ProjectStreamStateView({ store }: { store: StreamBrowserStore }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2">
+      <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-2">
         <span className="text-xs font-semibold text-muted-foreground">Reduced processor state</span>
         <output className="font-mono text-xs text-muted-foreground">
           {runtimeState == null ? "loading" : "live"}
         </output>
       </div>
       {error == null ? null : (
-        <p className="border-b px-4 py-2 text-xs text-destructive" role="alert">
+        <p className="px-4 py-2 text-xs text-destructive" role="alert">
           {error}
         </p>
       )}
@@ -753,16 +953,6 @@ function ProjectStreamStateView({ store }: { store: StreamBrowserStore }) {
 // ---------------------------------------------------------------------------
 // Shared bits
 // ---------------------------------------------------------------------------
-
-function StreamStatus({ count, snapshot }: { count: number; snapshot: StreamBrowserSnapshot }) {
-  return (
-    <p className="mt-0.5 flex gap-3 font-mono text-[11px] text-muted-foreground">
-      <span>{snapshot.connectionStatus}</span>
-      <span>{snapshot.subscriptionStatus}</span>
-      <span>{count.toLocaleString()} events</span>
-    </p>
-  );
-}
 
 function Centered({ children }: { children: ReactNode }) {
   return (

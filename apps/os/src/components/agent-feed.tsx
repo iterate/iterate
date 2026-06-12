@@ -1,0 +1,525 @@
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { ChevronRightIcon, CodeIcon } from "lucide-react";
+import type {
+  AgentUiActivity,
+  AgentUiCodeStep,
+  AgentUiItem,
+  AgentUiLlmStep,
+  AgentUiState,
+  AgentUiStep,
+} from "@iterate-com/ui/components/events/agent-ui-processor/contract";
+import {
+  Message,
+  MessageContent,
+  MessageResponse,
+} from "@iterate-com/ui/components/ai-elements/message";
+import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
+import { Spinner } from "@iterate-com/ui/components/spinner";
+import { cn } from "@iterate-com/ui/lib/utils";
+
+/**
+ * The clean agent chat feed: user message → activity ("Ran code 2× · 3
+ * requests · 7.4 s") → assistant message.
+ *
+ * Settled items render through a TanStack virtual list; the in-flight
+ * activity — with live-streaming thinking and response text — renders as one
+ * element below the list that receives the current reduced state as props.
+ */
+export function AgentFeedView({
+  state,
+  search = "",
+  emptyLabel = "No messages yet.",
+  isPending = false,
+}: {
+  state: AgentUiState;
+  search?: string;
+  emptyLabel?: string;
+  isPending?: boolean;
+}) {
+  const items = useMemo(() => filterAgentItems(state.items, search), [state.items, search]);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottomRef = useRef(true);
+  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(new Set());
+
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (index) => (items[index]?.kind === "activity" ? 36 : 64),
+    getItemKey: (index) => items[index]?.id ?? index,
+    overscan: 16,
+  });
+
+  // Follow new content down while the reader is pinned to the bottom — both
+  // when settled items land and on every live streaming tick.
+  const liveSignature =
+    state.live == null
+      ? ""
+      : state.live.steps
+          .map((step) =>
+            step.kind === "llm"
+              ? `${step.id}:${step.thinkingText.length}:${step.responseText.length}:${step.status}`
+              : `${step.id}:${step.code.length}:${step.status}`,
+          )
+          .join("|");
+  useLayoutEffect(() => {
+    if (!stickToBottomRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const scrollContainer = scrollRef.current;
+      if (scrollContainer == null) return;
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [items.length, liveSignature]);
+
+  function toggleExpanded(id: string) {
+    setExpandedIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const virtualItems = virtualizer.getVirtualItems();
+
+  return (
+    <div
+      ref={scrollRef}
+      className="min-h-0 flex-1 overflow-y-auto"
+      onScroll={(event) => {
+        const el = event.currentTarget;
+        stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      }}
+    >
+      <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
+        {items.length === 0 && state.live == null ? (
+          <div className="grid min-h-48 place-items-center text-sm text-muted-foreground">
+            {isPending ? (
+              <span className="inline-flex items-center gap-2">
+                <Spinner className="size-4" /> Connecting to the stream
+              </span>
+            ) : (
+              emptyLabel
+            )}
+          </div>
+        ) : null}
+        <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+          {virtualItems.map((virtualItem) => {
+            const item = items[virtualItem.index];
+            return (
+              <div
+                key={virtualItem.key}
+                data-index={virtualItem.index}
+                ref={virtualizer.measureElement}
+                className="absolute left-0 top-0 w-full"
+                style={{ transform: `translateY(${virtualItem.start}px)` }}
+              >
+                {item == null ? null : (
+                  <AgentFeedItemRow
+                    item={item}
+                    expandedIds={expandedIds}
+                    onToggle={toggleExpanded}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {state.live == null ? null : (
+          <AgentLiveActivity
+            live={state.live}
+            expandedIds={expandedIds}
+            onToggle={toggleExpanded}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function filterAgentItems(items: readonly AgentUiItem[], search: string): AgentUiItem[] {
+  const query = search.trim().toLowerCase();
+  if (query === "") return [...items];
+  return items.filter((item) => JSON.stringify(item).toLowerCase().includes(query));
+}
+
+function AgentFeedItemRow({
+  item,
+  expandedIds,
+  onToggle,
+}: {
+  item: AgentUiItem;
+  expandedIds: ReadonlySet<string>;
+  onToggle: (id: string) => void;
+}) {
+  if (item.kind !== "activity") {
+    if (item.kind === "user") {
+      return (
+        <Message from="user" className="pb-2 pt-3.5">
+          <MessageContent className="group-[.is-user]:rounded-2xl">
+            <div className="whitespace-pre-wrap leading-6">{item.text}</div>
+          </MessageContent>
+        </Message>
+      );
+    }
+    return (
+      <Message from="assistant" className="py-2">
+        <MessageContent>
+          <MessageResponse className="min-w-0 max-w-full overflow-hidden">
+            {item.text}
+          </MessageResponse>
+        </MessageContent>
+      </Message>
+    );
+  }
+
+  return (
+    <AgentActivityRow
+      activity={item}
+      expanded={expandedIds.has(item.id)}
+      expandedIds={expandedIds}
+      onToggle={onToggle}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Settled activity: the quiet "Ran code 2× · 3 requests · 7.4 s" row
+// ---------------------------------------------------------------------------
+
+function AgentActivityRow({
+  activity,
+  expanded,
+  expandedIds,
+  onToggle,
+}: {
+  activity: AgentUiActivity;
+  expanded: boolean;
+  expandedIds: ReadonlySet<string>;
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-col py-0.5">
+      <button
+        type="button"
+        title="Agent activity — click to see what it did"
+        onClick={() => onToggle(activity.id)}
+        className="-ml-1.5 flex h-7 items-center gap-2 self-start rounded-md px-1.5 text-left hover:bg-muted/50"
+      >
+        <CodeIcon className="size-3 shrink-0 text-muted-foreground/60" />
+        <span className="text-[13px] font-medium text-muted-foreground">
+          {activitySummary(activity)}
+        </span>
+        <ChevronRightIcon
+          className={cn(
+            "size-2.5 shrink-0 text-muted-foreground/50 transition-transform",
+            expanded && "rotate-90",
+          )}
+        />
+      </button>
+      {expanded ? (
+        <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
+          {activity.steps.map((step) => (
+            <AgentActivityStep
+              key={step.id}
+              step={step}
+              expanded={expandedIds.has(step.id)}
+              onToggle={onToggle}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function activitySummary(activity: AgentUiActivity): string {
+  const codeCount = activity.steps.filter((step) => step.kind === "code").length;
+  const requestCount = activity.steps.filter((step) => step.kind === "llm").length;
+  const parts: string[] = [];
+  if (codeCount > 0) parts.push(`Ran code ${codeCount}×`);
+  parts.push(`${requestCount} request${requestCount === 1 ? "" : "s"}`);
+  const totalMs =
+    activity.endedAtMs == null ? null : Math.max(0, activity.endedAtMs - activity.startedAtMs);
+  if (totalMs != null && totalMs > 0) parts.push(formatSeconds(totalMs));
+  return parts.join(" · ");
+}
+
+// ---------------------------------------------------------------------------
+// Steps: condensed LLM request and code-run rows with expandable detail
+// ---------------------------------------------------------------------------
+
+function AgentActivityStep({
+  step,
+  expanded,
+  onToggle,
+}: {
+  step: AgentUiStep;
+  expanded: boolean;
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-col">
+      <button
+        type="button"
+        onClick={() => onToggle(step.id)}
+        className="-ml-1.5 flex h-[26px] items-center gap-2 self-start rounded-md px-1.5 text-left hover:bg-muted/50"
+      >
+        {step.kind === "llm" ? (
+          <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
+        ) : (
+          <CodeIcon className="size-3 shrink-0 text-muted-foreground" />
+        )}
+        <span className="font-mono text-xs text-foreground/70">{stepLabel(step)}</span>
+        <span className="font-mono text-[11px] text-muted-foreground/70">{stepMeta(step)}</span>
+        <ChevronRightIcon
+          className={cn(
+            "size-2 shrink-0 text-muted-foreground/50 transition-transform",
+            expanded && "rotate-90",
+          )}
+        />
+      </button>
+      {expanded ? (
+        <div className="flex flex-col gap-2 pb-2.5 pl-[21px] pt-0.5">
+          {step.kind === "llm" ? <LlmStepDetail step={step} /> : <CodeStepDetail step={step} />}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function stepLabel(step: AgentUiStep): string {
+  if (step.kind === "code") return "Ran code";
+  return step.model ?? step.provider ?? "LLM request";
+}
+
+function stepMeta(step: AgentUiStep): string {
+  if (step.kind === "code") {
+    return step.durationMs == null ? "" : formatSeconds(step.durationMs);
+  }
+  const parts: string[] = [];
+  if (step.inputTokens != null || step.outputTokens != null) {
+    parts.push(`${formatTokens(step.inputTokens)} → ${formatTokens(step.outputTokens)} tok`);
+  }
+  if (step.durationMs != null) parts.push(formatSeconds(step.durationMs));
+  if (step.outcome === "failed") parts.push("failed");
+  if (step.outcome === "cancelled") parts.push("cancelled");
+  return parts.join(" · ");
+}
+
+function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
+  return (
+    <>
+      {step.thinkingText === "" ? null : <ThinkingBlock>{step.thinkingText}</ThinkingBlock>}
+      {step.responseText === "" ? null : (
+        <SourceCodeBlock
+          code={step.responseText}
+          language="typescript"
+          className="max-h-80"
+          showCopyButton
+          showLineNumbers={false}
+          plainChrome
+        />
+      )}
+      <pre className="overflow-x-auto rounded-xl bg-muted/50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground">
+        {JSON.stringify(llmStepRawSummary(step), null, 2)}
+      </pre>
+    </>
+  );
+}
+
+function llmStepRawSummary(step: AgentUiLlmStep) {
+  return {
+    ...(step.model == null ? {} : { model: step.model }),
+    ...(step.provider == null ? {} : { provider: step.provider }),
+    usage: { input_tokens: step.inputTokens ?? null, output_tokens: step.outputTokens ?? null },
+    ...(step.durationMs == null ? {} : { duration_ms: step.durationMs }),
+    status: step.outcome ?? step.status,
+    ...(step.errorMessage == null ? {} : { error: step.errorMessage }),
+    ...(step.providerResponseId == null ? {} : { provider_response_id: step.providerResponseId }),
+  };
+}
+
+function CodeStepDetail({ step }: { step: AgentUiCodeStep }) {
+  return (
+    <>
+      {step.code === "" ? null : (
+        <SourceCodeBlock
+          code={step.code}
+          language="typescript"
+          className="max-h-80"
+          showCopyButton
+          showLineNumbers={false}
+          plainChrome
+        />
+      )}
+      {step.result === undefined && step.errorMessage == null ? null : (
+        <div className="flex items-start gap-2.5">
+          <span
+            className={cn(
+              "shrink-0 pt-2.5 font-mono text-xs",
+              step.errorMessage == null ? "text-emerald-600" : "text-destructive",
+            )}
+          >
+            →
+          </span>
+          <pre
+            className={cn(
+              "min-w-0 flex-1 overflow-x-auto rounded-xl px-4 py-2.5 font-mono text-xs leading-relaxed",
+              step.errorMessage == null
+                ? "bg-emerald-50 text-emerald-950 dark:bg-emerald-950/30 dark:text-emerald-200"
+                : "bg-destructive/5 text-destructive",
+            )}
+          >
+            {step.errorMessage ?? stringifyResult(step.result)}
+          </pre>
+        </div>
+      )}
+      {step.logs == null || step.logs.length === 0 ? null : (
+        <pre className="overflow-x-auto rounded-xl bg-muted/50 px-4 py-2.5 font-mono text-xs leading-relaxed text-muted-foreground">
+          {step.logs.join("\n")}
+        </pre>
+      )}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The live element: streaming thinking and code with a blinking cursor
+// ---------------------------------------------------------------------------
+
+/**
+ * Rendered below the virtual list whenever an activity is in flight. Receives
+ * the live reduced state on every chunk: finished steps collapse upward into
+ * quiet rows while the current step streams its thinking or code.
+ */
+export function AgentLiveActivity({
+  live,
+  expandedIds,
+  onToggle,
+}: {
+  live: AgentUiActivity;
+  expandedIds: ReadonlySet<string>;
+  onToggle: (id: string) => void;
+}) {
+  const liveStep = live.steps.findLast((step) => step.status === "running");
+  const doneSteps = live.steps.filter((step) => step.status === "done");
+
+  return (
+    <div className="flex flex-col py-0.5">
+      <div className="-ml-1.5 flex h-7 items-center gap-2 self-start px-1.5">
+        <Spinner className="size-3 shrink-0 text-amber-600" />
+        <span className="text-[13px] font-medium text-amber-700 dark:text-amber-500">
+          {liveActivityLabel(liveStep)}
+        </span>
+      </div>
+      <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
+        {doneSteps.map((step) => (
+          <AgentActivityStep
+            key={step.id}
+            step={step}
+            expanded={expandedIds.has(step.id)}
+            onToggle={onToggle}
+          />
+        ))}
+        {liveStep == null ? null : <LiveStepStream step={liveStep} />}
+      </div>
+    </div>
+  );
+}
+
+function liveActivityLabel(liveStep: AgentUiStep | undefined): string {
+  if (liveStep == null) return "Thinking…";
+  if (liveStep.kind === "code") return "Running code…";
+  if (liveStep.responseText !== "") return "Writing code…";
+  return "Thinking…";
+}
+
+function LiveStepStream({ step }: { step: AgentUiStep }) {
+  if (step.kind === "code") {
+    return (
+      <div className="flex flex-col gap-1.5 py-1">
+        {step.code === "" ? null : <StreamingCodeBlock code={step.code} />}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 py-1">
+      {step.thinkingText === "" && step.responseText === "" ? (
+        <div className="px-1.5 text-[13px] italic text-muted-foreground">
+          Thinking
+          <StreamingCursor />
+        </div>
+      ) : null}
+      {step.thinkingText === "" ? null : (
+        <div className="max-w-[620px] whitespace-pre-wrap px-1.5 text-[13.5px] italic leading-relaxed text-muted-foreground">
+          {step.thinkingText}
+          {step.responseText === "" ? <StreamingCursor /> : null}
+        </div>
+      )}
+      {step.responseText === "" ? null : <StreamingCodeBlock code={step.responseText} />}
+    </div>
+  );
+}
+
+/** Amber-tinted block the response/code streams into, character by character. */
+function StreamingCodeBlock({ code }: { code: string }) {
+  return (
+    <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded-xl bg-amber-50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground dark:bg-amber-950/20">
+      {code}
+      <StreamingCursor className="bg-amber-600" />
+    </pre>
+  );
+}
+
+function StreamingCursor({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "ml-px inline-block h-[13px] w-[7px] animate-pulse bg-muted-foreground/40 align-[-2px]",
+        className,
+      )}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Thinking block (shared by settled steps)
+// ---------------------------------------------------------------------------
+
+function ThinkingBlock({ children }: { children: ReactNode }) {
+  return (
+    <div className="max-w-[620px] whitespace-pre-wrap rounded-xl bg-muted/50 px-4 py-3 text-[13px] italic leading-relaxed text-muted-foreground">
+      {children}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Formatting
+// ---------------------------------------------------------------------------
+
+function formatTokens(count: number | undefined): string {
+  if (count == null) return "?";
+  if (count < 1000) return String(count);
+  return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
+}
+
+function formatSeconds(durationMs: number): string {
+  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
+  const seconds = durationMs / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1).replace(/\.0$/, "")} s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.round(seconds % 60)}s`;
+}
+
+function stringifyResult(result: unknown): string {
+  if (typeof result === "string") return result;
+  try {
+    return JSON.stringify(result, null, 2) ?? String(result);
+  } catch {
+    return String(result);
+  }
+}

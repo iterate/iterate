@@ -1,6 +1,9 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { Suspense, useMemo } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
+import { useItx } from "~/itx/use-itx.ts";
 import {
   projectAgentRuntimeStateQueryOptions,
   projectAgentsListQueryOptions,
@@ -41,9 +44,22 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
 });
 
 function ProjectAgentDetailPage() {
+  return (
+    <Suspense
+      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
+    >
+      <ProjectAgentDetailContent />
+    </Suspense>
+  );
+}
+
+function ProjectAgentDetailContent() {
   const params = Route.useParams();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { project, streamPath } = Route.useLoaderData();
+  const itx = useItx(project.id);
+  const source = useMemo(() => (path: StreamPathType) => itx.streams.get(path), [itx]);
   const agentsQueryOptions = projectAgentsListQueryOptions(project.id);
   const sendMessage = useMutation(
     orpc.project.agents.sendMessage.mutationOptions({
@@ -61,6 +77,16 @@ function ProjectAgentDetailPage() {
     });
   }
 
+  function openStream(path: StreamPathType) {
+    void navigate({
+      to: "/projects/$projectSlug/agents/streams/$",
+      params: {
+        projectSlug: params.projectSlug,
+        _splat: path,
+      },
+    });
+  }
+
   return (
     <ProjectStreamView
       emptyLabel="No events on this agent stream yet."
@@ -71,6 +97,7 @@ function ProjectAgentDetailPage() {
       projectSlug={params.projectSlug}
       projectSlugOrId={project.id}
       streamPath={streamPath}
+      streamNavigator={{ source, onOpenPath: openStream }}
     />
   );
 }
