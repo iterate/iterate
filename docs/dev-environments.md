@@ -40,14 +40,31 @@ pnpm dev          # fully-local OS dev server on http://os.localhost:<port>
   `DOPPLER_CONFIG` env var → `doppler setup` scope for the worktree → shared
   `dev`. The scope (via the repo's `doppler.yaml`) is the intended mechanism;
   the env var is a one-off override.
-- **Which config?** `dev` is the shared fully-local config — works for
-  everyone, any number of parallel worktrees. `dev_<you>` is your personal
-  _tunnel-backed_ config: fixed port 5173 plus a cloudflared tunnel claiming
-  `os.iterate-dev-<you>.com` — only one worktree can usefully hold that
-  tunnel at a time, so use it in the worktree where you need webhooks and
-  scope everything else (especially agent worktrees) to `dev`. The startup
-  banner prints `Stage: <config>` — if it doesn't say `dev`, you're not
-  fully local.
+- **Which config?** Scope every worktree to `dev` by default — the shared
+  fully-local config works for everyone, any number of parallel worktrees,
+  with full sign-in (Google and email OTP) via `auth.iterate-dev.com`. Reach
+  for `dev_<you>` in exactly **one** worktree, and only when you need inbound
+  webhooks (practically: Slack — see
+  [Tunnels and webhooks](#tunnels-and-webhooks)).
+
+  `dev_<you>` is not a different kind of environment; it is `dev` plus
+  precisely two things: a _tunnel identity_ (`APP_CONFIG_BASE_URL =
+  https://os.iterate-dev-<you>.com`, fixed port 5173, a cloudflared tunnel
+  claiming that hostname, `iterate-dev-<you>.app` project hostnames) and your
+  _personal Slack app credentials_ (`APP_CONFIG_INTEGRATIONS__SLACK`, whose
+  delivery URL on Slack's side points at that tunnel hostname). Auth is
+  identical to `dev`: same `os-local-dev` client, same
+  `auth.iterate-dev.com`. Only one worktree can usefully hold the tunnel at a
+  time, so scope everything else (especially agent worktrees) to `dev`. The
+  startup banner prints `Stage: <config>` — if it doesn't say `dev`, you're
+  not fully local.
+
+  Don't (re)introduce legacy `ITERATE_OAUTH_*` / `ITERATE_AUTH_JWKS` vars in
+  these configs: an explicit JWKS in Doppler overrides the deploy-time fetch
+  from the auth worker, and a stale one makes OS silently reject every
+  session — login just bounces back to `/sign-in` with no error. (This broke
+  all `dev_<user>` and preview logins once; cleaned out of `dev_*` and the
+  `preview` root on 2026-06-12.)
 - The chosen port is baked into the env (`APP_CONFIG_BASE_URL`) at startup and
   recorded in **`apps/os/.alchemy/dev-server.json`** (`{pid, port, baseUrl}`).
   Scripts and CLIs that need "the local dev server" read that file — no
@@ -61,6 +78,10 @@ pnpm dev          # fully-local OS dev server on http://os.localhost:<port>
 - Sign in as a human with Google or email OTP via `auth.iterate-dev.com` — the
   shared `os-local-dev` OAuth client accepts any localhost port. Your identity
   there persists across every worktree and environment on your machine.
+  Google sign-in needs no per-port (or per-worktree) setup because Google
+  never sees your dev server: the only redirect URI it checks is
+  `auth.iterate-dev.com`'s own callback, and the OS↔auth hop uses the
+  port-agnostic loopback client above.
 - Sign in as an agent/test: mint it (next section). Never script the OAuth
   dance.
 - Test emails: any address matching `+...test@` (e.g. `alice+test@nustom.com`)
