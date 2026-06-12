@@ -4,7 +4,7 @@ OS deploys as **many small Cloudflare Workers** instead of one big one. Every
 Durable Object class is its own worker, the dashboard app is its own worker,
 and a tiny ingress router owns all the routes. The point is cold-start speed:
 a cold Durable Object isolate loads only the code that object actually runs,
-not the whole product. (Before the split, one 34MB script served everything,
+not the whole product. (Before the split, one ~28MB script served everything,
 every DO cold start paid for it, and request paths that chain several DOs
 paid it several times — see the 2026-06 Slack-latency incident.)
 
@@ -181,11 +181,37 @@ under the hood.
 
 ## Measured impact
 
-See the table below — measured on a preview slot before/after the split
-(method: per-worker script sizes from the Workers Scripts API; cold-start =
-TTFB of the first request to each worker after deploy; agent path =
-`scripts/benchmark-agent-stream.ts`).
+Measured 2026-06-12 on preview slot 3, A/B on the same slot: old topology =
+main @ `62e649fd4` (one monolith), new = this topology. Script sizes are the
+full uploaded content (Workers Scripts API `content/v2`, all modules).
+Cold-start probe: TTFB of `/__durable-objects/stream/<fresh-name>/`
+immediately after a fresh deploy — each fresh name instantiates a new Stream
+DO, which is what chained request paths (e.g. Slack webhook →
+slack-integration → stream → agent) pay per hop.
 
-<!-- MEASUREMENTS -->
+**Script sizes** (what every cold isolate of that worker loads):
 
-_To be filled in from the preview-slot measurement run before merge._
+| Worker                      | Uploaded size | vs monolith (28.3MB)                                                                       |
+| --------------------------- | ------------- | ------------------------------------------------------------------------------------------ |
+| ingress                     | 1.3MB         | 22× smaller                                                                                |
+| stream                      | 2.3MB         | 12×                                                                                        |
+| slack-agent                 | 2.1MB         | 14×                                                                                        |
+| slack-integration           | 2.5MB         | 11×                                                                                        |
+| workspace                   | 3.3MB         | 9×                                                                                         |
+| repo                        | 3.8MB         | 7×                                                                                         |
+| itx / project / mcp / agent | 19.6–23.5MB   | ~14MB of each is `esbuild.wasm` (precompiled; see tasks/os-source-build-builder-worker.md) |
+| app                         | 27.3MB        | the TanStack SSR bundle — but no Durable Object ever loads it anymore                      |
+
+**Fresh Stream DO instantiation** (TTFB, post-deploy, same colo):
+
+|        | old monolith | new topology     |
+| ------ | ------------ | ---------------- |
+| median | 1.05s (n=8)  | **0.40s** (n=12) |
+| min    | 0.93s        | 0.33s            |
+
+The residual ~0.3s floor and occasional ~1.2–1.7s outliers are Durable
+Object placement + storage init, which the split doesn't touch. The script
+load component — which the old topology paid per DO isolate, and chained
+paths paid several times — is what dropped. Dashboard (app worker) warm
+requests are unchanged (~70ms); its cold SSR boot (~0.8s) is also unchanged,
+but is paid only on the app lane, never by Durable Objects.

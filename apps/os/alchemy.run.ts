@@ -306,7 +306,14 @@ const itxBuildCache = await R2Bucket("itx-build-cache", {
 // miniflare's dev registry, so it never needs it either.
 const missingScripts = ctx.app.local
   ? new Set<string>()
-  : await findMissingWorkerScripts(Object.values(workerNames));
+  : await findMissingWorkerScripts(
+      // debugSubscriber is local-only and never deploys — counting it as
+      // missing would put every deploy into (harmless but pointless)
+      // bootstrap double-pass mode forever.
+      Object.entries(workerNames)
+        .filter(([id]) => id !== "debugSubscriber")
+        .map(([, name]) => name),
+    );
 if (missingScripts.size > 0) {
   console.warn(
     `[alchemy.run] Bootstrap: ${[...missingScripts].join(", ")} not deployed yet — ` +
