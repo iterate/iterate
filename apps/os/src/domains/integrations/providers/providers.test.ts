@@ -6,7 +6,10 @@ import { describe, expect, it } from "vitest";
 import { hmacSha256Hex } from "./verify.ts";
 import { githubIntegration } from "./github.ts";
 import { discordIntegration, discordGatewayRoutingKey } from "./discord.ts";
-import type { CaptureIntegrationEvent } from "~/domains/integrations/definition.ts";
+import type {
+  CaptureIntegrationEvent,
+  IntegrationIngressContext,
+} from "~/domains/integrations/definition.ts";
 import { replayPathCall } from "~/itx/path-proxy.ts";
 import { INTEGRATIONS } from "~/domains/integrations/registry.ts";
 
@@ -24,11 +27,13 @@ describe("integration registry", () => {
 describe("github ingress (partial fetch function)", () => {
   it("ignores requests that are not its webhook", async () => {
     const { capture } = recordingCapture();
-    const response = await githubIntegration.fetch!({
-      request: new Request("https://os.iterate.com/api/anything-else"),
-      env: { GITHUB_WEBHOOK_SECRET: "shh" },
-      capture,
-    });
+    const response = await githubIntegration.fetch!(
+      ingressCtx({
+        request: new Request("https://os.iterate.com/api/anything-else"),
+        env: { GITHUB_WEBHOOK_SECRET: "shh" },
+        capture,
+      }),
+    );
     expect(response).toBeNull();
   });
 
@@ -37,15 +42,17 @@ describe("github ingress (partial fetch function)", () => {
     const signature = `sha256=${await hmacSha256Hex({ secret: "shh", message: bodyText })}`;
     const { capture, captured } = recordingCapture();
 
-    const response = await githubIntegration.fetch!({
-      request: new Request("https://os.iterate.com/api/integrations/github/webhook", {
-        method: "POST",
-        headers: { "x-hub-signature-256": signature, "x-github-delivery": "delivery-1" },
-        body: bodyText,
+    const response = await githubIntegration.fetch!(
+      ingressCtx({
+        request: new Request("https://os.iterate.com/api/integrations/github/webhook", {
+          method: "POST",
+          headers: { "x-hub-signature-256": signature, "x-github-delivery": "delivery-1" },
+          body: bodyText,
+        }),
+        env: { GITHUB_WEBHOOK_SECRET: "shh" },
+        capture,
       }),
-      env: { GITHUB_WEBHOOK_SECRET: "shh" },
-      capture,
-    });
+    );
 
     expect(response?.status).toBe(200);
     expect(captured).toEqual([
@@ -60,15 +67,17 @@ describe("github ingress (partial fetch function)", () => {
 
   it("rejects bad signatures without capturing", async () => {
     const { capture, captured } = recordingCapture();
-    const response = await githubIntegration.fetch!({
-      request: new Request("https://os.iterate.com/api/integrations/github/webhook", {
-        method: "POST",
-        headers: { "x-hub-signature-256": "sha256=ffff" },
-        body: "{}",
+    const response = await githubIntegration.fetch!(
+      ingressCtx({
+        request: new Request("https://os.iterate.com/api/integrations/github/webhook", {
+          method: "POST",
+          headers: { "x-hub-signature-256": "sha256=ffff" },
+          body: "{}",
+        }),
+        env: { GITHUB_WEBHOOK_SECRET: "shh" },
+        capture,
       }),
-      env: { GITHUB_WEBHOOK_SECRET: "shh" },
-      capture,
-    });
+    );
     expect(response?.status).toBe(401);
     expect(captured).toEqual([]);
   });
@@ -80,19 +89,23 @@ describe("discord ingress", () => {
     const { capture, captured } = recordingCapture();
 
     const ping = JSON.stringify({ type: 1 });
-    const pingResponse = await discordIntegration.fetch!({
-      request: await signedDiscordRequest({ bodyText: ping, sign }),
-      env: { DISCORD_PUBLIC_KEY: publicKeyHex },
-      capture,
-    });
+    const pingResponse = await discordIntegration.fetch!(
+      ingressCtx({
+        request: await signedDiscordRequest({ bodyText: ping, sign }),
+        env: { DISCORD_PUBLIC_KEY: publicKeyHex },
+        capture,
+      }),
+    );
     expect(await pingResponse?.json()).toEqual({ type: 1 });
 
     const interaction = JSON.stringify({ type: 2, id: "inter-1", guild_id: "42" });
-    const response = await discordIntegration.fetch!({
-      request: await signedDiscordRequest({ bodyText: interaction, sign }),
-      env: { DISCORD_PUBLIC_KEY: publicKeyHex },
-      capture,
-    });
+    const response = await discordIntegration.fetch!(
+      ingressCtx({
+        request: await signedDiscordRequest({ bodyText: interaction, sign }),
+        env: { DISCORD_PUBLIC_KEY: publicKeyHex },
+        capture,
+      }),
+    );
     expect(response?.status).toBe(200);
     expect(captured).toEqual([
       {
@@ -169,6 +182,20 @@ function fakeSdkContext(input: { integration: string; account: string }) {
     }) as typeof fetch,
   };
   return { ctx, outbound };
+}
+
+function ingressCtx(input: {
+  request: Request;
+  env: Record<string, string | undefined>;
+  capture: CaptureIntegrationEvent;
+}): IntegrationIngressContext {
+  return {
+    ...input,
+    config: { integrations: {} } as IntegrationIngressContext["config"],
+    baseUrl: "https://os.iterate.com",
+    oauthState: { sign: async () => "signed-state", verify: async () => null },
+    connect: async () => ({}),
+  };
 }
 
 function recordingCapture() {

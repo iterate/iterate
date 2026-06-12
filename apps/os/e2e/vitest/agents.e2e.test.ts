@@ -13,7 +13,7 @@ import dedent from "dedent";
 import { createTestProjectFixture } from "../test-support/create-test-project.ts";
 import type { OsClient } from "../test-support/os-client.ts";
 import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
-import { getSlackIntegrationDurableObjectName } from "~/domains/slack/slack-naming.ts";
+import { getIntegrationDurableObjectName } from "~/domains/integrations/integration-naming.ts";
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
@@ -1133,8 +1133,12 @@ function slackProcessorSubscriptionEvent(input: { projectId: string; suffix: str
       // a callable subscriber that dials the SLACK_INTEGRATION host DO.
       subscriptionKey: `slack:${input.projectId}`,
       subscriber: durableObjectProcessorSubscriber({
-        bindingName: "SLACK_INTEGRATION",
-        durableObjectName: getSlackIntegrationDurableObjectName(input.projectId),
+        bindingName: "INTEGRATION",
+        durableObjectName: getIntegrationDurableObjectName({
+          account: "default",
+          integration: "slack",
+          projectId: input.projectId,
+        }),
         processorName: "slack",
       }),
     },

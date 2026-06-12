@@ -106,12 +106,6 @@ const SEEDED_CAPS: Array<{
     name: "ai",
     capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
   },
-  {
-    instructions:
-      "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }) against the Gmail REST API.",
-    name: "gmail",
-    capability: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
-  },
 ];
 
 export class ProjectMcpServerConnection extends McpAgent<

@@ -1,51 +1,25 @@
 # Secrets Domain
 
-Secrets owns project-level credential material and provider connection records
-for the current OS POC.
+A Secret is a domain object: a journal at `{projectId}:/secrets/{slug}` plus a
+`SecretDurableObject` folding it. Material is AES-256-GCM encrypted in every
+event payload (`secret-crypto.ts`) and exists in plaintext only inside Secret
+DOs. The logic lives in the secret STREAM PROCESSOR
+(`stream-processors/secret`): derivation runs are its reaction to
+`secret/derive-requested` events; the DO is the host (crypto key, sibling
+dials, the expiry alarm) plus request/response verbs that only append facts
+and read the fold.
 
-This POC deliberately stores Secrets in D1 and exposes raw Secret material
-through a project-bound `SecretsCapability`. Longer-term Project Egress and
-Secret Durable Object work can move material behind a narrower trusted runtime
-boundary.
+Material flows out only as substitution: project egress parses
+`getSecret({ key })` placeholders and DELEGATES the request into the
+referenced secrets' own DOs (`egressFetch` — hop-by-hop substitution, last
+hop fetches). The audited `revealForPlatformUse` trapdoor exists for the two
+callers a fetch hop can't cover: websocket frames (Discord gateway identify,
+UrlDial upgrade headers) and sibling derivation sources.
 
-Provider Connections are project-level only for this slice. Webhook-driven
-providers can claim a provider webhook identifier, such as a Slack team ID, and
-that identifier must resolve to exactly one ProjectId.
+Derived secrets (`secret-derivation.ts`) subsume OAuth refresh: an access
+token is an `http-exchange` derivation over sibling Secrets (refresh token,
+client secret), re-derived inline when a use finds it stale. `sensitivity:
+"plain"` covers Doppler-style config variables. OAuth login state is a signed
+stateless token (`oauth-state.ts`) — no table.
 
-## Provider Claims
-
-A Provider Claim is the routing edge between a third-party identifier and an
-OS Project. The third party owns the identifier; OS owns the claim.
-
-Slack is the first concrete claim:
-
-- Provider: `slack`
-- Webhook Provider Identifier: Slack `team_id`
-- Claim owner: exactly one `ProjectId`
-- Integration stream: that project's stream namespace at `/integrations/slack`
-- Processor slug: `slack`
-
-This means one Slack team cannot forward signed webhooks into two projects at
-the same time. Reconnecting Slack in the same project can replace that project's
-Slack connection, but connecting a Slack team already claimed by another project
-must fail before writing a new connection or secret.
-
-Future webhook-driven integrations should follow the same shape: identify the
-provider-owned webhook routing key, store it in
-`project_connections.webhook_provider_identifier`, enforce global uniqueness for
-that provider, and route inbound webhooks by resolving that claim to a ProjectId.
-
-Google is project-scoped for this slice:
-
-- Provider: `google`
-- Lifecycle stream: that project's stream namespace at `/integrations/google`
-- Future processor slug: `google-integration`
-
-OAuth callbacks append `events.iterate.com/slack/connected` and
-`events.iterate.com/google-integration/connected`; disconnect actions append
-the matching `/disconnected` events (`integration-api.ts`,
-`integration-streams.ts`, and the integrations oRPC router). The `slack`
-stream processor (`~/domains/slack/stream-processors/slack`) exists and
-declares `slack/connected` and `slack/disconnected` in its contract. A
-`google-integration` processor does not exist yet; only its slug and event
-type constants are defined in `integration-streams.ts`.
+The full design narrative: `apps/os/docs/integrations-and-secrets-spike.md`.

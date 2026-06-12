@@ -4,7 +4,6 @@ import {
   jsonPointerGet,
   materialIsStale,
   parseSecretKeyReferences,
-  substituteKnownSecretKeyReferences,
   substituteSecretKeyReferences,
 } from "./secret-derivation.ts";
 
@@ -35,33 +34,6 @@ describe("secret key references (the egress placeholder language)", () => {
       },
     );
     expect(calls).toBe(1);
-  });
-});
-
-describe("substituteKnownSecretKeyReferences (one hop of the egress chain)", () => {
-  it("substitutes only the references it knows, leaving later hops' placeholders intact", () => {
-    const value =
-      'a=getSecret({ key: "waitrose/default/username" }) b=getSecret({ key: "waitrose/default/password" })';
-    const afterFirstHop = substituteKnownSecretKeyReferences(value, (key) =>
-      key === "waitrose/default/username" ? "jonas@example.com" : null,
-    );
-    expect(afterFirstHop).toBe(
-      'a=jonas@example.com b=getSecret({ key: "waitrose/default/password" })',
-    );
-    const afterSecondHop = substituteKnownSecretKeyReferences(afterFirstHop, (key) =>
-      key === "waitrose/default/password" ? "hunter2" : null,
-    );
-    expect(afterSecondHop).toBe("a=jonas@example.com b=hunter2");
-  });
-
-  it("never re-parses its own output: material can't inject new references", () => {
-    const substituted = substituteKnownSecretKeyReferences(
-      'auth=getSecret({ key: "a" })',
-      () => 'sneaky getSecret({ key: "b" })',
-    );
-    // The injected reference survives verbatim — and because the chain's key
-    // list is computed once by the pipe, no later hop will resolve it either.
-    expect(substituted).toBe('auth=sneaky getSecret({ key: "b" })');
   });
 });
 

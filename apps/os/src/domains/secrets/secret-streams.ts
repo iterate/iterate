@@ -40,6 +40,8 @@ export type SetJournaledSecretInput = {
   /** How to (re)compute material from other secrets — see secret-derivation.ts. */
   derivation?: SecretDerivation;
   source?: Record<string, unknown>;
+  /** Deterministic key for idempotent seeding (defaults to a fresh uuid). */
+  idempotencyKey?: string;
 };
 
 export async function setJournaledSecret(input: SetJournaledSecretInput) {
@@ -59,7 +61,7 @@ export async function setJournaledSecret(input: SetJournaledSecretInput) {
   });
   const event = await stream.append({
     type: "events.iterate.com/secret/set",
-    idempotencyKey: `secret-set:${input.slug}:${crypto.randomUUID()}`,
+    idempotencyKey: input.idempotencyKey ?? `secret-set:${input.slug}:${crypto.randomUUID()}`,
     payload: {
       slug: input.slug,
       ...(input.material == null

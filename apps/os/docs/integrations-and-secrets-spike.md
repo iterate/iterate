@@ -233,9 +233,9 @@ The terminal EgressPipe never touches journaled material: it parses
 `getSecret({ key })` references and DELEGATES the request into the referenced
 secrets' own DOs — each hop substitutes its own reference (re-deriving inline
 if stale) and the LAST hop performs the outbound fetch. Material only ever
-exists inside Secret DOs and on the wire to the API. (Legacy D1 rows still
-substitute in the pipe and die with the migration.) That is what makes the
-headline work: a project worker writes
+exists inside Secret DOs and on the wire to the API. There is no other
+secret store: the legacy D1 layer is gone. That is what makes the headline
+work: a project worker writes
 `authorization: Bearer getSecret({ key: "waitrose/default/access-token" })`
 and gets automatic inline token refresh without any isolate outside the
 secret system ever holding a credential.
@@ -413,10 +413,15 @@ Worth stealing later:
 
 ## Spike boundaries / open questions
 
-- Slack and Google still run their bespoke wiring; migration = re-express each
-  as a provider file (Slack's thread router becomes the project-side
-  `onIntegrationEvent`), then delete `project_connections`/`project_secrets`
-  reads in favor of the journals.
+- ~~Slack and Google still run their bespoke wiring~~ — DONE: both are
+  provider files in the registry now. Slack's thread router is the
+  `slack-route` processor on the account stream (the slack-agent pipeline
+  downstream is byte-compatible); Google's access token is a derived Secret
+  (the old `getFreshGoogleAccessToken` is deleted). The legacy D1 tables
+  (`project_secrets`, `project_connections`, `oauth_states`) are dropped;
+  OAuth state is a signed stateless token. Caveat: existing prd journals
+  carry subscriptions dialing the deleted SLACK_INTEGRATION namespace —
+  per the no-backcompat rule, prd gets a stage reset rather than a bridge.
 - GitHub App installation-token minting (app JWT → hourly token) isn't
   implemented; the Secret refresh loop is where it belongs.
 - Late route claims don't retroactively forward earlier captured events

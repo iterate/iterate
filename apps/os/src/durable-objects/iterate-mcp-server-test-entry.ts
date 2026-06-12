@@ -7,7 +7,6 @@ export {
   MockArtifactsBinding,
 } from "./mock-artifacts-binding.ts";
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
-export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";

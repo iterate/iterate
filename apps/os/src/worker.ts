@@ -45,13 +45,11 @@ export { ProjectDurableObject } from "~/domains/projects/durable-objects/project
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 export { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
-export { SlackIntegrationDurableObject } from "~/domains/slack/durable-objects/slack-integration-durable-object.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 export { PackageStream as StreamDurableObject };
 
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-capability.ts";
-export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { IntegrationsCapability } from "~/domains/integrations/entrypoints/integrations-capability.ts";
 export { BindingCapability, EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { McpClient } from "~/itx/capabilities/mcp-client.ts";
@@ -63,7 +61,6 @@ export { ItxCapabilityIngress } from "~/itx/http.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
-export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { SecretsJournalCapability } from "~/domains/secrets/entrypoints/secrets-journal-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";

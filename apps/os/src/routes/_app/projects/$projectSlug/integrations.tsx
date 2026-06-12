@@ -219,12 +219,6 @@ function IntegrationMetadata({
           tone={provider === "google" && token?.refreshTokenStored ? "ok" : undefined}
         />
       ) : null}
-      {token?.createdAt ? (
-        <IntegrationMetadataRow label="Secret created" value={formatTimestamp(token.createdAt)} />
-      ) : null}
-      {token?.updatedAt ? (
-        <IntegrationMetadataRow label="Secret updated" value={formatTimestamp(token.updatedAt)} />
-      ) : null}
       <IntegrationMetadataRow label="External ID" value={connection.externalId ?? "Unknown"} />
       <IntegrationMetadataRow
         label="Scopes"

@@ -5,6 +5,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "APP_CONFIG": "{\"adminApiSecret\":\"project-ingress-admin-secret\",\"openAiApiKey\":\"openai-test-key\",\"projectHostnameBases\":[\"iterate.localhost\"],\"typeIdPrefix\":\"os\"}",
+    "SECRETS_ENCRYPTION_KEY": "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
   },
   "worker_loaders": [
     {
@@ -43,6 +44,10 @@
         "name": "WORKSPACE",
         "class_name": "WorkspaceDurableObject",
       },
+      {
+        "name": "SECRET",
+        "class_name": "SecretDurableObject",
+      },
     ],
   },
   "d1_databases": [
@@ -79,6 +84,10 @@
     {
       "tag": "v5",
       "new_sqlite_classes": ["WorkspaceDurableObject"],
+    },
+    {
+      "tag": "v6",
+      "new_sqlite_classes": ["SecretDurableObject"],
     },
   ],
 }

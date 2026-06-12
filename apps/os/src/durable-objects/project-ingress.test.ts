@@ -162,17 +162,16 @@ describe("Project ingress routing", () => {
 
     // Creation side effects (the processor's create-requested steps) have
     // completed once phase is "ready" — the example secret is one of them.
-    const exampleSecret = await env.DB.prepare(
-      `SELECT key, material
-       FROM project_secrets
-       WHERE project_id = ? AND key = ?
-       LIMIT 1`,
-    )
-      .bind("proj__local__test", EXAMPLE_EGRESS_SECRET_KEY)
-      .first<{ key: string; material: string }>();
-    expect(exampleSecret).toEqual({
-      key: EXAMPLE_EGRESS_SECRET_KEY,
-      material: EXAMPLE_EGRESS_SECRET_MATERIAL,
+    // It is a journaled Secret now (sensitivity "plain", so describe()
+    // includes the value).
+    const exampleSecret = (await (
+      await SELF.fetch(
+        `https://os.iterate.localhost/__test/secret-state?slug=${encodeURIComponent(EXAMPLE_EGRESS_SECRET_KEY)}`,
+      )
+    ).json()) as { slug?: string; status: string; value?: string };
+    expect(exampleSecret).toMatchObject({
+      status: "set",
+      value: EXAMPLE_EGRESS_SECRET_MATERIAL,
     });
 
     const repoResponse = await SELF.fetch("https://os.iterate.localhost/__test/project-repo");

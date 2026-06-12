@@ -94,11 +94,9 @@ export const ProjectIntegrationConnection = z.object({
   scopes: z.string().nullable(),
   token: z
     .object({
-      createdAt: z.string(),
       expiresAt: z.string().nullable(),
       hasMaterial: z.boolean(),
       refreshTokenStored: z.boolean(),
-      updatedAt: z.string(),
     })
     .nullable(),
 });

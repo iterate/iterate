@@ -25,7 +25,34 @@
 // hostname). The `integration/connected` event records which one a project
 // chose; ingress and SDK construction resolve credentials accordingly.
 
+import type { AppConfig } from "~/config.ts";
+import type { SecretDerivation } from "~/domains/secrets/secret-derivation.ts";
+import type {
+  SecretSensitivity,
+  SecretTier,
+} from "~/domains/secrets/stream-processors/secret/contract.ts";
+import type { OAuthStatePayload } from "~/domains/secrets/oauth-state.ts";
+
 export type IntegrationTransport = "webhook" | "gateway";
+
+/** What a provider hands to ctx.connect — the integration slug is implied. */
+export type IntegrationConnectInput = {
+  account?: string;
+  projectId: string;
+  ownership: "first-party" | "customer";
+  externalId: string;
+  displayName?: string;
+  routingKeys: string[];
+  secrets: {
+    name: string;
+    material?: string;
+    metadata?: Record<string, unknown>;
+    tier?: SecretTier;
+    sensitivity?: SecretSensitivity;
+    derivation?: SecretDerivation;
+    expiresAt?: string;
+  }[];
+};
 
 /** The one side-effect channel of integration ingress: capture a provider
  * event verbatim on `{global}:/integrations/{slug}/webhooks`. Only this
@@ -45,7 +72,20 @@ export type IntegrationIngressContext = {
   /** Deployment config (first-party verification secrets). Customer-owned
    * connections resolve the same values from project Secrets instead. */
   env: Record<string, string | undefined>;
+  /** Parsed app config — first-party OAuth clients live at
+   * config.integrations.{slug}. */
+  config: AppConfig;
+  /** The app's base URL, for OAuth redirect URIs. */
+  baseUrl: string;
   capture: CaptureIntegrationEvent;
+  /** STATELESS OAuth state (HMAC-signed, 10-minute expiry) — no table. */
+  oauthState: {
+    sign(payload: Omit<OAuthStatePayload, "expiresAtMs">): Promise<string>;
+    verify(state: string): Promise<OAuthStatePayload | null>;
+  };
+  /** The ONE connect choreography: appends integration/connect-requested for
+   * this integration; the account's processor does the rest. */
+  connect(input: IntegrationConnectInput): Promise<unknown>;
 };
 
 export type IntegrationSdkContext = {

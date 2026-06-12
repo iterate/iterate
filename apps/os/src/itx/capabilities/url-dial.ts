@@ -27,7 +27,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWebSocketRpcSession } from "capnweb";
 import { RESERVED_PATH_SEGMENTS, type PathCall } from "../itx.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
-import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+import { revealJournaledSecretForPlatformUse } from "~/domains/secrets/secret-streams.ts";
 
 export type UrlDialProps = {
   /** The remote Cap'n Web server. Provider-supplied; http(s) or ws(s). */
@@ -51,13 +51,21 @@ export class UrlDial extends WorkerEntrypoint<Env, UrlDialProps> {
     }
     const url = dialableHttpUrl(props.url);
 
+    // A websocket upgrade has no fetch hop to delegate, so this dial — like
+    // the Discord gateway — substitutes via the audited reveal, inside the
+    // platform trust zone.
     const headers = new Headers(props.headers ?? {});
     const [substitutionError, substitutedHeaders] = await substituteProjectEgressSecretHeaders({
       headers,
-      secrets: getSecretsCapability({
-        exports: this.ctx.exports as unknown as Pick<Cloudflare.Exports, "SecretsCapability">,
-        props: { projectId: props.projectId },
-      }),
+      secrets: {
+        getSecretOrNull: async ({ key }) => ({
+          material: await revealJournaledSecretForPlatformUse({
+            projectId: props.projectId!,
+            slug: key,
+            usedBy: "url-dial",
+          }),
+        }),
+      },
     });
     if (substitutionError) {
       throw new Error(

@@ -53,6 +53,11 @@ import {
   IntegrationProcessorContract,
 } from "~/domains/integrations/stream-processors/integration/implementation.ts";
 import { ensureSecretStub } from "~/domains/secrets/durable-objects/secret-durable-object.ts";
+import {
+  SlackRouteProcessor,
+  SlackRouteProcessorContract,
+} from "~/domains/slack/stream-processors/slack-route/implementation.ts";
+import { slackRouteProcessorDeps } from "~/domains/slack/slack-route-host.ts";
 
 export { getIntegrationDurableObjectName };
 
@@ -137,9 +142,29 @@ export class IntegrationDurableObject extends IntegrationLifecycleBase<Integrati
         const stub = await ensureSecretStub({ projectId: params.projectId, slug });
         await stub.ensureReady();
       },
-      // The fan-out seam stays open in the spike: routed events fold into
-      // state and sit on the stream for any subscriber. The Slack thread
-      // router becomes an onIntegrationEvent here when slack migrates.
+      // The generic fan-out seam stays open; provider-specific fan-out is a
+      // SEPARATE processor on the same stream (slack-route below).
+    });
+  });
+
+  // Provider-specific fan-out processors share the account stream. Slack is
+  // the only provider with one today; per conventions-over-frameworks this is
+  // a direct registration, not a plugin mechanism — a second provider
+  // processor earns the abstraction. Deps resolve params lazily because
+  // host.add runs at construction, before the DO knows its name.
+  slackRoute = this.host.add(SlackRouteProcessorContract.slug, (deps) => {
+    const slackDeps = async () => {
+      const params = await this.ensureParams();
+      return slackRouteProcessorDeps({ projectId: params.projectId, account: params.account });
+    };
+    return new SlackRouteProcessor({
+      ...deps,
+      createRoutedStreamBootstrapEvents: async (input) =>
+        (await slackDeps()).createRoutedStreamBootstrapEvents!(input),
+      acknowledgeRoutedWebhook: async (input) =>
+        (await slackDeps()).acknowledgeRoutedWebhook!(input),
+      prewarmRoutedStreamHosts: async (input) =>
+        (await slackDeps()).prewarmRoutedStreamHosts!(input),
     });
   });
 
@@ -231,17 +256,24 @@ export class IntegrationDurableObject extends IntegrationLifecycleBase<Integrati
 
   private async ensureIntegrationSubscription(params: IntegrationDurableObjectStructuredName) {
     const stream = await this.integrationStream(params);
-    await stream.append({
-      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `integration-subscription:${params.projectId}:${params.integration}:${params.account}`,
-      payload: {
-        subscriptionKey: `integration:${params.projectId}:${params.integration}:${params.account}`,
-        subscriber: durableObjectProcessorSubscriber({
-          bindingName: "INTEGRATION",
-          durableObjectName: getIntegrationDurableObjectName(params),
-          processorName: IntegrationProcessorContract.slug,
-        }),
-      },
-    });
+    const processorSlugs = [
+      IntegrationProcessorContract.slug,
+      // Slack's thread router subscribes alongside the generic processor.
+      ...(params.integration === "slack" ? [SlackRouteProcessorContract.slug] : []),
+    ];
+    for (const processorName of processorSlugs) {
+      await stream.append({
+        type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+        idempotencyKey: `integration-subscription:${params.projectId}:${params.integration}:${params.account}:${processorName}`,
+        payload: {
+          subscriptionKey: `${processorName}:${params.projectId}:${params.integration}:${params.account}`,
+          subscriber: durableObjectProcessorSubscriber({
+            bindingName: "INTEGRATION",
+            durableObjectName: getIntegrationDurableObjectName(params),
+            processorName,
+          }),
+        },
+      });
+    }
   }
 }

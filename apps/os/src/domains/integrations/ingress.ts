@@ -13,7 +13,10 @@
 //    ack); routing to a project happens after, in the router processor.
 
 import { env } from "cloudflare:workers";
+import { parseConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
+import { signOAuthState, verifyOAuthState } from "~/domains/secrets/oauth-state.ts";
+import { connectIntegration } from "~/domains/integrations/connect.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -78,17 +81,34 @@ export async function handleIntegrationIngress(input: {
   context: RequestContext;
   request: Request;
 }): Promise<Response | null> {
+  const config = parseConfig(env as unknown as Parameters<typeof parseConfig>[0]);
+  const baseUrl = config.baseUrl ?? new URL(input.request.url).origin;
+  const stateKey = (env as unknown as { SECRETS_ENCRYPTION_KEY?: string }).SECRETS_ENCRYPTION_KEY;
   for (const integration of Object.values(INTEGRATIONS)) {
     if (!integration.fetch) continue;
     const response = await integration.fetch({
       request: input.request,
       env: env as unknown as Record<string, string | undefined>,
+      config,
+      baseUrl,
       capture: (event) =>
         captureIntegrationEvent({
           ...event,
           integration: integration.slug,
           waitUntil: input.context.waitUntil,
         }),
+      oauthState: {
+        sign: (payload) => {
+          if (!stateKey) throw new Error("SECRETS_ENCRYPTION_KEY is required for OAuth state.");
+          return signOAuthState({ key: stateKey, payload, nowMs: Date.now() });
+        },
+        verify: (state) => {
+          if (!stateKey) throw new Error("SECRETS_ENCRYPTION_KEY is required for OAuth state.");
+          return verifyOAuthState({ key: stateKey, state, nowMs: Date.now() });
+        },
+      },
+      connect: (connectInput) =>
+        connectIntegration({ ...connectInput, integration: integration.slug }),
     });
     if (response) return response;
   }

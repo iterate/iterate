@@ -437,7 +437,7 @@ return {
 // The placeholder is substituted server-side; this tab never sees the value.
 const response = await itx.fetch("https://postman-echo.com/get", {
   headers: {
-    authorization: 'Bearer getSecret({ key: "example.egress_api_key" })',
+    authorization: 'Bearer getSecret({ key: "example/egress-api-key" })',
   },
 });
 const body = await response.json();

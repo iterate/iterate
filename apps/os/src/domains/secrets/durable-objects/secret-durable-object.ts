@@ -42,10 +42,8 @@ import {
   encryptSecretMaterial,
   importSecretsKey,
 } from "~/domains/secrets/secret-crypto.ts";
-import {
-  materialIsStale,
-  substituteKnownSecretKeyReferences,
-} from "~/domains/secrets/secret-derivation.ts";
+import { materialIsStale } from "~/domains/secrets/secret-derivation.ts";
+import { parseSecretReferences } from "~/domains/projects/egress-secret-substitution.ts";
 import { secretStreamPath } from "~/domains/secrets/stream-processors/secret/contract.ts";
 import {
   SecretProcessor,
@@ -104,6 +102,24 @@ const SecretLifecycleBase = createIterateDurableObjectBase<
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
+/** The material-free public view describe() returns — a plain type so
+ * callers through DurableObjectStub keep it (stub method mapping degrades
+ * structurally-complex inferred types). */
+export type SecretDescription = {
+  slug?: string;
+  status: "unset" | "set" | "deleted";
+  version: number;
+  metadata: Record<string, unknown>;
+  tier: "project" | "iterate";
+  sensitivity: "secret" | "plain";
+  expiresAt?: string;
+  audit: { uses: number; lastUsedAt?: string; lastUsedBy?: string };
+  hasMaterial: boolean;
+  derivation: { kind: string } | null;
+  /** Included for sensitivity "plain" only. */
+  value?: string;
+};
+
 type SecretState = Awaited<ReturnType<SecretProcessor["snapshot"]>>["state"];
 
 export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObjectEnv> {
@@ -154,7 +170,7 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
 
   /** Public view of the Secret: material-free — except plain config
    * variables (sensitivity: "plain"), whose value is included. */
-  async describe() {
+  async describe(): Promise<SecretDescription> {
     const { state } = await this.readyState();
     const { encryptedMaterial, derivation, ...visible } = state;
     return {
@@ -222,12 +238,19 @@ export class SecretDurableObject extends SecretLifecycleBase<SecretDurableObject
     }
     const material = await this.ensureFreshMaterial({ params, state });
 
+    // Substitute by parsed reference SOURCE (both getSecret('k') and
+    // getSecret({ key: 'k' }) syntaxes), only for THIS secret's key —
+    // placeholders for later hops pass through verbatim, and substituted
+    // material is never re-parsed.
     const headers = new Headers(input.request.headers);
     for (const [name, value] of input.request.headers) {
-      headers.set(
-        name,
-        substituteKnownSecretKeyReferences(value, (key) => (key === params.slug ? material : null)),
-      );
+      const [parseError, references] = parseSecretReferences({ header: name, value });
+      if (parseError) throw new Error(`Secret reference parse failed in header "${name}".`);
+      let next = value;
+      for (const reference of references) {
+        if (reference.key === params.slug) next = next.split(reference.source).join(material);
+      }
+      headers.set(name, next);
     }
     const request = new Request(input.request, { headers });
 

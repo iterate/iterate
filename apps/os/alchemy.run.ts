@@ -25,7 +25,6 @@ import type { IntegrationIngressDurableObject } from "./src/domains/integrations
 import type { SecretDurableObject } from "./src/domains/secrets/durable-objects/secret-durable-object.ts";
 import type { RepoDurableObject } from "./src/domains/repos/durable-objects/repo-durable-object.ts";
 import type { SlackAgentDurableObject } from "./src/domains/slack/durable-objects/slack-agent-durable-object.ts";
-import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import { eventDocsHostnameForAppBaseUrl } from "./src/lib/event-docs-host.ts";
 
@@ -213,13 +212,6 @@ const agent = DurableObjectNamespace<AgentDurableObject>("agent", {
   className: "AgentDurableObject",
   sqlite: true,
 });
-const slackIntegration = DurableObjectNamespace<SlackIntegrationDurableObject>(
-  "slack-integration",
-  {
-    className: "SlackIntegrationDurableObject",
-    sqlite: true,
-  },
-);
 const slackAgent = DurableObjectNamespace<SlackAgentDurableObject>("slack-agent", {
   className: "SlackAgentDurableObject",
   sqlite: true,
@@ -250,7 +242,6 @@ const secretsEncryptionKey = process.env.SECRETS_ENCRYPTION_KEY;
 const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
 const discordPublicKey = process.env.DISCORD_PUBLIC_KEY;
 const discordBotToken = process.env.APP_CONFIG_DISCORD_BOT_TOKEN;
-const githubToken = process.env.APP_CONFIG_GITHUB_TOKEN;
 const artifactEventsQueue = await Queue("artifact-events", {
   name: `${ctx.workerName}-artifact-events`,
   adopt: true,
@@ -287,7 +278,6 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
     PROJECT: project,
     SLACK_AGENT: slackAgent,
-    SLACK_INTEGRATION: slackIntegration,
     INTEGRATION: integration,
     INTEGRATION_INGRESS: integrationIngress,
     SECRET: secret,
@@ -310,7 +300,6 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
     ...(discordBotToken == null
       ? {}
       : { APP_CONFIG_DISCORD_BOT_TOKEN: alchemy.secret(discordBotToken) }),
-    ...(githubToken == null ? {} : { APP_CONFIG_GITHUB_TOKEN: alchemy.secret(githubToken) }),
   },
   // OAuth login/refresh/logout, and JWT verification when static JWKS is not
   // configured, can still talk to auth.iterate.com from inside the Worker.

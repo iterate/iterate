@@ -1,29 +1,52 @@
+// Project integrations, post-clean-cut: everything runs on the registry +
+// journaled Secrets. Slack and Google connections are integration ACCOUNTS
+// (folds over /integrations/{slug}/{account}); OAuth state is a signed
+// stateless token; tokens live as journaled Secrets. The legacy D1 tables
+// (project_connections / project_secrets / oauth_states) are gone.
+
+import { env } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
 import type { RequestContext } from "~/request-context.ts";
-import {
-  createGoogleAuthorizationUrl,
-  createSlackAuthorizationUrl,
-  disconnectProvider,
-  providerSecretKey,
-  requestBaseUrl,
-} from "~/domains/secrets/oauth.ts";
-import {
-  appendIntegrationEvent,
-  GOOGLE_DISCONNECTED_EVENT_TYPE,
-  SLACK_DISCONNECTED_EVENT_TYPE,
-} from "~/domains/secrets/integration-streams.ts";
-import { getProjectConnection, getProjectSecret } from "~/domains/secrets/secrets-store.ts";
 import { connectIntegration } from "~/domains/integrations/connect.ts";
 import { getIntegration } from "~/domains/integrations/registry.ts";
+import { providedSecretSlug } from "~/domains/integrations/definition.ts";
+import {
+  DEFAULT_INTEGRATION_ACCOUNT,
+  integrationAccountStreamPath,
+  integrationIngressStreamPath,
+} from "~/domains/integrations/integration-events.ts";
 import { ensureIntegrationStub } from "~/domains/integrations/durable-objects/integration-durable-object.ts";
 import { ensureDiscordGatewayStub } from "~/domains/integrations/durable-objects/discord-gateway-durable-object.ts";
-import { ensureSecretStub } from "~/domains/secrets/durable-objects/secret-durable-object.ts";
+import {
+  buildSlackAuthorizationUrl,
+  SLACK_ACCESS_TOKEN_SECRET_NAME,
+} from "~/domains/integrations/providers/slack.ts";
+import {
+  buildGoogleAuthorizationUrl,
+  GOOGLE_ACCESS_TOKEN_SECRET_NAME,
+  GOOGLE_REFRESH_TOKEN_SECRET_NAME,
+} from "~/domains/integrations/providers/google.ts";
+import {
+  ensureSecretStub,
+  type SecretDescription,
+} from "~/domains/secrets/durable-objects/secret-durable-object.ts";
 import { setJournaledSecret } from "~/domains/secrets/secret-streams.ts";
+import { secretStreamPath } from "~/domains/secrets/stream-processors/secret/contract.ts";
+import { signOAuthState } from "~/domains/secrets/oauth-state.ts";
+import {
+  getInitializedStreamStub,
+  type StreamDurableObjectNamespace,
+} from "~/domains/streams/stream-runtime.ts";
 import { os, projectScopeMiddleware } from "~/orpc/orpc.ts";
 import { requireProjectScope } from "~/orpc/project-access.ts";
 
+type IntegrationsEnv = {
+  GLOBAL_STREAM_NAMESPACE: string;
+  SECRETS_ENCRYPTION_KEY?: string;
+  STREAM: StreamDurableObjectNamespace;
+};
+
 export const projectIntegrationsRouter = {
-  // ---- registry-driven integrations (spike) -------------------------------
   connect: os.project.integrations.connect
     .use(projectScopeMiddleware)
     .handler(async ({ context, input }) => {
@@ -99,21 +122,36 @@ export const projectIntegrationsRouter = {
       const stub = await ensureDiscordGatewayStub(scope);
       return await stub.ensureConnected();
     }),
+
+  // ---- slack / google (UI surface) — same contract, new system ------------
   getSlackConnection: os.project.integrations.getSlackConnection
     .use(projectScopeMiddleware)
-    .handler(async ({ context }) => connectionStatus(context, "slack")),
+    .handler(async ({ context }) => {
+      return await connectionStatus(context, {
+        integration: "slack",
+        tokenSecretName: SLACK_ACCESS_TOKEN_SECRET_NAME,
+      });
+    }),
   startSlackOAuthFlow: os.project.integrations.startSlackOAuthFlow
     .use(projectScopeMiddleware)
     .handler(async ({ context, input }) => {
       const project = requireProjectScope(context);
+      const slack = context.config.integrations.slack;
+      if (!slack) {
+        throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Slack not configured." });
+      }
+      const baseUrl = requestBaseUrl(context);
       return {
-        authorizationUrl: await createSlackAuthorizationUrl({
-          baseUrl: requestBaseUrl({ config: context.config, request: context.rawRequest }),
-          callbackUrl: input.callbackUrl,
-          config: context.config,
-          db: context.db,
-          projectId: project.id,
-          userId: requireUserId(context),
+        authorizationUrl: buildSlackAuthorizationUrl({
+          clientId: slack.oauthClientId,
+          scopes: slack.scopes,
+          redirectUri: `${baseUrl}/api/integrations/slack/callback`,
+          state: await signState({
+            provider: "slack",
+            projectId: project.id,
+            userId: requireUserId(context),
+            ...(input.callbackUrl == null ? {} : { callbackUrl: input.callbackUrl }),
+          }),
         }),
       };
     }),
@@ -121,52 +159,40 @@ export const projectIntegrationsRouter = {
     .use(projectScopeMiddleware)
     .handler(async ({ context }) => {
       const project = requireProjectScope(context);
-      const connection = await getProjectConnection(context.db, {
-        projectId: project.id,
-        provider: "slack",
-      });
-      const result = await disconnectProvider({
-        db: context.db,
-        projectId: project.id,
-        provider: "slack",
-      });
-      if (connection) {
-        await appendIntegrationEvent(context, {
-          projectId: project.id,
-          provider: "slack",
-          event: {
-            type: SLACK_DISCONNECTED_EVENT_TYPE,
-            payload: {
-              connectionId: connection.id,
-              externalId: connection.externalId,
-              projectId: project.id,
-              scopes: parseScopes(connection.scopes, ","),
-              teamDomain: readStringMetadata(connection.providerData, "teamDomain"),
-              teamId:
-                readStringMetadata(connection.providerData, "teamId") ?? connection.externalId,
-              teamName: readStringMetadata(connection.providerData, "teamName"),
-              webhookProviderIdentifier: connection.webhookProviderIdentifier,
-            },
-          },
-        });
-      }
-      return result;
+      return await disconnectAccount(project.id, "slack");
     }),
   getGoogleConnection: os.project.integrations.getGoogleConnection
     .use(projectScopeMiddleware)
-    .handler(async ({ context }) => connectionStatus(context, "google")),
+    .handler(async ({ context }) => {
+      return await connectionStatus(context, {
+        integration: "google",
+        tokenSecretName: GOOGLE_ACCESS_TOKEN_SECRET_NAME,
+        refreshSecretName: GOOGLE_REFRESH_TOKEN_SECRET_NAME,
+      });
+    }),
   startGoogleOAuthFlow: os.project.integrations.startGoogleOAuthFlow
     .use(projectScopeMiddleware)
     .handler(async ({ context, input }) => {
       const project = requireProjectScope(context);
+      const google = context.config.integrations.google;
+      if (!google) {
+        throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Google not configured." });
+      }
+      const baseUrl = requestBaseUrl(context);
+      const codeVerifier = randomBase64Url(32);
       return {
-        authorizationUrl: await createGoogleAuthorizationUrl({
-          baseUrl: requestBaseUrl({ config: context.config, request: context.rawRequest }),
-          callbackUrl: input.callbackUrl,
-          config: context.config,
-          db: context.db,
-          projectId: project.id,
-          userId: requireUserId(context),
+        authorizationUrl: buildGoogleAuthorizationUrl({
+          clientId: google.oauthClientId,
+          scopes: google.scopes,
+          redirectUri: `${baseUrl}/api/integrations/google/callback`,
+          codeChallenge: await sha256Base64Url(codeVerifier),
+          state: await signState({
+            provider: "google",
+            projectId: project.id,
+            userId: requireUserId(context),
+            codeVerifier,
+            ...(input.callbackUrl == null ? {} : { callbackUrl: input.callbackUrl }),
+          }),
         }),
       };
     }),
@@ -174,48 +200,22 @@ export const projectIntegrationsRouter = {
     .use(projectScopeMiddleware)
     .handler(async ({ context }) => {
       const project = requireProjectScope(context);
-      const connection = await getProjectConnection(context.db, {
-        projectId: project.id,
-        provider: "google",
-      });
-      const result = await disconnectProvider({
-        db: context.db,
-        projectId: project.id,
-        provider: "google",
-      });
-      if (connection) {
-        await appendIntegrationEvent(context, {
-          projectId: project.id,
-          provider: "google",
-          event: {
-            type: GOOGLE_DISCONNECTED_EVENT_TYPE,
-            payload: {
-              connectionId: connection.id,
-              email: readStringMetadata(connection.providerData, "email"),
-              externalId: connection.externalId,
-              googleUserId:
-                readStringMetadata(connection.providerData, "googleUserId") ??
-                connection.externalId,
-              name: readStringMetadata(connection.providerData, "name"),
-              picture: readStringMetadata(connection.providerData, "picture"),
-              projectId: project.id,
-              scopes: parseScopes(connection.scopes, " "),
-            },
-          },
-        });
-      }
-      return result;
+      return await disconnectAccount(project.id, "google");
     }),
 };
 
-async function connectionStatus(context: RequestContext, provider: "google" | "slack") {
+async function connectionStatus(
+  context: RequestContext,
+  input: { integration: string; tokenSecretName: string; refreshSecretName?: string },
+) {
   const project = requireProjectScope(context);
-  const connection = await getProjectConnection(context.db, {
+  const stub = await ensureIntegrationStub({
+    account: DEFAULT_INTEGRATION_ACCOUNT,
+    integration: input.integration,
     projectId: project.id,
-    provider,
   });
-
-  if (!connection) {
+  const { state } = await stub.ensureReady();
+  if (state.connection.status !== "connected") {
     return {
       connected: false,
       displayName: null,
@@ -226,48 +226,146 @@ async function connectionStatus(context: RequestContext, provider: "google" | "s
     };
   }
 
-  const secret = await getProjectSecret(context.db, {
-    key: providerSecretKey(provider),
-    projectId: project.id,
+  const token = await describeSecretOrNull(project.id, {
+    integration: input.integration,
+    name: input.tokenSecretName,
   });
-
+  const refresh = input.refreshSecretName
+    ? await describeSecretOrNull(project.id, {
+        integration: input.integration,
+        name: input.refreshSecretName,
+      })
+    : null;
+  const scopes = token?.metadata?.scopes;
   return {
     connected: true,
-    displayName: readDisplayName(connection.providerData),
-    externalId: connection.externalId,
-    metadata: connection.providerData,
-    scopes: connection.scopes,
-    token: secret
-      ? {
-          createdAt: secret.createdAt,
-          expiresAt: readStringMetadata(secret.metadata, "expiresAt"),
-          hasMaterial: secret.material.length > 0,
-          refreshTokenStored: readStringMetadata(secret.metadata, "refreshToken") !== null,
-          updatedAt: secret.updatedAt,
-        }
-      : null,
+    displayName: state.connection.displayName ?? null,
+    externalId: state.connection.externalId ?? null,
+    metadata: (token?.metadata ?? {}) as Record<string, unknown>,
+    scopes: Array.isArray(scopes) ? scopes.join(",") : null,
+    token:
+      token == null
+        ? null
+        : {
+            expiresAt: token.expiresAt ?? null,
+            hasMaterial: token.hasMaterial === true || token.derivation != null,
+            refreshTokenStored: refresh?.hasMaterial === true,
+          },
   };
 }
 
-function readDisplayName(metadata: Record<string, unknown>) {
-  const name = metadata.teamName ?? metadata.email ?? metadata.name;
-  return typeof name === "string" ? name : null;
+async function describeSecretOrNull(projectId: string, ref: { integration: string; name: string }) {
+  try {
+    const stub = await ensureSecretStub({
+      projectId,
+      slug: providedSecretSlug({
+        integration: ref.integration,
+        account: DEFAULT_INTEGRATION_ACCOUNT,
+        name: ref.name,
+      }),
+    });
+    const described = (await stub.describe()) as SecretDescription;
+    return described.status === "set" ? described : null;
+  } catch {
+    return null;
+  }
 }
 
-function readStringMetadata(metadata: Record<string, unknown>, key: string) {
-  const value = metadata[key];
-  return typeof value === "string" ? value : null;
+/** Disconnect = the mirror choreography: the disconnected fact on the account
+ * stream, route claims released on the global stream, secrets deleted. */
+async function disconnectAccount(projectId: string, integration: string) {
+  const integrationsEnv = env as unknown as IntegrationsEnv;
+  const account = DEFAULT_INTEGRATION_ACCOUNT;
+  const stub = await ensureIntegrationStub({ account, integration, projectId });
+  const { state } = await stub.ensureReady();
+  if (state.connection.status !== "connected") return { success: true };
+
+  const accountStream = await getInitializedStreamStub({
+    durableObjectNamespace: integrationsEnv.STREAM,
+    namespace: projectId,
+    path: integrationAccountStreamPath(integration, account),
+  });
+  await accountStream.append({
+    type: "events.iterate.com/integration/disconnected",
+    idempotencyKey: `integration-disconnected:${integration}:${account}:${crypto.randomUUID()}`,
+    payload: {
+      integration,
+      account,
+      projectId,
+      ...(state.connection.externalId == null ? {} : { externalId: state.connection.externalId }),
+    },
+  });
+
+  const ingressStream = await getInitializedStreamStub({
+    durableObjectNamespace: integrationsEnv.STREAM,
+    namespace: integrationsEnv.GLOBAL_STREAM_NAMESPACE,
+    path: integrationIngressStreamPath(integration),
+  });
+  for (const routingKey of state.connection.routingKeys) {
+    await ingressStream.append({
+      type: "events.iterate.com/integration/route-removed",
+      idempotencyKey: `integration-route-removed:${integration}:${routingKey}:${crypto.randomUUID()}`,
+      payload: { integration, routingKey },
+    });
+  }
+
+  for (const slug of state.connection.providedSecretSlugs) {
+    const secretStream = await getInitializedStreamStub({
+      durableObjectNamespace: integrationsEnv.STREAM,
+      namespace: projectId,
+      path: secretStreamPath(slug),
+    });
+    await secretStream.append({
+      type: "events.iterate.com/secret/deleted",
+      idempotencyKey: `secret-deleted:${slug}:${crypto.randomUUID()}`,
+      payload: { slug },
+    });
+  }
+  return { success: true };
 }
 
-function parseScopes(scopes: string | null, separator: "," | " ") {
-  if (!scopes) return [];
-  return scopes
-    .split(separator)
-    .map((scope) => scope.trim())
-    .filter((scope) => scope.length > 0);
+function requestBaseUrl(context: RequestContext) {
+  const base =
+    context.config.baseUrl ??
+    (context.rawRequest ? new URL(context.rawRequest.url).origin : undefined);
+  if (!base) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Cannot infer base URL." });
+  return base.replace(/\/$/, "");
+}
+
+async function signState(payload: {
+  provider: string;
+  projectId: string;
+  userId: string;
+  callbackUrl?: string;
+  codeVerifier?: string;
+}) {
+  const key = (env as unknown as IntegrationsEnv).SECRETS_ENCRYPTION_KEY;
+  if (!key) {
+    throw new ORPCError("INTERNAL_SERVER_ERROR", {
+      message: "SECRETS_ENCRYPTION_KEY is required for OAuth flows.",
+    });
+  }
+  return await signOAuthState({ key, payload, nowMs: Date.now() });
 }
 
 function requireUserId(context: RequestContext) {
   if (context.principal?.type !== "user") throw new ORPCError("UNAUTHORIZED");
   return context.principal.userId;
+}
+
+function randomBase64Url(byteLength: number) {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  return base64Url(bytes);
+}
+
+async function sha256Base64Url(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return base64Url(new Uint8Array(digest));
+}
+
+function base64Url(bytes: Uint8Array) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
 }

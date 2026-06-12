@@ -10,7 +10,10 @@ import { OpenAiWsProcessorContract } from "~/domains/agents/stream-processors/op
 import { ProjectProcessorContract } from "~/domains/projects/stream-processors/project/contract.ts";
 import { RepoStreamProcessorContract } from "~/domains/repos/stream-processors/repo-stream-processor.ts";
 import { SlackAgentProcessorContract } from "~/domains/slack/stream-processors/slack-agent/contract.ts";
-import { SlackProcessorContract } from "~/domains/slack/stream-processors/slack/contract.ts";
+import { SlackRouteProcessorContract } from "~/domains/slack/stream-processors/slack-route/contract.ts";
+import { IntegrationProcessorContract } from "~/domains/integrations/stream-processors/integration/contract.ts";
+import { IntegrationIngressProcessorContract } from "~/domains/integrations/stream-processors/integration-ingress/contract.ts";
+import { SecretProcessorContract } from "~/domains/secrets/stream-processors/secret/contract.ts";
 
 const EVENT_TYPE_PREFIX = "events.iterate.com/";
 const EVENT_TYPE_URL_PREFIX = "https://events.iterate.com/";
@@ -42,7 +45,10 @@ const processorContracts = [
   CloudflareAiProcessorContract,
   JsonataReactorProcessorContract,
   OpenAiWsProcessorContract,
-  SlackProcessorContract,
+  SlackRouteProcessorContract,
+  IntegrationProcessorContract,
+  IntegrationIngressProcessorContract,
+  SecretProcessorContract,
   SlackAgentProcessorContract,
 ] as const satisfies readonly ProcessorContractForDocs[];
 

@@ -32,7 +32,7 @@ import {
   getAgentDurableObjectName,
 } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import { jsonataReactorEventTypes } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
-import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+import { setJournaledSecret } from "~/domains/secrets/secret-streams.ts";
 import {
   EXAMPLE_EGRESS_SECRET_KEY,
   EXAMPLE_EGRESS_SECRET_MATERIAL,
@@ -197,20 +197,16 @@ export class ProjectProcessor extends StreamProcessor<
   }
 
   async #ensureExampleEgressSecret(projectId: string) {
-    const secrets = getSecretsCapability({
-      exports: this.deps.exports as Parameters<typeof getSecretsCapability>[0]["exports"],
-      props: { projectId },
-    });
-
-    const existing = await secrets.getSecretSummaryByKeyOrNull({
-      key: EXAMPLE_EGRESS_SECRET_KEY,
-    });
-    if (existing) return;
-
-    await secrets.setSecret({
-      key: EXAMPLE_EGRESS_SECRET_KEY,
+    // Journaled Secret with a deterministic idempotency key: re-running the
+    // create-requested side effects appends a duplicate that dedupes.
+    await setJournaledSecret({
+      projectId,
+      slug: EXAMPLE_EGRESS_SECRET_KEY,
       material: EXAMPLE_EGRESS_SECRET_MATERIAL,
       metadata: EXAMPLE_EGRESS_SECRET_METADATA,
+      sensitivity: "plain",
+      idempotencyKey: `secret-set:example:${projectId}`,
+      source: { kind: "project-created-example" },
     });
   }
 

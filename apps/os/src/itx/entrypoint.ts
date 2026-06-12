@@ -17,8 +17,6 @@ import { dialContext, lookupContext, projectContextAddress } from "./journal.ts"
 import { GLOBAL_CONTEXT_ID, isChildContextId, type ItxProps } from "./refs.ts";
 import { parseConfig } from "~/config.ts";
 import { parseSecretReferences } from "~/domains/projects/egress-secret-substitution.ts";
-import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
-import { substituteKnownSecretKeyReferences } from "~/domains/secrets/secret-derivation.ts";
 import {
   delegateEgressFetchToSecretChain,
   splitJournaledSecretKeys,
@@ -182,51 +180,21 @@ export class EgressPipe extends WorkerEntrypoint<Env, EgressPipeProps> {
     }
     if (keys.length === 0) return await fetch(request);
 
-    // Journaled keys DELEGATE: this pipe never touches their material. Legacy
-    // D1 rows have no domain object, so they substitute here (and die with
-    // the migration).
-    const { journaled, legacy } = await splitJournaledSecretKeys({ projectId, keys });
-
-    let outbound = request;
-    if (legacy.length > 0) {
-      const legacySecrets = getSecretsCapability({
-        exports: this.ctx.exports as unknown as Parameters<
-          typeof getSecretsCapability
-        >[0]["exports"],
-        props: { projectId },
-      });
-      const materials = new Map<string, string>();
-      for (const key of legacy) {
-        const secret = await legacySecrets.getSecretOrNull({ key });
-        if (secret == null) {
-          return Response.json(
-            {
-              error: "project_egress_secret_substitution_failed",
-              message: `Project egress secret substitution failed: Secret not found for key "${key}".`,
-              secretKey: key,
-            },
-            { status: 400 },
-          );
-        }
-        materials.set(key, secret.material);
-      }
-      const headers = new Headers(request.headers);
-      for (const [name, value] of request.headers) {
-        headers.set(
-          name,
-          substituteKnownSecretKeyReferences(value, (key) => materials.get(key) ?? null),
-        );
-      }
-      outbound = new Request(request, { headers });
+    // Every referenced key must be a journaled Secret (there is no other
+    // secret store). The pipe never touches material: it DELEGATES the
+    // request into the chain — hop by hop substitution, last hop fetches.
+    const { journaled, legacy: unknown } = await splitJournaledSecretKeys({ projectId, keys });
+    if (unknown.length > 0) {
+      return Response.json(
+        {
+          error: "project_egress_secret_substitution_failed",
+          message: `Project egress secret substitution failed: Secret not found for key "${unknown[0]}".`,
+          secretKey: unknown[0],
+        },
+        { status: 400 },
+      );
     }
-
-    if (journaled.length === 0) return await fetch(outbound);
-    // The chain substitutes hop by hop; the LAST secret's DO makes the fetch.
-    return await delegateEgressFetchToSecretChain({
-      projectId,
-      keys: journaled,
-      request: outbound,
-    });
+    return await delegateEgressFetchToSecretChain({ projectId, keys: journaled, request });
   }
 }
 

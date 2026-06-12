@@ -1,12 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { createD1Client } from "sqlfu";
-import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
+import { readSlackToken } from "~/domains/slack/slack-token.ts";
 
-type SlackCapabilityEnv = {
-  APP_CONFIG_SLACK_BOT_TOKEN?: string;
-  DB?: D1Database;
-  SLACK_BOT_TOKEN?: string;
-};
+type SlackCapabilityEnv = Record<string, never>;
 
 type SlackCapabilityProps = {
   projectId?: string;
@@ -32,7 +27,7 @@ export class SlackCapability extends WorkerEntrypoint<SlackCapabilityEnv, SlackC
     const token = await this.readToken();
     if (!token) {
       throw new Error(
-        "SlackCapability requires a project slack.access_token Secret or SLACK_BOT_TOKEN/APP_CONFIG_SLACK_BOT_TOKEN.",
+        "SlackCapability requires a connected Slack account (Secret slack/default/access-token) or a deployment bot token.",
       );
     }
 
@@ -44,15 +39,8 @@ export class SlackCapability extends WorkerEntrypoint<SlackCapabilityEnv, SlackC
   }
 
   private async readToken() {
-    if (this.env.DB && this.ctx.props.projectId) {
-      const secret = await getProjectSecret(createD1Client(this.env.DB), {
-        key: "slack.access_token",
-        projectId: this.ctx.props.projectId,
-      });
-      if (secret) return secret.material;
-    }
-
-    return this.env.SLACK_BOT_TOKEN ?? this.env.APP_CONFIG_SLACK_BOT_TOKEN;
+    if (!this.ctx.props.projectId) return undefined;
+    return await readSlackToken({ projectId: this.ctx.props.projectId });
   }
 }
 
