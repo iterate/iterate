@@ -99,6 +99,16 @@ export async function listIntegrationAccounts(input: {
  * there is exactly one (slack accounts are team-derived), otherwise the
  * caller must address the instance explicitly.
  */
+export class AmbiguousIntegrationAccountError extends Error {
+  constructor(input: { integration: string; accounts: string[] }) {
+    super(
+      `Integration "${input.integration}" has ${input.accounts.length} accounts (${input.accounts.join(", ")}) — ` +
+        `address one explicitly: itx.integrations["${input.integration}/${input.accounts[0]}"].`,
+    );
+    this.name = "AmbiguousIntegrationAccountError";
+  }
+}
+
 export async function resolveImplicitAccount(input: {
   projectId: string;
   integration: string;
@@ -106,10 +116,7 @@ export async function resolveImplicitAccount(input: {
   const accounts = await listIntegrationAccounts(input);
   if (accounts.length === 0 || accounts.includes("default")) return "default";
   if (accounts.length === 1) return accounts[0]!;
-  throw new Error(
-    `Integration "${input.integration}" has ${accounts.length} accounts (${accounts.join(", ")}) — ` +
-      `address one explicitly: itx.integrations["${input.integration}/${accounts[0]}"].`,
-  );
+  throw new AmbiguousIntegrationAccountError({ integration: input.integration, accounts });
 }
 
 /** Mint an initialized integration DO stub from a trusted domain file (see lint rule). */

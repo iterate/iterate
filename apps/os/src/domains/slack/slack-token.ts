@@ -8,7 +8,10 @@
 import { env } from "cloudflare:workers";
 import { providedSecretSlug } from "~/domains/integrations/definition.ts";
 import { DEFAULT_INTEGRATION_ACCOUNT } from "~/domains/integrations/integration-events.ts";
-import { listIntegrationAccounts } from "~/domains/integrations/durable-objects/integration-durable-object.ts";
+import {
+  AmbiguousIntegrationAccountError,
+  resolveImplicitAccount,
+} from "~/domains/integrations/durable-objects/integration-durable-object.ts";
 import { SLACK_ACCESS_TOKEN_SECRET_NAME } from "~/domains/integrations/providers/slack.ts";
 import { revealJournaledSecretForPlatformUse } from "~/domains/secrets/secret-streams.ts";
 
@@ -31,28 +34,33 @@ export async function readSlackToken(input: {
   projectId: string;
   account?: string;
 }): Promise<string | undefined> {
-  // Accounts are team-derived; with no explicit account, try each connected
-  // workspace's token (single-workspace projects have exactly one).
-  const accounts = input.account
-    ? [input.account]
-    : await listIntegrationAccounts({ projectId: input.projectId, integration: "slack" }).then(
-        (found) => (found.length > 0 ? found : [DEFAULT_INTEGRATION_ACCOUNT]),
-        () => [DEFAULT_INTEGRATION_ACCOUNT],
-      );
-  for (const account of accounts) {
-    try {
-      return await revealJournaledSecretForPlatformUse({
-        projectId: input.projectId,
-        slug: providedSecretSlug({
-          integration: "slack",
-          account,
-          name: SLACK_ACCESS_TOKEN_SECRET_NAME,
-        }),
-        usedBy: "slack-pipeline",
-      });
-    } catch {
-      // Try the next account; fall through to the deployment token after.
-    }
+  // Pipeline callers pass the routed account explicitly (the envelope stamp,
+  // the agent's stream path). A BARE call (itx.slack) resolves like every
+  // other bare integration address: the sole connected workspace, or a loud
+  // ambiguity error when there are several — never "whichever token reveals
+  // first", which would authenticate as an arbitrary workspace.
+  const account =
+    input.account ??
+    (await resolveImplicitAccount({ projectId: input.projectId, integration: "slack" }).catch(
+      (error) => {
+        if (error instanceof AmbiguousIntegrationAccountError) throw error;
+        // Catalog unavailable (fully-local dev) — the unnamed account.
+        return DEFAULT_INTEGRATION_ACCOUNT;
+      },
+    ));
+  try {
+    return await revealJournaledSecretForPlatformUse({
+      projectId: input.projectId,
+      slug: providedSecretSlug({
+        integration: "slack",
+        account,
+        name: SLACK_ACCESS_TOKEN_SECRET_NAME,
+      }),
+      usedBy: "slack-pipeline",
+    });
+  } catch {
+    // No journaled token for that account: the deployment-level env token is
+    // the first-party dev fallback.
   }
   const tokenEnv = env as unknown as SlackTokenEnv;
   return tokenEnv.SLACK_BOT_TOKEN ?? tokenEnv.APP_CONFIG_SLACK_BOT_TOKEN;
