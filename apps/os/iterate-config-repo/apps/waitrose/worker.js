@@ -26,7 +26,7 @@ const NEW_SESSION_MUTATION =
 
 // One-time setup: itx.worker.connectWaitrose({ username: "...", password: "..." }).
 // The ACCOUNT is the instance dimension — pass account: "mum" to connect a
-// second Waitrose login, then call itx.integrations["waitrose:mum"].…
+// second Waitrose login, then call itx.integrations["waitrose/mum"].…
 export async function connectWaitrose({ username, password, account = "default" }) {
   const itx = await env.ITERATE.context;
   await itx.secrets.set({

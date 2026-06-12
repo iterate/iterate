@@ -10,7 +10,7 @@
 //      re-login).
 //   2. itx.integrations.waitrose.searchProducts("milk") forwards to the
 //      project worker's integrations({ slug, account, path, args }) export as
-//      one call; itx.integrations["waitrose:mum"] is a SECOND account of the
+//      one call; itx.integrations["waitrose/mum"] is a SECOND account of the
 //      same integration, with its own credentials, token, and journal.
 //   3. The SDK's bare fetch() goes through egress substitution, which asks
 //      the account's access-token secret for material; finding none (or
@@ -150,7 +150,7 @@ describe("waitrose: a userspace integration on derived secrets", () => {
     expect(sdkRequests.every((r) => r.authorization.includes("getSecret("))).toBe(true);
     expect(fakeWaitroseApi.searchAuthHeaders).toEqual(["Bearer session-jonas@example.com-1"]);
 
-    // 3. itx.integrations["waitrose:mum"] — the SECOND account derives its own
+    // 3. itx.integrations["waitrose/mum"] — the SECOND account derives its own
     //    session from its own credentials; the default account's token is
     //    untouched.
     await integrations({

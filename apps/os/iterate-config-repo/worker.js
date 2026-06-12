@@ -18,7 +18,7 @@ export default {
   // USERSPACE integrations: itx.integrations.<slug>.<method>(...) calls that
   // the platform registry doesn't recognize land here as ONE call. Apps
   // export `integrations: { <slug>: sdkObject }` — or, for multi-ACCOUNT
-  // integrations (the instance dimension: itx.integrations["waitrose:mum"]),
+  // integrations (the instance dimension: itx.integrations["waitrose/mum"]),
   // a factory `(account) => sdkObject`. The path walks the sdk locally
   // (where it is concrete) and calls the terminal method.
   async integrations({ slug, account = "default", path, args }) {

@@ -13,7 +13,7 @@
 //   pipe — so even the project's own integration code never holds tokens.
 //
 //   itx.integrations.github.octokit.rest.issues.create({...})
-//   itx.integrations.discord.api.channels.createMessage(channelId, {...})
+//   itx.integrations["google/jonas"].gmail.users.messages.list({...})  ← 2nd ACCOUNT
 //   itx.integrations.waitrose.searchProducts("milk")        ← userspace
 
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -49,9 +49,12 @@ export class IntegrationsCapability extends WorkerEntrypoint<Env, IntegrationsCa
       throw new Error("IntegrationsCapability requires dial-injected projectId props.");
     }
 
-    // The instance dimension rides in the address segment:
-    // "google" = account "default"; "google:jonas" = account "jonas".
-    const [slug, account = DEFAULT_INTEGRATION_ACCOUNT] = address.split(":", 2) as [
+    // The address under itx.integrations IS the journal path under
+    // /integrations: "google" = /integrations/google/default,
+    // "google/jonas" = /integrations/google/jonas. (Same coordinates, two
+    // views: itx.integrations[...] is the account's behavior; the same path
+    // through itx.streams.get("/integrations/google/jonas") is its facts.)
+    const [slug, account = DEFAULT_INTEGRATION_ACCOUNT] = address.split("/", 2) as [
       string,
       string?,
     ];

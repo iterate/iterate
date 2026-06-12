@@ -115,11 +115,14 @@ instance dimension, built into every identity from the start:
   one owner, but a project's accounts each claim their own keys;
 - the itx address carries the account in its first segment:
   `itx.integrations.google.**` is account `default`,
-  `itx.integrations["google:jonas"].**` is account `jonas`. The unnamed
+  `itx.integrations["google/jonas"].**` is account `jonas` — the address
+  under `itx.integrations` IS the journal path under `/integrations`, so the
+  same coordinate read through `itx.streams.get("/integrations/google/jonas")`
+  is the account's journal. The unnamed
   single-account case never sees the dimension;
 - userspace mirrors it: the forwarded call carries `account`, and an app's
   `integrations` entry can be a factory `(account) => sdk`
-  (`itx.integrations["waitrose:mum"]` in the template);
+  (`itx.integrations["waitrose/mum"]` in the template);
 - customer-owned gateway scopes are `project:{projectId}:{account}` — two
   Discord bots, two sockets.
 

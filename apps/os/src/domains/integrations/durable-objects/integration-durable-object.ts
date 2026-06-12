@@ -3,7 +3,7 @@
 // as jonas@nustom.com in this project". It folds
 // `{projectId}:/integrations/{slug}/{account}` and implements the itx calling
 // convention, so `itx.integrations.{slug}.**` (account "default") and
-// `itx.integrations["{slug}:{account}"].**` terminate HERE. The DO is where
+// `itx.integrations["{slug}/{account}"].**` terminate HERE. The DO is where
 // the account's three faces meet:
 //
 //   - its JOURNAL: connection lifecycle + every routed provider event;
