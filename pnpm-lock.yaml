@@ -20,31 +20,31 @@ catalogs:
       version: 4.20260424.0
 
 overrides:
-  '@babel/parser': ^7.28.0
+  capnweb: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
+  axios: 1.13.6
+  agents>x402: '-'
+  agents>viem: '-'
+  quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
+  better-sqlite3: npm:libsql@0.5.22
+  '@orpc/server': 1.13.14
   '@orpc/client': 1.13.14
   '@orpc/contract': 1.13.14
-  '@orpc/json-schema': 1.13.14
   '@orpc/openapi': 1.13.14
-  '@orpc/openapi-client': 1.13.14
-  '@orpc/otel': 1.13.14
-  '@orpc/react-query': 1.13.14
-  '@orpc/server': 1.13.14
-  '@orpc/shared': 1.13.14
-  '@orpc/tanstack-query': 1.13.14
   '@orpc/zod': 1.13.14
+  '@orpc/otel': 1.13.14
+  '@orpc/openapi-client': 1.13.14
+  '@orpc/json-schema': 1.13.14
+  '@orpc/react-query': 1.13.14
+  '@orpc/tanstack-query': 1.13.14
+  '@orpc/shared': 1.13.14
+  srvx: 0.11.12
+  ws: 8.19.0
+  baseline-browser-mapping: ^2.9.14
+  '@babel/parser': ^7.28.0
   '@tanstack/query-core': 5.91.0
   '@tanstack/react-query': 5.91.0
-  agents>viem: '-'
-  agents>x402: '-'
-  axios: 1.13.6
-  baseline-browser-mapping: ^2.9.14
-  better-sqlite3: npm:libsql@0.5.22
-  capnweb: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
-  quicktype-core>readable-stream: npm:vite-compatible-readable-stream@3.6.1
-  srvx: 0.11.12
   trpc-cli: 0.14.0
   wrangler: 4.85.0
-  ws: 8.19.0
 
 patchedDependencies:
   '@better-auth/oauth-provider@1.6.9':
