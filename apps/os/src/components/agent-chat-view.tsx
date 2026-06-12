@@ -31,6 +31,9 @@ import { projectStreamRpcPath } from "~/lib/stream-links.ts";
 
 const USER_MESSAGE = "events.iterate.com/agent-chat/user-message-added";
 const ASSISTANT_RESPONSE = "events.iterate.com/agent-chat/assistant-response-added";
+// A finished LLM turn — emitted regardless of channel, so it ends "Thinking…"
+// even when the agent replied via Slack or produced no visible message.
+const LLM_REQUEST_COMPLETED = "events.iterate.com/agent/llm-request-completed";
 
 type ChatTurn = { offset: number; role: "user" | "agent"; text: string };
 
@@ -91,11 +94,24 @@ export function AgentChatView(props: {
     text: String((row.type === USER_MESSAGE ? row.content : row.message) ?? ""),
   }));
 
-  // The agent is "thinking" when the last turn is the user's (a reply is owed).
-  const awaitingReply = turns.length > 0 && turns.at(-1)!.role === "user";
+  // "Thinking" must clear when the agent's LLM turn FINISHES, not only when it
+  // emits a chat reply — Slack agents reply via Slack (no chat event here) and
+  // a web turn can end with an empty code block. So: a reply is owed iff the
+  // newest user message is more recent than the newest turn-completion signal
+  // (an assistant reply OR an llm-request-completed).
+  const progress = useStreamQuery(
+    store.streamDatabase,
+    `SELECT
+       (SELECT MAX(offset) FROM events WHERE type = ?) AS last_user,
+       (SELECT MAX(offset) FROM events WHERE type IN (?, ?)) AS last_done`,
+    [USER_MESSAGE, ASSISTANT_RESPONSE, LLM_REQUEST_COMPLETED],
+  );
+  const lastUser = Number(progress.data[0]?.last_user ?? 0);
+  const lastDone = Number(progress.data[0]?.last_done ?? 0);
+  const awaitingReply = lastUser > 0 && lastUser > lastDone;
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <Transcript turns={turns} awaitingReply={awaitingReply} status={snapshot.connectionStatus} />
       <Composer onSend={props.onSend} />
     </div>
