@@ -361,7 +361,7 @@ function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
   return (
     <>
       {step.thinkingText === "" ? null : <ThinkingBlock>{step.thinkingText}</ThinkingBlock>}
-      {step.responseText === "" ? null : (
+      {step.responseText === "" ? null : looksLikeCode(step.responseText) ? (
         <SourceCodeBlock
           code={step.responseText}
           language="typescript"
@@ -370,6 +370,10 @@ function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
           showLineNumbers={false}
           plainChrome
         />
+      ) : (
+        <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm leading-relaxed">
+          {step.responseText}
+        </div>
       )}
       <pre className="overflow-x-auto rounded-xl bg-muted/50 px-4 py-3 font-mono text-xs leading-relaxed text-foreground">
         {JSON.stringify(llmStepRawSummary(step), null, 2)}

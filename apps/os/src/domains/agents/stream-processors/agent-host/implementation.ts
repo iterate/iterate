@@ -173,9 +173,14 @@ export async function ensureChildAgentRunner(args: {
  * agents. Booting an agent on one creates that agent's own itx context, whose
  * child-stream-created events boot more agents — an unbounded recursive
  * child-stream storm that floods every journal under `/agents`.
+ *
+ * itx trees always hang BELOW an agent's own stream, and agents live directly
+ * under the agents root — so `/agents/itx` is a legitimate agent name and only
+ * deeper `itx` segments count. (`itx` is effectively a reserved name below the
+ * first level.)
  */
 export function isItxInfrastructurePath(streamPath: string): boolean {
-  return streamPath.split("/").includes("itx");
+  return streamPath.split("/").some((segment, index) => segment === "itx" && index >= 3);
 }
 
 // Ensures the AgentDurableObject for the stream the host processor is running on is initialized.

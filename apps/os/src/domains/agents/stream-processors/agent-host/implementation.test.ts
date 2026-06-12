@@ -56,10 +56,14 @@ describe("agent-host child agent booting", () => {
 });
 
 describe("isItxInfrastructurePath", () => {
-  it("matches any path with an itx segment", () => {
+  it("matches itx segments below the first level only", () => {
     expect(isItxInfrastructurePath("/agents/demo/itx")).toBe(true);
     expect(isItxInfrastructurePath("/agents/demo/itx/itx__os__abc")).toBe(true);
     expect(isItxInfrastructurePath("/agents/demo")).toBe(false);
     expect(isItxInfrastructurePath("/agents/itx-fan")).toBe(false);
+    // An agent literally named "itx" lives directly under the agents root —
+    // itx context trees only ever hang below an agent's own stream.
+    expect(isItxInfrastructurePath("/agents/itx")).toBe(false);
+    expect(isItxInfrastructurePath("/agents/itx/itx")).toBe(true);
   });
 });
