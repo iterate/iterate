@@ -62,7 +62,7 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
   "list-and-describe-project": {
     vars: ({ projectId }) => ({ projectId }),
     assert: (result, { projectId }) => {
-      expect(result).toMatchObject({ context: projectId, project: { id: projectId } });
+      expect(result).toMatchObject({ context: `${projectId}:/`, project: { id: projectId } });
     },
   },
   "append-and-read-stream": {
@@ -136,17 +136,17 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toEqual({ record: ["capability-provided", "capability-revoked"] });
     },
   },
-  "http-cap-and-share-url": {
+  "http-cap": {
     assert: (result) => {
-      const shareUrl = (result as { shareUrl: string }).shareUrl;
-      expect(typeof shareUrl).toBe("string");
-      expect(shareUrl).toContain("hello--");
-      expect(() => new URL(shareUrl)).not.toThrow();
+      const url = (result as { url: string }).url;
+      expect(typeof url).toBe("string");
+      expect(url).toContain("hello--");
+      expect(() => new URL(url)).not.toThrow();
     },
   },
   "import-npm-via-esm-sh": {
     assert: (result, { projectId }) => {
-      expect(result).toMatchObject({ context: projectId, project: { id: projectId } });
+      expect(result).toMatchObject({ context: `${projectId}:/`, project: { id: projectId } });
     },
   },
 };

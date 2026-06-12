@@ -8,7 +8,6 @@ import {
   type StreamState,
   StreamPath,
 } from "@iterate-com/shared/streams/types";
-import { assertStreamPathDoesNotClaimItxSegment } from "~/itx/journal.ts";
 import { ItxError } from "~/itx/errors.ts";
 import {
   coreStateToStreamState,
@@ -147,7 +146,6 @@ export class StreamsBackend extends WorkerEntrypoint<StreamsBackendEnv, StreamsB
   }
 
   async create(input: StreamPathInput) {
-    assertStreamPathDoesNotClaimItxSegment(this.resolveNamespacePath(input));
     return await getNamespaceStreamState({
       durableObjectNamespace: this.env.STREAM,
       path: this.resolveNamespacePath(input),
@@ -305,11 +303,6 @@ export class StreamsBackend extends WorkerEntrypoint<StreamsBackendEnv, StreamsB
   }
 
   private assertMayAppend(path: StreamPath) {
-    // The reserved journal segment: context journals (<base>/itx[/<id>])
-    // are written exclusively through the itx layer's own door
-    // (~/itx/journal.ts); domain and user streams may not claim it. They
-    // stay READABLE here — journals are ordinary streams in every viewer.
-    assertStreamPathDoesNotClaimItxSegment(path);
     const policy: StreamAppendPolicy =
       this.ctx.props.appendPolicy ??
       (this.ctx.props.streamPath ? { mode: "stream" } : { mode: "any" });

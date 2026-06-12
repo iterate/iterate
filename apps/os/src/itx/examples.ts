@@ -206,7 +206,7 @@ return {
     id: "repo-sourced-capability",
     title: "Code in your repo as a capability, built per commit",
     description:
-      "The project's own git repo is a capability source: commit a module, then provide a { type: 'repo' } address pointing at the file. The platform builds it per COMMIT (memoized), never per call — 'latest' tracks pushes; a pinned sha makes the journal entry fully determine behavior. The `worker` default is exactly this pattern.",
+      "The project's own git repo is a capability source: commit a module, then provide a { type: 'repo' } address pointing at the file. The platform builds it per COMMIT (memoized), never per call — 'latest' tracks pushes; a pinned sha makes the provided address fully determine behavior. The `worker` default is exactly this pattern.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -518,13 +518,13 @@ return { traceHeaderSeen: echoed.headers["x-trace-id"] };
   },
   {
     id: "journal-is-the-record",
-    title: "The journal IS the record: provide, revoke, read it back",
+    title: "The stream IS the record: provide, revoke, read it back",
     description:
-      "A context's capability table is replayed from an ordinary event stream — its journal at /itx. provideCapability and revokeCapability are appends; read the stream back and watch the record happen. There is no hidden registry to drift from it.",
+      "A context IS a stream coordinate — the project context lives on the project's root stream. provideCapability and revokeCapability are appends; read the stream back and watch the record happen. There is no hidden registry to drift from it.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-// Use a unique name so the journal slice below is unambiguous.
+// Use a unique name so the record slice below is unambiguous.
 const name = vars.capName ?? "ephemeral";
 
 await itx.provideCapability({
@@ -533,9 +533,9 @@ await itx.provideCapability({
 });
 await itx.revokeCapability({ name });
 
-// The context's journal is an ordinary stream — same read API as anything.
-const journal = await itx.streams.get("/itx").read();
-const record = journal
+// The context's stream is an ordinary stream — same read API as anything.
+const events = await itx.streams.get("/").read();
+const record = events
   .filter((e) => Array.isArray(e.payload?.path) && e.payload.path.join(".") === name)
   .map((e) => e.type.split("/").pop());
 return { record }; // ["capability-provided", "capability-revoked"]
@@ -572,7 +572,7 @@ return { tools: tools.map((tool) => tool.name), snippet: String(answer).slice(0,
     id: "mcp-authenticated",
     title: "An authenticated MCP server via a project secret",
     description:
-      "Connect a remote MCP server that needs an Authorization header — without the credential ever leaving the platform. The token lives as a PROJECT SECRET; the capability address carries only a getSecret(...) placeholder; substitution happens server-side on the egress path. This session, describe(), and the journal never see the material.",
+      "Connect a remote MCP server that needs an Authorization header — without the credential ever leaving the platform. The token lives as a PROJECT SECRET; the capability address carries only a getSecret(...) placeholder; substitution happens server-side on the egress path. This session, describe(), and the record never see the material.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
@@ -669,16 +669,16 @@ return { status: response.status, echoedKeyHeader: echoed.headers["x-api-key"] }
 `.trim(),
   },
   {
-    id: "http-cap-and-share-url",
-    title: "Serve a capability over HTTP + a shareable link",
+    id: "http-cap",
+    title: "Serve a capability over HTTP",
     description:
-      "A cap whose fetch() is exposed (meta.http.expose) gets its own hostname: {cap}--{project}.<base>. Routable ≠ public — it's admin-gated by default. itx.shareUrl() mints a signed, expiring link: 'let me show you something real quick.'",
+      "A cap whose fetch() is exposed (meta.http.expose) gets its own hostname: {cap}--{project}.<base>. Exposed means public — anyone can open the URL; unexposed caps don't exist as hostnames.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
 await itx.provideCapability({
   name: "hello",
-  meta: { http: { expose: true } },   // routable; still admin-gated
+  meta: { http: { expose: true } },   // routable at its own hostname, public
   capability: {
     type: "rpc",
     worker: {
@@ -703,8 +703,11 @@ await itx.provideCapability({
   },
 });
 
-// A signed link anyone can open for the next hour (no further auth needed).
-return { shareUrl: await itx.shareUrl({ name: "hello", path: "/demo", ttlSeconds: 3600 }) };
+// The cap's own hostname: {cap}-- prefixed onto the project's ingress host.
+const url = new URL(await itx.project.ingressUrl());
+url.hostname = "hello--" + url.hostname;
+url.pathname = "/demo";
+return { url: url.toString() };
 `.trim(),
   },
   {

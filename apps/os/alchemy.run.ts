@@ -47,6 +47,28 @@ const resolvedAuthIssuer =
 // loopback issuer (local dev auth server with its own keys) never uses a
 // Doppler-provided production JWKS. Key rotation in auth requires an OS
 // redeploy. On fetch failure the worker falls back to remote JWKS at runtime.
+async function fetchJwksWithRetry(url: string): Promise<{ keys: unknown[] }> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const jwks = (await response.json()) as { keys?: unknown[] };
+      if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) {
+        throw new Error("JWKS response has no keys");
+      }
+      return jwks as { keys: unknown[] };
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        console.warn(`[alchemy.run] JWKS fetch attempt ${attempt} failed, retrying:`, error);
+        await new Promise((resolve) => setTimeout(resolve, attempt * 2_000));
+      }
+    }
+  }
+  throw lastError;
+}
+
 async function resolveStaticAuthJwks(issuer: string | undefined) {
   if (!issuer) return undefined;
 
@@ -62,14 +84,10 @@ async function resolveStaticAuthJwks(issuer: string | undefined) {
   if (explicit && !issuerIsLoopback) return withForgePublicKey(explicit);
 
   try {
-    const response = await fetch(`${issuer.replace(/\/+$/, "")}/jwks`, {
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const jwks = (await response.json()) as { keys?: unknown[] };
-    if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) {
-      throw new Error("JWKS response has no keys");
-    }
+    // Retried: this one fetch decides the whole deploy on forge-enabled
+    // envs, and the auth worker may be cold (slot auths are hand-deployed) —
+    // a single timeout aborted a preview deploy on 2026-06-12.
+    const jwks = await fetchJwksWithRetry(`${issuer.replace(/\/+$/, "")}/jwks`);
     return withForgePublicKey(JSON.stringify(jwks));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -468,7 +486,7 @@ const [
   }),
   osWorker("itx", {
     entrypoint: "./src/workers/itx.ts",
-    // Own-zone fetches (UrlDial / EgressPipe dialing project hosts) must go
+    // Own-zone fetches (EgressPipe dialing project hosts) must go
     // through Worker routes, not origin — same reason as the app worker.
     compatibilityFlags: ["global_fetch_strictly_public"],
     bindings: loopbackUnionBindings,
@@ -521,6 +539,9 @@ const [
     entrypoint: "./src/workers/stream.ts",
     bindings: {
       AGENT: agent,
+      // Context streams dial their ItxDurableObject subscriber through this
+      // binding (itx/coordinates.ts createContext).
+      ITX_CONTEXT: itxContext,
       PROJECT: project,
       REPO: repo,
       SLACK_AGENT: slackAgent,

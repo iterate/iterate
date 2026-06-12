@@ -65,16 +65,6 @@ export function parseAgentDurableObjectName(
   return parsed.success ? parsed.data : null;
 }
 
-/** Does this itx context id name an agent context? Agent context ids ARE the
- * agent DO name (`{projectId}:{agentPath}`), so they're self-describing — see
- * resolveItx, which builds the AGENT address straight from the id. */
-export function isAgentContextId(contextId: string): boolean {
-  const parsed = parseAgentDurableObjectName(contextId);
-  return (
-    parsed !== null && (parsed.agentPath === "/agents" || parsed.agentPath.startsWith("/agents/"))
-  );
-}
-
 export function agentLlmProcessorSlug(provider: AgentLlmProvider) {
   return provider === "openai-ws"
     ? OpenAiWsProcessorContract.slug

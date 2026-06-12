@@ -8,7 +8,7 @@
 //     admin REST surface)
 //   - the capability ADDRESS carries only a getSecret(...) placeholder
 //   - substitution happens server-side in the EgressPipe on the egress path
-//   - neither describe() nor the journal ever contains the material
+//   - neither describe() nor the record ever contains the material
 //
 // Requires CLOUDFLARE_API_TOKEN in the environment — present under
 // `doppler run --config prd|preview_N --project os` (the same token alchemy
@@ -123,14 +123,14 @@ test.skipIf(!CLOUDFLARE_API_TOKEN)(
     expect(resultText).not.toContain(CLOUDFLARE_API_TOKEN);
 
     // (5) Negative control: the secret material exists ONLY in the egress
-    // pipe. describe() (the agent-facing view) and the journal (the durable
+    // pipe. describe() (the agent-facing view) and the stream (the durable
     // record, address included) both carry the placeholder, never the token.
     const description = await projectItx.describe();
     const describedJson = JSON.stringify(description);
     expect(describedJson).toContain("mcp.cloudflare");
     expect(describedJson).not.toContain(CLOUDFLARE_API_TOKEN);
 
-    const journal = (await projectItx.streams.get("/itx").read()) as Array<{
+    const journal = (await projectItx.streams.get("/").read()) as Array<{
       payload: Record<string, unknown>;
       type: string;
     }>;

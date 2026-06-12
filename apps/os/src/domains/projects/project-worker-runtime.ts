@@ -8,7 +8,7 @@
 import type { Event } from "@iterate-com/shared/streams/types";
 import { sourceIsolateKey, type WorkerLoaderBinding } from "~/itx/dial.ts";
 import { wireIsolateEnv, type IsolateLoopback } from "~/itx/isolate.ts";
-import { projectContextAddress } from "~/itx/journal.ts";
+import { projectContextRef } from "~/itx/coordinates.ts";
 import { PROJECT_WORKER_SOURCE } from "~/itx/platform-context.ts";
 import { resolveWorkerSource, type SourceBuildEnv } from "~/itx/source-build.ts";
 
@@ -60,16 +60,14 @@ export async function loadProjectWorker(input: {
     sourceIsolateKey({
       cacheKey: resolved.cacheKey,
       name: "worker",
-      origin: { id: input.projectId },
+      origin: { ref: projectContextRef(input.projectId) },
     }),
     () =>
       wireIsolateEnv({
         capabilityPath: "worker",
         code: resolved,
-        contextAddress: projectContextAddress(input.projectId),
-        contextId: input.projectId,
+        contextRef: projectContextRef(input.projectId),
         loopback,
-        projectId: input.projectId,
       }),
   );
   const entrypoint = worker.getEntrypoint();

@@ -111,6 +111,7 @@ export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/rep
 export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 export { EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
+export { ItxDurableObject } from "~/itx/itx-durable-object.ts";
 export { PlatformContext } from "~/itx/platform-context.ts";
 export { ProjectMcpServerConnection } from "~/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
@@ -197,7 +198,7 @@ export default {
       const itx = await resolveItx({
         env: env as never,
         exports: ctx.exports as never,
-        props: { context: "proj__local__test" },
+        props: { context: "proj__local__test:/" },
       });
       return await itx.fetch(target, { headers: request.headers });
     }
@@ -221,7 +222,7 @@ export default {
       const itx = await resolveItx({
         env: env as never,
         exports: ctx.exports as never,
-        props: { context: "proj__local__test" },
+        props: { context: "proj__local__test:/" },
       });
       await itx.provideCapability({
         name: "fetch",
@@ -293,7 +294,7 @@ export default {
       const itx = await resolveItx({
         env: env as never,
         exports: ctx.exports as never,
-        props: { context: "proj__local__test" },
+        props: { context: "proj__local__test:/" },
       });
       const project = itx.project as unknown as {
         processor: { snapshot(): Promise<{ state: { phase: string } }> };

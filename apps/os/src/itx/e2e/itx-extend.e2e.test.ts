@@ -26,20 +26,11 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
     capability: chatPostTarget("project-level"),
   });
 
-  // The node's own ADDRESS is a cap target (itx-next.md, address
-  // unification): the save() half of the SturdyRef story.
-  const address = (await (projectItx as never as Record<string, any>).project.address()) as {
-    type: string;
-    worker: { type: string; binding: string; name: string };
-  };
-  expect(address).toMatchObject({
-    type: "rpc",
-    worker: { type: "durable-object", binding: "PROJECT", name: expect.any(String) },
-  });
-
   using child = await projectItx.extend({ name: "e2e-session" });
   const childDescription = await child.describe();
-  expect(String(childDescription.context)).toMatch(/^itx_/);
+  // A context IS a stream coordinate: the anonymous extend lands under the
+  // /itx/<generated> catch-all in the project's namespace.
+  expect(String(childDescription.context)).toMatch(new RegExp(`^${project.id}:/itx/itx`));
   expect(childDescription.project).toMatchObject({ id: project.id });
 
   // (1) Chain miss → parent's cap answers.
@@ -251,7 +242,7 @@ test("extend: child worker caps run with the owning project's authority", async 
   const noted = (await (child as never as Record<string, any>).noter.note({
     text: "from a child context",
   })) as { context: string };
-  expect(noted.context).toMatch(/^itx_/);
+  expect(noted.context).toContain(":/itx/");
 
   const events = (await projectItx.streams.get("/itx-e2e/notes").read()) as Array<{
     payload: { text?: string };

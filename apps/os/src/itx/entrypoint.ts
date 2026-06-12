@@ -9,27 +9,20 @@
 // happens HERE and at connect-time auth (fetch.ts) — nowhere else.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { createD1Client } from "sqlfu";
 import { ItxHandle, type ItxRuntime } from "./handle.ts";
-import { replayPathCall, type CapabilityAddress, type PathCall } from "./itx.ts";
+import { replayPathCall, type PathCall } from "./itx.ts";
 import { resolveDialableTargets } from "./dial.ts";
-import { dialContext, lookupContext, projectContextAddress } from "./journal.ts";
-import { GLOBAL_CONTEXT_ID, isChildContextId, type ItxProps } from "./refs.ts";
-import {
-  isAgentContextId,
-  parseAgentDurableObjectName,
-} from "~/domains/agents/agent-stream-subscriptions.ts";
+import { contextAddress, dialContext, parseContextRef, projectContextRef } from "./coordinates.ts";
+import { GLOBAL_CONTEXT_ID, type ItxProps } from "./refs.ts";
 import { parseConfig } from "~/config.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 
 /**
- * restore(): names → live object graph. A project-context handle's access is
- * always exactly its own project, regardless of what props claim — same
+ * restore(): names → live object graph. A context handle's access is always
+ * exactly its own project, regardless of what props claim — same
  * non-escalation rule the old config-worker scope rewrite enforced (D7).
- * Child contexts (itx_…) carry their coordinate in props when platform
- * wiring minted them; a bare-id restore resolves it through the context
- * catalog — the one lookup a sturdy ref costs.
+ * The ref IS the coordinate: nothing resolves through a directory.
  */
 export async function resolveItx(input: {
   env: Env;
@@ -37,52 +30,30 @@ export async function resolveItx(input: {
   props: ItxProps;
 }): Promise<ItxHandle> {
   const config = parseConfig(input.env);
-  const contextId = input.props.context;
+  const ref = input.props.context;
 
-  let projectId: string | null;
-  let contextAddress: CapabilityAddress | null;
-  if (contextId === GLOBAL_CONTEXT_ID) {
+  if (ref === GLOBAL_CONTEXT_ID) {
     // Global handle minting stays connect-time — the global context has no
     // node to dial yet.
-    projectId = null;
-    contextAddress = null;
-  } else if (input.props.contextAddress && input.props.projectId) {
-    // An explicitly-addressed context — agent contexts (hosted by the agent
-    // DO, identity DERIVED from the agent's coordinate) and extended children
-    // both pass their coordinate, so trust it and skip the catalog entirely.
-    contextAddress = input.props.contextAddress as CapabilityAddress;
-    projectId = input.props.projectId;
-  } else if (isAgentContextId(contextId)) {
-    // An agent context is SELF-DESCRIBING: its id IS the agent DO name
-    // (`{projectId}:{agentPath}`), so its address and owning project derive
-    // from the id alone — no passed-down contextAddress, no catalog. This is
-    // what keeps a dropped `contextAddress` prop from silently dispatching the
-    // agent's codemode against an empty project context.
-    const parsed = parseAgentDurableObjectName(contextId)!;
-    projectId = parsed.projectId;
-    contextAddress = {
-      type: "rpc",
-      worker: { binding: "AGENT", name: contextId, type: "durable-object" },
-    };
-  } else if (isChildContextId(contextId)) {
-    const resolved = await lookupContext(createD1Client(input.env.DB), contextId);
-    if (!resolved) {
-      throw new Error(`Context ${contextId} is not in the context catalog.`);
-    }
-    contextAddress = resolved.address;
-    projectId = resolved.projectId;
-  } else {
-    // A project context's identity IS its project.
-    projectId = contextId;
-    contextAddress = projectContextAddress(contextId);
+    return new ItxHandle({
+      access: input.props.access ?? [],
+      capabilityPath: input.props.capabilityPath,
+      config,
+      contextAddress: null,
+      contextRef: ref,
+      env: input.env,
+      exports: input.exports,
+      projectId: null,
+    });
   }
 
+  const projectId = parseContextRef(ref).namespace;
   return new ItxHandle({
-    access: contextId === GLOBAL_CONTEXT_ID ? (input.props.access ?? []) : [projectId!],
+    access: [projectId],
     capabilityPath: input.props.capabilityPath,
     config,
-    contextAddress,
-    contextId,
+    contextAddress: contextAddress(ref),
+    contextRef: ref,
     env: input.env,
     exports: input.exports,
     projectId,
@@ -108,10 +79,9 @@ export type ProjectEgressProps = {
   /** The owning project. Dial-injected (never provider
    * props), so a `fetch` cap can only ever scope to its own project. */
   projectId: string;
-  /** The originating context (id + address): dispatch happens at ITS node so
-   * a child context's `fetch` shadow catches its isolates' bare fetch(). */
+  /** The originating context ref: dispatch happens at ITS node so a child
+   * context's `fetch` shadow catches its isolates' bare fetch(). */
   context?: string;
-  contextAddress?: CapabilityAddress | null;
   capabilityPath?: string;
 };
 
@@ -137,13 +107,10 @@ export class ProjectEgress extends WorkerEntrypoint<Env, ProjectEgressProps> {
   async fetch(request: Request): Promise<Response> {
     // Dispatch at the ORIGINATING context node, not the project: a child
     // context's `fetch` shadow must catch its isolates' bare fetch() too —
-    // the chain (child → project → the defaults) is what resolves the
-    // cap. The address rides in props so the hot path never needs the
-    // context catalog.
-    const address =
-      (this.ctx.props.contextAddress as CapabilityAddress | null | undefined) ??
-      projectContextAddress(this.ctx.props.projectId);
-    const node = dialContext(this.env, address);
+    // the chain (child → project → the defaults) is what resolves the cap.
+    // The ref IS the address — no directory on the hot path.
+    const ref = this.ctx.props.context ?? projectContextRef(this.ctx.props.projectId);
+    const node = dialContext(this.env, contextAddress(ref));
     // The implicit door's signal strip — same reason as ItxHandle.fetch (the
     // explicit door): an AbortSignal cannot cross the RPC hop to the node.
     return (await node
