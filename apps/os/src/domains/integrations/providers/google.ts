@@ -19,15 +19,28 @@ import { providedSecretSlug } from "~/domains/integrations/definition.ts";
 /** Accounts are USER-derived (the Slack team-id pattern): one connected
  * Google identity = one account, so a second Google user adds a second
  * account instead of overwriting the first's journal and secrets. The
- * sanitized email gives a readable itx address
- * (itx.integrations["google/jonas-nustom-com"]); the stable numeric id is
- * the fallback when Google omits the email claim. */
+ * sanitized email keeps the itx address readable
+ * (itx.integrations["google/jonas-nustom-com-9xk2p1"]), and a short hash of
+ * Google's stable id disambiguates — sanitization collapses distinct emails
+ * ("jonas.x@" and "jonas-x@" both sanitize to "jonas-x-"), and emails can
+ * change while the id never does, so the suffix alone decides identity. */
 export function googleAccountForUser(user: { email?: string; id: string }): string {
-  const base = (user.email ?? user.id)
+  const base = (user.email ?? "user")
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  return base.length > 0 ? base : "default";
+  return `${base.length > 0 ? base : "user"}-${stableIdHash(user.id)}`;
+}
+
+/** FNV-1a over the identity string, base36 — deterministic, account-grammar
+ * safe, plenty for disambiguating a project's handful of Google accounts. */
+function stableIdHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36);
 }
 
 export const GOOGLE_ACCESS_TOKEN_SECRET_NAME = "access-token";
