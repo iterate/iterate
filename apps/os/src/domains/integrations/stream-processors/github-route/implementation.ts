@@ -21,16 +21,25 @@ export class GithubRouteProcessor extends StreamProcessor<GithubRouteProcessorCo
   ): GithubRouteProcessorState {
     const { event, state } = args;
     switch (event.type) {
-      case "events.iterate.com/github/repo-route-configured":
+      case "events.iterate.com/github/repo-route-configured": {
+        const key = event.payload.fullName.toLowerCase();
+        const existing = state.routes[key] ?? [];
+        if (existing.includes(event.payload.repoStreamPath)) return state;
         return {
           ...state,
-          routes: {
-            ...state.routes,
-            [event.payload.fullName.toLowerCase()]: event.payload.repoStreamPath,
-          },
+          routes: { ...state.routes, [key]: [...existing, event.payload.repoStreamPath] },
         };
+      }
       case "events.iterate.com/github/repo-route-removed": {
-        const { [event.payload.fullName.toLowerCase()]: _removed, ...routes } = state.routes;
+        const key = event.payload.fullName.toLowerCase();
+        const remaining =
+          event.payload.repoStreamPath == null
+            ? []
+            : (state.routes[key] ?? []).filter((path) => path !== event.payload.repoStreamPath);
+        if (remaining.length > 0) {
+          return { ...state, routes: { ...state.routes, [key]: remaining } };
+        }
+        const { [key]: _removed, ...routes } = state.routes;
         return { ...state, routes };
       }
       case "events.iterate.com/integration/event-received":
@@ -48,22 +57,26 @@ export class GithubRouteProcessor extends StreamProcessor<GithubRouteProcessorCo
 
     const fullName = githubRepositoryFullName(event.payload.body);
     if (fullName == null) return;
-    const repoStreamPath = state.routes[fullName.toLowerCase()];
-    if (repoStreamPath == null) return;
+    const repoStreamPaths = state.routes[fullName.toLowerCase()] ?? [];
+    if (repoStreamPaths.length === 0) return;
 
+    // Fan out to EVERY linked repo. One idempotency key serves all
+    // destinations — dedupe is per-stream.
     args.blockProcessorWhile(async () => {
-      await this.ctx.stream.append({
-        streamPath: repoStreamPath,
-        event: {
-          type: "events.iterate.com/integration/event-received",
-          idempotencyKey: buildProcessorIdempotencyKey({
-            processor: this.contract,
-            key: "forward",
-            sourceEvent: event,
-          }),
-          payload: event.payload,
-        },
-      });
+      for (const repoStreamPath of repoStreamPaths) {
+        await this.ctx.stream.append({
+          streamPath: repoStreamPath,
+          event: {
+            type: "events.iterate.com/integration/event-received",
+            idempotencyKey: buildProcessorIdempotencyKey({
+              processor: this.contract,
+              key: "forward",
+              sourceEvent: event,
+            }),
+            payload: event.payload,
+          },
+        });
+      }
     });
   }
 }

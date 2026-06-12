@@ -30,7 +30,7 @@ describe("GithubRouteProcessor", () => {
     await flushBackgroundWork();
 
     // Matching is case-insensitive on the GitHub full name.
-    expect(processor.state.routes).toEqual({ "iterate/site": "/repos/site" });
+    expect(processor.state.routes).toEqual({ "iterate/site": ["/repos/site"] });
     expect(appends).toEqual([
       {
         streamPath: "/repos/site",
@@ -46,6 +46,61 @@ describe("GithubRouteProcessor", () => {
           },
         },
       },
+    ]);
+  });
+
+  it("fans out to EVERY iterate repo that mirrors the same GitHub repository", async () => {
+    const { appends, processor } = createProcessor();
+
+    await processor.ingest({
+      events: [
+        committedEvent({
+          offset: 1,
+          type: "events.iterate.com/github/repo-route-configured",
+          payload: { fullName: "iterate/site", repoStreamPath: "/repos/site" },
+        }),
+        committedEvent({
+          offset: 2,
+          type: "events.iterate.com/github/repo-route-configured",
+          payload: { fullName: "iterate/site", repoStreamPath: "/repos/site-fork" },
+        }),
+        committedEvent({
+          offset: 3,
+          type: "events.iterate.com/integration/event-received",
+          payload: {
+            integration: "github",
+            transport: "webhook",
+            routingKey: "installation:1234",
+            body: { repository: { full_name: "iterate/site" } },
+          },
+        }),
+        // Removing ONE link keeps the other forwarding.
+        committedEvent({
+          offset: 4,
+          type: "events.iterate.com/github/repo-route-removed",
+          payload: { fullName: "iterate/site", repoStreamPath: "/repos/site" },
+        }),
+        committedEvent({
+          offset: 5,
+          type: "events.iterate.com/integration/event-received",
+          payload: {
+            integration: "github",
+            transport: "webhook",
+            routingKey: "installation:1234",
+            body: { repository: { full_name: "iterate/site" } },
+          },
+        }),
+      ],
+      streamMaxOffset: 5,
+    });
+    await flushBackgroundWork();
+
+    // Delivery is guaranteed per destination; ordering across source events
+    // is not (each event's blocking forwards run concurrently in the batch).
+    expect(appends.map((entry) => [entry.streamPath, entry.event.idempotencyKey]).sort()).toEqual([
+      ["/repos/site", "github-route/forward@3"],
+      ["/repos/site-fork", "github-route/forward@3"],
+      ["/repos/site-fork", "github-route/forward@5"],
     ]);
   });
 

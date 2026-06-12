@@ -18,12 +18,14 @@ import { IntegrationEventReceivedPayload } from "~/domains/integrations/integrat
 
 export const GithubRouteProcessorContract = defineProcessorContract({
   slug: "github-route",
-  version: "0.1.0",
+  version: "0.2.0",
   description:
     "Routes GitHub events from the account's /integrations/github/{account} stream into per-repo streams, by repository full name.",
   stateSchema: z.object({
-    /** `owner/name` (lowercased) → the linked repo's stream path. */
-    routes: z.record(z.string(), z.string()).default({}),
+    /** `owner/name` (lowercased) → the linked repos' stream paths. SEVERAL
+     * iterate repos may mirror the same GitHub repository; each gets the
+     * forwarded copy. */
+    routes: z.record(z.string(), z.array(z.string())).default({}),
   }),
   initialState: {},
   events: {
@@ -41,8 +43,9 @@ export const GithubRouteProcessorContract = defineProcessorContract({
       }),
     },
     "events.iterate.com/github/repo-route-removed": {
-      description: "Releases a repository → repo-stream link.",
-      payloadSchema: z.object({ fullName: z.string() }),
+      description:
+        "Releases a repository → repo-stream link. With repoStreamPath, only that link; without, every link for the repository.",
+      payloadSchema: z.object({ fullName: z.string(), repoStreamPath: z.string().optional() }),
     },
   },
   consumes: [
