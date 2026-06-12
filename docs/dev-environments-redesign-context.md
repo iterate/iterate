@@ -53,13 +53,13 @@ can be destroyed and recreated.
 2. **Port: alchemy picks a free random port and bakes `base_url` as an env var** (get-port
    style, replacing Vite auto-increment). Request-sniffing the base URL was rejected: cron and
    scheduled work start without request context.
-3. **Localhost subdomain convention, plain HTTP:** `os.localhost:<port>`,
-   `<proj-slug>.os.localhost:<port>`, `auth.localhost:<other-port>`. Browsers resolve
+3. **Localhost convention, plain HTTP:** app/API/MCP use `localhost:<port>`;
+   browser project ingress uses `<proj-slug>.localhost:<port>`. Browsers resolve
    `*.localhost` to loopback and treat it as a secure context — no certs, no /etc/hosts.
-   Caveat: curl/Node on macOS don't resolve `*.localhost` — use `--resolve`, a Host header
-   against `127.0.0.1:<port>`, or plain `localhost:<port>`. Code: slug resolution already
-   strips ports (`apps/os/src/lib/project-host-routing.ts`); only URL generation
-   (`buildProjectWorkerUrl`, hardcoded `https://` + portless base) needs origin-style bases.
+   Caveat: curl/Node on macOS don't resolve `*.localhost` — use `localhost:<port>` with
+   a Host header for project ingress. Code: slug resolution already strips ports
+   (`apps/os/src/lib/project-host-routing.ts`); URL generation must carry the app port
+   for localhost project bases.
    3a. **One dev server per worktree (invariant) + discovery file.** Exactly one running dev
    server is allowed per git worktree. On boot, the alchemy script writes a discovery file in
    the worktree (e.g. `.alchemy/dev-server.json`: `{pid, port, baseUrl, startedAt}`); on a
@@ -183,7 +183,7 @@ can be destroyed and recreated.
 ## User stories (the redesign, concretely)
 
 1. **Agent does product work in a fresh worktree.** `doppler run --config dev -- pnpm dev` →
-   OS at `http://os.localhost:51234`, miniflare state local to the worktree. Needs to be a
+   OS at `http://localhost:51234`, miniflare state local to the worktree. Needs to be a
    user? Forges a JWT with the dev forge key (offline, ~1ms), opens
    `session-from-token?token=…` in headless agent-browser, clicks around as that user. Needs
    admin oRPC? Same forge with `platformAdmin: true`. Twenty sibling agents do the same

@@ -92,12 +92,12 @@ const server = http.createServer(async (_req, res) => {
   server.close();
 });
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Open http://os.localhost:${port}/ once in your browser.`);
+  console.log(`Open http://localhost:${port}/ once in your browser.`);
 });
 setTimeout(() => server.close(), 60000).unref();
 '
 ```
 
 Adjust `port` and the Doppler config for the environment you are testing. The
-cookie is host-scoped, not port-scoped, so setting it from `os.localhost:5199`
-also makes it available to `os.localhost:<dev-port>`.
+cookie is host-scoped, not port-scoped, so setting it from `localhost:5199`
+also makes it available to `localhost:<dev-port>`.

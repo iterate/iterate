@@ -13,8 +13,7 @@ names; the config supplies everything.
 
 Local dev is **fully local**: D1/DOs run in miniflare inside your worktree's
 `.alchemy/`, the server listens on a random free port at
-`http://os.localhost:<port>` (browsers resolve `*.localhost` to loopback — no
-DNS, no certs), and the only external dependency is the shared dev auth at
+`http://localhost:<port>`, and the only external dependency is the shared dev auth at
 `https://auth.iterate-dev.com`. OS's full worker topology (the per-DO
 workers, see `apps/os/docs/worker-topology.md`) runs inside vite's single
 workerd as auxiliary workers — one process, production-shaped cross-script
@@ -36,7 +35,7 @@ instantly and offline: `pnpm auth:mint` (see
 pnpm install
 doppler setup --config dev --no-interactive       # or --config dev_<you>
 
-pnpm dev          # fully-local OS dev server on http://os.localhost:<port>
+pnpm dev          # fully-local OS dev server on http://localhost:<port>
 ```
 
 - **Config selection**: `pnpm dev` resolves its Doppler config as
@@ -81,9 +80,13 @@ https://os.iterate-dev-<you>.com`, fixed port 5173, a cloudflared tunnel
   **`apps/os/.alchemy/dev-server.log`**. Tail it from another terminal with
   `tail -f apps/os/.alchemy/dev-server.log` from the repo root, or
   `tail -f .alchemy/dev-server.log` from `apps/os`.
-- Project hosts work in the browser as `<proj-slug>.os.localhost:<port>`.
-  (curl/Node don't resolve `*.localhost` — use `127.0.0.1:<port>` with a Host
-  header, or plain `localhost:<port>`.)
+- Project hosts work in the browser as `<proj-slug>.localhost:<port>`.
+  Browser project ingress uses `*.localhost`; curl/Node on macOS usually do
+  not resolve those names, so non-browser clients should use
+  `localhost:<port>` with a Host header.
+- Local MCP is deliberately path-mounted on the curlable app origin:
+  `http://localhost:<port>/api/__mcp`. Do not use `mcp.localhost` for local
+  scripts unless you have configured local wildcard DNS yourself.
 - Sign in as a human with Google or email OTP via `auth.iterate-dev.com` — the
   shared `os-local-dev` OAuth client accepts any localhost port. Your identity
   there persists across every worktree and environment on your machine.
@@ -150,7 +153,7 @@ The working recipe to browse OS as a minted identity:
 ```bash
 # 1. create a project via the operator path (admin API secret; from apps/os)
 cd apps/os
-doppler run --project os --config dev -- pnpm cli --base-url http://os.localhost:<port> \
+doppler run --project os --config dev -- pnpm cli --base-url http://localhost:<port> \
   rpc projects create --slug my-proj      # → note the returned "id"
 
 # 2. mint with BOTH org and project claims (the org can be any made-up id —

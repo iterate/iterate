@@ -118,7 +118,7 @@ pnpm dev
 
 The default config is the shared root `dev`: a **fully-local** environment
 (miniflare D1/DOs in the worktree, random free port at
-`http://os.localhost:<port>`, no tunnel, no Cloudflare resources) whose only
+`http://localhost:<port>`, no tunnel, no Cloudflare resources) whose only
 external dependency is the dev-global auth at `auth.iterate-dev.com`. Any
 number of worktrees/agents run this concurrently without contention. See
 [Dev environments](dev-environments.md). Tunnel-backed per-user configs
@@ -143,7 +143,7 @@ When `APP_CONFIG_BASE_URL` points at a real hostname, Alchemy creates the
 Cloudflare Tunnel, DNS records, and local `cloudflared` process. If
 `APP_CONFIG_BASE_URL` is absent or points at a loopback hostname, Vite runs
 locally without a tunnel. For fully-local dev, OS defaults MCP to `/api/__mcp`
-on the configured app base URL, such as `http://os.localhost:5176/api/__mcp`;
+on the configured app base URL, such as `http://localhost:5176/api/__mcp`;
 `mcp.localhost` is not portable across local resolvers.
 
 ## Environment Configs

@@ -19,7 +19,7 @@ pnpm cli rpc --help
 doppler run --config dev -- pnpm cli rpc --help
 
 # Explicit local override, if you are not using the discovery file.
-doppler run --config dev -- pnpm cli --base-url http://os.localhost:<port> rpc --help
+doppler run --config dev -- pnpm cli --base-url http://localhost:<port> rpc --help
 
 # Production.
 doppler run --config prd -- pnpm cli rpc --help

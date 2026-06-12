@@ -85,7 +85,7 @@ For tests that do not need the public tunnel, prefer the shared fully-local
 `dev` config:
 
 ```bash
-# Terminal 1: local worker on http://os.localhost:<port>.
+# Terminal 1: local worker on http://localhost:<port>.
 doppler run --project os --config dev -- pnpm dev
 
 # Terminal 2: run real-worker e2e against the discovered local server.
@@ -113,8 +113,9 @@ doppler run --config prd -- pnpm cli claude-mcp
 The canonical MCP endpoint comes from `APP_CONFIG_MCP__BASE_URL`, for example
 `https://mcp.iterate.com` in production or
 `https://mcp.iterate-dev-jonas.com` in local tunnel configs. `APP_CONFIG_BASE_URL`
-remains the dashboard URL. Localhost-oriented dev defaults MCP to
-`<APP_CONFIG_BASE_URL>/api/__mcp`, for example `http://localhost:5176/api/__mcp`.
+remains the dashboard URL. Fully-local dev deliberately keeps MCP path-mounted
+on the curlable app origin: `<APP_CONFIG_BASE_URL>/api/__mcp`, for example
+`http://localhost:5176/api/__mcp`.
 
 The script pattern is documented in
 [`docs/doppler-backed-scripts.md`](./docs/doppler-backed-scripts.md).

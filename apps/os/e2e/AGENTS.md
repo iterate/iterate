@@ -26,7 +26,7 @@ tunnel. For fully-local `dev`, the helpers read `.alchemy/dev-server.json` from 
 `pnpm dev` process.
 
 If you need to target something other than the discovered local server, override explicitly:
-`OS_ITX_E2E_BASE_URL=http://os.localhost:<port> doppler run --config dev -- pnpm e2e`.
+`OS_ITX_E2E_BASE_URL=http://localhost:<port> doppler run --config dev -- pnpm e2e`.
 
 - Live deployment tests: `pnpm e2e` (agents, admin-project suites).
 - Egress interception: itx script `fetch` rides project egress; the fetch-cap shadowing coverage
