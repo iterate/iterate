@@ -202,13 +202,17 @@ function createStreamRuntime(
   let readyWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
   // Self-heal backoff for browser-side ingest failures (C1).
   let ingestFailureCount = 0;
-  // The server incarnation this connection reconciled against, and how far deliveries have
-  // progressed on it. The liveness probe compares both against fresh runtimeState() so an
+  // The server incarnation this connection reconciled against, how far deliveries have
+  // progressed, and a counter bumped every time a delivery ARRIVES (before the possibly-slow
+  // ingest). The liveness probe compares these against fresh runtimeState() so an
   // orphaned-but-healthy-looking subscription (the stream was recreated underneath us, or the
   // server moved ahead while deliveries silently stopped) reconnects instead of wedging.
+  // Arrival — not ingest completion — is the aliveness signal: a large replay batch can take
+  // longer than a probe interval to apply, and that must not read as "orphaned".
   let reconciledIncarnation: string | undefined;
   let lastDeliveredOffset = -1;
-  let probePreviousDeliveredOffset = -1;
+  let deliveryArrivals = 0;
+  let probePreviousArrivals = 0;
 
   function resolveReadyWaiters() {
     const waiters = readyWaiters;
@@ -495,11 +499,15 @@ function createStreamRuntime(
         });
         const checkpoint = await processor.snapshot();
         lastDeliveredOffset = checkpoint.offset;
-        probePreviousDeliveredOffset = checkpoint.offset;
         return {
           replayAfterOffset: checkpoint.offset,
-          processEventBatch: (batch: { events: readonly StreamEvent[]; streamMaxOffset: number }) =>
-            ingestWithSelfHeal(processor, batch, election),
+          processEventBatch: (batch: {
+            events: readonly StreamEvent[];
+            streamMaxOffset: number;
+          }) => {
+            deliveryArrivals += 1;
+            return ingestWithSelfHeal(processor, batch, election);
+          },
         };
       })
       .then((ready) => {
@@ -621,7 +629,7 @@ function createStreamRuntime(
 
   function startLivenessProbe(connection: NonNullable<typeof stream>) {
     stopLivenessProbe();
-    probePreviousDeliveredOffset = lastDeliveredOffset;
+    probePreviousArrivals = deliveryArrivals;
     livenessTimer = setInterval(() => {
       void (async () => {
         try {
@@ -642,11 +650,11 @@ function createStreamRuntime(
           }
           const stalled =
             coreProcessorState.maxOffset > lastDeliveredOffset &&
-            lastDeliveredOffset === probePreviousDeliveredOffset;
-          probePreviousDeliveredOffset = lastDeliveredOffset;
+            deliveryArrivals === probePreviousArrivals;
+          probePreviousArrivals = deliveryArrivals;
           if (stalled) {
             throw new Error(
-              `server is at offset ${coreProcessorState.maxOffset} but deliveries stalled at ${lastDeliveredOffset}; subscription is orphaned`,
+              `server is at offset ${coreProcessorState.maxOffset} but no delivery arrived since the last probe (applied through ${lastDeliveredOffset}); subscription is orphaned`,
             );
           }
         } catch (error) {
