@@ -532,12 +532,20 @@ function createStreamRuntime(
         snapshot = { ...snapshot, subscriptionStatus: "leader" };
         emitSnapshot();
         await withDeadline("reconcile", reconcileLocalMirrorWithServer(election.connection.stream));
+        // Re-check after every await: a step that settles late (after this
+        // election was superseded) must not write runtime-wide fields like
+        // lastDeliveredOffset over the current election's values.
+        if (!ownsRuntime()) return undefined;
         const processor = args.createProcessor({
           stream: election.connection.stream,
           sql,
           subscriptionKey,
         });
-        const checkpoint = await processor.snapshot();
+        // The checkpoint read goes to the shared db worker; an un-deadlined
+        // hang here would park the runtime as a forever-"leader" with no
+        // subscription, no probe, and no error.
+        const checkpoint = await withDeadline("checkpoint read", processor.snapshot());
+        if (!ownsRuntime()) return undefined;
         lastDeliveredOffset = checkpoint.offset;
         return {
           replayAfterOffset: checkpoint.offset,
@@ -603,6 +611,10 @@ function createStreamRuntime(
     batch: { events: readonly StreamEvent[]; streamMaxOffset: number },
     election: { connection: Awaited<ReturnType<typeof withStreamConnectionFromBrowser>> },
   ): Promise<void> {
+    // A batch delivered to a superseded election must not be applied: its
+    // processor's queued ingests would interleave with (and can regress the
+    // checkpoint of) the current election's processor on the same tables.
+    if (disposed || stream !== election.connection) return;
     try {
       await processor.ingest(batch);
       ingestFailureCount = 0;
