@@ -7,9 +7,11 @@ import {
 import type {
   RepoInfo,
   RepoDurableObject,
-  RepoStructuredName,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-import { getRepoDurableObjectName } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import {
+  getRepoDurableObjectName,
+  type RepoStructuredName,
+} from "~/domains/repos/repo-durable-object-name.ts";
 import {
   isRepoAlreadyExistsError,
   isRepoNotCreatedError,

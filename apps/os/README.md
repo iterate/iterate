@@ -118,8 +118,9 @@ The script pattern is documented in
 
 ## Important Files
 
-- `src/worker.ts` is the Cloudflare Worker entrypoint (hostname/path dispatch,
-  Durable Object and entrypoint exports).
+- `src/workers/` holds the per-worker entrypoints — OS deploys as many small
+  workers (tiny ingress router, the TanStack app, one worker per Durable
+  Object class). See [docs/worker-topology.md](./docs/worker-topology.md).
 - `src/config.ts` holds the `AppConfig` runtime config schema.
 - `src/domains` contains domain-local Durable Objects, WorkerEntrypoints, tool
   providers, and focused README/AGENTS notes.

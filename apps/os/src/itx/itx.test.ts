@@ -116,13 +116,9 @@ describe("provide + longest-prefix invoke", () => {
     const result = await itx.invoke({ args: [{ text: "hi" }], path: ["slack", "chat", "post"] });
 
     expect(result).toMatchObject({ path: ["chat", "post"] });
-    // Two dials: the provide-time describeItx probe (self-description hook;
-    // a typeless rpc provide always asks once), then the invoke itself.
-    expect(dialed).toHaveLength(2);
-    expect(dialed[0]).toMatchObject({
-      call: { args: [], path: ["describeItx"] },
-      disposed: true,
-    });
+    // ONE dial: provide is a pure append (it never dials), so the only dial
+    // is the invoke itself.
+    expect(dialed).toHaveLength(1);
     expect(dialed.at(-1)).toMatchObject({
       address: AI_ADDRESS,
       attribution: { capabilityPath: "slack", origin: { address: SELF_ADDRESS, id: "prj_1" } },
@@ -170,95 +166,41 @@ describe("provide + longest-prefix invoke", () => {
   });
 });
 
-describe("provide-time self-description (describeItx)", () => {
-  /** A dial whose target answers the probe — and records every call. */
-  function selfDescribingDial(answer: unknown) {
-    const calls: Array<{ path: string[]; args: unknown[] }> = [];
-    const dial: CapabilityDial = () => ({
-      call: async (input: { path: string[]; args: unknown[] }) => {
-        calls.push(input);
-        if (input.path.join(".") === "describeItx") return answer;
-        return "called";
-      },
-    });
-    return { calls, dial };
-  }
+describe("provide is a pure journal append (no provider-code calls)", () => {
+  test("a typeless rpc provide dials NOTHING — provide never calls the target", async () => {
+    // Regression: a provide-time describeItx probe re-entered an agent's own
+    // Durable Object mid-wake and broke agents in prod. provide must append
+    // and return; the target is only dialed on invoke. Self-description is
+    // caller-supplied (instructions/types at provide time).
+    const dial = vi.fn();
+    const itx = makeItx({ dial: dial as unknown as CapabilityDial });
+    await itx.provideCapability({ capability: AI_ADDRESS, name: "ai" });
+    await itx.provideCapability({ capability: LOOPBACK_ADDRESS, name: "petstore" });
+    expect(dial).not.toHaveBeenCalled();
+    expect(await itx.describe()).toMatchObject([
+      { name: "ai", types: undefined },
+      { name: "petstore", types: undefined },
+    ]);
+  });
 
-  test("a typeless rpc provide journals the target's own types + instructions", async () => {
-    const { calls, dial } = selfDescribingDial({
+  test("caller-supplied instructions + types are journaled verbatim", async () => {
+    const { events, journal } = fakeJournal();
+    const itx = makeItx({ journal });
+    await itx.provideCapability({
+      capability: LOOPBACK_ADDRESS,
       instructions: "Petstore. listOperations() first.",
+      name: "petstore",
       types: "declare function findPetsByStatus(input: { status: string }): Promise<unknown>;",
     });
-    const { events, journal } = fakeJournal();
-    const itx = makeItx({ dial, journal });
-
-    await itx.provideCapability({ capability: LOOPBACK_ADDRESS, name: "petstore" });
-    expect(calls).toEqual([{ args: [], path: ["describeItx"] }]);
-    // The enrichment is IN the journaled event — the record, not a patch.
     expect(events[0]!.payload).toMatchObject({
       meta: {
         instructions: "Petstore. listOperations() first.",
         types: expect.stringContaining("declare function findPetsByStatus"),
       },
     });
-    expect(await itx.describe()).toMatchObject([
-      { instructions: "Petstore. listOperations() first.", name: "petstore" },
-    ]);
   });
 
-  test("explicit caller values win; caller-supplied types skip the probe entirely", async () => {
-    const { calls, dial } = selfDescribingDial({ instructions: "theirs", types: "their types" });
-    const itx = makeItx({ dial });
-
-    await itx.provideCapability({
-      capability: LOOPBACK_ADDRESS,
-      instructions: "mine",
-      name: "a",
-    });
-    expect(await itx.describe()).toMatchObject([
-      { instructions: "mine", name: "a", types: "their types" },
-    ]);
-
-    calls.length = 0;
-    await itx.provideCapability({ capability: LOOPBACK_ADDRESS, name: "b", types: "mine" });
-    expect(calls).toEqual([]); // no probe — nothing to fill
-    expect(await itx.describe()).toMatchObject([{ name: "a" }, { name: "b", types: "mine" }]);
-  });
-
-  test("a throwing or garbage-answering target never blocks or fails the provide", async () => {
-    const throwingDial: CapabilityDial = () => ({
-      call: async () => {
-        throw new Error("no such method");
-      },
-    });
-    const itx = makeItx({ dial: throwingDial });
-    await itx.provideCapability({ capability: AI_ADDRESS, name: "ai" });
-    expect(await itx.describe()).toMatchObject([{ name: "ai", types: undefined }]);
-
-    const garbage = makeItx({ dial: selfDescribingDial(42).dial });
-    await garbage.provideCapability({ capability: AI_ADDRESS, name: "ai" });
-    expect(await garbage.describe()).toMatchObject([{ name: "ai", types: undefined }]);
-  });
-
-  test("an oversized describeItx answer is truncated before it is journaled", async () => {
-    const { dial } = selfDescribingDial({ types: "x".repeat(80 * 1024) });
-    const { events, journal } = fakeJournal();
-    const itx = makeItx({ dial, journal });
-    await itx.provideCapability({ capability: LOOPBACK_ADDRESS, name: "huge" });
-
-    const journaled = (events[0]!.payload as { meta: { types: string } }).meta.types;
-    expect(journaled.length).toBeLessThan(65 * 1024);
-    expect(journaled).toContain("truncated by the platform");
-    // Caller-supplied values are the caller's business — never truncated.
-    await itx.provideCapability({
-      capability: LOOPBACK_ADDRESS,
-      name: "mine",
-      types: "y".repeat(80 * 1024),
-    });
-    expect((events[1]!.payload as { meta: { types: string } }).meta.types).toHaveLength(80 * 1024);
-  });
-
-  test("live provides are never probed", async () => {
+  test("live provides are never dialed", async () => {
     const dial = vi.fn();
     const itx = makeItx({ dial: dial as unknown as CapabilityDial });
     await itx.provideCapability({ capability: { run: async () => 1 }, name: "live" });

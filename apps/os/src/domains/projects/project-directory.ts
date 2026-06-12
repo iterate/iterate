@@ -16,7 +16,7 @@ import {
   insertProject,
   listAllProjects,
 } from "~/db/queries/.generated/index.ts";
-import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object-ref.ts";
 import { isProjectId } from "~/domains/projects/project-id.ts";
 import { principalIsAdmin } from "~/auth/principal.ts";
 
