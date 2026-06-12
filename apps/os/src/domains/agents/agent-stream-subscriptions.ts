@@ -1,7 +1,6 @@
 import { z } from "zod";
 import type { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import { StreamPath as StreamPathSchema } from "@iterate-com/shared/streams/types";
-import { deriveDurableObjectNameFromStructuredName } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
@@ -26,10 +25,54 @@ export const AgentDurableObjectStructuredName = z.object({
   projectId: z.string().trim().min(1),
 });
 
+/**
+ * An agent Durable Object's identity IS its stream coordinate:
+ * `{projectId}:{agentPath}` (e.g. `prj_abc:/agents/hahaha`) — the same shape a
+ * stream uses (`{namespace}:{path}`), not an opaque JSON blob. projectId has no
+ * colon and agentPath is colon-free, so splitting on the FIRST colon is exact.
+ * This makes the name self-describing: any holder can recover (projectId,
+ * agentPath) — and the agent context's address — from the id alone, with no
+ * out-of-band catalog or passed-down address.
+ */
 export function getAgentDurableObjectName(input: AgentDurableObjectStructuredName) {
-  return deriveDurableObjectNameFromStructuredName({
-    structuredName: input,
+  return `${input.projectId}:${input.agentPath}`;
+}
+
+/** The DO-name codec: parse `{projectId}:{agentPath}` back to its parts. The
+ * lifecycle base hands the raw name string to this schema (see parseName). */
+export const AgentDurableObjectName = z
+  .string()
+  .transform((value, ctx): AgentDurableObjectStructuredName => {
+    const parsed = parseAgentDurableObjectName(value);
+    if (!parsed) {
+      ctx.addIssue({
+        code: "custom",
+        message: `Agent DO name must be "{projectId}:{agentPath}", got ${JSON.stringify(value)}.`,
+      });
+      return z.NEVER;
+    }
+    return parsed;
   });
+
+export function parseAgentDurableObjectName(
+  value: string,
+): AgentDurableObjectStructuredName | null {
+  const colon = value.indexOf(":");
+  if (colon <= 0) return null;
+  const projectId = value.slice(0, colon);
+  const agentPath = value.slice(colon + 1);
+  const parsed = AgentDurableObjectStructuredName.safeParse({ agentPath, projectId });
+  return parsed.success ? parsed.data : null;
+}
+
+/** Does this itx context id name an agent context? Agent context ids ARE the
+ * agent DO name (`{projectId}:{agentPath}`), so they're self-describing — see
+ * resolveItx, which builds the AGENT address straight from the id. */
+export function isAgentContextId(contextId: string): boolean {
+  const parsed = parseAgentDurableObjectName(contextId);
+  return (
+    parsed !== null && (parsed.agentPath === "/agents" || parsed.agentPath.startsWith("/agents/"))
+  );
 }
 
 export function agentLlmProcessorSlug(provider: AgentLlmProvider) {

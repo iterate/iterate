@@ -15,6 +15,10 @@ import { replayPathCall, type CapabilityAddress, type PathCall } from "./itx.ts"
 import { resolveDialableTargets } from "./dial.ts";
 import { dialContext, lookupContext, projectContextAddress } from "./journal.ts";
 import { GLOBAL_CONTEXT_ID, isChildContextId, type ItxProps } from "./refs.ts";
+import {
+  isAgentContextId,
+  parseAgentDurableObjectName,
+} from "~/domains/agents/agent-stream-subscriptions.ts";
 import { parseConfig } from "~/config.ts";
 import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
@@ -48,6 +52,18 @@ export async function resolveItx(input: {
     // both pass their coordinate, so trust it and skip the catalog entirely.
     contextAddress = input.props.contextAddress as CapabilityAddress;
     projectId = input.props.projectId;
+  } else if (isAgentContextId(contextId)) {
+    // An agent context is SELF-DESCRIBING: its id IS the agent DO name
+    // (`{projectId}:{agentPath}`), so its address and owning project derive
+    // from the id alone — no passed-down contextAddress, no catalog. This is
+    // what keeps a dropped `contextAddress` prop from silently dispatching the
+    // agent's codemode against an empty project context.
+    const parsed = parseAgentDurableObjectName(contextId)!;
+    projectId = parsed.projectId;
+    contextAddress = {
+      type: "rpc",
+      worker: { binding: "AGENT", name: contextId, type: "durable-object" },
+    };
   } else if (isChildContextId(contextId)) {
     const resolved = await lookupContext(createD1Client(input.env.DB), contextId);
     if (!resolved) {
