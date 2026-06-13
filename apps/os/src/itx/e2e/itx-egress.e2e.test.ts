@@ -7,10 +7,11 @@
 //                  their globalOutbound, so even a dependency's fetch goes
 //                  through secret substitution without knowing it
 //
-// Every project is born with the example secret (example.egress_api_key →
-// "example-secret-value"), and the worker exposes an authenticated echo
-// endpoint, so we can assert the substitution end to end: the isolate sends
-// a getSecret(...) placeholder and the echo sees the material.
+// Every project is born with the example egress secret (journaled at
+// /secrets/example/egress-api-key → "example-secret-value"), and the worker
+// exposes an authenticated echo endpoint, so we can assert the substitution
+// end to end: the isolate sends a getSecret(...) placeholder and the echo
+// sees the material.
 
 import { expect, test } from "vitest";
 import {
@@ -20,7 +21,7 @@ import {
   registerCreatedProjectCleanup,
 } from "./e2e-env.ts";
 
-const SECRET_KEY = "example.egress_api_key";
+const SECRET_KEY = "example/egress-api-key";
 const SECRET_MATERIAL = "example-secret-value";
 const HEADER = "x-itx-egress-probe";
 
