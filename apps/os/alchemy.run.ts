@@ -573,9 +573,19 @@ const [
   }),
   osWorker("discordGateway", {
     entrypoint: "./src/workers/discord-gateway.ts",
+    // Own-zone is irrelevant; the gateway holds a WebSocket to Discord and
+    // captures inbound events like a webhook would.
+    compatibilityFlags: ["global_fetch_strictly_public"],
     bindings: {
       DISCORD_GATEWAY: discordGateway,
       DO_CATALOG: db,
+      // Gateway dispatches flow through the SAME capture path as webhooks
+      // (captureIntegrationEvent → global stream + wake the ingress router),
+      // and customer-owned scopes reveal their bot token from the Secret DO.
+      GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
+      INTEGRATION_INGRESS: integrationIngress,
+      SECRET: secret,
+      STREAM: stream,
       ...(discordBotToken == null
         ? {}
         : { APP_CONFIG_DISCORD_BOT_TOKEN: alchemy.secret(discordBotToken) }),
