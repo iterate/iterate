@@ -800,12 +800,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         name: "ai",
       },
       {
-        capability: { entrypoint: "SlackCapability", type: "rpc", worker: { type: "loopback" } },
-        instructions:
-          "Use itx.slack.<Slack Web API method path>(args), e.g. itx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If no reply is needed, do not call chat.postMessage. For legitimate long-running Slack replies, use Promise.all to send an immediate acknowledgment while doing the real work in parallel, then send the actual result afterwards.",
-        name: "slack",
-      },
-      {
         capability: {
           entrypoint: "IntegrationsCapability",
           type: "rpc",
