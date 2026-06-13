@@ -57,9 +57,19 @@ import {
   getProjectBySlug,
   insertProject,
   listAllProjects,
+  updateProjectConfig,
 } from "~/db/queries/.generated/index.ts";
 import type { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object-ref.ts";
+import {
+  ensureProjectCustomHostname,
+  ensureProjectCustomHostnameStatus,
+} from "~/domains/projects/cloudflare-custom-hostnames.ts";
+import {
+  isReservedProjectHostname,
+  isValidCustomHostname,
+  normalizeCustomHostname,
+} from "~/lib/project-host-routing.ts";
 import { isProjectId } from "~/domains/projects/project-id.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 
@@ -585,6 +595,122 @@ export class ItxProjects extends RpcTarget {
     return { deleted: true, id: input.id, ok: true as const };
   }
 
+  /**
+   * Cloudflare custom-hostname status for the project's configured custom
+   * hostname. Mirrors the oRPC `projects.customHostnameStatus` handler.
+   */
+  async customHostnameStatus(input: { id: string }) {
+    const row = await this.requireProjectRow(input.id);
+    return await ensureProjectCustomHostnameStatus({
+      apiToken: this.runtime.config.cloudflare.apiToken?.exposeSecret(),
+      customHostname: row.custom_hostname,
+      projectHostnameBase: this.runtime.config.projectHostnameBases[0],
+    });
+  }
+
+  /**
+   * Activate a Cloudflare custom hostname (the configured custom hostname or a
+   * subdomain of it). Mirrors the oRPC `projects.ensureCustomHostname` handler.
+   */
+  async ensureCustomHostname(input: { id: string; hostname: string }) {
+    const row = await this.requireProjectRow(input.id);
+    if (!row.custom_hostname) {
+      throw new ItxError({
+        code: "BAD_REQUEST",
+        message: "Set a custom hostname before activating app hostnames.",
+      });
+    }
+
+    const hostname = normalizeCustomHostname(input.hostname);
+    if (!hostname || !isValidCustomHostname(hostname)) {
+      throw new ItxError({
+        code: "BAD_REQUEST",
+        message: "Hostname must be a valid DNS hostname.",
+      });
+    }
+
+    return await ensureProjectCustomHostname({
+      apiToken: this.runtime.config.cloudflare.apiToken?.exposeSecret(),
+      customHostname: row.custom_hostname,
+      hostname,
+      projectHostnameBase: this.runtime.config.projectHostnameBases[0],
+    });
+  }
+
+  /**
+   * Update the project's config (custom hostname). Mirrors the oRPC
+   * `projects.updateConfig` handler; returns the project with its ingress URL.
+   */
+  async updateConfig(input: { id: string; customHostname?: string | null }) {
+    const existing = await this.requireProjectRow(input.id);
+    const db = this.db();
+
+    const normalizedCustomHostname = this.normalizeConfigCustomHostname(input.customHostname);
+    const nextCustomHostname =
+      normalizedCustomHostname === undefined
+        ? (existing.custom_hostname ?? null)
+        : normalizedCustomHostname;
+    try {
+      await updateProjectConfig(db, { customHostname: nextCustomHostname }, { id: input.id });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new ItxError({
+          code: "CONFLICT",
+          message: `Custom hostname ${nextCustomHostname} is already assigned.`,
+        });
+      }
+      throw error;
+    }
+
+    const row = await getProjectById(db, { id: input.id });
+    if (!row) {
+      throw new ItxError({
+        code: "INTERNAL",
+        message: `Project ${input.id} was not returned after update`,
+      });
+    }
+
+    if (row.custom_hostname) {
+      await ensureProjectCustomHostnameStatus({
+        apiToken: this.runtime.config.cloudflare.apiToken?.exposeSecret(),
+        customHostname: row.custom_hostname,
+        projectHostnameBase: this.runtime.config.projectHostnameBases[0],
+      });
+    }
+
+    return await this.toProjectWithIngressUrl(row);
+  }
+
+  private normalizeConfigCustomHostname(input: string | null | undefined) {
+    if (input === undefined) return undefined;
+
+    const customHostname = normalizeCustomHostname(input);
+    if (customHostname === null) return null;
+
+    if (!isValidCustomHostname(customHostname)) {
+      throw new ItxError({
+        code: "BAD_REQUEST",
+        message: "Custom hostname must be a valid DNS hostname.",
+      });
+    }
+
+    if (isReservedProjectHostname(customHostname, this.runtime.config.projectHostnameBases)) {
+      throw new ItxError({
+        code: "BAD_REQUEST",
+        message: "Custom hostname cannot use a reserved OS project hostname.",
+      });
+    }
+
+    return customHostname;
+  }
+
+  private async toProjectWithIngressUrl(row: { id: string; slug: string; [key: string]: unknown }) {
+    return {
+      ...toProjectSummary(row),
+      ingressUrl: await projectStub(this.runtime.env, row.id).ingressUrl(),
+    };
+  }
+
   private async requireProjectRow(projectIdOrSlug: string) {
     const db = this.db();
     const row = isProjectId(projectIdOrSlug)
@@ -617,6 +743,10 @@ export class ItxProjects extends RpcTarget {
   private db() {
     return createD1Client(this.runtime.env.DB);
   }
+}
+
+function isUniqueConstraintError(error: unknown) {
+  return error instanceof Error && error.message.includes("UNIQUE constraint failed");
 }
 
 function toProjectSummary(row: { id: string; slug: string; [key: string]: unknown }) {

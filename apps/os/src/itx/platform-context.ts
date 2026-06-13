@@ -120,6 +120,21 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     name: "secrets",
   },
   {
+    // The project's third-party integrations (slack, google): the read +
+    // connect/disconnect surface the dashboard settings use. OAuth material
+    // itself never crosses itx — startOAuthFlow only returns a provider
+    // authorization URL; tokens land in the secret store via the callback.
+    address: { entrypoint: "IntegrationsCapability", type: "rpc", worker: { type: "loopback" } },
+    instructions:
+      "Project integrations (slack, google): itx.integrations.getConnection({ provider }) " +
+      "returns connection status (connected, displayName, scopes, redacted token summary); " +
+      "startOAuthFlow({ provider, callbackUrl?, userId }) returns { authorizationUrl } to begin " +
+      "the provider OAuth flow (userId must be the connection-authenticated user, never browser " +
+      "input — the callback re-verifies it); disconnect({ provider }) revokes the connection and " +
+      "appends the disconnected event to the project's /integrations/<provider> stream.",
+    name: "integrations",
+  },
+  {
     address: { entrypoint: "ReposCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
       "The project's git repos: itx.repos.ensureProjectRepoInfo({ projectSlug }), " +
