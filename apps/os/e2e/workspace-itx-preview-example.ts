@@ -2,23 +2,16 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { createAdminOsItx } from "./test-support/os-client.ts";
 
 const DEFAULT_BASE_URL = "https://os.iterate-preview-2.com";
-
-type Project = {
-  id: string;
-  slug: string;
-};
 
 async function main() {
   const baseUrl = new URL(process.env.APP_CONFIG_BASE_URL?.trim() || DEFAULT_BASE_URL);
   const adminApiSecret = requireAdminApiSecret();
-  const project = await createProject({
-    adminApiSecret,
-    baseUrl,
-    slug: readProjectSlug(),
-  });
-  const mcpUrl = projectMcpUrlFor({ baseUrl, project });
+  const slug = readProjectSlug();
+  await ensureProject({ baseUrl, slug });
+  const mcpUrl = projectMcpUrlFor({ baseUrl });
   const result = await runWorkspaceCodemodeProof({
     bearerToken: adminApiSecret,
     mcpUrl,
@@ -29,7 +22,7 @@ async function main() {
       {
         baseUrl: baseUrl.toString(),
         mcpUrl: mcpUrl.toString(),
-        project,
+        project: { slug },
         result,
       },
       null,
@@ -59,48 +52,26 @@ function readProjectSlug() {
   return `workspace-itx-example-${Date.now()}`;
 }
 
-async function createProject(input: { adminApiSecret: string; baseUrl: URL; slug: string }) {
-  const response = await fetch(new URL("/api/projects", input.baseUrl), {
-    body: JSON.stringify({
-      slug: input.slug,
-    }),
-    headers: {
-      authorization: `Bearer ${input.adminApiSecret}`,
-      "content-type": "application/json",
-    },
-    method: "POST",
-  });
-
-  if (response.status === 409) {
-    return await fetchProjectBySlug(input);
+/**
+ * Ensure the project exists via project-scoped itx (the REST `/api/projects`
+ * route is gone with oRPC). We only need it to EXIST — the MCP URL is derived
+ * from the deployment host, not the project row — so a stable-slug CONFLICT
+ * from an earlier run is success.
+ */
+async function ensureProject(input: { baseUrl: URL; slug: string }) {
+  using itx = createAdminOsItx({ baseUrl: input.baseUrl.toString() });
+  try {
+    await itx.projects.create({ slug: input.slug });
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    const message = error instanceof Error ? error.message : String(error);
+    if (code !== "CONFLICT" && !/already exists/i.test(message)) {
+      throw error;
+    }
   }
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to create preview project ${input.slug}: ${response.status} ${await response.text()}`,
-    );
-  }
-
-  return (await response.json()) as Project;
 }
 
-async function fetchProjectBySlug(input: { adminApiSecret: string; baseUrl: URL; slug: string }) {
-  const response = await fetch(new URL(`/api/projects/by-slug/${input.slug}`, input.baseUrl), {
-    headers: {
-      authorization: `Bearer ${input.adminApiSecret}`,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to fetch preview project ${input.slug}: ${response.status} ${await response.text()}`,
-    );
-  }
-
-  return (await response.json()) as Project;
-}
-
-function projectMcpUrlFor(input: { baseUrl: URL; project: Project }) {
+function projectMcpUrlFor(input: { baseUrl: URL }) {
   const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(input.baseUrl.hostname);
   if (previewMatch) {
     return new URL(`https://mcp.iterate-preview-${previewMatch[1]}.com`);

@@ -674,8 +674,16 @@ export class ItxProjects extends RpcTarget {
     // the same gate every other project-scoped op uses — mirrors the oRPC
     // handler's requireProject. (Bugbot: non-admins must be able to delete
     // the projects they can create.)
-    if (this.runtime.access !== "all") {
-      await this.requireProjectRow(input.id);
+    // Non-admins are existence-masked (requireProjectRow throws NOT_FOUND for a
+    // project they can't see or that doesn't exist). Admins get an honest
+    // idempotent answer: deleting a project that isn't there reports
+    // { deleted: false } rather than claiming a phantom delete.
+    const row =
+      this.runtime.access === "all"
+        ? await getProjectById(this.db(), { id: input.id })
+        : await this.requireProjectRow(input.id);
+    if (!row) {
+      return { deleted: false, id: input.id, ok: true as const };
     }
     await deleteProject(this.db(), { id: input.id });
     return { deleted: true, id: input.id, ok: true as const };

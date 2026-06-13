@@ -106,9 +106,40 @@ async function assertHealthRoute(httpBaseUrl: string) {
   expect(body.app).toBe("os");
 }
 
+/**
+ * The itx HTTP boundary (`/api/itx/run`) is the admin/auth gate that replaced
+ * the oRPC admin procedures. Probe both sides without running a dynamic worker:
+ * an anonymous call is rejected (401) before the body is read, and the baked
+ * admin bearer authenticates past the gate — reaching the "functionSource is
+ * required" 400 — so a regression in admin itx auth fails the smoke.
+ */
+async function assertItxAdminAuth(httpBaseUrl: string) {
+  const runUrl = new URL("/api/itx/run", httpBaseUrl);
+
+  const anonymous = await fetch(runUrl, {
+    body: "{}",
+    headers: { "content-type": "application/json" },
+    method: "POST",
+    signal: AbortSignal.timeout(3_000),
+  });
+  expect(anonymous.status).toBe(401);
+
+  const admin = await fetch(runUrl, {
+    body: "{}",
+    headers: {
+      authorization: `Bearer ${SMOKE_ADMIN_API_SECRET}`,
+      "content-type": "application/json",
+    },
+    method: "POST",
+    signal: AbortSignal.timeout(3_000),
+  });
+  expect(admin.status, await admin.clone().text()).toBe(400);
+}
+
 async function assertFullStack(httpBaseUrl: string) {
   await assertSsrHtml(httpBaseUrl);
   await assertHealthRoute(httpBaseUrl);
+  await assertItxAdminAuth(httpBaseUrl);
 }
 
 async function waitForReady(httpBaseUrl: string, timeoutMs = 30_000) {
