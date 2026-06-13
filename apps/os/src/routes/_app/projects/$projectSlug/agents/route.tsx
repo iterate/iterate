@@ -2,7 +2,7 @@ import { Outlet, createFileRoute } from "@tanstack/react-router";
 import { breadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents")({
-  staticData: breadcrumbStaticData("Agents"),
+  staticData: breadcrumbStaticData("/agents"),
   component: AgentsLayout,
 });
 

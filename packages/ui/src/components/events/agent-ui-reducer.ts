@@ -95,6 +95,8 @@ export type AgentUiPresenceEntry = {
 export type AgentUiState = {
   /** The running activity (streaming thinking/code), or null when idle. */
   live: AgentUiActivity | null;
+  /** User messages that landed while the current request was already running. */
+  queuedUserMessages: AgentUiMessageItem[];
   eventCount: number;
   /** Connection roster reduced from subscriber-connected/disconnected facts. */
   presence: AgentUiPresenceEntry[];
@@ -103,7 +105,7 @@ export type AgentUiState = {
 };
 
 export function initialAgentUiState(): AgentUiState {
-  return { live: null, eventCount: 0, presence: [], nextLocalIndex: 0 };
+  return { live: null, queuedUserMessages: [], eventCount: 0, presence: [], nextLocalIndex: 0 };
 }
 
 /** One settled item to upsert at a dense list position. */
@@ -161,7 +163,11 @@ const STREAM_WOKEN = "events.iterate.com/stream/woken";
 // ---------------------------------------------------------------------------
 
 function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp[]): AgentUiState {
-  const state: AgentUiState = { ...previous, eventCount: previous.eventCount + 1 };
+  const state: AgentUiState = {
+    ...previous,
+    queuedUserMessages: previous.queuedUserMessages ?? [],
+    eventCount: previous.eventCount + 1,
+  };
   const timestampMs = Date.parse(event.createdAt);
 
   switch (event.type) {
@@ -173,13 +179,17 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       // activity settles here; an active one keeps streaming and settles on
       // its own terminal event.
       const hasRunningStep = state.live?.steps.some((step) => step.status === "running") ?? false;
-      const base = hasRunningStep ? state : settleLive(state, timestampMs, ops);
-      return emitItem(base, ops, {
+      const item: AgentUiMessageItem = {
         kind: "user",
         id: `user-${event.offset}`,
         text,
         timestampMs,
-      });
+      };
+      if (hasRunningStep) {
+        return { ...state, queuedUserMessages: [...state.queuedUserMessages, item] };
+      }
+      const base = hasRunningStep ? state : settleLive(state, timestampMs, ops);
+      return emitItem(base, ops, item);
     }
 
     case AGENT_CHAT_ASSISTANT_RESPONSE_ADDED: {
@@ -195,7 +205,11 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
     }
 
     case AGENT_LLM_REQUEST_REQUESTED: {
-      const live = ensureLive(state, event.offset, timestampMs);
+      const base =
+        state.queuedUserMessages.length === 0
+          ? state
+          : flushQueuedUserMessages(settleLive(state, timestampMs, ops), ops);
+      const live = ensureLive(base, event.offset, timestampMs);
       const model = readString(event, "model");
       const step: AgentUiLlmStep = {
         kind: "llm",
@@ -207,7 +221,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
         responseText: "",
         startedAtMs: timestampMs,
       };
-      return { ...state, live: { ...live, steps: [...live.steps, step] } };
+      return { ...base, live: { ...live, steps: [...live.steps, step] } };
     }
 
     case OPENAI_WS_REQUEST_STARTED:
@@ -228,7 +242,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       if (frameType === "response.output_text.delta" && delta !== "") {
         return updateLlmStep(state, llmRequestId, (step) => ({
           ...step,
-          responseText: step.responseText + delta,
+          responseText: step.status === "running" ? step.responseText + delta : step.responseText,
         }));
       }
       if (
@@ -238,13 +252,16 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       ) {
         return updateLlmStep(state, llmRequestId, (step) => ({
           ...step,
-          thinkingText: step.thinkingText + delta,
+          thinkingText: step.status === "running" ? step.thinkingText + delta : step.thinkingText,
         }));
       }
       if (frameType === "response.reasoning_summary_part.added") {
         return updateLlmStep(state, llmRequestId, (step) => ({
           ...step,
-          thinkingText: step.thinkingText === "" ? "" : `${step.thinkingText}\n\n`,
+          thinkingText:
+            step.status !== "running" || step.thinkingText === ""
+              ? step.thinkingText
+              : `${step.thinkingText}\n\n`,
         }));
       }
       return state;
@@ -258,8 +275,10 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       if (responseDelta === "" && thinkingDelta === "") return state;
       return updateLlmStep(state, llmRequestId, (step) => ({
         ...step,
-        responseText: step.responseText + responseDelta,
-        thinkingText: step.thinkingText + thinkingDelta,
+        responseText:
+          step.status === "running" ? step.responseText + responseDelta : step.responseText,
+        thinkingText:
+          step.status === "running" ? step.thinkingText + thinkingDelta : step.thinkingText,
       }));
     }
 
@@ -269,7 +288,9 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       if (llmRequestId == null || content == null) return state;
       // Authoritative full text: replaces whatever streamed in (or fills it
       // in for providers that never streamed).
-      return updateLlmStep(state, llmRequestId, (step) => ({ ...step, responseText: content }));
+      return updateLlmStep(state, llmRequestId, (step) =>
+        step.status === "running" ? { ...step, responseText: content } : step,
+      );
     }
 
     case AGENT_LLM_REQUEST_COMPLETED: {
@@ -283,19 +304,25 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
         isRecord(result?.error) && typeof result.error.message === "string"
           ? result.error.message
           : undefined;
-      return updateLlmStep(state, llmRequestId, (step) => ({
-        ...step,
-        status: "done",
-        outcome: status === "success" ? "completed" : "failed",
-        ...(typeof payload?.provider === "string" ? { provider: payload.provider } : {}),
-        ...(typeof payload?.durationMs === "number" ? { durationMs: payload.durationMs } : {}),
-        ...(usage.input == null ? {} : { inputTokens: usage.input }),
-        ...(usage.output == null ? {} : { outputTokens: usage.output }),
-        ...(errorMessage == null ? {} : { errorMessage }),
-        ...(typeof result?.providerResponseId === "string"
-          ? { providerResponseId: result.providerResponseId }
-          : {}),
-      }));
+      return updateLlmStep(state, llmRequestId, (step) =>
+        step.outcome === "cancelled"
+          ? step
+          : {
+              ...step,
+              status: "done",
+              outcome: status === "success" ? "completed" : "failed",
+              ...(typeof payload?.provider === "string" ? { provider: payload.provider } : {}),
+              ...(typeof payload?.durationMs === "number"
+                ? { durationMs: payload.durationMs }
+                : {}),
+              ...(usage.input == null ? {} : { inputTokens: usage.input }),
+              ...(usage.output == null ? {} : { outputTokens: usage.output }),
+              ...(errorMessage == null ? {} : { errorMessage }),
+              ...(typeof result?.providerResponseId === "string"
+                ? { providerResponseId: result.providerResponseId }
+                : {}),
+            },
+      );
     }
 
     case AGENT_LLM_REQUEST_CANCELLED: {
@@ -437,6 +464,14 @@ function settleLive(state: AgentUiState, endedAtMs: number, ops: AgentUiOp[]): A
     ),
   };
   return emitItem({ ...state, live: null }, ops, settled);
+}
+
+function flushQueuedUserMessages(state: AgentUiState, ops: AgentUiOp[]): AgentUiState {
+  let next: AgentUiState = { ...state, queuedUserMessages: [] };
+  for (const item of state.queuedUserMessages) {
+    next = emitItem(next, ops, item);
+  }
+  return next;
 }
 
 function updateLlmStep(

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronLeftIcon, XIcon } from "lucide-react";
+import { ChevronLeftIcon, DatabaseZapIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -59,16 +59,26 @@ export function StreamProcessorsPanel({
   metrics,
   eventCount,
   busy,
+  focusedKey,
+  onFocus,
+  onBack,
   onClose,
+  onClearClientDatabase,
 }: {
   presence: readonly AgentUiPresenceEntry[];
   metrics: RttMetrics;
   eventCount: number;
   busy: boolean;
+  /** Subscription key of the focused processor (URL-backed); null = overview. */
+  focusedKey: string | null;
+  onFocus: (subscriptionKey: string) => void;
+  onBack: () => void;
   onClose: () => void;
+  onClearClientDatabase: () => Promise<void>;
 }) {
-  const [focusKey, setFocusKey] = useState<string | null>(null);
-  const focused = presence.find((entry) => entry.subscriptionKey === focusKey) ?? null;
+  // A stale or never-connected key (e.g. after a reconnect) falls back to the
+  // overview rather than a blank detail pane.
+  const focused = presence.find((entry) => entry.subscriptionKey === focusedKey) ?? null;
 
   return (
     <aside className="absolute inset-y-0 right-0 z-30 flex w-full max-w-sm flex-col rounded-tl-2xl bg-background shadow-2xl">
@@ -78,16 +88,13 @@ export function StreamProcessorsPanel({
           metrics={metrics}
           eventCount={eventCount}
           busy={busy}
-          onFocus={setFocusKey}
+          focusedKey={focusedKey}
+          onFocus={onFocus}
           onClose={onClose}
+          onClearClientDatabase={onClearClientDatabase}
         />
       ) : (
-        <ProcessorDetail
-          entry={focused}
-          busy={busy}
-          onBack={() => setFocusKey(null)}
-          onClose={onClose}
-        />
+        <ProcessorDetail entry={focused} busy={busy} onBack={onBack} onClose={onClose} />
       )}
     </aside>
   );
@@ -98,16 +105,21 @@ function ProcessorsOverview({
   metrics,
   eventCount,
   busy,
+  focusedKey,
   onFocus,
   onClose,
+  onClearClientDatabase,
 }: {
   presence: readonly AgentUiPresenceEntry[];
   metrics: RttMetrics;
   eventCount: number;
   busy: boolean;
+  focusedKey: string | null;
   onFocus: (subscriptionKey: string) => void;
   onClose: () => void;
+  onClearClientDatabase: () => Promise<void>;
 }) {
+  const [clearState, setClearState] = useState<"idle" | "clearing" | "error">("idle");
   const points = sparklinePoints(metrics.spark, 368, 44);
   const area = `2,42 ${points} 366,42`;
 
@@ -152,6 +164,26 @@ function ProcessorsOverview({
             <MetricStat label="events/s" value={(0.4 + (metrics.rttNow % 7) / 10).toFixed(1)} />
             <MetricStat label="head" value={`#${eventCount}`} />
           </div>
+          <div className="mt-3 flex justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={clearState === "clearing"}
+              onClick={() => {
+                setClearState("clearing");
+                void onClearClientDatabase().catch(() => setClearState("error"));
+              }}
+              className="border-red-200 bg-background text-red-700 hover:border-red-300 hover:bg-red-50 hover:text-red-800 dark:border-red-900/70 dark:text-red-300 dark:hover:bg-red-950/30"
+            >
+              <DatabaseZapIcon className="size-3.5" />
+              {clearState === "clearing" ? "Clearing client DB..." : "Clear client DB"}
+            </Button>
+          </div>
+          {clearState === "error" ? (
+            <div className="mt-2 text-right text-xs text-red-600 dark:text-red-400">
+              Could not clear local client data.
+            </div>
+          ) : null}
         </div>
         <div>
           <div className="grid grid-cols-[minmax(0,1fr)_52px_44px] gap-1.5 px-3 pb-2 text-[10px] uppercase tracking-wider text-muted-foreground/70">
@@ -170,7 +202,11 @@ function ProcessorsOverview({
                   key={entry.subscriptionKey}
                   type="button"
                   onClick={() => onFocus(entry.subscriptionKey)}
-                  className="grid w-full grid-cols-[minmax(0,1fr)_52px_44px] items-center gap-1.5 rounded-xl px-3 py-2 text-left hover:bg-muted/40"
+                  className={cn(
+                    "grid w-full grid-cols-[minmax(0,1fr)_52px_44px] items-center gap-1.5 rounded-xl px-3 py-2 text-left hover:bg-muted/40",
+                    entry.subscriptionKey === focusedKey &&
+                      "bg-muted/60 ring-1 ring-inset ring-border",
+                  )}
                 >
                   <span className="flex min-w-0 items-center gap-2.5">
                     <PresenceAvatar entry={entry} busy={busy && isLlmish(entry)} />

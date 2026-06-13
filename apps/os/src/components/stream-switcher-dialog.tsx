@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
@@ -10,86 +10,94 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@iterate-com/ui/components/dialog";
+import { Field, FieldLabel } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { readStreamStateOnce, type StreamNavigator } from "~/lib/stream-navigation.ts";
-import { streamPathAncestors } from "~/lib/stream-links.ts";
+import { streamPathAncestors, streamPathParent } from "~/lib/stream-links.ts";
 
-// One path segment of the canonical StreamPath pattern (shared streams types).
-const STREAM_SEGMENT_PATTERN = /^[a-z0-9_-]+$/;
+// A full canonical StreamPath of at least one segment: leading slash, lowercase
+// segments separated by single slashes, no trailing slash.
+const STREAM_PATH_PATTERN = /^(?:\/[a-z0-9_-]+)+$/;
+
+// The destination input prefills with the parent of the current stream, so the
+// default action creates a *sibling* (type a leaf, hit Create). Keep typing
+// past another "/" to go deeper, or edit the prefix to land anywhere.
+function destinationPrefill(currentPath: StreamPathType) {
+  const parent = streamPathParent(currentPath);
+  return parent === "/" ? "/" : `${parent}/`;
+}
+
+// Normalize a typed path for validity/submit: trim, single leading slash, drop
+// any trailing slash. Returns null while the leaf is empty or a segment is
+// malformed — Create stays disabled until it resolves to a real new path.
+function normalizeDestination(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed === "" || trimmed.endsWith("/")) return null;
+  const candidate = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return STREAM_PATH_PATTERN.test(candidate) ? candidate : null;
+}
 
 /**
  * The ⌘K stream dialog, deliberately simple: the current stream with a form
- * to create a child under it, and the stream tree (expanded along the current
- * path) to click around. Streams are lazily created — navigating IS creating.
+ * to create/open a stream by path, and the stream tree (expanded along the
+ * current path) to click around. Streams are lazily created — navigating IS
+ * creating. The path field prefills with the current stream's parent, so the
+ * default is a sibling; edit the path to nest deeper or jump elsewhere.
  */
 export function StreamSwitcherDialog({
   open,
   onOpenChange,
   currentPath,
   navigator,
+  rootPath = StreamPath.parse("/"),
   scope,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   currentPath: StreamPathType;
   navigator: StreamNavigator;
+  rootPath?: StreamPathType;
   scope: string;
 }) {
   const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(new Set(["/"]));
-  const [childName, setChildName] = useState("");
+  const [destination, setDestination] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Opening reveals "where you are": every ancestor (and the current stream
-  // itself) starts expanded.
+  // itself) starts expanded, and the path field is seeded for a sibling with
+  // the cursor placed after the trailing slash, ready for the leaf.
   useEffect(() => {
     if (!open) return;
-    setExpandedPaths(new Set(["/", ...streamPathAncestors(currentPath)]));
-    setChildName("");
-  }, [open, currentPath]);
+    setExpandedPaths(new Set([rootPath, ...streamPathAncestors(currentPath)]));
+    setDestination(destinationPrefill(currentPath));
+    requestAnimationFrame(() => {
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+  }, [open, currentPath, rootPath]);
 
   function openStream(path: string) {
     onOpenChange(false);
     navigator.onOpenPath(StreamPath.parse(path));
   }
 
-  const childNameValid = STREAM_SEGMENT_PATTERN.test(childName);
+  const normalizedDestination = normalizeDestination(destination);
+  const destinationValid = normalizedDestination != null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-0 p-0 sm:max-w-lg">
-        <DialogHeader className="border-b px-4 py-3">
-          <DialogTitle className="font-mono text-sm font-medium">{currentPath}</DialogTitle>
-          <DialogDescription className="sr-only">
-            Create a child stream or open another stream
-          </DialogDescription>
-          <form
-            className="flex items-center gap-2 pt-1"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!childNameValid) return;
-              openStream(`${currentPath === "/" ? "" : currentPath}/${childName}`);
-            }}
-          >
-            <Input
-              value={childName}
-              onChange={(event) => setChildName(event.target.value)}
-              placeholder="new-child-stream"
-              aria-label="New child stream name"
-              className="h-8 font-mono text-xs"
-            />
-            <Button type="submit" size="sm" disabled={!childNameValid}>
-              Create
-            </Button>
-          </form>
-          {childName !== "" && !childNameValid ? (
-            <p className="text-xs text-muted-foreground">
-              Names are lowercase letters, digits, - and _.
-            </p>
-          ) : null}
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Streams</DialogTitle>
+          <DialogDescription className="sr-only">Create or open a stream by path</DialogDescription>
+          <p className="font-mono text-xs text-muted-foreground">{currentPath}</p>
         </DialogHeader>
-        <div className="max-h-80 overflow-y-auto p-2">
+        <div className="max-h-80 overflow-y-auto">
           <StreamTreeItem
-            path="/"
+            path={rootPath}
             depth={0}
             tree={{
               currentPath,
@@ -106,6 +114,33 @@ export function StreamSwitcherDialog({
                 }),
             }}
           />
+        </div>
+        <div className="border-t pt-3">
+          <form
+            className="flex w-full items-center gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (normalizedDestination == null) return;
+              openStream(normalizedDestination);
+            }}
+          >
+            <Field className="min-w-0 flex-1 gap-1">
+              <FieldLabel htmlFor="stream-switcher-destination" className="sr-only">
+                Stream path to create or open
+              </FieldLabel>
+              <Input
+                id="stream-switcher-destination"
+                ref={inputRef}
+                value={destination}
+                onChange={(event) => setDestination(event.target.value)}
+                placeholder="/agents/web/new-stream"
+                className="h-8 font-mono text-xs"
+              />
+            </Field>
+            <Button type="submit" size="sm" disabled={!destinationValid}>
+              Create stream
+            </Button>
+          </form>
         </div>
       </DialogContent>
     </Dialog>

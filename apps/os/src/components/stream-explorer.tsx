@@ -38,13 +38,13 @@ export function StreamExplorerTreePage({
  */
 export function StreamExplorerDetail({
   currentPath,
-  onOpenPath,
-  source,
+  showCommandPaletteTrigger = false,
   streamView,
 }: {
   currentPath: StreamPathType;
-  onOpenPath: (streamPath: StreamPathType) => void;
-  source: StreamTreeSource;
+  onOpenPath?: (streamPath: StreamPathType) => void;
+  showCommandPaletteTrigger?: boolean;
+  source?: StreamTreeSource;
   streamView: Omit<ProjectStreamViewProps, "streamPath">;
 }) {
   return (
@@ -52,7 +52,7 @@ export function StreamExplorerDetail({
       <ProjectStreamView
         {...streamView}
         streamPath={currentPath}
-        streamNavigator={{ source, onOpenPath }}
+        showCommandPaletteTrigger={showCommandPaletteTrigger}
       />
     </section>
   );

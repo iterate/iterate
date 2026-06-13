@@ -14,7 +14,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/mcp")({
     const routeConfig = await getPublicRouteConfig();
 
     return {
-      breadcrumb: "MCP",
+      breadcrumb: "/mcp",
       project,
       routeConfig,
     };

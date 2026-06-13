@@ -25,7 +25,7 @@ import {
 export const AGENT_UI_FEED_TABLE = "agent_feed_items";
 
 /** Bumped into the writer-lock name so a schema change lets a fresh tab take over. */
-export const AGENT_UI_SCHEMA_VERSION = 2;
+export const AGENT_UI_SCHEMA_VERSION = 4;
 
 const AgentUiProcessorContractBase = defineProcessorContract({
   slug: "agent-ui",

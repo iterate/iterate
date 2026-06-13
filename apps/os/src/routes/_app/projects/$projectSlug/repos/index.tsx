@@ -51,7 +51,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
     const routeConfig = await getPublicRouteConfig();
 
     return {
-      breadcrumb: "Repos",
+      breadcrumb: "/repos",
       project,
       routeConfig,
     };

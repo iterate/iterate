@@ -1,17 +1,23 @@
-import { Suspense, useMemo } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Suspense } from "react";
+import { createFileRoute } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
-import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { getBrowserItx } from "~/itx/use-itx.ts";
-import type { StreamTreeSource } from "~/components/stream-tree-browser.tsx";
 import { projectAgentRuntimeStateQueryOptions } from "~/lib/project-route-query.ts";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
+import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 import { orpc } from "~/orpc/client.ts";
 
+const AGENTS_ROOT = StreamPath.parse("/agents");
+
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams/$")({
-  staticData: { hideAppHeader: true },
+  staticData: {
+    hideAppHeader: true,
+    commandPalette: { stream: { mode: "agent", rootPath: AGENTS_ROOT } },
+  },
+  validateSearch: StreamViewSearch,
   params: {
     parse: (raw) => ({
       _splat: streamPathFromSplat(raw._splat),
@@ -55,21 +61,7 @@ function ProjectAgentDetailPage() {
 
 function ProjectAgentDetailContent() {
   const params = Route.useParams();
-  const navigate = useNavigate();
   const { project, streamPath } = Route.useLoaderData();
-  // itx backs ONLY the ⌘K stream tree, and is dialed lazily when the tree
-  // subscribes (not via the suspending useItx) so itx being slow or down
-  // degrades just the navigator, never the feed. getBrowserItx shares the
-  // same pooled socket useItx would.
-  const source = useMemo<StreamTreeSource>(
-    () => (path: StreamPathType) => ({
-      async onStateChange(onState) {
-        const itx = await getBrowserItx(project.id);
-        return itx.streams.get(path).onStateChange(onState);
-      },
-    }),
-    [project.id],
-  );
   // The stream view subscribes live, so a send needs no cache invalidation —
   // the new events arrive over the socket.
   const sendMessage = useMutation(orpc.project.agents.sendMessage.mutationOptions());
@@ -82,27 +74,32 @@ function ProjectAgentDetailContent() {
     });
   }
 
-  function openStream(path: StreamPathType) {
-    void navigate({
-      to: "/projects/$projectSlug/agents/streams/$",
-      params: {
-        projectSlug: params.projectSlug,
-        _splat: path,
-      },
-    });
+  async function interruptAgentMessage(llmRequestId: number) {
+    await getBrowserItx(project.id).then((itx) =>
+      itx.streams.get(streamPath).append({
+        type: "events.iterate.com/agent/llm-request-cancelled",
+        payload: {
+          phase: "requested",
+          llmRequestId,
+          reason: "interrupted-by-user-input",
+        },
+      }),
+    );
   }
 
   return (
     <ProjectStreamView
+      autoFocusMessageComposer
       emptyLabel="No events on this agent stream yet."
       messageComposer={{
+        onInterrupt: interruptAgentMessage,
         onSubmit: submitAgentMessage,
         placeholder: "Message this agent",
       }}
       projectSlug={params.projectSlug}
       projectSlugOrId={project.id}
+      showCommandPaletteTrigger
       streamPath={streamPath}
-      streamNavigator={{ source, onOpenPath: openStream }}
     />
   );
 }

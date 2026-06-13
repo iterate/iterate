@@ -2,12 +2,14 @@ import { resolveMcpBaseUrl } from "~/lib/mcp-base-url.ts";
 
 export function publicMcpRequestUrl(request: Request) {
   const url = new URL(request.url);
-  const forwardedHost = request.headers.get("x-forwarded-host")?.replace(/:\d+$/, "");
+  const forwardedHost = request.headers.get("x-forwarded-host");
   const forwardedProto = request.headers.get("x-forwarded-proto")?.replace(/:$/, "");
 
   if (forwardedProto) url.protocol = `${forwardedProto}:`;
-  if (forwardedHost) url.host = forwardedHost;
-  if (forwardedHost && !forwardedHost.includes(":")) url.port = "";
+  if (forwardedHost) {
+    url.host = forwardedHost;
+    if (!hasExplicitPort(forwardedHost)) url.port = "";
+  }
 
   return url.toString();
 }
@@ -71,4 +73,10 @@ function sameOriginOrLocalhostEquivalent(requestUrl: URL, baseUrl: URL) {
 
 function isLocalhostEquivalent(hostname: string) {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+function hasExplicitPort(host: string) {
+  const trimmedHost = host.trim();
+  if (trimmedHost.startsWith("[")) return /\]:\d+$/.test(trimmedHost);
+  return /:\d+$/.test(trimmedHost);
 }

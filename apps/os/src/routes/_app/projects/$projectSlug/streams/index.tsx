@@ -10,7 +10,6 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
   // subscriptions once the socket connects.
   ssr: false,
   loader: ({ context }) => ({
-    breadcrumb: "Tree",
     project: context.project,
   }),
   component: ProjectStreamsIndexPage,

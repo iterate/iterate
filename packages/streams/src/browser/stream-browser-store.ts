@@ -57,6 +57,12 @@ export type BrowserProcessorConfig = {
   slug: string;
   /** Bumped into the writer-lock name so a schema migration lets a fresh tab take over. */
   schemaVersion: number;
+  /**
+   * When true, a changed schemaVersion clears this processor's projection tables
+   * and checkpoint before replay. Use for processors whose projection table
+   * shares a SQLite file and cannot own PRAGMA user_version.
+   */
+  resetOnSchemaVersionChange?: boolean;
   /** Tables this processor owns, cleared together when the local mirror is discarded. */
   tables: string[];
   /** Create the concrete processor once the browser runtime has a stream connection. */
@@ -379,7 +385,11 @@ function createStreamRuntime(
 
   async function discardLocalMirror() {
     await streamDatabase.clearTables(tables);
-    await deleteBrowserProcessorState({ sql, processorSlug: slug, subscriptionKey });
+    // Projection tables are shared by every browser subscription for this
+    // processor slug. If the table is discarded, every checkpoint for that
+    // slug is invalid too; leaving an older subscription_key row behind lets
+    // readers that pick the highest checkpoint resurrect stale reduced state.
+    await deleteBrowserProcessorState({ sql, processorSlug: slug });
     await streamDatabase.compact();
     snapshot = {
       ...snapshot,
@@ -406,9 +416,26 @@ function createStreamRuntime(
     const serverIncarnation = coreProcessorState.createdAt;
     reconciledIncarnation = serverIncarnation;
     const localIncarnation = await streamDatabase.readMirrorIncarnation(slug);
+    const localSchemaVersion = args.resetOnSchemaVersionChange
+      ? await streamDatabase.readMirrorSchemaVersion(slug)
+      : schemaVersion;
+
+    if (localSchemaVersion !== schemaVersion) {
+      console.warn(
+        `[stream ${args.streamPath} ${slug}] Local ${slug} schema version changed; rebuilding mirror.`,
+        { localSchemaVersion, schemaVersion },
+      );
+      await discardLocalMirror();
+      await streamDatabase.writeMirrorSchemaVersion(slug, schemaVersion);
+      await streamDatabase.writeMirrorIncarnation(slug, serverIncarnation);
+      return;
+    }
 
     if (localMaxOffset <= 0) {
       // Fresh mirror: nothing to discard, just record which incarnation we are tracking.
+      if (args.resetOnSchemaVersionChange) {
+        await streamDatabase.writeMirrorSchemaVersion(slug, schemaVersion);
+      }
       await streamDatabase.writeMirrorIncarnation(slug, serverIncarnation);
       return;
     }
@@ -435,6 +462,9 @@ function createStreamRuntime(
       await discardLocalMirror();
     }
     // Record (or backfill) the incarnation we are now reconciled against.
+    if (args.resetOnSchemaVersionChange) {
+      await streamDatabase.writeMirrorSchemaVersion(slug, schemaVersion);
+    }
     await streamDatabase.writeMirrorIncarnation(slug, serverIncarnation);
   }
 

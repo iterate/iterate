@@ -47,6 +47,10 @@ type LlmRequestRequestedEvent = Extract<
   OpenAiWsConsumedEvent,
   { type: "events.iterate.com/agent/llm-request-requested" }
 >;
+type LlmRequestCancelledEvent = Extract<
+  OpenAiWsConsumedEvent,
+  { type: "events.iterate.com/agent/llm-request-cancelled" }
+>;
 type JsonValue = z.infer<ReturnType<typeof z.json>>;
 
 const OpenAiResponsesStreamMessage = z.looseObject({
@@ -116,6 +120,11 @@ export class OpenAiWsProcessor extends StreamProcessor<
    */
   #connection: OpenAiWsConnection | null = null;
   #previousResponseId: string | null = null;
+  #activeRequest: {
+    llmRequestId: number;
+    connection: OpenAiWsConnection | null;
+  } | null = null;
+  #cancelledLlmRequestIds = new Set<number>();
 
   /**
    * Requests this instance has taken responsibility for executing. The DO
@@ -143,6 +152,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
     switch (event.type) {
       case "events.iterate.com/agent/llm-request-requested":
       case "events.iterate.com/stream/subscriber-connected":
+      case "events.iterate.com/agent/llm-request-cancelled":
         return state;
       case "events.iterate.com/openai-ws/config-updated":
         return { ...state, model: event.payload.model };
@@ -183,6 +193,9 @@ export class OpenAiWsProcessor extends StreamProcessor<
         return;
       case "events.iterate.com/agent/llm-request-requested":
         this.#startLlmRequest({ event, state, runInBackground: args.runInBackground });
+        return;
+      case "events.iterate.com/agent/llm-request-cancelled":
+        this.#handleLlmRequestCancelled(event);
         return;
       case "events.iterate.com/stream/subscriber-connected":
         // The reconcile trigger: a fresh connection means some host's runtime
@@ -358,7 +371,25 @@ export class OpenAiWsProcessor extends StreamProcessor<
   }
 
   #markConnectionClosed(closedConnection: OpenAiWsConnection) {
-    if (this.#connection?.id === closedConnection.id) this.#connection = null;
+    if (this.#connection?.id !== closedConnection.id) return;
+    this.#connection = null;
+    this.#previousResponseId = null;
+  }
+
+  #handleLlmRequestCancelled(event: LlmRequestCancelledEvent) {
+    if (event.payload.phase !== "requested") return;
+    const llmRequestId = event.payload.llmRequestId;
+    this.#cancelledLlmRequestIds.add(llmRequestId);
+    if (this.#activeRequest?.llmRequestId !== llmRequestId) return;
+    this.#previousResponseId = null;
+    this.#activeRequest.connection?.client.close({
+      code: 1000,
+      reason: "llm-request-cancelled",
+    });
+  }
+
+  #clearActiveRequest(llmRequestId: number) {
+    if (this.#activeRequest?.llmRequestId === llmRequestId) this.#activeRequest = null;
   }
 
   async #executeOpenAiWsRequest(args: {
@@ -367,12 +398,26 @@ export class OpenAiWsProcessor extends StreamProcessor<
   }): Promise<void> {
     const llmRequestId = args.event.offset;
     if (args.state.requests[String(llmRequestId)]?.status === "completed") return;
+    if (this.#cancelledLlmRequestIds.has(llmRequestId)) {
+      await this.#appendProviderFailed({
+        durationMs: 0,
+        llmRequestId,
+        message: "LLM request was cancelled before provider execution started.",
+        sourceEvent: args.event,
+      });
+      this.#cancelledLlmRequestIds.delete(llmRequestId);
+      return;
+    }
 
     const startedAt = Date.now();
+    this.#activeRequest = { llmRequestId, connection: null };
 
     let connection: OpenAiWsConnection;
     try {
       connection = await this.#getConnection(args.event);
+      if (this.#activeRequest?.llmRequestId === llmRequestId) {
+        this.#activeRequest = { llmRequestId, connection };
+      }
     } catch (error) {
       const durationMs = Date.now() - startedAt;
       const failure = {
@@ -406,6 +451,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
           result: failure,
         },
       });
+      this.#clearActiveRequest(llmRequestId);
       return;
     }
 
@@ -488,6 +534,32 @@ export class OpenAiWsProcessor extends StreamProcessor<
       } catch (error) {
         this.#markConnectionClosed(connection);
         const durationMs = Date.now() - startedAt;
+        if (this.#cancelledLlmRequestIds.has(llmRequestId)) {
+          await this.#append({
+            type: "events.iterate.com/openai-ws/websocket-disconnected",
+            idempotencyKey: buildProcessorIdempotencyKey({
+              processor: OpenAiWsProcessorContract,
+              key: `websocket-disconnected/${connection.id}`,
+              sourceEvent: args.event,
+            }),
+            payload: {
+              connectionId: connection.id,
+              code: 1000,
+              reason: "llm-request-cancelled",
+              wasClean: true,
+            },
+          });
+          await this.#appendProviderFailed({
+            connectionId: connection.id,
+            durationMs,
+            llmRequestId,
+            message: "LLM request was cancelled.",
+            sourceEvent: args.event,
+          });
+          this.#cancelledLlmRequestIds.delete(llmRequestId);
+          this.#clearActiveRequest(llmRequestId);
+          return;
+        }
         const failure = {
           status: "failure" as const,
           error: { message: stringifyError(error) },
@@ -531,6 +603,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
             result: failure,
           },
         });
+        this.#clearActiveRequest(llmRequestId);
         return;
       }
 
@@ -580,6 +653,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
             },
             sourceEvent: args.event,
           });
+          this.#clearActiveRequest(llmRequestId);
           return;
         }
         await this.#append({
@@ -622,6 +696,7 @@ export class OpenAiWsProcessor extends StreamProcessor<
             },
           },
         });
+        this.#clearActiveRequest(llmRequestId);
         return;
       }
 
@@ -663,9 +738,36 @@ export class OpenAiWsProcessor extends StreamProcessor<
             result: failure,
           },
         });
+        this.#clearActiveRequest(llmRequestId);
         return;
       }
     }
+  }
+
+  async #appendProviderFailed(args: {
+    connectionId?: string;
+    durationMs: number;
+    llmRequestId: number;
+    message: string;
+    sourceEvent: LlmRequestRequestedEvent;
+  }) {
+    await this.#append({
+      type: "events.iterate.com/openai-ws/llm-request-completed",
+      idempotencyKey: buildProcessorIdempotencyKey({
+        processor: OpenAiWsProcessorContract,
+        key: "provider-llm-request-completed",
+        sourceEvent: args.sourceEvent,
+      }),
+      payload: {
+        ...(args.connectionId == null ? {} : { connectionId: args.connectionId }),
+        llmRequestId: args.llmRequestId,
+        durationMs: args.durationMs,
+        result: {
+          status: "failure",
+          error: { message: args.message },
+        },
+      },
+    });
   }
 
   async #appendProviderCompleted(args: {

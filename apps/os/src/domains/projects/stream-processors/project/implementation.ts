@@ -40,10 +40,17 @@ import {
 } from "~/domains/secrets/example-secret.ts";
 import { ensureProjectRepoInfoForProject } from "~/domains/repos/entrypoints/repo-capability.ts";
 import type { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import { PROJECT_REPO_SLUG } from "~/domains/repos/project-repo.ts";
+import {
+  ONBOARDING_AGENT_INPUT,
+  projectOnboardingBootstrapMarkdown,
+} from "~/domains/repos/project-repo-template.ts";
 import type { AppConfig } from "~/config.ts";
 
 export { PROJECT_STREAM_PATH, projectFacts, ProjectProcessorContract } from "./contract.ts";
 export type { ProjectFacts, ProjectProcessorState } from "./contract.ts";
+
+const ONBOARDING_AGENT_PATH = StreamPath.parse("/agents/onboarding");
 
 /**
  * High-level deps from the hosting DO: bindings, its loopback exports, and
@@ -94,6 +101,9 @@ export class ProjectProcessor extends StreamProcessor<
       case "events.iterate.com/project/create-completed":
         if (!this.#ownEvent(event.payload)) return state;
         return { ...state, phase: "ready" };
+      case "events.iterate.com/project/onboarding-completed":
+        if (!this.#ownEvent(event.payload)) return state;
+        return { ...state, onboarding: "completed" };
       default:
         return state;
     }
@@ -125,9 +135,12 @@ export class ProjectProcessor extends StreamProcessor<
         },
       });
       await this.#ensureProjectRepo({ projectId, slug });
+      await this.#seedOnboardingBootstrap({ projectId, slug });
       await this.#ensureExampleEgressSecret(projectId);
       await this.#ensureAgentsRoot(projectId);
       await this.#writeAgentsRootRule(projectId);
+      await this.#ensureOnboardingAgent(projectId);
+      await this.#appendOnboardingAgentInput(projectId);
       await this.ctx.stream.append({
         event: {
           type: "events.iterate.com/project/create-completed",
@@ -196,6 +209,29 @@ export class ProjectProcessor extends StreamProcessor<
     });
   }
 
+  async #seedOnboardingBootstrap(input: { projectId: string; slug: string }) {
+    const repo = await getInitializedDoStub({
+      allowCreate: false,
+      namespace: this.deps.env.REPO,
+      name: {
+        projectId: input.projectId,
+        repoSlug: PROJECT_REPO_SLUG,
+      },
+    });
+    if (!repo) throw new Error(`Project repo for ${input.projectId} was not initialized.`);
+
+    await repo.commitFiles({
+      author: { name: "Iterate", email: "support@iterate.com" },
+      changes: [
+        {
+          path: "BOOTSTRAP.md",
+          content: projectOnboardingBootstrapMarkdown(input),
+        },
+      ],
+      message: "Seed onboarding bootstrap",
+    });
+  }
+
   async #ensureExampleEgressSecret(projectId: string) {
     const secrets = getSecretsCapability({
       exports: this.deps.exports as Parameters<typeof getSecretsCapability>[0]["exports"],
@@ -222,6 +258,33 @@ export class ProjectProcessor extends StreamProcessor<
         agentPath: AGENTS_STREAM_PATH,
         projectId,
       }),
+    });
+  }
+
+  async #ensureOnboardingAgent(projectId: string) {
+    await getInitializedDoStub({
+      allowCreate: true,
+      namespace: this.deps.env.AGENT,
+      name: getAgentDurableObjectName({
+        agentPath: ONBOARDING_AGENT_PATH,
+        projectId,
+      }),
+    });
+  }
+
+  async #appendOnboardingAgentInput(projectId: string) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.deps.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: projectId,
+      path: ONBOARDING_AGENT_PATH,
+    });
+
+    await stream.append({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: `project-onboarding-agent-input:${projectId}`,
+      payload: {
+        content: ONBOARDING_AGENT_INPUT,
+      },
     });
   }
 

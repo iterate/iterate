@@ -38,7 +38,21 @@ export function PathBreadcrumbs() {
     )
     .at(-1);
 
-  const routeCrumbs = matches.flatMap((match) => {
+  const activeProjectSlug = matches
+    .map((match) => match.params)
+    .map((params) =>
+      typeof params === "object" && params && "projectSlug" in params
+        ? params.projectSlug
+        : undefined,
+    )
+    .filter((projectSlug): projectSlug is string => typeof projectSlug === "string")
+    .at(-1);
+  const isProjectScoped = activeProjectSlug != null;
+  const breadcrumbMatches = isProjectScoped
+    ? matches.filter((match) => !isProjectCollectionOrLayoutMatch(match))
+    : matches;
+
+  const routeCrumbs = breadcrumbMatches.flatMap((match) => {
     const staticBreadcrumb = (match.staticData as RouteBreadcrumbStaticData | undefined)
       ?.breadcrumb;
     const dynamicBreadcrumb = (match.loaderData as RouteBreadcrumbLoaderData | undefined)
@@ -46,6 +60,17 @@ export function PathBreadcrumbs() {
     const label = dynamicBreadcrumb ?? staticBreadcrumb;
 
     if (!label) {
+      return [];
+    }
+
+    if (
+      isProjectScoped &&
+      isProjectCollectionOrLayoutBreadcrumb({
+        activeProjectSlug,
+        label,
+        pathname: match.pathname,
+      })
+    ) {
       return [];
     }
 
@@ -131,6 +156,30 @@ export function PathBreadcrumbs() {
         {streamBreadcrumb ? <StreamChildrenBreadcrumb streamBreadcrumb={streamBreadcrumb} /> : null}
       </BreadcrumbList>
     </Breadcrumb>
+  );
+}
+
+function isProjectCollectionOrLayoutMatch(match: ReturnType<typeof useMatches>[number]) {
+  return (
+    match.id === "/_app/projects" ||
+    match.id === "/_app/projects/" ||
+    match.id === "/_app/projects/$projectSlug" ||
+    match.id === "/_app/projects/$projectSlug/"
+  );
+}
+
+function isProjectCollectionOrLayoutBreadcrumb(input: {
+  activeProjectSlug: string | undefined;
+  label: string;
+  pathname: string;
+}) {
+  const normalizedPathname = input.pathname.replace(/\/+$/, "");
+  return (
+    input.label === "Projects" ||
+    (input.activeProjectSlug != null && input.label === input.activeProjectSlug) ||
+    normalizedPathname === "/projects" ||
+    (input.activeProjectSlug != null &&
+      normalizedPathname === `/projects/${input.activeProjectSlug}`)
   );
 }
 

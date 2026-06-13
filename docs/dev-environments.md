@@ -42,24 +42,12 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   `DOPPLER_CONFIG` env var → `doppler setup` scope for the worktree → shared
   `dev`. The scope (via the repo's `doppler.yaml`) is the intended mechanism;
   the env var is a one-off override.
-- **Which config?** Scope every worktree to `dev` by default — the shared
-  fully-local config works for everyone, any number of parallel worktrees,
-  with full sign-in (Google and email OTP) via `auth.iterate-dev.com`. Reach
-  for `dev_<you>` in exactly **one** worktree, and only when you need inbound
-  webhooks (practically: Slack — see
-  [Tunnels and webhooks](#tunnels-and-webhooks)).
-
-  `dev_<you>` is not a different kind of environment; it is `dev` plus
-  precisely two things: a _tunnel identity_ (`APP_CONFIG_BASE_URL =
-https://os.iterate-dev-<you>.com`, fixed port 5173, a cloudflared tunnel
-  claiming that hostname, `iterate-dev-<you>.app` project hostnames) and your
-  _personal Slack app credentials_ (`APP_CONFIG_INTEGRATIONS__SLACK`, whose
-  delivery URL on Slack's side points at that tunnel hostname). Auth is
-  identical to `dev`: same `os-local-dev` client, same
-  `auth.iterate-dev.com`. Only one worktree can usefully hold the tunnel at a
-  time, so scope everything else (especially agent worktrees) to `dev`. The
-  startup banner prints `Stage: <config>` — if it doesn't say `dev`, you're
-  not fully local.
+- **Which config?** `dev`, `dev_jonas`, `dev_misha`, and `dev_rahul` all run
+  the same fully-local OS server: random localhost port, per-worktree
+  `.alchemy/` state, and human sign-in through `auth.iterate-dev.com`.
+  Personal `dev_<you>` configs may still carry personal integration secrets,
+  but they should not carry app/MCP/project-host URL overrides. The old
+  `os.iterate-dev-<you>.com` hostnames are no longer part of local dev.
 
   Don't (re)introduce legacy `ITERATE_OAUTH_*` / `ITERATE_AUTH_JWKS` vars in
   these configs: an explicit JWKS in Doppler overrides the deploy-time fetch
@@ -70,7 +58,7 @@ https://os.iterate-dev-<you>.com`, fixed port 5173, a cloudflared tunnel
 
 - The chosen port is baked into the env (`APP_CONFIG_BASE_URL`) at startup and
   recorded in **`apps/os/.alchemy/dev-server.json`**
-  (`{pid, port, baseUrl, logPath}`).
+  (`{pid, port, baseUrl, logPath, stoppedAt?}`).
   Scripts and CLIs that need "the local dev server" read that file — no
   flags, no guessing. One dev server per worktree: a second `pnpm dev` refuses
   while the first is alive. The file appears ~10–15s before the port actually
@@ -87,6 +75,33 @@ https://os.iterate-dev-<you>.com`, fixed port 5173, a cloudflared tunnel
 - Local MCP is deliberately path-mounted on the curlable app origin:
   `http://localhost:<port>/api/__mcp`. Do not use `mcp.localhost` for local
   scripts unless you have configured local wildcard DNS yourself.
+  Smoke it with the MCP Inspector from `apps/os`:
+
+  ```bash
+  doppler run --project os --config dev -- sh -lc '
+    BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
+    npx -y @modelcontextprotocol/inspector --cli "$BASE/api/__mcp" \
+      --transport http \
+      --method tools/list \
+      --header "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET"
+  '
+  ```
+
+  If `tools/list` works, call the smallest harmless tool invocation:
+
+  ```bash
+  doppler run --project os --config dev -- sh -lc '
+    BASE=$(node -p "require(\"./.alchemy/dev-server.json\").baseUrl")
+    npx -y @modelcontextprotocol/inspector --cli "$BASE/api/__mcp" \
+      --transport http \
+      --method tools/call \
+      --tool-name exec_js \
+      --tool-arg project=<project-slug> \
+      --tool-arg "code=async (itx) => { return await itx.describe(); }" \
+      --header "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET"
+  '
+  ```
+
 - Sign in as a human with Google or email OTP via `auth.iterate-dev.com` — the
   shared `os-local-dev` OAuth client accepts any localhost port. Your identity
   there persists across every worktree and environment on your machine.
@@ -324,5 +339,5 @@ keep that URL working.
 ## Slack end-to-end testing
 
 See [slack-smoke-testing.md](slack-smoke-testing.md). Slack requires public
-HTTPS webhooks, so this runs against deployed environments / tunnel-backed
-dev, not plain-localhost dev.
+HTTPS webhooks, so this runs against deployed environments or a local dev
+server exposed through captun, not plain-localhost dev.

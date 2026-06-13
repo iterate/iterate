@@ -83,4 +83,22 @@ describe("matchMcpRequestUrl", () => {
       }),
     ).toEqual({ relativePathname: "/" });
   });
+
+  it("preserves forwarded localhost ports for local path-mounted MCP requests", () => {
+    const requestUrl = publicMcpRequestUrl(
+      new Request("http://localhost:5176/api/__mcp", {
+        headers: {
+          "x-forwarded-host": "localhost:5176",
+        },
+      }),
+    );
+
+    expect(requestUrl).toBe("http://localhost:5176/api/__mcp");
+    expect(
+      matchMcpRequestUrl({
+        appBaseUrl: "http://localhost:5176",
+        requestUrl,
+      }),
+    ).toEqual({ relativePathname: "/" });
+  });
 });

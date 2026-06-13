@@ -1,11 +1,12 @@
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronRightIcon, CodeIcon } from "lucide-react";
+import { BanIcon, ChevronRightIcon, CodeIcon } from "lucide-react";
 import type {
   AgentUiActivity,
   AgentUiCodeStep,
   AgentUiItem,
   AgentUiLlmStep,
+  AgentUiMessageItem,
   AgentUiState,
   AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
@@ -22,6 +23,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/u
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { useVirtualizedTailScroll } from "~/lib/use-virtualized-tail-scroll.ts";
 
 /**
  * The clean agent chat feed: user message → activity ("Ran code 2× · 3
@@ -39,12 +41,16 @@ export function AgentFeedView({
   search = "",
   emptyLabel = "No messages yet.",
   isPending = false,
+  isInterruptingQueuedMessages = false,
+  onInterruptQueuedMessages,
 }: {
   database: StreamBrowserDatabase;
   liveState: AgentUiState | null;
   search?: string;
   emptyLabel?: string;
   isPending?: boolean;
+  isInterruptingQueuedMessages?: boolean;
+  onInterruptQueuedMessages?: () => Promise<void> | void;
 }) {
   const query = search.trim().toLowerCase();
   const countResult = useStreamQuery(
@@ -56,15 +62,22 @@ export function AgentFeedView({
   );
   const itemCount = Number(countResult.data[0]?.count ?? 0);
   const live = liveState?.live ?? null;
+  const queuedUserMessages = liveState?.queuedUserMessages ?? [];
   const scrollRef = useRef<HTMLDivElement>(null);
-  const stickToBottomRef = useRef(true);
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(new Set());
 
   const virtualizer = useVirtualizer({
     count: itemCount,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 56,
+    // Agent feed rows are append-only and addressed by dense local_index, so
+    // the virtual index is a stable item key for TanStack's end anchoring.
+    getItemKey: (index) => index,
+    anchorTo: "end",
+    followOnAppend: true,
+    scrollEndThreshold: 80,
     overscan: 16,
+    directDomUpdates: true,
   });
 
   const virtualItems = virtualizer.getVirtualItems();
@@ -113,23 +126,23 @@ export function AgentFeedView({
   // when settled rows land and on every live streaming tick.
   const liveSignature =
     live == null
-      ? ""
+      ? queuedUserMessages.map((message) => `${message.id}:${message.text.length}`).join("|")
       : live.steps
           .map((step) =>
             step.kind === "llm"
               ? `${step.id}:${step.thinkingText.length}:${step.responseText.length}:${step.status}`
               : `${step.id}:${step.code.length}:${step.status}`,
           )
-          .join("|");
-  useLayoutEffect(() => {
-    if (!stickToBottomRef.current) return;
-    const frame = window.requestAnimationFrame(() => {
-      const scrollContainer = scrollRef.current;
-      if (scrollContainer == null) return;
-      scrollContainer.scrollTop = scrollContainer.scrollHeight;
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [itemCount, liveSignature]);
+          .join("|") +
+        "|" +
+        queuedUserMessages.map((message) => `${message.id}:${message.text.length}`).join("|");
+  useVirtualizedTailScroll({
+    contentSignature: liveSignature,
+    count: itemCount + (live == null ? 0 : 1) + queuedUserMessages.length,
+    resetKey: database,
+    scrollElementRef: scrollRef,
+    virtualizer,
+  });
 
   function toggleExpanded(id: string) {
     setExpandedIds((previous) => {
@@ -141,16 +154,9 @@ export function AgentFeedView({
   }
 
   return (
-    <div
-      ref={scrollRef}
-      className="min-h-0 flex-1 overflow-y-auto"
-      onScroll={(event) => {
-        const el = event.currentTarget;
-        stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-      }}
-    >
+    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-5 md:px-6">
-        {itemCount === 0 && live == null ? (
+        {itemCount === 0 && live == null && queuedUserMessages.length === 0 ? (
           <Empty className="min-h-48">
             <EmptyHeader>
               {isPending ? <Spinner className="size-4" /> : null}
@@ -185,6 +191,13 @@ export function AgentFeedView({
         </div>
         {live == null ? null : (
           <AgentLiveActivity live={live} expandedIds={expandedIds} onToggle={toggleExpanded} />
+        )}
+        {queuedUserMessages.length === 0 ? null : (
+          <QueuedMessagesPanel
+            messages={queuedUserMessages}
+            isInterrupting={isInterruptingQueuedMessages}
+            onInterrupt={onInterruptQueuedMessages}
+          />
         )}
       </div>
     </div>
@@ -246,6 +259,8 @@ function AgentActivityRow({
   expandedIds: ReadonlySet<string>;
   onToggle: (id: string) => void;
 }) {
+  const interrupted = activityWasInterrupted(activity);
+
   return (
     <div className="flex flex-col py-0.5">
       <Button
@@ -256,7 +271,11 @@ function AgentActivityRow({
         onClick={() => onToggle(activity.id)}
         className="-ml-2.5 self-start font-medium text-muted-foreground"
       >
-        <CodeIcon className="size-3 text-muted-foreground/60" />
+        {interrupted ? (
+          <BanIcon className="size-3 text-red-600 dark:text-red-400" />
+        ) : (
+          <CodeIcon className="size-3 text-muted-foreground/60" />
+        )}
         {activitySummary(activity)}
         <ChevronRightIcon
           className={cn(
@@ -281,12 +300,71 @@ function AgentActivityRow({
   );
 }
 
+function QueuedMessagesPanel({
+  messages,
+  isInterrupting,
+  onInterrupt,
+}: {
+  messages: AgentUiMessageItem[];
+  isInterrupting: boolean;
+  onInterrupt?: () => Promise<void> | void;
+}) {
+  return (
+    <div className="flex flex-col gap-2 py-3">
+      <div className="flex items-center gap-3">
+        <div className="h-px flex-1 bg-border" />
+        <span className="font-mono text-xs text-muted-foreground">
+          Queued messages for after the next agent turn
+        </span>
+        <div className="h-px flex-1 bg-border" />
+      </div>
+      {messages.map((message) => (
+        <Message key={message.id} from="user" className="py-1">
+          <MessageContent className="group-[.is-user]:rounded-2xl">
+            <div className="whitespace-pre-wrap leading-6">{message.text}</div>
+          </MessageContent>
+        </Message>
+      ))}
+      {onInterrupt == null ? null : (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void onInterrupt()}
+          disabled={isInterrupting}
+          className="self-end border-red-200 bg-red-50 text-red-700 shadow-sm hover:border-red-300 hover:bg-red-100 hover:text-red-800 dark:border-red-900/70 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-950/50"
+        >
+          {isInterrupting ? (
+            <Spinner className="size-3" />
+          ) : (
+            <BanIcon className="size-3 text-current" />
+          )}
+          Interrupt agent and send now
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function activitySummary(activity: AgentUiActivity): string {
   const codeCount = activity.steps.filter((step) => step.kind === "code").length;
   const requestCount = activity.steps.filter((step) => step.kind === "llm").length;
+  const interrupted = activity.steps.some(
+    (step) => step.kind === "llm" && step.outcome === "cancelled",
+  );
+  const interruptedWithPartialResponse = activity.steps.some(
+    (step) =>
+      step.kind === "llm" && step.outcome === "cancelled" && llmStepHasPartialResponse(step),
+  );
   const parts: string[] = [];
   if (codeCount > 0) parts.push(`Ran code ${codeCount}×`);
   parts.push(`${requestCount} request${requestCount === 1 ? "" : "s"}`);
+  if (interrupted) {
+    parts.push(
+      interruptedWithPartialResponse
+        ? "interrupted (click to see partial response)"
+        : "interrupted",
+    );
+  }
   const totalMs =
     activity.endedAtMs == null ? null : Math.max(0, activity.endedAtMs - activity.startedAtMs);
   if (totalMs != null && totalMs > 0) parts.push(formatSeconds(totalMs));
@@ -353,8 +431,11 @@ function stepMeta(step: AgentUiStep): string {
   }
   if (step.durationMs != null) parts.push(formatSeconds(step.durationMs));
   if (step.outcome === "failed") parts.push("failed");
-  if (step.outcome === "cancelled") parts.push("cancelled");
   return parts.join(" · ");
+}
+
+function llmStepHasPartialResponse(step: AgentUiLlmStep): boolean {
+  return step.thinkingText !== "" || step.responseText !== "";
 }
 
 function LlmStepDetail({ step }: { step: AgentUiLlmStep }) {
@@ -461,6 +542,19 @@ function AgentLiveActivity({
   // A waiting activity (agent idle, no chat message yet) keeps its steps on
   // screen — the next round rolls into it — but parks the spinner.
   const working = liveStep != null || live.status === "running";
+  const showStepRail =
+    doneSteps.length > 0 || (liveStep != null && liveStepHasVisibleContent(liveStep));
+
+  if (!working && activityWasInterrupted(live)) {
+    return (
+      <AgentActivityRow
+        activity={live}
+        expanded={expandedIds.has(live.id)}
+        expandedIds={expandedIds}
+        onToggle={onToggle}
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col py-0.5">
@@ -472,19 +566,30 @@ function AgentLiveActivity({
           </span>
         </div>
       ) : null}
-      <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
-        {doneSteps.map((step) => (
-          <AgentActivityStep
-            key={step.id}
-            step={step}
-            expanded={expandedIds.has(step.id)}
-            onToggle={onToggle}
-          />
-        ))}
-        {liveStep == null ? null : <LiveStepStream step={liveStep} />}
-      </div>
+      {showStepRail ? (
+        <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
+          {doneSteps.map((step) => (
+            <AgentActivityStep
+              key={step.id}
+              step={step}
+              expanded={expandedIds.has(step.id)}
+              onToggle={onToggle}
+            />
+          ))}
+          {liveStep == null ? null : <LiveStepStream step={liveStep} />}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function activityWasInterrupted(activity: AgentUiActivity): boolean {
+  return activity.steps.some((step) => step.kind === "llm" && step.outcome === "cancelled");
+}
+
+function liveStepHasVisibleContent(step: AgentUiStep) {
+  if (step.kind === "code") return step.code !== "";
+  return step.thinkingText !== "" || step.responseText !== "";
 }
 
 function liveActivityLabel(live: AgentUiActivity, liveStep: AgentUiStep | undefined): string {
@@ -514,12 +619,6 @@ function LiveStepStream({ step }: { step: AgentUiStep }) {
 
   return (
     <div className="flex flex-col gap-1.5 py-1">
-      {step.thinkingText === "" && step.responseText === "" ? (
-        <div className="px-1.5 text-sm italic text-muted-foreground">
-          Thinking
-          <StreamingCursor />
-        </div>
-      ) : null}
       {step.thinkingText === "" ? null : (
         <div className="max-w-2xl whitespace-pre-wrap px-1.5 text-sm italic leading-relaxed text-muted-foreground">
           {step.thinkingText}

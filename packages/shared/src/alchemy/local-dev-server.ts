@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 
@@ -13,10 +13,10 @@ import { join } from "node:path";
  *
  * The port is picked at startup and baked into `APP_CONFIG_BASE_URL` (env is
  * the source of truth — request-sniffing doesn't work for cron/scheduled
- * work). `.alchemy/dev-server.json` records {pid, port, baseUrl, logPath} so
- * CLIs and scripts can find "the" dev server without flags. One dev server
- * per worktree: a second `pnpm dev` refuses to start while the recorded pid is
- * alive.
+ * work). `.alchemy/dev-server.json` records {pid, port, baseUrl, logPath,
+ * stoppedAt?} so CLIs and scripts can find "the" dev server without flags.
+ * One dev server per worktree: a second `pnpm dev` refuses to start while the
+ * recorded pid is alive.
  */
 
 export type DevServerInfo = {
@@ -25,6 +25,7 @@ export type DevServerInfo = {
   baseUrl: string;
   logPath?: string;
   startedAt: string;
+  stoppedAt?: string;
 };
 
 const DEV_SERVER_INFO_FILENAME = "dev-server.json";
@@ -53,10 +54,25 @@ export function readLocalDevServerInfo(
     ) {
       return null;
     }
-    if (opts.requireLive && !isPidAlive(parsed.pid)) return null;
+    if (opts.requireLive && (parsed.stoppedAt || !isPidAlive(parsed.pid))) return null;
     return parsed;
   } catch {
     return null;
+  }
+}
+
+export function releaseLocalDevServerInfo(appDir: string, pid: number) {
+  const path = devServerInfoPath(appDir);
+  try {
+    const current = readLocalDevServerInfo(appDir);
+    if (current?.pid === pid) {
+      writeFileSync(
+        path,
+        `${JSON.stringify({ ...current, stoppedAt: new Date().toISOString() }, null, 2)}\n`,
+      );
+    }
+  } catch {
+    // best effort — a stale file is detected by pid liveness anyway
   }
 }
 
@@ -107,7 +123,7 @@ async function pickFreePort(preferred?: number) {
  *
  * Mutates `env`: sets `PORT`, `HOST`, and `APP_CONFIG_BASE_URL`
  * (`http://localhost:<port>`), writes the discovery file, and installs exit
- * handlers that clean it up.
+ * handlers that mark the server stopped while preserving the last port.
  */
 export async function prepareLocalDevServer(
   env: Record<string, string | undefined>,
@@ -119,7 +135,7 @@ export async function prepareLocalDevServer(
 
   const appDir = opts.appDir ?? process.cwd();
   const existing = readLocalDevServerInfo(appDir);
-  if (existing && existing.pid !== process.pid && isPidAlive(existing.pid)) {
+  if (existing && existing.pid !== process.pid && !existing.stoppedAt && isPidAlive(existing.pid)) {
     throw new Error(
       `A dev server for this worktree is already running (pid ${existing.pid}, ${existing.baseUrl}). ` +
         `One dev server per worktree: stop it first, or work in another worktree. ` +
@@ -154,16 +170,7 @@ export async function prepareLocalDevServer(
   mkdirSync(join(appDir, ".alchemy"), { recursive: true });
   writeFileSync(path, `${JSON.stringify(info, null, 2)}\n`);
 
-  const cleanup = () => {
-    try {
-      const current = readLocalDevServerInfo(appDir);
-      if (current?.pid === process.pid) {
-        rmSync(path, { force: true });
-      }
-    } catch {
-      // best effort — a stale file is detected by pid liveness anyway
-    }
-  };
+  const cleanup = () => releaseLocalDevServerInfo(appDir, process.pid);
   process.once("exit", cleanup);
   process.once("SIGINT", () => {
     cleanup();

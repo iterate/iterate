@@ -36,7 +36,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")
     ]);
 
     return {
-      breadcrumb: "Integrations",
+      breadcrumb: "/integrations",
       project,
     };
   },

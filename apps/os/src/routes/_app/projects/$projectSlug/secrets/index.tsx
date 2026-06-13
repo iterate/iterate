@@ -38,7 +38,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/")({
     await context.queryClient.ensureQueryData(projectSecretsListQueryOptions(project.id));
 
     return {
-      breadcrumb: "Secrets",
+      breadcrumb: "/secrets",
       project,
     };
   },
