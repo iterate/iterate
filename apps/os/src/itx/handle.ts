@@ -48,7 +48,10 @@ import {
   PLATFORM_PROJECT_CONTEXT_ID,
 } from "./platform-context.ts";
 import { GLOBAL_CONTEXT_ID, type ProjectAccess } from "./refs.ts";
-import type { CapabilityProvision as CapabilityProvisionContract } from "./types.ts";
+import type {
+  CapabilityProvision as CapabilityProvisionContract,
+  KnownCapabilities,
+} from "./types.ts";
 import type { AppConfig } from "~/config.ts";
 import {
   countAllProjects,
@@ -96,6 +99,23 @@ export type ItxRuntime = {
   env: Env;
   /** The parent worker's loopback exports (ctx.exports). */
   exports: Record<string, (options: { props: Record<string, unknown> }) => unknown>;
+  /**
+   * The connect-time principal — ONLY threaded onto the GLOBAL handle (minted
+   * at connect, never restored in an isolate, so this live value never has to
+   * serialize). It exists for exactly one job: org-membership project creation
+   * (itx.projects.create) for non-admin users, which needs their org claims.
+   * Absent everywhere else; the access set is the permission model for all
+   * other paths.
+   */
+  principal?: ItxUserPrincipal | null;
+};
+
+/** The slice of the connect-time user principal the global create path needs:
+ * the org claims to authorize "create only in an org you're in", and the
+ * userId the auth worker mints/adopts as. */
+export type ItxUserPrincipal = {
+  userId: string;
+  organizations: { slug: string }[];
 };
 
 /** Whether `prop` resolves through a getter anywhere on the prototype chain. */
@@ -295,7 +315,11 @@ export class ItxHandle extends RpcTarget {
     };
   }
 
-  /** Fallthrough target — also reachable explicitly as itx.capability("name"). */
+  /** Fallthrough target — also reachable explicitly as itx.capability("name").
+   * A known cap name (merged into KnownCapabilities) resolves to its typed
+   * stub; any other name falls through to `unknown`. */
+  capability<K extends keyof KnownCapabilities>(name: K): KnownCapabilities[K];
+  capability(name: string): unknown;
   capability(name: string): unknown {
     return new PathProxy(async ({ path, args }) => {
       return await this.#itx().invoke({ args, path: [name, ...path] });
@@ -529,12 +553,37 @@ export class ItxProjects extends RpcTarget {
   }
 
   /**
-   * Admin-only for now: org-membership project creation stays in oRPC until
-   * that flow moves over (DECISIONS.md D7).
+   * Create a project. Two paths:
+   *
+   *  - ADMIN handle (access "all"): the operator/recovery path — auth mints a
+   *    fresh prj_ id (or an explicit one is adopted), no owning org.
+   *  - NON-ADMIN user (org claims threaded onto the GLOBAL handle): the
+   *    product path the dashboard uses — create only in an organization the
+   *    user belongs to, via the auth worker's createForOrganization (the same
+   *    flow the oRPC handler used). Mirrors project-directory.ts.
+   *
+   * The principal only rides the global handle, so this path needs no project
+   * context — it is the one create that runs before any narrowing.
    */
-  async create(input: { id?: string; slug: string }) {
-    this.requireAllAccess("create projects");
+  async create(input: { id?: string; slug: string; organizationSlug?: string }) {
     const db = this.db();
+
+    // Non-admin user with org claims: create in one of their orgs. Auth is the
+    // id authority — createForOrganization mints prj_ and we adopt it.
+    if (this.runtime.access !== "all") {
+      const principal = this.requireUserPrincipalForCreate();
+      const organizationSlug = resolveCreateOrganizationSlug(principal, input.organizationSlug);
+      const created = await createAuthWorkerServiceClient(
+        { config: this.runtime.config },
+        { asUserId: principal.userId },
+      ).internal.project.createForOrganization({
+        name: input.slug,
+        organizationSlug,
+        slug: input.slug,
+      });
+      return await this.finishCreate(db, { id: created.id, slug: created.slug });
+    }
+
     // Auth is the canonical minter of the one prj_ id space — even this
     // admin-only operator/recovery path (no owning auth org) round-trips
     // through it. A supplied id must already be a project id (legacy
@@ -553,10 +602,15 @@ export class ItxProjects extends RpcTarget {
           config: this.runtime.config,
         }).internal.project.mintProjectId()
       ).id;
+    return await this.finishCreate(db, { id, slug: input.slug });
+  }
 
+  /** Shared tail of create: idempotent insert + Project DO bootstrap. */
+  private async finishCreate(db: ReturnType<typeof this.db>, input: { id: string; slug: string }) {
+    const { id, slug } = input;
     const existingById = await getProjectById(db, { id });
     if (existingById) {
-      if (existingById.slug !== input.slug) {
+      if (existingById.slug !== slug) {
         throw new ItxError({
           code: "CONFLICT",
           details: { existingSlug: existingById.slug, id },
@@ -565,17 +619,17 @@ export class ItxProjects extends RpcTarget {
       }
       return toProjectSummary(existingById);
     }
-    if (await getProjectBySlug(db, { slug: input.slug })) {
+    if (await getProjectBySlug(db, { slug })) {
       throw new ItxError({
         code: "CONFLICT",
-        details: { slug: input.slug },
-        message: `A project with slug ${input.slug} already exists.`,
+        details: { slug },
+        message: `A project with slug ${slug} already exists.`,
       });
     }
 
-    await insertProject(db, { id, slug: input.slug });
+    await insertProject(db, { id, slug });
     try {
-      await projectStub(this.runtime.env, id).createProject({ projectId: id, slug: input.slug });
+      await projectStub(this.runtime.env, id).createProject({ projectId: id, slug });
     } catch (error) {
       await deleteProject(db, { id }).catch((cleanupError) => {
         console.error(
@@ -586,7 +640,23 @@ export class ItxProjects extends RpcTarget {
       throw error;
     }
     const row = await getProjectById(db, { id });
-    return toProjectSummary(row ?? { id, slug: input.slug });
+    return toProjectSummary(row ?? { id, slug });
+  }
+
+  private requireUserPrincipalForCreate() {
+    const principal = this.runtime.principal;
+    if (!principal) {
+      // A non-admin handle with no threaded principal cannot create: this is
+      // the operator/recovery posture without "all" access, or a narrowed
+      // (project) handle that never carries the connect principal.
+      throw new ItxError({
+        code: "FORBIDDEN",
+        message:
+          "Creating a project requires either admin access or a connect-time user principal " +
+          "with organization membership. Create from the global itx handle while logged in.",
+      });
+    }
+    return principal;
   }
 
   async remove(input: { id: string }) {
@@ -747,6 +817,34 @@ export class ItxProjects extends RpcTarget {
 
 function isUniqueConstraintError(error: unknown) {
   return error instanceof Error && error.message.includes("UNIQUE constraint failed");
+}
+
+/** Choose the org to create in: the requested one (must be a member) or, when
+ * omitted, the user's single org. Mirrors project-directory.ts'
+ * resolveOrganizationSlugForCreate, in ItxError terms. */
+function resolveCreateOrganizationSlug(
+  principal: ItxUserPrincipal,
+  requestedSlug: string | undefined,
+): string {
+  const organizations = principal.organizations;
+  if (requestedSlug) {
+    const organization = organizations.find((candidate) => candidate.slug === requestedSlug);
+    if (!organization) {
+      throw new ItxError({
+        code: "FORBIDDEN",
+        message: `Organization ${requestedSlug} is not available to this user.`,
+      });
+    }
+    return organization.slug;
+  }
+  if (organizations.length === 1) return organizations[0]!.slug;
+  throw new ItxError({
+    code: "BAD_REQUEST",
+    message:
+      organizations.length === 0
+        ? "Project creation requires organization membership."
+        : "Pass organizationSlug to choose which organization should own the project.",
+  });
 }
 
 function toProjectSummary(row: { id: string; slug: string; [key: string]: unknown }) {

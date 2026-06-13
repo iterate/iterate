@@ -283,7 +283,10 @@ export interface ItxBuiltins {
   describe(): Promise<ItxDescription>;
 
   /** Explicit form of the fallthrough: `itx.capability("slack")` ≡
-   * `itx.slack`. Useful when the name is computed or shadowed by a built-in. */
+   * `itx.slack`. A known cap name (merged into {@link KnownCapabilities})
+   * resolves to its typed stub; any other name falls through to `unknown`.
+   * Useful when the name is computed or shadowed by a built-in. */
+  capability<K extends keyof KnownCapabilities>(name: K): KnownCapabilities[K];
   capability(name: string): unknown;
 
   /**
@@ -690,8 +693,18 @@ export interface ItxProjects {
     }[];
     total: number;
   }>;
-  /** Admin principals only. */
-  create(input: { id?: string; slug: string }): Promise<{ id: string; slug: string }>;
+  /**
+   * Create a project. An ADMIN handle takes the operator/recovery path
+   * (optional explicit `id`, no owning org). A non-admin USER handle (the
+   * global handle minted with the connect principal's org claims) creates in
+   * an organization the user belongs to — `organizationSlug` chooses which, or
+   * is inferred when the user has exactly one org.
+   */
+  create(input: {
+    id?: string;
+    slug: string;
+    organizationSlug?: string;
+  }): Promise<{ id: string; slug: string }>;
   /** Admin principals only. */
   remove(input: { id: string }): Promise<{ deleted: boolean; id: string; ok: true }>;
 }

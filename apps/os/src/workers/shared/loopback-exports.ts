@@ -15,7 +15,12 @@
  * LOOPBACK_UNION bindings in alchemy.run.ts.
  */
 
+// Side-effect import: pulls the KnownCapabilities declaration merge for the
+// first-party platform defaults into every worker's compilation graph.
+import "~/itx/known-capabilities.ts";
+
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
+export { AgentsCapability } from "~/domains/agents/entrypoints/agents-capability.ts";
 export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-capability.ts";
 export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
 export { IntegrationsCapability } from "~/domains/secrets/entrypoints/integrations-capability.ts";

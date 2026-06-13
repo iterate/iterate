@@ -44,16 +44,15 @@ type IntegrationProvider = "google" | "slack";
  *     from. `config.baseUrl` must therefore be set in this deployment's config
  *     (it always is in non-localhost configs).
  *
- *  2. startOAuthFlow needs the userId that the callback re-verifies
- *     (integration-api.ts `requireCallbackUser`: the user who completes the
- *     OAuth callback must equal the user recorded in the OAuth state). The itx
- *     capability layer has NO principal — it is project-scoped only. So userId
- *     is taken as an argument here, with the firm contract that it is the
- *     connection-AUTHENTICATED user (the principal the itx WebSocket session
- *     authenticated), NOT a value the browser chose. The callback's
- *     requireCallbackUser check is the real security backstop regardless.
- *     Threading the connection principal into itx is a follow-up; until then
- *     the route handler that holds the verified principal supplies it.
+ *  2. startOAuthFlow takes a userId argument. The itx capability layer has NO
+ *     principal — it is project-scoped only — so the caller supplies it, and
+ *     in practice that is the BROWSER session's userId (browser-supplied, not
+ *     authority). This is fine because userId is not a permission here: it is
+ *     only the user the OAuth state is bound to, and the callback's
+ *     `requireCallbackUser` check (integration-api.ts) is the binding/backstop
+ *     — it rejects unless the user who completes the OAuth flow matches the
+ *     userId recorded in the signed state. That check is what makes a forged
+ *     userId useless.
  */
 export class IntegrationsCapability extends WorkerEntrypoint<
   IntegrationsCapabilityEnv,
@@ -109,7 +108,11 @@ export class IntegrationsCapability extends WorkerEntrypoint<
   async startOAuthFlow(input: {
     provider: IntegrationProvider;
     callbackUrl?: string;
-    /** The connection-authenticated user (see class docs) — never browser-supplied. */
+    /** The user to bind the OAuth state to. This IS browser-supplied (the
+     * caller passes the browser session's userId) — it is NOT authority. The
+     * real backstop is the callback's `requireCallbackUser` check, which
+     * rejects unless the user who completes the OAuth flow matches the userId
+     * recorded in the signed state here. */
     userId: string;
   }): Promise<{ authorizationUrl: string }> {
     const config = this.config();

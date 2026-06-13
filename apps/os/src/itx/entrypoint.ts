@@ -9,7 +9,7 @@
 // happens HERE and at connect-time auth (fetch.ts) — nowhere else.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { ItxHandle, type ItxRuntime } from "./handle.ts";
+import { ItxHandle, type ItxRuntime, type ItxUserPrincipal } from "./handle.ts";
 import { replayPathCall, type PathCall } from "./itx.ts";
 import { resolveDialableTargets } from "./dial.ts";
 import { contextAddress, dialContext, parseContextRef, projectContextRef } from "./coordinates.ts";
@@ -28,6 +28,10 @@ export async function resolveItx(input: {
   env: Env;
   exports: ItxRuntime["exports"];
   props: ItxProps;
+  /** The connect-time principal, threaded onto the GLOBAL handle ONLY (it is
+   * minted here, not restored from serialized props). Used solely by
+   * itx.projects.create's org-membership path for non-admin users. */
+  principal?: ItxUserPrincipal | null;
 }): Promise<ItxHandle> {
   const config = parseConfig(input.env);
   const ref = input.props.context;
@@ -43,6 +47,7 @@ export async function resolveItx(input: {
       contextRef: ref,
       env: input.env,
       exports: input.exports,
+      principal: input.principal ?? null,
       projectId: null,
     });
   }

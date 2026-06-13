@@ -39,8 +39,9 @@ describe("createSocketSuspenseCache", () => {
 
     deaths.get("prj_1")!();
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(pool.peek("prj_1")).toBeUndefined();
 
+    // Eviction is observable through get(): the post-death get() returns a
+    // NEW entry (and dials again), never the dead one.
     const second = pool.get("prj_1");
     expect(second).not.toBe(first);
     expect(dials()).toBe(2);
@@ -54,7 +55,9 @@ describe("createSocketSuspenseCache", () => {
     firstDeath(); // evicts the first entry
     const second = pool.get("prj_1");
     firstDeath(); // stale: must not touch the second entry
-    expect(pool.peek("prj_1")).toBe(second);
+    // The successor is still the live entry: a repeat get() returns it, no
+    // fresh dial (identity proves it was not evicted).
+    expect(pool.get("prj_1")).toBe(second);
   });
 
   test("unsubscribed listeners stop firing", () => {

@@ -129,8 +129,8 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
       "Project integrations (slack, google): itx.integrations.getConnection({ provider }) " +
       "returns connection status (connected, displayName, scopes, redacted token summary); " +
       "startOAuthFlow({ provider, callbackUrl?, userId }) returns { authorizationUrl } to begin " +
-      "the provider OAuth flow (userId must be the connection-authenticated user, never browser " +
-      "input — the callback re-verifies it); disconnect({ provider }) revokes the connection and " +
+      "the provider OAuth flow (userId is the browser session's user — it only binds the OAuth " +
+      "state; the callback's requireCallbackUser check is the real backstop); disconnect({ provider }) revokes the connection and " +
       "appends the disconnected event to the project's /integrations/<provider> stream.",
     name: "integrations",
   },
@@ -140,6 +140,19 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
       "The project's git repos: itx.repos.ensureProjectRepoInfo({ projectSlug }), " +
       "list(), create({ slug }), get({ slug }) — repo handles expose commitFiles/readFiles/readLog.",
     name: "repos",
+  },
+  {
+    // The project's agents. sendMessage FORCE-WAKES the agent Durable Object
+    // (ensureStartedAndCaughtUp) before appending, so chat works even for a
+    // cold or never-started/legacy agent — a raw stream append would not.
+    address: { entrypoint: "AgentsCapability", type: "rpc", worker: { type: "loopback" } },
+    instructions:
+      "The project's agents: itx.agents.sendMessage({ agentPath, message, channel? }) wakes " +
+      "the agent (cold/legacy included) and posts a user message, returning { event }; " +
+      "list() returns the agent paths under /agents; listPresets() and " +
+      "configurePreset({ basePath, model, provider, systemPrompt?, runOpts?, events? }) read " +
+      "and write the agent-path-prefix presets.",
+    name: "agents",
   },
   {
     // The workspace is provided EXPLICITLY (props.workspaceId) — workspaces

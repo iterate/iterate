@@ -12,8 +12,8 @@
 //   - No refcounting, no teardown on unmount: a context's socket lives until
 //     it dies or the tab closes.
 //   - Socket close → the map entry is evicted and subscribed components
-//     re-render (useSyncExternalStore), find no entry, dial fresh, and
-//     re-suspend. There is no backoff and no resume: re-fetching current
+//     re-render (an effect subscription bumps a reducer), find no entry, dial
+//     fresh, and re-suspend. There is no backoff and no resume: re-fetching current
 //     state IS the recovery — every kernel subscription pushes current state
 //     on open (DECISIONS D20), so onStateChange re-fires with current state
 //     on the new socket.
@@ -31,7 +31,7 @@
 // The repl keeps its own createBrowserReplSession (itx-repl.tsx): it needs
 // dispose/reconnect-on-demand semantics this singleton deliberately lacks.
 
-import { use, useCallback, useSyncExternalStore } from "react";
+import { use, useEffect, useReducer } from "react";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import type { ItxHandle } from "./handle.ts";
 
@@ -66,10 +66,6 @@ export function createSocketSuspenseCache<T>(input: {
       entries.set(key, created);
       return created;
     },
-    /** The current entry without creating one (useSyncExternalStore snapshot). */
-    peek(context?: string): Entry | undefined {
-      return entries.get(keyOf(context));
-    },
     /** Re-render trigger: fires when this context's entry is evicted. */
     subscribe(context: string | undefined, listener: () => void): () => void {
       const key = keyOf(context);
@@ -93,24 +89,27 @@ function dialItx(context: string | undefined, onDead: () => void): Promise<RpcSt
   );
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(url);
-  const { promise, resolve, reject } = Promise.withResolvers<RpcStub<ItxHandle>>();
+  const { promise, resolve } = Promise.withResolvers<RpcStub<ItxHandle>>();
   // A dial that never connects (e.g. the worker restarting behind the dev
   // proxy) must not suspend consumers forever: time out and close, so the
   // close handler below evicts the entry and the next render re-dials.
   const dialTimeout = setTimeout(() => {
-    reject(new Error(`The itx dial to ${url.pathname} timed out.`));
     socket.close();
   }, ITX_DIAL_TIMEOUT_MS);
   socket.addEventListener("open", () => {
     clearTimeout(dialTimeout);
     resolve(newWebSocketRpcSession<ItxHandle>(socket));
   });
-  // `close` fires both for a failed dial (reject the pending promise; no-op
-  // once resolved) and for a later death of an established socket — either
-  // way the entry is dead and must go.
+  // `close` fires both for a failed dial and for a later death of an
+  // established socket — either way the entry is dead and must be evicted.
+  // We deliberately never reject the suspense promise: rejecting makes
+  // `use()` THROW to an error boundary (blanking the subtree on a transient
+  // dial failure) instead of re-suspending. Eviction + onDead notify is the
+  // recovery — the next render gets a fresh entry and re-dials. A pre-open
+  // death leaves this promise pending forever, but its entry is already gone,
+  // so nothing reads it again; getBrowserItx callers re-call and re-dial.
   socket.addEventListener("close", () => {
     clearTimeout(dialTimeout);
-    reject(new Error(`The itx WebSocket to ${url.pathname} closed.`));
     onDead();
   });
   return promise;
@@ -147,17 +146,9 @@ export function getBrowserItx(context?: string): Promise<RpcStub<ItxHandle>> {
  */
 export function useItx(context?: string): RpcStub<ItxHandle> {
   assertBrowser("useItx");
-  // Socket death evicts the pool entry; this store subscription is what turns
-  // that into a re-render, so the component below re-dials and re-suspends.
-  const subscribe = useCallback(
-    (listener: () => void) => pool.subscribe(context, listener),
-    [context],
-  );
-  useSyncExternalStore(subscribe, () => pool.peek(context), neverOnTheServer);
+  // Socket death evicts the pool entry; this subscription bumps the reducer,
+  // which re-renders so the component below re-dials (pool.get) and re-suspends.
+  const [, redial] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => pool.subscribe(context, redial), [context]);
   return use(pool.get(context).promise);
-}
-
-function neverOnTheServer(): undefined {
-  // assertBrowser threw long before useSyncExternalStore could ask.
-  return undefined;
 }
