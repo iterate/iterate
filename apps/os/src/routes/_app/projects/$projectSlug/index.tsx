@@ -6,25 +6,15 @@ import { Button } from "@iterate-com/ui/components/button";
 import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import type { ProjectProcessorState } from "~/domains/projects/stream-processors/project/contract.ts";
-import {
-  projectCustomHostnameStatusQueryOptions,
-  projectLifecycleStateQueryOptions,
-} from "~/lib/project-route-query.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
+import { useItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/")({
   ssr: false,
   loader: async ({ context }) => {
-    const { project } = context;
-    if (project.customHostname) {
-      await context.queryClient.ensureQueryData(
-        projectCustomHostnameStatusQueryOptions(project.id),
-      );
-    }
-
     return {
       breadcrumb: "Home",
-      project,
+      project: context.project,
       routeConfig: await getPublicRouteConfig(),
     };
   },
@@ -34,8 +24,15 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/")({
 function ProjectHomePage() {
   const params = Route.useParams();
   const { project, routeConfig } = Route.useLoaderData();
+  // The project lifecycle snapshot lives on the Project DO's reduced-state
+  // processor — reachable through the project handle as
+  // `itx.project.processor.snapshot()` (replaces the oRPC `project.lifecycleState`).
+  // A plain useQuery + refetchInterval polls it; the panel below reads hostname
+  // status the same way, so there is no SSR loader prefetch.
+  const itx = useItx();
   const lifecycleStateQuery = useQuery({
-    ...projectLifecycleStateQueryOptions(project.id),
+    queryKey: ["itx", "project-lifecycle", project.id],
+    queryFn: () => itx.project.processor.snapshot() as Promise<unknown>,
     refetchInterval: 2_500,
   });
   const lifecycleSnapshot = lifecycleStateQuery.data as

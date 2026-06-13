@@ -51,8 +51,6 @@
     "@opentui/core": "0.1.102",
     "@opentui/react": "0.1.102",
     "@orpc/client": "1.13.14",
-    "@orpc/contract": "1.13.14",
-    "@orpc/openapi-client": "1.13.14",
     "@orpc/server": "1.13.14",
     "better-auth": "1.4.3",
     "react": "^19.2.0",
@@ -62,7 +60,6 @@
   },
   "devDependencies": {
     "@iterate-com/auth-contract": "workspace:*",
-    "@iterate-com/os-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
     "@iterate-com/streams": "workspace:*",
     "@iterate-com/ui": "workspace:*",

@@ -15,8 +15,8 @@ import {
   DefaultNotFoundComponent,
 } from "@iterate-com/ui/components/route-defaults";
 import { AppConfig } from "../config.ts";
-import { orpcClient } from "../orpc/client.ts";
 import appCss from "../styles.css?url";
+import { getPublicConfigServerFn } from "~/lib/public-route-config.ts";
 import { fetchRootAuthSnapshot } from "~/lib/root-auth-snapshot.ts";
 import type { RouterContext } from "~/router-context.ts";
 
@@ -38,7 +38,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
     return await context.queryClient.ensureQueryData(rootAuthSnapshotQueryOptions);
   },
   loader: async ({ context }) => {
-    const config = PublicConfigSchema.parse(await orpcClient.__internal.publicConfig({}));
+    const config = PublicConfigSchema.parse(JSON.parse(await getPublicConfigServerFn()));
     return {
       config,
       authSession: context.authSession ?? { authenticated: false },

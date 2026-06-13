@@ -4,7 +4,7 @@ import { requireOrganizationMemberForSession } from "../lib/auth.ts";
 import { AppSidebar } from "~/components/app-sidebar.tsx";
 import { GlobalCommandPalette } from "~/components/global-command-palette.tsx";
 import { PathBreadcrumbs } from "~/components/path-breadcrumbs.tsx";
-import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
+import { myProjectsQueryOptions } from "~/lib/project-server-fns.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import type { AppRouteStaticData } from "~/lib/route-breadcrumbs.ts";
 import { getSidebarDefaultOpen } from "~/lib/sidebar-state.ts";
@@ -13,7 +13,7 @@ export const Route = createFileRoute("/_app")({
   beforeLoad: ({ context, location }) =>
     requireOrganizationMemberForSession(context.authSession, location, context.iterateAuthIssuer),
   loader: async ({ context }) => {
-    await context.queryClient.ensureQueryData(projectsListQueryOptions({ limit: 100, offset: 0 }));
+    await context.queryClient.ensureQueryData(myProjectsQueryOptions());
 
     return {
       routeConfig: await getPublicRouteConfig(),

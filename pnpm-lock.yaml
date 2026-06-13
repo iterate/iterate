@@ -483,9 +483,6 @@ importers:
       '@iterate-com/auth-contract':
         specifier: workspace:*
         version: link:../auth-contract
-      '@iterate-com/os-contract':
-        specifier: workspace:*
-        version: link:../os-contract
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -504,27 +501,9 @@ importers:
       '@opentui/react':
         specifier: 0.1.102
         version: 0.1.102(react-devtools-core@7.0.1)(react@19.2.4)(stage-js@1.0.2)(typescript@5.9.3)(web-tree-sitter@0.25.10)(ws@8.19.0)
-      '@orpc/client':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)
-      '@orpc/contract':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)
-      '@orpc/openapi':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@orpc/openapi-client':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
         specifier: 1.13.14
         version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
-      '@orpc/tanstack-query':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)(@orpc/client@1.13.14(@opentelemetry/api@1.9.0))(@tanstack/query-core@5.91.0)
-      '@orpc/zod':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)(@orpc/contract@1.13.14(@opentelemetry/api@1.9.0))(@orpc/server@1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0))(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)(zod@4.3.6)
       '@tanstack/react-devtools':
         specifier: 0.10.0
         version: 0.10.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(csstype@3.2.3)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(solid-js@1.9.11)
@@ -573,9 +552,6 @@ importers:
       comlink:
         specifier: ^4.4.2
         version: 4.4.2
-      crossws:
-        specifier: ^0.4.4
-        version: 0.4.4(srvx@0.11.12)
       dedent:
         specifier: ^1.7.2
         version: 1.7.2
@@ -688,25 +664,6 @@ importers:
       ws:
         specifier: 8.19.0
         version: 8.19.0
-
-  apps/os-contract:
-    dependencies:
-      '@iterate-com/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
-      '@orpc/contract':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
-    devDependencies:
-      '@types/node':
-        specifier: ^25.0.10
-        version: 25.6.0
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
 
   apps/semaphore:
     dependencies:
@@ -862,12 +819,6 @@ importers:
       '@orpc/client':
         specifier: 1.13.14
         version: 1.13.14(@opentelemetry/api@1.9.0)
-      '@orpc/contract':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)
-      '@orpc/openapi-client':
-        specifier: 1.13.14
-        version: 1.13.14(@opentelemetry/api@1.9.0)
       '@orpc/server':
         specifier: 1.13.14
         version: 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
@@ -890,9 +841,6 @@ importers:
       '@iterate-com/auth-contract':
         specifier: workspace:*
         version: link:../../apps/auth-contract
-      '@iterate-com/os-contract':
-        specifier: workspace:*
-        version: link:../../apps/os-contract
       '@iterate-com/shared':
         specifier: workspace:*
         version: link:../shared

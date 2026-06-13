@@ -16,11 +16,6 @@ import {
 import { getInitialProcessorState } from "@iterate-com/streams/shared/stream-processors";
 import { createCliRenderer, type KeyEvent } from "@opentui/core";
 import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
-import { createORPCClient } from "@orpc/client";
-import type { ContractRouterClient } from "@orpc/contract";
-import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import { ORPCError } from "@orpc/server";
-import { osContract } from "@iterate-com/os-contract";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { readConfig, updateConfigSession } from "../config.ts";
 import {
@@ -66,8 +61,8 @@ if (!process.stdin.isTTY || !process.stdout.isTTY) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-type OrpcClient = ContractRouterClient<typeof osContract>;
 const ROOT_STREAM_PATH = StreamPath.parse("/");
+const STREAM_POLL_INTERVAL_MS = 1_000;
 const OAUTH_REFRESH_SKEW_MS = 60 * 1000;
 const OAUTH_FORCE_REFRESH_THROTTLE_MS = 10 * 1000;
 
@@ -128,7 +123,6 @@ function applyFeedMode(state: EventsStreamViewState, mode: FeedMode): EventsStre
 function StreamTerminalApp() {
   const renderer = useRenderer();
   const osClient = useMemo(() => createOsClient(args.baseUrl), []);
-  const client = osClient.client;
   const [currentStreamPath, setCurrentStreamPath] = useState(args.streamPath ?? ROOT_STREAM_PATH);
   const [currentFeedMode, setCurrentFeedMode] = useState<FeedMode>("mixed");
   const [rawEvents, setRawEvents] = useState<Event[]>([]);
@@ -186,24 +180,27 @@ function StreamTerminalApp() {
     setStatus("connecting");
 
     void (async () => {
+      // Live tail via itx: poll `itx.streams.get(path).read({ afterOffset })`
+      // over /api/itx/run, advancing the cursor each round. The oRPC
+      // `streams.streamEvents` server-sent iterator is gone; itx is the way.
+      let afterOffset: number | "start" = "start";
       try {
-        const stream = await client.project.streams.streamEvents(
-          {
-            afterOffset: "start",
-            projectSlugOrId: args.projectSlugOrId,
-            streamPath: currentStreamPath,
-          },
-          { signal: abortController.signal },
-        );
         setStatus("streaming");
-
-        for await (const value of stream) {
+        while (!abortController.signal.aborted) {
+          const result = (await runItxScript({
+            authedFetch: osClient.authedFetch,
+            functionSource:
+              "async ({ itx, vars }) => await itx.streams.get(vars.streamPath).read({ afterOffset: vars.afterOffset })",
+            vars: { streamPath: currentStreamPath, afterOffset },
+          })) as { events?: unknown[] };
           if (abortController.signal.aborted) return;
-          const event = Event.parse(value);
-          setRawEvents((previous) => [...previous, event]);
+          const events = (result.events ?? []).map((value) => Event.parse(value));
+          if (events.length > 0) {
+            setRawEvents((previous) => [...previous, ...events]);
+            afterOffset = events[events.length - 1]!.offset;
+          }
+          await delay(STREAM_POLL_INTERVAL_MS, abortController.signal);
         }
-
-        setStatus("stream closed");
       } catch (error) {
         if (abortController.signal.aborted) return;
         if (isUnauthorizedError(error)) {
@@ -224,7 +221,7 @@ function StreamTerminalApp() {
     })();
 
     return () => abortController.abort();
-  }, [client, currentStreamPath, osClient, streamRestartNonce]);
+  }, [currentStreamPath, osClient, streamRestartNonce]);
 
   const resolveStreamPath = useCallback(
     (streamPath?: string) => resolveStreamPathForCurrent({ currentStreamPath, streamPath }),
@@ -250,11 +247,12 @@ function StreamTerminalApp() {
   const streamApi = useMemo<StreamApi>(
     () => ({
       append: async (input) => {
-        const result = await client.project.streams.append({
-          projectSlugOrId: args.projectSlugOrId,
-          streamPath: resolveStreamPath(input.streamPath),
-          event: input.event,
-        });
+        const result = (await runItxScript({
+          authedFetch: osClient.authedFetch,
+          functionSource:
+            "async ({ itx, vars }) => await itx.streams.get(vars.streamPath).append(vars.event)",
+          vars: { streamPath: resolveStreamPath(input.streamPath), event: input.event },
+        })) as { event: Event };
         return result.event;
       },
       getState: async (input = {}) =>
@@ -297,7 +295,7 @@ function StreamTerminalApp() {
       },
       resolvePath: resolveStreamPath,
     }),
-    [client, osClient.authedFetch, resolveStreamPath],
+    [osClient.authedFetch, resolveStreamPath],
   );
 
   useEffect(() => {
@@ -883,8 +881,23 @@ function isPrintableCharacter(sequence: string) {
 }
 
 function formatError(error: unknown) {
-  if (error instanceof ORPCError) return `${error.code}: ${error.message}`;
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Abortable sleep for the stream poll loop. Resolves early on abort. */
+function delay(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function parseArgs(argv: string[]) {
@@ -942,19 +955,12 @@ async function runItxScript(input: {
 }
 
 function createOsClient(baseUrl: string): {
-  client: OrpcClient;
   refreshAuth: () => Promise<boolean>;
   authedFetch: ReturnType<typeof createAuthenticatedFetch>;
 } {
   const authProvider = createAuthProvider(baseUrl);
   const authedFetch = createAuthenticatedFetch(authProvider);
-  const client = createORPCClient(
-    new OpenAPILink(osContract, {
-      url: new URL("/api", `${baseUrl}/`).toString(),
-      fetch: authedFetch,
-    }),
-  ) as OrpcClient;
-  return { client, refreshAuth: authProvider.refresh, authedFetch };
+  return { refreshAuth: authProvider.refresh, authedFetch };
 }
 
 function createAuthenticatedFetch(authProvider: AuthProvider) {
@@ -1160,6 +1166,5 @@ function readEnv(name: string) {
 }
 
 function isUnauthorizedError(error: unknown) {
-  if (error instanceof ORPCError && error.code === "UNAUTHORIZED") return true;
   return error instanceof Error && /\b(UNAUTHORIZED|401)\b/i.test(error.message);
 }

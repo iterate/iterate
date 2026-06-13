@@ -49,7 +49,6 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     dopplerProject: "os",
     paths: [
       "apps/os/**",
-      "apps/os-contract/**",
       "apps/auth/**",
       "apps/auth-contract/**",
       // apps/os compiles in @iterate-com/streams (see apps/os/src/worker.ts).
