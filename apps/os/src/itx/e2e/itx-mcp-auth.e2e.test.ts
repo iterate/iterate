@@ -20,7 +20,9 @@ import { connectGlobal, registerCreatedProjectCleanup } from "./e2e-env.ts";
 const CLOUDFLARE_API_TOKEN = process.env.CLOUDFLARE_API_TOKEN?.trim() ?? "";
 const MCP_SERVER_URL = "https://bindings.mcp.cloudflare.com/mcp";
 const PUBLIC_MCP_SERVER_URL = "https://docs.mcp.cloudflare.com/mcp";
-const SECRET_KEY = "CLOUDFLARE_API_TOKEN";
+// Journaled secret slugs are stream-path segments (lowercase [a-z0-9_-], may
+// be slash-nested) — not the old free-form D1 key.
+const SECRET_KEY = "cloudflare/api-token";
 const PLACEHOLDER = `Bearer getSecret({ key: "${SECRET_KEY}" })`;
 
 const createdProjectIds = registerCreatedProjectCleanup();
