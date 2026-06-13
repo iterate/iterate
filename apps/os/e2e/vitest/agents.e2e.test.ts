@@ -1186,8 +1186,12 @@ function requiredStringPayload(event: Event, key: string) {
   return value;
 }
 
-function slackAgentPath(input: { channel: string; threadTs: string }) {
-  return `/agents/slack/${sanitizeSlackPathPart(input.channel)}/ts-${sanitizeSlackPathPart(input.threadTs)}`;
+function slackAgentPath(input: { channel: string; threadTs: string; account?: string }) {
+  // slack-route nests thread streams under the connected ACCOUNT, so multiple
+  // workspaces coexist: /agents/slack/{account}/{channel}/ts-{ts}. The e2e
+  // connects the single "default" workspace.
+  const account = input.account ?? "default";
+  return `/agents/slack/${sanitizeSlackPathPart(account)}/${sanitizeSlackPathPart(input.channel)}/ts-${sanitizeSlackPathPart(input.threadTs)}`;
 }
 
 function sanitizeSlackPathPart(value: string) {
