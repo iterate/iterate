@@ -122,15 +122,6 @@ export const ProjectSecretSummary = z.object({
 });
 export type ProjectSecretSummary = z.output<typeof ProjectSecretSummary>;
 
-export const AgentRecord = z.object({
-  agentPath: StreamPath,
-  name: z.string(),
-  projectId: z.string(),
-  createdAt: z.string(),
-  lastWokenAt: z.string(),
-});
-export type AgentRecord = z.output<typeof AgentRecord>;
-
 export const RepoRecord = z.object({
   createdAt: z.string(),
   lastWokenAt: z.string(),
@@ -300,15 +291,6 @@ export const osContract = oc.router({
       .input(ProjectScopedInput)
       .output(z.unknown()),
     agents: {
-      list: oc
-        .route({
-          method: "GET",
-          path: "/projects/{projectSlugOrId}/agents",
-          description: "List agents for a project",
-          tags: ["/project", "/agents"],
-        })
-        .input(ProjectScopedInput)
-        .output(z.object({ agents: z.array(AgentRecord) })),
       listPresets: oc
         .route({
           method: "GET",

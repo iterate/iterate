@@ -116,9 +116,6 @@ describe("itx REPL TypeScript declarations", () => {
     expect(result?.options.find((option) => option.label === "provideCapability")?.info).toContain(
       "Provide a capability",
     );
-    expect(result?.options.find((option) => option.label === "shareUrl")?.info).toContain(
-      "signed, expiring URL",
-    );
   });
 
   test("CodeMirror completion source delegates to the REPL TypeScript worker", async () => {

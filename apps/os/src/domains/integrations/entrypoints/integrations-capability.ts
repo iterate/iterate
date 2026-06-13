@@ -25,7 +25,7 @@ import {
   PLATFORM_PROJECT_CONTEXT_ID,
   PROJECT_WORKER_SOURCE,
 } from "~/itx/platform-context.ts";
-import { projectContextAddress } from "~/itx/journal.ts";
+import { contextAddress, projectContextRef } from "~/itx/coordinates.ts";
 import { parseConfig } from "~/config.ts";
 import { INTEGRATIONS } from "~/domains/integrations/registry.ts";
 import { DEFAULT_INTEGRATION_ACCOUNT } from "~/domains/integrations/integration-events.ts";
@@ -124,7 +124,7 @@ export class IntegrationsCapability extends WorkerEntrypoint<Env, IntegrationsCa
     const dial = makeDial({
       allowlists: resolveDialableTargets(parseConfig(this.env).itx),
       contextAddress: PLATFORM_PROJECT_CONTEXT_ADDRESS,
-      contextId: PLATFORM_PROJECT_CONTEXT_ID,
+      contextRef: PLATFORM_PROJECT_CONTEXT_ID,
       env: this.env,
       exports: this.ctx.exports as unknown as Parameters<typeof makeDial>[0]["exports"],
       loader: (this.env as { LOADER?: unknown }).LOADER as Parameters<typeof makeDial>[0]["loader"],
@@ -135,8 +135,8 @@ export class IntegrationsCapability extends WorkerEntrypoint<Env, IntegrationsCa
       {
         capabilityPath: `integrations.${input.slug}`,
         origin: {
-          address: projectContextAddress(input.projectId),
-          id: input.projectId,
+          address: contextAddress(projectContextRef(input.projectId)),
+          ref: projectContextRef(input.projectId),
         },
       },
     );

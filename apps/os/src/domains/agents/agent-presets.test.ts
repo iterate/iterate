@@ -201,8 +201,16 @@ describe("agent presets", () => {
     expect(prompt).toContain("If you're not sure about the shape of the result of a call");
     expect(prompt).toContain("Promise.all");
     expect(prompt).toContain("itx.<name>.<method>(args)");
-    expect(prompt).toContain("itx.slack.chat.postMessage({ channel, thread_ts, text })");
+    // Web agents' channel guidance is itx.chat.sendMessage; the Slack
+    // postMessage example is Slack-only (see the Slack-path test below).
+    expect(prompt).toContain("itx.chat.sendMessage({ message })");
     expect(prompt).toContain("itx.streams.get(");
+  });
+
+  it("gives Slack agents the Slack postMessage channel example, not web chat", () => {
+    const prompt = defaultAgentSystemPrompt("/agents/slack/c123/ts-1");
+    expect(prompt).toContain("itx.slack.chat.postMessage({ channel, thread_ts, text })");
+    expect(prompt).not.toContain("itx.chat.sendMessage");
   });
 
   it("tells Slack agents not to reply to FYI-only thread events", () => {

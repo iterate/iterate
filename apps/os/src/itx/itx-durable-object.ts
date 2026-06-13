@@ -1,134 +1,160 @@
-// ItxDurableObject: the GENERIC context host — one instance per extended
-// context (an agent session, a REPL scratchpad, an MCP session's context).
+// ItxDurableObject: THE context host — one instance per context, named by
+// the context's REF (`<namespace>:<path>`, coordinates.ts). The project
+// context, agent contexts, MCP-session contexts, and anonymous extensions
+// are all instances of this one class; no other Durable Object hosts an Itx.
 //
-// It holds NO configuration: its NAME is the journal coordinate
-// (`<namespace>:<journalPath>`, journal.ts), so identity, journal ref, and
-// self-address are projections of the name; parentage arrives as the
-// journal's first event (the birth certificate) and folds into state like
-// everything else. The DO's private storage holds only the processor
-// checkpoint — a disposable cache of the fold.
+// The host derives NOTHING beyond its coordinate: parentage and naming
+// arrive as the `context-created` event its CREATOR appended to the stream
+// (coordinates.ts createContext), and fold into state like everything else.
+// The stream pushes batches here through the subscription the creator
+// configured (the "itx" processor below); provides still self-ingest for
+// read-your-writes. The DO's private storage holds only the processor
+// checkpoint — a disposable cache of the fold — plus any facet caps' SQLite.
 //
 // Capability resolution walks the chain child → parent (→ … → the
-// platform context): the core delegates a miss per call through the parent
-// address recorded in the birth certificate. Shadowing is allowed and
-// VISIBLE: describe() returns the merged chain with each entry's owner.
+// defaults): the core delegates a miss per call through the parent address
+// recorded in the birth certificate. Shadowing is allowed and VISIBLE:
+// describe() returns the merged chain — inherited entries carry `from`, own
+// entries carry no provenance field.
 
 import { DurableObject } from "cloudflare:workers";
-import { Itx, type CapabilityAddress, type ItxStub } from "./itx.ts";
+import {
+  createStreamProcessorHost,
+  type RequestStreamSubscriptionArgs,
+} from "@iterate-com/streams/workers/stream-processor-host";
+import { Itx, ItxContract, type CapabilityAddress, type ItxStub } from "./itx.ts";
 import { makeDial, durableObjectFacetsHook, resolveDialableTargets } from "./dial.ts";
 import {
-  childContextAddress,
-  contextIdOfJournalPath,
+  contextAddress,
+  contextStream,
+  dialCodeContext,
   dialContext,
-  journalStream,
-  parseItxDurableObjectName,
+  isContextNodeAddress,
+  parseContextRef,
   type ContextDescriptor,
-  type ItxJournalRef,
-} from "./journal.ts";
+} from "./coordinates.ts";
 import { runItxScript } from "./run.ts";
 import type { ItxRuntime } from "./handle.ts";
 import { parseConfig } from "~/config.ts";
 
 export class ItxDurableObject extends DurableObject<Env> {
-  #itx: Itx | null = null;
-
-  /** The journal coordinate — a pure projection of the DO name. */
-  #journal(): ItxJournalRef {
-    const name = this.ctx.id.name;
-    if (!name)
-      throw new Error("ItxDurableObject must be addressed by name (its journal coordinate).");
-    return parseItxDurableObjectName(name);
-  }
-
-  /** This node's own address — the save() half of the SturdyRef story. */
-  address(): CapabilityAddress {
-    return childContextAddress(this.#journal());
-  }
-
-  /** Identity, name, and parentage, derived from the journal fold — there is
-   * no descriptor table. Throws until the birth certificate exists. */
-  async descriptor(): Promise<ContextDescriptor> {
-    const journal = this.#journal();
-    const record = await this.itx().contextRecord();
-    if (!record || !record.parent) {
-      throw new Error(
-        `Context ${contextIdOfJournalPath(journal.path)} has no birth certificate yet — ` +
-          `extend a context to create one (the context-created event is the journal's first).`,
-      );
-    }
-    return {
-      id: record.id,
-      name: record.name,
-      parent: record.parent,
-      projectId: journal.namespace,
-    };
-  }
-
-  /**
-   * This context's core. Materializes lazily by consuming its journal; the
-   * parent link dials the address from the birth certificate per call
-   * (Workers RPC stubs are request-scoped in a DO, so a held stub would go
-   * stale). The checkpoint lives in this DO's storage — a disposable cache.
-   */
-  itx(): Itx {
-    if (this.#itx) return this.#itx;
-    const journal = this.#journal();
-    const contextId = contextIdOfJournalPath(journal.path);
-    const selfAddress = childContextAddress(journal);
-    const parentNode = (): ItxStub | null => {
-      const parent = this.#itx?.state.context?.parent;
-      if (!parent) return null;
-      const node = () => dialContext(this.env, parent.address as CapabilityAddress);
-      return {
-        describe: () => node().itx().describe(),
-        invoke: (input) => node().itx().invoke(input),
-        provideCapability: (input) => node().itx().provideCapability(input),
-        revokeCapability: (input) => node().itx().revokeCapability(input),
-      };
-    };
-    // Legacy pre-journal residue (the itx_capabilities/itx_context SQLite
-    // tables) is dead weight on old instances: drop on sight, never read.
-    this.ctx.storage.sql.exec(`DROP TABLE IF EXISTS itx_capabilities`);
-    this.ctx.storage.sql.exec(`DROP TABLE IF EXISTS itx_context`);
-    this.#itx = new Itx({
-      contextId,
+  host = createStreamProcessorHost(this.ctx);
+  #itx: Itx = this.host.add(ItxContract.slug, (deps) => {
+    const ref = this.#ref();
+    const coordinate = parseContextRef(ref);
+    const projectId = coordinate.namespace;
+    const selfAddress = contextAddress(ref);
+    return new Itx({
+      ...deps,
+      contextRef: ref,
       dial: makeDial({
         allowlists: resolveDialableTargets(parseConfig(this.env).itx),
         contextAddress: selfAddress,
-        contextId,
+        contextRef: ref,
         env: this.env,
         exports: this.ctx.exports as unknown as Parameters<typeof makeDial>[0]["exports"],
         facets: durableObjectFacetsHook(this.ctx),
         loader: (this.env as { LOADER?: unknown }).LOADER as Parameters<
           typeof makeDial
         >[0]["loader"],
-        projectId: journal.namespace,
+        projectId,
       }),
-      iterateContext: { journal: journalStream(this.env, journal) },
-      keepAliveWhile: (work) => this.ctx.waitUntil(work()),
-      parentItx: parentNode,
-      readState: async () =>
-        await this.ctx.storage.get<{ offset: number; state: Itx["state"] }>("itx-checkpoint"),
+      // The core appends/reads its OWN stream directly (dialed by name) —
+      // never through the host's subscription-retained stub, which only
+      // exists after the stream has dialed us.
+      iterateContext: { stream: contextStream(this.env, coordinate) },
+      parentItx: () => {
+        const parent = this.#itx.state.context?.parent;
+        if (!parent) return null;
+        const address = parent.address as CapabilityAddress;
+        // A CODE parent (the platform defaults, the agent defaults): a
+        // loopback entrypoint answering the context protocol, dialed
+        // in-process via ctx.exports with the props the creation event
+        // baked in. Everything else is a context node.
+        if (!isContextNodeAddress(address)) {
+          return {
+            from: parent.ref,
+            stub: dialCodeContext({
+              address,
+              exports: this.ctx.exports as unknown as Parameters<
+                typeof dialCodeContext
+              >[0]["exports"],
+              projectId,
+            }),
+          };
+        }
+        const node = () => dialContext(this.env, address);
+        return {
+          from: parent.ref,
+          stub: {
+            describe: () => node().itx().describe(),
+            invoke: (input) => node().itx().invoke(input),
+            provideCapability: (input) => node().itx().provideCapability(input),
+            revokeCapability: (input) => node().itx().revokeCapability(input),
+          } satisfies ItxStub,
+        };
+      },
       // Processor-mode execution: an enqueued script-execution-requested on
-      // this journal runs here, and the runner appends the completed event
-      // back onto the same journal — the record stays self-contained.
+      // this context's stream runs here, and the runner appends the
+      // completed event back onto the same stream.
       runScript: (input) =>
         runItxScript({
-          contextAddress: selfAddress,
           env: this.env,
           executionId: input.executionId,
           exports: this.ctx.exports as unknown as ItxRuntime["exports"],
           functionSource: input.code,
-          projectId: journal.namespace,
-          props: { context: contextId },
-          record: journal,
+          projectId,
+          props: { context: ref },
+          record: coordinate,
           recordRequested: false,
         }),
       selfAddress,
-      writeState: async (snapshot) => {
-        await this.ctx.storage.put("itx-checkpoint", snapshot);
-      },
     });
+  });
+
+  /** The context ref — a pure projection of the DO name. */
+  #ref(): string {
+    const name = this.ctx.id.name;
+    if (!name) {
+      throw new Error("ItxDurableObject must be addressed by name (its context ref).");
+    }
+    parseContextRef(name);
+    return name;
+  }
+
+  /** This node's own address — the save() half of the SturdyRef story. */
+  address(): CapabilityAddress {
+    return contextAddress(this.#ref());
+  }
+
+  /** This context's core. A method, not a property: workerd does not
+   * pipeline calls through property accesses, so `node.itx().invoke(…)`
+   * stays one round trip. */
+  itx(): Itx {
     return this.#itx;
+  }
+
+  /** Subscription callables on this context's stream dial this. */
+  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
+    return this.host.requestStreamSubscription(args);
+  }
+
+  /** Naming and parentage, derived from the fold of the creation event —
+   * there is no descriptor table. Throws until the creator's
+   * `context-created` event exists. */
+  async descriptor(): Promise<ContextDescriptor> {
+    const ref = this.#ref();
+    const record = await this.#itx.contextRecord();
+    if (!record || !record.parent) {
+      throw new Error(
+        `Context ${ref} has no creation event yet — its creator must append ` +
+          `context-created (coordinates.ts createContext) before the chain can resolve.`,
+      );
+    }
+    return {
+      name: record.name,
+      parent: { address: record.parent.address as CapabilityAddress, ref: record.parent.ref },
+      ref,
+    };
   }
 }

@@ -22,9 +22,8 @@ const mcpHandler = McpAgent.serve("/mcp", { binding: "PROJECT_MCP_SERVER_CONNECT
 
 export default {
   async fetch(request, env, ctx) {
-    // The itx context catalog lives in the deployment D1 (DB and DO_CATALOG
-    // are the same database in real deployments); this env runs no
-    // migrations, so create what extendContext needs.
+    // This env runs no migrations; create the project directory the session
+    // wiring reads.
     await ensureD1Schema(env.DO_CATALOG);
     const ctxWithProps = ctx as ExecutionContext & { props?: ProjectMcpServerConnectionProps };
     ctxWithProps.props = propsForRequest(request);
@@ -40,12 +39,6 @@ async function ensureD1Schema(db: D1Database) {
         custom_hostname text unique,
         created_at text not null default current_timestamp,
         updated_at text not null default current_timestamp
-      )`),
-    db.prepare(`CREATE TABLE IF NOT EXISTS itx_contexts (
-        id text primary key not null,
-        project_id text not null,
-        journal_path text not null,
-        created_at text not null default current_timestamp
       )`),
   ]);
 }

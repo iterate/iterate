@@ -4,16 +4,20 @@ import type { Connection } from "agents";
 import { z } from "zod";
 import { StreamPath, type EventInput } from "@iterate-com/shared/streams/types";
 import { upsertD1ObjectCatalog } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { createD1Client } from "sqlfu";
 import packageJson from "../../../../package.json" with { type: "json" };
 import {
   getStreamsBackend,
   type StreamsBackendProps,
 } from "~/domains/streams/entrypoints/streams-backend.ts";
-import { parseConfig } from "~/config.ts";
 import type { ItxDurableObject } from "~/itx/itx-durable-object.ts";
 import type { CapabilityAddress } from "~/itx/itx.ts";
-import { dialContext, extendContext, projectContextAddress } from "~/itx/journal.ts";
+import {
+  contextAddress,
+  createContext,
+  dialContext,
+  formatContextRef,
+  projectContextRef,
+} from "~/itx/coordinates.ts";
 import type { ItxRuntime } from "~/itx/handle.ts";
 import { runItxScript } from "~/itx/run.ts";
 
@@ -22,8 +26,8 @@ export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts
 /**
  * Project-scoped MCP server connection for os.
  *
- * Runs as a Durable Object in a separate Worker (`project-mcp-server-connection-do`).
- * `worker.ts` verifies Iterate Auth OAuth, resolves the token's project
+ * Runs as a Durable Object in the MCP worker (`workers/mcp.ts`), whose fetch
+ * handler verifies Iterate Auth OAuth, resolves the token's project
  * grants, and passes that identity into this Durable Object through McpAgent
  * props. That mirrors Cloudflare's documented OAuth integration point:
  * https://developers.cloudflare.com/agents/model-context-protocol/mcp-agent-api/
@@ -298,9 +302,10 @@ export class ProjectMcpServerConnection extends McpAgent<
   }
 
   /**
-   * One child context per (MCP session, project): the session's capabilities
-   * live on it, scripts run against it, and anything it doesn't define
-   * delegates up to the project context (the itx prototype chain).
+   * One child context per (MCP session, project): its coordinate IS the
+   * session's stream — the session's capabilities live on it, scripts run
+   * against it, and anything it doesn't define delegates up to the project
+   * context (the itx prototype chain).
    */
   private async ensureItxContext(projectId: string): Promise<string> {
     // Single-flight per project: concurrent exec_js calls must not race the
@@ -317,26 +322,24 @@ export class ProjectMcpServerConnection extends McpAgent<
   readonly #ensureItxContextPromises = new Map<string, Promise<string>>();
 
   async #ensureItxContextOnce(projectId: string): Promise<string> {
-    const storageKey = `itxContextId:${projectId}`;
+    const streamPath = await this.getSessionStreamPath();
+    const ref = formatContextRef({ namespace: projectId, path: streamPath });
     const versionKey = `itxContextCapsVersion:${projectId}`;
-    const existing = await this.ctx.storage.get<string>(storageKey);
     const seededVersion = await this.ctx.storage.get<string>(versionKey);
-    if (existing && seededVersion === MCP_CONTEXT_CAPS_VERSION) return existing;
+    if (seededVersion === MCP_CONTEXT_CAPS_VERSION) return ref;
 
-    const config = parseConfig(this.env as unknown as Env);
-    // Creation is an event: extend the project context — the birth
-    // certificate is the journal's first event; the node materializes
-    // lazily by consuming it. A version bump mints a FRESH context
-    // (contexts are erasable; the session record is the session stream).
-    void existing;
-    const created = await extendContext({
-      base: "/",
-      db: createD1Client(this.env.DO_CATALOG),
+    // The session context's coordinate IS the session stream. Creation is
+    // the standard two appends (subscription + creation event) — re-creates
+    // are inert, so a caps-version bump just re-provides onto the same node.
+    const created = await createContext({
       env: this.env as unknown as Env,
       name: `mcp:${await this.getSessionSlug()}`,
-      parent: { address: projectContextAddress(projectId), id: projectId },
-      projectId,
-      typeIdPrefix: config.typeIdPrefix,
+      namespace: projectId,
+      parent: {
+        address: contextAddress(projectContextRef(projectId)),
+        ref: projectContextRef(projectId),
+      },
+      path: streamPath,
     });
     const contextItx = dialContext(this.env as unknown as Env, created.address).itx();
     for (const cap of SEEDED_CAPS) {
@@ -346,9 +349,8 @@ export class ProjectMcpServerConnection extends McpAgent<
         capability: cap.capability,
       });
     }
-    await this.ctx.storage.put(storageKey, created.contextId);
     await this.ctx.storage.put(versionKey, MCP_CONTEXT_CAPS_VERSION);
-    return created.contextId;
+    return ref;
   }
 
   private async emitLifecycleEvent(slug: string, payload: Record<string, unknown>) {

@@ -5,9 +5,9 @@
 
 /**
  * Worker-cap source: a durable fake-Slack capability. Source caps are
- * member-shaped — the dial wraps the loader entrypoint with
- * asPathCallable and replays the dotted path on its real members (nested
- * RpcTargets included), so the worker just exports the surface.
+ * member-shaped — the dial replays the dotted path on the loader
+ * entrypoint's real members (nested RpcTargets included), so the worker
+ * just exports the surface.
  */
 export function slackShapedCapabilitySource(input: { marker: string }) {
   return `

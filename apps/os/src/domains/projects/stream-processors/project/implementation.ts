@@ -26,11 +26,11 @@ import {
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
+import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import {
   AGENTS_STREAM_PATH,
-  type AgentDurableObject,
   getAgentDurableObjectName,
-} from "~/domains/agents/durable-objects/agent-durable-object.ts";
+} from "~/domains/agents/agent-stream-subscriptions.ts";
 import { jsonataReactorEventTypes } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
 import { setJournaledSecret } from "~/domains/secrets/secret-streams.ts";
 import {

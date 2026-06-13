@@ -8,6 +8,7 @@
     "./browser/processor-state-storage": "./src/browser/processor-state-storage.ts",
     "./browser/stream-browser-db": "./src/browser/stream-browser-db.ts",
     "./browser/stream-browser-store": "./src/browser/stream-browser-store.ts",
+    "./browser/ensure-schema-once": "./src/browser/ensure-schema-once.ts",
     "./workers/stream-processor-host": "./src/workers/stream-processor-host.ts",
     "./stream-processor": "./src/stream-processor.ts",
     "./processors/browser-event-feed/implementation": "./src/processors/browser-event-feed/implementation.ts",

@@ -20,6 +20,7 @@ import {
   type StreamEvent,
 } from "@iterate-com/streams/shared/stream-processors";
 import { CoreProcessorContract } from "@iterate-com/streams/processors/core/contract";
+import { ItxContract } from "~/itx/contract.ts";
 
 export const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.6";
 
@@ -82,17 +83,11 @@ export const AgentProcessorContract = defineProcessorContract({
   }),
   initialState: {},
   // The core contract owns `stream/subscriber-connected`, the scheduler's
-  // reconcile trigger.
-  processorDeps: [CoreProcessorContract],
+  // reconcile trigger; the itx contract owns `itx/capability-provided`, which
+  // we render into model-visible context so the LLM learns its tools (the same
+  // event whose fold makes `itx.<name>` resolve — one abstraction, two readers).
+  processorDeps: [CoreProcessorContract, ItxContract],
   events: {
-    "events.iterate.com/agent/capability-noted": {
-      description:
-        "Notes an itx capability available to this agent's scripts; rendered into model-visible context so the LLM learns its tools from stream history.",
-      payloadSchema: z.object({
-        instructions: z.string(),
-        name: z.string(),
-      }),
-    },
     "events.iterate.com/agent/system-prompt-updated": {
       description: "Updates the system prompt used for future LLM requests.",
       examples: [
@@ -224,7 +219,7 @@ export const AgentProcessorContract = defineProcessorContract({
     },
   },
   consumes: [
-    "events.iterate.com/agent/capability-noted",
+    "events.iterate.com/itx/capability-provided",
     "events.iterate.com/stream/subscriber-connected",
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
@@ -259,9 +254,10 @@ export type AgentConsumedEvent = ConsumedEvent<typeof AgentProcessorContract>;
 export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumedEvent }) {
   const { state, event } = args;
   // subscriber-connected is consumed for side effects only (the scheduler's
-  // reconcile trigger); like capability-noted it leaves state alone.
+  // reconcile trigger); like capability-provided it leaves state alone (the
+  // capability table is the itx core's fold, not this projection's concern).
   switch (event.type) {
-    case "events.iterate.com/agent/capability-noted":
+    case "events.iterate.com/itx/capability-provided":
     case "events.iterate.com/stream/subscriber-connected":
       return state;
     case "events.iterate.com/agent/system-prompt-updated":

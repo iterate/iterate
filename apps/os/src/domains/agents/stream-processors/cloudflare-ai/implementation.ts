@@ -314,9 +314,25 @@ export class CloudflareAiProcessor extends StreamProcessor<
       llmRequestId,
     });
 
+    // Streaming on: every chunk lands on the stream as it arrives so
+    // subscribers (e.g. the browser agent UI) can render text and thinking
+    // deltas live. Models that ignore `stream: true` return a plain object
+    // and fall through to the non-streaming extraction below.
     let raw: unknown;
+    let streamed: StreamedCloudflareAiResponse | null = null;
     try {
-      raw = await ai.run(args.event.payload.model, body, args.event.payload.runOpts);
+      raw = await ai.run(
+        args.event.payload.model,
+        { ...body, stream: true },
+        args.event.payload.runOpts,
+      );
+      if (raw instanceof ReadableStream) {
+        streamed = await this.#consumeCloudflareAiStream({
+          body: raw,
+          llmRequestId,
+          sourceEvent: args.event,
+        });
+      }
     } catch (error) {
       const durationMs = Date.now() - startedAt;
       const failure = {
@@ -359,9 +375,15 @@ export class CloudflareAiProcessor extends StreamProcessor<
 
     let assistantText: string;
     try {
-      assistantText = extractCloudflareAssistantText(raw);
+      if (streamed == null) {
+        assistantText = extractCloudflareAssistantText(raw);
+      } else {
+        // A stream that carried no text deltas (usage-only, or a model that
+        // produced no content) is an empty completion, not a failure.
+        assistantText = streamed.text;
+      }
     } catch (error) {
-      const rawResponse = toJsonValue(raw);
+      const rawResponse = streamed == null ? toJsonValue(raw) : streamedRawResponse(streamed);
       const durationMs = Date.now() - startedAt;
       const failure = {
         status: "failure" as const,
@@ -403,8 +425,8 @@ export class CloudflareAiProcessor extends StreamProcessor<
       return;
     }
 
-    const rawResponse = toJsonValue(raw);
-    const usage = extractUsage(raw);
+    const rawResponse = streamed == null ? toJsonValue(raw) : streamedRawResponse(streamed);
+    const usage = streamed == null ? extractUsage(raw) : streamed.usage;
     const durationMs = Date.now() - startedAt;
 
     if (!(await this.#isAgentLlmRequestStillCurrent({ llmRequestId }))) {
@@ -495,9 +517,124 @@ export class CloudflareAiProcessor extends StreamProcessor<
     });
   }
 
+  /**
+   * Drains a streaming AI.run response, appending every parsed SSE data
+   * payload verbatim as an llm-response-chunk event while accumulating the
+   * assistant text and trailing usage for the terminal events.
+   */
+  async #consumeCloudflareAiStream(args: {
+    body: ReadableStream<Uint8Array>;
+    llmRequestId: number;
+    sourceEvent: LlmRequestRequestedEvent;
+  }): Promise<StreamedCloudflareAiResponse> {
+    const decoder = new TextDecoder();
+    const reader = args.body.getReader();
+    let buffered = "";
+    let sequence = 0;
+    let text = "";
+    let usage: JsonValue | null = null;
+
+    const handleFrame = async (frame: string) => {
+      const data = frame
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice("data:".length).trim())
+        .join("\n");
+      if (data === "" || data === "[DONE]") return;
+      let chunk: JsonValue;
+      try {
+        chunk = toJsonValue(JSON.parse(data));
+      } catch {
+        chunk = data;
+      }
+      text += extractChunkDeltaText(chunk);
+      const chunkUsage = extractUsage(chunk);
+      if (chunkUsage != null) usage = chunkUsage;
+      await this.#append({
+        type: "events.iterate.com/cloudflare-ai/llm-response-chunk",
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: CloudflareAiProcessorContract,
+          key: `llm-response-chunk/${sequence}`,
+          sourceEvent: args.sourceEvent,
+        }),
+        payload: { llmRequestId: args.llmRequestId, sequence, chunk },
+      });
+      sequence += 1;
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      // SSE frames are blank-line separated; the last split piece may be a
+      // partial frame, so it stays buffered for the next read.
+      const frames = buffered.split("\n\n");
+      buffered = frames.pop() ?? "";
+      for (const frame of frames) await handleFrame(frame);
+    }
+    buffered += decoder.decode();
+    await handleFrame(buffered);
+
+    return { text, usage, chunkCount: sequence };
+  }
+
   async #append(event: { type: string; idempotencyKey: string; payload: unknown }) {
     await this.ctx.stream.append({ event });
   }
+}
+
+type StreamedCloudflareAiResponse = {
+  text: string;
+  usage: JsonValue | null;
+  chunkCount: number;
+};
+
+/**
+ * Stand-in rawResponse for streamed runs: the chunk events are the verbatim
+ * record, so the terminal event carries the reassembled text instead of a
+ * provider response object.
+ */
+function streamedRawResponse(streamed: StreamedCloudflareAiResponse): JsonValue {
+  return {
+    streamed: true,
+    response: streamed.text,
+    chunkCount: streamed.chunkCount,
+    ...(streamed.usage == null ? {} : { usage: streamed.usage }),
+  };
+}
+
+const OpenAiChatCompletionChunk = z.object({
+  choices: z
+    .array(
+      z.object({
+        delta: z.object({ content: z.string().nullable().optional() }).nullable().optional(),
+      }),
+    )
+    .min(1),
+});
+
+const AnthropicStreamDelta = z.object({
+  delta: z.object({ text: z.string().optional() }),
+});
+
+const WorkersAiChunk = z.object({ response: z.string() });
+
+/**
+ * Pulls the assistant-text delta out of one provider-shaped streaming chunk.
+ * Reasoning/thinking deltas are deliberately not folded into the assistant
+ * text — they stay visible in the verbatim chunk events.
+ */
+function extractChunkDeltaText(chunk: JsonValue): string {
+  const workersAi = WorkersAiChunk.safeParse(chunk);
+  if (workersAi.success) return workersAi.data.response;
+
+  const openAi = OpenAiChatCompletionChunk.safeParse(chunk);
+  if (openAi.success) return openAi.data.choices[0].delta?.content ?? "";
+
+  const anthropic = AnthropicStreamDelta.safeParse(chunk);
+  if (anthropic.success) return anthropic.data.delta.text ?? "";
+
+  return "";
 }
 
 function extractCloudflareAssistantText(raw: unknown): string {

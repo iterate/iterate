@@ -25,6 +25,10 @@
         "class_name": "ProjectDurableObject",
       },
       {
+        "name": "ITX_CONTEXT",
+        "class_name": "ItxDurableObject",
+      },
+      {
         "name": "AGENT",
         "class_name": "AgentDurableObject",
       },
@@ -88,6 +92,10 @@
     {
       "tag": "v6",
       "new_sqlite_classes": ["SecretDurableObject"],
+    },
+    {
+      "tag": "v7",
+      "new_sqlite_classes": ["ItxDurableObject"],
     },
   ],
 }

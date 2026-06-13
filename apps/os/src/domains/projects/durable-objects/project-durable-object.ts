@@ -1,32 +1,26 @@
-// The Project Durable Object: the durable home of one PROJECT CONTEXT
-// (apps/os/docs/itx-next.md). It has exactly one job: ITX CORE HOST — it
-// embeds the capability core (itx()) and is the dispatch point for every
-// capability invocation in this project.
+// The Project Durable Object: project-domain machinery — processors over
+// the project's root stream and creation orchestration.
 //
-// The project's WORKER does not live here: it is an ordinary repo-sourced
-// capability (PROJECT_WORKER_SOURCE, itx/platform-context.ts) built through
-// the generic per-commit R2 memo (itx/source-build.ts). Ingress loads it in
-// the stateless ProjectIngressEntrypoint; this DO only forwards root-stream
-// events to its processEvent hook (project-worker-runtime.ts).
+// The PROJECT CONTEXT does NOT live here: it is an ItxDurableObject like
+// every other context, at the coordinate `(projectId, "/")` — createProject
+// appends its subscription + creation events onto the root stream alongside
+// this DO's own processor subscriptions (itx/coordinates.ts). Capability
+// dispatch, live shadows, and facet caps all live on that node.
 //
-// Egress does NOT live here anymore: it is the `fetch` capability among the
-// platform defaults (itx/platform-context.ts). This DO still supervises
-// every egress dispatch (job 1 — live shadows resolve in its core), but the
-// terminal pipe is the stateless EgressPipe: secrets are D1 rows, so
-// substitution + the real fetch happen in a plain isolate and secret
-// material never enters this DO. The old captun intercept tunnel is reborn
-// as `itx.provideCapability({ name: "fetch", capability: liveStub })`. This DO
-// has NO fetch surface at all.
+// The project's WORKER does not live here either: it is an ordinary
+// repo-sourced capability (PROJECT_WORKER_SOURCE, itx/platform-context.ts)
+// built through the generic per-commit R2 memo (itx/source-build.ts).
+// Ingress loads it in the stateless ProjectIngressEntrypoint; this DO only
+// forwards root-stream events to its processEvent hook
+// (project-worker-runtime.ts).
 //
 // State lives in the project's root event stream, projected by
 // ProjectProcessor (stream-processors/project-processor.ts), which also owns
 // every creation side effect — including the one D1 `projects` projection.
-// The project CONTEXT's state folds from its journal stream (/itx); this
-// DO's storage holds only that fold's checkpoint. There is no bespoke
-// project table and no lifecycle mixin: the DO is addressed by the plain
-// project id.
+// There is no bespoke project table and no lifecycle mixin: the DO is
+// addressed by the plain project id.
 
-import { DurableObject, env } from "cloudflare:workers";
+import { DurableObject } from "cloudflare:workers";
 import { type Event } from "@iterate-com/shared/streams/types";
 import type { StreamEvent } from "@iterate-com/streams/shared/event";
 import {
@@ -57,26 +51,15 @@ import {
   loadProjectWorker,
 } from "~/domains/projects/project-worker-runtime.ts";
 import { type RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
-import { Itx, type CapabilityAddress } from "~/itx/itx.ts";
-import { durableObjectFacetsHook, makeDial, resolveDialableTargets } from "~/itx/dial.ts";
-import { journalStream, ownJournalPath, projectContextAddress } from "~/itx/journal.ts";
-import { getPlatformContext } from "~/itx/platform-context.ts";
-import { runItxScript } from "~/itx/run.ts";
-import type { ItxRuntime } from "~/itx/handle.ts";
+import { createContext } from "~/itx/coordinates.ts";
+import { PLATFORM_PROJECT_CONTEXT_ADDRESS } from "~/itx/platform-context.ts";
+import { DEFAULTS_DESCRIBE_FROM } from "~/itx/types.ts";
+import {
+  getProjectDurableObjectName,
+  getProjectDurableObjectStub,
+} from "~/domains/projects/durable-objects/project-durable-object-ref.ts";
 
-/** Project DOs are addressed by the plain project id. */
-export function getProjectDurableObjectName(projectId: string) {
-  return projectId;
-}
-
-/**
- * Mint a Project DO stub. Lives here (a trusted domain DO file) so ingress code
- * never accesses the raw PROJECT binding — see the
- * no-raw-durable-object-binding-access lint rule.
- */
-export function getProjectDurableObjectStub(projectId: string) {
-  return env.PROJECT.getByName(getProjectDurableObjectName(projectId));
-}
+export { getProjectDurableObjectName, getProjectDurableObjectStub };
 
 export type ProjectSummary = {
   id: string;
@@ -178,6 +161,16 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     // Both appends are idempotent, as is every downstream creation step —
     // calling createProject again is a no-op that returns the summary.
     await this.ensureProjectSubscription(input.projectId);
+    // The PROJECT CONTEXT: an ItxDurableObject at (projectId, "/"), created
+    // like any other context — subscription + creation event on the root
+    // stream. Its parent is the platform defaults (the chain's code root).
+    await createContext({
+      env: this.env as unknown as Env,
+      name: input.slug,
+      namespace: input.projectId,
+      parent: { address: PLATFORM_PROJECT_CONTEXT_ADDRESS, ref: DEFAULTS_DESCRIBE_FROM },
+      path: "/",
+    });
     const stream = await this.projectStream(input.projectId);
     await stream.append({
       type: "events.iterate.com/project/create-requested",
@@ -211,84 +204,13 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
       .bind(summary.id)
       .first<{ custom_hostname: string | null }>();
     const host = row?.custom_hostname?.trim().toLowerCase() || summary.defaultHost;
-    const protocol = config.baseUrl ? new URL(config.baseUrl).protocol : "https:";
-    return new URL(`${protocol}//${host}`).origin;
-  }
-
-  // ---- the itx core ---------------------------------------------------------
-  //
-  // The Project DO hosts the PROJECT CONTEXT: itx() is the node's entire
-  // capability surface — handles, ingress, and chain delegation all go
-  // through the core it returns (a method, not a property, so
-  // `node.itx().invoke(...)` pipelines in one round trip — workerd does not
-  // pipeline calls through property accesses, see `processor` above). The
-  // context's journal is the project's /itx stream — the only authority;
-  // this DO's storage holds the fold's disposable checkpoint. The parent
-  // link is the in-process platform context: the chain's code root, where
-  // the platform defaults live.
-
-  #itx: Itx | null = null;
-
-  /** The project context's capability core (one Itx over the /itx journal). */
-  itx(): Itx {
-    if (this.#itx) return this.#itx;
-    const projectId = this.projectId;
-    const selfAddress = projectContextAddress(projectId);
-    const journal = { namespace: projectId, path: ownJournalPath("/") };
-    // Legacy pre-journal residue: the SQLite capability table is dead
-    // weight on old instances — drop on sight, never read.
-    this.ctx.storage.sql.exec(`DROP TABLE IF EXISTS itx_capabilities`);
-    this.#itx = new Itx({
-      contextId: projectId,
-      dial: makeDial({
-        allowlists: resolveDialableTargets(parseConfig(this.env).itx),
-        contextAddress: selfAddress,
-        contextId: projectId,
-        env: this.env,
-        exports: this.ctx.exports as unknown as Parameters<typeof makeDial>[0]["exports"],
-        facets: durableObjectFacetsHook(this.ctx),
-        loader: (this.env as { LOADER?: unknown }).LOADER as Parameters<
-          typeof makeDial
-        >[0]["loader"],
-        projectId,
-      }),
-      iterateContext: { journal: journalStream(this.env as unknown as Env, journal) },
-      keepAliveWhile: (work) => this.ctx.waitUntil(work()),
-      parentItx: () =>
-        getPlatformContext({
-          exports: this.ctx.exports as unknown as Parameters<
-            typeof getPlatformContext
-          >[0]["exports"],
-          projectId,
-        }),
-      readState: async () =>
-        await this.ctx.storage.get<{ offset: number; state: Itx["state"] }>("itx-checkpoint"),
-      // Processor-mode execution: an enqueued script-execution-requested on
-      // the project journal runs here; the runner appends the completed
-      // event back onto the same journal.
-      runScript: (input) =>
-        runItxScript({
-          env: this.env as unknown as Env,
-          executionId: input.executionId,
-          exports: this.ctx.exports as unknown as ItxRuntime["exports"],
-          functionSource: input.code,
-          projectId,
-          props: { context: projectId },
-          record: journal,
-          recordRequested: false,
-        }),
-      selfAddress,
-      writeState: async (snapshot) => {
-        await this.ctx.storage.put("itx-checkpoint", snapshot);
-      },
-    });
-    return this.#itx;
-  }
-
-  /** This node's own context address — the save() half of the SturdyRef
-   * story: dial it back with dialContext (journal.ts). */
-  address(): CapabilityAddress {
-    return projectContextAddress(this.projectId);
+    // Local dev serves project hosts on the dev server's port
+    // (<slug>.localhost:<port>), so carry the base URL's port, not just
+    // its protocol.
+    const base = config.baseUrl ? new URL(config.baseUrl) : null;
+    const protocol = base?.protocol ?? "https:";
+    const port = base?.port ? `:${base.port}` : "";
+    return new URL(`${protocol}//${host}${port}`).origin;
   }
 
   /**

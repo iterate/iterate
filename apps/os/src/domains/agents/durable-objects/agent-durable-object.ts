@@ -16,10 +16,15 @@ import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
-import { createD1Client } from "sqlfu";
 import type { ItxDurableObject } from "~/itx/itx-durable-object.ts";
 import type { CapabilityAddress } from "~/itx/itx.ts";
-import { dialContext, extendContext, projectContextAddress } from "~/itx/journal.ts";
+import {
+  contextAddress,
+  createContext,
+  dialContext,
+  formatContextRef,
+  projectContextRef,
+} from "~/itx/coordinates.ts";
 import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
 import { AgentChatProcessor } from "~/domains/agents/stream-processors/agent-chat/implementation.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
@@ -53,7 +58,7 @@ import {
   type WorkspaceDurableObject,
   type WorkspaceStructuredName,
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
-import { stripArtifactTokenQuery } from "~/domains/repos/artifacts.ts";
+import { stripArtifactTokenQuery } from "~/domains/repos/artifact-token.ts";
 import {
   DEFAULT_AGENT_LLM_PROVIDER,
   defaultAgentSetupEvents,
@@ -67,9 +72,11 @@ import {
 import {
   AGENT_HOST_PROCESSOR_SLUG,
   AGENTS_STREAM_PATH,
+  AgentDurableObjectName,
   AgentDurableObjectStructuredName,
   agentLlmProcessorSlug,
   agentProcessorSubscriptionConfiguredEvents,
+  getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
 
@@ -87,6 +94,9 @@ export type AgentDurableObjectEnv = {
   AI: CloudflareAiBinding;
   APP_CONFIG: string;
   ITX_CONTEXT: DurableObjectNamespace<ItxDurableObject>;
+  // Shared app D1 — read-only here, for the `itx.debug()` project-slug lookup.
+  // The agent writes NO object-catalog projection: it is listed by walking the
+  // /agents stream tree and addressed by its self-describing name.
   DO_CATALOG: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
@@ -119,23 +129,24 @@ type AgentStreamApi = Omit<
   }): Promise<Event[]>;
 };
 
+// An agent IS a context, and its identity IS its stream coordinate:
+// `{projectId}:{agentPath}` (no opaque JSON name). The lifecycle base parses
+// that directly via the AgentDurableObjectName codec. No D1 object catalog —
+// agents are listed by walking the `/agents` stream tree (the UI is just the
+// stream explorer scoped to /agents), and addressed by their self-describing
+// coordinate; nothing enumerates them through a catalog.
 const AgentLifecycleBase = createIterateDurableObjectBase<
-  typeof AgentDurableObjectStructuredName,
-  Pick<AgentDurableObjectEnv, "DO_CATALOG">
+  typeof AgentDurableObjectName,
+  AgentDurableObjectEnv
 >({
   className: "AgentDurableObject",
-  getDatabase: (env) => env.DO_CATALOG,
-  indexes: {
-    agentPath: (params) => params.agentPath,
-    projectId: (params) => params.projectId,
-  },
-  nameSchema: AgentDurableObjectStructuredName,
+  nameSchema: AgentDurableObjectName,
 });
 
-/** Bump when agentContextCapabilities changes shape or membership. A bump
- * mints a FRESH context (journal, workspace and all) — contexts are
- * erasable; the agent's durable record is its own stream. */
-const AGENT_CONTEXT_CAPABILITIES_VERSION = "3";
+/** Bump when agentContextCapabilities changes — re-provides the agent's tools
+ * onto its own context (each provide appends an itx/capability-provided event
+ * that both folds into the capability table and renders into the LLM's view). */
+const AGENT_CONTEXT_CAPABILITIES_VERSION = "8";
 
 export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv> {
   host = createStreamProcessorHost(this.ctx);
@@ -185,9 +196,10 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       new AgentHostProcessor({
         ...deps,
         agentNamespace: this.env.AGENT,
-        getItxContextId: async () => {
+        getItxContext: async () => {
           const params = await this.ensureStartedOrInitializeFromRuntimeName();
-          return await this.ensureItxContext(params);
+          const { context } = await this.ensureItxContext(params);
+          return { context };
         },
         getStreamContext: () => this.subscribedStreamContext(AGENT_HOST_PROCESSOR_SLUG),
         runnerEnv: this.env as unknown as Env,
@@ -218,7 +230,18 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
           agentLlmProcessorSlug(llmProvider),
           AGENT_HOST_PROCESSOR_SLUG,
         ]);
-        await this.ensureItxContext(params);
+        // Deliberately NOT awaited: context provisioning probes each rpc
+        // capability for self-description, and those loopback dials can only
+        // make progress once this wake hook releases the input gate — awaiting
+        // here deadlocks until the probes' deadlines and blows the 30s
+        // blockConcurrencyWhile budget. Script runs ensure the context lazily
+        // via getItxContextId() (single-flighted), so nothing needs it
+        // synchronously at wake.
+        this.ctx.waitUntil(
+          this.ensureItxContext(params).catch((error) => {
+            console.error("[agent-itx-context-setup] failed", error);
+          }),
+        );
       }
       // Deliberately no catch-up wait here: wake hooks run inside
       // `blockConcurrencyWhile`, and the processors are co-hosted on this DO,
@@ -455,63 +478,70 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     }
   }
 
-  /** The agent's itx child context: its tools live on it as caps, scripts
-   * run against it, misses delegate up to the project context. Seeding is
-   * versioned: bump AGENT_CONTEXT_CAPABILITIES_VERSION when
-   * agentContextCapabilities changes so existing agents re-provide caps
-   * (provides upsert; the capability-noted idempotency keys dedupe
-   * re-appends per cap name). */
-  async ensureItxContext(params: AgentDurableObjectStructuredName): Promise<string> {
-    // Single-flight: the wake hook's workspace prep (waitUntil) and script
-    // runs can call this concurrently; without memoization the interleaved
-    // storage get/put could mint two different context ids.
+  /**
+   * AN AGENT IS A CONTEXT: its coordinate is the agent's own stream, its
+   * node the generic ItxDurableObject at that coordinate. This DO is the
+   * CREATOR — it appends the subscription + creation events (parent: the
+   * project context) and, once per version, PROVIDES the agent's tools onto
+   * its context via itx.provideCapability — the one door. NO mint, NO
+   * catalog: the provide events fold into the capability table (resolution)
+   * while the agent processor renders them for the LLM (visibility).
+   */
+  async ensureItxContext(
+    params: AgentDurableObjectStructuredName,
+  ): Promise<{ context: string; contextAddress: CapabilityAddress }> {
     this.#ensureItxContextPromise ??= this.#ensureItxContextOnce(params).finally(() => {
       this.#ensureItxContextPromise = undefined;
     });
     return await this.#ensureItxContextPromise;
   }
 
-  #ensureItxContextPromise: Promise<string> | undefined;
+  #ensureItxContextPromise:
+    | Promise<{ context: string; contextAddress: CapabilityAddress }>
+    | undefined;
 
-  async #ensureItxContextOnce(params: AgentDurableObjectStructuredName): Promise<string> {
-    const existing = await this.ctx.storage.get<string>("itxContextId");
+  async #ensureItxContextOnce(
+    params: AgentDurableObjectStructuredName,
+  ): Promise<{ context: string; contextAddress: CapabilityAddress }> {
+    const context = agentContextRef(params);
+    const selfAddress = agentContextAddress(params);
     const seededVersion = await this.ctx.storage.get<string>("itxContextCapabilitiesVersion");
-    if (existing && seededVersion === AGENT_CONTEXT_CAPABILITIES_VERSION) return existing;
+    if (seededVersion === AGENT_CONTEXT_CAPABILITIES_VERSION) {
+      return { context, contextAddress: selfAddress };
+    }
 
-    // Creation is an event: extend the project context with this agent's
-    // path as the journal base, so the agent's whole subtree (its stream,
-    // its context journal at <agentPath>/itx/<id>) reads as one directory.
-    const config = this.getAppConfig();
-    const created = await extendContext({
-      base: params.agentPath,
-      db: createD1Client(this.env.DO_CATALOG),
+    // Creation: the standard two appends (subscription + creation event) by
+    // this DO, the creator — idempotent, so re-creation is inert. The
+    // parent is the project context.
+    await createContext({
       env: this.env as unknown as Env,
-      name: `agent:${params.agentPath}`,
-      parent: { address: projectContextAddress(params.projectId), id: params.projectId },
-      projectId: params.projectId,
-      typeIdPrefix: config.typeIdPrefix,
+      name: String(params.agentPath),
+      namespace: params.projectId,
+      parent: {
+        address: contextAddress(projectContextRef(params.projectId)),
+        ref: projectContextRef(params.projectId),
+      },
+      path: String(params.agentPath),
     });
-    const caps = this.agentContextCapabilities(params, created.contextId);
-    const contextItx = dialContext(this.env as unknown as Env, created.address).itx();
+
+    // Provide the agent's tools onto its OWN context — the one and only door
+    // (itx.provideCapability), exactly how every other capability in the
+    // system is registered. Each provide appends an itx/capability-provided
+    // event to the agent's stream: the fold projects it into the capability
+    // table (so `itx.<name>` resolves through the normal path), AND the agent
+    // processor renders that same event into the LLM's visible context (so the
+    // model knows the tool exists). One abstraction, one event, two readers.
+    const node = dialContext(this.env as unknown as Env, selfAddress).itx();
+    const caps = this.agentContextCapabilities(params, context);
     for (const cap of caps) {
-      await contextItx.provideCapability({
+      await node.provideCapability({
         capability: cap.capability,
         instructions: cap.instructions,
         name: cap.name,
       });
     }
-    // The LLM learns its tools from stream history: one rendered event per
-    // cap (the agent processor rewrites these into the visible context).
-    await this.streamsEntrypoint(params.agentPath).appendBatch({
-      events: caps.map((cap) => ({
-        type: "events.iterate.com/agent/capability-noted",
-        idempotencyKey: `agent-capability-noted:${cap.name}`,
-        payload: { instructions: cap.instructions, name: cap.name },
-      })),
-    });
-    await this.ctx.storage.put("itxContextId", created.contextId);
     await this.ctx.storage.put("itxContextCapabilitiesVersion", AGENT_CONTEXT_CAPABILITIES_VERSION);
-    return created.contextId;
+    return { context, contextAddress: selfAddress };
   }
 
   private async ensureAgentWorkspace(params: AgentDurableObjectStructuredName) {
@@ -575,7 +605,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }
 
   private async getAgentWorkspace(params: AgentDurableObjectStructuredName) {
-    const contextId = await this.ensureItxContext(params);
+    const { context: contextId } = await this.ensureItxContext(params);
     return await getInitializedDoStub({
       allowCreate: true,
       namespace: this.env.WORKSPACE,
@@ -720,75 +750,91 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     instructions: string;
     capability: CapabilityAddress;
   }> {
-    const agentTool = (tool: "chat" | "debug"): CapabilityAddress => ({
-      entrypoint: "AgentToolsCapability",
-      props: { agentPath: params.agentPath, tool },
-      type: "rpc",
-      worker: { type: "loopback" },
-    });
+    // Every agent gets a RICH toolset. The ONLY thing that varies by agent is
+    // the CHANNEL — how it talks to its user: a Slack agent gets `slack`, a
+    // web agent gets `chat`. (Channel-specific PROMPTING lives in the agent's
+    // system prompt — defaultAgentSystemPrompt, agent-presets.ts.) Everything
+    // else below is identical for all agents.
+    const channel = isSlackAgentPath(params.agentPath)
+      ? {
+          capability: {
+            entrypoint: "SlackCapability",
+            type: "rpc",
+            worker: { type: "loopback" },
+          } satisfies CapabilityAddress,
+          instructions:
+            "Use itx.slack.<Slack Web API method>(args), e.g. " +
+            "itx.slack.chat.postMessage({ channel, thread_ts, text }). Always reply on the same " +
+            "thread_ts you received. Only post when mentioned, asked, or the thread clearly " +
+            "calls for it.",
+          name: "slack",
+        }
+      : {
+          capability: {
+            entrypoint: "AgentToolsCapability",
+            props: { agentPath: params.agentPath, tool: "chat" },
+            type: "rpc",
+            worker: { type: "loopback" },
+          } satisfies CapabilityAddress,
+          instructions:
+            "itx.chat.sendMessage({ message }) sends a visible reply to the user in the web chat.",
+          name: "chat",
+        };
+
     return [
-      ...(isSlackAgentPath(params.agentPath)
-        ? []
-        : [
-            {
-              instructions:
-                "Use itx.chat.sendMessage({ message }) to send a visible response to the user. Prefer this over appending chat events manually.",
-              name: "chat",
-              capability: agentTool("chat"),
-            },
-          ]),
+      channel,
       {
-        instructions:
-          "Use itx.debug() to return OS debug information about the current agent stream.",
+        capability: {
+          entrypoint: "AgentToolsCapability",
+          props: { agentPath: params.agentPath, tool: "debug" },
+          type: "rpc",
+          worker: { type: "loopback" },
+        },
+        instructions: "itx.debug() returns OS debug info about this agent stream.",
         name: "debug",
-        capability: agentTool("debug"),
       },
       {
+        capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
         instructions:
           "Workers AI. itx.ai.run(model, input) — e.g. itx.ai.run('@cf/meta/llama-3.1-8b-instruct', { prompt: '…' }).",
         name: "ai",
-        capability: { type: "rpc", worker: { binding: "AI", type: "binding" } },
       },
       {
+        capability: { entrypoint: "SlackCapability", type: "rpc", worker: { type: "loopback" } },
         instructions:
           "Use itx.slack.<Slack Web API method path>(args), e.g. itx.slack.chat.postMessage({ channel, thread_ts, text }). Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. If no reply is needed, do not call chat.postMessage. For legitimate long-running Slack replies, use Promise.all to send an immediate acknowledgment while doing the real work in parallel, then send the actual result afterwards.",
         name: "slack",
-        capability: { entrypoint: "SlackCapability", type: "rpc", worker: { type: "loopback" } },
       },
       {
+        capability: {
+          entrypoint: "IntegrationsCapability",
+          type: "rpc",
+          worker: { type: "loopback" },
+        },
         instructions:
           'Connected third-party services. itx.integrations.google.gmail.request({ path: "/messages", query: { q: "is:unread" } }) ' +
           "calls Gmail as the connected account (self-refreshing token); itx.integrations.github.octokit is a ready-authenticated Octokit; " +
           'itx.integrations["google/<account>"] addresses a specific account when several are connected. ' +
           "Call itx.integrations() to list platform integrations; unknown slugs forward to the project worker's own integrations export (userspace).",
         name: "integrations",
-        capability: {
-          entrypoint: "IntegrationsCapability",
-          type: "rpc",
-          worker: { type: "loopback" },
-        },
       },
       {
-        instructions:
-          "Use itx.agents.create() to get a promise-pipelineable subagent handle, e.g. await itx.agents.create().doThing(args).",
-        name: "agents",
         capability: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },
+        instructions:
+          "itx.agents.create() returns a promise-pipelineable subagent handle, e.g. await itx.agents.create().doThing(args).",
+        name: "agents",
       },
       {
-        // Workspaces are not itx's concern: this HOST decides its context
-        // gets a private workspace and provides one bound to the context's
-        // identity. Plain extensions of the project share the project
-        // workspace through the chain instead.
-        instructions:
-          "This agent's private workspace filesystem: itx.workspace.readFile/writeFile plus " +
-          "the flat git methods gitClone/gitAdd/gitCommit/gitPush/gitStatus.",
-        name: "workspace",
         capability: {
           entrypoint: "WorkspaceCapability",
           props: { workspaceId: contextId },
           type: "rpc",
           worker: { type: "loopback" },
         },
+        instructions:
+          "This agent's private workspace filesystem: itx.workspace.readFile/writeFile plus the " +
+          "flat git methods gitClone/gitAdd/gitCommit/gitPush/gitStatus.",
+        name: "workspace",
       },
     ];
   }
@@ -930,6 +976,18 @@ function resolveProcessorStreamPath(input: { basePath: StreamPath; pathInput?: s
   return StreamPath.parse(
     input.basePath === "/" ? `/${relativePath}` : `${input.basePath}/${relativePath}`,
   );
+}
+
+/** AN AGENT IS A CONTEXT: its ref and address are projections of the
+ * agent's stream coordinate — no mint, no catalog. The agent DO's own name
+ * (#1513) is the SAME string: one coordinate, two doors. The context node
+ * is the generic ItxDurableObject named with the ref. */
+function agentContextRef(name: AgentDurableObjectStructuredName): string {
+  return formatContextRef({ namespace: name.projectId, path: String(name.agentPath) });
+}
+
+function agentContextAddress(name: AgentDurableObjectStructuredName): CapabilityAddress {
+  return contextAddress(agentContextRef(name));
 }
 
 function agentWorkspaceName(input: {

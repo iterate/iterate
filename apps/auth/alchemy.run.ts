@@ -114,6 +114,10 @@ const worker = await TanStackStart(APP_NAME, {
   },
   routes: alchemyEnv.WORKER_ROUTES.map((pattern) => ({ pattern: `${pattern}/*`, adopt: true })),
   adopt: true,
+  // Without this flag, same-zone subrequests (e.g. SSR calling our own
+  // /api/auth/get-session via the public hostname) bypass Worker routes and
+  // hang against the originless zone for ~20s per page load.
+  compatibilityFlags: ["global_fetch_strictly_public"],
   assets: {
     not_found_handling: "single-page-application",
     run_worker_first: ["/api/*"],

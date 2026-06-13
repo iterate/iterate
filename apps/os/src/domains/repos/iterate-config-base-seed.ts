@@ -52,12 +52,10 @@ export default {
   //       payload: { systemPrompt: "You are this project's agent. ..." },
   //     },
   //   });
-  //   await env.STREAMS.append({
-  //     streamPath: agentPath,
-  //     event: {
-  //       type: "events.iterate.com/agent/capability-noted",
-  //       payload: { name: "worker.myTool", instructions: "Use itx.worker.myTool({ ... }) to ..." },
-  //     },
+  //   await itx.provideCapability({
+  //     name: "worker.myTool",
+  //     capability: { type: "rpc", worker: { type: "loopback" }, entrypoint: "MyToolCapability" },
+  //     instructions: "Use itx.worker.myTool({ ... }) to ...",
   //   });
   // },
 };

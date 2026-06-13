@@ -95,32 +95,10 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
     }, 120_000);
   }
 
-  it("provides a live browser-owned capability and calls it via the fallthrough (alert example)", async () => {
-    const projectId = await ensureBrowserMatrixProject();
-    using itx = await connectFromBrowser(projectId);
-
-    const example = ITX_EXAMPLES.find((candidate) => candidate.id === "provide-live-capability");
-    if (!example) throw new Error("Missing provide-live-capability example.");
-
-    const alertMessages: string[] = [];
-    const originalAlert = globalThis.alert;
-    globalThis.alert = (message?: unknown) => {
-      alertMessages.push(String(message));
-    };
-    try {
-      await expect(
-        evalBrowserReplSessionCode({
-          code: example.code,
-          env: {},
-          itx,
-          scope: createBrowserReplScope({ projectId }),
-        }),
-      ).resolves.toBe("alerted");
-    } finally {
-      globalThis.alert = originalAlert;
-    }
-    expect(alertMessages).toEqual(["The answer is 42"]);
-  }, 45_000);
+  // The browser-as-provider story (a tab registering live, browser-owned
+  // objects) is covered by the matrix run of "provide-plain-object": its
+  // closures live in this tab, so the asserted values can only have been
+  // computed by calls travelling back over the open session.
 
   it("provides a browser path-call cap with an SDK-shaped surface", async () => {
     const projectId = await ensureBrowserMatrixProject();

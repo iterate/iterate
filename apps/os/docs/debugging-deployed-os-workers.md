@@ -14,11 +14,12 @@ Common target modes:
 # Local dev through your configured tunnel. Requires `pnpm dev` and a healthy tunnel.
 pnpm cli rpc --help
 
-# Direct local dev server. Use when the tunnel hostname is not reachable.
-doppler run --config dev_jonas -- pnpm cli --base-url http://localhost:5173 rpc --help
+# Fully-local dev server. Requires `doppler run --config dev -- pnpm dev`;
+# the CLI reads .alchemy/dev-server.json for the selected port.
+doppler run --config dev -- pnpm cli rpc --help
 
-# Localhost-specific config. Requires `pnpm dev:localhost`.
-doppler run --config dev_localhost -- pnpm cli rpc --help
+# Explicit local override, if you are not using the discovery file.
+doppler run --config dev -- pnpm cli --base-url http://localhost:<port> rpc --help
 
 # Production.
 doppler run --config prd -- pnpm cli rpc --help
@@ -185,7 +186,7 @@ doppler run --config prd -- pnpm cli rpc project inbound-mcp-server list-session
 
 Use the Cloudflare API MCP server for Workers traces, routes, bindings, D1, Durable Objects, and other Cloudflare state. Docs: [Cloudflare MCP servers](https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/).
 
-The deployed worker name is derived in `packages/shared/src/alchemy/init.ts` as `${manifest.slug}-${app.stage}` and then used by `apps/os/alchemy.run.ts` as `ctx.workerName`. For production OS, that is `os-prd`.
+The deployed worker name is derived in `packages/shared/src/alchemy/init.ts` as `${manifest.slug}-${app.stage}` and then used by `apps/os/alchemy.run.ts` as `ctx.workerName`. For production OS, `os-prd` is the **ingress router**; the app worker is `os-prd-app` and each Durable Object class has its own worker (`os-prd-stream`, `os-prd-agent`, `os-prd-project`, `os-prd-slack-integration`, …) — see [worker-topology.md](./worker-topology.md). Pick the worker that owns the code you are debugging: dashboard/API traffic is `os-prd-app`, Slack event routing is `os-prd-slack-integration`, agent turns are `os-prd-agent`, stream appends are `os-prd-stream`.
 
 OS workers have persistent Workers Logs and traces enabled in `packages/shared/src/alchemy/iterate-app.ts`.
 
@@ -301,7 +302,7 @@ async () => {
             key: "$metadata.service",
             operation: "eq",
             type: "string",
-            value: "os-prd",
+            value: "os-prd-app", // or os-prd-agent, os-prd-stream, … (worker-topology.md)
           },
         ],
       },
@@ -315,8 +316,8 @@ Useful dashboard search queries:
 ```txt
 REPLACE_WITH_RAY_ID
 "Project iterate not found"
-$metadata.service = "os-prd" AND $workers.outcome = "exception"
-$metadata.service = "os-prd" AND $workers.wallTimeMs > 1000
+$metadata.service = "os-prd-app" AND $workers.outcome = "exception"
+$metadata.service = "os-prd-app" AND $workers.wallTimeMs > 1000
 exists($metadata.error)
 ```
 
@@ -335,8 +336,8 @@ doppler run --config prd -- wrangler tail os-prd --status error
 doppler run --config prd -- wrangler tail os-prd --search "REPLACE_WITH_RAY_ID" --format json
 
 # Deployment/version checks.
-doppler run --config prd -- wrangler deployments list --name os-prd
-doppler run --config prd -- wrangler versions list --name os-prd
+doppler run --config prd -- wrangler deployments list --name os-prd-app
+doppler run --config prd -- wrangler versions list --name os-prd-app
 
 # D1 spot checks.
 doppler run --config prd -- \

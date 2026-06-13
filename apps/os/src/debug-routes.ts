@@ -10,6 +10,7 @@ import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-ch
 import { authenticateAdminBearer } from "~/auth/admin.ts";
 
 const EGRESS_ECHO_PATH = "/api/itx/egress-echo";
+const OPENAPI_FIXTURE_BASE = "/api/itx/openapi-fixture";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 /**
@@ -24,6 +25,7 @@ export async function handleDebugRoutes(input: {
 }): Promise<Response | null> {
   return (
     handleEgressEchoFetch(input) ??
+    (await handleOpenApiFixtureFetch(input)) ??
     (await handleDebugAppendChainFetch(input)) ??
     (await handleSeedIterateConfigBaseFetch(input))
   );
@@ -47,6 +49,131 @@ function handleEgressEchoFetch(input: { request: Request; config: AppConfig }) {
     method: input.request.method,
     url: url.toString(),
   });
+}
+
+/**
+ * A tiny, deterministic OpenAPI service — the spec document plus the API it
+ * describes — so the OpenApiClient e2e never depends on a live third-party
+ * demo server. Admin-token-gated like the egress echo: the e2e provides the
+ * capability with an admin bearer in props.headers, which also proves that
+ * headers ride every API call (nothing here answers without them).
+ */
+async function handleOpenApiFixtureFetch(input: {
+  request: Request;
+  config: AppConfig;
+}): Promise<Response | null> {
+  const url = new URL(input.request.url);
+  if (
+    url.pathname !== OPENAPI_FIXTURE_BASE &&
+    !url.pathname.startsWith(`${OPENAPI_FIXTURE_BASE}/`)
+  ) {
+    return null;
+  }
+
+  const expectedToken = input.config.adminApiSecret?.exposeSecret();
+  if (
+    expectedToken == null ||
+    input.request.headers.get("authorization") !== `Bearer ${expectedToken}`
+  ) {
+    return Response.json({ error: "Unauthorized." }, { status: 401 });
+  }
+
+  const subpath = url.pathname.slice(OPENAPI_FIXTURE_BASE.length);
+  if (subpath === "/openapi.json" && input.request.method === "GET") {
+    return Response.json(openApiFixtureSpec());
+  }
+  if (subpath === "/pets" && input.request.method === "GET") {
+    const status = url.searchParams.get("status");
+    if (!status) return Response.json({ error: "status is required." }, { status: 400 });
+    const limit = Number(url.searchParams.get("limit") ?? "2");
+    const pets = [
+      { id: 1, name: `${status}-pet-1`, tag: status },
+      { id: 2, name: `${status}-pet-2`, tag: status },
+    ];
+    return Response.json(pets.slice(0, limit));
+  }
+  if (subpath === "/pets" && input.request.method === "POST") {
+    const body = (await input.request.json().catch(() => null)) as Record<string, unknown> | null;
+    if (body == null || typeof body.name !== "string") {
+      return Response.json({ error: "A pet needs a name." }, { status: 400 });
+    }
+    return Response.json({ ...body, id: 99 });
+  }
+  const petMatch = subpath.match(/^\/pets\/(\d+)$/);
+  if (petMatch && input.request.method === "GET") {
+    const id = Number(petMatch[1]);
+    return Response.json({ id, name: `pet-${id}` });
+  }
+  return Response.json({ error: "Not found." }, { status: 404 });
+}
+
+function openApiFixtureSpec() {
+  const petRef = { $ref: "#/components/schemas/Pet" };
+  return {
+    components: {
+      schemas: {
+        Pet: {
+          properties: {
+            id: { type: "integer" },
+            name: { type: "string" },
+            tag: { type: "string" },
+          },
+          required: ["id", "name"],
+          type: "object",
+        },
+      },
+    },
+    info: { title: "Itx OpenAPI Fixture", version: "1.0.0" },
+    openapi: "3.0.3",
+    paths: {
+      "/pets": {
+        get: {
+          operationId: "listPets",
+          parameters: [
+            {
+              in: "query",
+              name: "status",
+              required: true,
+              schema: { enum: ["available", "pending", "sold"], type: "string" },
+            },
+            { in: "query", name: "limit", schema: { type: "integer" } },
+          ],
+          responses: {
+            "200": {
+              content: { "application/json": { schema: { items: petRef, type: "array" } } },
+              description: "Pets with the given status.",
+            },
+          },
+          summary: "List pets by status.",
+        },
+        post: {
+          operationId: "createPet",
+          requestBody: { content: { "application/json": { schema: petRef } } },
+          responses: {
+            "200": {
+              content: { "application/json": { schema: petRef } },
+              description: "The created pet.",
+            },
+          },
+          summary: "Create a pet.",
+        },
+      },
+      "/pets/{petId}": {
+        get: {
+          operationId: "getPet",
+          parameters: [{ in: "path", name: "petId", required: true, schema: { type: "integer" } }],
+          responses: {
+            "200": {
+              content: { "application/json": { schema: petRef } },
+              description: "The pet.",
+            },
+          },
+          summary: "One pet by id.",
+        },
+      },
+    },
+    servers: [{ url: OPENAPI_FIXTURE_BASE }],
+  };
 }
 
 async function handleDebugAppendChainFetch(input: {

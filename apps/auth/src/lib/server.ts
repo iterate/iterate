@@ -499,10 +499,15 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
   const app = new Hono().basePath(authHandlerBasePath);
 
   app.get("/login", async (c) => {
+    const requestURL = new URL(c.req.url);
+    const canonicalLoginURL = localLoopbackCanonicalLoginURL(requestURL, config.redirectURI);
+    if (canonicalLoginURL) {
+      return c.redirect(canonicalLoginURL.toString());
+    }
+
     const as = await getAuthorizationServer();
     if (!as.authorization_endpoint) throw new Error("No authorization_endpoint in server metadata");
 
-    const requestURL = new URL(c.req.url);
     const returnTo = resolveAllowedReturnTo(requestURL.searchParams.get("return_to"), [
       requestURL.origin,
       ...(config.logoutReturnToOrigins ?? []),
@@ -787,4 +792,24 @@ function normalizeAuthHandlerBasePath(authHandlerBasePath: string | undefined) {
   const basePath = authHandlerBasePath ?? DEFAULT_AUTH_HANDLER_BASE_PATH;
   const normalized = `/${basePath.replace(/^\/+|\/+$/g, "")}`;
   return normalized === "/" ? DEFAULT_AUTH_HANDLER_BASE_PATH : normalized;
+}
+
+function localLoopbackCanonicalLoginURL(requestURL: URL, redirectURI: string) {
+  const redirectURL = new URL(redirectURI);
+  if (requestURL.origin === redirectURL.origin) return null;
+  if (!isLocalLoopbackHostname(requestURL.hostname)) return null;
+  if (!isLocalLoopbackHostname(redirectURL.hostname)) return null;
+
+  return new URL(`${requestURL.pathname}${requestURL.search}`, redirectURL.origin);
+}
+
+function isLocalLoopbackHostname(hostname: string) {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized.endsWith(".localhost") ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "[::1]"
+  );
 }

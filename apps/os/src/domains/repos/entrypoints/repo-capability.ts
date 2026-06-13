@@ -7,10 +7,12 @@ import {
 import type {
   RepoInfo,
   RepoDurableObject,
-  RepoStructuredName,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import type { RepoRemote } from "~/domains/repos/stream-processors/repo-stream-processor.ts";
-import { getRepoDurableObjectName } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import {
+  getRepoDurableObjectName,
+  type RepoStructuredName,
+} from "~/domains/repos/repo-durable-object-name.ts";
 import {
   isRepoAlreadyExistsError,
   isRepoNotCreatedError,

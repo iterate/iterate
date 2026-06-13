@@ -1,6 +1,6 @@
-// Live tail of the project context's JOURNAL (the /itx stream — the only
-// authority for its capability table): capabilities being provided, revoked,
-// disconnecting; script executions. The first instance of the canonical
+// Live tail of the project context's own stream (the project root stream —
+// the only authority for its capability table): capabilities being provided,
+// revoked, disconnecting; script executions. The first instance of the canonical
 // "filtered stream view" — friendly per-event-type renderers, raw mode shows
 // the same events unfiltered (filtering is client-side by design). Rides useItx (suspends until connected — give it a Suspense
 // boundary) with one kernel subscribe from "start": full replay + live tail.
@@ -15,8 +15,8 @@ import { useItx } from "~/itx/use-itx.ts";
 
 const MAX_BUFFERED_EVENTS = 500;
 
-/** The project context's journal path (journal.ts ownJournalPath("/")). */
-const PROJECT_JOURNAL_PATH = "/itx";
+/** The project context's stream path — the project root (coordinates.ts). */
+const PROJECT_CONTEXT_PATH = "/";
 
 const capabilityName = (p: Record<string, unknown>) =>
   Array.isArray(p.path) ? p.path.join(".") : String(p.name ?? "");
@@ -27,7 +27,7 @@ const FRIENDLY_RENDERERS: Record<string, (payload: Record<string, unknown>) => s
   "events.iterate.com/itx/capability-revoked": (p) => `capability "${capabilityName(p)}" revoked`,
   "events.iterate.com/itx/capability-disconnected": (p) =>
     `capability "${capabilityName(p)}" disconnected`,
-  "events.iterate.com/itx/context-created": (p) => `context created: ${p.id ?? ""}`,
+  "events.iterate.com/itx/context-created": (p) => `context created: ${p.name ?? ""}`,
 };
 
 type TailStatus = "connecting" | "live" | "error";
@@ -45,7 +45,7 @@ export function ItxActivityTail({ projectId }: { projectId: string }) {
     setStatus("connecting");
     setError(undefined);
     itx.streams
-      .get(PROJECT_JOURNAL_PATH)
+      .get(PROJECT_CONTEXT_PATH)
       .subscribe(
         (batch) => {
           if (disposed) return;

@@ -74,6 +74,10 @@ export class StreamBrowserDatabase implements Disposable {
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
   >();
   readonly #queries = new Map<string, RegisteredQuery>();
+  // Every entry a view is (or was) observing. Change notifications iterate
+  // THIS set, not #queries: the dedupe map can evict/replace an entry while a
+  // view still holds its handle, and that view must keep refreshing.
+  readonly #liveQueries = new Set<RegisteredQuery>();
   readonly #changeListeners = new Set<(change: StreamDbChange) => void>();
 
   constructor(
@@ -217,21 +221,25 @@ export class StreamBrowserDatabase implements Disposable {
    * The server stream incarnation (its `created` identity) this mirror was last built
    * against, or undefined if never recorded. Used to detect a server reset()/reincarnation
    * so the mirror is rebuilt rather than reconciled by an offset that restarted.
+   *
+   * Keyed per processor slug: multiple runtimes share this database and each
+   * reconciles (and discards) its own tables independently — a shared key would
+   * let the first runtime's rebuild mask another runtime's pending discard.
    */
-  async readMirrorIncarnation(): Promise<string | undefined> {
+  async readMirrorIncarnation(slug: string): Promise<string | undefined> {
     await this.#ensureMirrorMetaSchema();
-    const [row] = await this.exec(
-      `SELECT value FROM mirror_meta WHERE key = 'incarnation' LIMIT 1`,
-    );
+    const [row] = await this.exec(`SELECT value FROM mirror_meta WHERE key = ? LIMIT 1`, [
+      `incarnation:${slug}`,
+    ]);
     return typeof row?.value === "string" ? row.value : undefined;
   }
 
-  async writeMirrorIncarnation(incarnation: string): Promise<void> {
+  async writeMirrorIncarnation(slug: string, incarnation: string): Promise<void> {
     await this.#ensureMirrorMetaSchema();
     await this.exec(
-      `INSERT INTO mirror_meta (key, value) VALUES ('incarnation', ?)
+      `INSERT INTO mirror_meta (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      [incarnation],
+      [`incarnation:${slug}`, incarnation],
     );
   }
 
@@ -270,6 +278,15 @@ export class StreamBrowserDatabase implements Disposable {
             clearTimeout(entry.gcTimer);
             entry.gcTimer = undefined;
           }
+          // React can subscribe AFTER the creation-time GC fired (Suspense or a
+          // lazy chunk delays the commit past the 0ms timer while useMemo keeps
+          // the handle). An evicted entry must rejoin the registry, or this
+          // query runs once and never sees another change notification — the
+          // exact "feed frozen until reload" bug. The dedupe slot may have been
+          // re-taken by a newer identical entry; #liveQueries is what change
+          // notification iterates, so re-adding there is what matters.
+          if (this.#queries.get(key) === undefined) this.#queries.set(key, entry);
+          this.#liveQueries.add(entry);
           if (!entry.started) {
             entry.started = true;
             void this.#runQuery(entry);
@@ -294,7 +311,10 @@ export class StreamBrowserDatabase implements Disposable {
     if (entry.gcTimer !== undefined) clearTimeout(entry.gcTimer);
     entry.gcTimer = setTimeout(() => {
       entry.gcTimer = undefined;
-      if (entry.listeners.size === 0) this.#queries.delete(key);
+      if (entry.listeners.size === 0) {
+        this.#liveQueries.delete(entry);
+        if (this.#queries.get(key) === entry) this.#queries.delete(key);
+      }
     }, 0);
   }
 
@@ -355,7 +375,7 @@ export class StreamBrowserDatabase implements Disposable {
 
   #onChange(change: StreamDbChange) {
     this.#infoRefresh = undefined;
-    for (const entry of this.#queries.values()) {
+    for (const entry of this.#liveQueries) {
       // Skip entries no view is observing (and ones that never started): re-running them
       // wastes a worker round trip and they will run on first subscribe anyway.
       if (entry.listeners.size === 0 || !entry.started) continue;
@@ -372,6 +392,7 @@ export class StreamBrowserDatabase implements Disposable {
     }
     this.#pending.clear();
     this.#queries.clear();
+    this.#liveQueries.clear();
     this.#changeListeners.clear();
     this.#channel.close();
     const closeRequestId = this.#nextRequestId++;

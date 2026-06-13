@@ -8,6 +8,7 @@ import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { createBrowserOpenApiClient } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
+  staticData: { hideAppHeader: true },
   params: {
     parse: (raw) => ({
       _splat: streamPathFromSplat(raw._splat),

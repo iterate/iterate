@@ -68,8 +68,52 @@ describe("CloudflareAiProcessor", () => {
           { role: "system", content: "You are a helpful assistant. You can trust your user." },
           { role: "user", content: "hello" },
         ],
+        stream: true,
       },
     ]);
+  });
+
+  it("appends every streamed chunk and reassembles the assistant text", async () => {
+    const { stream, appended } = memoryStream();
+    const runs: string[] = [];
+    const processor = newProcessor({
+      stream,
+      runs,
+      aiResult: () =>
+        sseStream([
+          `data: ${JSON.stringify({ response: "Hel" })}`,
+          `data: ${JSON.stringify({ response: "lo" })}`,
+          `data: ${JSON.stringify({ response: "", usage: { prompt_tokens: 5, completion_tokens: 2 } })}`,
+          "data: [DONE]",
+        ]),
+      readStreamEvents: async () => [llmRequestRequestedEvent({ offset: 11 })],
+    });
+
+    await processor.ingest({
+      events: [llmRequestRequestedEvent({ offset: 11 })],
+      streamMaxOffset: 11,
+    });
+
+    await waitFor(() =>
+      eventTypes(appended).includes("events.iterate.com/agent/llm-request-completed"),
+    );
+    const chunkEvents = appended.filter(
+      (event) => event.type === "events.iterate.com/cloudflare-ai/llm-response-chunk",
+    );
+    expect(chunkEvents).toHaveLength(3);
+    expect(chunkEvents.map((event) => (event.payload as { sequence: number }).sequence)).toEqual([
+      0, 1, 2,
+    ]);
+    const outputAdded = appended.find(
+      (event) => event.type === "events.iterate.com/agent/output-added",
+    );
+    expect(outputAdded?.payload).toMatchObject({ content: "Hello", llmRequestId: 11 });
+    const completed = appended.find(
+      (event) => event.type === "events.iterate.com/agent/llm-request-completed",
+    );
+    expect(completed?.payload).toMatchObject({
+      result: { status: "success", usage: { prompt_tokens: 5, completion_tokens: 2 } },
+    });
   });
 
   it("retries a request a previous incarnation left in started", async () => {
@@ -215,6 +259,7 @@ function newProcessor(args: {
   bodies?: unknown[];
   snapshot?: StreamProcessorSnapshot<CloudflareAiState>;
   readStreamEvents?: () => Promise<StreamEvent[]>;
+  aiResult?: () => unknown;
 }) {
   return new CloudflareAiProcessor({
     iterateContext: { stream: args.stream },
@@ -223,12 +268,22 @@ function newProcessor(args: {
       run: async (model: string, body: unknown) => {
         args.runs.push(model);
         args.bodies?.push(body);
-        return { response: "ok" };
+        return args.aiResult?.() ?? { response: "ok" };
       },
     },
     // The agent's stream history; empty means the output-added append is
     // skipped as stale, which is fine — completion events still land.
     readStreamEvents: args.readStreamEvents ?? (async () => []),
+  });
+}
+
+function sseStream(lines: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const line of lines) controller.enqueue(encoder.encode(`${line}\n\n`));
+      controller.close();
+    },
   });
 }
 

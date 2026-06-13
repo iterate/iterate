@@ -374,3 +374,30 @@ One PR (deliberately breaking; prd gets redeployed), five moves:
   slack-integration, and repo DOs (delivery has been on the host model for a
   while; those were catch-up/observability vestiges). Agent runtime state is
   now the honest `{ agentPath, processors: { [slug]: snapshot } }`.
+- **`{ type: "url" }` addresses and `UrlDial` are deleted.** The url kind's
+  only consumer was an e2e test dialing the deployment's own `/api/itx` back
+  over the network — a self-proof, not a use. Addresses are `"rpc"` only;
+  re-adding an outbound-capnweb variant later is purely additive. (It also
+  carried a known gap: url dials bypassed fetch-cap shadowing.)
+- **Share URLs are deleted; exposed caps are public.** `shareUrl` /
+  `itx_share` was the realm's one bearer-token edge — a query-string token
+  signed with the ADMIN API SECRET, with no consumer outside tests. Cap-host
+  HTTP is now one switch: `meta.http.expose` (404 unless exposed; exposed
+  answers anyone). `meta.http.public` died with the gate.
+- **A context IS a stream coordinate; ItxDurableObject is the ONLY host.**
+  Context ids (`itx_…`), the `itx_contexts` D1 directory, the reserved `itx`
+  stream segment, and the embedded cores in the Project and Agent DOs are
+  all deleted. Identity is the REF `<namespace>:<path>` — also the node's
+  DO name and address. The project context lives at `prj_x:/` (its events
+  interleave with the project's own on the root stream, exactly like agents
+  already did on theirs); an MCP session's at its session stream; `extend`
+  takes a `path` or generates `/itx/<id>`.
+- **The generic host derives nothing; creation is an event by the CREATOR.**
+  `createContext` appends `subscription-configured` (pointing the stream at
+  the node's `itx` processor) + `context-created { name, parent }` — both
+  idempotent by key, so creation is get-or-create (the fold takes the first
+  birth certificate). Parentage comes strictly from the event; the platform
+  defaults parent is the one loopback (code) address.
+- **The project-host `/__itx` connect door is deleted** (premature). Connect
+  is `/api/itx[/:target]` on the OS origin only; `:target` is a project
+  id/slug (the root context) or a full URL-encoded ref.

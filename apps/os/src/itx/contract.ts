@@ -1,12 +1,13 @@
-// The journal contract: the context's event vocabulary and the shape of its
+// The context's stream contract: its event vocabulary and the shape of its
 // folded state (the repo's processor-contract convention — see
-// docs/domain-objects-and-stream-processors.md). The context's journal is an
-// ordinary event stream; these are its event types. Provides, revokes,
-// disconnects, and the script execution record all live here — there is no
-// other write. Payload schemas are deliberately LOOSE (z.looseObject +
-// optionals): a journal may carry events from before a deploy's schema, and
-// a malformed payload must be ignored by the fold (itx.ts
-// reduceItxJournalEvent), never wedge ingestion.
+// docs/domain-objects-and-stream-processors.md). A context IS a stream
+// coordinate; these are the itx-owned event types on that stream (which the
+// context may share with whatever else lives there — an agent's events, a
+// session's). Provides, revokes, disconnects, and the script execution
+// record all live here — there is no other write. Payload schemas are
+// deliberately LOOSE (z.looseObject + optionals): a stream may carry events
+// from before a deploy's schema, and a malformed payload must be ignored by
+// the fold (itx.ts reduceItxEvent), never wedge ingestion.
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
@@ -59,48 +60,39 @@ const WorkerRefRecord = z.discriminatedUnion("type", [
   z.looseObject({ source: WorkerSourceRecord, type: z.literal("source") }),
 ]) satisfies z.ZodType<WorkerRef, unknown>;
 
-export const CapabilityAddressRecord = z.discriminatedUnion("type", [
-  z.looseObject({
-    entrypoint: z.string().optional(),
-    props: z.record(z.string(), z.json()).optional(),
-    type: z.literal("rpc"),
-    worker: WorkerRefRecord,
-  }),
-  z.looseObject({
-    headers: z.record(z.string(), z.string()).optional(),
-    type: z.literal("url"),
-    url: z.string(),
-  }),
-]) satisfies z.ZodType<CapabilityAddress, unknown>;
+export const CapabilityAddressRecord = z.looseObject({
+  entrypoint: z.string().optional(),
+  props: z.record(z.string(), z.json()).optional(),
+  type: z.literal("rpc"),
+  worker: WorkerRefRecord,
+}) satisfies z.ZodType<CapabilityAddress, unknown>;
 
 const ParentRefRecord = z.object({
   address: CapabilityAddressRecord,
-  id: z.string(),
+  ref: z.string(),
 });
 
 const CapabilityRecord = z.object({
   address: CapabilityAddressRecord.nullable().default(null),
-  kind: z.enum(["live", "rpc", "url"]),
+  kind: z.enum(["live", "rpc"]),
   meta: z.record(z.string(), z.json()).default({}),
   name: z.string(),
   owner: z.string(),
   updatedAtMs: z.number().default(0),
 });
 
-/** The journal contract: the context's state is the fold of these events. */
+/** The contract: the context's state is the fold of these events. */
 export const ItxContract = defineProcessorContract({
   slug: "itx",
   version: "0.1.0",
-  description:
-    "A context: its birth certificate and capability table, folded from its journal stream.",
+  description: "A context: its birth certificate and capability table, folded from its own stream.",
   stateSchema: z.object({
     capabilities: z.record(z.string(), CapabilityRecord).default({}),
-    /** The birth certificate (journal event #1). null until created — and
-     * forever null for code-created contexts like the project context, whose
-     * identity derives from its host's name instead. */
+    /** The birth certificate. null until the creation event arrives —
+     * identity is the coordinate (the host's name), so the certificate
+     * carries only naming and parentage. */
     context: z
       .object({
-        id: z.string(),
         name: z.string().nullable().default(null),
         parent: ParentRefRecord.nullable().default(null),
       })
@@ -114,16 +106,15 @@ export const ItxContract = defineProcessorContract({
   events: {
     "events.iterate.com/itx/context-created": {
       description:
-        "The context's birth certificate — the FIRST event in its journal. Carries identity and parentage; the fold takes the first one and ignores any later one (exactly-once is a property of the fold, not of delivery).",
+        "The context's birth certificate, appended by its CREATOR. Carries naming and parentage (identity is the stream coordinate itself); the fold takes the first one and ignores any later one — creation is get-or-create.",
       payloadSchema: z.looseObject({
-        id: z.string(),
         name: z.string().nullable().optional(),
         parent: ParentRefRecord.nullable().optional(),
       }),
     },
     "events.iterate.com/itx/capability-provided": {
       description:
-        "A capability was provided at a path. THE write: the fold projects it into the capability table. Live provides journal this record too (it outlives the session) while the stub stays an in-memory instance field.",
+        "A capability was provided at a path. THE write: the fold projects it into the capability table. Live provides append this record too (it outlives the session) while the stub stays an in-memory instance field.",
       payloadSchema: z.looseObject({
         address: CapabilityAddressRecord.nullable().optional(),
         kind: z.string().optional(),

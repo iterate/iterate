@@ -84,6 +84,8 @@ export function createSocketSuspenseCache<T>(input: {
   };
 }
 
+const ITX_DIAL_TIMEOUT_MS = 15_000;
+
 function dialItx(context: string | undefined, onDead: () => void): Promise<RpcStub<ItxHandle>> {
   const url = new URL(
     context ? `/api/itx/${encodeURIComponent(context)}` : "/api/itx",
@@ -92,11 +94,22 @@ function dialItx(context: string | undefined, onDead: () => void): Promise<RpcSt
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(url);
   const { promise, resolve, reject } = Promise.withResolvers<RpcStub<ItxHandle>>();
-  socket.addEventListener("open", () => resolve(newWebSocketRpcSession<ItxHandle>(socket)));
+  // A dial that never connects (e.g. the worker restarting behind the dev
+  // proxy) must not suspend consumers forever: time out and close, so the
+  // close handler below evicts the entry and the next render re-dials.
+  const dialTimeout = setTimeout(() => {
+    reject(new Error(`The itx dial to ${url.pathname} timed out.`));
+    socket.close();
+  }, ITX_DIAL_TIMEOUT_MS);
+  socket.addEventListener("open", () => {
+    clearTimeout(dialTimeout);
+    resolve(newWebSocketRpcSession<ItxHandle>(socket));
+  });
   // `close` fires both for a failed dial (reject the pending promise; no-op
   // once resolved) and for a later death of an established socket — either
   // way the entry is dead and must go.
   socket.addEventListener("close", () => {
+    clearTimeout(dialTimeout);
     reject(new Error(`The itx WebSocket to ${url.pathname} closed.`));
     onDead();
   });

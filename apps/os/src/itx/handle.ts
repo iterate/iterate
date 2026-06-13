@@ -12,21 +12,19 @@
 //   - typed built-ins (the trust kernel): the verbs provideCapability,
 //     revokeCapability, describe, extend, invoke — plus super, streams,
 //     project, projects, and `fetch`, which is sugar dispatching through the
-//     core's `fetch` capability (a shadowable platform default)
+//     core's `fetch` capability (a shadowable default)
 //   - a fallthrough Proxy: any unknown name becomes a PathProxy whose
 //     terminal call dispatches to the context node's core (node.itx()).
 //     itx.slack works because someone provided "slack", not because anything
 //     here knows about Slack.
 
 import { RpcTarget } from "cloudflare:workers";
-import { RpcStub } from "capnweb";
 import { createD1Client } from "sqlfu";
 import { PathProxy } from "./path-proxy.ts";
 import { ItxError } from "./errors.ts";
 import { ItxStreams } from "./capabilities/streams.ts";
 import {
   isCapabilityAddress,
-  isLocalBareFunction,
   replayPathCall,
   RESERVED_CAPABILITY_NAMES,
   type CapabilityAddress,
@@ -35,14 +33,15 @@ import {
   type ItxStub,
   type PathCall,
 } from "./itx.ts";
+import { resolveLiveCapability } from "./live-target.ts";
 import {
+  contextAddress,
+  createContext,
   dialContext,
-  extendContext,
-  isChildContextAddress,
-  journalBaseOf,
-  parseItxDurableObjectName,
-  projectContextAddress,
-} from "./journal.ts";
+  generatedContextPath,
+  isContextNodeAddress,
+  projectContextRef,
+} from "./coordinates.ts";
 import {
   getPlatformContext,
   PLATFORM_PROJECT_CONTEXT_ADDRESS,
@@ -50,7 +49,6 @@ import {
 } from "./platform-context.ts";
 import { GLOBAL_CONTEXT_ID, type ProjectAccess } from "./refs.ts";
 import type { CapabilityProvision as CapabilityProvisionContract } from "./types.ts";
-import { createShareToken, SHARE_TOKEN_PARAM } from "./http.ts";
 import type { AppConfig } from "~/config.ts";
 import {
   countAllProjects,
@@ -60,10 +58,8 @@ import {
   insertProject,
   listAllProjects,
 } from "~/db/queries/.generated/index.ts";
-import {
-  getProjectDurableObjectName,
-  type ProjectDurableObject,
-} from "~/domains/projects/durable-objects/project-durable-object.ts";
+import type { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
+import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object-ref.ts";
 import { isProjectId } from "~/domains/projects/project-id.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 
@@ -78,16 +74,14 @@ export type ItxRuntime = {
    * the dotted route, not a display name. */
   capabilityPath?: string;
   config: AppConfig;
-  /** "global", a project id, a itx_… child context id, or the
+  /** "global", a context ref (`<namespace>:<path>`), or the
    * platform:project chain root. */
-  contextId: string;
-  /** How to dial the context node — resolved once by the restorer (the
-   * catalog for bare itx_… refs, derivation for projects); null only on
-   * global handles. */
+  contextRef: string;
+  /** How to dial the context node — a projection of the ref for context
+   * nodes, the loopback address at the chain root; null only on global
+   * handles. */
   contextAddress: CapabilityAddress | null;
-  /** The owning project; null only on global handles. For project contexts
-   * this equals contextId; for child contexts the restorer resolved it from
-   * the context catalog. */
+  /** The owning project — the ref's namespace; null only on global handles. */
   projectId: string | null;
   env: Env;
   /** The parent worker's loopback exports (ctx.exports). */
@@ -146,10 +140,10 @@ export class ItxHandle extends RpcTarget {
   async provideCapability(input: {
     name?: string;
     path?: string[];
-    /** The capability (types.ts): a serializable rpc/url address, a bare
-     * function (auto-wrapped: empty remainder calls it, deeper errors), or
-     * anything live — a stub implementing call({ path, args }) itself, or a
-     * plain object-of-methods wrapped client-side with asPathCallable. */
+    /** The capability (types.ts): a serializable rpc/url address, or
+     * anything live — a plain object of methods (dispatch replays the dotted
+     * path onto its members, no wrapper), a bare function (calling the cap
+     * calls it), or a target implementing call({ path, args }) itself. */
     capability: CapabilityTarget;
     /** A sentence for the human/agent who finds this cap (the
      * meta.instructions convention field, lifted by describe()). */
@@ -270,7 +264,13 @@ export class ItxHandle extends RpcTarget {
    * Isolates the platform loads get this same dispatch as global fetch.
    */
   async fetch(input: Request | string, init?: RequestInit): Promise<Response> {
-    const request = typeof input === "string" ? new Request(input, init) : input;
+    // The explicit egress door — and where any AbortSignal is detached: a
+    // signal cannot cross the RPC hop to the context node ("AbortSignal
+    // serialization is not enabled"), so the door strips it once for every
+    // caller (the MCP SDK attaches one to each request, for example).
+    // Per-request aborts don't survive egress; the pipe's bounds do.
+    const built = typeof input === "string" ? new Request(input, init) : input;
+    const request = new Request(built, { signal: null });
     return (await this.#itx().invoke({ args: [request], path: ["fetch"] })) as Response;
   }
 
@@ -280,7 +280,7 @@ export class ItxHandle extends RpcTarget {
       access: this.#runtime.access,
       capabilityPath: this.#runtime.capabilityPath,
       capabilities: projectId === null ? [] : await this.#itx().describe(),
-      context: this.#runtime.contextId,
+      context: this.#runtime.contextRef,
       project: projectId === null ? null : await this.#projectStub().describe(),
     };
   }
@@ -294,41 +294,37 @@ export class ItxHandle extends RpcTarget {
 
   /**
    * Extend this context with a child (prototype-chain intuition: children
-   * extend parents; resolution climbs upward): same anatomy (capability table,
-   * parent chain, journal), cheaper and disposable — an agent session,
-   * a REPL scratchpad. Returns a handle, because narrowing is construction
+   * extend parents; resolution climbs upward): same anatomy (capability
+   * table, parent chain, stream), cheaper and disposable — a session, a
+   * REPL scratchpad. Returns a handle, because narrowing is construction
    * (Law 4). Child caps shadow this context's; misses delegate up the chain.
+   *
+   * The child IS a stream coordinate: pass `path` to put it somewhere
+   * meaningful (an MCP session's stream, a run's stream), or take the
+   * generated `/itx/<id>` catch-all. Extending an existing path is
+   * get-or-create — the first creation event wins.
    */
-  async extend(opts: { name?: string } = {}): Promise<ItxHandle> {
+  async extend(opts: { name?: string; path?: string } = {}): Promise<ItxHandle> {
     const projectId = this.#requireProjectId();
     const address = this.#requireContextAddress();
-    // Creation is an event: mint the id, append the birth certificate to the
-    // child's journal (identity AND parentage — the child dials chain
-    // delegation through the parent address recorded there), catalog the
-    // coordinate, return a handle. Nothing touches the new node — it
-    // materializes lazily by consuming its journal.
-    const created = await extendContext({
-      base: isChildContextAddress(address)
-        ? journalBaseOf(parseItxDurableObjectName(addressDoName(address)).path)
-        : "/",
-      db: createD1Client(this.#runtime.env.DB),
+    const created = await createContext({
       env: this.#runtime.env,
       name: opts.name,
-      parent: { address, id: this.#runtime.contextId },
-      projectId,
-      typeIdPrefix: this.#runtime.config.typeIdPrefix,
+      namespace: projectId,
+      parent: { address, ref: this.#runtime.contextRef },
+      path: opts.path ?? generatedContextPath(this.#runtime.config.typeIdPrefix),
     });
     // The child is NARROWER than its parent (Law 4): its access is exactly
     // its owning project, never the parent's wider scope. So a session
     // extended off an admin (access "all") handle still cannot reach sibling
     // projects via itx.projects — same access a reconnect through
-    // /api/itx/itx_… would resolve.
+    // /api/itx/<ref> would resolve.
     return new ItxHandle({
       ...this.#runtime,
       access: [projectId],
       capabilityPath: undefined,
       contextAddress: created.address,
-      contextId: created.contextId,
+      contextRef: created.ref,
       projectId,
     });
   }
@@ -341,8 +337,8 @@ export class ItxHandle extends RpcTarget {
    * `await itx.super` also works and yields the parent handle's surface.
    *
    * An extension's parent comes from its birth certificate; the project
-   * context's parent IS the platform context (the chain's code root); the
-   * platform context is the end of the line.
+   * context's parent IS the defaults (the chain's code root); the
+   * defaults are the end of the line.
    */
   get super(): ItxHandle {
     const parentHandle = async (): Promise<ItxHandle> => {
@@ -353,31 +349,27 @@ export class ItxHandle extends RpcTarget {
           message: "The global handle has no parent context.",
         });
       }
-      if (isChildContextAddress(address)) {
-        // A generic context's parentage is its birth certificate, folded
-        // from its journal — ask the node.
-        const descriptor = await dialContext(this.#runtime.env, address).descriptor!();
-        return new ItxHandle({
-          ...this.#runtime,
-          capabilityPath: undefined,
-          contextAddress: descriptor.parent.address as CapabilityAddress,
-          contextId: descriptor.parent.id,
-          projectId: descriptor.projectId,
-        });
-      }
-      if (this.#runtime.contextId === PLATFORM_PROJECT_CONTEXT_ID) {
+      if (this.#runtime.contextRef === PLATFORM_PROJECT_CONTEXT_ID) {
         throw new ItxError({
           code: "BAD_REQUEST",
-          message: "The platform context is the chain root — it has no parent.",
+          message: "The defaults are the chain root — they have no parent.",
         });
       }
-      // The project context's parent IS the platform defaults link: a
-      // read-only code context, dialed in-process.
+      // A context's parentage is its creation event, folded from its
+      // stream — ask the node. The defaults parent comes back as the
+      // loopback address (not a context node), same as the chain dials it.
+      const descriptor = await dialContext(this.#runtime.env, address).descriptor();
+      const parentAddress = descriptor.parent.address as CapabilityAddress;
       return new ItxHandle({
         ...this.#runtime,
         capabilityPath: undefined,
-        contextAddress: PLATFORM_PROJECT_CONTEXT_ADDRESS,
-        contextId: PLATFORM_PROJECT_CONTEXT_ID,
+        contextAddress: isContextNodeAddress(parentAddress)
+          ? parentAddress
+          : PLATFORM_PROJECT_CONTEXT_ADDRESS,
+        contextRef: isContextNodeAddress(parentAddress)
+          ? descriptor.parent.ref
+          : PLATFORM_PROJECT_CONTEXT_ID,
+        projectId: this.#runtime.projectId,
       });
     };
     return new PathProxy(async (call: PathCall) => {
@@ -388,38 +380,6 @@ export class ItxHandle extends RpcTarget {
     }) as unknown as ItxHandle;
   }
 
-  /**
-   * "Let me show you something real quick": a signed, expiring URL for one
-   * HTTP-exposed cap. Possession grants exactly that cap's fetch surface
-   * until expiry — nothing else (itx/http.ts).
-   */
-  async shareUrl(input: { name: string; path?: string; ttlSeconds?: number }): Promise<string> {
-    const secret = this.#runtime.config.adminApiSecret?.exposeSecret();
-    if (!secret) throw new Error("Share URLs need an admin API secret configured.");
-    const projectId = this.#runtime.projectId;
-    if (!projectId) {
-      throw new ItxError({
-        code: "BAD_REQUEST",
-        message: "Share URLs are project-scoped; narrow to a project first.",
-      });
-    }
-
-    const ingress = new URL(await this.#projectStub().ingressUrl());
-    const expiresAtMs = Date.now() + (input.ttlSeconds ?? 3600) * 1000;
-    const token = await createShareToken({
-      capability: input.name,
-      expiresAtMs,
-      projectId,
-      secret,
-    });
-
-    const url = new URL(ingress);
-    url.hostname = `${input.name}--${ingress.hostname}`;
-    url.pathname = input.path ?? "/";
-    url.searchParams.set(SHARE_TOKEN_PARAM, token);
-    return url.toString();
-  }
-
   // ---- wiring -------------------------------------------------------------
 
   #projectId(): string | null {
@@ -427,16 +387,16 @@ export class ItxHandle extends RpcTarget {
   }
 
   /**
-   * The core of the context node this handle points at: the Project DO for
-   * project contexts, an ItxDurableObject for extended children — both
-   * expose it via itx() (a method, so `node.itx().invoke(...)` pipelines in
-   * ONE round trip; workerd does not pipeline calls through property
-   * accesses) — or the in-process platform context at the chain root. The
-   * runtime carries the ADDRESS; global handles get the narrow-first error.
+   * The core of the context node this handle points at: the
+   * ItxDurableObject named with the ref — exposed via itx() (a method, so
+   * `node.itx().invoke(...)` pipelines in ONE round trip; workerd does not
+   * pipeline calls through property accesses) — or the in-process defaults
+   * context at the chain root. The runtime carries the ADDRESS; global
+   * handles get the narrow-first error.
    */
   #itx(): ItxStub {
     this.#requireProjectId();
-    if (this.#runtime.contextId === PLATFORM_PROJECT_CONTEXT_ID) {
+    if (this.#runtime.contextRef === PLATFORM_PROJECT_CONTEXT_ID) {
       return getPlatformContext({
         exports: this.#runtime.exports,
         projectId: this.#requireProjectId(),
@@ -505,88 +465,6 @@ export class CapabilityProvision extends RpcTarget implements CapabilityProvisio
   }
 }
 
-/**
- * Normalize a live capability before it crosses to the context node. Bare
- * functions auto-wrap with asPathCallable semantics — an empty remainder
- * calls the function, a deeper remainder errors:
- *
- * - A LOCAL function (prototype Function/AsyncFunction.prototype — never
- *   true of an RPC stub) wraps directly.
- * - A capnweb stub of a REMOTE function is indistinguishable from an object
- *   stub by type (every capnweb stub is a callable proxy), so it is probed:
- *   `await stub.call` is a pure property pull (no user code runs) that
- *   resolves `undefined` only when the remote target is a bare function —
- *   a call-implementing provider yields its method. Probe failures fall
- *   back to the historical call-convention dispatch.
- */
-async function resolveLiveCapability(capability: CapabilityTarget): Promise<CapabilityTarget> {
-  if (isCapabilityAddress(capability)) return capability;
-  if (isLocalBareFunction(capability)) {
-    return new BareFunctionCapability(capability) as unknown as CapabilityTarget;
-  }
-  if (typeof capability === "function" && (capability as object) instanceof RpcStub) {
-    const callMember = await Promise.resolve(
-      (capability as unknown as { call: unknown }).call,
-    ).then(
-      (value) => value,
-      () => "unprobeable" as const,
-    );
-    if (callMember === undefined) {
-      return new BareFunctionCapability(
-        capability as unknown as (...args: never[]) => unknown,
-      ) as unknown as CapabilityTarget;
-    }
-    (callMember as Partial<Disposable> | null | undefined)?.[Symbol.dispose]?.();
-  }
-  return capability;
-}
-
-/**
- * The wrap for a bare-function capability: speaks the one calling convention
- * (`call({ path, args })`) by invoking the function for an empty remainder
- * and refusing anything deeper. Extends RpcTarget so it crosses the
- * worker → context-node hop as a stub while the function (local or a capnweb
- * stub of the provider's process) stays callable right here.
- */
-class BareFunctionCapability extends RpcTarget {
-  readonly #fn: (...args: never[]) => unknown;
-
-  constructor(fn: (...args: never[]) => unknown) {
-    super();
-    // Retain a dup when the function is itself a session stub: RPC disposes
-    // argument stubs when the provide call returns.
-    const dup = (fn as { dup?: () => (...args: never[]) => unknown }).dup;
-    this.#fn = typeof dup === "function" ? dup.call(fn) : fn;
-  }
-
-  call(input: PathCall): unknown {
-    if (input.path.length > 0) {
-      throw new Error(
-        `This capability is a bare function — it has no member "${input.path.join(".")}"; call it directly.`,
-      );
-    }
-    return this.#fn(...(input.args as never[]));
-  }
-
-  onRpcBroken(callback: (error: unknown) => void): void {
-    (this.#fn as { onRpcBroken?: (callback: (error: unknown) => void) => void }).onRpcBroken?.(
-      callback,
-    );
-  }
-
-  [Symbol.dispose](): void {
-    (this.#fn as Partial<Disposable>)[Symbol.dispose]?.();
-  }
-}
-
-/** The DO name inside a child-context address (its journal coordinate). */
-function addressDoName(address: CapabilityAddress): string {
-  if (address.type !== "rpc" || address.worker.type !== "durable-object") {
-    throw new Error("Expected a durable-object context address.");
-  }
-  return address.worker.name;
-}
-
 type ProjectStub = DurableObjectStub<ProjectDurableObject>;
 
 function projectStub(env: Env, projectId: string): ProjectStub {
@@ -610,8 +488,8 @@ export class ItxProjects extends RpcTarget {
     const row = await this.requireProjectRow(projectIdOrSlug);
     return new ItxHandle({
       ...this.runtime,
-      contextAddress: projectContextAddress(row.id),
-      contextId: row.id,
+      contextAddress: contextAddress(projectContextRef(row.id)),
+      contextRef: projectContextRef(row.id),
       projectId: row.id,
     });
   }

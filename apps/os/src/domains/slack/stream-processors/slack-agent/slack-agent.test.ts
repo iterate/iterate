@@ -114,26 +114,18 @@ describe("SlackAgentProcessor", () => {
     expect(processor.state.botUserId).toBe("U_BOT");
   });
 
-  it("notes Slack etiquette as a capability when route context arrives", async () => {
+  it("captures route context in state and announces nothing (the slack cap is provided on the agent's own context)", async () => {
     const { appended, processor } = createProcessor();
 
     await processor.ingest({ events: [routeEvent()], streamMaxOffset: 1 });
     await flushBackgroundWork();
 
-    expect(appended).toEqual([
-      {
-        streamPath: undefined,
-        event: {
-          type: "events.iterate.com/agent/capability-noted",
-          idempotencyKey: "slack-agent/register-slack-agent-tool-provider@1",
-          payload: {
-            name: "slack",
-            instructions:
-              "Slack agents MUST respond on the same thread_ts that received the message; otherwise they will not receive responses from that thread. Unless explicitly required, always include thread_ts in Slack replies. Do not post to Slack unless the bot was explicitly mentioned, a user directly asks or instructs you, or the surrounding thread context clearly calls for agent action. Normal Slack replies use channel/thread_ts from the webhook event directly.",
-          },
-        },
-      },
-    ]);
+    // The `slack` capability is provided onto the agent's own itx context
+    // (agentContextCapabilities → provideCapability), not announced here — so
+    // thread-route-configured only folds route context into state.
+    expect(appended).toEqual([]);
+    expect(processor.state.channel).toBeDefined();
+    expect(processor.state.threadTs).toBeDefined();
   });
 
   it("emits a Slack-posting codemode script for the debug bang command", async () => {

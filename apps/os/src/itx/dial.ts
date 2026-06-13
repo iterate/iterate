@@ -34,9 +34,10 @@ export type WorkerLoaderBinding = {
 };
 
 export type DialHost = {
-  /** The hosting context — stateful (facet) capabilities key their private
-   * storage by it: a cap's data belongs to the context it was provided on. */
-  contextId: string;
+  /** The hosting context's ref — stateful (facet) capabilities key their
+   * private storage by it: a cap's data belongs to the context it was
+   * provided on. */
+  contextRef: string;
   /** The hosting context's own address — facet isolates (host-scoped) get it
    * as their dial-back coordinate. */
   contextAddress: import("./itx.ts").CapabilityAddress;
@@ -72,7 +73,7 @@ export function makeDial(host: DialHost): CapabilityDial {
 
   const loadWorker = async (
     name: string,
-    origin: { id: string; address: unknown },
+    origin: { ref: string; address: unknown },
     source: WorkerSource,
   ) => {
     if (!host.loader) throw new Error("Source capabilities need a LOADER binding.");
@@ -93,10 +94,8 @@ export function makeDial(host: DialHost): CapabilityDial {
       wireIsolateEnv({
         capabilityPath: name,
         code: resolved,
-        contextAddress: origin.address as Parameters<typeof wireIsolateEnv>[0]["contextAddress"],
-        contextId: origin.id,
+        contextRef: origin.ref,
         loopback: (exportName, options) => loopback(exportName, options.props),
-        projectId: host.projectId,
       }),
     );
   };
@@ -108,17 +107,10 @@ export function makeDial(host: DialHost): CapabilityDial {
     // pure attribution for records and policy.
     const injected = {
       capabilityPath: name,
-      context: attribution.origin.id,
+      context: attribution.origin.ref,
       projectId: host.projectId,
     };
 
-    if (address.type === "url") {
-      // Law 7: the Cap'n Web session must terminate in a stateless worker,
-      // never this DO — the call crosses to the UrlDial entrypoint as data
-      // and UrlDial replays it against the REMOTE main.
-      const stub = loopback("UrlDial", { headers: address.headers, url: address.url, ...injected });
-      return stub as PathCallable;
-    }
     const worker = address.worker;
     switch (worker.type) {
       case "binding": {
@@ -134,7 +126,7 @@ export function makeDial(host: DialHost): CapabilityDial {
         // The binding is a concrete env object that doesn't speak the calling
         // convention — wrap it here, where it is real. Env bindings are
         // long-lived host objects, never per-call borrows: no dispose.
-        return inProcessPathCallable(binding);
+        return inProcessPathCallable(binding, { capability: name });
       }
       case "loopback": {
         // First-party loopback entrypoints all implement call({ path, args })
@@ -171,7 +163,7 @@ export function makeDial(host: DialHost): CapabilityDial {
           const facetTarget = facets(`cap:${name}`, async () => {
             const worker = await loadWorker(
               name,
-              { address: host.contextAddress, id: host.contextId },
+              { address: host.contextAddress, ref: host.contextRef },
               source,
             );
             const facetClass = worker.getDurableObjectClass?.(source.entrypoint);
@@ -183,7 +175,10 @@ export function makeDial(host: DialHost): CapabilityDial {
             }
             return { class: facetClass };
           });
-          return inProcessPathCallable(facetTarget, () => disposeIfPossible(facetTarget));
+          return inProcessPathCallable(facetTarget, {
+            capability: name,
+            dispose: () => disposeIfPossible(facetTarget),
+          });
         }
         const entrypoint = loadWorker(name, attribution.origin, source).then((worker) =>
           worker.getEntrypoint(source.entrypoint),
@@ -193,7 +188,7 @@ export function makeDial(host: DialHost): CapabilityDial {
         // path still awaits the original promise and gets the real error).
         entrypoint.catch(() => {});
         const borrowed: PathCallable & Disposable = {
-          call: async (input) => replayPathCall(await entrypoint, input),
+          call: async (input) => replayPathCall(await entrypoint, input, { capability: name }),
           [Symbol.dispose]: () => void entrypoint.then(disposeIfPossible, () => {}),
         };
         return borrowed;
@@ -232,19 +227,22 @@ export function makeDial(host: DialHost): CapabilityDial {
 export function sourceIsolateKey(input: {
   cacheKey: string;
   name: string;
-  origin: { id: string };
+  origin: { ref: string };
 }): string {
-  return `itx-cap:${input.origin.id}:${input.name}:${input.cacheKey}`;
+  return `itx-cap:${input.origin.ref}:${input.name}:${input.cacheKey}`;
 }
 
 /** An in-process borrow that speaks the calling convention: replays the path
  * on the concrete object the dial just resolved, and (optionally) disposes
  * the inner borrow when the core finishes the call. Never crosses RPC — the
  * core consumes it in-process, so no RpcTarget wrapper is needed. */
-function inProcessPathCallable(target: unknown, dispose?: () => void): PathCallable {
+function inProcessPathCallable(
+  target: unknown,
+  opts?: { capability?: string; dispose?: () => void },
+): PathCallable {
   return {
-    call: (input) => replayPathCall(target, input),
-    ...(dispose ? { [Symbol.dispose]: dispose } : {}),
+    call: (input) => replayPathCall(target, input, { capability: opts?.capability }),
+    ...(opts?.dispose ? { [Symbol.dispose]: opts.dispose } : {}),
   };
 }
 
@@ -300,7 +298,15 @@ const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "EgressPipe",
   "IntegrationsCapability",
   "McpClient",
+  // Like McpClient: only provider props (specUrl/baseUrl/headers) + the
+  // dial-injected attribution — every fetch rides the originating project's
+  // egress, so a handle holder providing it grants nothing beyond HTTP
+  // through their own project's pipe.
+  "OpenApiClient",
   "ReposCapability",
+  // Scopes strictly by the dial-injected projectId (SecretsJournalCapability
+  // reads ctx.props.projectId, which the injection spread always overwrites),
+  // so a provider can never point it at another project's secrets.
   "SecretsJournalCapability",
   "SlackCapability",
   "StreamsCapability",

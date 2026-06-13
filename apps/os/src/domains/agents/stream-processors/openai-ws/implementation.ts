@@ -455,6 +455,10 @@ export class OpenAiWsProcessor extends StreamProcessor<
         ],
       })),
       store: false,
+      // Reasoning models stream `response.reasoning_summary_text.delta`
+      // frames when summaries are requested; those land on the stream like
+      // every other frame so the UI can show thinking as it happens.
+      ...(supportsReasoningSummaries(args.state.model) ? { reasoning: { summary: "auto" } } : {}),
       ...(previousResponseId == null ? {} : { previous_response_id: previousResponseId }),
     });
     const sendSequence = connection.sendSequence++;
@@ -533,14 +537,12 @@ export class OpenAiWsProcessor extends StreamProcessor<
       const message = toJsonValue(rawMessage);
       const parsed = OpenAiResponsesStreamMessage.safeParse(message);
       if (parsed.success && parsed.data.type === "response.output_text.delta") {
-        // IMPORTANT TEMPORARY SKIP: eventually we DO want these raw output_text
-        // delta frames in the stream again. For now, dropping them keeps
-        // circuit breaker tuning and stream subscription latency easier to
-        // reason about while these deltas are still very high volume.
         outputText += parsed.data.delta ?? "";
-        continue;
       }
 
+      // Every frame — including output_text and reasoning summary deltas —
+      // lands on the stream verbatim, so subscribers (e.g. the browser agent
+      // UI) can render responses and thinking as they stream.
       const receiveSequence = connection.receiveSequence++;
       await this.#append({
         type: "events.iterate.com/openai-ws/websocket-message-received",
@@ -709,6 +711,14 @@ export class OpenAiWsProcessor extends StreamProcessor<
 
 function createConnectionId(args: { llmRequestId: number }) {
   return `openai_ws_${args.llmRequestId}_${crypto.randomUUID()}`;
+}
+
+/**
+ * Sending `reasoning` options to a non-reasoning model fails the whole
+ * request, so only ask for summaries on model families known to reason.
+ */
+function supportsReasoningSummaries(model: string) {
+  return /^(gpt-5|o[1-9]|codex)/.test(model);
 }
 
 async function waitForOpenAiResponsesSocketOpen(

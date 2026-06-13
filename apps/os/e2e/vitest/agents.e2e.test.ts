@@ -142,6 +142,70 @@ test("can configure Cloudflare AI Gateway as the provider for an agent path pref
   );
 });
 
+test("a web agent holds a real conversation: user message in, visible reply out", async () => {
+  // THE end-to-end conversation proof (no canned system prompt, default
+  // provider): a user message on a fresh agent stream must come back as a
+  // visible web reply — the LLM turn runs, codemode executes, and
+  // itx.chat.sendMessage lands assistant-response-added on the stream.
+  await using fixture = await createTestProjectFixture({ slugPrefix: "agent-web-convo" });
+  const { client, project } = fixture;
+  const suffix = uniqueSuffix();
+  const agentPath = `/agents/web-convo-${suffix}`;
+  const marker = `pong-${suffix}`;
+
+  await client.project.agents.runtimeState({
+    agentPath,
+    projectSlugOrId: project.id,
+  });
+  await client.project.agents.sendMessage({
+    agentPath,
+    message: `Please reply in this chat with a short message that contains exactly this token: ${marker}`,
+    projectSlugOrId: project.id,
+  });
+
+  const events = await readUntil({
+    agentPath,
+    client,
+    projectId: project.id,
+    afterOffset: "start",
+    predicate: (event) =>
+      event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+      typeof (event.payload as { message?: unknown }).message === "string" &&
+      (event.payload as { message: string }).message.includes(marker),
+    timeoutMs: 150_000,
+  });
+
+  // The full round trip is on the stream: the user's message…
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/agent-chat/user-message-added",
+      payload: expect.objectContaining({
+        channel: "web",
+        content: expect.stringContaining(marker),
+      }),
+    }),
+  );
+  // …the agent's visible web reply…
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/agent-chat/assistant-response-added",
+      payload: expect.objectContaining({
+        channel: "web",
+        message: expect.stringContaining(marker),
+      }),
+    }),
+  );
+  // …its chat tool arriving as a PROVIDED capability (the one door)…
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: "events.iterate.com/itx/capability-provided",
+      payload: expect.objectContaining({ path: ["chat"] }),
+    }),
+  );
+  // …and no turn ended in an error.
+  expect(events.filter((event) => event.type.endsWith("error-occurred"))).toEqual([]);
+}, 180_000);
+
 test("uses OpenAI for unconfigured agent chats by default", async () => {
   await using fixture = await createTestProjectFixture({ slugPrefix: "agent-default-openai" });
   const { client, project } = fixture;
@@ -333,9 +397,9 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
 
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/agent/capability-noted",
+      type: "events.iterate.com/itx/capability-provided",
       payload: expect.objectContaining({
-        name: "chat",
+        path: ["chat"],
       }),
     }),
   );
@@ -394,8 +458,8 @@ test("project config worker customizes fresh agents by appending events", async 
     "    await env.STREAMS.append({",
     "      streamPath: agentPath,",
     "      event: {",
-    '        type: "events.iterate.com/agent/capability-noted",',
-    `        payload: { name: ${JSON.stringify(capabilityName)}, instructions: "Use itx.worker.${capabilityName}() (custom ${suffix})." },`,
+    '        type: "events.iterate.com/itx/capability-provided",',
+    `        payload: { path: [${JSON.stringify(capabilityName)}], kind: "rpc", address: { type: "rpc", worker: { type: "loopback" }, entrypoint: "WorkerCapability" }, meta: { instructions: "Use itx.worker.${capabilityName}() (custom ${suffix})." } },`,
     "      },",
     "    });",
     "  },",
@@ -462,8 +526,8 @@ test("project config worker customizes fresh agents by appending events", async 
   expect(lastPromptText).toContain(customizedPath);
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/agent/capability-noted",
-      payload: expect.objectContaining({ name: capabilityName }),
+      type: "events.iterate.com/itx/capability-provided",
+      payload: expect.objectContaining({ path: [capabilityName] }),
     }),
   );
 }, 240_000);
@@ -674,9 +738,9 @@ itIfSlackBotToken(
 
     expect(events).toContainEqual(
       expect.objectContaining({
-        type: "events.iterate.com/agent/capability-noted",
+        type: "events.iterate.com/itx/capability-provided",
         payload: expect.objectContaining({
-          name: "slack",
+          path: ["slack"],
         }),
       }),
     );
@@ -802,9 +866,9 @@ itIfSlackBotToken(
     );
     expect(events).toContainEqual(
       expect.objectContaining({
-        type: "events.iterate.com/agent/capability-noted",
+        type: "events.iterate.com/itx/capability-provided",
         payload: expect.objectContaining({
-          name: "slack",
+          path: ["slack"],
         }),
       }),
     );

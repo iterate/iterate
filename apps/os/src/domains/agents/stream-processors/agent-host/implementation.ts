@@ -29,8 +29,9 @@ const STREAM_CHILD_STREAM_CREATED_TYPE = "events.iterate.com/stream/child-stream
 
 export type AgentHostProcessorDeps = {
   agentNamespace: DurableObjectNamespace<AgentDurableObject> | undefined;
-  /** Ensures (and returns) the agent's itx child context id. */
-  getItxContextId: () => Promise<string>;
+  /** Ensures (and returns) the agent's own itx context ref — identity,
+   * address, and owning project are all projections of it. */
+  getItxContext: () => Promise<{ context: string }>;
   /** The worker env + exports the script runner needs (LOADER/STREAM/exports). */
   runnerEnv: Env;
   workerExports: unknown;
@@ -196,13 +197,13 @@ export function extractAgentScript(args: { event: Event; streamPath: StreamPath 
 
 export async function runAgentItxScript(args: {
   code: string;
-  deps: Pick<AgentHostProcessorDeps, "getItxContextId" | "runnerEnv" | "workerExports">;
+  deps: Pick<AgentHostProcessorDeps, "getItxContext" | "runnerEnv" | "workerExports">;
   executionId?: string;
   projectId: string;
   recordRequested?: boolean;
   streamPath: StreamPath;
 }) {
-  const contextId = await args.deps.getItxContextId();
+  const { context } = await args.deps.getItxContext();
   await runItxScript({
     // The runner's one shape is `async (itx) => …`; the model's code goes
     // through verbatim (older histories say `async (ctx) =>` — the parameter
@@ -213,7 +214,10 @@ export async function runAgentItxScript(args: {
     exports: args.deps.workerExports as ItxRuntime["exports"],
     functionSource: args.code,
     projectId: args.projectId,
-    props: { context: contextId },
+    // The agent's context ref IS its coordinate — the script resolves it
+    // directly. The record (script-execution events) lands on the agent
+    // stream, which IS the agent context's stream.
+    props: { context },
     record: { namespace: args.projectId, path: args.streamPath },
   });
 }

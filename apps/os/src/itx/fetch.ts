@@ -3,11 +3,13 @@
 // stateless worker, never in a DO — the hibernation-ready seam).
 //
 // Routes:
-//   GET/WS  /api/itx                  itx on the global context (access from principal)
-//   GET/WS  /api/itx/:projectIdOrSlug itx on that project's context
-//   POST    /api/itx/run              run an itx script in a loader isolate
-//   POST    /api/itx/admin-cookie     test-only browser auth bridge (browsers
-//                                     cannot set WebSocket Authorization headers)
+//   GET/WS  /api/itx          itx on the global context (access from principal)
+//   GET/WS  /api/itx/:target  itx on a context: a project id/slug (the
+//                             project root context) or a full context ref
+//                             (`<projectId>:/<path>`, URL-encoded)
+//   POST    /api/itx/run      run an itx script in a loader isolate
+//   POST    /api/itx/admin-cookie  test-only browser auth bridge (browsers
+//                                  cannot set WebSocket Authorization headers)
 
 import {
   newHttpBatchRpcResponse,
@@ -18,14 +20,9 @@ import { resolveItx } from "./entrypoint.ts";
 import { tagOutboundItxError } from "./errors.ts";
 import { runItxScript } from "./run.ts";
 import { GLOBAL_CONTEXT_ID, type ItxProps, type ProjectAccess } from "./refs.ts";
-import type { ItxRuntime } from "./handle.ts";
 import { authenticateCapnwebAdmin, handleCapnwebAdminCookieRequest } from "./admin-auth-cookie.ts";
-import {
-  accessForPrincipal,
-  requireWorkerExports,
-  resolveAccessibleContextId,
-  type ResolvedAccessibleContext,
-} from "./access.ts";
+import { accessForPrincipal, requireWorkerExports, resolveAccessibleContextRef } from "./access.ts";
+import { parseContextRef } from "./coordinates.ts";
 import type { AppConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
@@ -55,8 +52,8 @@ export async function handleItxFetch(input: {
     return await handleItxRun({ ...input, access });
   }
 
-  // Bare prefix → global handle; anything else is a project id/slug or a
-  // itx_… child context id.
+  // Bare prefix → global handle; anything else is a project id/slug (the
+  // project root context) or a full context ref.
   let props: ItxProps;
   if (subpath === "") {
     // A global handle is safe for any authenticated principal: its access is
@@ -69,20 +66,15 @@ export async function handleItxFetch(input: {
     // global /itx-repl page work for normal logged-in users.
     props = { access, context: GLOBAL_CONTEXT_ID };
   } else {
-    const resolved = await resolveAccessibleContextId({
+    const ref = await resolveAccessibleContextRef({
       access,
       db: input.context.db,
-      env: input.env,
-      idOrSlug: decodeURIComponent(subpath),
+      target: decodeURIComponent(subpath),
     });
-    if (!resolved) {
+    if (!ref) {
       return Response.json({ code: "NOT_FOUND", error: "Context not found" }, { status: 404 });
     }
-    props = {
-      context: resolved.contextId,
-      contextAddress: (resolved.contextAddress ?? null) as ItxProps["contextAddress"],
-      projectId: resolved.projectId,
-    };
+    props = { context: ref };
   }
 
   const response = await newItxRpcResponse(
@@ -92,41 +84,6 @@ export async function handleItxFetch(input: {
   const setCookie = auth.responseHeaders.get("set-cookie");
   if (setCookie) response.headers.append("set-cookie", setCookie);
   return response;
-}
-
-export const PROJECT_HOST_ITX_PATH = "/__itx";
-
-/**
- * Project-host connect endpoint: wss://{project-host}/__itx returns an itx
- * already narrowed to that project. Cap'n Web terminates here in the
- * stateless worker (Law 7); the Project DO only ever sees Workers RPC.
- * Admin-credential only for now — user sessions connect via /api/itx on the
- * control plane host.
- */
-export async function handleProjectHostItxFetch(input: {
-  config: AppConfig;
-  env: Env;
-  exports: unknown;
-  projectId: string;
-  request: Request;
-}): Promise<Response | null> {
-  const pathname = new URL(input.request.url).pathname;
-  if (pathname === `${PROJECT_HOST_ITX_PATH}/admin-cookie`) {
-    return await handleCapnwebAdminCookieRequest({ config: input.config, request: input.request });
-  }
-  if (pathname !== PROJECT_HOST_ITX_PATH) return null;
-
-  const principal = authenticateCapnwebAdmin({ config: input.config, request: input.request });
-  if (!principal) return new Response("Unauthorized", { status: 401 });
-
-  return await newItxRpcResponse(
-    input.request,
-    await resolveItx({
-      env: input.env,
-      exports: input.exports as ItxRuntime["exports"],
-      props: { context: input.projectId },
-    }),
-  );
 }
 
 /**
@@ -169,7 +126,7 @@ async function authenticateItxRequest(input: {
 //
 // Thin HTTP shim over the shared runner (run.ts): resolve + access-check the
 // target context here (Law 3 — this is the auth boundary), then delegate.
-// The runner leaves the two-event execution record on the project's /itx
+// The runner leaves the two-event execution record on the context's own
 // stream; the HTTP response carries the executionId so callers can correlate.
 
 async function handleItxRun(input: {
@@ -203,30 +160,23 @@ async function handleItxRun(input: {
 
   let props: ItxProps;
   let scriptProjectId: string | null = null;
-  let scriptContextAddress: ResolvedAccessibleContext["contextAddress"] = null;
-  let scriptRecord: ResolvedAccessibleContext["journal"] = null;
+  let scriptRecord: { namespace: string; path: string } | null = null;
   if (body.context && body.context !== GLOBAL_CONTEXT_ID) {
-    const resolved = await resolveAccessibleContextId({
+    const ref = await resolveAccessibleContextRef({
       access: input.access,
       db: input.context.db,
-      env: input.env,
-      idOrSlug: body.context,
+      target: body.context,
     });
     // NOT_FOUND covers both missing and forbidden contexts (existence
     // masking — same posture as ItxProjects.get, see errors.ts).
-    if (!resolved) {
+    if (!ref) {
       return Response.json({ code: "NOT_FOUND", error: "Context not found" }, { status: 404 });
     }
-    props = {
-      context: resolved.contextId,
-      contextAddress: (resolved.contextAddress ?? null) as ItxProps["contextAddress"],
-      projectId: resolved.projectId,
-    };
-    scriptProjectId = resolved.projectId;
-    scriptContextAddress = resolved.contextAddress;
-    // A child context's record lands on ITS journal; a project's on /itx
-    // (the runner's default).
-    scriptRecord = resolved.journal;
+    props = { context: ref };
+    const coordinate = parseContextRef(ref);
+    scriptProjectId = coordinate.namespace;
+    // The record lands on the context's own stream.
+    scriptRecord = coordinate;
   } else {
     // A global-context script inherits the platform's own egress (no
     // per-project globalOutbound), so it is admin-only — same rule as the
@@ -241,7 +191,6 @@ async function handleItxRun(input: {
   // knows ONE shape, `async (itx) => …`, so vars are baked into the source
   // here — parameterization is the caller's concern, not the runner's.
   const outcome = await runItxScript({
-    contextAddress: scriptContextAddress,
     env: input.env,
     exports: requireWorkerExports(input.context),
     functionSource: `async (itx) => (${body.functionSource})({ itx, vars: ${JSON.stringify(

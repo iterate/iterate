@@ -5,8 +5,10 @@ short README.
 
 ## Runtime Shape
 
-One Worker (`src/worker.ts`) serves three kinds of traffic, dispatched on
-hostname and path:
+OS deploys as many small Workers (see [worker-topology.md](./worker-topology.md)):
+a tiny ingress router owns all routes, the dashboard app is its own worker,
+and every Durable Object class is its own worker. Three kinds of traffic are
+dispatched on hostname and path:
 
 1. Infrastructure routes that bypass the app entirely: the captun tunnel relay
    at `/__iterate/captun` and admin-token debug routes.
@@ -14,10 +16,12 @@ hostname and path:
    hostnames) route to the project's callable, never the dashboard.
 3. The OS dashboard: a TanStack Start app (SSR + oRPC API).
 
-Inside the evlog-wrapped pipeline, the worker tries handlers in order before
-falling through to TanStack Start: the canonical MCP endpoint, project-host
-ingress, docs markdown, project stream RPC, `/api/itx`, and the
-`/__durable-objects` debug proxy. Runtime config is parsed from `env` per
+The ingress worker (`src/workers/ingress.ts`) forwards the MCP hostname to
+the MCP worker and ingress-rule matches to the project worker; everything
+else lands on the app worker (`src/workers/app.ts`), whose evlog-wrapped
+pipeline tries handlers in order before falling through to TanStack Start:
+docs markdown, project stream RPC, `/api/itx`, and the `/__durable-objects`
+debug proxy. Runtime config is parsed from `env` per
 request (never at module scope — isolates can outlive binding-only deploys).
 
 The TanStack handler receives a `RequestContext` (`src/request-context.ts`)
@@ -149,7 +153,7 @@ OS has two MCP flows:
 - Inbound MCP: external MCP clients connect to the canonical MCP endpoint.
   `handleMcpFetch` (`src/domains/inbound-mcp-server/mcp-handler.ts`) matches
   the URL from `APP_CONFIG_MCP__BASE_URL` (for example
-  `https://mcp.iterate.com`; localhost-oriented dev defaults to
+  `https://mcp.iterate.com`; fully-local dev defaults to
   `<baseUrl>/api/__mcp`) and delegates session state to the
   `ProjectMcpServerConnection` Durable Object via `McpAgent.serve`.
 - Outbound MCP: a codemode session uses an external MCP server as a Tool
@@ -260,10 +264,14 @@ It requires `SERVICE_AUTH_TOKEN` (run through Doppler for the auth project).
 
 ## Deployment
 
-`alchemy.run.ts` defines the deployment: one worker with D1 (`os-db`), the
-Durable Object namespaces, a `WorkerLoader`, the Workers AI binding, and extra
-route hostnames for the MCP base URL, the event-docs host, and each project
-hostname base. The ambient Doppler config selects the stage: `pnpm cf:deploy`
+`alchemy.run.ts` defines the deployment: the full worker topology
+([worker-topology.md](./worker-topology.md)) sharing one D1 (`os-db`), the
+Durable Object namespaces (each owned by its worker, bound cross-script
+everywhere else), a `WorkerLoader`, the Workers AI binding, and routes on the
+ingress worker for the app base URL, the MCP base URL, the event-docs host,
+and each project hostname base. Fresh stages bootstrap with an automatic
+two-pass deploy (cross-script bindings to not-yet-existing scripts are wired
+by the second pass). The ambient Doppler config selects the stage: `pnpm cf:deploy`
 deploys to whatever stage your environment points at; `pnpm deploy` is the
 production wrapper (`doppler run --config prd`).
 

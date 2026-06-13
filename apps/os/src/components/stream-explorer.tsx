@@ -9,21 +9,33 @@ export function StreamExplorerTreePage({
   currentPath,
   header,
   onOpenPath,
+  rootPath,
   source,
 }: {
   currentPath?: StreamPathType;
   header?: ReactNode;
   onOpenPath: (streamPath: StreamPathType) => void;
+  rootPath?: StreamPathType;
   source: StreamTreeSource;
 }) {
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-3 p-4">
       {header == null ? null : <div className="min-w-0">{header}</div>}
-      <StreamTreeBrowser source={source} currentPath={currentPath} onOpenPath={onOpenPath} />
+      <StreamTreeBrowser
+        source={source}
+        currentPath={currentPath}
+        onOpenPath={onOpenPath}
+        rootPath={rootPath}
+      />
     </section>
   );
 }
 
+/**
+ * Stream detail page. Navigation lives in the ⌘K stream switcher behind the
+ * header's path pill, not a tree sidebar — the source feeds the switcher's
+ * lazy child loading.
+ */
 export function StreamExplorerDetail({
   currentPath,
   onOpenPath,
@@ -36,11 +48,12 @@ export function StreamExplorerDetail({
   streamView: Omit<ProjectStreamViewProps, "streamPath">;
 }) {
   return (
-    <section className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[20rem_minmax(0,1fr)]">
-      <aside className="hidden min-h-0 border-r p-3 lg:flex">
-        <StreamTreeBrowser source={source} currentPath={currentPath} onOpenPath={onOpenPath} />
-      </aside>
-      <ProjectStreamView {...streamView} streamPath={currentPath} />
+    <section className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <ProjectStreamView
+        {...streamView}
+        streamPath={currentPath}
+        streamNavigator={{ source, onOpenPath }}
+      />
     </section>
   );
 }

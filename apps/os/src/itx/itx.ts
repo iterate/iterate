@@ -1,28 +1,28 @@
 // The itx CORE: an Itx holds capabilities; everything else holds a stub of
 // one (itx-next.md, "The address unification" — the LOCKED final shape).
 //
-// ONE class: `Itx extends StreamProcessor`. The context's JOURNAL (an
-// ordinary event stream) is the only authority — provides and revokes APPEND
-// events and self-ingest them; `reduce` folds the journal into the
-// capability table; the checkpoint is a disposable cache of that fold. The
-// record and the state cannot disagree, because events are the only writes
+// ONE class: `Itx extends StreamProcessor`. The context's STREAM is the only
+// authority — provides and revokes APPEND events and self-ingest them;
+// `reduce` folds the stream into the capability table; the checkpoint is a
+// disposable cache of that fold. The record and the state cannot disagree,
+// because events are the only writes
 // (docs/domain-objects-and-stream-processors.md).
 //
 // The pure pieces stay module-level so they are provable without workerd or
-// streams: `reduceItxJournalEvent` (the fold), `resolveLongestProvidedPrefix`
+// streams: `reduceItxEvent` (the fold), `resolveLongestProvidedPrefix`
 // (dispatch), path validation, and the live-vs-address discriminator.
 //
 // Everything effectful is injected: `dial` turns a CapabilityAddress into
 // something speaking `call({ path, args })` (dial.ts builds it; the core
 // never touches env or a project id), `parentItx` is a stub of the parent
-// context's core (chain delegation — the platform defaults are simply the
-// chain's code-rooted final link, platform-context.ts), and the journal
+// context's core (chain delegation — the defaults are simply the chain's
+// code-rooted final link, platform-context.ts), and the stream's
 // append/read pair rides in as the processor's iterate context.
 //
-// Hosts: the Project DO and ItxDurableObject expose the core via an `itx()`
-// method — a method, not a property, because workerd does not pipeline calls
-// through property accesses, so the method form keeps `node.itx().invoke(…)`
-// a single pipelined round trip.
+// ONE host: ItxDurableObject (the generic context host) exposes the core via
+// an `itx()` method — a method, not a property, because workerd does not
+// pipeline calls through property accesses, so the method form keeps
+// `node.itx().invoke(…)` a single pipelined round trip.
 
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import type { StreamEvent } from "@iterate-com/streams/shared/event";
@@ -30,18 +30,20 @@ import { ItxContract, ITX_EVENT_TYPES, type ItxState } from "./contract.ts";
 import {
   replayPathCall,
   RESERVED_PATH_SEGMENTS,
+  SELF_DESCRIPTION_METHOD,
   type PathCall,
   type PathCallable,
 } from "./path-proxy.ts";
-import type {
-  CapabilityAddress,
-  CapabilityDescription,
-  CapabilityKind,
-  CapabilityMeta,
-  CapabilityTarget,
-  ItxOrigin,
-  WorkerRef,
-  WorkerSource,
+import {
+  DEFAULTS_DESCRIBE_FROM,
+  type CapabilityAddress,
+  type CapabilityDescription,
+  type CapabilityKind,
+  type CapabilityMeta,
+  type CapabilityTarget,
+  type ItxOrigin,
+  type WorkerRef,
+  type WorkerSource,
 } from "./types.ts";
 
 // Server-side one-stop: the calling-convention pieces live in path-proxy.ts
@@ -49,13 +51,14 @@ import type {
 // model lives in types.ts (the import-free design of record). Server code
 // imports all of it from here.
 export {
-  asPathCallable,
   replayPathCall,
   RESERVED_PATH_SEGMENTS,
+  SELF_DESCRIPTION_METHOD,
   type PathCall,
   type PathCallable,
 } from "./path-proxy.ts";
 export { ItxContract, ITX_EVENT_TYPES, type ItxState } from "./contract.ts";
+export { DEFAULTS_DESCRIBE_FROM } from "./types.ts";
 export type {
   CapabilityAddress,
   CapabilityDescription,
@@ -129,18 +132,19 @@ export class CapabilityOfflineError extends Error {
   constructor(name: string) {
     super(
       `Capability "${name}" is registered but its provider is not connected. ` +
-        `Live capabilities last as long as the provider's session; the provider must reconnect and provide() again.`,
+        `Live capabilities last as long as the provider's session; the provider must ` +
+        `reconnect and call provideCapability() again.`,
     );
   }
 }
 
 /**
- * The pure fold: one journal event into the next state. Module-level so the
+ * The pure fold: one stream event into the next state. Module-level so the
  * workshop and unit tests can run it without workerd, streams, or the class.
  * Defensive by design: a malformed payload keeps the current state — replay
  * must never wedge on a pre-deploy event shape.
  */
-export function reduceItxJournalEvent(
+export function reduceItxEvent(
   state: ItxState,
   event: { type: string; payload?: unknown },
 ): ItxState {
@@ -148,11 +152,10 @@ export function reduceItxJournalEvent(
   switch (event.type) {
     case ITX_EVENT_TYPES.contextCreated: {
       // The first birth certificate wins; later ones are inert (retried
-      // appends, replays) — exactly-once as a property of the fold.
+      // appends, re-creates) — exactly-once as a property of the fold, which
+      // is what makes creation get-or-create.
       if (state.context !== null) return state;
-      if (typeof payload.id !== "string") return state;
       const context = {
-        id: payload.id,
         name: typeof payload.name === "string" ? payload.name : null,
         parent: payload.parent ?? null,
       } as NonNullable<ItxState["context"]>;
@@ -162,14 +165,14 @@ export function reduceItxJournalEvent(
       const path = payload.path;
       if (!Array.isArray(path) || path.length === 0) return state;
       const kind = payload.kind;
-      if (kind !== "live" && kind !== "rpc" && kind !== "url") return state;
+      if (kind !== "live" && kind !== "rpc") return state;
       const name = path.join(".");
       const entry = {
         address: payload.address ?? null,
         kind,
         meta: payload.meta ?? {},
         name,
-        owner: typeof payload.owner === "string" ? payload.owner : (state.context?.id ?? ""),
+        owner: typeof payload.owner === "string" ? payload.owner : "",
         updatedAtMs: typeof payload.providedAtMs === "number" ? payload.providedAtMs : 0,
       } as ItxState["capabilities"][string];
       return {
@@ -207,29 +210,33 @@ export function reduceItxJournalEvent(
 
 // ---- the class ------------------------------------------------------------------
 
-/** The journal surface a host hands the core: its own stream's append/read. */
-export type ItxJournal = {
+/** The context's stream as the core consumes it: append + read. */
+export type ContextStream = {
   append(event: { type: string; payload: Record<string, unknown> }): Promise<{ offset: number }>;
   read(input: { afterOffset: number }): Promise<StreamEvent[]>;
 };
 
 export type ItxIterateContext = {
-  journal: ItxJournal;
+  stream: ContextStream;
 };
 
 export type ItxDeps = {
-  /** This context's identity — describe() owner label, origin id. */
-  contextId: string;
+  /** This context's identity — its coordinate ref (`<namespace>:<path>`),
+   * stamped as the owner of provides and as origin when delegating. */
+  contextRef: string;
   /** This context's own address — stamped as origin when delegating. */
   selfAddress: CapabilityAddress;
   /** THE only dial effect: address → something speaking call({ path, args }). */
   dial: CapabilityDial;
-  /** The parent context's core, or null at the chain root. A function
+  /** The parent context's link, or null at the chain root. A function
    * because a generic context learns its parent from its own birth
-   * certificate (state), which exists only after the journal is consumed. */
-  parentItx: () => ItxStub | null;
+   * certificate (state), which exists only after the stream is consumed.
+   * `from` is how describe() labels entries inherited through this link —
+   * the parent's context id, or "defaults" at the code root (the internal
+   * platform:project id never leaves the chain). */
+  parentItx: () => { from: string; stub: ItxStub } | null;
   /** Processor-mode execution: run one enqueued script-execution-requested
-   * event (the runner appends the completed event to this journal). */
+   * event (the runner appends the completed event to this context's stream). */
   runScript?: (input: { code: string; executionId: string }) => Promise<unknown>;
 };
 
@@ -240,6 +247,9 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    * In-memory on purpose: a connection cannot be persisted (workerd#6087
    * may change this) — replay marks live entries disconnected. */
   #liveStubs = new Map<string, LiveProvider>();
+  /** Releases everything a live registration dup-retained (the provider's
+   * own dup, or every member dup of a plain-object provider). */
+  #liveStubReleases = new Map<string, () => void>();
   #materialized = false;
   /** Monotonic append counter; #catchUp compares it against the counter a
    * sync STARTED at to guarantee read-your-writes. */
@@ -249,17 +259,18 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
 
   /**
    * Register a capability — ONE verb for every capability kind, and ONE
-   * write path: append `capability-provided` to the journal, then
+   * write path: append `capability-provided` to the context's stream, then
    * self-ingest it (read-your-writes through the one consumption door;
    * the checkpoint's offset bookkeeping makes any later delivery of the
    * same offsets a no-op). A CapabilityAddress registers durably-shaped;
-   * anything else is LIVE — the EVENT is journaled (the record outlives the
-   * session) while the stub stays an instance field. A bare local FUNCTION
-   * is live by nature and auto-wraps with asPathCallable semantics (empty
-   * remainder calls the function; a deeper remainder errors).
+   * anything else is LIVE — the EVENT is appended (the record outlives the
+   * session) while the stub stays an instance field. A live target needs no
+   * wrapper: a plain object (or bare function) IS the capability — dispatch
+   * replays paths onto its members; a target that implements `call({ path,
+   * args })` itself owns its whole method-tree semantics instead (#borrow).
    *
    * Returns nothing: the HANDLE (handle.ts) builds the CapabilityProvision
-   * its callers hold — the core's provide is just the journaled write.
+   * its callers hold — the core's provide is just the appended write.
    */
   async provideCapability(input: ProvideCapabilityInput): Promise<void> {
     await this.#materialize();
@@ -287,22 +298,29 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       if (typeof type === "string") {
         throw new Error(
           `Capability "${name}": unknown target type ${JSON.stringify(type)} — ` +
-            `addresses are "rpc" or "url"; anything else must be a live capability.`,
+            `addresses are "rpc"; anything else must be a live capability.`,
         );
       }
       kind = "live";
       const live = isLocalBareFunction(input.capability)
-        ? localFunctionCapability(input.capability)
+        ? localFunctionCapability(input.capability, name)
         : (input.capability as LiveProvider);
       this.#registerLiveStub(name, live);
     }
 
+    // provide is a PURE STREAM APPEND — it never calls into provider code.
+    // (An earlier provide-time `describeItx` probe dialed the target to
+    // auto-fill `types`; it was removed after it broke agents in prod: an
+    // agent re-providing its tool caps re-entered its own Durable Object
+    // mid-wake through the probe. Self-description stays caller-supplied:
+    // pass `instructions`/`types` at provide time. `describeItx` remains a
+    // reserved protocol name.)
     try {
       await this.#append(ITX_EVENT_TYPES.capabilityProvided, {
         address: kind === "live" ? null : (input.capability as CapabilityAddress),
         kind,
         meta: meta as Record<string, unknown>,
-        owner: this.deps.contextId,
+        owner: this.deps.contextRef,
         path,
         providedAtMs: Date.now(),
       });
@@ -315,7 +333,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
   /**
    * Remove an entry (exact path match, never prefix) by appending
    * `capability-revoked`. Only this context's OWN entries can be revoked:
-   * inherited entries (platform defaults, ancestors') resolve through the
+   * inherited entries (the defaults, ancestors') resolve through the
    * chain, so "revoking" one here would lie — shadow it instead. Revoking a
    * shadow resurfaces whatever the chain resolves, by construction.
    */
@@ -326,14 +344,17 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     if (!(name in this.state.capabilities)) {
       // Distinguish "never existed" (a no-op, matching the old semantics)
       // from "inherited through the chain" (refuse with the shadowing hint).
-      const inherited = (await this.deps.parentItx()?.describe())?.find(
+      const parent = this.deps.parentItx();
+      const inherited = (await parent?.stub.describe())?.find(
         (description) => description.name === name,
       );
       if (inherited) {
+        const from = inherited.from ?? parent!.from;
         throw new Error(
           `Capability "${name}" is not provided on this context — it is inherited from ` +
-            `${inherited.owner} (e.g. a platform default) and cannot be revoked here; ` +
-            `provide your own "${name}" to shadow it.`,
+            `${from === DEFAULTS_DESCRIBE_FROM ? "the defaults" : `context ${from}`} and cannot ` +
+            `be revoked here; provide your own "${name}" on this context to take its place; ` +
+            `the original stays on the parent.`,
         );
       }
       return;
@@ -343,36 +364,48 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
   }
 
   /**
-   * The merged chain view: own entries (each with its `owner` provenance),
-   * then the parent chain's — the platform defaults arrive from the chain's
-   * code-rooted final link like any other ancestor's. Suppression is
-   * deliberately EXACT-match only: a path provide ("sdk.chat.postMessage")
-   * shadows just its subtree — the parent's "sdk" stays live for every other
-   * path, so hiding it here would lie about what longest-prefix dispatch
-   * actually resolves.
+   * The merged chain view: own entries first (no provenance field — they are
+   * yours), then the parent chain's, each carrying `from` (the context the
+   * entry actually lives on; the defaults read `from: "defaults"`).
+   * Suppression is deliberately EXACT-match only: a path provide
+   * ("sdk.chat.postMessage") shadows just its subtree — the parent's "sdk"
+   * stays live for every other path, so hiding it here would lie about what
+   * longest-prefix dispatch actually resolves.
    */
   async describe(): Promise<CapabilityDescription[]> {
     await this.#materialize();
     const own = Object.values(this.state.capabilities)
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((entry): CapabilityDescription => {
-        const meta = entry.meta as CapabilityMeta;
+        // `instructions`/`types` are LIFTED to the entry's top level and
+        // removed from the projected meta — one place to read each fact.
+        // (The stream keeps the full meta verbatim; this is projection.)
+        const { instructions, types, ...meta } = entry.meta as CapabilityMeta;
         return {
           connected: entry.kind === "live" ? this.#liveStubs.has(entry.name) : undefined,
-          instructions: typeof meta.instructions === "string" ? meta.instructions : undefined,
+          instructions: typeof instructions === "string" ? instructions : undefined,
           kind: entry.kind,
           meta,
           name: entry.name,
-          owner: entry.owner,
-          types: typeof meta.types === "string" ? meta.types : undefined,
+          types: typeof types === "string" ? types : undefined,
           updatedAtMs: entry.updatedAtMs,
         };
       });
     const parent = this.deps.parentItx();
     if (!parent) return own;
     const shadowed = new Set(own.map((description) => description.name));
-    const inherited = await parent.describe();
-    return [...own, ...inherited.filter((description) => !shadowed.has(description.name))];
+    const inherited = await parent.stub.describe();
+    return [
+      ...own,
+      ...inherited
+        .filter((description) => !shadowed.has(description.name))
+        // Stamp `from` exactly one level below the owner: the parent's OWN
+        // entries arrive unstamped (own entries carry no provenance) and get
+        // this link's label; deeper ancestors' already carry theirs.
+        .map((description) =>
+          description.from === undefined ? { ...description, from: parent.from } : description,
+        ),
+    ];
   }
 
   /**
@@ -386,15 +419,15 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    */
   async invoke(input: { path: string[]; args: unknown[]; origin?: ItxOrigin }): Promise<unknown> {
     await this.#materialize();
-    const origin = input.origin ?? { address: this.deps.selfAddress, id: this.deps.contextId };
+    const origin = input.origin ?? { address: this.deps.selfAddress, ref: this.deps.contextRef };
     const resolved = resolveLongestProvidedPrefix(this.state.capabilities, input.path);
     if (!resolved) {
       const parent = this.deps.parentItx();
       if (parent) {
-        return await parent.invoke({ ...input, origin });
+        return await parent.stub.invoke({ ...input, origin });
       }
       throw new Error(
-        `No capability named "${input.path[0] ?? ""}" in context ${this.deps.contextId}` +
+        `No capability named "${input.path[0] ?? ""}" in context ${this.deps.contextRef}` +
           (input.path.length > 1 ? ` (call path "${input.path.join(".")}").` : `.`),
       );
     }
@@ -410,7 +443,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
       // masked as "internal error; reference = …", so the only place the
       // real failure is visible is here.
       console.error(
-        `[itx] cap "${entry.name}" (${entry.kind}) failed in ${this.deps.contextId} ` +
+        `[itx] cap "${entry.name}" (${entry.kind}) failed in ${this.deps.contextRef} ` +
           `at path ${remainder.join(".") || "<call>"}:`,
         error,
       );
@@ -420,7 +453,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     }
   }
 
-  /** The birth certificate, as folded from the journal (null for contexts
+  /** The birth certificate, as folded from the stream (null for contexts
    * born in code, like the project context). Hosts derive descriptor()
    * and parentage from this — there is no other record. */
   async contextRecord(): Promise<ItxState["context"]> {
@@ -431,13 +464,13 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
   // ---- processor hooks ------------------------------------------------------
 
   protected override reduce(args: Parameters<StreamProcessor<typeof ItxContract>["reduce"]>[0]) {
-    return reduceItxJournalEvent(args.state, args.event);
+    return reduceItxEvent(args.state, args.event);
   }
 
   /**
    * Processor-mode execution: an `enqueued: true` script-execution-requested
    * event IS a request for work — run it through the host's runner (which
-   * appends the completed event back onto this journal). Batch-level so the
+   * appends the completed event back onto this stream). Batch-level so the
    * dedupe can consult the BATCH-FINAL state: a requested event whose
    * completed is already in the same batch (or in history) is a replay, not
    * an obligation. Runs detached (`runInBackground`): the script's own
@@ -467,17 +500,17 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
 
   // ---- the write/consume seam -------------------------------------------------
 
-  /** Append one journal event, then catch up THROUGH the one consumption
+  /** Append one event to the context's stream, then catch up THROUGH the one
    * door — never reduce directly. Reading from the checkpoint (instead of
    * ingesting just the appended event) keeps consumption contiguous when
    * concurrent writers interleave offsets. */
   async #append(type: string, payload: Record<string, unknown>): Promise<void> {
-    await this.ctx.journal.append({ payload, type });
+    await this.ctx.stream.append({ payload, type });
     this.#appendCount += 1;
     await this.#catchUp();
   }
 
-  /** Lazy materialization: the context comes alive by consuming its journal.
+  /** Lazy materialization: the context comes alive by consuming its stream.
    * Once per instance — afterwards self-appends keep the fold current, and
    * events written by OTHER writers (the /api/itx/run record door) are
    * picked up by the next append's catch-up or the next wake. */
@@ -505,7 +538,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const done = (async () => {
       try {
         const { offset } = await this.snapshot();
-        const events = await this.ctx.journal.read({ afterOffset: offset });
+        const events = await this.ctx.stream.read({ afterOffset: offset });
         if (events.length > 0) {
           await this.ingest({ events, streamMaxOffset: events.at(-1)!.offset });
         }
@@ -521,10 +554,13 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
   #registerLiveStub(name: string, provider: LiveProvider): void {
     // RPC disposes argument stubs when the call returns; keep a duplicate
     // (and hand further dups to borrowers) — both directions of the dup()
-    // discipline from the original capnweb learnings.
-    const retained = provider.dup ? provider.dup() : provider;
+    // discipline from the original capnweb learnings. A PLAIN-object provider
+    // crosses RPC by value with its function members as stubs, so retention
+    // walks it and dups every member (retainLiveProvider).
+    const { onRpcBroken, release, retained } = retainLiveProvider(provider);
     this.#dropLiveStub(name, { record: false });
     this.#liveStubs.set(name, retained);
+    this.#liveStubReleases.set(name, release);
     // Best-effort teardown registration: capnweb stubs implement onRpcBroken
     // locally, but Workers-RPC stubs proxy EVERY property as a remote method,
     // so on a provider that doesn't implement it the call rejects with "does
@@ -533,7 +569,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const teardown = () => {
       if (this.#liveStubs.get(name) === retained) this.#dropLiveStub(name, { record: true });
     };
-    void Promise.resolve(retained.onRpcBroken?.(teardown) as unknown).catch(() => {});
+    void Promise.resolve(onRpcBroken?.(teardown) as unknown).catch(() => {});
   }
 
   /** Drop a live stub. `record: true` (session teardown) appends the
@@ -543,8 +579,10 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const stub = this.#liveStubs.get(name);
     if (!stub) return;
     this.#liveStubs.delete(name);
+    const release = this.#liveStubReleases.get(name);
+    this.#liveStubReleases.delete(name);
     if (opts.record) {
-      void this.ctx.journal
+      void this.ctx.stream
         .append({
           payload: { path: name.split(".") },
           type: ITX_EVENT_TYPES.capabilityDisconnected,
@@ -553,7 +591,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
           console.error(`[itx] capability-disconnected append failed for "${name}":`, error);
         });
     }
-    stub[Symbol.dispose]?.();
+    release?.();
   }
 
   /** The two-case shape: a capability is either held up by a live connection
@@ -562,7 +600,23 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     if (entry.kind === "live") {
       const stub = this.#liveStubs.get(entry.name);
       if (!stub) throw new CapabilityOfflineError(entry.name);
-      return (stub.dup ? stub.dup() : stub) as unknown as PathCallable;
+      const borrowed = (stub.dup ? stub.dup() : stub) as LiveProvider;
+      // Dispatch decides the live target's mode right here, by a free local
+      // property probe (never a round trip). A target implementing `call`
+      // owns its whole method-tree semantics (the SDK shape: one method
+      // receives { path, args } as data); anything else IS its member tree —
+      // replay the remaining path onto it. Plain objects always take the
+      // member branch: they cross sessions by value (the probe sees their
+      // real, absent `call`), and their retained member stubs are what the
+      // replay calls. Function-shaped targets always probe call-speaking —
+      // bare functions wrap at provide (localFunctionCapability / the
+      // handle's wrapper, live-target.ts), and a session-crossed stub
+      // materializes a callable proxy for any member name, `call` included.
+      if (typeof borrowed.call === "function") return borrowed as unknown as PathCallable;
+      return {
+        call: (input: PathCall) => replayPathCall(borrowed, input, { capability: entry.name }),
+        [Symbol.dispose]: () => disposeIfPossible(borrowed),
+      } as PathCallable;
     }
     return this.deps.dial(entry.address! as CapabilityAddress, {
       capabilityPath: entry.name,
@@ -595,7 +649,7 @@ export function resolveLongestProvidedPrefix<Entry>(
  * Names that may never be FIRST path segments: a cap must not shadow the
  * trust kernel (it is reachable as `itx.<name>`, so it competes with the
  * handle's built-ins). `fetch` and `streams` are deliberately NOT here:
- * both are shadowable platform default capabilities (providing your own
+ * both are shadowable default capabilities (providing your own
  * `fetch` is how egress interception works) — the handle's real members
  * still win property lookup; they route through the core anyway.
  */
@@ -608,7 +662,6 @@ const ITX_BUILTIN_NAMES = [
   "projects",
   "provideCapability",
   "revokeCapability",
-  "shareUrl",
   "super",
 ] as const;
 
@@ -659,8 +712,8 @@ export function capabilityPathFrom(input: { name?: string; path?: string[] }): s
 
 /**
  * The live-vs-address discriminator: an ADDRESS is plain data — an object
- * whose prototype is Object.prototype (or null) carrying `type: "rpc" |
- * "url"`. Everything else — capnweb RpcStubs (callable function-proxies),
+ * whose prototype is Object.prototype (or null) carrying `type: "rpc"`.
+ * Everything else — capnweb RpcStubs (callable function-proxies),
  * workers-RPC stubs, RpcTarget instances, plain functions — is a LIVE
  * capability. The plainness check MUST come before any `.type` probe:
  * property access on a capnweb stub returns a truthy pipelined stub, so
@@ -669,7 +722,7 @@ export function capabilityPathFrom(input: { name?: string; path?: string[] }): s
 export function isCapabilityAddress(capability: CapabilityTarget): capability is CapabilityAddress {
   if (!isPlainObject(capability)) return false;
   const type = (capability as { type?: unknown }).type;
-  return type === "rpc" || type === "url";
+  return type === "rpc";
 }
 
 const ASYNC_FUNCTION_PROTOTYPE = Object.getPrototypeOf(async () => {}) as object;
@@ -690,10 +743,13 @@ export function isLocalBareFunction(
 }
 
 /** Wrap a bare local function so it speaks the one calling convention:
- * empty remainder calls the function, a deeper remainder errors (the
- * asPathCallable semantics, replayed in-process). */
-function localFunctionCapability(fn: (...args: never[]) => unknown): LiveProvider {
-  return { call: (input: PathCall) => replayPathCall(fn, input) } as LiveProvider;
+ * empty remainder calls the function, a deeper remainder errors (replayed
+ * in-process). The wrap exists because a bare function would otherwise look
+ * call-speaking to dispatch — `fn.call` IS a function (Function.prototype). */
+function localFunctionCapability(fn: (...args: never[]) => unknown, name: string): LiveProvider {
+  return {
+    call: (input: PathCall) => replayPathCall(fn, input, { capability: name }),
+  } as LiveProvider;
 }
 
 function isPlainObject(target: unknown): boolean {
@@ -703,26 +759,75 @@ function isPlainObject(target: unknown): boolean {
 }
 
 /**
- * STRUCTURAL address validation only — URL parseability, required fields.
+ * Retention for a live provider, beyond the provide call that delivered it:
+ * RPC disposes argument stubs when the call returns, so anything stored must
+ * be a dup. Three shapes:
+ *
+ * - a stub with `.dup` (RpcTarget/function providers) retains via one dup;
+ * - a PLAIN object crosses RPC by value with its function members as session
+ *   stubs — retention deep-walks it and dups every stub-valued member (the
+ *   members are the things that die at call end, not the carrier object);
+ * - anything else (a local object) needs no retention.
+ *
+ * `release` disposes exactly what was dup'd here (#dropLiveStub calls it);
+ * `onRpcBroken` is the best teardown hook the shape offers — the provider's
+ * own, or any member stub's (members share the provider's session).
+ */
+function retainLiveProvider(provider: LiveProvider): {
+  retained: LiveProvider;
+  release: () => void;
+  onRpcBroken?: (callback: (error: unknown) => void) => void;
+} {
+  if (typeof provider.dup === "function") {
+    const retained = provider.dup();
+    return {
+      onRpcBroken: (callback) => retained.onRpcBroken?.(callback),
+      release: () => disposeIfPossible(retained),
+      retained,
+    };
+  }
+  if (!isPlainObject(provider)) {
+    return {
+      onRpcBroken: (callback) => provider.onRpcBroken?.(callback),
+      release: () => disposeIfPossible(provider),
+      retained: provider,
+    };
+  }
+  const memberDups: LiveProvider[] = [];
+  const walk = (node: Record<string, unknown>): Record<string, unknown> => {
+    const copy: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(node)) {
+      const dup = (value as { dup?: () => LiveProvider } | null)?.dup;
+      if (value !== null && typeof dup === "function") {
+        // Any member exposing dup() is a session stub — a function OR an
+        // object-shaped stub (e.g. a nested RpcTarget). Both die with the
+        // provide RPC unless retained here.
+        const duped = Reflect.apply(dup, value, []) as LiveProvider;
+        memberDups.push(duped);
+        copy[key] = duped;
+      } else if (isPlainObject(value)) {
+        copy[key] = walk(value as Record<string, unknown>);
+      } else {
+        copy[key] = value;
+      }
+    }
+    return copy;
+  };
+  const retained = walk(provider as Record<string, unknown>) as LiveProvider;
+  return {
+    onRpcBroken: memberDups[0] ? (callback) => memberDups[0]!.onRpcBroken?.(callback) : undefined,
+    release: () => memberDups.forEach((duped) => disposeIfPossible(duped)),
+    retained,
+  };
+}
+
+/**
+ * STRUCTURAL address validation only — required fields and field exclusions.
  * Reachability (the dialable allowlists) is deliberately NOT checked here:
  * it is the dial's authority and surfaces at first invoke, so a deployment
  * widening its allowlists never strands rows provided before the widening.
  */
 function assertWellFormedCapabilityAddress(name: string, address: CapabilityAddress): void {
-  if (address.type === "url") {
-    let protocol: string;
-    try {
-      protocol = new URL(address.url).protocol;
-    } catch {
-      throw new Error(`Capability "${name}": ${JSON.stringify(address.url)} is not a valid URL.`);
-    }
-    if (!["http:", "https:", "ws:", "wss:"].includes(protocol)) {
-      throw new Error(
-        `Capability "${name}": url targets must be http(s) or ws(s), got ${JSON.stringify(address.url)}.`,
-      );
-    }
-    return;
-  }
   const worker = address.worker;
   switch (worker.type) {
     case "binding":

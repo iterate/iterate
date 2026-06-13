@@ -9,15 +9,16 @@ import {
   ITERATE_ROLE_CLAIM,
 } from "@iterate-com/shared/auth-claims";
 
-// Mint an OS session for any identity — dev and preview environments.
+// Mint an OS session for any identity — dev, preview, and production.
 //
-// OS trusts JWTs signed by any key in its baked JWKS. In dev/preview that
-// JWKS includes the *forge* public key whose private half lives in the
-// Doppler config (`AUTH_FORGE_PRIVATE_JWK`, inherited from `_shared/dev` /
-// `_shared/preview`). This script signs an access+id token pair with that key
-// — fully offline, no auth worker involved — so agents and tests can be any
-// user instantly. There is deliberately no forge key in prd: minting against
-// production goes through the (audited) auth worker instead.
+// OS trusts JWTs signed by any key in its baked JWKS, which includes the
+// *forge* public key whose private half lives in the Doppler config
+// (`AUTH_FORGE_PRIVATE_JWK`, from `_shared/dev` / `_shared/preview` and
+// `os/prd`). This script signs an access+id token pair with that key — fully
+// offline, no auth worker involved — so you can be any user instantly. The
+// forge key is a master key; in prod it is gated behind an explicit opt-in at
+// deploy (AUTH_FORGE_ALLOW_PRODUCTION, see apps/os/alchemy.run.ts). An audited
+// mint endpoint on the auth worker is the planned replacement for prod.
 //
 //   # local dev (uses the running dev server's discovery file for the URL)
 //   doppler run --project os --config dev -- pnpm auth:mint --email alice+test@nustom.com
@@ -27,6 +28,9 @@ import {
 //
 //   # against a preview slot
 //   doppler run --project os --config preview_3 -- pnpm auth:mint --email e2e+test@nustom.com
+//
+//   # against production (mints a real os.iterate.com session — handle with care)
+//   doppler run --project os --config prd -- pnpm auth:mint --email someone@nustom.com --browser-url
 //
 // The minted tokens work three ways:
 //   1. `Authorization: Bearer <accessToken>` against the OS API
@@ -117,9 +121,9 @@ function resolveBaseUrl(): string {
 const forgePrivateJwkJson = process.env.AUTH_FORGE_PRIVATE_JWK?.trim();
 if (!forgePrivateJwkJson) {
   throw new Error(
-    "AUTH_FORGE_PRIVATE_JWK is not in the environment. Run under a dev/preview Doppler config " +
-      "(e.g. `doppler run --project os --config dev -- pnpm auth:mint ...`). " +
-      "There is intentionally no forge key for prd — production minting goes through the auth worker.",
+    "AUTH_FORGE_PRIVATE_JWK is not in the environment. Run under a Doppler config that carries " +
+      "the forge key — dev, preview, or prd (e.g. `doppler run --project os --config dev -- pnpm auth:mint ...`). " +
+      "Prod additionally requires AUTH_FORGE_ALLOW_PRODUCTION=true at deploy (apps/os/alchemy.run.ts).",
   );
 }
 
