@@ -87,6 +87,15 @@ export const InboundMcpSession = z.object({
 export type InboundMcpSession = z.output<typeof InboundMcpSession>;
 
 export const ProjectIntegrationConnection = z.object({
+  /** EVERY connected account (workspace), deterministically ordered; the
+   * top-level fields below describe the first one. */
+  accounts: z.array(
+    z.object({
+      account: z.string(),
+      displayName: z.string().nullable(),
+      externalId: z.string().nullable(),
+    }),
+  ),
   connected: z.boolean(),
   externalId: z.string().nullable(),
   displayName: z.string().nullable(),
@@ -94,11 +103,9 @@ export const ProjectIntegrationConnection = z.object({
   scopes: z.string().nullable(),
   token: z
     .object({
-      createdAt: z.string(),
       expiresAt: z.string().nullable(),
       hasMaterial: z.boolean(),
       refreshTokenStored: z.boolean(),
-      updatedAt: z.string(),
     })
     .nullable(),
 });
@@ -140,6 +147,22 @@ export const RepoInfo = z.object({
   tokenExpiresAt: z.string().nullable(),
 });
 export type RepoInfo = z.output<typeof RepoInfo>;
+
+/** A GitHub repository configured as a REMOTE of an iterate repo. */
+export const RepoGithubRemote = z.object({
+  provider: z.literal("github"),
+  /** github integration ACCOUNT whose installation/token covers the repo. */
+  account: z.string(),
+  owner: z.string(),
+  repo: z.string(),
+  /** Branch to mirror; defaults to the repository's default branch. */
+  branch: z.string().optional(),
+  sync: z.object({
+    pull: z.enum(["auto", "manual"]),
+    push: z.enum(["auto", "manual"]),
+  }),
+});
+export type RepoGithubRemote = z.output<typeof RepoGithubRemote>;
 
 /**
  * Shared source of truth for the OS app's typed RPC surface.
@@ -388,6 +411,64 @@ export const osContract = oc.router({
           }),
         )
         .output(RepoInfo),
+      configureGithubRemote: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/repos/{repoSlug}/remotes/github",
+          description:
+            "Configure a GitHub repository as a remote of an iterate repo — pushes to GitHub then mirror into the repo's artifact automatically (sync.pull: auto)",
+          tags: ["/project", "/repos"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            repoSlug: z
+              .string()
+              .trim()
+              .min(1, "Repo slug is required")
+              .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Repo slug must be lowercase kebab-case"),
+            owner: z.string().trim().min(1),
+            repo: z.string().trim().min(1),
+            /** Defaults to the project's implicit github account. */
+            account: z.string().trim().min(1).optional(),
+            branch: z.string().trim().min(1).optional(),
+            sync: z
+              .object({
+                pull: z.enum(["auto", "manual"]).default("auto"),
+                push: z.enum(["auto", "manual"]).default("manual"),
+              })
+              .default({ pull: "auto", push: "manual" }),
+          }),
+        )
+        .output(z.object({ remoteKey: z.string(), remote: RepoGithubRemote })),
+      getSyncState: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/repos/{repoSlug}/remotes",
+          description: "Read a repo's configured remotes and last mirror sync outcome",
+          tags: ["/project", "/repos"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            repoSlug: z
+              .string()
+              .trim()
+              .min(1, "Repo slug is required")
+              .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Repo slug must be lowercase kebab-case"),
+          }),
+        )
+        .output(
+          z.object({
+            remotes: z.record(z.string(), RepoGithubRemote),
+            lastSync: z
+              .object({
+                headSha: z.string(),
+                at: z.string(),
+                status: z.enum(["synced", "failed"]),
+                reason: z.string().optional(),
+              })
+              .optional(),
+          }),
+        ),
     },
     inboundMcpServer: {
       listSessions: oc
@@ -455,6 +536,136 @@ export const osContract = oc.router({
         })
         .input(ProjectScopedInput)
         .output(z.object({ success: z.boolean() })),
+      // ---- registry-driven integrations (spike) -------------------------------
+      // Generic connect/state for integrations defined in the OS registry
+      // (github, discord). Credentials are supplied directly for the spike;
+      // provider OAuth callbacks converge on the same connect choreography.
+      connect: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/integrations/{integration}/connect",
+          description:
+            "Connect a registry-driven integration: journals provided Secrets, the connection event, and global routing-key claims",
+          tags: ["/project", "/integrations"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            integration: z.string().trim().min(1),
+            /** The instance: a project can connect MANY accounts of one
+             * integration. Same grammar as the account stream path. */
+            account: z
+              .string()
+              .trim()
+              .regex(/^[a-z0-9][a-z0-9-]*$/, "Account names are lowercase kebab-case")
+              .refine((value) => value !== "webhooks", "'webhooks' is reserved")
+              .default("default"),
+            ownership: z.enum(["first-party", "customer"]).default("first-party"),
+            externalId: z.string().trim().min(1),
+            displayName: z.string().optional(),
+            routingKeys: z.array(z.string()).default([]),
+            secrets: z
+              .array(
+                z.object({
+                  name: z.string().trim().min(1),
+                  material: z.string().min(1),
+                  expiresAt: z.string().optional(),
+                }),
+              )
+              .default([]),
+          }),
+        )
+        .output(z.object({ integration: z.string(), account: z.string(), projectId: z.string() })),
+      getIntegrationState: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/integrations/{integration}/state",
+          description: "Reduced state of one integration account's project stream",
+          tags: ["/project", "/integrations"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            integration: z.string().trim().min(1),
+            account: z.string().trim().min(1).default("default"),
+          }),
+        )
+        .output(z.unknown()),
+      setJournaledSecret: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/journaled-secrets",
+          description:
+            "Set a journal-backed Secret: material, a derivation (derived secrets recompute from other secrets), or both",
+          tags: ["/project", "/secrets"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            slug: z.string().trim().min(1),
+            material: z.string().optional(),
+            metadata: z.record(z.string(), z.unknown()).optional(),
+            tier: z.enum(["project", "iterate"]).optional(),
+            sensitivity: z.enum(["secret", "plain"]).optional(),
+            expiresAt: z.string().optional(),
+            derivation: z.unknown().optional(),
+          }),
+        )
+        .output(z.unknown()),
+      describeJournaledSecret: oc
+        .route({
+          method: "GET",
+          path: "/projects/{projectSlugOrId}/journaled-secrets/state",
+          description:
+            "Material-free view of a journal-backed Secret (/secrets/{slug}): status, version, audit trail",
+          tags: ["/project", "/secrets"],
+        })
+        .input(ProjectScopedInput.extend({ slug: z.string().trim().min(1) }))
+        .output(z.unknown()),
+      describePendingConnect: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/integrations/pending-connect/describe",
+          description:
+            "Describe a paused connect (the takeover interstitial): the workspace, its current owner project, and the target project",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput.extend({ token: z.string().trim().min(1) }))
+        .output(
+          z.object({
+            integration: z.string(),
+            account: z.string(),
+            externalId: z.string(),
+            displayName: z.string().nullable(),
+            routingKey: z.string(),
+            currentOwner: z.object({
+              projectId: z.string(),
+              projectSlug: z.string().nullable(),
+              account: z.string(),
+            }),
+            targetProjectId: z.string(),
+          }),
+        ),
+      confirmPendingConnect: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/integrations/pending-connect/confirm",
+          description: "Complete a paused connect as a consented routing-key TAKEOVER",
+          tags: ["/project", "/integrations"],
+        })
+        .input(ProjectScopedInput.extend({ token: z.string().trim().min(1) }))
+        .output(z.object({ integration: z.string(), account: z.string(), projectId: z.string() })),
+      ensureDiscordGateway: oc
+        .route({
+          method: "POST",
+          path: "/projects/{projectSlugOrId}/integrations/discord/gateway",
+          description: "Ensure the Discord gateway websocket is connected for this scope",
+          tags: ["/project", "/integrations"],
+        })
+        .input(
+          ProjectScopedInput.extend({
+            ownership: z.enum(["first-party", "customer"]).default("first-party"),
+            account: z.string().trim().min(1).default("default"),
+          }),
+        )
+        .output(z.unknown()),
     },
     secrets: {
       list: oc

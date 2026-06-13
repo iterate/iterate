@@ -2,6 +2,16 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ProjectIntegrationConnection } from "@iterate-com/os-contract";
 import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@iterate-com/ui/components/alert-dialog";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Item,
@@ -24,6 +34,8 @@ import { orpc } from "~/orpc/client.ts";
 
 const Search = z.object({
   error: z.string().optional(),
+  // A connect paused for takeover consent (sealed token from the OAuth callback).
+  pending_connect: z.string().optional(),
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")({
@@ -91,6 +103,12 @@ function ProjectIntegrationsPage() {
 
   return (
     <section className="max-w-md space-y-4 p-4">
+      {search.pending_connect ? (
+        <PendingConnectTakeoverDialog
+          projectSlugOrId={projectSlugOrId}
+          token={search.pending_connect}
+        />
+      ) : null}
       {oauthErrorLabel ? (
         <Alert variant="destructive">
           <AlertCircle className="size-4" />
@@ -107,7 +125,7 @@ function ProjectIntegrationsPage() {
             <ItemTitle>Slack</ItemTitle>
             <ItemDescription>
               {slackConnection?.connected
-                ? `Connected to ${slackConnection.displayName ?? slackConnection.externalId}`
+                ? `Connected to ${connectedAccountNames(slackConnection)}`
                 : "Connect a Slack workspace to receive project webhooks and use Slack API tools."}
             </ItemDescription>
             <IntegrationMetadata connection={slackConnection} provider="slack" />
@@ -149,7 +167,7 @@ function ProjectIntegrationsPage() {
             <ItemTitle>Google</ItemTitle>
             <ItemDescription>
               {googleConnection?.connected
-                ? `Connected as ${googleConnection.displayName ?? googleConnection.externalId}`
+                ? `Connected as ${connectedAccountNames(googleConnection)}`
                 : "Connect Google for Gmail, Calendar, Docs, Sheets, and Drive API tools."}
             </ItemDescription>
             <IntegrationMetadata connection={googleConnection} provider="google" />
@@ -187,6 +205,21 @@ function ProjectIntegrationsPage() {
   );
 }
 
+/** Every connected workspace/account, comma-joined — a project can hold
+ * several (e.g. multiple Slack workspaces). */
+function connectedAccountNames(connection: {
+  accounts: { account: string; displayName: string | null; externalId: string | null }[];
+  displayName: string | null;
+  externalId: string | null;
+}): string {
+  if (connection.accounts.length > 1) {
+    return connection.accounts
+      .map((each) => each.displayName ?? each.externalId ?? each.account)
+      .join(", ");
+  }
+  return connection.displayName ?? connection.externalId ?? "unknown";
+}
+
 function IntegrationMetadata({
   connection,
   provider,
@@ -218,12 +251,6 @@ function IntegrationMetadata({
           value={token?.refreshTokenStored ? "Stored" : "Not stored"}
           tone={provider === "google" && token?.refreshTokenStored ? "ok" : undefined}
         />
-      ) : null}
-      {token?.createdAt ? (
-        <IntegrationMetadataRow label="Secret created" value={formatTimestamp(token.createdAt)} />
-      ) : null}
-      {token?.updatedAt ? (
-        <IntegrationMetadataRow label="Secret updated" value={formatTimestamp(token.updatedAt)} />
       ) : null}
       <IntegrationMetadataRow label="External ID" value={connection.externalId ?? "Unknown"} />
       <IntegrationMetadataRow
@@ -294,4 +321,81 @@ function countScopes(scopes: string | null, separator: "," | " ") {
     .split(separator)
     .map((scope) => scope.trim())
     .filter((scope) => scope.length > 0).length;
+}
+
+/**
+ * The takeover interstitial: the OAuth callback found this workspace already
+ * routed to a DIFFERENT project and paused the connect into a sealed token.
+ * Show who owns it today and who would own it after, and only proceed on
+ * explicit confirmation.
+ */
+function PendingConnectTakeoverDialog(props: { projectSlugOrId: string; token: string }) {
+  const navigate = Route.useNavigate();
+  const queryClient = useQueryClient();
+  const { data: pending, error } = useQuery(
+    orpc.project.integrations.describePendingConnect.queryOptions({
+      input: { projectSlugOrId: props.projectSlugOrId, token: props.token },
+    }),
+  );
+  const dismiss = () => {
+    void navigate({ search: (previous) => ({ ...previous, pending_connect: undefined }) });
+  };
+  const confirm = useMutation(
+    orpc.project.integrations.confirmPendingConnect.mutationOptions({
+      onSuccess: async () => {
+        await queryClient.invalidateQueries();
+        toast.success("Connection moved to this project");
+        dismiss();
+      },
+      onError: (mutationError) => toast.error(`Takeover failed: ${mutationError.message}`),
+    }),
+  );
+
+  if (error) {
+    return (
+      <Alert variant="destructive">
+        <AlertCircle className="size-4" />
+        <AlertTitle>Pending connection expired</AlertTitle>
+        <AlertDescription>
+          {error.message} — restart the connect flow to try again.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  if (!pending) return null;
+
+  const workspaceLabel = pending.displayName ?? pending.externalId;
+  const ownerLabel = pending.currentOwner.projectSlug ?? pending.currentOwner.projectId;
+
+  return (
+    <AlertDialog open>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Move “{workspaceLabel}” to this project?</AlertDialogTitle>
+          <AlertDialogDescription className="space-y-2">
+            <span className="block">
+              The {pending.integration} workspace <strong>{workspaceLabel}</strong> (
+              {pending.externalId}) is currently connected to project <strong>{ownerLabel}</strong>.
+              Connecting it here moves its inbound events to <strong>this project</strong> —{" "}
+              {ownerLabel} stops receiving them immediately.
+            </span>
+            <span className="block text-xs text-muted-foreground">
+              Routing key {pending.routingKey} → account {pending.account}
+            </span>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={dismiss}>Keep it where it is</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() =>
+              confirm.mutate({ projectSlugOrId: props.projectSlugOrId, token: props.token })
+            }
+            disabled={confirm.isPending}
+          >
+            {confirm.isPending ? "Moving…" : "Yes, move it here"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
 }

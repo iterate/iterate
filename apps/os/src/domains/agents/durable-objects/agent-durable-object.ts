@@ -800,10 +800,17 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
         name: "ai",
       },
       {
-        capability: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
+        capability: {
+          entrypoint: "IntegrationsCapability",
+          type: "rpc",
+          worker: { type: "loopback" },
+        },
         instructions:
-          "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }).",
-        name: "gmail",
+          'Connected third-party services. itx.integrations.google.gmail.request({ path: "/messages", query: { q: "is:unread" } }) ' +
+          "calls Gmail as the connected account (self-refreshing token); itx.integrations.github.octokit is a ready-authenticated Octokit; " +
+          'itx.integrations["google/<account>"] addresses a specific account when several are connected. ' +
+          "Call itx.integrations() to list platform integrations; unknown slugs forward to the project worker's own integrations export (userspace).",
+        name: "integrations",
       },
       {
         capability: { entrypoint: "AgentCapability", type: "rpc", worker: { type: "loopback" } },

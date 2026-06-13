@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { Octokit } from "@octokit/rest";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import {
   createStreamProcessorHost,
@@ -25,6 +26,8 @@ import {
 } from "~/domains/repos/artifacts.ts";
 import { parseConfig } from "~/config.ts";
 import { RepoNotCreatedError } from "~/domains/repos/repo-errors.ts";
+import { providedSecretSlug } from "~/domains/integrations/definition.ts";
+import { getSecretStub } from "~/domains/secrets/durable-objects/secret-durable-object.ts";
 import {
   CommitRepoFilesInput,
   ListRepoFilesInput,
@@ -39,10 +42,13 @@ import {
   readRepoLog,
   readRepoTree,
   type CommitRepoFilesResult,
+  type RepoFileChange,
 } from "~/domains/repos/repo-git.ts";
 import {
+  RepoRemote,
   RepoStreamProcessor,
   RepoStreamProcessorContract,
+  repoRemoteKey,
   repoStreamPath,
 } from "~/domains/repos/stream-processors/repo-stream-processor.ts";
 import {
@@ -117,7 +123,65 @@ const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscript
 
 export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
   host = createStreamProcessorHost(this.ctx);
-  repo = this.host.add(RepoStreamProcessorContract.slug, (deps) => new RepoStreamProcessor(deps));
+  repo = this.host.add(RepoStreamProcessorContract.slug, (deps) => {
+    return new RepoStreamProcessor({
+      ...deps,
+      // The mirror PULL: fetch each changed file from GitHub at headSha and
+      // commit the batch to the artifact. Auth is a placeholder token
+      // chain-fetched through the Secret DO — this host never holds the
+      // credential. Incremental by webhook content; large pushes fail loudly
+      // (a full git mirror via workspace-git is the upgrade path).
+      pullFromGithub: async ({ remote, headSha, changedPaths }) => {
+        if (changedPaths.length > 200) {
+          throw new Error(
+            `push touches ${changedPaths.length} files; incremental mirror caps at 200`,
+          );
+        }
+        const { projectId } = this.structuredName;
+        const tokenSlug = providedSecretSlug({
+          integration: "github",
+          account: remote.account,
+          name: "access-token",
+        });
+        // The established placeholder-SDK convention: octokit holds the
+        // getSecret placeholder as its token and fetches through the Secret
+        // DO chain, which substitutes (and inline-refreshes) on the way out.
+        const octokit = new Octokit({
+          auth: `getSecret({ key: "${tokenSlug}" })`,
+          request: {
+            fetch: (async (url: RequestInfo | URL, init?: RequestInit) =>
+              await getSecretStub({ projectId, slug: tokenSlug }).egressFetch({
+                request: new Request(url, init),
+                keys: [tokenSlug],
+              })) as typeof fetch,
+          },
+        });
+        const changes: RepoFileChange[] = [];
+        for (const { path, change } of changedPaths) {
+          if (change === "delete") {
+            changes.push({ path, delete: true });
+            continue;
+          }
+          const { data } = await octokit.rest.repos.getContent({
+            owner: remote.owner,
+            repo: remote.repo,
+            path,
+            ref: headSha,
+          });
+          if (Array.isArray(data) || data.type !== "file" || data.encoding !== "base64") {
+            throw new Error(`GitHub contents ${path}@${headSha}: not a base64 file`);
+          }
+          changes.push({ path, content: data.content.replaceAll("\n", ""), encoding: "base64" });
+        }
+        if (changes.length === 0) return { commitOid: null };
+        const result = await this.commitFiles({
+          message: `Mirror ${remote.owner}/${remote.repo}@${headSha.slice(0, 7)}`,
+          changes,
+        });
+        return { commitOid: result.noChanges ? null : result.commitOid };
+      },
+    });
+  });
 
   constructor(ctx: DurableObjectState, env: RepoEnv) {
     super(ctx, env);
@@ -192,6 +256,50 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
     await this.ensureStarted();
     await this.waitForRepoProcessorCatchUp();
     return await this.requireInfo();
+  }
+
+  /**
+   * Configure a GitHub repository as a remote of this repo: ONE journaled
+   * fact (`repo/remote-configured`); the processor reacts by registering the
+   * webhook route on the github account stream. Re-configuring the same
+   * remote is last-write-wins.
+   */
+  async configureRemote(input: RepoRemote): Promise<{ remoteKey: string; remote: RepoRemote }> {
+    await this.ensureStarted();
+    await this.waitForRepoProcessorCatchUp();
+    if ((await this.currentRepo()) === null) {
+      throw new RepoNotCreatedError(`Repo ${this.structuredName.repoSlug} has not been created.`);
+    }
+
+    const remote = RepoRemote.parse(input);
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: this.structuredName.projectId,
+      path: repoStreamPath(this.structuredName.repoSlug),
+    });
+    const event = await stream.append({
+      type: "events.iterate.com/repo/remote-configured",
+      idempotencyKey: `repo-remote-configured:${repoRemoteKey(remote)}:${await sha256Hex(
+        JSON.stringify(remote),
+      )}`,
+      payload: remote,
+    });
+    await this.waitForRepoProcessorCatchUp(event.offset);
+    return { remoteKey: repoRemoteKey(remote), remote };
+  }
+
+  /** The fold's remote-sync view: configured remotes + last mirror outcome. */
+  async getSyncState(): Promise<{
+    remotes: Record<string, RepoRemote>;
+    lastSync?: { headSha: string; at: string; status: "synced" | "failed"; reason?: string };
+  }> {
+    await this.ensureStarted();
+    await this.waitForRepoProcessorCatchUp();
+    const snapshot = await this.repo.snapshot();
+    return {
+      remotes: snapshot.state?.remotes ?? {},
+      ...(snapshot.state?.lastSync == null ? {} : { lastSync: snapshot.state.lastSync }),
+    };
   }
 
   async refreshWriteToken(): Promise<RepoInfo> {
@@ -557,4 +665,9 @@ async function readArtifactString(value: unknown): Promise<string | undefined> {
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }

@@ -13,7 +13,7 @@ import dedent from "dedent";
 import { createTestProjectFixture } from "../test-support/create-test-project.ts";
 import type { OsClient } from "../test-support/os-client.ts";
 import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
-import { getSlackIntegrationDurableObjectName } from "~/domains/slack/slack-naming.ts";
+import { getIntegrationDurableObjectName } from "~/domains/integrations/integration-naming.ts";
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
@@ -784,18 +784,20 @@ itIfSlackBotToken(
 
     await client.project.streams.append({
       projectSlugOrId: project.id,
-      streamPath: "/integrations/slack",
+      streamPath: "/integrations/slack/default",
       event: slackProcessorSubscriptionEvent({ projectId: project.id, suffix }),
     });
 
     await client.project.streams.append({
       projectSlugOrId: project.id,
-      streamPath: "/integrations/slack",
+      streamPath: "/integrations/slack/default",
       event: {
-        type: "events.iterate.com/slack/webhook-received",
+        type: "events.iterate.com/integration/event-received",
         idempotencyKey: `slack-agent-e2e-webhook:${suffix}`,
         payload: {
-          slackTeamId: "T_E2E",
+          integration: "slack",
+          transport: "webhook",
+          routingKey: "team:T_E2E",
           body: {
             type: "event_callback",
             team_id: "T_E2E",
@@ -908,12 +910,14 @@ itIfSlackBotToken(
     const debugMessageTs = `${Date.now()}.123456`;
     await client.project.streams.append({
       projectSlugOrId: project.id,
-      streamPath: "/integrations/slack",
+      streamPath: "/integrations/slack/default",
       event: {
-        type: "events.iterate.com/slack/webhook-received",
+        type: "events.iterate.com/integration/event-received",
         idempotencyKey: `slack-agent-e2e-debug-webhook:${suffix}`,
         payload: {
-          slackTeamId: "T_E2E",
+          integration: "slack",
+          transport: "webhook",
+          routingKey: "team:T_E2E",
           body: {
             type: "event_callback",
             team_id: "T_E2E",
@@ -1000,18 +1004,20 @@ itIfSlackBotToken(
 
     await client.project.streams.append({
       projectSlugOrId: project.id,
-      streamPath: "/integrations/slack",
+      streamPath: "/integrations/slack/default",
       event: slackProcessorSubscriptionEvent({ projectId: project.id, suffix }),
     });
 
     await client.project.streams.append({
       projectSlugOrId: project.id,
-      streamPath: "/integrations/slack",
+      streamPath: "/integrations/slack/default",
       event: {
-        type: "events.iterate.com/slack/webhook-received",
+        type: "events.iterate.com/integration/event-received",
         idempotencyKey: `slack-agent-e2e-llm-webhook:${suffix}`,
         payload: {
-          slackTeamId: "T_E2E",
+          integration: "slack",
+          transport: "webhook",
+          routingKey: "team:T_E2E",
           body: {
             type: "event_callback",
             team_id: "T_E2E",
@@ -1180,8 +1186,12 @@ function requiredStringPayload(event: Event, key: string) {
   return value;
 }
 
-function slackAgentPath(input: { channel: string; threadTs: string }) {
-  return `/agents/slack/${sanitizeSlackPathPart(input.channel)}/ts-${sanitizeSlackPathPart(input.threadTs)}`;
+function slackAgentPath(input: { channel: string; threadTs: string; account?: string }) {
+  // slack-route nests thread streams under the connected ACCOUNT, so multiple
+  // workspaces coexist: /agents/slack/{account}/{channel}/ts-{ts}. The e2e
+  // connects the single "default" workspace.
+  const account = input.account ?? "default";
+  return `/agents/slack/${sanitizeSlackPathPart(account)}/${sanitizeSlackPathPart(input.channel)}/ts-${sanitizeSlackPathPart(input.threadTs)}`;
 }
 
 function sanitizeSlackPathPart(value: string) {
@@ -1193,13 +1203,17 @@ function slackProcessorSubscriptionEvent(input: { projectId: string; suffix: str
     type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
     idempotencyKey: `slack-integration-e2e-subscription:${input.projectId}:${input.suffix}`,
     payload: {
-      // Mirrors SlackIntegrationDurableObject.ensureIntegrationSubscription:
-      // a callable subscriber that dials the SLACK_INTEGRATION host DO.
-      subscriptionKey: `slack:${input.projectId}`,
+      // Mirrors IntegrationDurableObject.ensureIntegrationSubscription for
+      // slack: the slack-route processor on the ACCOUNT stream.
+      subscriptionKey: `slack-route:${input.projectId}:slack:default`,
       subscriber: durableObjectProcessorSubscriber({
-        bindingName: "SLACK_INTEGRATION",
-        durableObjectName: getSlackIntegrationDurableObjectName(input.projectId),
-        processorName: "slack",
+        bindingName: "INTEGRATION",
+        durableObjectName: getIntegrationDurableObjectName({
+          account: "default",
+          integration: "slack",
+          projectId: input.projectId,
+        }),
+        processorName: "slack-route",
       }),
     },
   } as const;

@@ -26,7 +26,7 @@
 //                                  the placeholder-never-material negative
 //                                  controls) by itx-mcp-auth.e2e.test.ts
 //   secrets-and-egress             depends on the same external echo service;
-//                                  the setSecret → placeholder-fetch flow is
+//                                  the set → placeholder-fetch flow is
 //                                  the "itx.secrets" e2e in
 //                                  itx-egress.e2e.test.ts
 //   openapi-client                 the catalogue snippet points at the live

@@ -112,9 +112,12 @@ const SEEDED_CAPS: Array<{
   },
   {
     instructions:
-      "Gmail for this project's connected Google account. itx.gmail.request({ path, method?, query?, body? }) against the Gmail REST API.",
-    name: "gmail",
-    capability: { entrypoint: "GmailCapability", type: "rpc", worker: { type: "loopback" } },
+      'Connected third-party services. itx.integrations.google.gmail.request({ path: "/messages", query: { q: "is:unread" } }) ' +
+      "calls Gmail as the connected account (self-refreshing token); itx.integrations.github.octokit is a ready-authenticated Octokit; " +
+      'itx.integrations["google/<account>"] addresses a specific account when several are connected. ' +
+      "Call itx.integrations() to list platform integrations; unknown slugs forward to the project worker's own integrations export (userspace).",
+    name: "integrations",
+    capability: { entrypoint: "IntegrationsCapability", type: "rpc", worker: { type: "loopback" } },
   },
 ];
 
@@ -212,7 +215,7 @@ export class ProjectMcpServerConnection extends McpAgent<
           "Available capabilities on itx:",
           providerDocs,
           "",
-          'Example: async (itx) => { const msgs = await itx.gmail.request({ path: "/gmail/v1/users/me/messages", query: { maxResults: 5 } }); return msgs.data; }',
+          'Example: async (itx) => { const msgs = await itx.integrations.google.gmail.request({ path: "/messages", query: { maxResults: "5" } }); return msgs; }',
         ].join("\n"),
         inputSchema: schema,
       },

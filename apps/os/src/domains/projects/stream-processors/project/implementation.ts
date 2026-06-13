@@ -17,6 +17,7 @@
 // NOT this processor's job: the sibling project-config-worker processor owns
 // that, with checkpointed at-least-once delivery.
 
+import { env } from "cloudflare:workers";
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -32,7 +33,7 @@ import {
   getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { jsonataReactorEventTypes } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
-import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+import { setJournaledSecret } from "~/domains/secrets/secret-streams.ts";
 import {
   EXAMPLE_EGRESS_SECRET_KEY,
   EXAMPLE_EGRESS_SECRET_MATERIAL,
@@ -197,20 +198,28 @@ export class ProjectProcessor extends StreamProcessor<
   }
 
   async #ensureExampleEgressSecret(projectId: string) {
-    const secrets = getSecretsCapability({
-      exports: this.deps.exports as Parameters<typeof getSecretsCapability>[0]["exports"],
-      props: { projectId },
-    });
-
-    const existing = await secrets.getSecretSummaryByKeyOrNull({
-      key: EXAMPLE_EGRESS_SECRET_KEY,
-    });
-    if (existing) return;
-
-    await secrets.setSecret({
-      key: EXAMPLE_EGRESS_SECRET_KEY,
+    // The example secret is a DEMO convenience (the codemode egress-echo
+    // example) — it must never gate project creation. A deployment without
+    // SECRETS_ENCRYPTION_KEY configured still gets working projects; real
+    // user secret writes (connect, itx.secrets.set) fail loudly on their own
+    // when the key is missing, which is the right place to surface it.
+    if (!(env as { SECRETS_ENCRYPTION_KEY?: string }).SECRETS_ENCRYPTION_KEY) {
+      console.warn(
+        `[project] skipping example egress secret for ${projectId}: ` +
+          `SECRETS_ENCRYPTION_KEY is not configured for this deployment.`,
+      );
+      return;
+    }
+    // Journaled Secret with a deterministic idempotency key: re-running the
+    // create-requested side effects appends a duplicate that dedupes.
+    await setJournaledSecret({
+      projectId,
+      slug: EXAMPLE_EGRESS_SECRET_KEY,
       material: EXAMPLE_EGRESS_SECRET_MATERIAL,
       metadata: EXAMPLE_EGRESS_SECRET_METADATA,
+      sensitivity: "plain",
+      idempotencyKey: `secret-set:example:${projectId}`,
+      source: { kind: "project-created-example" },
     });
   }
 

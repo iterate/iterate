@@ -7,10 +7,11 @@
 //                  their globalOutbound, so even a dependency's fetch goes
 //                  through secret substitution without knowing it
 //
-// Every project is born with the example secret (example.egress_api_key →
-// "example-secret-value"), and the worker exposes an authenticated echo
-// endpoint, so we can assert the substitution end to end: the isolate sends
-// a getSecret(...) placeholder and the echo sees the material.
+// Every project is born with the example egress secret (journaled at
+// /secrets/example/egress-api-key → "example-secret-value"), and the worker
+// exposes an authenticated echo endpoint, so we can assert the substitution
+// end to end: the isolate sends a getSecret(...) placeholder and the echo
+// sees the material.
 
 import { expect, test } from "vitest";
 import {
@@ -20,7 +21,7 @@ import {
   registerCreatedProjectCleanup,
 } from "./e2e-env.ts";
 
-const SECRET_KEY = "example.egress_api_key";
+const SECRET_KEY = "example/egress-api-key";
 const SECRET_MATERIAL = "example-secret-value";
 const HEADER = "x-itx-egress-probe";
 
@@ -138,29 +139,25 @@ test("itx.secrets: set a secret through the default, then fetch with its placeho
   await waitForProjectReady(projectItx);
 
   // The secrets-and-egress catalogue example's flow: store material once via
-  // the `secrets` default, reference it by KEY in an egress header,
-  // and the pipe substitutes server-side.
+  // the journaled `secrets` default (set), reference it by SLUG in an egress
+  // header, and the pipe substitutes server-side.
   const handle = projectItx as never as Record<string, any>;
   const material = `lifecycle-${crypto.randomUUID()}`;
-  await handle.secrets.setSecret({ key: "demo.api_key", material });
+  const slug = "demo/api-key";
+  await handle.secrets.set({ slug, material });
 
-  const listed = (await handle.secrets.listSecrets()) as Array<{ key: string }>;
-  expect(listed.map((secret) => secret.key)).toContain("demo.api_key");
-  // Summaries are redacted — material never rides the list surface.
-  expect(JSON.stringify(listed)).not.toContain(material);
+  // describe() is material-free — the bytes never ride the itx surface.
+  const described = (await handle.secrets.describe({ slug })) as Record<string, unknown>;
+  expect(JSON.stringify(described)).not.toContain(material);
 
   const response = await projectItx.fetch(echoUrl(), {
     headers: {
       authorization: `Bearer ${adminApiSecret()}`,
-      [HEADER]: 'getSecret({ key: "demo.api_key" })',
+      [HEADER]: `getSecret({ key: "${slug}" })`,
     },
   });
   expect(response.status).toBe(200);
   expect(echoedHeader(await response.json())).toContain(material);
-
-  await handle.secrets.deleteSecret({ key: "demo.api_key" });
-  const afterDelete = (await handle.secrets.listSecrets()) as Array<{ key: string }>;
-  expect(afterDelete.map((secret) => secret.key)).not.toContain("demo.api_key");
 });
 
 // ---- helpers ----------------------------------------------------------------

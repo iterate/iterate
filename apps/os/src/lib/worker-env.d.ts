@@ -13,13 +13,16 @@ type W = typeof workers;
 
 type AppWorkerEnv = W["app"]["Env"];
 type AgentWorkerEnv = W["agent"]["Env"];
+type DiscordGatewayWorkerEnv = W["discordGateway"]["Env"];
 type IngressWorkerEnv = W["ingress"]["Env"];
+type IntegrationWorkerEnv = W["integration"]["Env"];
+type IntegrationIngressWorkerEnv = W["integrationIngress"]["Env"];
 type ItxWorkerEnv = W["itx"]["Env"];
 type McpWorkerEnv = W["mcp"]["Env"];
 type ProjectWorkerEnv = W["project"]["Env"];
 type RepoWorkerEnv = W["repo"]["Env"];
+type SecretWorkerEnv = W["secret"]["Env"];
 type SlackAgentWorkerEnv = W["slackAgent"]["Env"];
-type SlackIntegrationWorkerEnv = W["slackIntegration"]["Env"];
 type StreamWorkerEnv = W["stream"]["Env"];
 type WorkspaceWorkerEnv = W["workspace"]["Env"];
 type DebugSubscriberWorkerEnv = Partial<NonNullable<W["debugSubscriber"]>["Env"]>;
@@ -33,13 +36,16 @@ export interface CloudflareEnv
   extends
     AppWorkerEnv,
     AgentWorkerEnv,
+    DiscordGatewayWorkerEnv,
     IngressWorkerEnv,
+    IntegrationWorkerEnv,
+    IntegrationIngressWorkerEnv,
     ItxWorkerEnv,
     McpWorkerEnv,
     ProjectWorkerEnv,
     RepoWorkerEnv,
+    SecretWorkerEnv,
     SlackAgentWorkerEnv,
-    SlackIntegrationWorkerEnv,
     StreamWorkerEnv,
     WorkspaceWorkerEnv,
     DebugSubscriberWorkerEnv {}

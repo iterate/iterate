@@ -1,4 +1,3 @@
-import { createD1Client } from "sqlfu";
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import {
@@ -15,8 +14,8 @@ import {
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
-import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
 import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
+import { readSlackToken, slackAccountFromStreamPath } from "~/domains/slack/slack-token.ts";
 import {
   SlackAgentProcessor,
   SlackAgentProcessorContract,
@@ -66,9 +65,8 @@ export class SlackAgentDurableObject extends SlackAgentLifecycleBase<SlackAgentE
       callSlackApi: async (method, body) => {
         const { projectId, streamPath } = await this.ensureStartedOrInitializeFromRuntimeName();
         const token = await readSlackToken({
-          db: this.env.DO_CATALOG,
-          env: this.env,
           projectId,
+          account: slackAccountFromStreamPath(streamPath),
         });
         if (!token) return;
         try {
@@ -130,20 +128,6 @@ export class SlackAgentDurableObject extends SlackAgentLifecycleBase<SlackAgentE
       return await this.initialize({ name: runtimeName });
     }
   }
-}
-
-export async function readSlackToken(input: {
-  db: D1Database;
-  env: Pick<SlackAgentEnv, "APP_CONFIG_SLACK_BOT_TOKEN" | "SLACK_BOT_TOKEN">;
-  projectId: string;
-}) {
-  const secret = await getProjectSecret(createD1Client(input.db), {
-    key: "slack.access_token",
-    projectId: input.projectId,
-  });
-  if (secret) return secret.material;
-
-  return input.env.SLACK_BOT_TOKEN ?? input.env.APP_CONFIG_SLACK_BOT_TOKEN ?? "";
 }
 
 export function slackAgentProcessorSubscriptionKey(input: {

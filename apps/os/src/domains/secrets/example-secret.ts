@@ -1,4 +1,4 @@
-export const EXAMPLE_EGRESS_SECRET_KEY = "example.egress_api_key";
+export const EXAMPLE_EGRESS_SECRET_KEY = "example/egress-api-key";
 export const EXAMPLE_EGRESS_SECRET_MATERIAL = "example-secret-value";
 
 export const EXAMPLE_EGRESS_SECRET_METADATA = {

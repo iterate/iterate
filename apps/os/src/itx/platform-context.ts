@@ -96,6 +96,34 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     name: "fetch",
   },
   {
+    address: { entrypoint: "IntegrationsCapability", type: "rpc", worker: { type: "loopback" } },
+    instructions:
+      "This project's connected integrations, each exposing its well-known SDK " +
+      "ready-authenticated from the project's Secrets: " +
+      "itx.integrations.github.octokit.rest.issues.create({...}), " +
+      "itx.integrations.discord.api.channels.createMessage(channelId, {...}). " +
+      "Slugs the platform doesn't know forward to the project worker's own " +
+      "integrations({ slug, path, args }) export — userspace integrations. " +
+      "Call itx.integrations() to list the platform-provided ones.",
+    name: "integrations",
+  },
+  {
+    address: {
+      entrypoint: "SecretsJournalCapability",
+      type: "rpc",
+      worker: { type: "loopback" },
+    },
+    instructions:
+      "Journaled Secrets at /secrets/{slug}: itx.secrets.set({ slug, material?, derivation?, " +
+      "sensitivity? }) to store credentials, config variables, or DERIVED secrets " +
+      "(material recomputed from other secrets, e.g. a session token from a stored " +
+      "username/password); itx.secrets.describe({ slug }) for material-free state. " +
+      'Reference material in outbound requests as getSecret({ key: "slug" }) header ' +
+      "placeholders — substitution (with inline refresh) happens in egress, so code " +
+      "here never sees the bytes.",
+    name: "secrets",
+  },
+  {
     address: { entrypoint: "StreamsCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
       "Event streams in this project's namespace: itx.streams.get('/path') returns a " +
@@ -103,21 +131,6 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
       "refs ('ns:/path') checked against this project's access. Chained calls ride " +
       "RPC promise pipelining.",
     name: "streams",
-  },
-  {
-    // The project's secret store — the WRITE half of the placeholder design:
-    // store material once (itx.secrets.setSecret), then reference it in any
-    // egress header as getSecret({ key }) and the egress pipe substitutes it
-    // server-side. The itx surface is writes + redacted summaries ONLY —
-    // material never crosses an itx boundary (secrets-capability-call.ts).
-    address: { entrypoint: "SecretsCapability", type: "rpc", worker: { type: "loopback" } },
-    instructions:
-      "Project secrets: itx.secrets.setSecret({ key, material }), listSecrets() " +
-      "(redacted summaries), getSecretSummaryByKey({ key }), deleteSecret({ key }). " +
-      'Reference a stored secret in any outbound-HTTP header as getSecret({ key: "…" }) ' +
-      "— the platform substitutes the real value inside its own outbound-HTTP layer; " +
-      "your code only ever sees the placeholder.",
-    name: "secrets",
   },
   {
     address: { entrypoint: "ReposCapability", type: "rpc", worker: { type: "loopback" } },

@@ -639,7 +639,7 @@ return { count: pets.length, operations: operations.slice(0, 3) };
 // The placeholder is substituted server-side; this tab never sees the value.
 const response = await itx.fetch("https://postman-echo.com/get", {
   headers: {
-    authorization: 'Bearer getSecret({ key: "example.egress_api_key" })',
+    authorization: 'Bearer getSecret({ key: "example/egress-api-key" })',
   },
 });
 const body = await response.json();
@@ -650,21 +650,20 @@ return { status: response.status, sawSubstitutedHeader: body.headers };
     id: "secrets-and-egress",
     title: "Store a secret, then fetch with it",
     description:
-      "The full credential lifecycle in one script: itx.secrets.setSecret() stores material in the project's secret store, and from then on a getSecret(...) placeholder in any egress header becomes the real value server-side — the script itself never round-trips the material again. This is how authenticated MCP/OpenAPI capability addresses stay credential-free.",
+      "The full credential lifecycle in one script: itx.secrets.set() journals material in the project's Secret store, and from then on a getSecret(...) placeholder in any egress header becomes the real value server-side — the script itself never round-trips the material again. This is how authenticated MCP/OpenAPI capability addresses stay credential-free.",
     context: "project",
     runtimes: ALL_RUNTIMES,
     code: `
-// (1) Store the credential once. listSecrets() shows redacted summaries.
-await itx.secrets.setSecret({ key: "demo.api_key", material: "demo-" + crypto.randomUUID() });
+// (1) Journal the credential once. describe() returns material-free state.
+await itx.secrets.set({ slug: "demo/api-key", material: "demo-" + crypto.randomUUID() });
 
-// (2) Use it by KEY: the placeholder substitutes inside the egress pipe.
+// (2) Use it by SLUG: the placeholder substitutes inside the egress pipe.
 const response = await itx.fetch("https://postman-echo.com/get", {
-  headers: { "x-api-key": 'getSecret({ key: "demo.api_key" })' },
+  headers: { "x-api-key": 'getSecret({ key: "demo/api-key" })' },
 });
 const echoed = await response.json();
 
-// (3) Clean up. The echo saw the real material; this script only saw the key.
-await itx.secrets.deleteSecret({ key: "demo.api_key" });
+// (3) The echo saw the real material; this script only ever saw the slug.
 return { status: response.status, echoedKeyHeader: echoed.headers["x-api-key"] };
 `.trim(),
   },

@@ -15,8 +15,11 @@ import { resolveDialableTargets } from "./dial.ts";
 import { contextAddress, dialContext, parseContextRef, projectContextRef } from "./coordinates.ts";
 import { GLOBAL_CONTEXT_ID, type ItxProps } from "./refs.ts";
 import { parseConfig } from "~/config.ts";
-import { substituteProjectEgressSecretHeaders } from "~/domains/projects/egress-secret-substitution.ts";
-import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+import { parseSecretReferences } from "~/domains/projects/egress-secret-substitution.ts";
+import {
+  delegateEgressFetchToSecretChain,
+  splitJournaledSecretKeys,
+} from "~/domains/secrets/secret-streams.ts";
 
 /**
  * restore(): names → live object graph. A context handle's access is always
@@ -129,12 +132,14 @@ export type EgressPipeProps = {
 
 /**
  * The TERMINAL egress pipe: the default target of the `fetch` capability
- * (PLATFORM_PROJECT_CAPABILITIES, platform-context.ts). Stateless: secrets are D1 rows
- * (domains/secrets), scoped by the dial-injected projectId, so
- * substitution and the real fetch happen here in a plain isolate — the
- * Project DO supervises dispatch (its capability table is where live shadows live)
- * but secret material never enters it. Future egress policy (allowlists,
- * human-in-the-loop approval) slots in here.
+ * (PLATFORM_PROJECT_CAPABILITIES, platform-context.ts). Stateless and
+ * material-free for journaled Secrets: it parses getSecret({ key })
+ * references and DELEGATES the request into the referenced secrets' own
+ * Durable Objects, which substitute hop by hop — the last hop performs the
+ * outbound fetch, so material never leaves the secret system. Legacy D1
+ * rows (pre-domain-object secrets) still substitute here and die with the
+ * migration. Future egress policy (allowlists, human-in-the-loop approval)
+ * slots in here.
  */
 export class EgressPipe extends WorkerEntrypoint<Env, EgressPipeProps> {
   async call({ args }: PathCall): Promise<Response> {
@@ -152,21 +157,32 @@ export class EgressPipe extends WorkerEntrypoint<Env, EgressPipeProps> {
       return await fetch(request);
     }
 
-    const secrets = getSecretsCapability({
-      exports: this.ctx.exports as unknown as Parameters<typeof getSecretsCapability>[0]["exports"],
-      props: { projectId },
-    });
-    const [substitutionError, substitutedHeaders] = await substituteProjectEgressSecretHeaders({
-      headers: request.headers,
-      secrets,
-    });
-    if (substitutionError) return substitutionError;
-
-    const outboundHeaders = new Headers(request.headers);
-    for (const [header, value] of Object.entries(substitutedHeaders)) {
-      outboundHeaders.set(header, value);
+    // Collect every getSecret({ key }) reference across the headers, once.
+    const keys: string[] = [];
+    for (const [header, value] of request.headers) {
+      const [parseError, references] = parseSecretReferences({ header, value });
+      if (parseError) return parseError;
+      for (const reference of references) {
+        if (!keys.includes(reference.key)) keys.push(reference.key);
+      }
     }
-    return await fetch(new Request(request, { headers: outboundHeaders }));
+    if (keys.length === 0) return await fetch(request);
+
+    // Every referenced key must be a journaled Secret (there is no other
+    // secret store). The pipe never touches material: it DELEGATES the
+    // request into the chain — hop by hop substitution, last hop fetches.
+    const { journaled, legacy: unknown } = await splitJournaledSecretKeys({ projectId, keys });
+    if (unknown.length > 0) {
+      return Response.json(
+        {
+          error: "project_egress_secret_substitution_failed",
+          message: `Project egress secret substitution failed: Secret not found for key "${unknown[0]}".`,
+          secretKey: unknown[0],
+        },
+        { status: 400 },
+      );
+    }
+    return await delegateEgressFetchToSecretChain({ projectId, keys: journaled, request });
   }
 }
 

@@ -100,6 +100,20 @@ export const AppConfig = z.object({
           scopes: publicValue(z.array(GoogleScope).default(DEFAULT_GOOGLE_OAUTH_SCOPES)),
         })
         .optional(),
+      // iterate's GitHub App (migrated from os-legacy-backup Doppler).
+      // appId + privateKey mint App JWTs -> installation tokens (the script-
+      // derivation gap); oauthClient* serve the user OAuth flow; the webhook
+      // signing secret verifies ingress.
+      github: z
+        .object({
+          appId: publicValue(z.string().trim().min(1)),
+          appSlug: publicValue(z.string().trim().min(1)),
+          oauthClientId: publicValue(z.string().trim().min(1)),
+          oauthClientSecret: redacted(z.string().trim().min(1)),
+          privateKey: redacted(z.string().trim().min(1)),
+          webhookSigningSecret: redacted(z.string().trim().min(1)),
+        })
+        .optional(),
     })
     .default({}),
   // Extra itx dial allowlist entries for this deployment, merged with the

@@ -6,7 +6,7 @@
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
-import { SlackProcessorContract } from "../slack/contract.ts";
+import { SlackRouteProcessorContract } from "../slack-route/contract.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
 
 /**
@@ -32,7 +32,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
     threadTs: z.string().optional(),
   }),
   initialState: {},
-  processorDeps: [AgentProcessorContract, SlackProcessorContract],
+  processorDeps: [AgentProcessorContract, SlackRouteProcessorContract],
   events: {
     "events.iterate.com/itx/script-execution-requested": {
       description:

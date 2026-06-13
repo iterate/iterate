@@ -17,14 +17,14 @@
 
 export { AgentCapability } from "~/domains/agents/entrypoints/agent-capability.ts";
 export { AgentToolsCapability } from "~/domains/agents/entrypoints/agent-tools-capability.ts";
-export { GmailCapability } from "~/domains/google/entrypoints/gmail-capability.ts";
+export { IntegrationsCapability } from "~/domains/integrations/entrypoints/integrations-capability.ts";
 export { BindingCapability, EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { McpClient } from "~/itx/capabilities/mcp-client.ts";
 export { OpenApiClient } from "~/itx/capabilities/openapi-client.ts";
 export { StreamsCapability } from "~/itx/capabilities/streams.ts";
 export { PlatformContext } from "~/itx/platform-context.ts";
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
-export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+export { SecretsJournalCapability } from "~/domains/secrets/entrypoints/secrets-journal-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";

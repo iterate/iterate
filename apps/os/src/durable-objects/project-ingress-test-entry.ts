@@ -12,7 +12,8 @@ import {
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import { PROJECT_REPO_SLUG } from "~/domains/repos/project-repo.ts";
-import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+import { setJournaledSecret } from "~/domains/secrets/secret-streams.ts";
+import { ensureSecretStub } from "~/domains/secrets/durable-objects/secret-durable-object.ts";
 import {
   dispatchFetchCallable,
   matchIngressRequest,
@@ -108,7 +109,8 @@ export class RepoDurableObject extends RealRepoDurableObject {
   }
 }
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
-export { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+export { SecretDurableObject } from "~/domains/secrets/durable-objects/secret-durable-object.ts";
+export { SecretsJournalCapability } from "~/domains/secrets/entrypoints/secrets-journal-capability.ts";
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 export { EgressPipe, ItxEntrypoint, ProjectEgress } from "~/itx/entrypoint.ts";
 export { ItxDurableObject } from "~/itx/itx-durable-object.ts";
@@ -179,15 +181,20 @@ export default {
     }
 
     if (url.pathname === "/__test/upsert-secret") {
-      const secrets = getSecretsCapability({
-        exports: ctx.exports,
-        props: { projectId: "proj__local__test" },
-      });
-      const secret = await secrets.setSecret({
-        key: url.searchParams.get("key") ?? "openai",
+      const slug = url.searchParams.get("key") ?? "openai";
+      const event = await setJournaledSecret({
+        projectId: "proj__local__test",
+        slug,
         material: url.searchParams.get("material") ?? "mvp-secret-value",
+        sensitivity: "plain",
       });
-      return Response.json(secret);
+      return Response.json({ slug, offset: event.offset });
+    }
+
+    if (url.pathname === "/__test/secret-state") {
+      const slug = url.searchParams.get("slug") ?? "openai";
+      const stub = await ensureSecretStub({ projectId: "proj__local__test", slug });
+      return Response.json(await stub.describe());
     }
 
     if (url.pathname === "/__test/egress") {

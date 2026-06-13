@@ -296,7 +296,7 @@ const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "AgentToolsCapability",
   "BindingCapability",
   "EgressPipe",
-  "GmailCapability",
+  "IntegrationsCapability",
   "McpClient",
   // Like McpClient: only provider props (specUrl/baseUrl/headers) + the
   // dial-injected attribution — every fetch rides the originating project's
@@ -304,10 +304,10 @@ const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   // through their own project's pipe.
   "OpenApiClient",
   "ReposCapability",
-  // Scopes strictly by the dial-injected projectId (SecretsCapability reads
-  // ctx.props.projectId, which the injection spread always overwrites), so a
-  // provider can never point it at another project's secrets.
-  "SecretsCapability",
+  // Scopes strictly by the dial-injected projectId (SecretsJournalCapability
+  // reads ctx.props.projectId, which the injection spread always overwrites),
+  // so a provider can never point it at another project's secrets.
+  "SecretsJournalCapability",
   "SlackCapability",
   "StreamsCapability",
   "WorkspaceCapability",

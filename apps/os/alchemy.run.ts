@@ -31,9 +31,12 @@ import type { DebugAppendChainSubscriber } from "./src/durable-objects/debug-app
 import type { ProjectDurableObject } from "./src/domains/projects/durable-objects/project-durable-object.ts";
 import type { ProjectMcpServerConnection } from "./src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts";
 import type { AgentDurableObject } from "./src/domains/agents/durable-objects/agent-durable-object.ts";
+import type { DiscordGatewayDurableObject } from "./src/domains/integrations/durable-objects/discord-gateway-durable-object.ts";
+import type { IntegrationDurableObject } from "./src/domains/integrations/durable-objects/integration-durable-object.ts";
+import type { IntegrationIngressDurableObject } from "./src/domains/integrations/durable-objects/integration-ingress-durable-object.ts";
+import type { SecretDurableObject } from "./src/domains/secrets/durable-objects/secret-durable-object.ts";
 import type { RepoDurableObject } from "./src/domains/repos/durable-objects/repo-durable-object.ts";
 import type { SlackAgentDurableObject } from "./src/domains/slack/durable-objects/slack-agent-durable-object.ts";
-import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import { eventDocsHostnameForAppBaseUrl } from "./src/lib/event-docs-host.ts";
 
@@ -214,13 +217,16 @@ const workerNames = {
   agent: `${ctx.workerName}-agent`,
   app: `${ctx.workerName}-app`,
   debugSubscriber: `${ctx.workerName}-debug-subscriber`,
+  discordGateway: `${ctx.workerName}-discord-gateway`,
   ingress: ctx.workerName,
+  integration: `${ctx.workerName}-integration`,
+  integrationIngress: `${ctx.workerName}-integration-ingress`,
   itx: `${ctx.workerName}-itx`,
   mcp: `${ctx.workerName}-mcp`,
   project: `${ctx.workerName}-project`,
   repo: `${ctx.workerName}-repo`,
+  secret: `${ctx.workerName}-secret`,
   slackAgent: `${ctx.workerName}-slack-agent`,
-  slackIntegration: `${ctx.workerName}-slack-integration`,
   stream: `${ctx.workerName}-stream`,
   workspace: `${ctx.workerName}-workspace`,
 };
@@ -257,7 +263,7 @@ const stream = DurableObjectNamespace<Stream>("stream", {
   sqlite: true,
 });
 // itx generic context hosts: one instance per extended context, addressed
-// by its journal coordinate (src/itx/journal.ts).
+// by its journal coordinate (src/itx/coordinates.ts).
 const itxContext = DurableObjectNamespace<ItxDurableObject>("itx-context", {
   className: "ItxDurableObject",
   scriptName: workerNames.itx,
@@ -291,19 +297,40 @@ const agent = DurableObjectNamespace<AgentDurableObject>("agent", {
   scriptName: workerNames.agent,
   sqlite: true,
 });
-const slackIntegration = DurableObjectNamespace<SlackIntegrationDurableObject>(
-  "slack-integration",
-  {
-    className: "SlackIntegrationDurableObject",
-    scriptName: workerNames.slackIntegration,
-    sqlite: true,
-  },
-);
 const slackAgent = DurableObjectNamespace<SlackAgentDurableObject>("slack-agent", {
   className: "SlackAgentDurableObject",
   scriptName: workerNames.slackAgent,
   sqlite: true,
 });
+// Integrations spike: generic per-(project, integration) lifecycle hosts, the
+// per-integration global ingress router, journal-backed Secrets, and the
+// Discord gateway connection holder.
+const integration = DurableObjectNamespace<IntegrationDurableObject>("integration", {
+  className: "IntegrationDurableObject",
+  scriptName: workerNames.integration,
+  sqlite: true,
+});
+const integrationIngress = DurableObjectNamespace<IntegrationIngressDurableObject>(
+  "integration-ingress",
+  {
+    className: "IntegrationIngressDurableObject",
+    scriptName: workerNames.integrationIngress,
+    sqlite: true,
+  },
+);
+const secret = DurableObjectNamespace<SecretDurableObject>("secret", {
+  className: "SecretDurableObject",
+  scriptName: workerNames.secret,
+  sqlite: true,
+});
+const discordGateway = DurableObjectNamespace<DiscordGatewayDurableObject>("discord-gateway", {
+  className: "DiscordGatewayDurableObject",
+  scriptName: workerNames.discordGateway,
+  sqlite: true,
+});
+const secretsEncryptionKey = process.env.SECRETS_ENCRYPTION_KEY;
+const discordPublicKey = process.env.DISCORD_PUBLIC_KEY;
+const discordBotToken = process.env.APP_CONFIG_DISCORD_BOT_TOKEN;
 const debugAppendChainSubscriber = ctx.app.local
   ? DurableObjectNamespace<DebugAppendChainSubscriber>("debug-append-chain-subscriber", {
       className: "DebugAppendChainSubscriber",
@@ -420,15 +447,23 @@ const loopbackUnionBindings = {
   AI: Ai(),
   AGENT: agent,
   DB: db,
+  DISCORD_GATEWAY: discordGateway,
   DO_CATALOG: db,
+  GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
+  INTEGRATION: integration,
+  INTEGRATION_INGRESS: integrationIngress,
   ITX_BUILD_CACHE: itxBuildCache,
   ITX_CONTEXT: itxContext,
   LOADER: WorkerLoader(),
   PROJECT: project,
   REPO: repo,
+  SECRET: secret,
   STREAM: stream,
   WORKSPACE: workspace,
   ...(slackBotToken == null ? {} : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
+  ...(secretsEncryptionKey == null
+    ? {}
+    : { SECRETS_ENCRYPTION_KEY: alchemy.secret(secretsEncryptionKey) }),
 };
 
 // The Durable Object workers deploy CONCURRENTLY: cross-script DO bindings
@@ -442,7 +477,10 @@ const [
   repoWorker,
   itxWorker,
   agentWorker,
-  slackIntegrationWorker,
+  integrationWorker,
+  integrationIngressWorker,
+  secretWorker,
+  discordGatewayWorker,
   mcpWorker,
   projectWorker,
   debugSubscriberWorker,
@@ -458,6 +496,11 @@ const [
     entrypoint: "./src/workers/slack-agent.ts",
     bindings: {
       DO_CATALOG: db,
+      // The agent host resolves the routed workspace's bot token via
+      // readSlackToken → revealJournaledSecretForPlatformUse, which dials the
+      // Secret DO. (account comes from the stream path, so no INTEGRATION
+      // lookup here.)
+      SECRET: secret,
       SLACK_AGENT: slackAgent,
       STREAM: stream,
       ...(slackBotToken == null
@@ -480,6 +523,10 @@ const [
       DO_CATALOG: db,
       GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
       REPO: repo,
+      // GitHub-remote sync (pullFromGithub) authenticates Octokit by routing
+      // its fetch through getSecretStub(...).egressFetch — the Secret DO
+      // substitutes the github token — so the repo worker dials SECRET.
+      SECRET: secret,
       STREAM: stream,
     },
   }),
@@ -496,18 +543,65 @@ const [
     compatibilityFlags: ["nodejs_compat", "global_fetch_strictly_public"],
     bindings: loopbackUnionBindings,
   }),
-  osWorker("slackIntegration", {
-    entrypoint: "./src/workers/slack-integration.ts",
+  osWorker("integration", {
+    entrypoint: "./src/workers/integration.ts",
+    // Registry SDK egress dials the terminal EgressPipe through ctx.exports,
+    // so this worker hosts the loopback surface + its union bindings (which
+    // already carry INTEGRATION / INTEGRATION_INGRESS / SECRET). Egress to
+    // own-zone project hosts must take Worker routes, same as the itx worker.
+    compatibilityFlags: ["global_fetch_strictly_public"],
     bindings: {
-      AGENT: agent,
-      DB: db,
-      DO_CATALOG: db,
+      ...loopbackUnionBindings,
+      // Slack's thread router also prewarms the SLACK_AGENT host (the only
+      // binding the loopback union doesn't already include).
       SLACK_AGENT: slackAgent,
-      SLACK_INTEGRATION: slackIntegration,
+    },
+  }),
+  osWorker("integrationIngress", {
+    entrypoint: "./src/workers/integration-ingress.ts",
+    bindings: {
+      DO_CATALOG: db,
+      GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
+      // Routing a captured event wakes the owning project's integration DO
+      // (ensureIntegrationStub) so its account-stream subscription is live
+      // before the forward lands.
+      INTEGRATION: integration,
+      INTEGRATION_INGRESS: integrationIngress,
       STREAM: stream,
-      ...(slackBotToken == null
+    },
+  }),
+  osWorker("secret", {
+    entrypoint: "./src/workers/secret.ts",
+    // Own-zone is irrelevant; egress here makes external HTTP calls on behalf
+    // of stored credentials (material never leaves this isolate).
+    compatibilityFlags: ["global_fetch_strictly_public"],
+    bindings: {
+      DO_CATALOG: db,
+      SECRET: secret,
+      STREAM: stream,
+      ...(secretsEncryptionKey == null
         ? {}
-        : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
+        : { SECRETS_ENCRYPTION_KEY: alchemy.secret(secretsEncryptionKey) }),
+    },
+  }),
+  osWorker("discordGateway", {
+    entrypoint: "./src/workers/discord-gateway.ts",
+    // Own-zone is irrelevant; the gateway holds a WebSocket to Discord and
+    // captures inbound events like a webhook would.
+    compatibilityFlags: ["global_fetch_strictly_public"],
+    bindings: {
+      DISCORD_GATEWAY: discordGateway,
+      DO_CATALOG: db,
+      // Gateway dispatches flow through the SAME capture path as webhooks
+      // (captureIntegrationEvent → global stream + wake the ingress router),
+      // and customer-owned scopes reveal their bot token from the Secret DO.
+      GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
+      INTEGRATION_INGRESS: integrationIngress,
+      SECRET: secret,
+      STREAM: stream,
+      ...(discordBotToken == null
+        ? {}
+        : { APP_CONFIG_DISCORD_BOT_TOKEN: alchemy.secret(discordBotToken) }),
     },
   }),
   osWorker("mcp", {
@@ -538,13 +632,18 @@ const [
     entrypoint: "./src/workers/stream.ts",
     bindings: {
       AGENT: agent,
+      // Subscriber namespaces the stream dials back by the binding name
+      // embedded in each subscription (INTEGRATION / INTEGRATION_INGRESS /
+      // SECRET are the integration-spike DOs).
+      INTEGRATION: integration,
+      INTEGRATION_INGRESS: integrationIngress,
+      SECRET: secret,
       // Context streams dial their ItxDurableObject subscriber through this
       // binding (itx/coordinates.ts createContext).
       ITX_CONTEXT: itxContext,
       PROJECT: project,
       REPO: repo,
       SLACK_AGENT: slackAgent,
-      SLACK_INTEGRATION: slackIntegration,
       STREAM: stream,
       ...(debugAppendChainSubscriber == null
         ? {}
@@ -579,15 +678,19 @@ const appWorker = await IterateAppWorker(ctx, {
     ARTIFACTS: Artifacts({ namespace: artifactsNamespace }),
     ARTIFACTS_ACCOUNT_ID: artifactsAccountId,
     ARTIFACTS_NAMESPACE: artifactsNamespace,
-    GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
     MCP: mcpWorker,
     PROJECT_HOST: projectWorker,
     PROJECT_MCP_SERVER_CONNECTION: projectMcpServerConnection,
     SLACK_AGENT: slackAgent,
-    SLACK_INTEGRATION: slackIntegration,
     ...(debugAppendChainSubscriber == null
       ? {}
       : { DEBUG_APPEND_CHAIN_SUBSCRIBER: debugAppendChainSubscriber }),
+    // Discord webhook (interaction) verification runs in the app worker; the
+    // bot token also rides here for the connect/SDK egress path.
+    ...(discordPublicKey == null ? {} : { DISCORD_PUBLIC_KEY: discordPublicKey }),
+    ...(discordBotToken == null
+      ? {}
+      : { APP_CONFIG_DISCORD_BOT_TOKEN: alchemy.secret(discordBotToken) }),
   },
   // OAuth login/refresh/logout, and JWT verification when static JWKS is not
   // configured, can still talk to auth.iterate.com from inside the Worker.
@@ -649,13 +752,16 @@ export const workers = {
   agent: agentWorker,
   app: appWorker,
   debugSubscriber: debugSubscriberWorker,
+  discordGateway: discordGatewayWorker,
   ingress: ingressWorker,
+  integration: integrationWorker,
+  integrationIngress: integrationIngressWorker,
   itx: itxWorker,
   mcp: mcpWorker,
   project: projectWorker,
   repo: repoWorker,
+  secret: secretWorker,
   slackAgent: slackAgentWorker,
-  slackIntegration: slackIntegrationWorker,
   stream: streamWorker,
   workspace: workspaceWorker,
 };
