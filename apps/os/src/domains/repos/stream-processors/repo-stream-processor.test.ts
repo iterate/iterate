@@ -95,6 +95,41 @@ describe("Repo stream processor remotes", () => {
     ]);
   });
 
+  it("releases the prior account's route when the same repo is reconfigured onto another github account", async () => {
+    const { appends, processor } = createProcessor();
+
+    await ingest(processor, [
+      REPO_CREATED,
+      { type: "events.iterate.com/repo/remote-configured", payload: REMOTE },
+      // Same owner/repo (the fold key), different github account.
+      {
+        type: "events.iterate.com/repo/remote-configured",
+        payload: { ...REMOTE, account: "secondary" },
+      },
+    ]);
+
+    // The route is released on the old account and registered on the new one,
+    // so github-route stops forwarding this repo's webhooks from the old fold.
+    const removed = appends.find(
+      (entry) => entry.event.type === "events.iterate.com/github/repo-route-removed",
+    );
+    expect(removed).toEqual({
+      streamPath: "/integrations/github/default",
+      event: {
+        type: "events.iterate.com/github/repo-route-removed",
+        idempotencyKey: "github-repo-route-removed:github:iterate/site:site:default",
+        payload: { fullName: "iterate/site", repoStreamPath: "/repos/site" },
+      },
+    });
+    expect(
+      appends.filter(
+        (entry) =>
+          entry.event.type === "events.iterate.com/github/repo-route-configured" &&
+          entry.streamPath === "/integrations/github/secondary",
+      ),
+    ).toHaveLength(1);
+  });
+
   it("turns a push to the mirrored branch into a sync request with NET file changes", async () => {
     const { appends, processor } = createProcessor();
 

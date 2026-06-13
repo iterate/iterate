@@ -159,6 +159,7 @@ export const RepoStreamProcessorContract = defineProcessorContract({
   ],
   emits: [
     "events.iterate.com/github/repo-route-configured",
+    "events.iterate.com/github/repo-route-removed",
     "events.iterate.com/repo/remote-sync-requested",
     "events.iterate.com/repo/remote-synced",
     "events.iterate.com/repo/remote-sync-failed",
@@ -237,7 +238,26 @@ export class RepoStreamProcessor extends StreamProcessor<
       const remote = event.payload;
       const slug = state.repo?.slug;
       if (slug == null) return;
+      // Reconfiguring the SAME repo (key is owner/repo) onto a DIFFERENT github
+      // account moves the route. Release the link on the prior account first,
+      // or its github-route fold keeps forwarding this repository's webhooks
+      // here after the remote fold has moved on.
+      const prior = args.previousState.remotes[repoRemoteKey(remote)];
+      const movedAccount = prior != null && prior.account !== remote.account ? prior : null;
       args.blockProcessorWhile(async () => {
+        if (movedAccount != null) {
+          await this.ctx.stream.append({
+            streamPath: integrationAccountStreamPath("github", movedAccount.account),
+            event: {
+              type: "events.iterate.com/github/repo-route-removed",
+              idempotencyKey: `github-repo-route-removed:${repoRemoteKey(remote)}:${slug}:${movedAccount.account}`,
+              payload: {
+                fullName: `${movedAccount.owner}/${movedAccount.repo}`,
+                repoStreamPath: repoStreamPath(slug),
+              },
+            },
+          });
+        }
         await this.ctx.stream.append({
           streamPath: integrationAccountStreamPath("github", remote.account),
           event: {
