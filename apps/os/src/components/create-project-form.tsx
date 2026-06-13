@@ -37,13 +37,14 @@ const CreateProjectInput = z.object({
 export function CreateProjectForm() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { session } = useAuthClient();
+  const { refresh, session } = useAuthClient();
   const organizations = session?.authenticated ? session.session.organizations : [];
   const createProject = useMutation(
     orpc.projects.create.mutationOptions({
       onSuccess: async (project) => {
         cacheCreatedProjectQueries({ project, queryClient });
         void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
+        await refresh({ force: true });
         await router.invalidate({ sync: true });
         await router.navigate({
           to: "/projects/$projectSlug",

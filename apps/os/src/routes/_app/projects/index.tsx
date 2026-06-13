@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
 import type { Project } from "@iterate-com/os-contract";
+import { useAuthClient } from "@iterate-com/auth/client";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
@@ -36,6 +37,7 @@ function buildProjectHostname(input: {
 function ProjectsIndexPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { refresh } = useAuthClient();
   const { routeConfig } = Route.useLoaderData();
   const { data: projectsData } = useQuery(projectsListQueryOptions({ limit: 20, offset: 0 }));
 
@@ -44,6 +46,7 @@ function ProjectsIndexPage() {
       onSuccess: async (project) => {
         cacheCreatedProjectQueries({ project, queryClient });
         void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
+        await refresh({ force: true });
         await router.invalidate({ sync: true });
         await router.navigate({
           to: "/projects/$projectSlug",

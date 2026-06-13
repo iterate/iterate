@@ -133,9 +133,11 @@ cat <<'EOF' | ab eval --stdin
 EOF
 ```
 
-Project claims only land in the JWT on the next token refresh (or a fresh
-sign-in), so a just-created project is visible to the creating session via its
-seeded query cache but not to a cold reload until the access token reissues.
+Project claims only land in the JWT on token refresh (or a fresh sign-in), so
+the OS create-project UI forces an auth session refresh after creation before it
+navigates to the project. If you create directly through `fetch`, call
+`/api/iterate-auth/session?refresh=force` afterward before testing cold reloads
+or WebSocket-backed project routes.
 
 ## Read local server state directly
 
