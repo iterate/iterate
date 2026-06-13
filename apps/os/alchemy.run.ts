@@ -536,21 +536,16 @@ const [
   }),
   osWorker("integration", {
     entrypoint: "./src/workers/integration.ts",
+    // Registry SDK egress dials the terminal EgressPipe through ctx.exports,
+    // so this worker hosts the loopback surface + its union bindings (which
+    // already carry INTEGRATION / INTEGRATION_INGRESS / SECRET). Egress to
+    // own-zone project hosts must take Worker routes, same as the itx worker.
+    compatibilityFlags: ["global_fetch_strictly_public"],
     bindings: {
-      // Slack's thread router runs here: it prewarms the agent hosts (AGENT /
-      // SLACK_AGENT) and reads the connected account's token (INTEGRATION +
-      // SECRET) to ack the 👀 reaction.
-      AGENT: agent,
-      DO_CATALOG: db,
-      GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
-      INTEGRATION: integration,
-      INTEGRATION_INGRESS: integrationIngress,
-      SECRET: secret,
+      ...loopbackUnionBindings,
+      // Slack's thread router also prewarms the SLACK_AGENT host (the only
+      // binding the loopback union doesn't already include).
       SLACK_AGENT: slackAgent,
-      STREAM: stream,
-      ...(slackBotToken == null
-        ? {}
-        : { APP_CONFIG_SLACK_BOT_TOKEN: alchemy.secret(slackBotToken) }),
     },
   }),
   osWorker("integrationIngress", {
