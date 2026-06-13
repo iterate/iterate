@@ -271,7 +271,7 @@ describe("agent-ui reducer", () => {
     expect(state.live).toMatchObject({ kind: "activity", status: "waiting" });
   });
 
-  it("keeps a running activity live when a user message arrives mid-turn", () => {
+  it("queues a user message that arrives mid-turn", () => {
     const state = reduceAll([
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -284,10 +284,141 @@ describe("agent-ui reducer", () => {
       },
     ]);
 
-    // The interjected message is a settled row, but the in-flight step keeps
-    // running — it must not be archived as done by the interruption.
-    expect(state.items).toHaveLength(1);
-    expect(state.items[0]).toMatchObject({ kind: "user", text: "also, one more thing" });
+    // The interjected message should stay pinned after the live activity
+    // instead of settling into chronological feed rows before the current turn.
+    expect(state.items).toHaveLength(0);
+    expect(state.queuedUserMessages).toHaveLength(1);
+    expect(state.queuedUserMessages[0]).toMatchObject({
+      kind: "user",
+      text: "also, one more thing",
+    });
     expect(state.live?.steps[0]).toMatchObject({ kind: "llm", status: "running" });
+  });
+
+  it("settles queued user messages before the next LLM request starts", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 7,
+        payload: { model: "gpt-test", runOpts: {} },
+      },
+      {
+        type: "events.iterate.com/agent-chat/user-message-added",
+        payload: { channel: "web", content: "also, one more thing" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-completed",
+        payload: {
+          llmRequestId: 7,
+          provider: "openai-ws",
+          durationMs: 100,
+          result: { status: "success" },
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 12,
+        payload: { model: "gpt-test", runOpts: {} },
+      },
+    ]);
+
+    expect(state.items.map((item) => item.kind)).toEqual(["activity", "user"]);
+    expect(state.items[1]).toMatchObject({
+      kind: "user",
+      text: "also, one more thing",
+    });
+    expect(state.queuedUserMessages).toHaveLength(0);
+    expect(state.live?.steps).toHaveLength(1);
+    expect(state.live?.steps[0]).toMatchObject({ kind: "llm", llmRequestId: 12 });
+  });
+
+  it("does not append late chunks from an interrupted request into the next turn", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 7,
+        payload: { model: "gpt-test", runOpts: {} },
+      },
+      {
+        type: "events.iterate.com/openai-ws/websocket-message-received",
+        payload: {
+          connectionId: "c1",
+          llmRequestId: 7,
+          sequence: 0,
+          message: { type: "response.output_text.delta", delta: "old partial" },
+        },
+      },
+      {
+        type: "events.iterate.com/agent-chat/user-message-added",
+        payload: { channel: "web", content: "oh this is taking too long" },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-cancelled",
+        payload: {
+          phase: "requested",
+          llmRequestId: 7,
+          reason: "interrupted-by-user-input",
+        },
+      },
+      {
+        type: "events.iterate.com/openai-ws/websocket-message-received",
+        payload: {
+          connectionId: "c1",
+          llmRequestId: 7,
+          sequence: 1,
+          message: { type: "response.output_text.delta", delta: " stale chunk" },
+        },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 12,
+        payload: { model: "gpt-test", runOpts: {} },
+      },
+    ]);
+
+    expect(state.items.map((item) => item.kind)).toEqual(["activity", "user"]);
+    const activity = state.items[0];
+    if (activity?.kind !== "activity") throw new Error("expected activity item");
+    expect(activity.steps[0]).toMatchObject({
+      kind: "llm",
+      llmRequestId: 7,
+      outcome: "cancelled",
+      responseText: "old partial",
+    });
+    expect(state.items[1]).toMatchObject({
+      kind: "user",
+      text: "oh this is taking too long",
+    });
+    expect(state.live?.steps).toHaveLength(1);
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      llmRequestId: 12,
+      responseText: "",
+    });
+  });
+
+  it("marks an LLM request cancelled when interrupted", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 7,
+        payload: { model: "gpt-test", runOpts: {} },
+      },
+      {
+        type: "events.iterate.com/agent/llm-request-cancelled",
+        payload: {
+          phase: "requested",
+          llmRequestId: 7,
+          reason: "interrupted-by-user-input",
+        },
+      },
+    ]);
+
+    expect(state.items).toHaveLength(0);
+    expect(state.live?.steps[0]).toMatchObject({
+      kind: "llm",
+      status: "done",
+      outcome: "cancelled",
+    });
   });
 });

@@ -104,8 +104,44 @@ describe("Project ingress routing", () => {
       projectId: "proj__local__test",
       slug: "demo",
     });
+    expect(projectState.state.onboarding).toBe("in-progress");
     expect(projectState.state.phase).toBe("ready");
     expect(projectState.offset).toBeGreaterThanOrEqual(4);
+
+    const onboardingResponse = await SELF.fetch(
+      "https://os.iterate.localhost/__test/read-stream?path=/agents/onboarding",
+    );
+    expect(onboardingResponse.ok).toBe(true);
+    const onboardingBody = (await onboardingResponse.json()) as {
+      events: Array<{ type: string; payload: Record<string, unknown> }>;
+    };
+    expect(onboardingBody.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "events.iterate.com/agent/input-added",
+          payload: expect.objectContaining({
+            content: expect.stringContaining("Please read BOOTSTRAP.md"),
+          }),
+        }),
+      ]),
+    );
+
+    const onboardingCompletedResponse = await SELF.fetch(
+      "https://os.iterate.localhost/__test/append-onboarding-completed",
+    );
+    expect(onboardingCompletedResponse.ok).toBe(true);
+    const { appended: onboardingCompleted } = (await onboardingCompletedResponse.json()) as {
+      appended: { offset: number };
+    };
+    await vi.waitFor(async () => {
+      const state = await (
+        await SELF.fetch("https://os.iterate.localhost/__test/project-state")
+      ).json();
+      expect((state as { offset: number }).offset).toBeGreaterThanOrEqual(
+        onboardingCompleted.offset,
+      );
+      expect((state as { state: { onboarding: string } }).state.onboarding).toBe("completed");
+    });
 
     // itx.project deep-traverses in one expression (path proxy; regression
     // for "value.bind is not a function" when the fallthrough Proxy bound
@@ -419,6 +455,7 @@ async function waitForProjectState() {
     const snapshot = latest as {
       offset: number;
       state: {
+        onboarding: string;
         phase: string;
         project: { projectId: string } | null;
       };

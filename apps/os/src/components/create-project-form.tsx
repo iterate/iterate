@@ -47,8 +47,9 @@ export function CreateProjectForm() {
         await refresh({ force: true });
         await router.invalidate({ sync: true });
         await router.navigate({
-          to: "/projects/$projectSlug",
+          to: "/projects/$projectSlug/agents/streams/$",
           params: {
+            _splat: "/agents/onboarding",
             projectSlug: project.slug,
           },
         });

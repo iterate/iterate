@@ -1,12 +1,12 @@
 import { Outlet, createFileRoute, useMatches } from "@tanstack/react-router";
-import { Separator } from "@iterate-com/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { requireOrganizationMemberForSession } from "../lib/auth.ts";
 import { AppSidebar } from "~/components/app-sidebar.tsx";
+import { GlobalCommandPalette } from "~/components/global-command-palette.tsx";
 import { PathBreadcrumbs } from "~/components/path-breadcrumbs.tsx";
 import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import type { RouteBreadcrumbStaticData } from "~/lib/route-breadcrumbs.ts";
+import type { AppRouteStaticData } from "~/lib/route-breadcrumbs.ts";
 import { getSidebarDefaultOpen } from "~/lib/sidebar-state.ts";
 
 export const Route = createFileRoute("/_app")({
@@ -29,7 +29,7 @@ function AppLayout() {
   // Stream pages replace breadcrumbs with the ⌘K path pill and render their
   // own SidebarTrigger, so the shell header would just duplicate chrome.
   const hideAppHeader = matches.some(
-    (match) => (match.staticData as RouteBreadcrumbStaticData | undefined)?.hideAppHeader,
+    (match) => (match.staticData as AppRouteStaticData | undefined)?.hideAppHeader,
   );
 
   return (
@@ -39,11 +39,7 @@ function AppLayout() {
         {hideAppHeader ? null : (
           <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
             <div className="flex items-center gap-2 px-4">
-              <SidebarTrigger className="-ml-1" />
-              <Separator
-                orientation="vertical"
-                className="mr-2 data-vertical:h-4 data-vertical:self-auto"
-              />
+              <SidebarTrigger className="-ml-1 md:hidden" />
               <PathBreadcrumbs />
             </div>
           </header>
@@ -52,6 +48,7 @@ function AppLayout() {
           <Outlet />
         </div>
       </SidebarInset>
+      <GlobalCommandPalette />
     </SidebarProvider>
   );
 }

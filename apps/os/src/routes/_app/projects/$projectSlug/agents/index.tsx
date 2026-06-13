@@ -14,7 +14,6 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
   // from its own live subscriptions once the socket connects.
   ssr: false,
   loader: ({ context }) => ({
-    breadcrumb: "All",
     project: context.project,
   }),
   component: ProjectAgentsIndexPage,

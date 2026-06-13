@@ -150,6 +150,71 @@ describe("OpenAiWsProcessor", () => {
     expect(eventTypes(appended)).not.toContain("events.iterate.com/agent/llm-request-completed");
   });
 
+  it("closes a cancelled in-flight request so the next request can start", async () => {
+    const { stream, appended } = memoryStream();
+    const sockets: FakeOpenAiResponsesWebSocket[] = [];
+    const processor = newProcessor({
+      stream,
+      appended,
+      sockets,
+      snapshot: { offset: 0, state: testState() },
+    });
+
+    const previousRequest = processor.ingest({
+      events: [llmRequestRequestedEvent({ offset: 37 })],
+      streamMaxOffset: 37,
+    });
+    await waitFor(() => sockets.length === 1);
+    sockets[0]?.open();
+    await waitFor(() => sockets[0]?.sent.length === 1);
+    completeResponse(sockets[0], { delta: "PREVIOUS", responseId: "resp_previous" });
+    await previousRequest;
+
+    await processor.ingest({
+      events: [llmRequestRequestedEvent({ offset: 183 })],
+      streamMaxOffset: 183,
+    });
+    await waitFor(() => sockets[0]?.sent.length === 2);
+    expect(sockets[0]?.sent[1]).toMatchObject({
+      previous_response_id: "resp_previous",
+    });
+
+    await processor.ingest({
+      events: [
+        llmRequestCancelledEvent({ offset: 433, llmRequestId: 183 }),
+        llmRequestRequestedEvent({ offset: 445 }),
+      ],
+      streamMaxOffset: 445,
+    });
+
+    await waitFor(() => sockets[0]?.closed === true);
+    await waitFor(() => sockets.length === 2);
+    sockets[1]?.open();
+    await waitFor(() => sockets[1]?.sent.length === 1);
+    expect(sockets[1]?.sent[0]).not.toHaveProperty("previous_response_id");
+    completeResponse(sockets[1], { delta: "NEXT", responseId: "resp_next" });
+
+    await waitFor(
+      () =>
+        appended.filter((event) => event.type === "events.iterate.com/agent/llm-request-completed")
+          .length === 2,
+    );
+
+    expect(
+      appended.filter((event) => event.type === "events.iterate.com/openai-ws/llm-request-started"),
+    ).toHaveLength(3);
+    expect(
+      appended.filter((event) => event.type === "events.iterate.com/agent/llm-request-completed"),
+    ).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ llmRequestId: 37 }),
+      }),
+      expect.objectContaining({
+        payload: expect.objectContaining({ llmRequestId: 445 }),
+      }),
+    ]);
+  });
+
   it("processes the next batch to completion while a request is still in flight", async () => {
     const { stream, appended } = memoryStream();
     const sockets: FakeOpenAiResponsesWebSocket[] = [];
@@ -440,6 +505,19 @@ function llmRequestRequestedEvent(args: { offset: number }): StreamEvent {
   return {
     type: "events.iterate.com/agent/llm-request-requested",
     payload: { model: "ignored-provider-owned-model", runOpts: {} },
+    offset: args.offset,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+function llmRequestCancelledEvent(args: { offset: number; llmRequestId: number }): StreamEvent {
+  return {
+    type: "events.iterate.com/agent/llm-request-cancelled",
+    payload: {
+      phase: "requested",
+      llmRequestId: args.llmRequestId,
+      reason: "interrupted-by-user-input",
+    },
     offset: args.offset,
     createdAt: "2026-01-01T00:00:00.000Z",
   };

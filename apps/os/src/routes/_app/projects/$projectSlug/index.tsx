@@ -1,17 +1,31 @@
 import { useQuery } from "@tanstack/react-query";
-import { createFileRoute } from "@tanstack/react-router";
+import { Link, createFileRoute } from "@tanstack/react-router";
 import { StreamPath } from "@iterate-com/shared/streams/types";
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
+import { Button } from "@iterate-com/ui/components/button";
+import { ProjectSettingsPanel } from "~/components/project-settings-panel.tsx";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { projectLifecycleStateQueryOptions } from "~/lib/project-route-query.ts";
+import type { ProjectProcessorState } from "~/domains/projects/stream-processors/project/contract.ts";
+import {
+  projectCustomHostnameStatusQueryOptions,
+  projectLifecycleStateQueryOptions,
+} from "~/lib/project-route-query.ts";
+import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/")({
   ssr: false,
   loader: async ({ context }) => {
     const { project } = context;
+    if (project.customHostname) {
+      await context.queryClient.ensureQueryData(
+        projectCustomHostnameStatusQueryOptions(project.id),
+      );
+    }
 
     return {
       breadcrumb: "Home",
       project,
+      routeConfig: await getPublicRouteConfig(),
     };
   },
   component: ProjectHomePage,
@@ -19,23 +33,55 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/")({
 
 function ProjectHomePage() {
   const params = Route.useParams();
-  const { project } = Route.useLoaderData();
+  const { project, routeConfig } = Route.useLoaderData();
   const lifecycleStateQuery = useQuery({
     ...projectLifecycleStateQueryOptions(project.id),
     refetchInterval: 2_500,
   });
+  const lifecycleSnapshot = lifecycleStateQuery.data as
+    | { state?: Partial<ProjectProcessorState> }
+    | undefined;
+  const onboarding = lifecycleSnapshot?.state?.onboarding ?? "in-progress";
 
   return (
-    <section className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden md:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)]">
+    <section className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(24rem,38rem)_minmax(0,1fr)]">
       <aside className="min-h-0 overflow-auto border-b p-4 md:border-r md:border-b-0">
-        <div className="space-y-3">
-          <div>
-            <h2 className="text-sm font-semibold">Reduced State</h2>
-            <p className="text-sm text-muted-foreground">Project lifecycle processor</p>
+        <div className="flex flex-col gap-6">
+          {onboarding === "in-progress" ? (
+            <Alert className="border-2 p-4 text-base">
+              <AlertTitle className="text-lg">Continue onboarding</AlertTitle>
+              <AlertDescription>
+                This project has not finished onboarding. Continue the onboarding agent before
+                treating the project memory as ready.
+              </AlertDescription>
+              <AlertAction>
+                <Button
+                  size="default"
+                  render={
+                    <Link
+                      to="/projects/$projectSlug/agents/streams/$"
+                      params={{
+                        _splat: "/agents/onboarding",
+                        projectSlug: params.projectSlug,
+                      }}
+                    />
+                  }
+                >
+                  Continue
+                </Button>
+              </AlertAction>
+            </Alert>
+          ) : null}
+          <div className="flex flex-col gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">Reduced State</h2>
+              <p className="text-sm text-muted-foreground">Project lifecycle processor</p>
+            </div>
+            <pre className="max-h-[calc(100vh-12rem)] overflow-auto rounded-lg border bg-muted p-3 font-mono text-xs whitespace-pre-wrap">
+              {JSON.stringify(lifecycleStateQuery.data ?? null, null, 2)}
+            </pre>
           </div>
-          <pre className="max-h-[calc(100vh-12rem)] overflow-auto rounded-lg border bg-muted p-3 font-mono text-xs whitespace-pre-wrap">
-            {JSON.stringify(lifecycleStateQuery.data ?? null, null, 2)}
-          </pre>
+          <ProjectSettingsPanel project={project} routeConfig={routeConfig} />
         </div>
       </aside>
       <ProjectStreamView
