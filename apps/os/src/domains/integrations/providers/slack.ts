@@ -222,11 +222,18 @@ async function handleSlackOAuthCallback(
     ],
   };
 
-  // The workspace may already be routed to ANOTHER project (one shared
-  // first-party Slack app). Moving it needs explicit consent: pause the
-  // connect into a sealed token and bounce to the takeover interstitial.
+  // The workspace may already be routed elsewhere (one shared first-party
+  // Slack app) — to ANOTHER project, or to a DIFFERENT account in this same
+  // project (e.g. a manual `default` connect that this team-derived OAuth
+  // would move). Either way the routing key changes hands, which needs
+  // explicit consent: pause the connect into a sealed token and bounce to the
+  // takeover interstitial. Only an exact (project, account) re-connect of the
+  // current owner falls through and proceeds directly.
   const owner = await ctx.routeOwner({ routingKey });
-  if (owner != null && owner.projectId !== stateData.projectId) {
+  if (
+    owner != null &&
+    (owner.projectId !== stateData.projectId || owner.account !== connectInput.account)
+  ) {
     const pending = await ctx.sealPendingConnect({
       integration: "slack",
       connect: connectInput,

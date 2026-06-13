@@ -222,7 +222,10 @@ export const googleIntegration: IntegrationDefinition = {
           query?: Record<string, string>;
           body?: unknown;
         }) {
-          const url = new URL(`https://gmail.googleapis.com/gmail/v1/users/me${input.path}`);
+          // Tolerate paths with or without a leading slash ("messages" and
+          // "/messages" both address users/me/messages).
+          const path = input.path.startsWith("/") ? input.path : `/${input.path}`;
+          const url = new URL(`https://gmail.googleapis.com/gmail/v1/users/me${path}`);
           for (const [key, value] of Object.entries(input.query ?? {})) {
             url.searchParams.set(key, value);
           }
