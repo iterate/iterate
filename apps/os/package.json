@@ -77,7 +77,6 @@
     "capnweb": "^0.8.0",
     "captun": "https://pkg.pr.new/captun@27",
     "comlink": "^4.4.2",
-    "dedent": "^1.7.2",
     "json5": "^2.2.3",
     "lucide-react": "^0.553.0",
     "openai": "^6.36.0",
@@ -85,7 +84,6 @@
     "react-dom": "^19.2.0",
     "sqlfu": "0.0.3-14",
     "tailwindcss": "^4.1.18",
-    "trpc-cli": "0.14.0",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
   },
