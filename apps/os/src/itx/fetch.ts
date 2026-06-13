@@ -79,7 +79,18 @@ export async function handleItxFetch(input: {
 
   const response = await newItxRpcResponse(
     input.request,
-    await resolveItx({ env: input.env, exports: requireWorkerExports(input.context), props }),
+    await resolveItx({
+      env: input.env,
+      exports: requireWorkerExports(input.context),
+      // The connect-time principal is threaded onto the GLOBAL handle ONLY (it
+      // is minted here, never restored in an isolate), for itx.projects.create's
+      // org-membership path. Project/context handles never see it.
+      principal:
+        subpath === "" && auth.principal?.type === "user"
+          ? { userId: auth.principal.userId, organizations: auth.principal.organizations }
+          : null,
+      props,
+    }),
   );
   const setCookie = auth.responseHeaders.get("set-cookie");
   if (setCookie) response.headers.append("set-cookie", setCookie);

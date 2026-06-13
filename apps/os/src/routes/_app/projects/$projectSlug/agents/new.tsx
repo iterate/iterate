@@ -4,6 +4,7 @@ import { Play } from "lucide-react";
 import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { AgentSetupFormPage, type AgentSetupFormValues } from "~/components/agent-setup-form.tsx";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import {
   configuredAgentSetupEvents,
   parseAgentEventInputsYaml,
@@ -14,35 +15,37 @@ import {
   defaultAgentProcessorSlugs,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { agentPathFromInput } from "~/lib/agent-links.ts";
-import { orpcClient } from "~/orpc/client.ts";
+import { useItx } from "~/itx/use-itx.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
-  loader: async ({ context }) => {
-    const { project } = context;
-
-    return {
-      breadcrumb: "New Agent",
-      project,
-    };
-  },
+  ssr: false,
+  loader: ({ context }) => ({
+    breadcrumb: "New Agent",
+    project: context.project,
+  }),
   component: NewAgentPage,
 });
 
 type NewAgentPreview = { agentPath: StreamPath; error?: string; events: EventInput[] };
 
 function NewAgentPage() {
+  return (
+    <ItxBoundary>
+      <NewAgentContent />
+    </ItxBoundary>
+  );
+}
+
+function NewAgentContent() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const navigate = useNavigate();
+  const itx = useItx(project.id);
 
   const createAgent = useMutation({
     mutationFn: async (preview: NewAgentPreview) => {
       if (preview.error) throw new Error(preview.error);
-      await orpcClient.project.streams.appendBatch({
-        events: preview.events,
-        projectSlugOrId: project.id,
-        streamPath: preview.agentPath,
-      });
+      await itx.streams.get(preview.agentPath).appendBatch(preview.events);
       return preview;
     },
     onSuccess: (preview) => {

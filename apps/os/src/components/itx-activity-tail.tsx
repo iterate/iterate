@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import type { Event as StreamEvent } from "@iterate-com/shared/streams/types";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import { useItx } from "~/itx/use-itx.ts";
+import { releaseItxSubscription, useItx } from "~/itx/use-itx.ts";
 
 const MAX_BUFFERED_EVENTS = 500;
 
@@ -63,13 +63,11 @@ export function ItxActivityTail({ projectId }: { projectId: string }) {
         { afterOffset: "start" },
       )
       .then((subscription) => {
-        const releaseSubscription = () =>
-          void Promise.resolve(subscription.unsubscribe()).catch(() => {});
         if (disposed) {
-          releaseSubscription();
+          releaseItxSubscription(subscription);
           return;
         }
-        release = releaseSubscription;
+        release = () => releaseItxSubscription(subscription);
         setStatus("live");
       })
       .catch((subscribeError: unknown) => {

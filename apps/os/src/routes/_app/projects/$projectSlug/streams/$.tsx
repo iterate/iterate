@@ -5,7 +5,6 @@ import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
 import { useItx } from "~/itx/use-itx.ts";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
-import { createBrowserOpenApiClient } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
   staticData: { hideAppHeader: true },
@@ -54,16 +53,12 @@ function ProjectStreamDetailContent() {
   const source = useMemo(() => (path: StreamPathType) => itx.streams.get(path), [itx]);
 
   async function submitMessage(message: string) {
-    await createBrowserOpenApiClient().project.streams.appendBatch({
-      events: [
-        {
-          type: "events.iterate.com/agent-chat/user-message-added",
-          payload: { channel: "web", content: message },
-        },
-      ],
-      projectSlugOrId: project.id,
-      streamPath,
-    });
+    await itx.streams.get(streamPath).appendBatch([
+      {
+        type: "events.iterate.com/agent-chat/user-message-added",
+        payload: { channel: "web", content: message },
+      },
+    ]);
   }
 
   function openStream(path: StreamPathType) {

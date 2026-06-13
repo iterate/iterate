@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
@@ -15,12 +15,10 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import { ItxBoundary, ItxResourceError } from "~/components/itx-boundary.tsx";
 import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
-import {
-  projectSecretQueryOptions,
-  projectSecretsListQueryOptions,
-} from "~/lib/project-route-query.ts";
-import { orpc } from "~/orpc/client.ts";
+import { useItx } from "~/itx/use-itx.ts";
+import { useItxResource } from "~/itx/use-itx-resource.ts";
 
 const UpdateSecretForm = z.object({
   material: z.string().min(1, "Secret material is required"),
@@ -28,70 +26,74 @@ const UpdateSecretForm = z.object({
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/$secretId")({
-  loader: async ({ context, params }) => {
-    const { project } = context;
-    const secret = await context.queryClient.ensureQueryData(
-      projectSecretQueryOptions({ projectId: project.id, secretId: params.secretId }),
-    );
-
-    return {
-      breadcrumb: secret.key,
-      project,
-      secret,
-    };
-  },
+  ssr: false,
+  loader: ({ context, params }) => ({
+    breadcrumb: params.secretId,
+    project: context.project,
+  }),
   component: ProjectSecretDetailPage,
 });
 
 function ProjectSecretDetailPage() {
+  return (
+    <ItxBoundary>
+      <ProjectSecretDetailContent />
+    </ItxBoundary>
+  );
+}
+
+function ProjectSecretDetailContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const { project, secret: loadedSecret } = Route.useLoaderData();
-  const secretQueryOptions = projectSecretQueryOptions({
-    projectId: project.id,
-    secretId: params.secretId,
-  });
-  const secretsListQueryOptions = projectSecretsListQueryOptions(project.id);
-  const secretQuery = useQuery({
-    ...secretQueryOptions,
-    initialData: loadedSecret,
-  });
-  const secret = secretQuery.data;
+  const { project } = Route.useLoaderData();
+  const itx = useItx(project.id);
+  const {
+    data: secrets,
+    status,
+    error,
+    refetch,
+  } = useItxResource(() => itx.secrets.listSecrets(), [itx]);
+  const secret = useMemo(
+    () => secrets?.find((row) => row.id === params.secretId) ?? null,
+    [secrets, params.secretId],
+  );
+
   const defaultValues = useMemo(
     () => ({
       material: "",
-      metadataJson: JSON.stringify(secret.metadata, null, 2),
+      metadataJson: JSON.stringify(secret?.metadata ?? {}, null, 2),
     }),
-    [secret.metadata],
+    [secret?.metadata],
   );
-  const upsertSecret = useMutation(
-    orpc.project.secrets.upsert.mutationOptions({
-      onSuccess: async () => {
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: secretQueryOptions.queryKey }),
-          queryClient.invalidateQueries({ queryKey: secretsListQueryOptions.queryKey }),
-        ]);
-        form.reset();
-        toast.success("Secret updated");
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
-  const removeSecret = useMutation(
-    orpc.project.secrets.remove.mutationOptions({
-      onSuccess: async () => {
-        await queryClient.invalidateQueries({ queryKey: secretsListQueryOptions.queryKey });
-        void navigate({
-          to: "/projects/$projectSlug/secrets",
-          params: {
-            projectSlug: params.projectSlug,
-          },
-        });
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
+  const upsertSecret = useMutation({
+    mutationFn: async (input: {
+      key: string;
+      material: string;
+      metadata: Record<string, unknown>;
+    }) => {
+      return await itx.secrets.setSecret(input);
+    },
+    onSuccess: async () => {
+      await refetch();
+      form.reset();
+      toast.success("Secret updated");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
+  const removeSecret = useMutation({
+    mutationFn: async (input: { key: string }) => {
+      return await itx.secrets.deleteSecret(input);
+    },
+    onSuccess: () => {
+      void navigate({
+        to: "/projects/$projectSlug/secrets",
+        params: {
+          projectSlug: params.projectSlug,
+        },
+      });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
   const form = useForm({
     defaultValues,
     validators: {
@@ -99,6 +101,7 @@ function ProjectSecretDetailPage() {
       onSubmit: UpdateSecretForm,
     },
     onSubmit: async ({ value }) => {
+      if (!secret) return;
       const parsed = UpdateSecretForm.parse(value);
       const metadata = parseMetadataJson(parsed.metadataJson);
       if ("message" in metadata) {
@@ -107,13 +110,32 @@ function ProjectSecretDetailPage() {
       }
 
       await upsertSecret.mutateAsync({
-        projectSlugOrId: project.id,
         key: secret.key,
         material: parsed.material,
         metadata: metadata.metadata,
       });
     },
   });
+
+  if (status === "error") {
+    return (
+      <div className="m-4">
+        <ItxResourceError label="secret" error={error} onRetry={() => void refetch()} />
+      </div>
+    );
+  }
+
+  if (status === "loading") {
+    return <div className="p-4 text-sm text-muted-foreground">Loading secret...</div>;
+  }
+
+  if (!secret) {
+    return (
+      <div className="p-4 text-sm text-muted-foreground">
+        Secret {params.secretId} was not found for this project.
+      </div>
+    );
+  }
 
   return (
     <section className="w-full space-y-4 p-4">
@@ -206,12 +228,7 @@ function ProjectSecretDetailPage() {
               variant="destructive"
               size="sm"
               className="self-start"
-              onClick={() =>
-                removeSecret.mutate({
-                  id: secret.id,
-                  projectSlugOrId: project.id,
-                })
-              }
+              onClick={() => removeSecret.mutate({ key: secret.key })}
               disabled={removeSecret.isPending}
             >
               <Trash2 className="h-4 w-4" />

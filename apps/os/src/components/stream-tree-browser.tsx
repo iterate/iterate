@@ -11,6 +11,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { releaseItxSubscription } from "~/itx/use-itx.ts";
 
 /**
  * Where tree nodes get their state: path → stream handle. Project pages pass
@@ -57,12 +58,8 @@ function useLiveStreamState(input: {
         setNode({ status: "live", state: StreamState.parse(next) });
       })
       .then((subscription) => {
-        // The far end may already be gone when we unsubscribe — never let
-        // that reject unhandled.
-        const releaseSubscription = () =>
-          void Promise.resolve(subscription.unsubscribe()).catch(() => {});
-        if (disposed) releaseSubscription();
-        else release = releaseSubscription;
+        if (disposed) releaseItxSubscription(subscription);
+        else release = () => releaseItxSubscription(subscription);
       })
       .catch((error: unknown) => {
         if (disposed) return;

@@ -1,19 +1,38 @@
-// The ONE browser itx primitive: useItx(context?) suspends until a WebSocket
-// to /api/itx[/<context>] is connected and returns the live handle stub.
-// Everything else — query caches, SSR prefetch, reconnect machinery, a
-// shared-socket multiplexer — was deliberately deleted (DECISIONS D21).
+// The ONE browser itx primitive. useItx(context?) suspends until a WebSocket
+// to /api/itx[/<context>] is connected and returns the live handle stub;
+// getBrowserItx(context?) is the same for non-hook code. There is exactly one
+// route (/api/itx[/<context>]) and one pool — "admin", "global", and a project
+// are just different context keys (= the connect endpoint), never different
+// sockets or different primitives. Everything else — query caches, SSR
+// prefetch, reconnect machinery, a shared-socket multiplexer, the repl's old
+// private socket — was deliberately deleted (DECISIONS D21).
 //
-// The contract:
+// The model, exactly:
 //
-//   - One socket per context key, per tab, held in a module-level map. The
-//     map exists only so Suspense works (use() needs the same promise across
-//     render replays) — NOT for connection pooling. Multiple sockets are
-//     explicitly fine.
+//   - ONE socket per context key, per tab, held in a module-level map. Every
+//     component on a context shares that one socket: the project page, its
+//     repl, its activity tail, and the admin layout (global key) all ride the
+//     same connection. The map is module-scoped (outside React), so the socket
+//     persists across client-side route navigations untouched — components
+//     mount and unmount, the socket does not. The map also makes Suspense work
+//     (use() needs the same promise across render replays). Multiple sockets
+//     across DIFFERENT contexts (global + each project) are expected; one per
+//     context is the invariant, not one globally.
 //   - No refcounting, no teardown on unmount: a context's socket lives until
-//     it dies or the tab closes.
+//     it dies or the tab closes. Components NEVER own the connection.
+//   - Disposal contract. The pool owns the socket's lifetime. A component must
+//     NEVER dispose the root handle stub or close the socket on unmount — the
+//     root stub IS the socket's lifetime handle (capnweb: disposing it closes
+//     the WebSocket), and it is shared. The ONLY deliberate root-dispose is
+//     evict()/reconnectBrowserItx(), used when the connect-time principal must
+//     change (e.g. after creating a project, or unlocking admin). Per-component
+//     RPC objects (subscription stubs, callbacks, any returned stub) ARE owned
+//     by that component and must be disposed on unmount — on a long-lived
+//     pooled socket an undisposed stub accumulates in the session import table
+//     for the life of the tab (see itx-activity-tail / stream-tree-browser).
 //   - Socket close → the map entry is evicted and subscribed components
-//     re-render (useSyncExternalStore), find no entry, dial fresh, and
-//     re-suspend. There is no backoff and no resume: re-fetching current
+//     re-render (an effect subscription bumps a reducer), find no entry, dial
+//     fresh, and re-suspend. There is no backoff and no resume: re-fetching current
 //     state IS the recovery — every kernel subscription pushes current state
 //     on open (DECISIONS D20), so onStateChange re-fires with current state
 //     on the new socket.
@@ -23,13 +42,9 @@
 //     suspended boundary), while a throw inside a Suspense boundary streams
 //     the fallback and recovers client-side — and a throw outside one fails
 //     loudly at the route instead of hanging the worker. Consumers render
-//     under an `ssr: false` route or behind <ClientOnly> (the admin layout's
-//     connect-effect gate counts too).
+//     under an `ssr: false` route or behind <ClientOnly> + <Suspense>.
 //   - Errors keep their codes: getItxErrorCode / isItxAccessError (errors.ts)
 //     read ItxError codes off anything a catch block or error boundary sees.
-//
-// The repl keeps its own createBrowserReplSession (itx-repl.tsx): it needs
-// dispose/reconnect-on-demand semantics this singleton deliberately lacks.
 
 import { use, useCallback, useSyncExternalStore } from "react";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
@@ -66,10 +81,6 @@ export function createSocketSuspenseCache<T>(input: {
       entries.set(key, created);
       return created;
     },
-    /** The current entry without creating one (useSyncExternalStore snapshot). */
-    peek(context?: string): Entry | undefined {
-      return entries.get(keyOf(context));
-    },
     /** Re-render trigger: fires when this context's entry is evicted. */
     subscribe(context: string | undefined, listener: () => void): () => void {
       const key = keyOf(context);
@@ -80,6 +91,23 @@ export function createSocketSuspenseCache<T>(input: {
       }
       set.add(listener);
       return () => set.delete(listener);
+    },
+    /**
+     * Drop this context's socket so the next `get` re-dials. Used after the
+     * browser session's claims change (e.g. creating a project) — the live
+     * socket carries the connect-time principal, so a fresh dial is the only
+     * way the new claims take effect. Disposes the resolved stub to close the
+     * underlying session; subscribers re-render and re-suspend on a new dial.
+     */
+    evict(context?: string): void {
+      const key = keyOf(context);
+      const entry = entries.get(key);
+      if (!entry) return;
+      entries.delete(key);
+      for (const listener of listeners.get(key) ?? []) listener();
+      void entry.promise
+        .then((value) => (value as Partial<Disposable>)[Symbol.dispose]?.())
+        .catch(() => {});
     },
   };
 }
@@ -93,24 +121,27 @@ function dialItx(context: string | undefined, onDead: () => void): Promise<RpcSt
   );
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const socket = new WebSocket(url);
-  const { promise, resolve, reject } = Promise.withResolvers<RpcStub<ItxHandle>>();
+  const { promise, resolve } = Promise.withResolvers<RpcStub<ItxHandle>>();
   // A dial that never connects (e.g. the worker restarting behind the dev
   // proxy) must not suspend consumers forever: time out and close, so the
   // close handler below evicts the entry and the next render re-dials.
   const dialTimeout = setTimeout(() => {
-    reject(new Error(`The itx dial to ${url.pathname} timed out.`));
     socket.close();
   }, ITX_DIAL_TIMEOUT_MS);
   socket.addEventListener("open", () => {
     clearTimeout(dialTimeout);
     resolve(newWebSocketRpcSession<ItxHandle>(socket));
   });
-  // `close` fires both for a failed dial (reject the pending promise; no-op
-  // once resolved) and for a later death of an established socket — either
-  // way the entry is dead and must go.
+  // `close` fires both for a failed dial and for a later death of an
+  // established socket — either way the entry is dead and must be evicted.
+  // We deliberately never reject the suspense promise: rejecting makes
+  // `use()` THROW to an error boundary (blanking the subtree on a transient
+  // dial failure) instead of re-suspending. Eviction + onDead notify is the
+  // recovery — the next render gets a fresh entry and re-dials. A pre-open
+  // death leaves this promise pending forever, but its entry is already gone,
+  // so nothing reads it again; getBrowserItx callers re-call and re-dial.
   socket.addEventListener("close", () => {
     clearTimeout(dialTimeout);
-    reject(new Error(`The itx WebSocket to ${url.pathname} closed.`));
     onDead();
   });
   return promise;
@@ -139,6 +170,31 @@ export function getBrowserItx(context?: string): Promise<RpcStub<ItxHandle>> {
 }
 
 /**
+ * Drop a context's socket (default: the global handle) so the next use re-dials
+ * with the browser session's current claims. Call after a session change such
+ * as creating a project — the live socket still carries the connect-time
+ * principal, so `itx.projects.list` would otherwise omit the new project until
+ * a reload.
+ */
+export function reconnectBrowserItx(context?: string): void {
+  pool.evict(context);
+}
+
+/**
+ * Release a per-component itx subscription on unmount. Both halves matter on the
+ * long-lived pooled socket: unsubscribe() tears down the server-side
+ * subscription, and disposing the subscription stub frees our RPC import of it
+ * (an undisposed stub accumulates in the session import table for the life of
+ * the tab). The far end may already be gone when a socket dies, so an
+ * unsubscribe() rejection is swallowed. This is the disposal contract from the
+ * module header, in one place so the two subscription consumers can't drift.
+ */
+export function releaseItxSubscription(subscription: { unsubscribe(): unknown }): void {
+  void Promise.resolve(subscription.unsubscribe()).catch(() => {});
+  (subscription as Partial<Disposable>)[Symbol.dispose]?.();
+}
+
+/**
  * The itx handle for `context` ("global" when omitted, else a project id/slug
  * or itx_… id; session-cookie auth). Suspends until the socket is connected;
  * re-suspends (fresh socket, fresh state) if it dies. See the module header
@@ -147,17 +203,15 @@ export function getBrowserItx(context?: string): Promise<RpcStub<ItxHandle>> {
  */
 export function useItx(context?: string): RpcStub<ItxHandle> {
   assertBrowser("useItx");
-  // Socket death evicts the pool entry; this store subscription is what turns
-  // that into a re-render, so the component below re-dials and re-suspends.
-  const subscribe = useCallback(
-    (listener: () => void) => pool.subscribe(context, listener),
-    [context],
+  // The pool IS an external store: `subscribe` fires when a socket dies (its
+  // entry is evicted) and `get` returns a stable Entry identity until then.
+  // useSyncExternalStore coordinates the subscription with commit, so an
+  // eviction in the render→commit gap can't be missed; on death the snapshot
+  // is a fresh entry, the component re-renders, re-dials, and re-suspends.
+  const entry = useSyncExternalStore(
+    useCallback((onChange) => pool.subscribe(context, onChange), [context]),
+    () => pool.get(context),
+    () => pool.get(context),
   );
-  useSyncExternalStore(subscribe, () => pool.peek(context), neverOnTheServer);
-  return use(pool.get(context).promise);
-}
-
-function neverOnTheServer(): undefined {
-  // assertBrowser threw long before useSyncExternalStore could ask.
-  return undefined;
+  return use(entry.promise);
 }

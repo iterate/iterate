@@ -33,10 +33,30 @@ export async function appendIntegrationEvent(
     });
   }
 
+  return await appendNamespaceIntegrationEvent({
+    event: input.event,
+    exports: context.workerExports,
+    projectId: input.projectId,
+    provider: input.provider,
+  });
+}
+
+/**
+ * The context-free core of {@link appendIntegrationEvent}: append a connect/
+ * disconnect event to the project's integration stream given the worker's
+ * loopback `exports` directly. Used by the itx IntegrationsCapability, which
+ * holds `ctx.exports` but no RequestContext.
+ */
+export async function appendNamespaceIntegrationEvent(input: {
+  event: EventInput;
+  exports: Parameters<typeof getStreamsBackend>[0]["exports"];
+  projectId: string;
+  provider: IntegrationProvider;
+}) {
   const streamPath =
     input.provider === "slack" ? SLACK_INTEGRATION_STREAM_PATH : GOOGLE_INTEGRATION_STREAM_PATH;
   return await getStreamsBackend({
-    exports: context.workerExports,
+    exports: input.exports,
     props: {
       appendPolicy: { mode: "stream" },
       projectId: input.projectId,

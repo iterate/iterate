@@ -1,10 +1,6 @@
-import { Suspense, useMemo } from "react";
+import { Suspense } from "react";
 import { ClientOnly, createFileRoute } from "@tanstack/react-router";
-import {
-  createBrowserReplSession,
-  ItxReplPage,
-  type BrowserReplSessionFactory,
-} from "~/routes/_app/itx-repl.tsx";
+import { ConnectedItxRepl } from "~/routes/_app/itx-repl.tsx";
 import { ItxActivityTail } from "~/components/itx-activity-tail.tsx";
 
 const PROJECT_REPL_INITIAL_CODE = "await itx.describe()";
@@ -24,27 +20,20 @@ function TailConnecting() {
 
 function ProjectItxReplPage() {
   const { project } = Route.useRouteContext();
-  // A project repl is just an itx session on that project's context — the
-  // connect endpoint does the narrowing, the page is otherwise identical.
-  const connectSession = useMemo<BrowserReplSessionFactory>(
-    () => () => createBrowserReplSession(project.id),
-    [project.id],
-  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1">
-        <ItxReplPage
-          connectSession={connectSession}
+        {/* A project repl is just an itx session on that project's context — the
+            same pooled socket every other component on this project rides. */}
+        <ConnectedItxRepl
+          poolContext={project.id}
           context="project"
           initialCode={PROJECT_REPL_INITIAL_CODE}
           scope={{ projectId: project.id }}
         />
       </div>
       <div className="flex max-h-56 min-h-0 flex-col">
-        {/* useItx never SSRs and suspends until its socket connects, so the
-            tail needs both gates: ClientOnly (this route still SSRs) and a
-            Suspense boundary. */}
         <ClientOnly fallback={<TailConnecting />}>
           <Suspense fallback={<TailConnecting />}>
             <ItxActivityTail projectId={project.id} />
