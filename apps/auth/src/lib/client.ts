@@ -40,6 +40,11 @@ type LoginOptions = {
   returnTo?: string;
 };
 
+type RefreshOptions = {
+  /** Reissue the OAuth access token even when it is not near expiry. */
+  force?: boolean;
+};
+
 export type AuthClient = ReturnType<typeof createIterateAuthClient>;
 
 export type AuthClientContextValue = {
@@ -47,7 +52,7 @@ export type AuthClientContextValue = {
   loading: boolean;
   signIn: (options?: LoginOptions) => void;
   signOut: () => Promise<void>;
-  refresh: () => Promise<void>;
+  refresh: (options?: RefreshOptions) => Promise<void>;
 };
 
 export type AuthClientProviderProps = {
@@ -63,8 +68,10 @@ const AuthClientContext = createContext<AuthClientContextValue | null>(null);
 export function createIterateAuthClient(config: IterateAuthClientConfig = {}) {
   const base = (config.authHandlerBasePath ?? "/api/iterate-auth").replace(/\/$/, "");
 
-  async function fetchSession(): Promise<SessionResponse> {
-    const response = await fetch(`${base}/session`, {
+  async function fetchSession(options: RefreshOptions = {}): Promise<SessionResponse> {
+    const url = options.force ? `${base}/session?refresh=force` : `${base}/session`;
+
+    const response = await fetch(url, {
       credentials: "include",
       headers: { Accept: "application/json" },
     });
@@ -107,14 +114,17 @@ export function AuthClientProvider({
   const [session, setSession] = useState<PublicSessionResponse | null>(initialSession);
   const [loading, setLoading] = useState(false);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      setSession(toPublicSessionResponse(await client.fetchSession()));
-    } finally {
-      setLoading(false);
-    }
-  }, [client]);
+  const refresh = useCallback(
+    async (options: RefreshOptions = {}) => {
+      setLoading(true);
+      try {
+        setSession(toPublicSessionResponse(await client.fetchSession(options)));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [client],
+  );
 
   const signIn = useCallback(
     (options: LoginOptions = {}) => {

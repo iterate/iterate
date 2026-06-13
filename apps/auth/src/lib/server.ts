@@ -592,15 +592,22 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
   });
 
   app.get("/session", async (c) => {
-    let tokenSet: TokenSet | null;
-    try {
-      tokenSet = getTokenSet(c);
-      if (tokenSet && tokenSet.accessTokenExpiresAt <= Date.now() + REFRESH_SKEW_MS) {
-        tokenSet = await doRefresh(tokenSet);
+    let tokenSet = getTokenSet(c);
+    const forceRefresh = c.req.query("refresh") === "force";
+    if (
+      tokenSet &&
+      tokenSet.refreshToken &&
+      (forceRefresh || tokenSet.accessTokenExpiresAt <= Date.now() + REFRESH_SKEW_MS)
+    ) {
+      const accessTokenExpired = tokenSet.accessTokenExpiresAt <= Date.now();
+      try {
+        tokenSet = (await doRefresh(tokenSet)) ?? tokenSet;
+      } catch {
+        if (accessTokenExpired) {
+          deleteCookie(c, SESSION_COOKIE, cookieOpts());
+          return c.json({ authenticated: false } satisfies SessionResponse, 401);
+        }
       }
-    } catch {
-      deleteCookie(c, SESSION_COOKIE, cookieOpts());
-      return c.json({ authenticated: false } satisfies SessionResponse, 401);
     }
 
     if (!tokenSet || !tokenSet.idToken) {

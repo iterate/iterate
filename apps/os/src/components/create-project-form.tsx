@@ -35,7 +35,7 @@ const CreateProjectInput = z.object({
 
 export function CreateProjectForm() {
   const router = useRouter();
-  const { session } = useAuthClient();
+  const { refresh, session } = useAuthClient();
   const organizations = session?.authenticated ? session.session.organizations : [];
   const createProject = useMutation({
     mutationFn: async (input: { slug: string; organizationSlug: string }) => {
@@ -46,6 +46,10 @@ export function CreateProjectForm() {
       });
     },
     onSuccess: async (project) => {
+      // Refresh the browser auth session so it carries the new project's
+      // claim BEFORE navigating to the project-scoped route (#1516); without
+      // this the project route loads before the session knows the project.
+      await refresh({ force: true });
       await router.invalidate({ sync: true });
       await router.navigate({
         to: "/projects/$projectSlug",
