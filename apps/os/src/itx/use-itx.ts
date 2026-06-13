@@ -31,7 +31,7 @@
 // The repl keeps its own createBrowserReplSession (itx-repl.tsx): it needs
 // dispose/reconnect-on-demand semantics this singleton deliberately lacks.
 
-import { use, useEffect, useReducer } from "react";
+import { use, useCallback, useSyncExternalStore } from "react";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 import type { ItxHandle } from "./handle.ts";
 
@@ -146,9 +146,15 @@ export function getBrowserItx(context?: string): Promise<RpcStub<ItxHandle>> {
  */
 export function useItx(context?: string): RpcStub<ItxHandle> {
   assertBrowser("useItx");
-  // Socket death evicts the pool entry; this subscription bumps the reducer,
-  // which re-renders so the component below re-dials (pool.get) and re-suspends.
-  const [, redial] = useReducer((n: number) => n + 1, 0);
-  useEffect(() => pool.subscribe(context, redial), [context]);
-  return use(pool.get(context).promise);
+  // The pool IS an external store: `subscribe` fires when a socket dies (its
+  // entry is evicted) and `get` returns a stable Entry identity until then.
+  // useSyncExternalStore coordinates the subscription with commit, so an
+  // eviction in the render→commit gap can't be missed; on death the snapshot
+  // is a fresh entry, the component re-renders, re-dials, and re-suspends.
+  const entry = useSyncExternalStore(
+    useCallback((onChange) => pool.subscribe(context, onChange), [context]),
+    () => pool.get(context),
+    () => pool.get(context),
+  );
+  return use(entry.promise);
 }

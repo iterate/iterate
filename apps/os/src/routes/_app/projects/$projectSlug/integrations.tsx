@@ -1,4 +1,3 @@
-import { Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -17,6 +16,7 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
+import { ItxBoundary, ItxResourceError } from "~/components/itx-boundary.tsx";
 import { useItx } from "~/itx/use-itx.ts";
 import { useItxResource } from "~/itx/use-itx-resource.ts";
 import type { ItxHandle } from "~/itx/types.ts";
@@ -39,11 +39,9 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")
 
 function ProjectIntegrationsPage() {
   return (
-    <Suspense
-      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
-    >
+    <ItxBoundary>
       <ProjectIntegrationsContent />
-    </Suspense>
+    </ItxBoundary>
   );
 }
 
@@ -117,12 +115,7 @@ function ProjectIntegrationsContent() {
   if (status === "error") {
     return (
       <section className="max-w-md space-y-4 p-4">
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-destructive/50 p-4 text-sm text-muted-foreground">
-          <span>Couldn't load integrations. {error?.message}</span>
-          <Button type="button" size="sm" variant="outline" onClick={() => void refetch()}>
-            Retry
-          </Button>
-        </div>
+        <ItxResourceError label="integrations" error={error} onRetry={() => void refetch()} />
       </section>
     );
   }

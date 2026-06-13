@@ -1,10 +1,10 @@
-import { Suspense } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { ItxBoundary, ItxResourceError } from "~/components/itx-boundary.tsx";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { useItx } from "~/itx/use-itx.ts";
@@ -34,11 +34,9 @@ function buildProjectHostname(input: {
 
 function ProjectsIndexPage() {
   return (
-    <Suspense
-      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
-    >
+    <ItxBoundary>
       <ProjectsIndexContent />
-    </Suspense>
+    </ItxBoundary>
   );
 }
 
@@ -82,12 +80,7 @@ function ProjectsIndexContent() {
       </div>
 
       {status === "error" ? (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-destructive/50 p-4 text-sm text-muted-foreground">
-          <span>Couldn't load projects. {error?.message}</span>
-          <Button type="button" size="sm" variant="outline" onClick={() => void refetch()}>
-            Retry
-          </Button>
-        </div>
+        <ItxResourceError label="projects" error={error} onRetry={() => void refetch()} />
       ) : !hasProjects ? (
         <div className="rounded-xl border border-dashed bg-card/60 px-6 py-14 text-center">
           <div className="mx-auto flex max-w-md flex-col items-center gap-4">

@@ -148,10 +148,8 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     address: { entrypoint: "AgentsCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
       "The project's agents: itx.agents.sendMessage({ agentPath, message, channel? }) wakes " +
-      "the agent (cold/legacy included) and posts a user message, returning { event }; " +
-      "list() returns the agent paths under /agents; listPresets() and " +
-      "configurePreset({ basePath, model, provider, systemPrompt?, runOpts?, events? }) read " +
-      "and write the agent-path-prefix presets.",
+      "the agent (cold/legacy included) and posts a user message, returning { event }. " +
+      "List agents and read/write presets directly via itx.streams on the /agents tree.",
     name: "agents",
   },
   {

@@ -1,4 +1,4 @@
-import { Suspense, useMemo } from "react";
+import { useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation } from "@tanstack/react-query";
@@ -15,6 +15,7 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import { ItxBoundary, ItxResourceError } from "~/components/itx-boundary.tsx";
 import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
 import { useItx } from "~/itx/use-itx.ts";
 import { useItxResource } from "~/itx/use-itx-resource.ts";
@@ -35,11 +36,9 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/$secre
 
 function ProjectSecretDetailPage() {
   return (
-    <Suspense
-      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
-    >
+    <ItxBoundary>
       <ProjectSecretDetailContent />
-    </Suspense>
+    </ItxBoundary>
   );
 }
 
@@ -120,11 +119,8 @@ function ProjectSecretDetailContent() {
 
   if (status === "error") {
     return (
-      <div className="m-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 p-4 text-sm text-muted-foreground">
-        <span>Couldn't load secret. {error?.message}</span>
-        <Button type="button" size="sm" variant="outline" onClick={() => void refetch()}>
-          Retry
-        </Button>
+      <div className="m-4">
+        <ItxResourceError label="secret" error={error} onRetry={() => void refetch()} />
       </div>
     );
   }

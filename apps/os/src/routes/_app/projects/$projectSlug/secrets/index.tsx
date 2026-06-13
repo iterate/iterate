@@ -1,4 +1,4 @@
-import { Suspense, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation } from "@tanstack/react-query";
@@ -16,7 +16,9 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
+import { ItxBoundary, ItxResourceError } from "~/components/itx-boundary.tsx";
 import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
+import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { useItx } from "~/itx/use-itx.ts";
 import { useItxResource } from "~/itx/use-itx-resource.ts";
 
@@ -43,11 +45,9 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/")({
 
 function ProjectSecretsIndexPage() {
   return (
-    <Suspense
-      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
-    >
+    <ItxBoundary>
       <ProjectSecretsIndexContent />
-    </Suspense>
+    </ItxBoundary>
   );
 }
 
@@ -248,12 +248,7 @@ function ProjectSecretsIndexContent() {
       </div>
 
       {status === "error" ? (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-destructive/50 p-4 text-sm text-muted-foreground">
-          <span>Couldn't load secrets. {error?.message}</span>
-          <Button type="button" size="sm" variant="outline" onClick={() => void refetch()}>
-            Retry
-          </Button>
-        </div>
+        <ItxResourceError label="secrets" error={error} onRetry={() => void refetch()} />
       ) : (secretsList ?? []).length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
@@ -309,22 +304,4 @@ function ProjectSecretsIndexContent() {
       )}
     </section>
   );
-}
-
-function formatRelativeTime(value: string) {
-  const seconds = Math.round((Date.now() - new Date(value).getTime()) / 1000);
-  const absoluteSeconds = Math.abs(seconds);
-  const units = [
-    { label: "year", seconds: 31_536_000 },
-    { label: "month", seconds: 2_592_000 },
-    { label: "day", seconds: 86_400 },
-    { label: "hour", seconds: 3_600 },
-    { label: "minute", seconds: 60 },
-  ] as const;
-  const unit = units.find((unit) => absoluteSeconds >= unit.seconds);
-  if (!unit) return seconds < 0 ? "in a few seconds" : "just now";
-
-  const count = Math.round(absoluteSeconds / unit.seconds);
-  const suffix = count === 1 ? unit.label : `${unit.label}s`;
-  return seconds < 0 ? `in ${count} ${suffix}` : `${count} ${suffix} ago`;
 }

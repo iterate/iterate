@@ -28,6 +28,6 @@ declare module "./types.ts" {
     integrations: Stubify<
       Pick<IntegrationsCapability, "getConnection" | "startOAuthFlow" | "disconnect">
     >;
-    agents: Stubify<Pick<AgentsCapability, "sendMessage" | "list">>;
+    agents: Stubify<Pick<AgentsCapability, "sendMessage">>;
   }
 }

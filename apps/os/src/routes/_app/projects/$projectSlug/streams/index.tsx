@@ -1,6 +1,7 @@
-import { Suspense, useMemo } from "react";
+import { useMemo } from "react";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
 import { useItx } from "~/itx/use-itx.ts";
 
@@ -18,11 +19,9 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/streams/")({
 
 function ProjectStreamsIndexPage() {
   return (
-    <Suspense
-      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
-    >
+    <ItxBoundary>
       <ProjectStreamsIndexContent />
-    </Suspense>
+    </ItxBoundary>
   );
 }
 

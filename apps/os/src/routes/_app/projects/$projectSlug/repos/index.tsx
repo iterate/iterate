@@ -1,7 +1,7 @@
-import { Suspense, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
@@ -23,11 +23,13 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
+import { ItxBoundary, ItxResourceError } from "~/components/itx-boundary.tsx";
 import { repoArtifactName } from "~/domains/repos/repo-artifact-name.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
-import { projectReposListQueryOptions } from "~/lib/project-route-query.ts";
+import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { useItx } from "~/itx/use-itx.ts";
+import { useItxResource } from "~/itx/use-itx-resource.ts";
 
 const CreateRepoForm = z.object({
   slug: z
@@ -48,7 +50,6 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
   ssr: false,
   loader: async ({ context }) => {
     const { project } = context;
-    await context.queryClient.ensureQueryData(projectReposListQueryOptions(project.id));
     const routeConfig = await getPublicRouteConfig();
 
     return {
@@ -62,18 +63,15 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
 
 function ProjectReposIndexPage() {
   return (
-    <Suspense
-      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
-    >
+    <ItxBoundary>
       <ProjectReposIndexContent />
-    </Suspense>
+    </ItxBoundary>
   );
 }
 
 function ProjectReposIndexContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { project, routeConfig } = Route.useLoaderData();
   const itx = useItx(project.id);
   const [filter, setFilter] = useState("");
@@ -81,15 +79,14 @@ function ProjectReposIndexContent() {
     key: "lastWokenAt",
     direction: "desc",
   });
-  const reposQueryOptions = projectReposListQueryOptions(project.id);
-  const { data } = useQuery(reposQueryOptions);
+  const { data: reposList, status, error, refetch } = useItxResource(() => itx.repos.list(), [itx]);
   const createRepo = useMutation({
     mutationFn: async (input: { slug: string }) => {
       await itx.repos.create({ projectSlug: params.projectSlug, slug: input.slug });
       return input.slug;
     },
     onSuccess: async (slug) => {
-      await queryClient.invalidateQueries({ queryKey: reposQueryOptions.queryKey });
+      await refetch();
       form.reset();
       void navigate({
         to: "/projects/$projectSlug/repos/$repoSlug",
@@ -115,7 +112,7 @@ function ProjectReposIndexContent() {
     },
   });
 
-  const repos = useMemo(() => data?.repos ?? [], [data?.repos]);
+  const repos = useMemo(() => reposList ?? [], [reposList]);
   const visibleRepos = useMemo(() => {
     const query = filter.trim().toLowerCase();
     return repos
@@ -199,7 +196,9 @@ function ProjectReposIndexContent() {
         </Button>
       </div>
 
-      {repos.length === 0 ? (
+      {status === "error" ? (
+        <ItxResourceError label="repos" error={error} onRetry={() => void refetch()} />
+      ) : repos.length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>No Repos</EmptyTitle>
@@ -330,22 +329,4 @@ function compareRepoRows(
 ) {
   if (key === "repoSlug") return left.repoSlug.localeCompare(right.repoSlug);
   return new Date(left[key]).getTime() - new Date(right[key]).getTime();
-}
-
-function formatRelativeTime(value: string) {
-  const seconds = Math.round((Date.now() - new Date(value).getTime()) / 1000);
-  const absoluteSeconds = Math.abs(seconds);
-  const units = [
-    { label: "year", seconds: 31_536_000 },
-    { label: "month", seconds: 2_592_000 },
-    { label: "day", seconds: 86_400 },
-    { label: "hour", seconds: 3_600 },
-    { label: "minute", seconds: 60 },
-  ] as const;
-  const unit = units.find((unit) => absoluteSeconds >= unit.seconds);
-  if (!unit) return seconds < 0 ? "in a few seconds" : "just now";
-
-  const count = Math.round(absoluteSeconds / unit.seconds);
-  const suffix = count === 1 ? unit.label : `${unit.label}s`;
-  return seconds < 0 ? `in ${count} ${suffix}` : `${count} ${suffix} ago`;
 }

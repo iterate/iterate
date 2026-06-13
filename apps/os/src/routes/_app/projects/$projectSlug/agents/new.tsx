@@ -1,10 +1,10 @@
-import { Suspense } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Play } from "lucide-react";
 import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { AgentSetupFormPage, type AgentSetupFormValues } from "~/components/agent-setup-form.tsx";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import {
   configuredAgentSetupEvents,
   parseAgentEventInputsYaml,
@@ -30,11 +30,9 @@ type NewAgentPreview = { agentPath: StreamPath; error?: string; events: EventInp
 
 function NewAgentPage() {
   return (
-    <Suspense
-      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
-    >
+    <ItxBoundary>
       <NewAgentContent />
-    </Suspense>
+    </ItxBoundary>
   );
 }
 

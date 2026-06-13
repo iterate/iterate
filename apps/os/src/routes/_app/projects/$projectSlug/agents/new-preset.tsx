@@ -1,10 +1,10 @@
-import { Suspense } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Save } from "lucide-react";
 import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { AgentSetupFormPage, type AgentSetupFormValues } from "~/components/agent-setup-form.tsx";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import {
   AgentPresetEvent,
   configuredAgentSetupEvents,
@@ -34,11 +34,9 @@ type PresetPreview = {
 
 function NewAgentPresetPage() {
   return (
-    <Suspense
-      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
-    >
+    <ItxBoundary>
       <NewAgentPresetContent />
-    </Suspense>
+    </ItxBoundary>
   );
 }
 

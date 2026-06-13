@@ -1,8 +1,9 @@
-import { Suspense, useMemo } from "react";
+import { useMemo } from "react";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { buttonVariants } from "@iterate-com/ui/components/button";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
 import { useItx } from "~/itx/use-itx.ts";
 
@@ -22,11 +23,9 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
 
 function ProjectAgentsIndexPage() {
   return (
-    <Suspense
-      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
-    >
+    <ItxBoundary>
       <ProjectAgentsIndexContent />
-    </Suspense>
+    </ItxBoundary>
   );
 }
 
