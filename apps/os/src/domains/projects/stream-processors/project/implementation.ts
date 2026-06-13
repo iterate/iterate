@@ -17,6 +17,7 @@
 // NOT this processor's job: the sibling project-config-worker processor owns
 // that, with checkpointed at-least-once delivery.
 
+import { env } from "cloudflare:workers";
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
@@ -197,6 +198,18 @@ export class ProjectProcessor extends StreamProcessor<
   }
 
   async #ensureExampleEgressSecret(projectId: string) {
+    // The example secret is a DEMO convenience (the codemode egress-echo
+    // example) — it must never gate project creation. A deployment without
+    // SECRETS_ENCRYPTION_KEY configured still gets working projects; real
+    // user secret writes (connect, itx.secrets.set) fail loudly on their own
+    // when the key is missing, which is the right place to surface it.
+    if (!(env as { SECRETS_ENCRYPTION_KEY?: string }).SECRETS_ENCRYPTION_KEY) {
+      console.warn(
+        `[project] skipping example egress secret for ${projectId}: ` +
+          `SECRETS_ENCRYPTION_KEY is not configured for this deployment.`,
+      );
+      return;
+    }
     // Journaled Secret with a deterministic idempotency key: re-running the
     // create-requested side effects appends a duplicate that dedupes.
     await setJournaledSecret({
