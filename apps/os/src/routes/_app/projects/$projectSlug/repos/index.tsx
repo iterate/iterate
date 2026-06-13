@@ -23,7 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import { ItxBoundary, ItxResourceError } from "~/components/itx-boundary.tsx";
+import { ItxBoundary, ItxResourceError, ItxResourceLoading } from "~/components/itx-boundary.tsx";
 import { repoArtifactName } from "~/domains/repos/repo-artifact-name.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
@@ -198,7 +198,9 @@ function ProjectReposIndexContent() {
 
       {status === "error" ? (
         <ItxResourceError label="repos" error={error} onRetry={() => void refetch()} />
-      ) : repos.length === 0 ? (
+      ) : status === "loading" ? (
+        <ItxResourceLoading label="repos" />
+      ) : status === "ready" && repos.length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>No Repos</EmptyTitle>

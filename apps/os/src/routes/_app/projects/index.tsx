@@ -4,7 +4,7 @@ import { FolderPlus } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { ItxBoundary, ItxResourceError } from "~/components/itx-boundary.tsx";
+import { ItxBoundary, ItxResourceError, ItxResourceLoading } from "~/components/itx-boundary.tsx";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { useItx } from "~/itx/use-itx.ts";
@@ -81,6 +81,8 @@ function ProjectsIndexContent() {
 
       {status === "error" ? (
         <ItxResourceError label="projects" error={error} onRetry={() => void refetch()} />
+      ) : status === "loading" ? (
+        <ItxResourceLoading label="projects" />
       ) : !hasProjects ? (
         <div className="rounded-xl border border-dashed bg-card/60 px-6 py-14 text-center">
           <div className="mx-auto flex max-w-md flex-col items-center gap-4">

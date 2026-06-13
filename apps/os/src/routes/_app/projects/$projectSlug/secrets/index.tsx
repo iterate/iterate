@@ -16,7 +16,7 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
-import { ItxBoundary, ItxResourceError } from "~/components/itx-boundary.tsx";
+import { ItxBoundary, ItxResourceError, ItxResourceLoading } from "~/components/itx-boundary.tsx";
 import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { useItx } from "~/itx/use-itx.ts";
@@ -249,7 +249,9 @@ function ProjectSecretsIndexContent() {
 
       {status === "error" ? (
         <ItxResourceError label="secrets" error={error} onRetry={() => void refetch()} />
-      ) : (secretsList ?? []).length === 0 ? (
+      ) : status === "loading" ? (
+        <ItxResourceLoading label="secrets" />
+      ) : status === "ready" && (secretsList ?? []).length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>No Secrets</EmptyTitle>

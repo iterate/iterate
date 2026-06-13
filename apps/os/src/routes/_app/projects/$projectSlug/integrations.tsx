@@ -16,7 +16,7 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
-import { ItxBoundary, ItxResourceError } from "~/components/itx-boundary.tsx";
+import { ItxBoundary, ItxResourceError, ItxResourceLoading } from "~/components/itx-boundary.tsx";
 import { useItx } from "~/itx/use-itx.ts";
 import { useItxResource } from "~/itx/use-itx-resource.ts";
 import type { ItxHandle } from "~/itx/types.ts";
@@ -116,6 +116,14 @@ function ProjectIntegrationsContent() {
     return (
       <section className="max-w-md space-y-4 p-4">
         <ItxResourceError label="integrations" error={error} onRetry={() => void refetch()} />
+      </section>
+    );
+  }
+
+  if (status === "loading") {
+    return (
+      <section className="max-w-md space-y-4 p-4">
+        <ItxResourceLoading label="integrations" />
       </section>
     );
   }
