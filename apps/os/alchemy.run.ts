@@ -496,6 +496,11 @@ const [
     entrypoint: "./src/workers/slack-agent.ts",
     bindings: {
       DO_CATALOG: db,
+      // The agent host resolves the routed workspace's bot token via
+      // readSlackToken → revealJournaledSecretForPlatformUse, which dials the
+      // Secret DO. (account comes from the stream path, so no INTEGRATION
+      // lookup here.)
+      SECRET: secret,
       SLACK_AGENT: slackAgent,
       STREAM: stream,
       ...(slackBotToken == null
@@ -518,6 +523,10 @@ const [
       DO_CATALOG: db,
       GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
       REPO: repo,
+      // GitHub-remote sync (pullFromGithub) authenticates Octokit by routing
+      // its fetch through getSecretStub(...).egressFetch — the Secret DO
+      // substitutes the github token — so the repo worker dials SECRET.
+      SECRET: secret,
       STREAM: stream,
     },
   }),
