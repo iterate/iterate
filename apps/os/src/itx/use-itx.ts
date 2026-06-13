@@ -181,6 +181,20 @@ export function reconnectBrowserItx(context?: string): void {
 }
 
 /**
+ * Release a per-component itx subscription on unmount. Both halves matter on the
+ * long-lived pooled socket: unsubscribe() tears down the server-side
+ * subscription, and disposing the subscription stub frees our RPC import of it
+ * (an undisposed stub accumulates in the session import table for the life of
+ * the tab). The far end may already be gone when a socket dies, so an
+ * unsubscribe() rejection is swallowed. This is the disposal contract from the
+ * module header, in one place so the two subscription consumers can't drift.
+ */
+export function releaseItxSubscription(subscription: { unsubscribe(): unknown }): void {
+  void Promise.resolve(subscription.unsubscribe()).catch(() => {});
+  (subscription as Partial<Disposable>)[Symbol.dispose]?.();
+}
+
+/**
  * The itx handle for `context` ("global" when omitted, else a project id/slug
  * or itx_… id; session-cookie auth). Suspends until the socket is connected;
  * re-suspends (fresh socket, fresh state) if it dies. See the module header

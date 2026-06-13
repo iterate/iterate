@@ -14,7 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import { useAdminItx } from "~/lib/admin-itx.ts";
+import { useItx } from "~/itx/use-itx.ts";
 
 const PAGE_SIZE = 100;
 
@@ -31,7 +31,7 @@ type AdminProject = {
 };
 
 function AdminProjectsPage() {
-  const itx = useAdminItx();
+  const itx = useItx();
   const [pageIndex, setPageIndex] = useState(0);
   const offset = pageIndex * PAGE_SIZE;
   const projectsQuery = useQuery({

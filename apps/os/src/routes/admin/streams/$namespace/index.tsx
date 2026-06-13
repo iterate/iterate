@@ -4,7 +4,7 @@ import { ArrowLeftIcon, RadioTowerIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
-import { useAdminItx } from "~/lib/admin-itx.ts";
+import { useItx } from "~/itx/use-itx.ts";
 
 export const Route = createFileRoute("/admin/streams/$namespace/")({
   component: AdminStreamNamespacePage,
@@ -12,7 +12,7 @@ export const Route = createFileRoute("/admin/streams/$namespace/")({
 
 function AdminStreamNamespacePage() {
   const { namespace } = Route.useParams();
-  const itx = useAdminItx();
+  const itx = useItx();
   const navigate = useNavigate();
   const source = useMemo(
     () => (streamPath: StreamPathType) => itx.streams.namespace(namespace).get(streamPath),

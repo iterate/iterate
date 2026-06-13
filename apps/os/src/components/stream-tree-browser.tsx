@@ -11,6 +11,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { releaseItxSubscription } from "~/itx/use-itx.ts";
 
 /**
  * Where tree nodes get their state: path → stream handle. Project pages pass
@@ -57,16 +58,8 @@ function useLiveStreamState(input: {
         setNode({ status: "live", state: StreamState.parse(next) });
       })
       .then((subscription) => {
-        // Release BOTH ends on unmount: unsubscribe() tears down the server-side
-        // subscription (the far end may already be gone — never let that reject
-        // unhandled), and disposing the stub frees our RPC import of it so it
-        // doesn't accumulate in the pooled session's import table.
-        const releaseSubscription = () => {
-          void Promise.resolve(subscription.unsubscribe()).catch(() => {});
-          (subscription as Partial<Disposable>)[Symbol.dispose]?.();
-        };
-        if (disposed) releaseSubscription();
-        else release = releaseSubscription;
+        if (disposed) releaseItxSubscription(subscription);
+        else release = () => releaseItxSubscription(subscription);
       })
       .catch((error: unknown) => {
         if (disposed) return;

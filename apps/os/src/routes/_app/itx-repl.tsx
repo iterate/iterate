@@ -6,14 +6,14 @@
 // The REPL rides the ONE browser itx primitive — useItx / the pool
 // (~/itx/use-itx.ts). It does NOT open its own socket: the global repl shares
 // the tab's global socket, the project repl shares that project's socket, and
-// neither owns the connection's lifetime. See the use-itx.ts header for the
-// single-socket-per-context model and the disposal contract.
+// neither owns the connection. ConnectedItxRepl is the single connect wrapper
+// both routes use. See the use-itx.ts header for the single-socket-per-context
+// model and the disposal contract.
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { ClientOnly, createFileRoute } from "@tanstack/react-router";
 import type { RpcStub } from "capnweb";
 import {
-  browserReplExternalScopesEqual,
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
   runBrowserReplEntry,
@@ -28,37 +28,67 @@ export const Route = createFileRoute("/_app/itx-repl")({
   staticData: {
     breadcrumb: "Repl",
   },
-  component: GlobalItxReplRoute,
+  component: () => <ConnectedItxRepl context="global" />,
 });
 
-/** The shared "connecting to itx" fallback every repl suspends behind. */
+/** The shared "connecting to itx" fallback both repls suspend behind. */
 export function ItxReplConnecting() {
   return <div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>;
 }
 
-function GlobalItxReplRoute() {
-  // useItx never SSRs and suspends until its socket connects, so the repl needs
-  // both gates: ClientOnly (this route still SSRs its shell) and Suspense.
+/**
+ * The one connect wrapper both repls share. `useItx` never SSRs and suspends
+ * until connected, so this gates it behind ClientOnly (the route still SSRs its
+ * shell) + Suspense, then renders the repl against the live pooled handle.
+ * `poolContext` is the useItx key — a project id, or undefined for global = the
+ * connect endpoint. It also keys the inner component, so switching project
+ * remounts the repl with a fresh scope + history.
+ */
+export function ConnectedItxRepl({
+  poolContext,
+  context = "global",
+  initialCode,
+  scope,
+}: {
+  poolContext?: string;
+  context?: "global" | "project";
+  initialCode?: string;
+  scope?: Record<string, unknown>;
+}) {
   return (
     <ClientOnly fallback={<ItxReplConnecting />}>
       <Suspense fallback={<ItxReplConnecting />}>
-        <GlobalItxReplConnected />
+        <ItxReplConnected
+          key={poolContext ?? "global"}
+          poolContext={poolContext}
+          context={context}
+          initialCode={initialCode}
+          scope={scope}
+        />
       </Suspense>
     </ClientOnly>
   );
 }
 
-function GlobalItxReplConnected() {
-  const itx = useItx();
-  return <ItxReplPage itx={itx} context="global" />;
+function ItxReplConnected({
+  poolContext,
+  context,
+  initialCode,
+  scope,
+}: {
+  poolContext?: string;
+  context?: "global" | "project";
+  initialCode?: string;
+  scope?: Record<string, unknown>;
+}) {
+  const itx = useItx(poolContext);
+  return <ItxReplPage itx={itx} context={context} initialCode={initialCode} scope={scope} />;
 }
 
-export function ItxReplPage({
+function ItxReplPage({
   // The live itx handle from the pool (useItx). The REPL never owns this stub:
   // it must NOT dispose it or close the socket — the pool owns the connection's
   // lifetime and every other component on this context rides the same socket.
-  // On a pool reconnect, useItx re-suspends and hands a fresh stub; this
-  // component remounts with it (the globalThis binding effect below rebinds).
   itx,
   context = "global",
   initialCode = DEFAULT_BROWSER_REPL_CODE,
@@ -73,30 +103,18 @@ export function ItxReplPage({
   const [status, setStatus] = useState("Ready");
   const [entries, setEntries] = useState<BrowserReplEntry[]>([]);
   const [examplesOpen, setExamplesOpen] = useState(false);
-  const envRef = useRef<Record<string, unknown>>({});
-  const externalScopeRef = useRef(scope);
+  // Scope is fixed for this instance: ConnectedItxRepl keys by context, so a
+  // project switch remounts (fresh scope), not a re-sync on render.
   const scopeRef = useRef<Record<string, unknown>>(createBrowserReplScope(scope));
-
-  // Keep injected values in sync when navigating between project repls, without
-  // wiping REPL-created bindings on ordinary state updates.
-  if (!browserReplExternalScopesEqual(externalScopeRef.current, scope)) {
-    externalScopeRef.current = scope;
-    scopeRef.current = createBrowserReplScope(scope);
-  }
 
   // Expose the live handle on globalThis for console poking. This only
   // binds/clears a reference — it never disposes `itx` or closes the socket
   // (the pool owns that). A fresh stub after a pool reconnect rebinds here.
   useEffect(() => {
-    const globals = globalThis as typeof globalThis & {
-      itx?: RpcStub<ItxHandle>;
-      env?: object;
-    };
+    const globals = globalThis as typeof globalThis & { itx?: RpcStub<ItxHandle> };
     globals.itx = itx;
-    globals.env = envRef.current;
     return () => {
       if (globals.itx === itx) delete globals.itx;
-      delete globals.env;
     };
   }, [itx]);
 
@@ -107,7 +125,6 @@ export function ItxReplPage({
     setCode("");
     const entry = await runBrowserReplEntry({
       code: trimmedCode,
-      env: envRef.current,
       itx,
       scope: scopeRef.current,
     });

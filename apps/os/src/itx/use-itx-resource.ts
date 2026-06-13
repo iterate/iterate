@@ -24,6 +24,10 @@ export type ItxResource<T> = {
 export function useItxResource<T>(load: () => Promise<T>, deps: unknown[]): ItxResource<T> {
   const loadRef = useRef(load);
   loadRef.current = load;
+  // The last error message we toasted, so a refetch/poll that keeps failing
+  // with the SAME error toasts once, not on every run (settings.tsx polls
+  // refetch every 5s — without this it would spew a toast every 5 seconds).
+  const lastToastRef = useRef<string | undefined>(undefined);
   const [state, setState] = useState<{ status: ItxResource<T>["status"]; data?: T; error?: Error }>(
     {
       status: "loading",
@@ -34,17 +38,25 @@ export function useItxResource<T>(load: () => Promise<T>, deps: unknown[]): ItxR
     try {
       const data = await loadRef.current();
       if (isCancelled()) return;
+      lastToastRef.current = undefined;
       setState({ status: "ready", data });
     } catch (caught) {
       if (isCancelled()) return;
       const error = caught instanceof Error ? caught : new Error(String(caught));
       setState({ status: "error", error });
-      toast.error(error.message);
+      if (lastToastRef.current !== error.message) {
+        lastToastRef.current = error.message;
+        toast.error(error.message);
+      }
     }
   };
 
   useEffect(() => {
     let cancelled = false;
+    // New resource (deps changed) → clean dedup slate, so a same-message error
+    // on a DIFFERENT resource still toasts (otherwise it would be swallowed —
+    // and settings.tsx, the one toast-only call site, would fail silently).
+    lastToastRef.current = undefined;
     setState((prev) => ({ ...prev, status: "loading" }));
     void run(() => cancelled);
     return () => {

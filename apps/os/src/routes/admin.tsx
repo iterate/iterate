@@ -6,9 +6,8 @@
 // browser, since WebSockets cannot send Authorization headers. Until then the
 // layout shows an unlock form instead of its children.
 
-import { useEffect, useState, type CSSProperties } from "react";
-import { createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
-import type { RpcStub } from "capnweb";
+import { Suspense, useEffect, useState, type CSSProperties } from "react";
+import { ClientOnly, createFileRoute, Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { FolderKanbanIcon, RadioTowerIcon, ShieldIcon, WaypointsIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -35,63 +34,13 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@iterate-com/ui/components/sidebar";
-import type { ItxHandle } from "~/itx/handle.ts";
-import { AdminItxContext } from "~/lib/admin-itx.ts";
-import { getBrowserItx, reconnectBrowserItx } from "~/itx/use-itx.ts";
+import { reconnectBrowserItx, useItx } from "~/itx/use-itx.ts";
 
 export const Route = createFileRoute("/admin")({
   component: AdminLayout,
 });
 
-type AdminItxState =
-  | { status: "connecting" }
-  // The WebSocket is up but the handle lacks global authority (no admin
-  // cookie yet) — or the connection failed outright. Either way the fix is
-  // the same: unlock with the admin API secret.
-  | { status: "locked"; reason: string }
-  | { status: "ready"; itx: RpcStub<ItxHandle> };
-
 function AdminLayout() {
-  const [state, setState] = useState<AdminItxState>({ status: "connecting" });
-  // Bumped after a successful unlock so the connect effect runs again with
-  // the freshly set admin cookie on the WebSocket handshake.
-  const [epoch, setEpoch] = useState(0);
-
-  useEffect(() => {
-    let closed = false;
-    // The admin handle is the global pooled itx socket — the SAME connection
-    // the rest of the tab uses (one browser itx primitive, one /api/itx route;
-    // see ~/itx/use-itx.ts). Its global authority comes from the admin cookie
-    // carried on the WebSocket handshake, so the unlock below re-dials the
-    // pooled socket (reconnectBrowserItx) rather than opening a private one.
-    // We never close the socket here — the pool owns its lifetime.
-    void getBrowserItx()
-      .then((itx) =>
-        // Probe global authority: itx.streams on a global handle throws unless
-        // the connection authenticated as admin, so one cheap call tells us
-        // whether to render the admin pages or the unlock form.
-        itx.streams
-          .get("/")
-          .describe()
-          .then(() => {
-            if (!closed) setState({ status: "ready", itx });
-          }),
-      )
-      .catch((error: unknown) => {
-        if (!closed) {
-          setState({
-            status: "locked",
-            reason: error instanceof Error ? error.message : String(error),
-          });
-        }
-      });
-
-    return () => {
-      closed = true;
-      setState({ status: "connecting" });
-    };
-  }, [epoch]);
-
   return (
     <SidebarProvider
       className="h-svh"
@@ -114,32 +63,80 @@ function AdminLayout() {
           </div>
         </header>
         <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {state.status === "connecting" && (
-            <div className="p-4 text-sm text-muted-foreground">
-              Connecting to the root itx context...
-            </div>
-          )}
-          {state.status === "locked" && (
-            <AdminUnlockForm
-              reason={state.reason}
-              onUnlocked={() => {
-                // The admin cookie is now set, but the live pooled socket still
-                // carries its pre-cookie (non-admin) authority — evict it so the
-                // probe below re-dials a socket whose handshake sends the cookie.
-                reconnectBrowserItx();
-                setEpoch((e) => e + 1);
-              }}
-            />
-          )}
-          {state.status === "ready" && (
-            <AdminItxContext.Provider value={state.itx}>
-              <Outlet />
-            </AdminItxContext.Provider>
-          )}
+          {/* useItx never SSRs and suspends until connected — gate the admin
+              handle behind ClientOnly + Suspense, then probe global authority. */}
+          <ClientOnly fallback={<AdminConnecting />}>
+            <Suspense fallback={<AdminConnecting />}>
+              <AdminGate />
+            </Suspense>
+          </ClientOnly>
         </main>
       </SidebarInset>
     </SidebarProvider>
   );
+}
+
+function AdminConnecting() {
+  return (
+    <div className="p-4 text-sm text-muted-foreground">Connecting to the root itx context...</div>
+  );
+}
+
+type AdminAuthority =
+  | { status: "checking" }
+  // The WebSocket is up but the handle lacks global authority (no admin cookie
+  // yet) — or the probe failed. Either way the fix is the same: unlock with the
+  // admin API secret.
+  | { status: "locked"; reason: string }
+  | { status: "ready" };
+
+function AdminGate() {
+  // The admin handle is the global pooled itx socket — the SAME connection the
+  // rest of the tab uses (one browser itx primitive, one /api/itx route; see
+  // ~/itx/use-itx.ts). Its global authority comes from the admin cookie on the
+  // WebSocket handshake, so unlock re-dials the pooled socket
+  // (reconnectBrowserItx) and useItx re-suspends here, re-running the probe — no
+  // epoch, no private socket, no manual connect lifecycle.
+  const itx = useItx();
+  const [authority, setAuthority] = useState<AdminAuthority>({ status: "checking" });
+
+  useEffect(() => {
+    let cancelled = false;
+    setAuthority({ status: "checking" });
+    // Probe global authority: itx.streams on a global handle throws unless the
+    // connection authenticated as admin, so one cheap call tells us whether to
+    // render the admin pages or the unlock form.
+    void itx.streams
+      .get("/")
+      .describe()
+      .then(
+        () => {
+          if (!cancelled) setAuthority({ status: "ready" });
+        },
+        (error: unknown) => {
+          if (!cancelled) {
+            setAuthority({
+              status: "locked",
+              reason: error instanceof Error ? error.message : String(error),
+            });
+          }
+        },
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [itx]);
+
+  if (authority.status === "checking") return <AdminConnecting />;
+  if (authority.status === "locked") {
+    // Unlock set the admin cookie; evict the pooled socket so useItx re-dials a
+    // handshake that carries it (and re-runs this probe). The pool owns the
+    // socket — we never close it here.
+    return <AdminUnlockForm reason={authority.reason} onUnlocked={() => reconnectBrowserItx()} />;
+  }
+  // Children just call useItx() for the same global pooled handle — no admin
+  // context to thread, and they only render here, under the authorized gate.
+  return <Outlet />;
 }
 
 function AdminUnlockForm({ reason, onUnlocked }: { reason: string; onUnlocked: () => void }) {

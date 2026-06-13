@@ -1,14 +1,14 @@
 import { Suspense, type ReactNode } from "react";
 import { Button } from "@iterate-com/ui/components/button";
 
-/** The single "Connecting to itx..." fallback every itx route suspends behind. */
-function ItxConnecting() {
-  return <div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>;
+/** The one muted-text placeholder both the socket-connect and first-read waits render. */
+function ItxPending({ children }: { children: ReactNode }) {
+  return <div className="p-4 text-sm text-muted-foreground">{children}</div>;
 }
 
 /** Suspense wrapper shared by every route that reads through itx. */
 export function ItxBoundary({ children }: { children: ReactNode }) {
-  return <Suspense fallback={<ItxConnecting />}>{children}</Suspense>;
+  return <Suspense fallback={<ItxPending>Connecting to itx…</ItxPending>}>{children}</Suspense>;
 }
 
 /**
@@ -17,7 +17,7 @@ export function ItxBoundary({ children }: { children: ReactNode }) {
  * flight, so routes must show this rather than flashing an empty/"none" state.
  */
 export function ItxResourceLoading({ label }: { label: string }) {
-  return <div className="p-4 text-sm text-muted-foreground">Loading {label}…</div>;
+  return <ItxPending>Loading {label}…</ItxPending>;
 }
 
 /** The shared "Couldn't load X — {error.message} [Retry]" panel for useItxResource routes. */

@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import type { Event as StreamEvent } from "@iterate-com/shared/streams/types";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import { useItx } from "~/itx/use-itx.ts";
+import { releaseItxSubscription, useItx } from "~/itx/use-itx.ts";
 
 const MAX_BUFFERED_EVENTS = 500;
 
@@ -63,19 +63,11 @@ export function ItxActivityTail({ projectId }: { projectId: string }) {
         { afterOffset: "start" },
       )
       .then((subscription) => {
-        // Release BOTH ends on unmount: unsubscribe() tears down the server-side
-        // subscription, and disposing the subscription stub frees our RPC import
-        // of it. On a long-lived (pooled) socket an undisposed stub would
-        // accumulate in the session's import table for the life of the tab.
-        const releaseSubscription = () => {
-          void Promise.resolve(subscription.unsubscribe()).catch(() => {});
-          (subscription as Partial<Disposable>)[Symbol.dispose]?.();
-        };
         if (disposed) {
-          releaseSubscription();
+          releaseItxSubscription(subscription);
           return;
         }
-        release = releaseSubscription;
+        release = () => releaseItxSubscription(subscription);
         setStatus("live");
       })
       .catch((subscribeError: unknown) => {

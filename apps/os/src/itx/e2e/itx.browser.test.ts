@@ -51,7 +51,6 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
     await expect(
       evalBrowserReplSessionCode({
         code: DEFAULT_BROWSER_REPL_CODE,
-        env: {},
         itx,
         scope: createBrowserReplScope(),
       }),
@@ -87,7 +86,6 @@ describe.skipIf(!httpsTarget)("itx browser execution mode", () => {
       const vars = exampleCase.vars?.(ctx) ?? {};
       const result = await evalBrowserReplSessionCode({
         code: example.code,
-        env: {},
         itx,
         scope: createBrowserReplScope({ projectId, vars }),
       });

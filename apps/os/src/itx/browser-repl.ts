@@ -19,39 +19,21 @@ export function createBrowserReplScope(scope?: Record<string, unknown>): Record<
   return { RpcTarget, vars: {}, ...scope };
 }
 
-export function browserReplExternalScopesEqual(
-  first?: Record<string, unknown>,
-  second?: Record<string, unknown>,
-) {
-  const firstKeys = Object.keys(first ?? {});
-  const secondKeys = Object.keys(second ?? {});
-  if (firstKeys.length !== secondKeys.length) return false;
-
-  for (const key of firstKeys) {
-    if (!Object.prototype.hasOwnProperty.call(second ?? {}, key)) return false;
-    if (!Object.is(first?.[key], second?.[key])) return false;
-  }
-
-  return true;
-}
-
-export async function evalBrowserReplCode(input: { code: string; itx: unknown; env?: object }) {
-  return await compileBrowserReplFunction(input.code)(input.itx, input.env ?? {}, {});
+export async function evalBrowserReplCode(input: { code: string; itx: unknown }) {
+  return await compileBrowserReplFunction(input.code)(input.itx, {});
 }
 
 export async function evalBrowserReplSessionCode(input: {
   code: string;
   itx: unknown;
-  env?: object;
   scope: Record<string, unknown>;
 }) {
-  return await compileBrowserReplFunction(input.code)(input.itx, input.env ?? {}, input.scope);
+  return await compileBrowserReplFunction(input.code)(input.itx, input.scope);
 }
 
 export async function runBrowserReplEntry(input: {
   code: string;
   itx: unknown;
-  env?: object;
   scope: Record<string, unknown>;
 }): Promise<BrowserReplEntry> {
   const trimmedCode = input.code.trim();
@@ -62,7 +44,6 @@ export async function runBrowserReplEntry(input: {
     const result = await evalBrowserReplSessionCode({
       code: trimmedCode,
       itx: input.itx,
-      env: input.env,
       scope: input.scope,
     });
     input.scope.$_ = result;
@@ -102,20 +83,15 @@ export function compileBrowserReplFunction(rawCode: string) {
   const expressionSource = `return (async () => (${code}))()`;
   try {
     // oxlint-disable-next-line no-new-func -- This helper backs the explicit browser-local REPL.
-    return new Function(
-      "itx",
-      "env",
-      "scope",
-      `with (scope) { ${expressionSource} }`,
-    ) as ReplFunction;
+    return new Function("itx", "scope", `with (scope) { ${expressionSource} }`) as ReplFunction;
   } catch {
     return compileBrowserReplStatements(code);
   }
 }
 
-type ReplFunction = (itx: unknown, env: object, scope: Record<string, unknown>) => Promise<unknown>;
+type ReplFunction = (itx: unknown, scope: Record<string, unknown>) => Promise<unknown>;
 
-const RESERVED_TOP_LEVEL_BINDINGS = new Set(["itx", "env", "scope", "console", "$_", "_"]);
+const RESERVED_TOP_LEVEL_BINDINGS = new Set(["itx", "scope", "console", "$_", "_"]);
 
 function compileBrowserReplStatements(code: string) {
   const statementSource = transformTopLevelStatements(code);
@@ -125,7 +101,6 @@ function compileBrowserReplStatements(code: string) {
   // oxlint-disable-next-line no-new-func -- Statement-mode fallback for the explicit browser-local REPL.
   return new Function(
     "itx",
-    "env",
     "scope",
     `with (scope) { return (async () => { let __replLastValue;\n${statementSource}\n; return __replLastValue })() }`,
   ) as ReplFunction;
