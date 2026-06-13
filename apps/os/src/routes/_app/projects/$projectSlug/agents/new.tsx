@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Play } from "lucide-react";
@@ -14,35 +15,39 @@ import {
   defaultAgentProcessorSlugs,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { agentPathFromInput } from "~/lib/agent-links.ts";
-import { orpcClient } from "~/orpc/client.ts";
+import { useItx } from "~/itx/use-itx.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
-  loader: async ({ context }) => {
-    const { project } = context;
-
-    return {
-      breadcrumb: "New Agent",
-      project,
-    };
-  },
+  ssr: false,
+  loader: ({ context }) => ({
+    breadcrumb: "New Agent",
+    project: context.project,
+  }),
   component: NewAgentPage,
 });
 
 type NewAgentPreview = { agentPath: StreamPath; error?: string; events: EventInput[] };
 
 function NewAgentPage() {
+  return (
+    <Suspense
+      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
+    >
+      <NewAgentContent />
+    </Suspense>
+  );
+}
+
+function NewAgentContent() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const navigate = useNavigate();
+  const itx = useItx(project.id);
 
   const createAgent = useMutation({
     mutationFn: async (preview: NewAgentPreview) => {
       if (preview.error) throw new Error(preview.error);
-      await orpcClient.project.streams.appendBatch({
-        events: preview.events,
-        projectSlugOrId: project.id,
-        streamPath: preview.agentPath,
-      });
+      await itx.streams.get(preview.agentPath).appendBatch(preview.events);
       return preview;
     },
     onSuccess: (preview) => {

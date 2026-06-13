@@ -1,14 +1,11 @@
 import { Suspense, useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMutation } from "@tanstack/react-query";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { getBrowserItx } from "~/itx/use-itx.ts";
 import type { StreamTreeSource } from "~/components/stream-tree-browser.tsx";
-import { projectAgentRuntimeStateQueryOptions } from "~/lib/project-route-query.ts";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
-import { orpc } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams/$")({
   staticData: { hideAppHeader: true },
@@ -21,12 +18,9 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
     }),
   },
   ssr: false,
-  loader: async ({ context, params }) => {
+  loader: ({ context, params }) => {
     const agentPath = params._splat;
     const { project } = context;
-    await context.queryClient.ensureQueryData(
-      projectAgentRuntimeStateQueryOptions({ agentPath, projectId: project.id }),
-    );
 
     return breadcrumbLoaderData({
       breadcrumb: agentPath,
@@ -71,14 +65,14 @@ function ProjectAgentDetailContent() {
     [project.id],
   );
   // The stream view subscribes live, so a send needs no cache invalidation —
-  // the new events arrive over the socket.
-  const sendMessage = useMutation(orpc.project.agents.sendMessage.mutationOptions());
-
+  // the new events arrive over the socket. Sending a message IS appending the
+  // user-message-added event to the agent's own stream (what the agent DO's
+  // sendMessage did); the subscribed Agent DO reacts to the new event.
   async function submitAgentMessage(message: string) {
-    await sendMessage.mutateAsync({
-      agentPath: streamPath,
-      message,
-      projectSlugOrId: project.id,
+    const itx = await getBrowserItx(project.id);
+    await itx.streams.get(streamPath).append({
+      type: "events.iterate.com/agent-chat/user-message-added",
+      payload: { channel: "web", content: message },
     });
   }
 

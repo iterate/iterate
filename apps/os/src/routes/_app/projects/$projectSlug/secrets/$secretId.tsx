@@ -1,7 +1,7 @@
-import { useMemo } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
@@ -16,11 +16,12 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
-import {
-  projectSecretQueryOptions,
-  projectSecretsListQueryOptions,
-} from "~/lib/project-route-query.ts";
-import { orpc } from "~/orpc/client.ts";
+import { useItx } from "~/itx/use-itx.ts";
+import type { Stubify } from "~/itx/types.ts";
+import type { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+
+type SecretsCap = Stubify<Pick<SecretsCapability, "setSecret" | "listSecrets" | "deleteSecret">>;
+type SecretSummary = Awaited<ReturnType<SecretsCap["listSecrets"]>>[number];
 
 const UpdateSecretForm = z.object({
   material: z.string().min(1, "Secret material is required"),
@@ -28,70 +29,94 @@ const UpdateSecretForm = z.object({
 });
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/$secretId")({
-  loader: async ({ context, params }) => {
-    const { project } = context;
-    const secret = await context.queryClient.ensureQueryData(
-      projectSecretQueryOptions({ projectId: project.id, secretId: params.secretId }),
-    );
-
-    return {
-      breadcrumb: secret.key,
-      project,
-      secret,
-    };
-  },
+  ssr: false,
+  loader: ({ context, params }) => ({
+    breadcrumb: params.secretId,
+    project: context.project,
+  }),
   component: ProjectSecretDetailPage,
 });
 
 function ProjectSecretDetailPage() {
+  return (
+    <Suspense
+      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
+    >
+      <ProjectSecretDetailContent />
+    </Suspense>
+  );
+}
+
+function ProjectSecretDetailContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const { project, secret: loadedSecret } = Route.useLoaderData();
-  const secretQueryOptions = projectSecretQueryOptions({
-    projectId: project.id,
-    secretId: params.secretId,
-  });
-  const secretsListQueryOptions = projectSecretsListQueryOptions(project.id);
-  const secretQuery = useQuery({
-    ...secretQueryOptions,
-    initialData: loadedSecret,
-  });
-  const secret = secretQuery.data;
+  const { project } = Route.useLoaderData();
+  const itx = useItx(project.id);
+  const secretsCap = itx.capability("secrets") as unknown as SecretsCap;
+  const [secret, setSecret] = useState<SecretSummary | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    secretsCap
+      .listSecrets()
+      .then((rows) => {
+        if (cancelled) return;
+        const found = rows.find((row) => row.id === params.secretId);
+        if (!found) {
+          toast.error(`Secret ${params.secretId} was not found for this project.`);
+          return;
+        }
+        setSecret(found);
+      })
+      .catch((error) => toast.error(error instanceof Error ? error.message : String(error)));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the itx handle identity changes (reconnect), not on every dep churn
+  }, [itx, params.secretId]);
+
   const defaultValues = useMemo(
     () => ({
       material: "",
-      metadataJson: JSON.stringify(secret.metadata, null, 2),
+      metadataJson: JSON.stringify(secret?.metadata ?? {}, null, 2),
     }),
-    [secret.metadata],
+    [secret?.metadata],
   );
-  const upsertSecret = useMutation(
-    orpc.project.secrets.upsert.mutationOptions({
-      onSuccess: async () => {
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: secretQueryOptions.queryKey }),
-          queryClient.invalidateQueries({ queryKey: secretsListQueryOptions.queryKey }),
-        ]);
-        form.reset();
-        toast.success("Secret updated");
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
-  const removeSecret = useMutation(
-    orpc.project.secrets.remove.mutationOptions({
-      onSuccess: async () => {
-        await queryClient.invalidateQueries({ queryKey: secretsListQueryOptions.queryKey });
-        void navigate({
-          to: "/projects/$projectSlug/secrets",
-          params: {
-            projectSlug: params.projectSlug,
-          },
-        });
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
+  const upsertSecret = useMutation({
+    mutationFn: async (input: {
+      key: string;
+      material: string;
+      metadata: Record<string, unknown>;
+    }) => {
+      return await secretsCap.setSecret(input);
+    },
+    onSuccess: async () => {
+      try {
+        const rows = await secretsCap.listSecrets();
+        const found = rows.find((row) => row.id === params.secretId);
+        if (found) setSecret(found);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : String(error));
+      }
+      form.reset();
+      toast.success("Secret updated");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
+  const removeSecret = useMutation({
+    mutationFn: async (input: { key: string }) => {
+      return await secretsCap.deleteSecret(input);
+    },
+    onSuccess: () => {
+      void navigate({
+        to: "/projects/$projectSlug/secrets",
+        params: {
+          projectSlug: params.projectSlug,
+        },
+      });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
   const form = useForm({
     defaultValues,
     validators: {
@@ -99,6 +124,7 @@ function ProjectSecretDetailPage() {
       onSubmit: UpdateSecretForm,
     },
     onSubmit: async ({ value }) => {
+      if (!secret) return;
       const parsed = UpdateSecretForm.parse(value);
       const metadata = parseMetadataJson(parsed.metadataJson);
       if ("message" in metadata) {
@@ -107,13 +133,16 @@ function ProjectSecretDetailPage() {
       }
 
       await upsertSecret.mutateAsync({
-        projectSlugOrId: project.id,
         key: secret.key,
         material: parsed.material,
         metadata: metadata.metadata,
       });
     },
   });
+
+  if (!secret) {
+    return <div className="p-4 text-sm text-muted-foreground">Loading secret...</div>;
+  }
 
   return (
     <section className="w-full space-y-4 p-4">
@@ -206,12 +235,7 @@ function ProjectSecretDetailPage() {
               variant="destructive"
               size="sm"
               className="self-start"
-              onClick={() =>
-                removeSecret.mutate({
-                  id: secret.id,
-                  projectSlugOrId: project.id,
-                })
-              }
+              onClick={() => removeSecret.mutate({ key: secret.key })}
               disabled={removeSecret.isPending}
             >
               <Trash2 className="h-4 w-4" />

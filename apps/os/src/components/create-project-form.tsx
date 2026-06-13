@@ -1,5 +1,5 @@
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { Button } from "@iterate-com/ui/components/button";
@@ -20,8 +20,7 @@ import {
 } from "@iterate-com/ui/components/select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
-import { cacheCreatedProjectQueries } from "~/lib/cache-created-project-queries.ts";
-import { orpc } from "~/orpc/client.ts";
+import { getBrowserItx } from "~/itx/use-itx.ts";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -36,25 +35,24 @@ const CreateProjectInput = z.object({
 
 export function CreateProjectForm() {
   const router = useRouter();
-  const queryClient = useQueryClient();
   const { session } = useAuthClient();
   const organizations = session?.authenticated ? session.session.organizations : [];
-  const createProject = useMutation(
-    orpc.projects.create.mutationOptions({
-      onSuccess: async (project) => {
-        cacheCreatedProjectQueries({ project, queryClient });
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
-        await router.invalidate({ sync: true });
-        await router.navigate({
-          to: "/projects/$projectSlug",
-          params: {
-            projectSlug: project.slug,
-          },
-        });
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
+  const createProject = useMutation({
+    mutationFn: async (input: { slug: string }) => {
+      const itx = await getBrowserItx();
+      return await itx.projects.create({ slug: input.slug });
+    },
+    onSuccess: async (project) => {
+      await router.invalidate({ sync: true });
+      await router.navigate({
+        to: "/projects/$projectSlug",
+        params: {
+          projectSlug: project.slug,
+        },
+      });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
 
   const form = useForm({
     defaultValues: { slug: "", organizationSlug: organizations[0]?.slug ?? "" },
@@ -66,7 +64,6 @@ export function CreateProjectForm() {
       const parsed = CreateProjectInput.parse(value);
       await createProject.mutateAsync({
         slug: parsed.slug,
-        organizationSlug: parsed.organizationSlug || undefined,
       });
       form.reset();
     },

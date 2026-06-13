@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -27,7 +27,11 @@ import { repoArtifactName } from "~/domains/repos/repo-artifact-name.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { projectReposListQueryOptions } from "~/lib/project-route-query.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { orpc } from "~/orpc/client.ts";
+import { useItx } from "~/itx/use-itx.ts";
+import type { Stubify } from "~/itx/types.ts";
+import type { ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
+
+type ReposCap = Stubify<Pick<ReposCapability, "create">>;
 
 const CreateRepoForm = z.object({
   slug: z
@@ -45,6 +49,7 @@ type SortKey = "repoSlug" | "createdAt" | "lastWokenAt";
 type SortDirection = "asc" | "desc";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
+  ssr: false,
   loader: async ({ context }) => {
     const { project } = context;
     await context.queryClient.ensureQueryData(projectReposListQueryOptions(project.id));
@@ -60,10 +65,22 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/repos/")({
 });
 
 function ProjectReposIndexPage() {
+  return (
+    <Suspense
+      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
+    >
+      <ProjectReposIndexContent />
+    </Suspense>
+  );
+}
+
+function ProjectReposIndexContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { project, routeConfig } = Route.useLoaderData();
+  const itx = useItx(project.id);
+  const reposCap = itx.capability("repos") as unknown as ReposCap;
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({
     key: "lastWokenAt",
@@ -71,24 +88,26 @@ function ProjectReposIndexPage() {
   });
   const reposQueryOptions = projectReposListQueryOptions(project.id);
   const { data } = useQuery(reposQueryOptions);
-  const createRepo = useMutation(
-    orpc.project.repos.create.mutationOptions({
-      onSuccess: async (repo) => {
-        await queryClient.invalidateQueries({ queryKey: reposQueryOptions.queryKey });
-        form.reset();
-        void navigate({
-          to: "/projects/$projectSlug/repos/$repoSlug",
-          params: {
-            projectSlug: params.projectSlug,
-            repoSlug: repo.slug,
-          },
-        });
-      },
-      onError: (error) => {
-        toast.error(error instanceof Error ? error.message : "Could not create Repo.");
-      },
-    }),
-  );
+  const createRepo = useMutation({
+    mutationFn: async (input: { slug: string }) => {
+      await reposCap.create({ projectSlug: params.projectSlug, slug: input.slug });
+      return input.slug;
+    },
+    onSuccess: async (slug) => {
+      await queryClient.invalidateQueries({ queryKey: reposQueryOptions.queryKey });
+      form.reset();
+      void navigate({
+        to: "/projects/$projectSlug/repos/$repoSlug",
+        params: {
+          projectSlug: params.projectSlug,
+          repoSlug: slug,
+        },
+      });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Could not create Repo.");
+    },
+  });
   const form = useForm({
     defaultValues: DEFAULT_CREATE_REPO_FORM_VALUES,
     validators: {
@@ -97,10 +116,7 @@ function ProjectReposIndexPage() {
     },
     onSubmit: async ({ value }) => {
       const parsed = CreateRepoForm.parse(value);
-      await createRepo.mutateAsync({
-        projectSlugOrId: project.id,
-        slug: parsed.slug,
-      });
+      await createRepo.mutateAsync({ slug: parsed.slug });
     },
   });
 

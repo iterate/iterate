@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { KeyRound, Trash2 } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
@@ -17,8 +17,12 @@ import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
-import { projectSecretsListQueryOptions } from "~/lib/project-route-query.ts";
-import { orpc } from "~/orpc/client.ts";
+import { useItx } from "~/itx/use-itx.ts";
+import type { Stubify } from "~/itx/types.ts";
+import type { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
+
+type SecretsCap = Stubify<Pick<SecretsCapability, "setSecret" | "listSecrets" | "deleteSecret">>;
+type SecretSummary = Awaited<ReturnType<SecretsCap["listSecrets"]>>[number];
 
 const SecretForm = z.object({
   key: z.string().trim().min(1, "Secret key is required"),
@@ -33,50 +37,85 @@ const DEFAULT_SECRET_FORM_VALUES = {
 };
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/")({
-  loader: async ({ context }) => {
-    const { project } = context;
-    await context.queryClient.ensureQueryData(projectSecretsListQueryOptions(project.id));
-
-    return {
-      breadcrumb: "Secrets",
-      project,
-    };
-  },
+  ssr: false,
+  loader: ({ context }) => ({
+    breadcrumb: "Secrets",
+    project: context.project,
+  }),
   component: ProjectSecretsIndexPage,
 });
 
 function ProjectSecretsIndexPage() {
+  return (
+    <Suspense
+      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
+    >
+      <ProjectSecretsIndexContent />
+    </Suspense>
+  );
+}
+
+function ProjectSecretsIndexContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { project } = Route.useLoaderData();
+  const itx = useItx(project.id);
+  const secrets = itx.capability("secrets") as unknown as SecretsCap;
   const [filter, setFilter] = useState("");
-  const secretsQueryOptions = projectSecretsListQueryOptions(project.id);
-  const { data } = useQuery(secretsQueryOptions);
-  const upsertSecret = useMutation(
-    orpc.project.secrets.upsert.mutationOptions({
-      onSuccess: async (secret) => {
-        await queryClient.invalidateQueries({ queryKey: secretsQueryOptions.queryKey });
-        form.reset();
-        void navigate({
-          to: "/projects/$projectSlug/secrets/$secretId",
-          params: {
-            projectSlug: params.projectSlug,
-            secretId: secret.id,
-          },
-        });
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
-  const removeSecret = useMutation(
-    orpc.project.secrets.remove.mutationOptions({
-      onSuccess: async () => {
-        await queryClient.invalidateQueries({ queryKey: secretsQueryOptions.queryKey });
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
+  const [secretsList, setSecretsList] = useState<SecretSummary[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    secrets
+      .listSecrets()
+      .then((rows) => {
+        if (!cancelled) setSecretsList(rows);
+      })
+      .catch((error) => toast.error(error instanceof Error ? error.message : String(error)));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the itx handle identity changes (reconnect), not on every dep churn
+  }, [itx]);
+
+  async function refetchSecrets() {
+    try {
+      setSecretsList(await secrets.listSecrets());
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  const upsertSecret = useMutation({
+    mutationFn: async (input: {
+      key: string;
+      material: string;
+      metadata: Record<string, unknown>;
+    }) => {
+      return await secrets.setSecret(input);
+    },
+    onSuccess: async (secret) => {
+      await refetchSecrets();
+      form.reset();
+      void navigate({
+        to: "/projects/$projectSlug/secrets/$secretId",
+        params: {
+          projectSlug: params.projectSlug,
+          secretId: secret.id,
+        },
+      });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
+  const removeSecret = useMutation({
+    mutationFn: async (input: { key: string }) => {
+      return await secrets.deleteSecret(input);
+    },
+    onSuccess: async () => {
+      await refetchSecrets();
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
   const form = useForm({
     defaultValues: DEFAULT_SECRET_FORM_VALUES,
     validators: {
@@ -92,7 +131,6 @@ function ProjectSecretsIndexPage() {
       }
 
       await upsertSecret.mutateAsync({
-        projectSlugOrId: project.id,
         key: parsed.key,
         material: parsed.material,
         metadata: metadata.metadata,
@@ -100,16 +138,15 @@ function ProjectSecretsIndexPage() {
     },
   });
 
-  const secrets = useMemo(() => data?.secrets ?? [], [data?.secrets]);
   const visibleSecrets = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    return secrets
+    return secretsList
       .filter((secret) => {
         if (!query) return true;
         return secret.key.toLowerCase().includes(query) || secret.id.toLowerCase().includes(query);
       })
       .toSorted((left, right) => left.key.localeCompare(right.key));
-  }, [filter, secrets]);
+  }, [filter, secretsList]);
 
   return (
     <section className="w-full space-y-4 p-4">
@@ -232,7 +269,7 @@ function ProjectSecretsIndexPage() {
         </Button>
       </div>
 
-      {secrets.length === 0 ? (
+      {secretsList.length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>No Secrets</EmptyTitle>
@@ -275,13 +312,8 @@ function ProjectSecretsIndexPage() {
                   variant="outline"
                   className="h-8 w-8 shrink-0"
                   aria-label={`Delete ${secret.key}`}
-                  onClick={() =>
-                    removeSecret.mutate({
-                      id: secret.id,
-                      projectSlugOrId: project.id,
-                    })
-                  }
-                  disabled={removeSecret.isPending && removeSecret.variables?.id === secret.id}
+                  onClick={() => removeSecret.mutate({ key: secret.key })}
+                  disabled={removeSecret.isPending && removeSecret.variables?.key === secret.key}
                 >
                   <Trash2 className="h-4 w-4" />
                 </Button>

@@ -1,6 +1,7 @@
+import { Suspense, useEffect, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ProjectIntegrationConnection } from "@iterate-com/os-contract";
+import { useMutation } from "@tanstack/react-query";
+import { useAuthClient } from "@iterate-com/auth/client";
 import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
 import { Button } from "@iterate-com/ui/components/button";
 import {
@@ -16,11 +17,14 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
-import {
-  projectGoogleConnectionQueryOptions,
-  projectSlackConnectionQueryOptions,
-} from "~/lib/project-route-query.ts";
-import { orpc } from "~/orpc/client.ts";
+import { useItx } from "~/itx/use-itx.ts";
+import type { Stubify } from "~/itx/types.ts";
+import type { IntegrationsCapability } from "~/domains/secrets/entrypoints/integrations-capability.ts";
+
+type IntegrationsCap = Stubify<
+  Pick<IntegrationsCapability, "getConnection" | "startOAuthFlow" | "disconnect">
+>;
+type Connection = Awaited<ReturnType<IntegrationsCap["getConnection"]>>;
 
 const Search = z.object({
   error: z.string().optional(),
@@ -28,66 +32,112 @@ const Search = z.object({
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")({
   validateSearch: Search,
-  loader: async ({ context }) => {
-    const { project } = context;
-    await Promise.all([
-      context.queryClient.ensureQueryData(projectSlackConnectionQueryOptions(project.id)),
-      context.queryClient.ensureQueryData(projectGoogleConnectionQueryOptions(project.id)),
-    ]);
-
-    return {
-      breadcrumb: "Integrations",
-      project,
-    };
-  },
+  ssr: false,
+  loader: ({ context }) => ({
+    breadcrumb: "Integrations",
+    project: context.project,
+  }),
   component: ProjectIntegrationsPage,
 });
 
 function ProjectIntegrationsPage() {
+  return (
+    <Suspense
+      fallback={<div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>}
+    >
+      <ProjectIntegrationsContent />
+    </Suspense>
+  );
+}
+
+function ProjectIntegrationsContent() {
   const search = Route.useSearch();
   const { project } = Route.useLoaderData();
-  const queryClient = useQueryClient();
-  const projectSlugOrId = project.id;
-  const slackQuery = projectSlackConnectionQueryOptions(project.id);
-  const googleQuery = projectGoogleConnectionQueryOptions(project.id);
-  const { data: slackConnection } = useQuery(slackQuery);
-  const { data: googleConnection } = useQuery(googleQuery);
+  const { session } = useAuthClient();
+  const userId = session?.authenticated ? session.user.id : null;
+  const itx = useItx(project.id);
+  const integrations = itx.capability("integrations") as unknown as IntegrationsCap;
+  const [slackConnection, setSlackConnection] = useState<Connection | undefined>(undefined);
+  const [googleConnection, setGoogleConnection] = useState<Connection | undefined>(undefined);
   const oauthErrorLabel = search.error ? formatOAuthError(search.error) : null;
 
-  const startSlack = useMutation(
-    orpc.project.integrations.startSlackOAuthFlow.mutationOptions({
-      onSuccess: (result) => {
-        window.location.href = result.authorizationUrl;
-      },
-      onError: (error) => toast.error(`Failed to connect Slack: ${error.message}`),
-    }),
-  );
-  const disconnectSlack = useMutation(
-    orpc.project.integrations.disconnectSlack.mutationOptions({
-      onSuccess: async () => {
-        await queryClient.invalidateQueries({ queryKey: slackQuery.queryKey });
-        toast.success("Slack disconnected");
-      },
-      onError: (error) => toast.error(`Failed to disconnect Slack: ${error.message}`),
-    }),
-  );
-  const startGoogle = useMutation(
-    orpc.project.integrations.startGoogleOAuthFlow.mutationOptions({
-      onSuccess: (result) => {
-        window.location.href = result.authorizationUrl;
-      },
-      onError: (error) => toast.error(`Failed to connect Google: ${error.message}`),
-    }),
-  );
-  const disconnectGoogle = useMutation(
-    orpc.project.integrations.disconnectGoogle.mutationOptions({
-      onSuccess: async () => {
-        await queryClient.invalidateQueries({ queryKey: googleQuery.queryKey });
-        toast.success("Google disconnected");
-      },
-      onError: (error) => toast.error(`Failed to disconnect Google: ${error.message}`),
-    }),
-  );
+  async function refreshSlack() {
+    try {
+      setSlackConnection(await integrations.getConnection({ provider: "slack" }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+  async function refreshGoogle() {
+    try {
+      setGoogleConnection(await integrations.getConnection({ provider: "google" }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      integrations.getConnection({ provider: "slack" }),
+      integrations.getConnection({ provider: "google" }),
+    ])
+      .then(([slack, google]) => {
+        if (cancelled) return;
+        setSlackConnection(slack);
+        setGoogleConnection(google);
+      })
+      .catch((error) => toast.error(error instanceof Error ? error.message : String(error)));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the itx handle identity changes (reconnect), not on every dep churn
+  }, [itx]);
+
+  const startSlack = useMutation({
+    mutationFn: async () => {
+      if (!userId) throw new Error("You must be signed in to connect Slack.");
+      return await integrations.startOAuthFlow({
+        provider: "slack",
+        userId,
+        callbackUrl: window.location.href,
+      });
+    },
+    onSuccess: (result) => {
+      window.location.href = result.authorizationUrl;
+    },
+    onError: (error) => toast.error(`Failed to connect Slack: ${error.message}`),
+  });
+  const disconnectSlack = useMutation({
+    mutationFn: async () => await integrations.disconnect({ provider: "slack" }),
+    onSuccess: async () => {
+      await refreshSlack();
+      toast.success("Slack disconnected");
+    },
+    onError: (error) => toast.error(`Failed to disconnect Slack: ${error.message}`),
+  });
+  const startGoogle = useMutation({
+    mutationFn: async () => {
+      if (!userId) throw new Error("You must be signed in to connect Google.");
+      return await integrations.startOAuthFlow({
+        provider: "google",
+        userId,
+        callbackUrl: window.location.href,
+      });
+    },
+    onSuccess: (result) => {
+      window.location.href = result.authorizationUrl;
+    },
+    onError: (error) => toast.error(`Failed to connect Google: ${error.message}`),
+  });
+  const disconnectGoogle = useMutation({
+    mutationFn: async () => await integrations.disconnect({ provider: "google" }),
+    onSuccess: async () => {
+      await refreshGoogle();
+      toast.success("Google disconnected");
+    },
+    onError: (error) => toast.error(`Failed to disconnect Google: ${error.message}`),
+  });
 
   return (
     <section className="max-w-md space-y-4 p-4">
@@ -118,22 +168,13 @@ function ProjectIntegrationsPage() {
                 size="sm"
                 variant="outline"
                 disabled={disconnectSlack.isPending}
-                onClick={() => disconnectSlack.mutate({ projectSlugOrId })}
+                onClick={() => disconnectSlack.mutate()}
               >
                 {disconnectSlack.isPending ? <Spinner /> : null}
                 Disconnect
               </Button>
             ) : (
-              <Button
-                size="sm"
-                disabled={startSlack.isPending}
-                onClick={() =>
-                  startSlack.mutate({
-                    projectSlugOrId,
-                    callbackUrl: window.location.href,
-                  })
-                }
-              >
+              <Button size="sm" disabled={startSlack.isPending} onClick={() => startSlack.mutate()}>
                 {startSlack.isPending ? <Spinner /> : null}
                 Connect Slack
               </Button>
@@ -160,7 +201,7 @@ function ProjectIntegrationsPage() {
                 size="sm"
                 variant="outline"
                 disabled={disconnectGoogle.isPending}
-                onClick={() => disconnectGoogle.mutate({ projectSlugOrId })}
+                onClick={() => disconnectGoogle.mutate()}
               >
                 {disconnectGoogle.isPending ? <Spinner /> : null}
                 Disconnect
@@ -169,12 +210,7 @@ function ProjectIntegrationsPage() {
               <Button
                 size="sm"
                 disabled={startGoogle.isPending}
-                onClick={() =>
-                  startGoogle.mutate({
-                    projectSlugOrId,
-                    callbackUrl: window.location.href,
-                  })
-                }
+                onClick={() => startGoogle.mutate()}
               >
                 {startGoogle.isPending ? <Spinner /> : null}
                 Connect Google
@@ -191,7 +227,7 @@ function IntegrationMetadata({
   connection,
   provider,
 }: {
-  connection?: ProjectIntegrationConnection;
+  connection?: Connection;
   provider: "google" | "slack";
 }) {
   if (!connection?.connected) return null;
