@@ -63,8 +63,14 @@ export function ItxActivityTail({ projectId }: { projectId: string }) {
         { afterOffset: "start" },
       )
       .then((subscription) => {
-        const releaseSubscription = () =>
+        // Release BOTH ends on unmount: unsubscribe() tears down the server-side
+        // subscription, and disposing the subscription stub frees our RPC import
+        // of it. On a long-lived (pooled) socket an undisposed stub would
+        // accumulate in the session's import table for the life of the tab.
+        const releaseSubscription = () => {
           void Promise.resolve(subscription.unsubscribe()).catch(() => {});
+          (subscription as Partial<Disposable>)[Symbol.dispose]?.();
+        };
         if (disposed) {
           releaseSubscription();
           return;

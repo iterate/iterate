@@ -57,10 +57,14 @@ function useLiveStreamState(input: {
         setNode({ status: "live", state: StreamState.parse(next) });
       })
       .then((subscription) => {
-        // The far end may already be gone when we unsubscribe — never let
-        // that reject unhandled.
-        const releaseSubscription = () =>
+        // Release BOTH ends on unmount: unsubscribe() tears down the server-side
+        // subscription (the far end may already be gone — never let that reject
+        // unhandled), and disposing the stub frees our RPC import of it so it
+        // doesn't accumulate in the pooled session's import table.
+        const releaseSubscription = () => {
           void Promise.resolve(subscription.unsubscribe()).catch(() => {});
+          (subscription as Partial<Disposable>)[Symbol.dispose]?.();
+        };
         if (disposed) releaseSubscription();
         else release = releaseSubscription;
       })

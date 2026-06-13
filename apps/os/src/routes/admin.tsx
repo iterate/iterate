@@ -37,7 +37,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import type { ItxHandle } from "~/itx/handle.ts";
 import { AdminItxContext } from "~/lib/admin-itx.ts";
-import { createBrowserReplSession } from "~/routes/_app/itx-repl.tsx";
+import { getBrowserItx, reconnectBrowserItx } from "~/itx/use-itx.ts";
 
 export const Route = createFileRoute("/admin")({
   component: AdminLayout,
@@ -59,17 +59,24 @@ function AdminLayout() {
 
   useEffect(() => {
     let closed = false;
-    const session = createBrowserReplSession();
-
-    // Probe global authority: itx.streams on a global handle throws unless
-    // the connection authenticated as admin, so one cheap call tells us
-    // whether to render the admin pages or the unlock form.
-    void session.itx.streams
-      .get("/")
-      .describe()
-      .then(() => {
-        if (!closed) setState({ status: "ready", itx: session.itx });
-      })
+    // The admin handle is the global pooled itx socket — the SAME connection
+    // the rest of the tab uses (one browser itx primitive, one /api/itx route;
+    // see ~/itx/use-itx.ts). Its global authority comes from the admin cookie
+    // carried on the WebSocket handshake, so the unlock below re-dials the
+    // pooled socket (reconnectBrowserItx) rather than opening a private one.
+    // We never close the socket here — the pool owns its lifetime.
+    void getBrowserItx()
+      .then((itx) =>
+        // Probe global authority: itx.streams on a global handle throws unless
+        // the connection authenticated as admin, so one cheap call tells us
+        // whether to render the admin pages or the unlock form.
+        itx.streams
+          .get("/")
+          .describe()
+          .then(() => {
+            if (!closed) setState({ status: "ready", itx });
+          }),
+      )
       .catch((error: unknown) => {
         if (!closed) {
           setState({
@@ -82,7 +89,6 @@ function AdminLayout() {
     return () => {
       closed = true;
       setState({ status: "connecting" });
-      session.close();
     };
   }, [epoch]);
 
@@ -114,7 +120,16 @@ function AdminLayout() {
             </div>
           )}
           {state.status === "locked" && (
-            <AdminUnlockForm reason={state.reason} onUnlocked={() => setEpoch((e) => e + 1)} />
+            <AdminUnlockForm
+              reason={state.reason}
+              onUnlocked={() => {
+                // The admin cookie is now set, but the live pooled socket still
+                // carries its pre-cookie (non-admin) authority — evict it so the
+                // probe below re-dials a socket whose handshake sends the cookie.
+                reconnectBrowserItx();
+                setEpoch((e) => e + 1);
+              }}
+            />
           )}
           {state.status === "ready" && (
             <AdminItxContext.Provider value={state.itx}>

@@ -262,10 +262,19 @@ handle, please". `apps/os/src/itx/use-itx.ts` replaces all of it:
   `RpcStub<Itx>`. `getBrowserItx(context?)` is the same singleton for
   non-hook code (event handlers). That's the whole API.
 - **Per-context module-singleton sockets, no refcounting, no teardown on
-  unmount.** The map exists only because Suspense needs a stable promise
-  across render replays — NOT as a pooling layer. Multiple sockets per tab
-  are explicitly fine (the repl keeps its own `createBrowserReplSession`;
-  the admin layout keeps its own session too).
+  unmount.** The map exists because Suspense needs a stable promise across
+  render replays AND so every component on a context shares one socket that
+  persists across client-side navigations. One socket PER CONTEXT (global +
+  each project) — `admin`, `global`, and a project are just different context
+  keys (the connect endpoint), never different primitives. The global repl,
+  project repl, and admin layout all ride the pool now — no component opens
+  its own socket. The pool owns the socket's lifetime; a component never
+  disposes the root stub or closes the socket on unmount (that would kill the
+  shared connection — capnweb closes the WebSocket when the root stub is
+  disposed). The only deliberate root-dispose is `reconnectBrowserItx()`
+  (evict), used when the connect-time principal must change (creating a
+  project; unlocking admin). Per-component RPC objects (subscription stubs,
+  callbacks) ARE owned by the component and disposed on unmount.
 - **No query cache.** Stream-shaped data subscribes (`onStateChange` /
   `subscribe` — D20 is the protocol this rides on: every subscription's
   initial push carries current state, so a subscription alone paints a first

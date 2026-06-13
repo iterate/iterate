@@ -1,16 +1,35 @@
-// The ONE browser itx primitive: useItx(context?) suspends until a WebSocket
-// to /api/itx[/<context>] is connected and returns the live handle stub.
-// Everything else — query caches, SSR prefetch, reconnect machinery, a
-// shared-socket multiplexer — was deliberately deleted (DECISIONS D21).
+// The ONE browser itx primitive. useItx(context?) suspends until a WebSocket
+// to /api/itx[/<context>] is connected and returns the live handle stub;
+// getBrowserItx(context?) is the same for non-hook code. There is exactly one
+// route (/api/itx[/<context>]) and one pool — "admin", "global", and a project
+// are just different context keys (= the connect endpoint), never different
+// sockets or different primitives. Everything else — query caches, SSR
+// prefetch, reconnect machinery, a shared-socket multiplexer, the repl's old
+// private socket — was deliberately deleted (DECISIONS D21).
 //
-// The contract:
+// The model, exactly:
 //
-//   - One socket per context key, per tab, held in a module-level map. The
-//     map exists only so Suspense works (use() needs the same promise across
-//     render replays) — NOT for connection pooling. Multiple sockets are
-//     explicitly fine.
+//   - ONE socket per context key, per tab, held in a module-level map. Every
+//     component on a context shares that one socket: the project page, its
+//     repl, its activity tail, and the admin layout (global key) all ride the
+//     same connection. The map is module-scoped (outside React), so the socket
+//     persists across client-side route navigations untouched — components
+//     mount and unmount, the socket does not. The map also makes Suspense work
+//     (use() needs the same promise across render replays). Multiple sockets
+//     across DIFFERENT contexts (global + each project) are expected; one per
+//     context is the invariant, not one globally.
 //   - No refcounting, no teardown on unmount: a context's socket lives until
-//     it dies or the tab closes.
+//     it dies or the tab closes. Components NEVER own the connection.
+//   - Disposal contract. The pool owns the socket's lifetime. A component must
+//     NEVER dispose the root handle stub or close the socket on unmount — the
+//     root stub IS the socket's lifetime handle (capnweb: disposing it closes
+//     the WebSocket), and it is shared. The ONLY deliberate root-dispose is
+//     evict()/reconnectBrowserItx(), used when the connect-time principal must
+//     change (e.g. after creating a project, or unlocking admin). Per-component
+//     RPC objects (subscription stubs, callbacks, any returned stub) ARE owned
+//     by that component and must be disposed on unmount — on a long-lived
+//     pooled socket an undisposed stub accumulates in the session import table
+//     for the life of the tab (see itx-activity-tail / stream-tree-browser).
 //   - Socket close → the map entry is evicted and subscribed components
 //     re-render (an effect subscription bumps a reducer), find no entry, dial
 //     fresh, and re-suspend. There is no backoff and no resume: re-fetching current
@@ -23,13 +42,9 @@
 //     suspended boundary), while a throw inside a Suspense boundary streams
 //     the fallback and recovers client-side — and a throw outside one fails
 //     loudly at the route instead of hanging the worker. Consumers render
-//     under an `ssr: false` route or behind <ClientOnly> (the admin layout's
-//     connect-effect gate counts too).
+//     under an `ssr: false` route or behind <ClientOnly> + <Suspense>.
 //   - Errors keep their codes: getItxErrorCode / isItxAccessError (errors.ts)
 //     read ItxError codes off anything a catch block or error boundary sees.
-//
-// The repl keeps its own createBrowserReplSession (itx-repl.tsx): it needs
-// dispose/reconnect-on-demand semantics this singleton deliberately lacks.
 
 import { use, useCallback, useSyncExternalStore } from "react";
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";

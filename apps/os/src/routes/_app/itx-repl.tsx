@@ -2,10 +2,16 @@
 // /api/itx, with `itx` in scope. Because itx is symmetric, anything you can
 // do here you can do from Node, a worker cap, or the config worker — and the
 // browser can PROVIDE live capabilities too (see the examples).
+//
+// The REPL rides the ONE browser itx primitive — useItx / the pool
+// (~/itx/use-itx.ts). It does NOT open its own socket: the global repl shares
+// the tab's global socket, the project repl shares that project's socket, and
+// neither owns the connection's lifetime. See the use-itx.ts header for the
+// single-socket-per-context model and the disposal contract.
 
-import { useEffect, useRef, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
-import { newWebSocketRpcSession, type RpcStub } from "capnweb";
+import { Suspense, useEffect, useRef, useState } from "react";
+import { ClientOnly, createFileRoute } from "@tanstack/react-router";
+import type { RpcStub } from "capnweb";
 import {
   browserReplExternalScopesEqual,
   createBrowserReplScope,
@@ -15,68 +21,56 @@ import {
 } from "~/itx/browser-repl.ts";
 import { ITX_EXAMPLES } from "~/itx/examples.ts";
 import type { ItxHandle } from "~/itx/handle.ts";
+import { useItx } from "~/itx/use-itx.ts";
 import { ItxRepl } from "~/components/itx-repl.tsx";
 
 export const Route = createFileRoute("/_app/itx-repl")({
   staticData: {
     breadcrumb: "Repl",
   },
-  component: ItxReplPage,
+  component: GlobalItxReplRoute,
 });
 
-export type BrowserReplSession = {
-  close(): void;
-  itx: RpcStub<ItxHandle>;
-};
+/** The shared "connecting to itx" fallback every repl suspends behind. */
+export function ItxReplConnecting() {
+  return <div className="p-4 text-sm text-muted-foreground">Connecting to itx...</div>;
+}
 
-export type BrowserReplSessionFactory = () => BrowserReplSession | Promise<BrowserReplSession>;
-
-/**
- * Connect to a context: the global one by default, or a project's.
- *
- * Deliberately NOT the app's useItx singleton (~/itx/use-itx.ts): the repl
- * disposes and recreates its session on its own schedule (close() on every
- * connect-effect teardown), semantics the per-context singleton deliberately
- * lacks. Multiple sockets per tab are fine — see DECISIONS D21.
- */
-export function createBrowserReplSession(context?: string): BrowserReplSession {
-  const wsUrl = new URL(
-    context ? `/api/itx/${encodeURIComponent(context)}` : "/api/itx",
-    window.location.href,
+function GlobalItxReplRoute() {
+  // useItx never SSRs and suspends until its socket connects, so the repl needs
+  // both gates: ClientOnly (this route still SSRs its shell) and Suspense.
+  return (
+    <ClientOnly fallback={<ItxReplConnecting />}>
+      <Suspense fallback={<ItxReplConnecting />}>
+        <GlobalItxReplConnected />
+      </Suspense>
+    </ClientOnly>
   );
-  wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
-  const socket = new WebSocket(wsUrl);
-  const rpc = newWebSocketRpcSession<ItxHandle>(socket);
+}
 
-  return {
-    itx: rpc,
-    close() {
-      rpc[Symbol.dispose]?.();
-      socket.close();
-    },
-  };
+function GlobalItxReplConnected() {
+  const itx = useItx();
+  return <ItxReplPage itx={itx} context="global" />;
 }
 
 export function ItxReplPage({
-  // NOTE: must be a STABLE reference, not an inline arrow. The connect effect
-  // below depends on `connectSession`; a fresh identity each render would tear
-  // down and re-create the Cap'n Web session on every render — including the
-  // re-render triggered by clicking Run — disposing the stub mid-call
-  // ("RPC stub used after disposed"). createBrowserReplSession() with no arg
-  // connects to the global context; project repls pass their own memoized one.
-  connectSession = createBrowserReplSession,
+  // The live itx handle from the pool (useItx). The REPL never owns this stub:
+  // it must NOT dispose it or close the socket — the pool owns the connection's
+  // lifetime and every other component on this context rides the same socket.
+  // On a pool reconnect, useItx re-suspends and hands a fresh stub; this
+  // component remounts with it (the globalThis binding effect below rebinds).
+  itx,
   context = "global",
   initialCode = DEFAULT_BROWSER_REPL_CODE,
   scope,
 }: {
-  connectSession?: BrowserReplSessionFactory;
+  itx: RpcStub<ItxHandle>;
   context?: "global" | "project";
   initialCode?: string;
   scope?: Record<string, unknown>;
 }) {
   const [code, setCode] = useState(initialCode);
-  const [itx, setItx] = useState<RpcStub<ItxHandle> | null>(null);
-  const [status, setStatus] = useState("Connecting...");
+  const [status, setStatus] = useState("Ready");
   const [entries, setEntries] = useState<BrowserReplEntry[]>([]);
   const [examplesOpen, setExamplesOpen] = useState(false);
   const envRef = useRef<Record<string, unknown>>({});
@@ -90,43 +84,25 @@ export function ItxReplPage({
     scopeRef.current = createBrowserReplScope(scope);
   }
 
+  // Expose the live handle on globalThis for console poking. This only
+  // binds/clears a reference — it never disposes `itx` or closes the socket
+  // (the pool owns that). A fresh stub after a pool reconnect rebinds here.
   useEffect(() => {
     const globals = globalThis as typeof globalThis & {
       itx?: RpcStub<ItxHandle>;
       env?: object;
     };
-    let closed = false;
-    let session: BrowserReplSession | null = null;
-
-    void Promise.resolve(connectSession())
-      .then((connectedSession) => {
-        if (closed) {
-          connectedSession.close();
-          return;
-        }
-
-        session = connectedSession;
-        globals.itx = connectedSession.itx;
-        globals.env = envRef.current;
-        setItx(() => connectedSession.itx);
-        setStatus("Connected");
-      })
-      .catch((error: unknown) => {
-        if (closed) return;
-        setStatus(error instanceof Error ? error.message : String(error));
-      });
-
+    globals.itx = itx;
+    globals.env = envRef.current;
     return () => {
-      closed = true;
-      delete globals.itx;
+      if (globals.itx === itx) delete globals.itx;
       delete globals.env;
-      session?.close();
     };
-  }, [connectSession]);
+  }, [itx]);
 
   async function run() {
     const trimmedCode = code.trim();
-    if (!itx || trimmedCode === "") return;
+    if (trimmedCode === "") return;
     setStatus("Running...");
     setCode("");
     const entry = await runBrowserReplEntry({
@@ -136,7 +112,7 @@ export function ItxReplPage({
       scope: scopeRef.current,
     });
     setEntries((current) => [...current, entry]);
-    setStatus("Connected");
+    setStatus("Ready");
   }
 
   function selectExample(exampleCode: string) {
@@ -146,7 +122,7 @@ export function ItxReplPage({
 
   return (
     <ItxRepl
-      canRun={Boolean(itx) && status !== "Running..." && code.trim() !== ""}
+      canRun={status !== "Running..." && code.trim() !== ""}
       code={code}
       context={context}
       entries={entries}
