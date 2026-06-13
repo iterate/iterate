@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation } from "@tanstack/react-query";
@@ -17,11 +17,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
 import { useItx } from "~/itx/use-itx.ts";
-import type { Stubify } from "~/itx/types.ts";
-import type { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
-
-type SecretsCap = Stubify<Pick<SecretsCapability, "setSecret" | "listSecrets" | "deleteSecret">>;
-type SecretSummary = Awaited<ReturnType<SecretsCap["listSecrets"]>>[number];
+import { useItxResource } from "~/itx/use-itx-resource.ts";
 
 const UpdateSecretForm = z.object({
   material: z.string().min(1, "Secret material is required"),
@@ -52,28 +48,16 @@ function ProjectSecretDetailContent() {
   const navigate = useNavigate();
   const { project } = Route.useLoaderData();
   const itx = useItx(project.id);
-  const secretsCap = itx.capability("secrets") as unknown as SecretsCap;
-  const [secret, setSecret] = useState<SecretSummary | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    secretsCap
-      .listSecrets()
-      .then((rows) => {
-        if (cancelled) return;
-        const found = rows.find((row) => row.id === params.secretId);
-        if (!found) {
-          toast.error(`Secret ${params.secretId} was not found for this project.`);
-          return;
-        }
-        setSecret(found);
-      })
-      .catch((error) => toast.error(error instanceof Error ? error.message : String(error)));
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the itx handle identity changes (reconnect), not on every dep churn
-  }, [itx, params.secretId]);
+  const {
+    data: secrets,
+    status,
+    error,
+    refetch,
+  } = useItxResource(() => itx.secrets.listSecrets(), [itx]);
+  const secret = useMemo(
+    () => secrets?.find((row) => row.id === params.secretId) ?? null,
+    [secrets, params.secretId],
+  );
 
   const defaultValues = useMemo(
     () => ({
@@ -88,16 +72,10 @@ function ProjectSecretDetailContent() {
       material: string;
       metadata: Record<string, unknown>;
     }) => {
-      return await secretsCap.setSecret(input);
+      return await itx.secrets.setSecret(input);
     },
     onSuccess: async () => {
-      try {
-        const rows = await secretsCap.listSecrets();
-        const found = rows.find((row) => row.id === params.secretId);
-        if (found) setSecret(found);
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : String(error));
-      }
+      await refetch();
       form.reset();
       toast.success("Secret updated");
     },
@@ -105,7 +83,7 @@ function ProjectSecretDetailContent() {
   });
   const removeSecret = useMutation({
     mutationFn: async (input: { key: string }) => {
-      return await secretsCap.deleteSecret(input);
+      return await itx.secrets.deleteSecret(input);
     },
     onSuccess: () => {
       void navigate({
@@ -140,8 +118,27 @@ function ProjectSecretDetailContent() {
     },
   });
 
-  if (!secret) {
+  if (status === "error") {
+    return (
+      <div className="m-4 flex items-center justify-between gap-3 rounded-lg border border-destructive/50 p-4 text-sm text-muted-foreground">
+        <span>Couldn't load secret. {error?.message}</span>
+        <Button type="button" size="sm" variant="outline" onClick={() => void refetch()}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
+  if (status === "loading") {
     return <div className="p-4 text-sm text-muted-foreground">Loading secret...</div>;
+  }
+
+  if (!secret) {
+    return (
+      <div className="p-4 text-sm text-muted-foreground">
+        Secret {params.secretId} was not found for this project.
+      </div>
+    );
   }
 
   return (

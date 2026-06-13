@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState } from "react";
+import { Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -18,13 +18,10 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
 import { useItx } from "~/itx/use-itx.ts";
-import type { Stubify } from "~/itx/types.ts";
-import type { IntegrationsCapability } from "~/domains/secrets/entrypoints/integrations-capability.ts";
+import { useItxResource } from "~/itx/use-itx-resource.ts";
+import type { ItxHandle } from "~/itx/types.ts";
 
-type IntegrationsCap = Stubify<
-  Pick<IntegrationsCapability, "getConnection" | "startOAuthFlow" | "disconnect">
->;
-type Connection = Awaited<ReturnType<IntegrationsCap["getConnection"]>>;
+type Connection = Awaited<ReturnType<ItxHandle["integrations"]["getConnection"]>>;
 
 const Search = z.object({
   error: z.string().optional(),
@@ -56,48 +53,26 @@ function ProjectIntegrationsContent() {
   const { session } = useAuthClient();
   const userId = session?.authenticated ? session.user.id : null;
   const itx = useItx(project.id);
-  const integrations = itx.capability("integrations") as unknown as IntegrationsCap;
-  const [slackConnection, setSlackConnection] = useState<Connection | undefined>(undefined);
-  const [googleConnection, setGoogleConnection] = useState<Connection | undefined>(undefined);
-  const oauthErrorLabel = search.error ? formatOAuthError(search.error) : null;
-
-  async function refreshSlack() {
-    try {
-      setSlackConnection(await integrations.getConnection({ provider: "slack" }));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  }
-  async function refreshGoogle() {
-    try {
-      setGoogleConnection(await integrations.getConnection({ provider: "google" }));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    void Promise.all([
-      integrations.getConnection({ provider: "slack" }),
-      integrations.getConnection({ provider: "google" }),
-    ])
-      .then(([slack, google]) => {
-        if (cancelled) return;
-        setSlackConnection(slack);
-        setGoogleConnection(google);
-      })
-      .catch((error) => toast.error(error instanceof Error ? error.message : String(error)));
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the itx handle identity changes (reconnect), not on every dep churn
+  const {
+    data: connections,
+    status,
+    error,
+    refetch,
+  } = useItxResource(async (): Promise<{ slack: Connection; google: Connection }> => {
+    const [slack, google] = await Promise.all([
+      itx.integrations.getConnection({ provider: "slack" }),
+      itx.integrations.getConnection({ provider: "google" }),
+    ]);
+    return { slack, google };
   }, [itx]);
+  const slackConnection = connections?.slack;
+  const googleConnection = connections?.google;
+  const oauthErrorLabel = search.error ? formatOAuthError(search.error) : null;
 
   const startSlack = useMutation({
     mutationFn: async () => {
       if (!userId) throw new Error("You must be signed in to connect Slack.");
-      return await integrations.startOAuthFlow({
+      return await itx.integrations.startOAuthFlow({
         provider: "slack",
         userId,
         callbackUrl: window.location.href,
@@ -109,9 +84,9 @@ function ProjectIntegrationsContent() {
     onError: (error) => toast.error(`Failed to connect Slack: ${error.message}`),
   });
   const disconnectSlack = useMutation({
-    mutationFn: async () => await integrations.disconnect({ provider: "slack" }),
+    mutationFn: async () => await itx.integrations.disconnect({ provider: "slack" }),
     onSuccess: async () => {
-      await refreshSlack();
+      await refetch();
       toast.success("Slack disconnected");
     },
     onError: (error) => toast.error(`Failed to disconnect Slack: ${error.message}`),
@@ -119,7 +94,7 @@ function ProjectIntegrationsContent() {
   const startGoogle = useMutation({
     mutationFn: async () => {
       if (!userId) throw new Error("You must be signed in to connect Google.");
-      return await integrations.startOAuthFlow({
+      return await itx.integrations.startOAuthFlow({
         provider: "google",
         userId,
         callbackUrl: window.location.href,
@@ -131,13 +106,26 @@ function ProjectIntegrationsContent() {
     onError: (error) => toast.error(`Failed to connect Google: ${error.message}`),
   });
   const disconnectGoogle = useMutation({
-    mutationFn: async () => await integrations.disconnect({ provider: "google" }),
+    mutationFn: async () => await itx.integrations.disconnect({ provider: "google" }),
     onSuccess: async () => {
-      await refreshGoogle();
+      await refetch();
       toast.success("Google disconnected");
     },
     onError: (error) => toast.error(`Failed to disconnect Google: ${error.message}`),
   });
+
+  if (status === "error") {
+    return (
+      <section className="max-w-md space-y-4 p-4">
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-destructive/50 p-4 text-sm text-muted-foreground">
+          <span>Couldn't load integrations. {error?.message}</span>
+          <Button type="button" size="sm" variant="outline" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="max-w-md space-y-4 p-4">

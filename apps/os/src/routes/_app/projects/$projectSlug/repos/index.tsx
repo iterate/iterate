@@ -28,10 +28,6 @@ import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { projectReposListQueryOptions } from "~/lib/project-route-query.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { useItx } from "~/itx/use-itx.ts";
-import type { Stubify } from "~/itx/types.ts";
-import type { ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
-
-type ReposCap = Stubify<Pick<ReposCapability, "create">>;
 
 const CreateRepoForm = z.object({
   slug: z
@@ -80,7 +76,6 @@ function ProjectReposIndexContent() {
   const queryClient = useQueryClient();
   const { project, routeConfig } = Route.useLoaderData();
   const itx = useItx(project.id);
-  const reposCap = itx.capability("repos") as unknown as ReposCap;
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({
     key: "lastWokenAt",
@@ -90,7 +85,7 @@ function ProjectReposIndexContent() {
   const { data } = useQuery(reposQueryOptions);
   const createRepo = useMutation({
     mutationFn: async (input: { slug: string }) => {
-      await reposCap.create({ projectSlug: params.projectSlug, slug: input.slug });
+      await itx.repos.create({ projectSlug: params.projectSlug, slug: input.slug });
       return input.slug;
     },
     onSuccess: async (slug) => {

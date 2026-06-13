@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { useMutation } from "@tanstack/react-query";
@@ -18,11 +18,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
 import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
 import { useItx } from "~/itx/use-itx.ts";
-import type { Stubify } from "~/itx/types.ts";
-import type { SecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
-
-type SecretsCap = Stubify<Pick<SecretsCapability, "setSecret" | "listSecrets" | "deleteSecret">>;
-type SecretSummary = Awaited<ReturnType<SecretsCap["listSecrets"]>>[number];
+import { useItxResource } from "~/itx/use-itx-resource.ts";
 
 const SecretForm = z.object({
   key: z.string().trim().min(1, "Secret key is required"),
@@ -60,31 +56,13 @@ function ProjectSecretsIndexContent() {
   const navigate = useNavigate();
   const { project } = Route.useLoaderData();
   const itx = useItx(project.id);
-  const secrets = itx.capability("secrets") as unknown as SecretsCap;
   const [filter, setFilter] = useState("");
-  const [secretsList, setSecretsList] = useState<SecretSummary[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    secrets
-      .listSecrets()
-      .then((rows) => {
-        if (!cancelled) setSecretsList(rows);
-      })
-      .catch((error) => toast.error(error instanceof Error ? error.message : String(error)));
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the itx handle identity changes (reconnect), not on every dep churn
-  }, [itx]);
-
-  async function refetchSecrets() {
-    try {
-      setSecretsList(await secrets.listSecrets());
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  }
+  const {
+    data: secretsList,
+    status,
+    error,
+    refetch,
+  } = useItxResource(() => itx.secrets.listSecrets(), [itx]);
 
   const upsertSecret = useMutation({
     mutationFn: async (input: {
@@ -92,10 +70,10 @@ function ProjectSecretsIndexContent() {
       material: string;
       metadata: Record<string, unknown>;
     }) => {
-      return await secrets.setSecret(input);
+      return await itx.secrets.setSecret(input);
     },
     onSuccess: async (secret) => {
-      await refetchSecrets();
+      await refetch();
       form.reset();
       void navigate({
         to: "/projects/$projectSlug/secrets/$secretId",
@@ -109,10 +87,10 @@ function ProjectSecretsIndexContent() {
   });
   const removeSecret = useMutation({
     mutationFn: async (input: { key: string }) => {
-      return await secrets.deleteSecret(input);
+      return await itx.secrets.deleteSecret(input);
     },
     onSuccess: async () => {
-      await refetchSecrets();
+      await refetch();
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
@@ -140,7 +118,7 @@ function ProjectSecretsIndexContent() {
 
   const visibleSecrets = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    return secretsList
+    return (secretsList ?? [])
       .filter((secret) => {
         if (!query) return true;
         return secret.key.toLowerCase().includes(query) || secret.id.toLowerCase().includes(query);
@@ -269,7 +247,14 @@ function ProjectSecretsIndexContent() {
         </Button>
       </div>
 
-      {secretsList.length === 0 ? (
+      {status === "error" ? (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-destructive/50 p-4 text-sm text-muted-foreground">
+          <span>Couldn't load secrets. {error?.message}</span>
+          <Button type="button" size="sm" variant="outline" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </div>
+      ) : (secretsList ?? []).length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>No Secrets</EmptyTitle>

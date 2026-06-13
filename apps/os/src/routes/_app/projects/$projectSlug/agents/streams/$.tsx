@@ -65,15 +65,13 @@ function ProjectAgentDetailContent() {
     [project.id],
   );
   // The stream view subscribes live, so a send needs no cache invalidation —
-  // the new events arrive over the socket. Sending a message IS appending the
-  // user-message-added event to the agent's own stream (what the agent DO's
-  // sendMessage did); the subscribed Agent DO reacts to the new event.
+  // the new events arrive over the socket. agents.sendMessage routes through
+  // the agent DO's own sendMessage, which force-wakes it
+  // (ensureStartedAndCaughtUp) so cold/legacy agents respond, not just freshly
+  // created ones.
   async function submitAgentMessage(message: string) {
     const itx = await getBrowserItx(project.id);
-    await itx.streams.get(streamPath).append({
-      type: "events.iterate.com/agent-chat/user-message-added",
-      payload: { channel: "web", content: message },
-    });
+    await itx.agents.sendMessage({ agentPath: streamPath, message, channel: "web" });
   }
 
   function openStream(path: StreamPathType) {

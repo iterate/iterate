@@ -127,6 +127,14 @@ function isAccessor(target: object, prop: PropertyKey): boolean {
   return false;
 }
 
+// Declaration-merge the typed cap fallthrough (KnownCapabilities:
+// secrets/repos/integrations/agents) onto the runtime class, so a
+// RpcStub<ItxHandle> exposes itx.secrets.listSecrets() etc. cast-free. The
+// class keeps its own (RpcTarget-extending) projects/streams member types —
+// only the fallthrough names are added. The runtime delivers these via the
+// constructor's Proxy; this interface is the compile-time mirror.
+export interface ItxHandle extends KnownCapabilities {}
+
 export class ItxHandle extends RpcTarget {
   readonly #runtime: ItxRuntime;
 

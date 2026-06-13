@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useState } from "react";
+import { Suspense } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
@@ -8,6 +8,7 @@ import { toast } from "@iterate-com/ui/components/sonner";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { useItx } from "~/itx/use-itx.ts";
+import { useItxResource } from "~/itx/use-itx-resource.ts";
 import type { ItxProjects } from "~/itx/handle.ts";
 
 type ProjectSummary = Awaited<ReturnType<ItxProjects["list"]>>["projects"][number];
@@ -44,37 +45,22 @@ function ProjectsIndexPage() {
 function ProjectsIndexContent() {
   const { routeConfig } = Route.useLoaderData();
   const itx = useItx();
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
-
-  async function refreshProjects() {
-    try {
-      const result = await itx.projects.list({ limit: 20, offset: 0 });
-      setProjects(result.projects);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    itx.projects
-      .list({ limit: 20, offset: 0 })
-      .then((result) => {
-        if (!cancelled) setProjects(result.projects);
-      })
-      .catch((error) => toast.error(error instanceof Error ? error.message : String(error)));
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the itx handle identity changes (reconnect), not on every dep churn
-  }, [itx]);
+  // Orphan recovery deferred — itx.projects.list returns OS-DB projects only and
+  // intentionally does NOT merge auth-service orphans yet; see follow-up.
+  const {
+    data: list,
+    status,
+    error,
+    refetch,
+  } = useItxResource(() => itx.projects.list({ limit: 20, offset: 0 }), [itx]);
+  const projects: ProjectSummary[] = list?.projects ?? [];
 
   const deleteProject = useMutation({
     mutationFn: async (input: { id: string }) => {
       return await itx.projects.remove(input);
     },
     onSuccess: async () => {
-      await refreshProjects();
+      await refetch();
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
@@ -95,7 +81,14 @@ function ProjectsIndexContent() {
         ) : null}
       </div>
 
-      {!hasProjects ? (
+      {status === "error" ? (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-destructive/50 p-4 text-sm text-muted-foreground">
+          <span>Couldn't load projects. {error?.message}</span>
+          <Button type="button" size="sm" variant="outline" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </div>
+      ) : !hasProjects ? (
         <div className="rounded-xl border border-dashed bg-card/60 px-6 py-14 text-center">
           <div className="mx-auto flex max-w-md flex-col items-center gap-4">
             <div className="flex size-12 items-center justify-center rounded-full bg-muted">

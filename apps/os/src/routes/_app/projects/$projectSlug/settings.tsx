@@ -10,6 +10,7 @@ import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig, type PublicRouteConfig } from "~/lib/public-route-config.ts";
 import { useItx } from "~/itx/use-itx.ts";
+import { useItxResource } from "~/itx/use-itx-resource.ts";
 import type { ItxProjects } from "~/itx/handle.ts";
 
 type CustomHostnameStatus = Awaited<ReturnType<ItxProjects["customHostnameStatus"]>>;
@@ -48,47 +49,37 @@ function ProjectDetailContent({
   const itx = useItx();
   const [customHostname, setCustomHostname] = useState(project.customHostname ?? "");
   const [hostnameToActivate, setHostnameToActivate] = useState("");
-  const [hostnameStatus, setHostnameStatus] = useState<CustomHostnameStatus | undefined>(undefined);
-  const [statusPending, setStatusPending] = useState(Boolean(project.customHostname));
   const dnsInstructions = customHostnameDnsInstructions({
     customHostname,
     project,
     projectHostnameBases: routeConfig.projectHostnameBases,
   });
 
-  const refreshStatus = useCallback(async () => {
-    if (!project.customHostname) return;
-    try {
-      const status = await itx.projects.customHostnameStatus({ id: project.id });
-      setHostnameStatus(status);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    } finally {
-      setStatusPending(false);
-    }
-  }, [itx, project.customHostname, project.id]);
+  const {
+    data: hostnameStatus,
+    status: resourceStatus,
+    refetch: refreshStatus,
+  } = useItxResource<CustomHostnameStatus | undefined>(
+    () =>
+      project.customHostname
+        ? itx.projects.customHostnameStatus({ id: project.id })
+        : Promise.resolve(undefined),
+    [itx, project.id, project.customHostname],
+  );
+  // Still resolving the FIRST status for a configured custom hostname.
+  const statusPending = Boolean(project.customHostname) && resourceStatus === "loading";
 
+  // Poll every 5s while any certificate is not yet active; stop once all are
+  // (or there is no custom hostname to watch). `data` is a real dep, so the
+  // effect re-evaluates the stop condition on each refresh — no stale closure.
+  const allCertsActive =
+    !hostnameStatus ||
+    hostnameStatus.hostnames.every((hostname) => hostname.sslStatus === "active");
   useEffect(() => {
-    if (!project.customHostname) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setInterval> | undefined;
-    const tick = async () => {
-      if (cancelled) return;
-      await refreshStatus();
-    };
-    void tick();
-    // Poll while any hostname certificate is not yet active.
-    timer = setInterval(() => {
-      if (hostnameStatus?.hostnames.some((hostname) => hostname.sslStatus !== "active")) {
-        void tick();
-      }
-    }, 10_000);
-    return () => {
-      cancelled = true;
-      if (timer) clearInterval(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-run only when the itx handle identity changes (reconnect), not on every dep churn
-  }, [itx, project.customHostname]);
+    if (!project.customHostname || allCertsActive) return;
+    const timer = setInterval(() => void refreshStatus(), 5_000);
+    return () => clearInterval(timer);
+  }, [project.customHostname, allCertsActive, refreshStatus]);
 
   const updateConfig = useMutation({
     mutationFn: async (input: { id: string; customHostname: string | null }) => {

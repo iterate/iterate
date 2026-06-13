@@ -38,9 +38,12 @@ export function CreateProjectForm() {
   const { session } = useAuthClient();
   const organizations = session?.authenticated ? session.session.organizations : [];
   const createProject = useMutation({
-    mutationFn: async (input: { slug: string }) => {
+    mutationFn: async (input: { slug: string; organizationSlug: string }) => {
       const itx = await getBrowserItx();
-      return await itx.projects.create({ slug: input.slug });
+      return await itx.projects.create({
+        slug: input.slug,
+        organizationSlug: input.organizationSlug || undefined,
+      });
     },
     onSuccess: async (project) => {
       await router.invalidate({ sync: true });
@@ -64,6 +67,7 @@ export function CreateProjectForm() {
       const parsed = CreateProjectInput.parse(value);
       await createProject.mutateAsync({
         slug: parsed.slug,
+        organizationSlug: parsed.organizationSlug,
       });
       form.reset();
     },
