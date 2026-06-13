@@ -19,7 +19,7 @@ import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as SignUpSplatRouteImport } from './routes/sign-up.$'
 import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
-import { Route as ApiOrpcWsRouteImport } from './routes/api.orpc-ws'
+import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
 import { Route as AdminProjectsRouteImport } from './routes/admin/projects'
 import { Route as AppNewProjectRouteImport } from './routes/_app/new-project'
@@ -29,7 +29,6 @@ import { Route as AdminStreamsRouteRouteImport } from './routes/admin/streams/ro
 import { Route as AppProjectsRouteRouteImport } from './routes/_app/projects/route'
 import { Route as AdminStreamsIndexRouteImport } from './routes/admin/streams/index'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
-import { Route as ApiOrpcSplatRouteImport } from './routes/api.orpc.$'
 import { Route as AdminStreamsNamespaceRouteRouteImport } from './routes/admin/streams/$namespace/route'
 import { Route as AppProjectsProjectSlugRouteRouteImport } from './routes/_app/projects/$projectSlug/route'
 import { Route as DocsStreamsProcessorsIndexRouteImport } from './routes/docs.streams.processors.index'
@@ -104,9 +103,9 @@ const PosthogProxySplatRoute = PosthogProxySplatRouteImport.update({
   path: '/posthog-proxy/$',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiOrpcWsRoute = ApiOrpcWsRouteImport.update({
-  id: '/api/orpc-ws',
-  path: '/api/orpc-ws',
+const ApiHealthRoute = ApiHealthRouteImport.update({
+  id: '/api/health',
+  path: '/api/health',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSplatRoute = ApiSplatRouteImport.update({
@@ -154,11 +153,6 @@ const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AppProjectsRouteRoute,
-} as any)
-const ApiOrpcSplatRoute = ApiOrpcSplatRouteImport.update({
-  id: '/api/orpc/$',
-  path: '/api/orpc/$',
-  getParentRoute: () => rootRouteImport,
 } as any)
 const AdminStreamsNamespaceRouteRoute =
   AdminStreamsNamespaceRouteRouteImport.update({
@@ -317,7 +311,7 @@ export interface FileRoutesByFullPath {
   '/new-project': typeof AppNewProjectRoute
   '/admin/projects': typeof AdminProjectsRoute
   '/api/$': typeof ApiSplatRoute
-  '/api/orpc-ws': typeof ApiOrpcWsRoute
+  '/api/health': typeof ApiHealthRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -325,7 +319,6 @@ export interface FileRoutesByFullPath {
   '/docs/': typeof DocsIndexRoute
   '/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
   '/admin/streams/$namespace': typeof AdminStreamsNamespaceRouteRouteWithChildren
-  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/projects/': typeof AppProjectsIndexRoute
   '/admin/streams/': typeof AdminStreamsIndexRoute
   '/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
@@ -359,13 +352,12 @@ export interface FileRoutesByTo {
   '/new-project': typeof AppNewProjectRoute
   '/admin/projects': typeof AdminProjectsRoute
   '/api/$': typeof ApiSplatRoute
-  '/api/orpc-ws': typeof ApiOrpcWsRoute
+  '/api/health': typeof ApiHealthRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
   '/admin': typeof AdminIndexRoute
   '/docs': typeof DocsIndexRoute
-  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/projects': typeof AppProjectsIndexRoute
   '/admin/streams': typeof AdminStreamsIndexRoute
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
@@ -403,7 +395,7 @@ export interface FileRoutesById {
   '/_app/new-project': typeof AppNewProjectRoute
   '/admin/projects': typeof AdminProjectsRoute
   '/api/$': typeof ApiSplatRoute
-  '/api/orpc-ws': typeof ApiOrpcWsRoute
+  '/api/health': typeof ApiHealthRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
   '/sign-in/$': typeof SignInSplatRoute
   '/sign-up/$': typeof SignUpSplatRoute
@@ -411,7 +403,6 @@ export interface FileRoutesById {
   '/docs/': typeof DocsIndexRoute
   '/_app/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
   '/admin/streams/$namespace': typeof AdminStreamsNamespaceRouteRouteWithChildren
-  '/api/orpc/$': typeof ApiOrpcSplatRoute
   '/_app/projects/': typeof AppProjectsIndexRoute
   '/admin/streams/': typeof AdminStreamsIndexRoute
   '/_app/projects/$projectSlug/agents': typeof AppProjectsProjectSlugAgentsRouteRouteWithChildren
@@ -451,7 +442,7 @@ export interface FileRouteTypes {
     | '/new-project'
     | '/admin/projects'
     | '/api/$'
-    | '/api/orpc-ws'
+    | '/api/health'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -459,7 +450,6 @@ export interface FileRouteTypes {
     | '/docs/'
     | '/projects/$projectSlug'
     | '/admin/streams/$namespace'
-    | '/api/orpc/$'
     | '/projects/'
     | '/admin/streams/'
     | '/projects/$projectSlug/agents'
@@ -493,13 +483,12 @@ export interface FileRouteTypes {
     | '/new-project'
     | '/admin/projects'
     | '/api/$'
-    | '/api/orpc-ws'
+    | '/api/health'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
     | '/admin'
     | '/docs'
-    | '/api/orpc/$'
     | '/projects'
     | '/admin/streams'
     | '/projects/$projectSlug/integrations'
@@ -536,7 +525,7 @@ export interface FileRouteTypes {
     | '/_app/new-project'
     | '/admin/projects'
     | '/api/$'
-    | '/api/orpc-ws'
+    | '/api/health'
     | '/posthog-proxy/$'
     | '/sign-in/$'
     | '/sign-up/$'
@@ -544,7 +533,6 @@ export interface FileRouteTypes {
     | '/docs/'
     | '/_app/projects/$projectSlug'
     | '/admin/streams/$namespace'
-    | '/api/orpc/$'
     | '/_app/projects/'
     | '/admin/streams/'
     | '/_app/projects/$projectSlug/agents'
@@ -578,11 +566,10 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRouteWithChildren
   DocsRoute: typeof DocsRouteWithChildren
   ApiSplatRoute: typeof ApiSplatRoute
-  ApiOrpcWsRoute: typeof ApiOrpcWsRoute
+  ApiHealthRoute: typeof ApiHealthRoute
   PosthogProxySplatRoute: typeof PosthogProxySplatRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
-  ApiOrpcSplatRoute: typeof ApiOrpcSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -657,11 +644,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PosthogProxySplatRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/orpc-ws': {
-      id: '/api/orpc-ws'
-      path: '/api/orpc-ws'
-      fullPath: '/api/orpc-ws'
-      preLoaderRoute: typeof ApiOrpcWsRouteImport
+    '/api/health': {
+      id: '/api/health'
+      path: '/api/health'
+      fullPath: '/api/health'
+      preLoaderRoute: typeof ApiHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/$': {
@@ -726,13 +713,6 @@ declare module '@tanstack/react-router' {
       fullPath: '/projects/'
       preLoaderRoute: typeof AppProjectsIndexRouteImport
       parentRoute: typeof AppProjectsRouteRoute
-    }
-    '/api/orpc/$': {
-      id: '/api/orpc/$'
-      path: '/api/orpc/$'
-      fullPath: '/api/orpc/$'
-      preLoaderRoute: typeof ApiOrpcSplatRouteImport
-      parentRoute: typeof rootRouteImport
     }
     '/admin/streams/$namespace': {
       id: '/admin/streams/$namespace'
@@ -1109,11 +1089,10 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRouteWithChildren,
   DocsRoute: DocsRouteWithChildren,
   ApiSplatRoute: ApiSplatRoute,
-  ApiOrpcWsRoute: ApiOrpcWsRoute,
+  ApiHealthRoute: ApiHealthRoute,
   PosthogProxySplatRoute: PosthogProxySplatRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
-  ApiOrpcSplatRoute: ApiOrpcSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -1,7 +1,7 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { requireAuthenticatedRootRedirectTargetFromSession } from "../lib/auth.ts";
 import { DocsHomePage } from "~/components/docs-portal.tsx";
-import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
+import { listMyProjectsServerFn } from "~/lib/project-server-fns.ts";
 
 export const Route = createFileRoute("/")({
   loader: async ({ context, location }) => {
@@ -22,9 +22,7 @@ export const Route = createFileRoute("/")({
       });
     }
 
-    const projectsData = await context.queryClient.ensureQueryData(
-      projectsListQueryOptions({ limit: 100, offset: 0 }),
-    );
+    const projectsData = await listMyProjectsServerFn({ data: { limit: 100, offset: 0 } });
     const projects = projectsData.projects.filter(
       (project) => !project.isOrphanedProjectFromAuthService,
     );

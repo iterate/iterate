@@ -1,37 +1,51 @@
 import { Copy } from "lucide-react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { projectRepoQueryOptions } from "~/lib/project-route-query.ts";
+import { ItxBoundary, ItxResourceError, ItxResourceLoading } from "~/components/itx-boundary.tsx";
+import { useItx } from "~/itx/use-itx.ts";
+import { useItxResource } from "~/itx/use-itx-resource.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$repoSlug")({
-  loader: async ({ context, params }) => {
-    const { project } = context;
-    await context.queryClient.ensureQueryData(
-      projectRepoQueryOptions({ projectId: project.id, repoSlug: params.repoSlug }),
-    );
-
-    return {
-      breadcrumb: params.repoSlug,
-      project,
-    };
-  },
+  ssr: false,
+  loader: ({ context, params }) => ({
+    breadcrumb: params.repoSlug,
+    project: context.project,
+  }),
   component: ProjectRepoDetailPage,
 });
 
 function ProjectRepoDetailPage() {
+  return (
+    <ItxBoundary>
+      <ProjectRepoDetailContent />
+    </ItxBoundary>
+  );
+}
+
+function ProjectRepoDetailContent() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
-  const repoQuery = useQuery(
-    projectRepoQueryOptions({ projectId: project.id, repoSlug: params.repoSlug }),
-  );
-  const repo = repoQuery.data;
+  const itx = useItx(project.id);
+  const {
+    data: repo,
+    status,
+    error,
+    refetch,
+  } = useItxResource(() => itx.repos.getInfo({ slug: params.repoSlug }), [itx, params.repoSlug]);
+
+  if (status === "error") {
+    return (
+      <section className="w-full p-4">
+        <ItxResourceError label="repo" error={error} onRetry={() => void refetch()} />
+      </section>
+    );
+  }
 
   if (!repo) {
     return (
       <section className="w-full p-4">
-        <div className="rounded-lg border p-4 text-sm text-muted-foreground">Loading Repo...</div>
+        <ItxResourceLoading label="repo" />
       </section>
     );
   }

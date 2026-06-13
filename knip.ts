@@ -78,16 +78,6 @@ function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceCon
   };
 }
 
-function makePrivateContractWorkspace(): WorkspaceConfig {
-  return {
-    // These contract packages are private, tiny, and self-contained, so report
-    // unused exports even from the public entry file.
-    entry: ["src/index.ts!"],
-    project: ["src/**/*.ts!"],
-    includeEntryExports: true,
-  };
-}
-
 function makeSharedWorkspace(): WorkspaceConfig {
   return {
     // This package exposes many subpath exports from package.json rather than a
@@ -111,16 +101,8 @@ const config: KnipConfig = {
   // Keep this root command intentionally scoped. When Knip includes dependent
   // workspaces for a selected package, we still do not want it wandering into
   // unrelated apps with heavyweight config loading.
-  ignoreWorkspaces: [
-    "apps/*",
-    "!apps/os",
-    "!apps/os-contract",
-    "!apps/semaphore",
-    "packages/*",
-    "!packages/shared",
-  ],
+  ignoreWorkspaces: ["apps/*", "!apps/os", "!apps/semaphore", "packages/*", "!packages/shared"],
   ignoreIssues: {
-    "apps/os-contract/src/index.ts": ["exports", "types"],
     "apps/os/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
     "apps/os/src/db/queries/.generated/index.ts": ["files", "exports", "types"],
     "apps/os/src/db/queries/.generated/tables.ts": ["files", "types"],
@@ -141,7 +123,6 @@ const config: KnipConfig = {
   workspaces: {
     "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
-    "apps/os-contract": makePrivateContractWorkspace(),
     "packages/shared": makeSharedWorkspace(),
   },
 };

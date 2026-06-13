@@ -1,12 +1,9 @@
 import { Outlet, createFileRoute } from "@tanstack/react-router";
-import { ensureProjectBySlug } from "~/lib/project-route-query.ts";
+import { getProjectBySlugServerFn } from "~/lib/project-server-fns.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug")({
-  beforeLoad: async ({ context, params }) => ({
-    project: await ensureProjectBySlug({
-      queryClient: context.queryClient,
-      projectSlug: params.projectSlug,
-    }),
+  beforeLoad: async ({ params }) => ({
+    project: await getProjectBySlugServerFn({ data: { slug: params.projectSlug } }),
   }),
   loader: ({ context }) => {
     return {

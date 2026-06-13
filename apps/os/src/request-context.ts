@@ -7,8 +7,8 @@ import type { Principal } from "~/auth/principal.ts";
 
 /**
  * Per-request server context, passed to TanStack Start's server handler in
- * `workers/app.ts` and from there into server routes, server functions, and oRPC
- * procedures (https://tanstack.com/start/latest/docs/framework/react/guide/server-routes).
+ * `workers/app.ts` and from there into server routes and server functions
+ * (https://tanstack.com/start/latest/docs/framework/react/guide/server-routes).
  *
  * This holds request-scoped state only. Worker bindings (durable object
  * namespaces, AI, the worker loader, ...) are not threaded through here — use
@@ -34,20 +34,6 @@ export interface RequestContext {
   // Set by the iterate auth request middleware (src/auth/middleware.ts).
   principal?: Principal | null;
   iterateAuthSession?: AuthenticatedSession | null;
-  // Set by project-scoped oRPC middleware (src/orpc/orpc.ts).
-  projectAccess?: {
-    projectId: string;
-  };
-  projectScope?: {
-    project: {
-      id: string;
-      slug: string;
-      custom_hostname?: string | null;
-      created_at: string;
-      updated_at: string;
-    };
-    projectSlugOrId: string;
-  };
 }
 
 // Register the request context for both packages: in the installed versions,
