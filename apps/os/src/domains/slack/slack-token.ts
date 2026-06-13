@@ -59,8 +59,14 @@ export async function readSlackToken(input: {
       usedBy: "slack-pipeline",
     });
   } catch {
-    // No journaled token for that account: the deployment-level env token is
-    // the first-party dev fallback.
+    // No journaled token for that account. The deployment-level env token is
+    // the first-party dev fallback, but it is the PLATFORM's own Slack bot —
+    // it must never stand in for a connected customer workspace. So it only
+    // backstops the DEFAULT (unnamed) account, which is the local-dev /
+    // single-first-party-workspace shape. A resolved or explicitly-routed
+    // NAMED workspace account whose token can't be revealed fails CLOSED
+    // (undefined) rather than silently acting as the platform bot.
+    if (account !== DEFAULT_INTEGRATION_ACCOUNT) return undefined;
   }
   const tokenEnv = env as unknown as SlackTokenEnv;
   return tokenEnv.SLACK_BOT_TOKEN ?? tokenEnv.APP_CONFIG_SLACK_BOT_TOKEN;
