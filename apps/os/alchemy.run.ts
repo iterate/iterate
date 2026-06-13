@@ -553,6 +553,10 @@ const [
     bindings: {
       DO_CATALOG: db,
       GLOBAL_STREAM_NAMESPACE: globalStreamNamespace,
+      // Routing a captured event wakes the owning project's integration DO
+      // (ensureIntegrationStub) so its account-stream subscription is live
+      // before the forward lands.
+      INTEGRATION: integration,
       INTEGRATION_INGRESS: integrationIngress,
       STREAM: stream,
     },
