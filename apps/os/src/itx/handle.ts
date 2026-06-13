@@ -668,7 +668,15 @@ export class ItxProjects extends RpcTarget {
   }
 
   async remove(input: { id: string }) {
-    this.requireAllAccess("remove projects");
+    // Symmetric with create: an admin handle ("all") may delete any project;
+    // a non-admin may delete a project its handle holds a claim for. The
+    // claim check is requireProjectRow (existence-masked NOT_FOUND otherwise),
+    // the same gate every other project-scoped op uses — mirrors the oRPC
+    // handler's requireProject. (Bugbot: non-admins must be able to delete
+    // the projects they can create.)
+    if (this.runtime.access !== "all") {
+      await this.requireProjectRow(input.id);
+    }
     await deleteProject(this.db(), { id: input.id });
     return { deleted: true, id: input.id, ok: true as const };
   }

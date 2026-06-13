@@ -77,6 +77,23 @@ export function createSocketSuspenseCache<T>(input: {
       set.add(listener);
       return () => set.delete(listener);
     },
+    /**
+     * Drop this context's socket so the next `get` re-dials. Used after the
+     * browser session's claims change (e.g. creating a project) — the live
+     * socket carries the connect-time principal, so a fresh dial is the only
+     * way the new claims take effect. Disposes the resolved stub to close the
+     * underlying session; subscribers re-render and re-suspend on a new dial.
+     */
+    evict(context?: string): void {
+      const key = keyOf(context);
+      const entry = entries.get(key);
+      if (!entry) return;
+      entries.delete(key);
+      for (const listener of listeners.get(key) ?? []) listener();
+      void entry.promise
+        .then((value) => (value as Partial<Disposable>)[Symbol.dispose]?.())
+        .catch(() => {});
+    },
   };
 }
 
@@ -135,6 +152,17 @@ function assertBrowser(caller: string): void {
 export function getBrowserItx(context?: string): Promise<RpcStub<ItxHandle>> {
   assertBrowser("getBrowserItx");
   return pool.get(context).promise;
+}
+
+/**
+ * Drop a context's socket (default: the global handle) so the next use re-dials
+ * with the browser session's current claims. Call after a session change such
+ * as creating a project — the live socket still carries the connect-time
+ * principal, so `itx.projects.list` would otherwise omit the new project until
+ * a reload.
+ */
+export function reconnectBrowserItx(context?: string): void {
+  pool.evict(context);
 }
 
 /**

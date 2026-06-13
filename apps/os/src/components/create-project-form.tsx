@@ -20,7 +20,7 @@ import {
 } from "@iterate-com/ui/components/select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
-import { getBrowserItx } from "~/itx/use-itx.ts";
+import { getBrowserItx, reconnectBrowserItx } from "~/itx/use-itx.ts";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -50,6 +50,9 @@ export function CreateProjectForm() {
       // claim BEFORE navigating to the project-scoped route (#1516); without
       // this the project route loads before the session knows the project.
       await refresh({ force: true });
+      // Drop the global itx socket so it re-dials with the refreshed claims —
+      // otherwise itx.projects.list (connect-time principal) omits this project.
+      reconnectBrowserItx();
       await router.invalidate({ sync: true });
       await router.navigate({
         to: "/projects/$projectSlug",
