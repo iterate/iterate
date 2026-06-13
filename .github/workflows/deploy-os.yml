@@ -13,7 +13,6 @@ on:
       - main
     paths:
       - apps/os/**
-      - apps/os-contract/**
       - apps/auth/**
       - apps/auth-contract/**
       - packages/streams/**

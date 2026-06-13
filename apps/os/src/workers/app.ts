@@ -1,5 +1,5 @@
 /**
- * The app worker: the OS dashboard — TanStack Start (SSR + oRPC API),
+ * The app worker: the OS dashboard — TanStack Start (SSR + server functions),
  * static assets, debug routes, stream RPC, and app-host itx.
  *
  * In the per-DO worker topology (docs/worker-topology.md) this worker has no
@@ -15,8 +15,6 @@
  */
 import handler from "@tanstack/react-start/server-entry";
 import { withEvlog } from "@iterate-com/shared/evlog";
-import { NitroWebSocketResponse } from "@iterate-com/shared/nitro-ws-response";
-import crossws from "crossws/adapters/cloudflare";
 import { createD1Client } from "sqlfu";
 import { ROUTED_LANE_HEADER, routeOsRequest } from "./shared/router.ts";
 import { AppConfig, parseConfig } from "~/config.ts";
@@ -101,14 +99,11 @@ export default {
         });
         if (durableObjectDebugResponse) return durableObjectDebugResponse;
 
-        // The TanStack Start app: SSR routes, server functions, and the oRPC
-        // API under /api. `context` becomes the Start request context (see
-        // src/request-context.ts for the Register augmentation).
-        const response = await handler.fetch(request, { context });
-        if (response instanceof NitroWebSocketResponse) {
-          return crossws({ hooks: response.crossws }).handleUpgrade(request, env, ctx);
-        }
-        return response;
+        // The TanStack Start app: SSR routes and server functions, plus the
+        // remaining /api routes (integration callbacks, health). `context`
+        // becomes the Start request context (see src/request-context.ts for the
+        // Register augmentation).
+        return await handler.fetch(request, { context });
       },
     );
   },

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
-import type { Project } from "@iterate-com/os-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
@@ -10,6 +9,7 @@ import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig, type PublicRouteConfig } from "~/lib/public-route-config.ts";
+import type { Project } from "~/lib/project-server-fns.ts";
 import { useItx } from "~/itx/use-itx.ts";
 import { useItxResource } from "~/itx/use-itx-resource.ts";
 import type { ItxProjects } from "~/itx/handle.ts";

@@ -1,115 +1,23 @@
-import path from "node:path";
-import type { EventInput } from "@iterate-com/shared/streams/types";
-import { createCaptunTunnel } from "captun";
-import { RpcTarget } from "capnweb";
-import { expect } from "vitest";
-import { slugify } from "@iterate-com/shared/slug";
-import type { ProcessorContractShape } from "@iterate-com/streams/shared/stream-processors";
 import {
-  createAdminOsClient,
+  createAdminOsItx,
   requireBaseUrl,
-  uniqueSuffix,
   requireAdminBearerToken,
+  uniqueSuffix,
 } from "./os-client.ts";
-import { withItx, type ItxClient } from "~/itx/client.ts";
-
-type Fetch = Parameters<typeof createCaptunTunnel>[0]["fetch"];
+import { withItx } from "~/itx/client.ts";
 
 /**
- * Structural subset of a stream processor contract used for event typing.
- * Looser than `ProcessorContractShape` so contracts returned by
- * `defineProcessorContract` (whose `reduce` is property-typed after `Omit`)
- * remain assignable.
+ * Create a disposable project against the deployment under test via itx (the
+ * admin handle has access "all"). Returns the project plus a base URL and an
+ * async disposer that removes it. Project create/remove run on a short-lived
+ * global itx session; per-project work narrows with `itx.projects.get(id)`.
  */
-type ProcessorContractLike = {
-  events: ProcessorContractShape["events"];
-  processorDeps?: readonly unknown[];
-};
-
-export async function createTestProjectFixture<
-  ProcessorContracts extends ProcessorContractLike[],
->(params?: {
-  /** a fetch implementation that will be used to intercept the project's egress */
-  egressFetch?: Fetch;
-  processors?: ProcessorContracts;
-  slugPrefix?: string;
-}) {
-  const testFilePath = expect.getState().testPath;
-  if (!testFilePath) throw new Error(`Couldn't get test path from expect.getState()`);
-  const streamPathParts = [
-    ...path.relative(process.cwd(), testFilePath).split("/"),
-    ...expect.getState().currentTestName!.split(" > "),
-  ].map(slugify);
-  const streamPath = "/" + streamPathParts.join("/");
-  const { egressFetch } = params || {};
-  const slugPrefix = params?.slugPrefix || streamPathParts.at(-1)!;
-  const project = await createTestProject({ slugPrefix });
-  let egressItx: ItxClient | null = null;
-  try {
-    if (egressFetch) {
-      egressItx = await provideLiveEgressFetchCapability({
-        baseUrl: project.baseUrl,
-        fetch: egressFetch,
-        projectId: project.project.id,
-      });
-    }
-  } catch (error) {
-    egressItx?.[Symbol.dispose]?.();
-    await project[Symbol.asyncDispose]();
-    throw error;
-  }
-
-  return {
-    ...project,
-    /** recommended test stream path - arbitrary, but by convention mirrors test file + name as its path (`/${relativeFilePath}/${describeSlug}/${testSlug}`)  */
-    streamPath,
-    slugPrefix,
-    /** strongly-typed event constructor for the given processor contracts */
-    event: (event: ProcessorContractEvent<ProcessorContracts>) => event,
-    /** shorthand for appending an event to the test's associated project + stream */
-    append: (params: {
-      projectSlugOrId?: string;
-      streamPath?: string;
-      event: ProcessorContractEvent<ProcessorContracts>;
-    }) =>
-      project.os.project.streams.append({
-        projectSlugOrId: params.projectSlugOrId || project.project.slug,
-        streamPath: params.streamPath || streamPath,
-        event: params.event,
-      }),
-    async [Symbol.asyncDispose]() {
-      try {
-        // The fetch shadow is a LIVE cap: dropping the itx session revokes it.
-        egressItx?.[Symbol.dispose]?.();
-      } finally {
-        await project[Symbol.asyncDispose]();
-      }
-    },
-  };
-}
-
-type ProcessorContractEvent<ProcessorContracts extends ProcessorContractLike[]> =
-  ProcessorContractLike extends { processorDeps: infer Deps extends ProcessorContractLike[] }
-    ? ExtractEventType<ProcessorContracts[number]["events"]> | ProcessorContractEvent<Deps>
-    : ExtractEventType<ProcessorContracts[number]["events"]>;
-
-type ExtractEventType<EventsDefinition extends ProcessorContractShape["events"]> = Extract<
-  {
-    [K in keyof EventsDefinition]: Omit<EventInput, "type" | "payload"> & {
-      type: Extract<K, string>;
-      payload: NoInfer<
-        NonNullable<EventsDefinition[K]["payloadSchema"]["~standard"]["types"]>["output"]
-      >;
-    };
-  }[keyof EventsDefinition],
-  EventInput
->;
-
 export async function createTestProject(opts: { slugPrefix: string }) {
   const baseUrl = requireBaseUrl();
-  const client = createAdminOsClient(baseUrl);
   const slugPrefix = opts.slugPrefix;
-  let project = await client.projects.create({
+  using itx = createAdminOsItx({ baseUrl });
+
+  let project = await itx.projects.create({
     // you get invalid DNS name errors if the slug is too long
     slug: `${slugPrefix.slice(0, 20)}-${uniqueSuffix()}`.replace("--", "-"),
   });
@@ -117,86 +25,33 @@ export async function createTestProject(opts: { slugPrefix: string }) {
   let disposed = false;
   return {
     baseUrl,
-    /** @deprecated use `.os` instead */
-    client,
-    os: client,
+    /** A fresh admin itx handle narrowed to this project. */
+    itx(context?: string) {
+      return withItx({
+        baseUrl,
+        context: context ?? project.id,
+        token: requireAdminBearerToken(),
+      });
+    },
     get project() {
       return project;
     },
     async updateConfig(input: { customHostname?: string | null }) {
-      project = await client.projects.updateConfig({
-        id: project.id,
-        customHostname: input.customHostname,
-      });
+      using session = createAdminOsItx({ baseUrl });
+      project = {
+        ...project,
+        ...(await session.projects.updateConfig({
+          id: project.id,
+          customHostname: input.customHostname,
+        })),
+      };
       return project;
     },
     async [Symbol.asyncDispose]() {
       if (disposed) return;
       disposed = true;
-      await client.projects.remove({ id: project.id }).catch(() => undefined);
-    },
-  };
-}
-
-/**
- * Shadows the project's `fetch` capability with a LIVE cap backed by the
- * given fetch implementation: every project egress request dispatches to it
- * (with getSecret() placeholders unsubstituted) for as long as the returned
- * itx session stays open. Dispose the session to drop the shadow.
- */
-async function provideLiveEgressFetchCapability(input: {
-  baseUrl: string;
-  fetch: Fetch;
-  projectId: string;
-}): Promise<ItxClient> {
-  class LiveEgressFetch extends RpcTarget {
-    async call({ args }: { path: string[]; args: unknown[] }) {
-      return await input.fetch(args[0] as Request);
-    }
-  }
-
-  const itx = withItx({
-    baseUrl: input.baseUrl,
-    context: input.projectId,
-    token: requireAdminBearerToken(),
-  });
-  try {
-    await itx.provideCapability({
-      name: "fetch",
-      capability: new LiveEgressFetch() as never,
-    });
-  } catch (error) {
-    itx[Symbol.dispose]?.();
-    throw error;
-  }
-  return itx;
-}
-
-/**
- * Creates a public captun tunnel for test-defined HTTP servers, using the
- * standalone iterate tunnel gateway (apps/tunnels, `<name>.tunnels.iterate.com`).
- * Configure via env: `CAPTUN_GATEWAY` (default `https://tunnels.iterate.com`)
- * and `CAPTUN_TOKEN` (the gateway secret).
- */
-export async function createPublicTunnel(input: { fetch: Fetch; tunnelName?: string }) {
-  const tunnelName = input.tunnelName || `e2e-${uniqueSuffix()}`;
-  const token = process.env.CAPTUN_TOKEN?.trim();
-  if (!token) {
-    throw new Error(
-      "CAPTUN_TOKEN is required to open a public tunnel (apps/tunnels gateway secret).",
-    );
-  }
-  const tunnel = await createCaptunTunnel({
-    gateway: process.env.CAPTUN_GATEWAY?.trim() || "https://tunnels.iterate.com",
-    name: tunnelName,
-    token,
-    fetch: input.fetch,
-  });
-
-  return {
-    url: tunnel.url,
-    [Symbol.dispose]() {
-      tunnel[Symbol.dispose]();
+      using session = createAdminOsItx({ baseUrl });
+      await session.projects.remove({ id: project.id }).catch(() => undefined);
     },
   };
 }

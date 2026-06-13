@@ -8,27 +8,19 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { createORPCClient } from "@orpc/client";
-import { RPCLink as WebSocketRPCLink } from "@orpc/client/websocket";
-import { OpenAPILink } from "@orpc/openapi-client/fetch";
-import { type ContractRouterClient } from "@orpc/contract";
-import { osContract } from "@iterate-com/os-contract";
-import { extractPublicConfigSchema } from "@iterate-com/shared/config";
 import { x, type Result } from "tinyexec";
 import { describe, expect, test } from "vitest";
-import { AppConfig } from "./src/config.ts";
 
 const appRoot = dirname(fileURLToPath(import.meta.url));
 const CF_DEV_PORT = 3015;
 const hasCfWranglerLocal = existsSync(join(appRoot, ".alchemy/local/wrangler.jsonc"));
 const runFullSmoke = process.env.RUNTIME_SMOKE_FULL === "1";
 const describeRuntimeSmoke = process.env.CI ? describe.skip : describe.sequential;
-const PublicConfigSchema = extractPublicConfigSchema(AppConfig);
 /**
  * Fixture admin secret: `stripInheritedAppConfig` removes any Doppler-provided
  * `APP_CONFIG_ADMIN_API_SECRET` from the server's env, so the smoke bakes its
  * own known secret into `APP_CONFIG` (redacted field — never reaches
- * publicConfig) and uses it for the authenticated oRPC roundtrip.
+ * publicConfig).
  */
 const SMOKE_ADMIN_API_SECRET = "runtime-smoke-admin-api-secret";
 const smokeEnv = {
@@ -79,12 +71,6 @@ function runWithDrainedOutput(
   });
 }
 
-function httpToWsUrl(httpBaseUrl: string, pathname: string) {
-  const url = new URL(pathname, httpBaseUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
-}
-
 function parseAlchemyDeployUrl(output: string): string | undefined {
   const fromLog =
     output.match(/url:\s*'(https:\/\/[^']+)'/)?.[1] ??
@@ -109,70 +95,51 @@ async function assertSsrHtml(httpBaseUrl: string) {
   expect(html).toContain("Sign in to OS");
 }
 
-function createOpenApiClient(
-  httpBaseUrl: string,
-  headers?: Record<string, string>,
-): ContractRouterClient<typeof osContract> {
-  return createORPCClient(
-    new OpenAPILink(osContract, {
-      url: new URL("/api", httpBaseUrl).toString(),
-      headers,
-    }),
-  );
-}
-
-async function assertTypedClientHealth(httpBaseUrl: string) {
-  const client = createOpenApiClient(httpBaseUrl);
-  const body = await client.__internal.health({});
+/** The plain `/api/health` route that replaced the oRPC `__internal.health` procedure. */
+async function assertHealthRoute(httpBaseUrl: string) {
+  const res = await fetch(new URL("/api/health", httpBaseUrl), {
+    signal: AbortSignal.timeout(3_000),
+  });
+  expect(res.ok).toBe(true);
+  const body = (await res.json()) as { ok?: unknown; app?: unknown };
   expect(body.ok).toBe(true);
   expect(body.app).toBe("os");
 }
 
-async function assertPublicConfigOverride(httpBaseUrl: string) {
-  const client = createOpenApiClient(httpBaseUrl);
-  const config = PublicConfigSchema.parse(await client.__internal.publicConfig({}));
-  expect(config).toEqual({});
-}
-
 /**
- * Authenticated oRPC end-to-end: the admin API secret (same mechanism the
- * repo CLI uses — `Authorization: Bearer <APP_CONFIG_ADMIN_API_SECRET>`,
- * resolved to the admin principal in `resolveRequestAuth`) must unlock an
- * `authenticatedUserMiddleware`-gated procedure, and the same call without
- * credentials must be rejected.
+ * The itx HTTP boundary (`/api/itx/run`) is the admin/auth gate that replaced
+ * the oRPC admin procedures. Probe both sides without running a dynamic worker:
+ * an anonymous call is rejected (401) before the body is read, and the baked
+ * admin bearer authenticates past the gate — reaching the "functionSource is
+ * required" 400 — so a regression in admin itx auth fails the smoke.
  */
-async function assertAdminAuthenticatedOrpc(httpBaseUrl: string) {
-  const authenticated = createOpenApiClient(httpBaseUrl, {
-    authorization: `Bearer ${SMOKE_ADMIN_API_SECRET}`,
+async function assertItxAdminAuth(httpBaseUrl: string) {
+  const runUrl = new URL("/api/itx/run", httpBaseUrl);
+
+  const anonymous = await fetch(runUrl, {
+    body: "{}",
+    headers: { "content-type": "application/json" },
+    method: "POST",
+    signal: AbortSignal.timeout(3_000),
   });
-  const listed = await authenticated.projects.list({});
-  expect(Array.isArray(listed.projects)).toBe(true);
-  expect(listed.total).toBeGreaterThanOrEqual(0);
+  expect(anonymous.status).toBe(401);
 
-  const anonymous = createOpenApiClient(httpBaseUrl);
-  await expect(anonymous.projects.list({})).rejects.toMatchObject({ code: "UNAUTHORIZED" });
-}
-
-async function assertOrpcWebSocket(httpBaseUrl: string) {
-  const websocket = new WebSocket(httpToWsUrl(httpBaseUrl, "/api/orpc-ws"));
-  const client: ContractRouterClient<typeof osContract> = createORPCClient(
-    new WebSocketRPCLink({ websocket }),
-  );
-
-  try {
-    const body = await client.__internal.health({});
-    expect(body.ok).toBe(true);
-  } finally {
-    websocket.close();
-  }
+  const admin = await fetch(runUrl, {
+    body: "{}",
+    headers: {
+      authorization: `Bearer ${SMOKE_ADMIN_API_SECRET}`,
+      "content-type": "application/json",
+    },
+    method: "POST",
+    signal: AbortSignal.timeout(3_000),
+  });
+  expect(admin.status, await admin.clone().text()).toBe(400);
 }
 
 async function assertFullStack(httpBaseUrl: string) {
   await assertSsrHtml(httpBaseUrl);
-  await assertTypedClientHealth(httpBaseUrl);
-  await assertPublicConfigOverride(httpBaseUrl);
-  await assertAdminAuthenticatedOrpc(httpBaseUrl);
-  await assertOrpcWebSocket(httpBaseUrl);
+  await assertHealthRoute(httpBaseUrl);
+  await assertItxAdminAuth(httpBaseUrl);
 }
 
 async function waitForReady(httpBaseUrl: string, timeoutMs = 30_000) {

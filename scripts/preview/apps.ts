@@ -47,9 +47,12 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     displayName: "OS",
     appPath: "apps/os",
     dopplerProject: "os",
+    // oRPC's /api/__internal/health is gone with the teardown — readiness now
+    // probes the plain /api/health route that replaced it. Without this, the
+    // preview deploy waits the full 10min readiness timeout on a 404 and fails.
+    previewReadyUrlPath: "/api/health",
     paths: [
       "apps/os/**",
-      "apps/os-contract/**",
       "apps/auth/**",
       "apps/auth-contract/**",
       // apps/os compiles in @iterate-com/streams (see apps/os/src/worker.ts).
