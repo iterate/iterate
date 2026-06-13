@@ -145,6 +145,7 @@ export async function connectIntegration(input: ConnectIntegrationInput) {
       account,
       ownership: input.ownership,
       externalId: input.externalId,
+      displayName: input.displayName ?? null,
       routingKeys: input.routingKeys,
       takeover: input.takeover === true,
       secrets: input.secrets,
