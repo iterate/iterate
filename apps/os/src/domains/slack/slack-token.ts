@@ -44,7 +44,10 @@ export async function readSlackToken(input: {
     (await resolveImplicitAccount({ projectId: input.projectId, integration: "slack" }).catch(
       (error) => {
         if (error instanceof AmbiguousIntegrationAccountError) throw error;
-        // Catalog unavailable (fully-local dev) — the unnamed account.
+        // Nothing connected, or the catalog is unavailable (fully-local dev):
+        // fall through to the unnamed account, where the env-token dev
+        // fallback (default-account only) backstops the Slack pipeline. A
+        // NAMED workspace, in contrast, still fails closed downstream.
         return DEFAULT_INTEGRATION_ACCOUNT;
       },
     ));

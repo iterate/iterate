@@ -146,6 +146,19 @@ export class AmbiguousIntegrationAccountError extends Error {
   }
 }
 
+/** A bare `itx.integrations.{slug}` (or other implicit-account resolution)
+ * with nothing connected — fail closed rather than silently dialing the
+ * tokenless "default" account. */
+export class NoConnectedIntegrationAccountError extends Error {
+  constructor(input: { integration: string }) {
+    super(
+      `Integration "${input.integration}" has no connected account in this project. ` +
+        `Connect it first, or address an account explicitly: itx.integrations["${input.integration}/<account>"].`,
+    );
+    this.name = "NoConnectedIntegrationAccountError";
+  }
+}
+
 export async function resolveImplicitAccount(input: {
   projectId: string;
   integration: string;
@@ -155,7 +168,13 @@ export async function resolveImplicitAccount(input: {
   const connected = (await listConnectedIntegrationAccountStates(input)).map(
     (state) => state.account ?? DEFAULT_INTEGRATION_ACCOUNT,
   );
-  if (connected.length === 0 || connected.includes(DEFAULT_INTEGRATION_ACCOUNT)) {
+  // Nothing connected: fail closed. Returning "default" here would dial a
+  // tokenless DO and egress getSecret placeholders that resolve to nothing —
+  // a confusing late failure instead of a clear "connect it first".
+  if (connected.length === 0) {
+    throw new NoConnectedIntegrationAccountError({ integration: input.integration });
+  }
+  if (connected.includes(DEFAULT_INTEGRATION_ACCOUNT)) {
     return DEFAULT_INTEGRATION_ACCOUNT;
   }
   if (connected.length === 1) return connected[0]!;
