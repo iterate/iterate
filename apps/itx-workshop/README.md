@@ -1,9 +1,9 @@
 # itx-workshop-repro
 
 A small, runnable reproduction that **empirically tests the claims in the itx
-workshop** (`apps/os/docs/itx-explainer.html`) against real Cloudflare
-workerd + real Cap'n Web clients. Every step from the workshop is exercised by
-a Node client over a real WebSocket to a `wrangler dev` Worker + Durable Object.
+workshop** (`itx-explainer.md`) against real Cloudflare workerd + real Cap'n Web
+clients. Every step from the workshop is exercised by a Node client over a real
+WebSocket to a `wrangler dev` Worker + Durable Object.
 
 ## Run it
 
