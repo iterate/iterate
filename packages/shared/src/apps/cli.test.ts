@@ -5,6 +5,7 @@ import {
   formatAppCliError,
   normalizePermissiveInputArgv,
   normalizePermissiveInputValue,
+  normalizeRemoteRpcError,
 } from "./cli.ts";
 
 describe("formatAppCliError", () => {
@@ -96,6 +97,37 @@ describe("normalizePermissiveInputValue", () => {
 
   it("leaves invalid structured input unchanged", () => {
     expect(normalizePermissiveInputValue("{event:")).toBe("{event:");
+  });
+});
+
+describe("normalizeRemoteRpcError", () => {
+  it("passes through a real Error with a message untouched", () => {
+    const error = new ORPCError("BAD_REQUEST", {
+      message: "Agent preset path must be /agents or start with /agents/.",
+    });
+    expect(normalizeRemoteRpcError(error, "project.agents.configurePreset")).toBe(error);
+  });
+
+  it("turns an opaque undefined rejection into an actionable error (never 'undefined thrown')", () => {
+    const result = normalizeRemoteRpcError(undefined, "project.agents.configurePreset");
+    expect(result).toBeInstanceOf(Error);
+    expect(result.message).toContain("project.agents.configurePreset");
+    expect(result.message).toContain("Workers Observability");
+    expect(result.message).not.toContain("Non-error of type");
+  });
+
+  it("surfaces code/status when the rejection carries them but no message", () => {
+    const result = normalizeRemoteRpcError(
+      { code: "INTERNAL_SERVER_ERROR", status: 500 },
+      "project.agents.configurePreset",
+    );
+    expect(result.message).toContain("code INTERNAL_SERVER_ERROR");
+    expect(result.message).toContain("status 500");
+  });
+
+  it("synthesizes a message for an Error whose message is blank", () => {
+    const result = normalizeRemoteRpcError(new Error("   "), "x.y");
+    expect(result.message).toContain("without a client-visible message");
   });
 });
 

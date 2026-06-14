@@ -412,6 +412,28 @@ function errorProcedure(message: string) {
   });
 }
 
+// A remote oRPC call can reject with a value that is not a usable Error: oRPC
+// masks a non-ORPCError thrown in a procedure body as an internal error with no
+// client-visible message, which reaches trpc-cli as a bare `undefined` and
+// prints the unhelpful "Non-error of type undefined thrown: undefined". Turn any
+// such opaque rejection into an actionable Error so the user knows where to look.
+export function normalizeRemoteRpcError(error: unknown, procedurePath: string): Error {
+  if (error instanceof Error && error.message.trim().length > 0) return error;
+
+  const detail = (() => {
+    if (!error || typeof error !== "object") return "";
+    const code = "code" in error ? String((error as { code: unknown }).code) : undefined;
+    const status = "status" in error ? String((error as { status: unknown }).status) : undefined;
+    return [code && `code ${code}`, status && `status ${status}`].filter(Boolean).join(", ");
+  })();
+
+  return new Error(
+    `Remote procedure "${procedurePath}" failed${detail ? ` (${detail})` : ""} without a ` +
+      `client-visible message. The server most likely threw a non-ORPCError, which oRPC masks ` +
+      `as an internal error — check the server logs / Workers Observability for the real error.`,
+  );
+}
+
 function orpcToTrpcStyleClient(orpcClient: unknown) {
   return new Proxy(
     {},
@@ -466,7 +488,11 @@ function proxifyOrpc<R extends AnyRouter>(
       .input(standardSchema)
       .handler(async ({ input }: { input: unknown }) => {
         const client: any = await getClient(procedurePath);
-        return client[procedurePath].query(input);
+        try {
+          return await client[procedurePath].query(input);
+        } catch (error) {
+          throw normalizeRemoteRpcError(error, procedurePath);
+        }
       });
   }
 

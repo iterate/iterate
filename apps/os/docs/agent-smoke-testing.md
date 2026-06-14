@@ -123,33 +123,34 @@ doppler run --project os --config prd -- pnpm --dir apps/os cli rpc \
 
 ## Gotchas
 
-### The CLI swallows server errors into an opaque throw
+### A masked internal error (rare, now actionable)
 
-A failed RPC often prints only:
+Client-visible errors (oRPC `ORPCError`s — bad input, not-found, the `/agents`
+path rule, etc.) print their real message in the terminal. Only a server-side
+**non-ORPCError** is masked by oRPC into an internal error with no client
+message. The CLI used to render that as the useless `Non-error of type undefined
+thrown: undefined`; it now prints an actionable line naming the procedure and
+pointing you at the logs (see `normalizeRemoteRpcError`). When you see it, pull
+the real error from **Workers Observability**:
 
-```
-Non-error of type undefined thrown: undefined
-```
+- See [Debugging deployed OS workers](./debugging-deployed-os-workers.md).
+- Or, via the general Cloudflare MCP (prd account
+  `04b3b57291ef2626c6a8daa9d47065a7`): `POST
+/accounts/{id}/workers/observability/telemetry/query` with `view: "events"`, a
+  tight `timeframe`, and filters like `$metadata.message includes
+"<procedurePath>"` or `… includes "<your prj_ id>"`. The RPC ingress is
+  `os-prd`; app logic logs as `os-prd-app`.
 
-This hides the real server-side error. To get it, query **Workers
-Observability** for the os workers around the time of the call (the RPC ingress
-is `os-prd`, the app logic is `os-prd-app`). See
-[Debugging deployed OS workers](./debugging-deployed-os-workers.md), or run a
-telemetry query filtered to your project id / `configurePreset`. For example, the
-"agent preset path" rule above surfaced only as a logged
-`Error: Agent preset path must be /agents or start with /agents/.` in
-`os-prd-app` — never in the terminal.
-
-Quick recipe (general Cloudflare MCP, prd account
-`04b3b57291ef2626c6a8daa9d47065a7`): `POST /accounts/{id}/workers/observability/telemetry/query`
-with `view: "events"`, a tight `timeframe`, and filters like
-`$metadata.message includes "configurePreset"` or `… includes "<your prj_ id>"`.
+The right long-term fix for such a case is to make the offending server throw an
+`ORPCError` instead of a plain `Error` (as `configurePreset` now does for the
+path rule), so the message reaches the caller directly.
 
 ### `--base-path` / `--agent-path` must live under `/agents`
 
 `configure-preset` rejects any base path that isn't `/agents` or under
-`/agents/…`. The agent's stream is then at `/agents/<name>` and `send-message`
-uses the same `--agent-path`.
+`/agents/…` with a clear `BAD_REQUEST`: _"Agent preset path must be /agents or
+start with /agents/."_ The agent's stream is then at `/agents/<name>` and
+`send-message` uses the same `--agent-path`.
 
 ### Use `--project os --config <cfg>`
 

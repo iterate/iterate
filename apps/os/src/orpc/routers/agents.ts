@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { ORPCError } from "@orpc/server";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import {
@@ -34,7 +35,17 @@ export const projectAgentsRouter = {
     .use(projectScopeMiddleware)
     .handler(async ({ context, input }) => {
       const project = requireProjectScope(context);
-      const basePath = normalizeAgentPresetBasePath(input.basePath);
+      // Surface the path rule as a client-visible BAD_REQUEST. Thrown as a plain
+      // Error it would be masked as an internal error and reach the CLI as an
+      // opaque "Non-error of type undefined thrown" (see toRepoORPCError).
+      let basePath: StreamPath;
+      try {
+        basePath = normalizeAgentPresetBasePath(input.basePath);
+      } catch (error) {
+        throw new ORPCError("BAD_REQUEST", {
+          message: error instanceof Error ? error.message : "Invalid agent preset path.",
+        });
+      }
       const events = [
         ...configuredAgentSetupEvents({
           model: input.model,
