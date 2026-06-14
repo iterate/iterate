@@ -539,6 +539,37 @@ function check10b() {
   );
 }
 
+// ── v11: ergonomics — a cap reads an injected origin-scoped `itx` binding
+//        (env.ITERATE); a trailing `itx` arg would corrupt a mounted SDK ──────
+function check11() {
+  // (a) the binding: the platform hands the cap an origin-scoped itx; reading it
+  // and calling .fetch routes egress to the agent shadow (no threading, no arg):
+  const logs = [];
+  const projectFetch = (url) => `${url}#200`;
+  const env = {
+    ITERATE: {
+      fetch: (url) => {
+        logs.push(url);
+        return projectFetch(url);
+      },
+    },
+  }; // origin=agent
+  const petApi = { getPet: (id) => env.ITERATE.fetch(`/pet/${id}`) }; // "just get itx" via env
+  petApi.getPet(1);
+  ok("v11: cap reads injected env.ITERATE (origin-scoped) — no threading", logs.length === 1);
+
+  // (b) a trailing `itx` arg would CORRUPT a mounted SDK call (extra arg):
+  const slack = { chat: { postMessage: (...args) => args.length } }; // a real SDK expects exactly its args
+  ok(
+    "v11: clean SDK call passes exactly its args",
+    walk(slack, ["chat", "postMessage"], [{ text: "hi" }]) === 1,
+  );
+  ok(
+    "v11: a trailing itx arg corrupts the SDK call (so: binding, not arg)",
+    walk(slack, ["chat", "postMessage"], [{ text: "hi" }, env.ITERATE]) === 2,
+  );
+}
+
 const checks = [
   check1,
   check2,
@@ -551,6 +582,7 @@ const checks = [
   check9,
   check10,
   check10b,
+  check11,
 ];
 const upTo = Number(process.argv[2] ?? checks.length);
 console.log(`running checks 1..${upTo}`);
