@@ -237,3 +237,20 @@ heavy new transport / breaking contract change).
   workerd suite (sever + re-dial + exactly-once over the REAL Stream DO + runner
   DO via real Workers RPC); the probe will confirm prd activeTime falls once the
   fix ships.
+
+- 2026-06-14 — PREVIEW VALIDATION (PR #1518 deployed to preview-2):
+  - `streams-e2e` + `Preview / deploy + e2e` PASS against the deployed fix — the
+    real subscription path delivers end-to-end with idle teardown active.
+  - `do-duration-probe` contrast on the dev/preview account (48h):
+    - os-preview-3-_ / os-preview-5-_ (OLD code): FLAGGED — 9 script-days, e.g.
+      os-preview-5-agent wallTimeP99 11h, os-preview-3-project 10.45h. Leak live.
+    - os-preview-2-\* (THIS FIX): CLEAN — no pinned-DO signature.
+  - Honest caveat: airtight same-slot before/after needs hours of analytics lag;
+    the evidence here (deployed e2e green + workerd adversarial exactly-once + the
+    fixed slot clean while leaking slots still flag + the probe correctly flagging
+    prd) is strong and convergent. Post-merge, the probe on prd should flip from
+    16 flagged script-days to clean as the fix runs and the window rolls forward.
+    STATUS: fix complete, tested (unit + adversarial + deployed e2e), validated in
+    preview, defense-in-depth in place, public PR #1518 green. Remaining: review +
+    merge; wire the probe to a scheduled monitoring job; decide outbound-only vs also
+    inbound (browser) teardown (currently outbound-only by design).
