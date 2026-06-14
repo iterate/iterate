@@ -43,24 +43,18 @@ That's the whole primitive. Everything below is making this **bidirectional, dyn
 > **the cool thing about Cap'n Web** — stubs pass _as arguments, in either direction_. So the client can hand the server a live object and the **server** calls methods on it, back across the same socket. Our client is a Node daemon on a laptop that can run a one-off bit of Swift.
 
 ```ts
-// daemon.ts — a Node program on your laptop. runSwift ACTUALLY runs here:
-// `swift -` reads a program from stdin and runs it. that's the whole trick.
+// daemon.ts — runSwift ACTUALLY runs Swift on the laptop: `swift -` reads the program from stdin.
 import { spawn } from "node:child_process";
+import { text } from "node:stream/consumers";
 
-const runSwift = (code: string) =>
-  new Promise<string>((resolve, reject) => {
-    const swift = spawn("swift", ["-"]); // read program from stdin
-    let out = "";
-    swift.stdout.on("data", (d) => (out += d));
-    swift.on("error", reject);
-    swift.on("close", () => resolve(out));
-    swift.stdin.end(code);
-  });
-
-const laptop = { runSwift }; // the capability we hand over
+const runSwift = (code: string) => {
+  const swift = spawn("swift", ["-"]);
+  swift.stdin.end(code);
+  return text(swift.stdout); // Promise<string> of the output
+};
 
 using itx = newWebSocketRpcSession<Server>(socket);
-await itx.register(laptop); // hand the server our laptop object
+await itx.register({ runSwift }); // hand the server our laptop tool
 ```
 
 The server calls BACK into the laptop to ask the human a question, popping a **native macOS dialog** and reading what they type:
@@ -87,22 +81,23 @@ class Server extends RpcTarget {
 
 Code in a Worker popped a native dialog on someone's laptop and read back what they typed — `laptop.runSwift(...)` executed _there_, called from _here_. A capability is just an object reference that happens to point across a socket. _(The runnable harness drives this exact path with a non-interactive program so CI doesn't block on the dialog; the dialog Swift above is type-checked separately.)_
 
-> ⚠️ **but this breaks when…** the laptop can only offer the _one_ object it passed into _that one call_, and only the server (its direct peer) can reach it. A real daemon offers several tools (`runSwift`, `runPython`, `screenshot`), wants to add them over time, and — soon — wants _other_ clients to use them. None of that fits "pass one object into one method."
+### 🚧 Why this isn't enough yet
+
+The laptop can only offer the _one_ object it passed into _that one call_, and only the server (its direct peer) can reach it. A real daemon offers several tools (`runSwift`, `runPython`, `screenshot`), wants to add them over time, and — soon — wants _other_ clients to use them. None of that fits "pass one object into one method."
 
 ---
 
 ## Step 2 — provide & invoke: capabilities go dynamic
 
-> **the one new idea** — stop passing objects as call arguments. Add two verbs: `provideCapability(name, target)` registers a capability under a name; `invoke(name, args)` calls it. The set of capabilities is now a dynamic registry, grown at runtime.
+> **the one new idea** — stop passing objects as call arguments. Add two verbs: `provideCapability({ name, capability })` registers a capability under a name; `invoke({ name, args })` calls it. The set of capabilities is now a dynamic registry, grown at runtime. (Every itx verb is a single **bag of props**, matching production — there are no positional signatures.)
 
 ```ts
 class Itx extends RpcTarget {
   #caps = new Map<string, unknown>();
-  provideCapability(name: string, target: unknown) {
-    this.#caps.set(name, target);
-    return `provided ${name}`;
+  provideCapability({ name, capability }: { name: string; capability: unknown }) {
+    this.#caps.set(name, capability);
   }
-  async invoke(name: string, args: unknown[]) {
+  async invoke({ name, args }: { name: string; args: unknown[] }) {
     const cap = this.#caps.get(name);
     if (!cap) throw new Error(`no capability "${name}"`);
     return await (cap as Function)(...args);
@@ -112,11 +107,15 @@ class Itx extends RpcTarget {
 
 ```ts
 // laptop registers its tool by name, then anyone with the handle invokes it:
-await itx.provideCapability("runSwift", runSwift);
-await itx.invoke("runSwift", [`print(1 + 1)`]); // → "2\n"
+await itx.provideCapability({ name: "runSwift", capability: runSwift });
+await itx.invoke({ name: "runSwift", args: [`print(1 + 1)`] }); // → "2\n"
 ```
 
-> ⚠️ **but this breaks when…** the registry lives in one server's memory, reachable only by that connection. The dashboard in another tab — a _second_ client — can't see what the laptop provided.
+The stored `name → capability` pairing has no special label in the codebase — the act is a **provide**, the folded row is a **capability entry**, and the target half is a `CapabilityTarget` (live stub or sturdy ref). In Step 6 the addressing field generalizes from `name` to a `path`, which is what production's `invoke({ path, args })` actually takes.
+
+### 🚧 Why this isn't enough yet
+
+The registry lives in one server's memory, reachable only by that connection. The dashboard in another tab — a _second_ client — can't see what the laptop provided.
 
 ---
 
@@ -126,41 +125,60 @@ await itx.invoke("runSwift", [`print(1 + 1)`]); // → "2\n"
 
 ```ts
 // client A (laptop): provides
-await a.provideCapability("runSwift", runSwift);
+await a.provideCapability({ name: "runSwift", capability: runSwift });
 
 // client B (dashboard): a SEPARATE socket — wants to call what A provided
-await b.invoke("runSwift", [`print(40 + 2)`]); // ← needs a shared registry
+await b.invoke({ name: "runSwift", args: [`print(40 + 2)`] }); // ← needs a shared registry
 ```
 
 A plain per-connection `Itx` can't do this: each socket gets its own `#caps`. We need one registry both sockets reach.
 
-> ⚠️ **but this breaks when…** "one shared registry, addressable by name, that outlives any single connection" is exactly a **Durable Object**. So that's where the registry has to live.
+### 🚧 Why this isn't enough yet
+
+"One shared registry, addressable by name, that outlives any single connection" is exactly a **Durable Object**. So that's where the registry has to live.
 
 ---
 
 ## Step 4 — A Durable Object to live in
 
-> **the one new idea** — put the `Itx` registry inside a Durable Object addressed by a constant name. Every connection — from any client — meets the same DO, so provides and invokes rendezvous.
+> **the one new idea** — put the `Itx` registry inside a Durable Object addressed by a constant name. Its real job is to be the **bridge**: client A's _live_ stub is held in the DO so client B — on a different edge isolate, with its own socket — can invoke it. Every connection meets the same DO, so provides and invokes rendezvous.
 
 ```ts
 export class ItxDO extends DurableObject {
   #itx = new Itx();
-  itx() {
-    return this.#itx; // a METHOD (see note) returning the registry target
+  // Itx extends RpcTarget — and on workerd capnweb's RpcTarget IS the platform
+  // `cloudflare:workers` RpcTarget — so returning it across the DO→Worker RPC
+  // boundary passes a STUB (RpcStub<Itx>), never a copy. Calling a method on the
+  // stub round-trips back to the DO. (A method, not a property: workerd doesn't
+  // pipeline through property access.)
+  itx(): Itx {
+    return this.#itx;
   }
 }
 
 // the stateless Worker terminates the WebSocket and forwards verbs to the DO:
-const node = env.ITX.getByName("itx"); // the ONE shared registry
+const itxDurableObject = env.ITX.getByName("itx"); // the ONE shared registry
+const itx = itxDurableObject.itx(); // RpcStub<Itx> — .provideCapability()/.invoke() round-trip to the DO
 ```
 
 Now A's provide and B's invoke meet in the DO → B runs A's live function.
 
-> **side note — the session terminates in the stateless Worker, not the DO.** The WebSocket is accepted in the (stateless) Worker; the DO exposes its target through an `itx()` _method_. Today this keeps the DO from being pinned per-connection; it also positions us for capnweb hibernation if/when Workers-RPC targets become hibernatable (Kenton Varda has signalled it's on the table).
->
-> Making a _live_ cross-client capability survive this — with the WS in the Worker — needs three things (verified in `server.ts`): the Worker serves a **local** capnweb handle forwarding to the DO (not the raw DO stub); it **`dup()`s the provided stub** at the Worker layer (Cap'n Web disposes argument stubs on return); and **`ctx.waitUntil`** keeps the provider's invocation alive for the socket's lifetime.
+### 🌉 The DO is the bridge, the edge does the rest
 
-> ⚠️ **but this breaks when…** we went dynamic, so we lost the nice native call — it's `invoke("runSwift", [...])` now, not `itx.runSwift(...)`. Let's win the ergonomics back.
+This is the division of labor that makes the whole thing work, and it's worth saying plainly:
+
+- **The edge Worker is per-connection.** It terminates one client's WebSocket, builds that client's handle/proxy, and enforces the auth it established at connect. Crucially, an edge isolate only ever sees the live stubs from _its own_ socket — client A's `runSwift` stub lives in A's edge isolate, client B's in B's.
+- **The DO is the shared meeting point.** It's the _one_ place both connections reach, so it's the only place a _live_ capability from A can be handed to B. A's edge Worker passes A's live stub into the DO (kept alive there); B's edge Worker forwards B's `invoke` to the same DO, which calls A's stub. Without the DO, B's isolate has no path to A's in-memory function at all.
+
+So you can't push everything to the edge: the **ergonomics and auth** belong at the edge (per-connection), but the **live-capability rendezvous** has to be in the DO (cross-connection). Durability of the registry is a bonus the DO also gives you — but the bridge is the point.
+
+Making a live cross-client stub actually survive this needs three things (verified in `server.ts`): the edge Worker passes a **duped** copy of the provided stub into the DO (Cap'n Web disposes argument stubs when the `provide` call returns), and it holds the provider's invocation open with **`ctx.waitUntil`** for the socket's lifetime, so A's stub stays callable when B invokes it later.
+
+> **side note — hibernation, deferred.** The WebSocket terminates in the stateless Worker and the DO exposes its target through an `itx()` _method_ — which also positions us for capnweb hibernation if/when Workers-RPC targets become hibernatable (Kenton Varda has signalled it's on the table).
+
+### 🚧 Why this isn't enough yet
+
+We went dynamic, so we lost the nice native call — it's `invoke({ name: "runSwift", args })` now, not `itx.runSwift(...)`. Let's win the ergonomics back.
 
 ---
 
@@ -175,24 +193,35 @@ await itx.runSwift(`print(1 + 1)`); // → one pipelined call, path ["runSwift"]
 
 ```ts
 // server — the registry is DYNAMIC, so the served target can't be a fixed class.
-// serve a proxy whose unknown names become invoke():
+// Wrap the core in a Proxy whose unknown names become invoke():
 function handle(core) {
   return new Proxy(core, {
     get(core, key) {
       if (key in core) return Reflect.get(core, key); // provideCapability, invoke, describe…
-      return (...args) => core.invoke(key, args); // unknown → invoke("runSwift", [code])
+      return (...args) => core.invoke({ name: key, args }); // unknown → invoke
     },
   });
 }
-// the DO serves the wrapped core:
-itx() {
-  return handle(this.#itx);
-}
+
+// the STATELESS WORKER builds the handle and serves it to the client over Cap'n Web.
+// (Matches production: the DO returns the bare Itx core stub; the handle is a
+// Worker-side wrapper around it — production calls it ItxHandle.)
+newWebSocketRpcSession(clientSocket, handle(itx)); // itx = the RpcStub<Itx> from Step 4
 ```
 
-`itx.runSwift(code)` feels native again — but notice the proxy is on the **server**, not the client, and it's pure sugar over the same dynamic `invoke`. (This one-level version works because Cap'n Web walks an `RpcTarget` by reading its members directly. The deep version below trips a subtler rule.)
+`itx.runSwift(code)` feels native again — and notice **where** the proxy lives: the stateless Worker at the edge, not the DO.
 
-> ⚠️ **but this breaks when…** the capability is a whole _SDK_ and you want `itx.slack.chat.postMessage({ channel, text })` — a deep path, ideally typed against the official Slack package. Cap'n Web pipelines the whole path from the client just fine; the breakage is on the **server**, where traversing past the first segment needs more than a `get` trap.
+### 🔌 Wait — does RPC ship a Proxy across the wire?
+
+No. **An RPC never serializes a Proxy — it passes a _stub_ (a reference).** When the Worker hands `handle(core)` to Cap'n Web, the client receives a stub, not a copy; `itx.runSwift(...)` is a message back to the Worker, where the Proxy's `get`/`apply` traps actually run. Only plain `{...}` objects are deep-copied — functions, `RpcTarget`s, and Proxies over them cross by reference (`["export", id]` on the wire). workerd had to special-case this: wrapping an `RpcTarget` in a Proxy used to throw `DataCloneError` until [workerd#3184](https://github.com/cloudflare/workerd/pull/3212) taught serialization to see the `RpcTarget` through the Proxy and pass it by stub. This works one level because Cap'n Web walks an `RpcTarget` by reading its members directly — the deep version (Step 6) trips a subtler rule.
+
+### 🌍 Why build the proxy at the edge, not in the DO?
+
+The DO is the one **durable, single-threaded** thing — a serialization point for the shared registry. The stateless Worker is **horizontally scalable** and is where each WebSocket actually terminates. So the per-connection work — the proxy traps, the ergonomic handle, and the connect-time **auth/access narrowing** it carries — belongs at the edge, next to the connection, where it scales out per client. The DO does only the minimal stateful job (hold the fold) and nothing per-connection. Concretely that buys you: the DO is never **pinned per-connection** (otherwise every live socket would hold a slice of the DO's memory and its single thread, throttling everyone); the handle is cheap and ephemeral, recreated per connection from the same DO; and it keeps the door open to **capnweb hibernation** (idle edge sessions can sleep without keeping the DO resident). The cost is one extra hop (edge → DO) per real registry op — cheap, and pipelined into a single round trip.
+
+### 🚧 Why this isn't enough yet
+
+The capability is a whole _SDK_ and you want `itx.slack.chat.postMessage({ channel, text })` — a deep path, ideally typed against the official Slack package. Cap'n Web pipelines the whole path from the client just fine; the breakage is on the **server**, where traversing past the first segment needs more than a `get` trap.
 
 ---
 
@@ -203,14 +232,15 @@ itx() {
 ```ts
 // provide the real Slack SDK as ONE capability, mounted at "slack":
 import { WebClient } from "@slack/web-api";
-itx.provideCapability("slack", new WebClient(token));
+itx.provideCapability({ name: "slack", capability: new WebClient(token) });
 
 // client — a naked stub typed as { slack: WebClient }, so the editor autocompletes the
 // real Slack API. Cap'n Web sends ["slack","chat","postMessage"] + [msg] in ONE message:
 await itx.slack.chat.postMessage({ channel: "C123", text: "hi" });
 
-// server — resolve the LONGEST registered prefix, replay the rest onto the target:
-function invoke(path, args) {
+// server — resolve the LONGEST registered prefix, replay the rest onto the target.
+// invoke's addressing field is now a `path` (this is production's invoke({ path, args })):
+invoke({ path, args }) {
   const { entry, remainder } = resolveLongestPrefix(this.#caps, path); // "slack" wins
   return replayPath(entry, remainder, args); // webClient.chat.postMessage(msg)
 }
@@ -218,22 +248,31 @@ function invoke(path, args) {
 
 itx doesn't know a thing about Slack; it routes a path. And there is **no client-side path proxy** — Cap'n Web's stub already is one. (Production matches this exactly: the browser, Node, and the REPL all hold a plain `newWebSocketRpcSession<ItxHandle>` stub; the path proxy in `path-proxy.ts` runs _server-side_, inside the handle.)
 
-> ⚠️ **the gotcha that cost a day** — the dynamic **server** target has to answer for names it has never seen. Three non-obvious rules make that work (all verified in `min-dynamic-target.mjs`):
->
-> 1. **`getOwnPropertyDescriptor` is load-bearing, not just `get`.** Server-side Cap'n Web does `Object.hasOwn(value, segment)` _before_ reading each segment; without a descriptor trap every segment reads as absent and the chain dies at "`.chat` of undefined" — which is exactly why our first draft wrongly concluded deep server-side dispatch "doesn't work."
-> 2. **The target must be function-typed** — a Proxy over a plain function, not over an `RpcTarget`. Cap'n Web classifies an rpc-target by its prototype and rejects fabricated "instance properties" (it even flags the real verbs).
-> 3. **Retain (`dup`) provided live stubs** — Cap'n Web disposes argument stubs when the `provide` call returns.
+### ⚠️ The gotcha that cost a day
 
-> ✅ **what falls out for free** — because the _longest_ registered prefix wins, you can **shadow a single method deep inside another capability**. Provide at `["slack","chat","postMessage"]` and that one call resolves to your override; `slack.users.list` and everything else still resolves to the original `slack` client.
+The dynamic **server** target has to answer for names it has never seen. Three non-obvious rules make that work (all verified in `min-dynamic-target.mjs`):
+
+1. **`getOwnPropertyDescriptor` is load-bearing, not just `get`.** Server-side Cap'n Web does `Object.hasOwn(value, segment)` _before_ reading each segment; without a descriptor trap every segment reads as absent and the chain dies at "`.chat` of undefined" — which is exactly why our first draft wrongly concluded deep server-side dispatch "doesn't work."
+2. **The target must be function-typed** — a Proxy over a plain function, not over an `RpcTarget`. Cap'n Web classifies an rpc-target by its prototype and rejects fabricated "instance properties" (it even flags the real verbs).
+3. **Retain (`dup`) provided live stubs** — Cap'n Web disposes argument stubs when the `provide` call returns.
+
+### 🎁 What falls out for free
+
+Because the _longest_ registered prefix wins, you can **shadow a single method deep inside another capability**. Provide at `["slack","chat","postMessage"]` and that one call resolves to your override; `slack.users.list` and everything else still resolves to the original `slack` client.
 
 ```ts
 // wrap just chat.postMessage with rate-limiting; leave the rest of Slack intact.
-itx.provideCapability("slack.chat.postMessage", rateLimited(slack.chat.postMessage));
+itx.provideCapability({
+  path: ["slack", "chat", "postMessage"],
+  capability: rateLimited(slack.chat.postMessage),
+});
 await itx.slack.chat.postMessage(msg); // → your wrapper (longest prefix)
 await itx.slack.users.list(); // → the original WebClient (prefix "slack")
 ```
 
-> ⚠️ **but this breaks when…** the DO is evicted (we kept deferring it). And we still haven't said what a capability _is_ — the laptop's `runSwift` is a live function in a process that may have closed its lid; the Slack client is a live object too. Some capabilities can't survive an eviction. We have to name the kinds.
+### 🚧 Why this isn't enough yet
+
+The DO is evicted (we kept deferring it). And we still haven't said what a capability _is_ — the laptop's `runSwift` is a live function in a process that may have closed its lid; the Slack client is a live object too. Some capabilities can't survive an eviction. We have to name the kinds.
 
 ---
 
@@ -248,7 +287,7 @@ const slackRef = {
   type: "rpc",
   worker: { type: "source", source: { repo, commit, path: "caps/slack.ts" } },
 };
-itx.provideCapability("slack", slackRef); // survives eviction — it's just data
+itx.provideCapability({ name: "slack", capability: slackRef }); // survives eviction — it's just data
 ```
 
 A purely structural discriminator decides dispatch:
@@ -263,7 +302,9 @@ async function dispatch(target, args) {
 }
 ```
 
-> ⚠️ **but this breaks when…** if the registry is just a `Map` in memory, it dies with the DO anyway — even the sturdy refs. We need the registry itself to be durable.
+### 🚧 Why this isn't enough yet
+
+If the registry is just a `Map` in memory, it dies with the DO anyway — even the sturdy refs. We need the registry itself to be durable.
 
 ---
 
@@ -288,7 +329,9 @@ function reduceItxEvent(state, event) {
 
 Last-write-wins, revoke removes, and replay is deterministic — the table is never the source of truth, the stream is.
 
-> ⚠️ **but this breaks when…** a sturdy ref is just data. Something has to turn `{ type:"rpc", worker:{ type:"source", … } }` back into a callable. That's `dial`.
+### 🚧 Why this isn't enough yet
+
+A sturdy ref is just data. Something has to turn `{ type:"rpc", worker:{ type:"source", … } }` back into a callable. That's `dial`.
 
 ---
 
@@ -309,7 +352,9 @@ function dial(ref) {
 
 Dialing the same ref twice reuses the cached isolate (no rebuild); different content builds a new one. The core only knows "ref → `PathCallable` via the injected `dial`."
 
-> ⚠️ **but this breaks when…** a context wants the platform's defaults (`fetch`, `ai`, `secrets`) and a parent's capabilities without re-providing them all. We need contexts to inherit.
+### 🚧 Why this isn't enough yet
+
+A context wants the platform's defaults (`fetch`, `ai`, `secrets`) and a parent's capabilities without re-providing them all. We need contexts to inherit.
 
 ---
 
@@ -327,7 +372,9 @@ function invoke(name) {
 
 A child provides `slack`; the parent provides `fetch` and `ai`. The child sees all three; if the child also provides `fetch`, its version shadows the parent's. The chain bottoms out at a code-rooted, read-only platform context whose defaults are loopback refs — so they update the instant you deploy.
 
-> ⚠️ **but this breaks when…** nothing breaks — this is the punchline. Everything we've built (provide/revoke as events, a folded table, read-your-writes, a stream that replays) is exactly a **stream processor**.
+### 🎯 Nothing breaks — this is the punchline
+
+Everything we've built (provide/revoke as events, a folded table, read-your-writes, a stream that replays) is exactly a **stream processor**.
 
 ---
 
@@ -340,11 +387,12 @@ class Itx extends StreamProcessor {
   constructor() {
     super(reduceItxEvent);
   }
-  provideCapability(name, kind, value) {
-    this.append({ type: "capability-provided", name, kind, value });
+  provideCapability({ name, capability }) {
+    this.append({ type: "capability-provided", name, capability }); // append, don't store
   }
-  invoke(name) {
-    return this.getState().get(name); // the fold of everything appended
+  invoke({ path, args }) {
+    const cap = this.getState().get(path[0]); // the fold of everything appended
+    return cap(...args);
   }
 }
 ```
