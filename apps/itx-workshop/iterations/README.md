@@ -1,0 +1,38 @@
+# itx-explainer — incremental idea sequence
+
+A sequence of **near-identical** versions of `../itx-explainer.md`, each folding in
+**one** idea from the ocap/Kenton-idiomatic review (`/tmp/itx-ocap-blue-sky-review.md`).
+Read consecutive `diff`s to see exactly what each idea changes; each version is
+**validated** by a runnable model-check in `validate.mjs`.
+
+```bash
+node validate.mjs        # run every check (v1..v6 + v3b)
+node validate.mjs 3      # run checks 1..3 (i.e. up to v3)
+diff v2-fold-sturdy-only.md v3-two-verbs-firstof.md   # see exactly what v3 adds
+```
+
+| File                             | idea folded in                                                                                                                                                                                        | `validate.mjs` check | Δ from prior |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ------------ |
+| `v0-baseline.md`                 | (current `itx-explainer.md`, unchanged)                                                                                                                                                               | —                    | —            |
+| `v1-context-is-a-capability.md`  | **A context IS a capability** + name the Cap'n Proto lineage (address=SturdyRef, dial=restore)                                                                                                        | 1                    | +5           |
+| `v2-fold-sturdy-only.md`         | The fold reconstructs the **sturdy** registry only; live caps are a non-durable overlay reaped by `onRpcBroken`                                                                                       | 2                    | ~42          |
+| `v3-two-verbs-firstof.md`        | **Two-verb core** (`provide`+`invoke`) + one `firstOf`/membrane combinator (revoke=provide-⊥, extend=provide-parent, describe/super=reads)                                                            | 3                    | ~49          |
+| `v3b-multi-do-and-origin.md`     | **Two new steps**: Step 11 the chain spans Durable Objects (project itx + agent itx); Step 12 deep shadowing via `origin` (a project cap invoked through the agent honors the agent's `fetch` shadow) | 7                    | +54          |
+| `v4-sealed-sturdyref.md`         | **Seal the SturdyRef** (`sealedFor`); `dial`/`restore` checks the seal → deletes the dial allowlist                                                                                                   | 4                    | +11          |
+| `v5-lean-on-followpath.md`       | **Lean on `followPath`**: itx only _selects_ (longest prefix); Cap'n Web _traverses_ the rest — the `replayPathCall` live half is redundant for real stubs                                            | 5                    | +4           |
+| `v6-bound-origin-typed-tiers.md` | **Bind `origin` into the reference** (`.boundTo`, no wire tag) + **typed/dynamic tiers** (typed caps reference-called; `invoke({path,args})` reserved for dynamic/codemode)                           | 6                    | +20          |
+
+Order is cumulative: each file is a copy of the prior plus one idea, so
+`v6` contains all of them. `v3b` inserts the two **new workshop steps** (multi-DO
+chain + `origin`) that came out of the "does this work across two DOs?" question
+— it sits between v3 and v4 in the cumulative chain.
+
+`validate.mjs` is **model-level**: each check implements the minimal model the
+corresponding version describes (pure Node, no workerd) and asserts it behaves as
+the doc claims — e.g. `firstOf` deep-shadow ≡ chain-shadow, `revoke = provide(⊥)`
+climbing to a parent, a sealed ref refusing a mismatched dialer, `origin` making
+the agent's `fetch` shadow reach an inherited project cap (and **not** reaching it
+without `origin` — proving `origin` is load-bearing, not decoration).
+
+These are exploration artifacts, not a merge target — pick the ideas worth landing
+in `../itx-explainer.md`.
