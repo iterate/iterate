@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "itx-workshop-repro",
+  "main": "server.ts",
+  "compatibility_date": "2025-04-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "durable_objects": {
+    "bindings": [{ "name": "ITX", "class_name": "ItxDO" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ItxDO"] }],
+  "dev": {
+    "port": 8787,
+  },
+}
