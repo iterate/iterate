@@ -408,6 +408,17 @@
         </li>
       </ol>
 
+      <div class="note">
+        <span class="label">runnable &amp; verified</span>
+        Every step here is exercised against real <code class="inline">workerd</code> and real Cap'n
+        Web clients by the repro in this folder (<code class="inline">server.ts</code> +
+        <code class="inline">harness.ts</code>, and the self-contained
+        <code class="inline">min-dynamic-target.mjs</code>). Where the first draft of this workshop
+        guessed wrong, the repro corrected it — most notably:
+        <b>there is no client-side path proxy</b>, because a naked Cap'n Web stub already pipelines
+        a whole dotted path into one call. See Step&nbsp;6.
+      </div>
+
       <!-- STEP 0 -->
       <section class="step" id="s0">
         <div class="step-head"><span class="step-n">Step 0</span></div>
@@ -637,93 +648,107 @@ itx.provideCapability(<span class="s">"runSwift"</span>, runSwift);
       <!-- STEP 5 -->
       <section class="step" id="s5">
         <div class="step-head"><span class="step-n">Step 5</span></div>
-        <h2>Getting the method call back — a server-side proxy</h2>
+        <h2>Getting the method call back — and who's really proxying</h2>
         <div class="idea">
-          <span class="label">the one new idea (MVP)</span>
-          We lost <code class="inline">itx.runSwift(code)</code> when we went dynamic. Win it back
-          with a tiny <b>server-side Proxy</b>: serve a wrapper around the core whose unknown
-          properties become <code class="inline">invoke</code>. The client calls a method that
-          doesn't statically exist; capnweb relays the name to the server; the Proxy turns it into a
-          registry lookup.
+          <span class="label">the one new idea</span>
+          Going dynamic looked like it cost us <code class="inline">itx.runSwift(code)</code>. It
+          didn't — because the <b>client is a naked Cap'n Web stub</b>, and Cap'n Web already turns
+          property access plus a call into a single pipelined message. We never write a client
+          proxy. What we write is the <b>server-side</b> target that receives the name and turns it
+          into an <code class="inline">invoke</code>.
         </div>
-        <pre><span class="c">// wrap the core: real verbs pass through, anything else becomes an invoke.</span>
+        <pre><span class="c">// client — a plain Cap'n Web stub, no wrapper. It sends ["runSwift"] + args itself:</span>
+<span class="k">await</span> itx.runSwift(<span class="s">`print(1 + 1)`</span>);  <span class="c">// → one pipelined call, path ["runSwift"] → "2\n"</span></pre>
+        <pre><span class="c">// server — the registry is DYNAMIC, so the served target can't be a fixed class.</span>
+<span class="c">// serve a proxy whose unknown names become invoke():</span>
 <span class="k">function</span> handle(core) {
   <span class="k">return new</span> Proxy(core, {
     get(core, key) {
       <span class="k">if</span> (key <span class="k">in</span> core) <span class="k">return</span> Reflect.get(core, key);  <span class="c">// provideCapability, invoke, describe…</span>
-      <span class="k">return</span> (...args) =&gt; core.invoke(key, args);       <span class="c">// itx.runSwift(code) → invoke("runSwift", [code])</span>
+      <span class="k">return</span> (...args) =&gt; core.invoke(key, args);       <span class="c">// unknown → invoke("runSwift", [code])</span>
     },
   });
 }
 
 <span class="c">// the DO serves the wrapped core:</span>
 itx() { <span class="k">return</span> handle(<span class="k">this</span>.#itx); }</pre>
-        <pre><span class="c">// client — calling feels native again:</span>
-<span class="k">await</span> itx.runSwift(<span class="s">`print(1 + 1)`</span>);  <span class="c">// → core.invoke("runSwift", ["print(1 + 1)"]) → "2\n"</span></pre>
         <p>
-          That's the entire MVP: one <code class="inline">get</code> trap.
-          <code class="inline">itx.runSwift(code)</code>
-          is now indistinguishable from a native method, but underneath it's still one
-          <code class="inline">invoke</code> against a dynamic registry. The ergonomics and the
-          mechanism are cleanly separated — the proxy is sugar; the model is untouched.
+          <code class="inline">itx.runSwift(code)</code> feels native again — but notice the proxy
+          is on the <b>server</b>, not the client, and it's pure sugar over the same dynamic
+          <code class="inline">invoke</code>. (This one-level version works because Cap'n Web walks
+          an <code class="inline">RpcTarget</code> by reading its members directly. The deep version
+          below trips a subtler rule.)
         </p>
         <div class="breaks">
           <span class="label">but this breaks when…</span>
-          the capability isn't a flat function but a whole <em>SDK</em>. You want
-          <code class="inline">itx.slack.chat.postMessage({ channel, text })</code> — nested
-          namespaces, and ideally typed against the official Slack package. A one-level
-          <code class="inline">get</code> trap returns a function;
-          <code class="inline">.chat</code> on a function is <code class="inline">undefined</code>.
-          We need to call <em>deep</em>.
+          the capability is a whole <em>SDK</em> and you want
+          <code class="inline">itx.slack.chat.postMessage({ channel, text })</code> — a deep path,
+          ideally typed against the official Slack package. Cap'n Web pipelines the whole path from
+          the client just fine; the breakage is on the <b>server</b>, where traversing past the
+          first segment needs more than a <code class="inline">get</code> trap.
         </div>
       </section>
 
       <!-- STEP 6 -->
       <section class="step" id="s6">
         <div class="step-head"><span class="step-n">Step 6</span></div>
-        <h2>Paths &amp; the Slack SDK</h2>
+        <h2>Deep paths &amp; the Slack SDK</h2>
         <div class="idea">
           <span class="label">the motivation</span>
-          We want to
-          <b
-            >mount the official <code class="inline">@slack/web-api</code> client as one
-            capability</b
-          >
-          and call straight into it — <code class="inline">itx.slack.chat.postMessage(…)</code> —
-          with the SDK's own argument types. So a capability lives at a <b>path</b> (<code
-            class="inline"
-            >["slack"]</code
-          >), a call addresses a <b>full path</b> (<code class="inline"
-            >["slack","chat","postMessage"]</code
-          >), and dispatch <b>replays the remainder</b> onto the target.
+          Mount the official <code class="inline">@slack/web-api</code> client as
+          <b>one capability</b> and call straight into it —
+          <code class="inline">itx.slack.chat.postMessage(…)</code> — with the SDK's own types. The
+          client writes nothing new: Cap'n Web accumulates
+          <code class="inline">["slack","chat","postMessage"]</code> locally (zero round trips) and
+          sends one pipelined call. The <b>server</b> mounts the cap at a path, resolves the
+          <b>longest registered prefix</b>, and <b>replays the remainder</b> onto the target.
         </div>
         <pre><span class="c">// provide the real Slack SDK as ONE capability, mounted at "slack":</span>
 <span class="k">import</span> { WebClient } <span class="k">from</span> <span class="s">"@slack/web-api"</span>;
 itx.provideCapability(<span class="s">"slack"</span>, <span class="k">new</span> WebClient(token));
 
-<span class="c">// upgrade the proxy: each property access ACCUMULATES a path (locally, zero round</span>
-<span class="c">// trips); the terminal call sends ONE invoke with the whole path. (this is PathProxy)</span>
-<span class="k">function</span> pathProxy(core, path = []) {
-  <span class="k">return new</span> Proxy(() =&gt; {}, {
-    get: (_t, key) =&gt; pathProxy(core, [...path, key]),   <span class="c">// itx.slack.chat → ["slack","chat"]</span>
-    apply: (_t, _s, args) =&gt; core.invoke(path, args),    <span class="c">// …postMessage(x) → invoke(path, [x])</span>
-  });
-}
+<span class="c">// client — a naked stub typed as { slack: WebClient }, so the editor autocompletes the</span>
+<span class="c">// real Slack API. Cap'n Web sends ["slack","chat","postMessage"] + [msg] in ONE message:</span>
+<span class="k">await</span> itx.slack.chat.postMessage({ channel: <span class="s">"C123"</span>, text: <span class="s">"hi"</span> });
 
-<span class="c">// the server resolves the LONGEST registered prefix and replays the remainder:</span>
+<span class="c">// server — resolve the LONGEST registered prefix, replay the rest onto the target:</span>
 invoke(path, args) {
   <span class="k">const</span> { entry, remainder } = resolveLongestPrefix(<span class="k">this</span>.#caps, path); <span class="c">// "slack" wins</span>
-  <span class="k">return</span> replayPath(entry, remainder, args); <span class="c">// webClient.chat.postMessage(x)</span>
-}
-
-<span class="c">// typed against @slack/web-api, dispatched as one invoke:</span>
-<span class="k">await</span> itx.slack.chat.postMessage({ channel: <span class="s">"C123"</span>, text: <span class="s">"hi"</span> });</pre>
+  <span class="k">return</span> replayPath(entry, remainder, args); <span class="c">// webClient.chat.postMessage(msg)</span>
+}</pre>
         <p>
-          The handle is just typed as <code class="inline">{ slack: WebClient; … }</code>, so your
-          editor autocompletes the real Slack API — but every call is still one
-          <code class="inline">invoke(path, args)</code> against the dynamic registry. itx doesn't
-          know a thing about Slack; it routes a path.
+          itx doesn't know a thing about Slack; it routes a path. And there is
+          <b>no client-side path proxy</b> — Cap'n Web's stub already is one. (Production matches
+          this exactly: the browser, Node, and the REPL all hold a plain
+          <code class="inline">newWebSocketRpcSession&lt;ItxHandle&gt;</code> stub; the path proxy
+          in <code class="inline">path-proxy.ts</code> runs <em>server-side</em>, inside the
+          handle.)
         </p>
+        <div class="breaks">
+          <span class="label">the gotcha that cost a day</span>
+          The dynamic <b>server</b> target has to answer for names it has never seen. Three
+          non-obvious rules make that work (all verified in
+          <code class="inline">min-dynamic-target.mjs</code> in this folder):
+          <ul style="margin: 8px 0 0">
+            <li>
+              <b><code class="inline">getOwnPropertyDescriptor</code> is load-bearing</b>, not just
+              <code class="inline">get</code>. Server-side Cap'n Web does
+              <code class="inline">Object.hasOwn(value, segment)</code> <em>before</em> reading each
+              segment; without a descriptor trap every segment reads as absent and the chain dies at
+              "<code class="inline">.chat of undefined</code>" — which is exactly why our first
+              draft wrongly concluded deep server-side dispatch "doesn't work."
+            </li>
+            <li>
+              <b>The target must be function-typed</b> — a Proxy over a plain function, not over an
+              <code class="inline">RpcTarget</code>. Cap'n Web classifies an rpc-target by its
+              prototype and rejects fabricated "instance properties" (it even flags the real verbs).
+            </li>
+            <li>
+              <b>Retain (<code class="inline">dup</code>) provided live stubs</b> — Cap'n Web
+              disposes argument stubs when the <code class="inline">provide</code> call returns.
+            </li>
+          </ul>
+        </div>
         <div class="idea" style="border-color: #16a34a">
           <span class="label" style="color: #16a34a">what falls out for free</span>
           Because the <em>longest</em> registered prefix wins, you can
@@ -1137,7 +1162,7 @@ run.provideCapability(<span class="s">"slack.chat.postMessage"</span>, <span cla
               <td style="text-align: right">~40</td>
             </tr>
             <tr>
-              <td>Path proxy + longest-prefix + replay</td>
+              <td>Server-side path proxy + longest-prefix + replay</td>
               <td class="mono">PathProxy / resolveLongestProvidedPrefix / replayPathCall</td>
               <td style="text-align: right">~50</td>
             </tr>
@@ -1177,22 +1202,23 @@ run.provideCapability(<span class="s">"slack.chat.postMessage"</span>, <span cla
 
         <div class="quirk">
           <h4>
-            The path proxy's sharp edges — <code class="inline">then</code>, reserved segments
+            The server-side proxy's sharp edges — <code class="inline">then</code>, reserved
+            segments
           </h4>
           <p>
-            The Step-6 <code class="inline">PathProxy</code> needs a
-            <code class="inline">then</code> trap reading as
-            <code class="inline">undefined</code> (so
-            <code class="inline">await itx.slack</code> doesn't mistake a path node for a thenable),
-            and it must refuse protocol-level segments (<code class="inline">__proto__</code>,
-            <code class="inline">apply</code>, <code class="inline">call</code>,
-            <code class="inline">dup</code>, capnweb stub controls) on intermediate path nodes — the
-            same reserved set guards both the proxy and the server-side
+            The Step-6 server-side proxy (production's <code class="inline">PathProxy</code>,
+            reached through the remote handle) needs a <code class="inline">then</code> trap reading
+            as <code class="inline">undefined</code> (so a path node is never mistaken for a
+            thenable mid-chain), and it must refuse protocol-level segments (<code class="inline"
+              >__proto__</code
+            >, <code class="inline">apply</code>, <code class="inline">call</code>,
+            <code class="inline">dup</code>, Cap'n Web stub controls) on intermediate path nodes —
+            the same reserved set guards both the proxy and the server-side
             <code class="inline">replayPathCall</code>.
           </p>
           <p class="why">
-            <b>Without it:</b> <code class="inline">await</code> hangs on a path node, or a crafted
-            path reaches a prototype-pollution / RPC-control name. Pure protocol hygiene over the
+            <b>Without it:</b> a crafted path reaches a prototype-pollution / RPC-control name, or
+            <code class="inline">await</code> trips on a path node. Pure protocol hygiene over the
             same path dispatch.
           </p>
         </div>
@@ -1349,18 +1375,26 @@ run.provideCapability(<span class="s">"slack.chat.postMessage"</span>, <span cla
         </div>
 
         <div class="quirk">
-          <h4>workerd RPC quirks — method-not-property, invisible fields</h4>
+          <h4>Two RPC systems — Cap'n Web pipelines paths, Workers RPC doesn't</h4>
           <p>
-            capnweb's <code class="inline">RpcTarget</code> <em>is</em> a Workers RpcTarget in
-            workerd, but pipelining doesn't traverse property accesses — which is why the DO exposes
-            its core via an <code class="inline">itx()</code> method (Step&nbsp;4's note), and why
-            deep SDK calls accumulate a path on the consumer side (Step&nbsp;6) rather than relying
-            on the server to see each access. A DO's in-memory live-stub table can't cross RPC;
-            reconnecting replays the stream and marks live entries offline.
+            Cap'n Web's <code class="inline">RpcTarget</code> <em>is</em> a Workers RpcTarget in
+            workerd, but the two systems behave differently on property paths.
+            <b>Cap'n Web</b> pipelines a whole dotted path from a naked stub into one call — so
+            <code class="inline">itx.slack.chat.postMessage(…)</code> needs no client proxy; the
+            server-side dynamic proxy only has to answer
+            <code class="inline">Object.hasOwn</code> for each segment (its
+            <code class="inline">getOwnPropertyDescriptor</code> trap, Step&nbsp;6).
+            <b>Workers RPC</b> (the DO stub, the dialed parent) does <em>not</em> pipeline through
+            property accesses — which is why the DO exposes its core via an
+            <code class="inline">itx()</code> method (Step&nbsp;4's note) and why
+            <code class="inline">itx.project.processor.snapshot()</code> is made to work by
+            <code class="inline">replayPathCall</code> awaiting each segment server-side. A DO's
+            in-memory live-stub table can't cross RPC; reconnecting replays the stream and marks
+            live entries offline.
           </p>
           <p class="why">
-            <b>Without it:</b> calls hang or fields read as undefined across the RPC boundary. These
-            shape the wiring, not the model.
+            <b>Without it:</b> calls hang or fields read as undefined across the Workers-RPC
+            boundary. These shape the wiring, not the model.
           </p>
         </div>
 
