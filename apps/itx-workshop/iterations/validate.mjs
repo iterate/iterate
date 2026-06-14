@@ -473,7 +473,85 @@ function check10() {
   ok("v9: seal == public identity is forgeable → rejected (must be a secret)", forged);
 }
 
-const checks = [check1, check2, check3, check4, check5, check6, check7, check8, check9, check10];
+// ── v10: egress attenuation = routed through the `fetch` cap on the origin chain
+//        (works for a LIVE cap via itx.fetch; the only exception is a foreign OS fetch) ─
+function check10b() {
+  const MISS = Symbol("miss");
+  const ownProviders = (caps) => ({
+    tryInvoke({ path, args }) {
+      const hit = findCapabilityByPath({ caps, path });
+      return hit ? walk(hit.capability, hit.rest, args) : MISS;
+    },
+  });
+  const firstOf = (rs) => {
+    const tryInvoke = ({ path, args }) => {
+      for (const r of rs) {
+        const h = r.tryInvoke({ path, args });
+        if (h !== MISS) return h;
+      }
+      return MISS;
+    };
+    return {
+      tryInvoke,
+      invoke(i) {
+        const h = tryInvoke(i);
+        if (h === MISS) throw new Error("miss");
+        return h;
+      },
+    };
+  };
+  const logs = [];
+  const projectFetch = (url) => `${url}#200`;
+  const osFetch = (url) => `${url}#OS`; // a foreign/live provider's own network — outside the platform
+  const pcaps = new Map([["fetch", projectFetch]]);
+  const acaps = new Map([
+    [
+      "fetch",
+      (url) => {
+        logs.push(url);
+        return projectFetch(url);
+      },
+    ],
+  ]); // agent shadow: log→super
+  // itx.fetch on an ORIGIN-scoped handle dispatches `fetch` down origin's chain:
+  const itxFor = (originCaps) => ({
+    fetch: (url) =>
+      firstOf([ownProviders(originCaps), ownProviders(pcaps)]).invoke({
+        path: ["fetch"],
+        args: [url],
+      }),
+  });
+
+  // a LIVE cap (just a function — runs "in the provider") that routes egress through
+  // itx.fetch, origin-scoped to the agent → IS attenuated, exactly like a dialed cap:
+  const liveCapViaItxFetch = () => itxFor(acaps).fetch("https://petstore/pet/1");
+  ok(
+    "v10: a LIVE cap that calls itx.fetch is attenuated (not dialed-only)",
+    liveCapViaItxFetch() === "https://petstore/pet/1#200" && logs.length === 1,
+  );
+
+  // the ONE exception: a cap calling a foreign OS fetch never enters the fetch cap → not attenuated:
+  logs.length = 0;
+  const foreignCap = () => osFetch("https://petstore/pet/1");
+  ok(
+    "v10: a foreign OS fetch is NOT attenuated (the one genuine exception)",
+    foreignCap() === "https://petstore/pet/1#OS" && logs.length === 0,
+  );
+}
+
+const checks = [
+  check1,
+  check2,
+  check3,
+  check4,
+  check5,
+  check6,
+  check7,
+  check8,
+  check9,
+  check10,
+  check10b,
+];
 const upTo = Number(process.argv[2] ?? checks.length);
 console.log(`running checks 1..${upTo}`);
 for (let i = 0; i < upTo; i++) checks[i]();
