@@ -216,3 +216,24 @@ heavy new transport / breaking contract change).
     Green: 79 node + 17 workers streams; apps/os typecheck; oxlint clean.
     Remaining: preview repro + adversarial pressure test (real billing signal);
     defense-in-depth recurrence guard.
+
+- 2026-06-14 — Adversarial pressure tests (workerd, deterministic — preview
+  analytics lag makes a tight loop there impossible). `stream-idle-teardown-adversarial.workers.test.ts`:
+  (1) sever the PRODUCER before EVERY append (forced cold re-dial each time) →
+  echo processor's durable `seen` advances exactly 1,2,3,4,5 (exactly-once, no
+  loss/dup across 5 teardowns); (2) BOTH timers fire between appends (subscriber
+  disconnect + producer sever, worst order) → next append still delivered;
+  (3) double-sever a quiet stream → harmless no-op, later delivery intact. All green.
+- 2026-06-14 — Defense-in-depth recurrence guard: `apps/os/scripts/do-duration-probe.ts`
+  (+ `pnpm --dir apps/os probe:do-duration`). Queries CF GraphQL for the pinned-DO
+  signature (a single DO invocation > 1h wall-clock) and exits non-zero so a cron
+  can alert. VALIDATED against prd: correctly flagged the known leak (16 os-prd-\*
+  script-days, os-prd-agent wallTimeP99 17.35h, etc.). Wire to a scheduled job
+  (cron / monitoring) post-merge. The two-sided idle timers remain the primary,
+  structural defense — any future subscription is auto-capped on both ends.
+- 2026-06-14 — Preview: PR #1518 CI auto-deploys the fix to a slot ("Preview /
+  deploy + e2e" + "streams-e2e"). Empirical activeTime confirmation depends on CF
+  analytics lag (minutes–~1h), so the authoritative proof of the mechanism is the
+  workerd suite (sever + re-dial + exactly-once over the REAL Stream DO + runner
+  DO via real Workers RPC); the probe will confirm prd activeTime falls once the
+  fix ships.
