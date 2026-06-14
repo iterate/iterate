@@ -382,7 +382,98 @@ function check9() {
   );
 }
 
-const checks = [check1, check2, check3, check4, check5, check6, check7, check8, check9];
+// ── v9: corrected — firstOf really composes; revoke climbs; origin is re-entrant
+//        name resolution; the seal must be an unforgeable token (not == public id) ──
+function check10() {
+  const TOMBSTONE = Symbol("revoked");
+  const MISS = Symbol("miss");
+  const ownProviders = (caps) => ({
+    tryInvoke({ path, args }) {
+      const hit = findCapabilityByPath({ caps, path });
+      if (!hit || hit.capability === TOMBSTONE) return MISS; // miss or revoked → climb
+      return walk(hit.capability, hit.rest, args);
+    },
+  });
+  const firstOf = (resolvers) => {
+    const tryInvoke = ({ path, args }) => {
+      for (const r of resolvers) {
+        const hit = r.tryInvoke({ path, args });
+        if (hit !== MISS) return hit;
+      }
+      return MISS;
+    };
+    return {
+      tryInvoke,
+      invoke(input) {
+        const h = tryInvoke(input);
+        if (h === MISS) throw new Error(`no capability "${input.path.join(".")}"`);
+        return h;
+      },
+    };
+  };
+
+  // (a) firstOf actually composes a CONTEXT as a resolver (the typecheck gap is closed):
+  const pcaps = new Map([["ai", () => "project.ai"]]);
+  const project = firstOf([ownProviders(pcaps)]);
+  const acaps = new Map();
+  const agent = firstOf([ownProviders(acaps), project]); // project is a resolver — it has tryInvoke
+  ok(
+    "v9: firstOf composes a context as a resolver (real, not hand-rolled)",
+    agent.invoke({ path: ["ai"], args: [] }) === "project.ai",
+  );
+
+  // (b) revoke = provide(⊥) CLIMBS in the REAL invoke (no guard bolted on outside):
+  acaps.set("ai", () => "agent.ai");
+  ok("v9: child shadow wins", agent.invoke({ path: ["ai"], args: [] }) === "agent.ai");
+  acaps.set("ai", TOMBSTONE); // revoke = provide(⊥)
+  ok(
+    "v9: revoke=provide(⊥) climbs via firstOf (tombstone→MISS, in the real invoke)",
+    agent.invoke({ path: ["ai"], args: [] }) === "project.ai",
+  );
+
+  // (c) origin = RE-ENTRANT name resolution (transparent), NOT a hardcoded origin==="agent":
+  const logs = [];
+  const projectFetch = (url) => `${url}#200`;
+  pcaps.set("fetch", projectFetch);
+  acaps.set("fetch", (url) => {
+    logs.push(`[egress] ${url}`);
+    return projectFetch(url);
+  }); // agent shadow: log → super
+  // the project cap does egress by RE-INVOKING the NAME "fetch" on the origin's chain;
+  // it does NOT know who shadows it (transparency):
+  const chainFor = (originCaps) => firstOf([ownProviders(originCaps), ownProviders(pcaps)]);
+  pcaps.set("getPet", ({ origin }) =>
+    chainFor(origin).invoke({ path: ["fetch"], args: ["https://petstore/pet/1"] }),
+  );
+  const r1 = pcaps.get("getPet")({ origin: acaps }); // invoked with origin = the agent chain
+  ok(
+    "v9: origin routes egress by NAME to the agent shadow (transparent, not a string branch)",
+    r1 === "https://petstore/pet/1#200" && logs.length === 1,
+  );
+  logs.length = 0;
+  pcaps.get("getPet")({ origin: pcaps }); // project origin → no shadow in the chain
+  ok("v9: same cap with project origin → no shadow, no log", logs.length === 0);
+
+  // (d) the seal must be an UNFORGEABLE token, never `=== publicIdentity`:
+  const secretFor = (id) => `secret-token:${id}`; // a capability/secret, not the public coordinate
+  const restore = (ref, presentedToken) => {
+    if (ref.seal !== presentedToken) throw new Error("seal mismatch");
+    return () => `restored:${ref.worker}`;
+  };
+  ok(
+    "v9: sealed restore needs the secret token",
+    restore({ worker: "x", seal: secretFor("prj_abc") }, secretFor("prj_abc"))() === "restored:x",
+  );
+  let forged = false;
+  try {
+    restore({ worker: "evil", seal: "prj_abc" }, secretFor("prj_abc"));
+  } catch {
+    forged = true;
+  }
+  ok("v9: seal == public identity is forgeable → rejected (must be a secret)", forged);
+}
+
+const checks = [check1, check2, check3, check4, check5, check6, check7, check8, check9, check10];
 const upTo = Number(process.argv[2] ?? checks.length);
 console.log(`running checks 1..${upTo}`);
 for (let i = 0; i < upTo; i++) checks[i]();
