@@ -328,7 +328,61 @@ function check8() {
   );
 }
 
-const checks = [check1, check2, check3, check4, check5, check6, check7, check8];
+// ── v8: worked example — base fetch + API caller; agent shadow logs it ────────
+function check9() {
+  const logs = [];
+  const projectFetch = (url) => ({ status: 200, url }); // base egress
+  // the agent's logging shadow: log, then call super (the base fetch):
+  const agentFetch = (url) => {
+    logs.push(`[egress] GET ${url} → 200`);
+    return projectFetch(url);
+  };
+  const fetchFor = (origin) => (origin === "agent" ? agentFetch : projectFetch);
+
+  // base provides BOTH fetch and an API-caller cap whose bare fetch() rides origin's chain:
+  const projectCaps = new Map();
+  projectCaps.set("fetch", projectFetch);
+  projectCaps.set("petstore", {
+    getPet: ({ origin } = {}, id = 1) =>
+      fetchFor(origin)(`https://petstore.example/pet/${id}`).status,
+  });
+  const project = {
+    invoke({ path, args, origin }) {
+      const hit = findCapabilityByPath({ caps: projectCaps, path });
+      if (!hit) throw new Error(`miss "${path.join(".")}"`);
+      // petstore.getPet needs origin threaded so its bare fetch routes through it:
+      if (path.join(".") === "petstore.getPet")
+        return projectCaps.get("petstore").getPet({ origin }, args[0]);
+      return typeof hit.capability === "function"
+        ? hit.capability({ origin })
+        : walk(hit.capability, hit.rest, args);
+    },
+  };
+  const agentCaps = new Map(); // the agent's fetch shadow is modeled via fetchFor(origin==="agent")
+  const agent = {
+    address: "agent",
+    invoke({ path, args, origin = this.address }) {
+      const hit = findCapabilityByPath({ caps: agentCaps, path });
+      if (hit) return walk(hit.capability, hit.rest, args);
+      return project.invoke({ path, args, origin }); // climb, carry origin=agent
+    },
+  };
+
+  const status = agent.invoke({ path: ["petstore", "getPet"], args: [1] }); // INHERITED, through the agent
+  ok("v8: inherited API caller returns correctly", status === 200);
+  ok(
+    "v8: the agent's fetch-shadow LOGGED the inherited cap's egress",
+    logs.length === 1 && /petstore\.example\/pet\/1/.test(logs[0]),
+  );
+  logs.length = 0;
+  project.invoke({ path: ["petstore", "getPet"], args: [1] }); // same cap at the base
+  ok(
+    "v8: the same cap at the base does NOT log (shadow reached only via origin)",
+    logs.length === 0,
+  );
+}
+
+const checks = [check1, check2, check3, check4, check5, check6, check7, check8, check9];
 const upTo = Number(process.argv[2] ?? checks.length);
 console.log(`running checks 1..${upTo}`);
 for (let i = 0; i < upTo; i++) checks[i]();
