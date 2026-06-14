@@ -163,6 +163,7 @@ The script pattern is documented in
 ## Read Next
 
 - [Debugging Deployed OS Workers](./docs/debugging-deployed-os-workers.md)
+- [Agent Smoke Testing](./docs/agent-smoke-testing.md)
 - [Doppler-Backed Scripts](./docs/doppler-backed-scripts.md)
 - [Architecture And Operations](./docs/architecture-and-operations.md)
 - [Preview Agent Browser Smoke](./docs/preview-agent-browser-smoke.md)
