@@ -89,12 +89,12 @@ The laptop can only offer the _one_ object it passed into _that one call_, and o
 
 ## Step 2 — provide & invoke: capabilities go dynamic
 
-> **the one new idea** — stop passing objects as call arguments. Add two verbs: `provideCapability({ name, capability })` registers a capability under a name; `invoke({ name, args })` calls it. The set of capabilities is now a dynamic registry, grown at runtime. (Every itx verb is a single **bag of props**, matching production — there are no positional signatures.)
+> **the one new idea** — stop passing objects as call arguments. Add two verbs: `provide({ name, capability })` registers a capability under a name; `invoke({ name, args })` calls it. The set of capabilities is now a dynamic registry, grown at runtime. (Every itx verb is a single **bag of props**, matching production — there are no positional signatures.)
 
 ```ts
 class Itx extends RpcTarget {
   #caps = new Map<string, unknown>();
-  provideCapability({ name, capability }: { name: string; capability: unknown }) {
+  provide({ name, capability }: { name: string; capability: unknown }) {
     this.#caps.set(name, capability);
   }
   async invoke({ name, args }: { name: string; args: unknown[] }) {
@@ -107,11 +107,13 @@ class Itx extends RpcTarget {
 
 ```ts
 // laptop registers its tool by name, then anyone with the handle invokes it:
-await itx.provideCapability({ name: "runSwift", capability: runSwift });
+await itx.provide({ name: "runSwift", capability: runSwift });
 await itx.invoke({ name: "runSwift", args: [`print(1 + 1)`] }); // → "2\n"
 ```
 
 The stored `name → capability` pairing has no special label in the codebase — the act is a **provide**, the folded row is a **capability entry**, and the target half is a `CapabilityTarget` (live stub or sturdy ref). In Step 6 the addressing field generalizes from `name` to a `path`, which is what production's `invoke({ path, args })` actually takes.
+
+(We call the verbs `provide` / `invoke` here; production currently spells `provide` as `provideCapability`. These may eventually move under a namespace — `itx.caps.provide`, `itx.caps.invoke`, `itx.caps.revoke`, `itx.caps.get` — to free up the bare names.)
 
 ### 🚧 Why this isn't enough yet
 
@@ -125,10 +127,11 @@ The registry lives in one server's memory, reachable only by that connection. Th
 
 ```ts
 // client A (laptop): provides
-await a.provideCapability({ name: "runSwift", capability: runSwift });
+await a.provide({ name: "runSwift", capability: runSwift });
 
 // client B (dashboard): a SEPARATE socket — wants to call what A provided
-await b.invoke({ name: "runSwift", args: [`print(40 + 2)`] }); // ← needs a shared registry
+await b.invoke({ name: "runSwift", args: [`print(40 + 2)`] });
+// ❌ Error: no capability "runSwift" — B's socket got its own empty Itx; A's #caps is on A's socket
 ```
 
 A plain per-connection `Itx` can't do this: each socket gets its own `#caps`. We need one registry both sockets reach.
@@ -149,8 +152,12 @@ export class ItxDO extends DurableObject {
   // Itx extends RpcTarget — and on workerd capnweb's RpcTarget IS the platform
   // `cloudflare:workers` RpcTarget — so returning it across the DO→Worker RPC
   // boundary passes a STUB (RpcStub<Itx>), never a copy. Calling a method on the
-  // stub round-trips back to the DO. (A method, not a property: workerd doesn't
-  // pipeline through property access.)
+  // stub round-trips back to the DO.
+  //
+  // Why a method and not a public field `itx = new Itx()`? Workers RPC can't
+  // read instance properties over the wire, nor pipeline through them — a public
+  // `itx` field would be unreachable as `itxDurableObject.itx`. It must be a
+  // method call.
   itx(): Itx {
     return this.#itx;
   }
@@ -158,7 +165,7 @@ export class ItxDO extends DurableObject {
 
 // the stateless Worker terminates the WebSocket and forwards verbs to the DO:
 const itxDurableObject = env.ITX.getByName("itx"); // the ONE shared registry
-const itx = itxDurableObject.itx(); // RpcStub<Itx> — .provideCapability()/.invoke() round-trip to the DO
+const itx = itxDurableObject.itx(); // RpcStub<Itx> — .provide()/.invoke() round-trip to the DO
 ```
 
 Now A's provide and B's invoke meet in the DO → B runs A's live function.
@@ -194,30 +201,30 @@ await itx.runSwift(`print(1 + 1)`); // → one pipelined call, path ["runSwift"]
 ```ts
 // server — the registry is DYNAMIC, so the served target can't be a fixed class.
 // Wrap the core in a Proxy whose unknown names become invoke():
-function handle(core) {
+function invokeFallthrough(core) {
   return new Proxy(core, {
     get(core, key) {
-      if (key in core) return Reflect.get(core, key); // provideCapability, invoke, describe…
-      return (...args) => core.invoke({ name: key, args }); // unknown → invoke
+      if (key in core) return Reflect.get(core, key); // provide, invoke, describe…
+      return (...args) => core.invoke({ name: key, args }); // unknown name → invoke
     },
   });
 }
 
-// the STATELESS WORKER builds the handle and serves it to the client over Cap'n Web.
-// (Matches production: the DO returns the bare Itx core stub; the handle is a
-// Worker-side wrapper around it — production calls it ItxHandle.)
-newWebSocketRpcSession(clientSocket, handle(itx)); // itx = the RpcStub<Itx> from Step 4
+// the STATELESS WORKER wraps the core and serves it to the client over Cap'n Web.
+// (Matches production: the DO returns the bare Itx core stub; this wrapper is the
+// Worker-side handle around it — production calls it ItxHandle.)
+newWebSocketRpcSession(clientSocket, invokeFallthrough(itx)); // itx = the RpcStub<Itx> from Step 4
 ```
 
 `itx.runSwift(code)` feels native again — and notice **where** the proxy lives: the stateless Worker at the edge, not the DO.
 
 ### 🔌 Wait — does RPC ship a Proxy across the wire?
 
-No. **An RPC never serializes a Proxy — it passes a _stub_ (a reference).** When the Worker hands `handle(core)` to Cap'n Web, the client receives a stub, not a copy; `itx.runSwift(...)` is a message back to the Worker, where the Proxy's `get`/`apply` traps actually run. Only plain `{...}` objects are deep-copied — functions, `RpcTarget`s, and Proxies over them cross by reference (`["export", id]` on the wire). workerd had to special-case this: wrapping an `RpcTarget` in a Proxy used to throw `DataCloneError` until [workerd#3184](https://github.com/cloudflare/workerd/pull/3212) taught serialization to see the `RpcTarget` through the Proxy and pass it by stub. This works one level because Cap'n Web walks an `RpcTarget` by reading its members directly — the deep version (Step 6) trips a subtler rule.
+No. **An RPC never serializes a Proxy — it passes a _stub_ (a reference).** When the Worker hands `invokeFallthrough(core)` to Cap'n Web, the client receives a stub, not a copy; `itx.runSwift(...)` is a message back to the Worker, where the Proxy's `get`/`apply` traps actually run. Only plain `{...}` objects are deep-copied — functions, `RpcTarget`s, and Proxies over them cross by reference (`["export", id]` on the wire). workerd had to special-case this: wrapping an `RpcTarget` in a Proxy used to throw `DataCloneError` until [workerd#3184](https://github.com/cloudflare/workerd/pull/3212) taught serialization to see the `RpcTarget` through the Proxy and pass it by stub. This works one level because Cap'n Web walks an `RpcTarget` by reading its members directly — the deep version (Step 6) trips a subtler rule.
 
 ### 🌍 Why build the proxy at the edge, not in the DO?
 
-The DO is the one **durable, single-threaded** thing — a serialization point for the shared registry. The stateless Worker is **horizontally scalable** and is where each WebSocket actually terminates. So the per-connection work — the proxy traps, the ergonomic handle, and the connect-time **auth/access narrowing** it carries — belongs at the edge, next to the connection, where it scales out per client. The DO does only the minimal stateful job (hold the fold) and nothing per-connection. Concretely that buys you: the DO is never **pinned per-connection** (otherwise every live socket would hold a slice of the DO's memory and its single thread, throttling everyone); the handle is cheap and ephemeral, recreated per connection from the same DO; and it keeps the door open to **capnweb hibernation** (idle edge sessions can sleep without keeping the DO resident). The cost is one extra hop (edge → DO) per real registry op — cheap, and pipelined into a single round trip.
+The DO is the one **durable, single-threaded** thing — a serialization point for the shared registry. The stateless Worker is **horizontally scalable** and is where each WebSocket actually terminates. So the per-connection work — the proxy traps, the ergonomic handle, and the connect-time **auth/access narrowing** it carries — belongs at the edge, next to the connection, where it scales out per client. The DO does only the minimal shared job — hold the registry, including the in-memory live stubs that connected clients provided — and nothing per-connection. Concretely that buys you: the DO is never **pinned per-connection** (otherwise every live socket would hold a slice of the DO's memory and its single thread, throttling everyone); the handle is cheap and ephemeral, recreated per connection from the same DO; and it keeps the door open to **capnweb hibernation** (idle edge sessions can sleep without keeping the DO resident). The cost is one extra hop (edge → DO) per real registry op — cheap, and pipelined into a single round trip.
 
 ### 🚧 Why this isn't enough yet
 
@@ -232,7 +239,7 @@ The capability is a whole _SDK_ and you want `itx.slack.chat.postMessage({ chann
 ```ts
 // provide the real Slack SDK as ONE capability, mounted at "slack":
 import { WebClient } from "@slack/web-api";
-itx.provideCapability({ name: "slack", capability: new WebClient(token) });
+itx.provide({ name: "slack", capability: new WebClient(token) });
 
 // client — a naked stub typed as { slack: WebClient }, so the editor autocompletes the
 // real Slack API. Cap'n Web sends ["slack","chat","postMessage"] + [msg] in ONE message:
@@ -248,11 +255,19 @@ invoke({ path, args }) {
 
 itx doesn't know a thing about Slack; it routes a path. And there is **no client-side path proxy** — Cap'n Web's stub already is one. (Production matches this exactly: the browser, Node, and the REPL all hold a plain `newWebSocketRpcSession<ItxHandle>` stub; the path proxy in `path-proxy.ts` runs _server-side_, inside the handle.)
 
-### ⚠️ The gotcha that cost a day
+And since a capability is addressed by a **path**, the _name_ side of `provide` is a path too — `provide({ name: "slack", … })` is just the one-segment case. You might as well mount it deeper; namespacing comes for almost free:
+
+```ts
+// mount the same client at itx.integrations.slack — same longest-prefix dispatch:
+itx.provide({ path: ["integrations", "slack"], capability: new WebClient(token) });
+await itx.integrations.slack.chat.postMessage({ channel: "C123", text: "hi" });
+```
+
+### ⚠️ Three rules the dynamic server proxy must follow
 
 The dynamic **server** target has to answer for names it has never seen. Three non-obvious rules make that work (all verified in `min-dynamic-target.mjs`):
 
-1. **`getOwnPropertyDescriptor` is load-bearing, not just `get`.** Server-side Cap'n Web does `Object.hasOwn(value, segment)` _before_ reading each segment; without a descriptor trap every segment reads as absent and the chain dies at "`.chat` of undefined" — which is exactly why our first draft wrongly concluded deep server-side dispatch "doesn't work."
+1. **`getOwnPropertyDescriptor` is load-bearing, not just `get`.** Server-side Cap'n Web does `Object.hasOwn(value, segment)` _before_ reading each segment; without a descriptor trap every segment reads as absent and the chain dies at "`.chat` of undefined".
 2. **The target must be function-typed** — a Proxy over a plain function, not over an `RpcTarget`. Cap'n Web classifies an rpc-target by its prototype and rejects fabricated "instance properties" (it even flags the real verbs).
 3. **Retain (`dup`) provided live stubs** — Cap'n Web disposes argument stubs when the `provide` call returns.
 
@@ -262,7 +277,7 @@ Because the _longest_ registered prefix wins, you can **shadow a single method d
 
 ```ts
 // wrap just chat.postMessage with rate-limiting; leave the rest of Slack intact.
-itx.provideCapability({
+itx.provide({
   path: ["slack", "chat", "postMessage"],
   capability: rateLimited(slack.chat.postMessage),
 });
@@ -278,17 +293,49 @@ The DO is evicted (we kept deferring it). And we still haven't said what a capab
 
 ## Step 7 — Live vs sturdy: what a capability _is_
 
-> **the one new idea** — a capability is a name → a target that is EITHER **live** (a stub/function held in memory, dies with its connection) OR a **sturdy ref** (`{ type: "rpc", worker: {...} }`) — plain, serializable data describing how to _re-make_ the target on demand. `CapabilityKind = "live" | "rpc"`.
+> **the one new idea** — a capability is a name → a target that is EITHER **live** (a stub/function held in memory, dies with its connection) OR a **sturdy ref** (`{ type: "rpc", worker, props }`) — plain, serializable data describing how to _re-make_ the target on demand. `CapabilityKind = "live" | "rpc"`.
 
-The motivation for sturdy: "it's defined in this project worker." Encode that as data:
+The motivating case: a **reusable worker that turns an OpenAPI spec into a callable API**. Write one `WorkerEntrypoint` whose props are `{ openApiSpec, baseUrl }`; it dispatches each call by `operationId` to the matching HTTP request:
 
 ```ts
-const slackRef = {
-  type: "rpc",
-  worker: { type: "source", source: { repo, commit, path: "caps/slack.ts" } },
-};
-itx.provideCapability({ name: "slack", capability: slackRef }); // survives eviction — it's just data
+import { WorkerEntrypoint } from "cloudflare:workers";
+
+export class OpenApiClient extends WorkerEntrypoint<Env, { openApiSpec: Spec; baseUrl: string }> {
+  // the kernel dispatches every capability as call({ path, args }):
+  async call({ path: [operationId], args: [input = {}] }) {
+    const { openApiSpec, baseUrl } = this.ctx.props;
+    for (const [route, methods] of Object.entries(openApiSpec.paths))
+      for (const [method, op] of Object.entries(methods))
+        if (op.operationId === operationId) {
+          const url = route.replace(/\{(\w+)\}/g, (_, k) => encodeURIComponent(input[k]));
+          return fetch(new URL(url.replace(/^\//, ""), baseUrl), {
+            method: method.toUpperCase(),
+            ...(method === "get"
+              ? {}
+              : { headers: { "content-type": "application/json" }, body: JSON.stringify(input) }),
+          }).then((r) => r.json());
+        }
+    throw new Error(`No operation "${operationId}" in spec`);
+  }
+}
 ```
+
+Now "the Petstore API" is a **sturdy capability** — no live connection, just a ref naming that worker plus the props that specialize it:
+
+```ts
+itx.provide({
+  name: "petstore",
+  capability: {
+    type: "rpc",
+    worker: { type: "source", source: { repo, commit, path: "caps/openapi-client.ts" } },
+    entrypoint: "OpenApiClient",
+    props: { openApiSpec, baseUrl: "https://petstore3.swagger.io/api/v3" },
+  },
+}); // survives eviction — it's just data; dial rebuilds the worker on demand
+await itx.petstore.findPetsByStatus({ status: "available" }); // → call({ path: ["findPetsByStatus"], args })
+```
+
+(iterate ships exactly this — `apps/os/src/itx/capabilities/openapi-client.ts`.)
 
 A purely structural discriminator decides dispatch:
 
@@ -317,7 +364,8 @@ function reduceItxEvent(state, event) {
   const next = new Map(state);
   switch (event.type) {
     case "capability-provided":
-      next.set(event.name, { kind: event.kind, value: event.value });
+      // the durable entry: name, kind, and (for sturdy caps) the ref/address + meta.
+      next.set(event.name, { kind: event.kind, address: event.address ?? null, meta: event.meta });
       break;
     case "capability-revoked":
       next.delete(event.name);
@@ -327,7 +375,7 @@ function reduceItxEvent(state, event) {
 }
 ```
 
-Last-write-wins, revoke removes, and replay is deterministic — the table is never the source of truth, the stream is.
+Last-write-wins, revoke removes, and replay is deterministic — the table is never the source of truth, the stream is. Note what the fold does _not_ hold: a `live` cap's event records `kind: "live"` with `address: null` — you can't serialize a socket, so the actual stub lives in the DO's in-memory bridge map keyed by name (Step 4). That's precisely why a live cap dies on eviction and a sturdy ref (which folds to a serializable `address`) survives.
 
 ### 🚧 Why this isn't enough yet
 
@@ -380,14 +428,14 @@ Everything we've built (provide/revoke as events, a folded table, read-your-writ
 
 ## Step 11 — Itx _is_ a StreamProcessor
 
-> **the punchline** — `Itx extends StreamProcessor`. `provideCapability` == append an event; `getState()` == the fold; so the materialized registry equals `reduceItxEvent` over the appended stream, and you read your own writes. A context **is** its stream coordinate `<namespace>:/<path>` — which is also the host DO's name and its dial address.
+> **the punchline** — `Itx extends StreamProcessor`. `provide` == append an event; `getState()` == the fold; so the materialized registry equals `reduceItxEvent` over the appended stream, and you read your own writes. A context **is** its stream coordinate `<namespace>:/<path>` — which is also the host DO's name and its dial address.
 
 ```ts
 class Itx extends StreamProcessor {
   constructor() {
     super(reduceItxEvent);
   }
-  provideCapability({ name, capability }) {
+  provide({ name, capability }) {
     this.append({ type: "capability-provided", name, capability }); // append, don't store
   }
   invoke({ path, args }) {
@@ -409,7 +457,7 @@ The test for "core vs addendum": **does removing it change what `reduce` compute
 | ------------------------------------------------ | --------------------------------------------------------------- | ------ |
 | The fold (single source of truth)                | `reduceItxEvent`                                                | ~60    |
 | live-vs-ref discriminator                        | `isCapabilityAddress`                                           | ~25    |
-| The one write path                               | `provideCapability` / `revoke`                                  | ~80    |
+| The one write path                               | `provide` / `revoke`                                            | ~80    |
 | Borrow-or-dial + the dial type                   | `#borrow`                                                       | ~30    |
 | Dispatch + chain delegation                      | `invoke`                                                        | ~40    |
 | Server-side path proxy + longest-prefix + replay | `PathProxy` / `resolveLongestProvidedPrefix` / `replayPathCall` | ~50    |
