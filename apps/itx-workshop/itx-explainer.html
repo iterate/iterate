@@ -410,13 +410,19 @@
 
       <div class="note">
         <span class="label">runnable &amp; verified</span>
-        Every step here is exercised against real <code class="inline">workerd</code> and real Cap'n
-        Web clients by the repro in this folder (<code class="inline">server.ts</code> +
-        <code class="inline">harness.ts</code>, and the self-contained
-        <code class="inline">min-dynamic-target.mjs</code>). Where the first draft of this workshop
-        guessed wrong, the repro corrected it — most notably:
-        <b>there is no client-side path proxy</b>, because a naked Cap'n Web stub already pipelines
-        a whole dotted path into one call. See Step&nbsp;6.
+        Every step is exercised by runnable code in this folder. Steps&nbsp;0–6 (the wire-level
+        half) run against real <code class="inline">workerd</code> and real Cap'n Web clients (<code
+          class="inline"
+          >server.ts</code
+        >
+        + <code class="inline">harness.ts</code>, and the self-contained
+        <code class="inline">min-dynamic-target.mjs</code>); Steps&nbsp;7–11 (the model-level half —
+        fold, ref taxonomy, dial, chain, processor) are checked by
+        <code class="inline">validate-steps.mjs</code>; the Step&nbsp;1 dialog Swift is type-checked
+        with <code class="inline">swiftc</code>. Where the first draft of this workshop guessed
+        wrong, the repro corrected it — most notably: <b>there is no client-side path proxy</b>,
+        because a naked Cap'n Web stub already pipelines a whole dotted path into one call. See
+        Step&nbsp;6.
       </div>
 
       <!-- STEP 0 -->
@@ -484,17 +490,35 @@
 
 <span class="k">using</span> itx = newWebSocketRpcSession&lt;Server&gt;(socket);
 <span class="k">await</span> itx.register(laptop);                 <span class="c">// hand the server our laptop object</span></pre>
-        <pre><span class="c">// server.ts — the server now calls BACK into the laptop:</span>
+        <pre><span class="c">// server.ts — the server calls BACK into the laptop to ask the human a question,</span>
+<span class="c">// popping a NATIVE macOS dialog and reading what they type:</span>
 <span class="k">class</span> Server <span class="k">extends</span> RpcTarget {
   <span class="k">async</span> register(laptop) {
-    <span class="k">const</span> out = <span class="k">await</span> laptop.runSwift(<span class="s">`print(1 + 1)`</span>); <span class="c">// executes on the laptop!</span>
-    <span class="k">return</span> <span class="s">`your laptop says: ${out}`</span>;             <span class="c">// "your laptop says: 2\n"</span>
+    <span class="k">const</span> answer = <span class="k">await</span> laptop.runSwift(<span class="s">`
+      import AppKit
+      let a = NSAlert()
+      a.messageText = "Agent needs your input"
+      a.informativeText = "What should I name the project?"
+      let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+      a.accessoryView = field
+      a.addButton(withTitle: "OK")
+      NSApp.activate(ignoringOtherApps: true)
+      a.runModal()
+      print(field.stringValue)        // → whatever the human typed
+    `</span>);
+    <span class="k">return</span> <span class="s">`the human chose: ${answer}`</span>;   <span class="c">// "the human chose: Aurora"</span>
   }
 }</pre>
         <p>
-          That's the superpower: <code class="inline">laptop.runSwift(...)</code> ran on the laptop,
-          called by code in a Worker. A capability is just an object reference that happens to point
-          across a socket. Everything below is about making that durable, shareable, and nameable.
+          That's the superpower: code in a Worker popped a native dialog on someone's laptop and
+          read back what they typed — <code class="inline">laptop.runSwift(...)</code> executed
+          <em>there</em>, called from <em>here</em>. A capability is just an object reference that
+          happens to point across a socket. Everything below is about making that durable,
+          shareable, and nameable.
+          <span class="muted"
+            >(The runnable harness drives this exact path with a non-interactive program so CI
+            doesn't block on the dialog; the dialog Swift above is type-checked separately.)</span
+          >
         </p>
         <div class="breaks">
           <span class="label">but this breaks when…</span>
