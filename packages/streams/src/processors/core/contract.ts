@@ -87,6 +87,13 @@ export const StreamSubscriberDisconnectReason = z.enum([
   "delivery-failed",
   /** The outbound subscription's configuration was removed. */
   "subscription-removed",
+  /**
+   * The stream went quiet for longer than its idle window, so the Stream DO
+   * deliberately dropped every connection to let itself (and its subscribers)
+   * hibernate instead of accruing billable duration on idle cross-isolate RPC
+   * sessions. The durable subscription config is kept; the next append re-dials.
+   */
+  "idle",
 ]);
 
 export type StreamSubscriberDisconnectReason = z.infer<typeof StreamSubscriberDisconnectReason>;

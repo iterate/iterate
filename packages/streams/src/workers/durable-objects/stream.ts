@@ -48,8 +48,20 @@ const textEncoder = new TextEncoder();
 //      events instead of the removed processor-registered event.
 const CORE_STATE_VERSION = 4;
 
+// How long a stream may hold idle OUTBOUND delivery connections before the
+// Stream DO severs them so it (and its subscribers) can hibernate instead of
+// accruing billable duration on cross-isolate RPC sessions that pin both DOs.
+// Tracked with an in-memory timer (NOT a DO alarm): the retained stubs we tear
+// down are in-memory and die on eviction anyway, the DO is always resident while
+// it holds them (so the timer is guaranteed to fire), and a durable alarm's only
+// extra power — waking a hibernated DO — is exactly what we must never do.
+// Overridable via the STREAM_IDLE_TEARDOWN_MS env var (used by tests).
+const DEFAULT_STREAM_IDLE_TEARDOWN_MS = 5 * 60_000;
+
 export class Stream extends DurableObject<Env> implements StreamRpc {
   #coreProcessorState: StreamCoreProcessorState;
+  /** In-memory idle teardown timer; armed only while outbound connections exist. */
+  #idleTimer: ReturnType<typeof setTimeout> | undefined;
   // The core processor owns the live delivery connections and reconciles them
   // against reduced state; this DO supplies the storage and RPC mechanics it
   // needs (committed-event reads, the live state, Callable dispatch).
@@ -478,6 +490,26 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     // subscription-configured facts, which ran in the loop above.)
     this.coreProcessor.wakeConnections();
 
+    // Re-dial any configured subscription left without a live connection — e.g.
+    // an idle teardown (here or on the subscriber) severed it. The subscriber
+    // re-handshakes from its durable checkpoint, so replay covers this very
+    // event. Cheap (O(subscriptions)) and a no-op once everything is connected.
+    // Gated to DOMAIN appends: the teardown's own subscriber-disconnected fact
+    // (a `stream/*` system event) must NOT re-dial, or idle teardown would
+    // instantly undo itself. `woken`/`subscription-configured` already reconcile
+    // via the core's reduced-event side effect.
+    const hasDomainAppend = newEvents.some(
+      (event) => !event.type.startsWith("events.iterate.com/stream/"),
+    );
+    if (hasDomainAppend && this.coreProcessor.needsOutboundReconcile()) {
+      this.coreProcessor.reconcileConnections();
+    }
+
+    // Re-arm (or clear) the in-memory idle timer against the post-append
+    // connection set, so a stream that just went quiet sheds its outbound
+    // delivery sessions and lets both DOs hibernate.
+    this.#armOrClearIdleTimer();
+
     return events;
   }
 
@@ -580,6 +612,39 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         connections: this.coreProcessor.connectionsRuntimeState(),
       },
     };
+  }
+
+  #idleTeardownMs(): number {
+    const raw = (this.env as { STREAM_IDLE_TEARDOWN_MS?: string | number }).STREAM_IDLE_TEARDOWN_MS;
+    const parsed = typeof raw === "string" ? Number(raw) : raw;
+    return typeof parsed === "number" && Number.isFinite(parsed) && parsed > 0
+      ? parsed
+      : DEFAULT_STREAM_IDLE_TEARDOWN_MS;
+  }
+
+  // Keep the in-memory idle timer armed only while the DO holds outbound
+  // delivery connections (the thing that pins it resident). Reset on every
+  // append; cleared once no outbound connection remains. No storage writes, and
+  // nothing scheduled against a hibernated DO.
+  #armOrClearIdleTimer(): void {
+    if (this.#idleTimer !== undefined) {
+      clearTimeout(this.#idleTimer);
+      this.#idleTimer = undefined;
+    }
+    if (!this.coreProcessor.hasLiveOutboundConnections()) return;
+    this.#idleTimer = setTimeout(() => this.runIdleTeardownNow(), this.#idleTeardownMs());
+  }
+
+  /**
+   * Sever every idle outbound connection now — the idle timer's action, also
+   * callable directly (tests / operator "put this quiet stream to sleep").
+   * Disposes the retained callback stubs so the freed subscriber DOs hibernate;
+   * the durable subscription config is kept, so the next append re-dials
+   * (`needsOutboundReconcile` in `#appendBatchHere`).
+   */
+  runIdleTeardownNow(): void {
+    this.#idleTimer = undefined;
+    this.coreProcessor.closeIdleOutboundConnections();
   }
 
   /**
