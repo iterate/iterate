@@ -570,6 +570,28 @@ function check11() {
   );
 }
 
+// ── v12: live caps get itx as a FACTORY ARGUMENT (env.ITERATE can't reach them);
+//        the factory keeps method signatures clean (so raw SDK mounts stay clean) ─
+function check12() {
+  const logs = [];
+  const projectFetch = (url) => `${url}#200`;
+  const originItx = {
+    fetch: (url) => {
+      logs.push(url);
+      return projectFetch(url);
+    },
+  }; // origin-scoped (agent)
+  // a LIVE cap is a FACTORY: itx is the factory's argument; methods stay clean:
+  const petstoreFactory = (itx) => ({ getPet: (id) => itx.fetch(`/pet/${id}`) });
+  const surface = petstoreFactory(originItx); // platform invokes the factory with the origin-scoped itx
+  surface.getPet(1);
+  ok("v12: live-cap factory receives itx as its ARGUMENT → egress attenuated", logs.length === 1);
+  ok(
+    "v12: factory keeps method signatures clean (getPet takes only id)",
+    petstoreFactory(originItx).getPet.length === 1,
+  );
+}
+
 const checks = [
   check1,
   check2,
@@ -583,6 +605,7 @@ const checks = [
   check10,
   check10b,
   check11,
+  check12,
 ];
 const upTo = Number(process.argv[2] ?? checks.length);
 console.log(`running checks 1..${upTo}`);
