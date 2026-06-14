@@ -268,7 +268,67 @@ function check7() {
   );
 }
 
-const checks = [check1, check2, check3, check4, check5, check6, check7];
+// ── v7: inheritance is by reference + late binding (no copy to children) ──────
+function check8() {
+  const projectCaps = new Map();
+  const project = {
+    invoke({ path, args }) {
+      const hit = findCapabilityByPath({ caps: projectCaps, path });
+      if (!hit) throw new Error(`miss "${path.join(".")}"`);
+      return walk(hit.capability, hit.rest, args);
+    },
+  };
+  const agentCaps = new Map();
+  const agent = {
+    invoke({ path, args }) {
+      const hit = findCapabilityByPath({ caps: agentCaps, path });
+      if (hit) return walk(hit.capability, hit.rest, args);
+      return project.invoke({ path, args }); // a REFERENCE to the parent, resolved per call
+    },
+  };
+
+  // the agent exists BEFORE the base cap is added:
+  let before = false;
+  try {
+    agent.invoke({ path: ["ai"], args: [] });
+  } catch {
+    before = true;
+  }
+  ok("v7: pre-existing child doesn't see a base cap that isn't there yet", before);
+
+  // add to the base AFTER the child exists → visible to the child (late binding, no copy):
+  projectCaps.set("ai", () => "project.ai");
+  ok(
+    "v7: base cap added later is visible to the pre-existing child",
+    agent.invoke({ path: ["ai"], args: [] }) === "project.ai",
+  );
+  ok(
+    "v7: the cap lives ONCE in the base, not copied into the child",
+    projectCaps.has("ai") && !agentCaps.has("ai"),
+  );
+
+  // revoke at the base propagates instantly:
+  projectCaps.delete("ai");
+  let after = false;
+  try {
+    agent.invoke({ path: ["ai"], args: [] });
+  } catch {
+    after = true;
+  }
+  ok("v7: revoke at the base reaches the child on the next call", after);
+
+  // child shadow is local — base untouched, sibling unaffected:
+  projectCaps.set("ai", () => "project.ai");
+  agentCaps.set("ai", () => "agent.ai");
+  const sibling = { invoke: ({ path, args }) => project.invoke({ path, args }) };
+  ok("v7: child shadow wins locally", agent.invoke({ path: ["ai"], args: [] }) === "agent.ai");
+  ok(
+    "v7: sibling still sees the base (shadow didn't mutate the base)",
+    sibling.invoke({ path: ["ai"], args: [] }) === "project.ai",
+  );
+}
+
+const checks = [check1, check2, check3, check4, check5, check6, check7, check8];
 const upTo = Number(process.argv[2] ?? checks.length);
 console.log(`running checks 1..${upTo}`);
 for (let i = 0; i < upTo; i++) checks[i]();
