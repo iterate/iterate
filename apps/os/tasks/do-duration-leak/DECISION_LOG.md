@@ -254,3 +254,19 @@ heavy new transport / breaking contract change).
     preview, defense-in-depth in place, public PR #1518 green. Remaining: review +
     merge; wire the probe to a scheduled monitoring job; decide outbound-only vs also
     inbound (browser) teardown (currently outbound-only by design).
+
+- 2026-06-14 — MERGED + PRD VALIDATED. PR #1518 squash-merged to main
+  (f1924eda8); Bugbot reviewed HEAD and found no issues. "Deploy OS" → prd
+  succeeded 09:11Z. Validation:
+  - prd Stream DO healthy under the fix: read of project `booper` root stream
+    returns events (DO wakes + serves) via authenticated prd RPC.
+  - Direct billing signal — prd hourly activeTime (DO-seconds): 06:00 97,421 /
+    07:00 106,086 / 08:00 101,046 → 09:00 **14,126** (~7× collapse in the deploy
+    hour; the deploy evicted every pinned DO at 09:11, and the fix caps new ones
+    at the 5-min idle window). 10:00+ pending CF analytics lag.
+  - The day-grouped probe still flags Jun 13–14 historical (pre-deploy) data; it
+    rolls off the trailing window over ~24–48h and then reads clean.
+    GOAL COMPLETE: diagnosed, designed (with rejected alternatives), two-sided
+    fix, failing+adversarial tests, preview-validated, defense-in-depth probe,
+    public PR merged, prd-validated. Follow-ups: wire the probe to a scheduled
+    monitoring job; revisit inbound (browser) WS-hibernation as a separate change.
