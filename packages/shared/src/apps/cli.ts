@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/fetch";
-import { os } from "@orpc/server";
+import { ORPCError, os } from "@orpc/server";
 import * as prompts from "@clack/prompts";
 import { createCli, parseRouter, type AnyRouter } from "trpc-cli";
 import type { StandardSchemaV1 } from "trpc-cli/dist/standard-schema/contract.js";
@@ -418,20 +418,42 @@ function errorProcedure(message: string) {
 // prints the unhelpful "Non-error of type undefined thrown: undefined". Turn any
 // such opaque rejection into an actionable Error so the user knows where to look.
 export function normalizeRemoteRpcError(error: unknown, procedurePath: string): Error {
-  if (error instanceof Error && error.message.trim().length > 0) return error;
+  // A 4xx ORPCError carries a real, client-safe message and passes through the
+  // local oRPC pipeline untouched (e.g. a remote NOT_FOUND / BAD_REQUEST).
+  if (error instanceof ORPCError && error.status < 500 && error.message.trim().length > 0) {
+    return error;
+  }
+
+  // oRPC hides a thrown non-ORPCError behind a generic INTERNAL_SERVER_ERROR with
+  // the message "Internal server error" — the real message is already gone
+  // server-side and is not recoverable here. Anything else with a real message
+  // (e.g. a transport error) we keep.
+  const upstreamMessage =
+    error instanceof ORPCError && error.code === "INTERNAL_SERVER_ERROR"
+      ? undefined
+      : error instanceof Error && error.message.trim().length > 0
+        ? error.message
+        : undefined;
 
   const detail = (() => {
-    if (!error || typeof error !== "object") return "";
+    if (!(error && typeof error === "object")) return "";
     const code = "code" in error ? String((error as { code: unknown }).code) : undefined;
     const status = "status" in error ? String((error as { status: unknown }).status) : undefined;
-    return [code && `code ${code}`, status && `status ${status}`].filter(Boolean).join(", ");
+    const parts = [code && `code ${code}`, status && `status ${status}`].filter(Boolean);
+    return parts.length > 0 ? ` (${parts.join(", ")})` : "";
   })();
 
-  return new Error(
-    `Remote procedure "${procedurePath}" failed${detail ? ` (${detail})` : ""} without a ` +
-      `client-visible message. The server most likely threw a non-ORPCError, which oRPC masks ` +
-      `as an internal error — check the server logs / Workers Observability for the real error.`,
-  );
+  const message = upstreamMessage
+    ? `Remote procedure "${procedurePath}" failed: ${upstreamMessage}`
+    : `Remote procedure "${procedurePath}" failed${detail} without a client-visible message. ` +
+      `The server likely threw a non-ORPCError, which oRPC masks as an internal error — check ` +
+      `the server logs / Workers Observability for the real error.`;
+
+  // Re-throwing a plain Error (or a 5xx INTERNAL ORPCError) would be masked AGAIN
+  // by the local oRPC pipeline into the opaque "Non-error of type undefined
+  // thrown". BAD_GATEWAY (502) surfaces with its message and is semantically
+  // right: the CLI is a gateway whose upstream returned an untranslatable error.
+  return new ORPCError("BAD_GATEWAY", { message });
 }
 
 function orpcToTrpcStyleClient(orpcClient: unknown) {
@@ -525,6 +547,12 @@ export function formatAppCliError(error: unknown) {
         : "Input validation failed";
 
     return [header, ...issues.map((issue) => `- ${formatIssue(issue)}`)].join("\n");
+  }
+
+  // Show the plain message for ordinary errors (incl. ORPCErrors) rather than a
+  // verbose object dump; fall back to inspect for non-Error throws.
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
   }
 
   return inspect(error);
