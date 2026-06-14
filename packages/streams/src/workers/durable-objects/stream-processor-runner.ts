@@ -32,6 +32,15 @@ export class StreamProcessorRunner extends DurableObject {
   runtimeState(args?: { processorName?: string }): HostedProcessorRuntimeState {
     return this.host.runtimeState(args?.processorName);
   }
+
+  /**
+   * Subscriber-side idle teardown (belt-and-braces companion to the Stream DO's):
+   * drop retained stream stubs so this DO and the producer can hibernate. The
+   * idle timer calls this automatically; exposed for tests/operators.
+   */
+  runIdleDisconnectNow(): void {
+    this.host.runIdleDisconnectNow();
+  }
 }
 
 export const StreamProcessorRunnerRpcTarget = makeRpcTargetClass<

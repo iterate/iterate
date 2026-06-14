@@ -116,6 +116,17 @@ type HostedEntry = {
 // subscriber/processor (or a later re-dial) to decide whether to re-establish.
 const MAX_CONSECUTIVE_INGEST_FAILURES = 3;
 
+// Belt-and-braces companion to the Stream DO's idle teardown. A host that holds a
+// subscription's retained stream stub (`entry.stream`) pins the producer Stream
+// DO resident. If no batch arrives for this long, the host unsubscribes and
+// disposes its stream stubs so BOTH this subscriber DO and the producer can
+// hibernate; the durable checkpoint + subscription-key persist, so the producer
+// re-dials and the host re-handshakes when activity resumes. In-memory timer for
+// the same reason as the Stream DO side: the stubs are in-memory and the DO is
+// resident while it holds them, so the timer is guaranteed to fire — and a
+// durable alarm's only extra power, waking a hibernated DO, is exactly wrong.
+const HOST_IDLE_TEARDOWN_MS = 5 * 60_000;
+
 export type StreamProcessorHost = {
   /**
    * Register a named processor. The builder receives the host-provided base
@@ -128,6 +139,15 @@ export type StreamProcessorHost = {
   requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void>;
   /** Durable processor state for tests and operator inspection. */
   runtimeState(processorName?: string): HostedProcessorRuntimeState;
+  /**
+   * Drop every live subscription's retained stream stub now — the idle timer's
+   * action, also callable directly (tests / operator "let this idle subscriber
+   * sleep"). Unsubscribes from the producer (so the producer disposes its
+   * callback stub and frees this DO) and disposes the stream handle (freeing the
+   * producer Stream DO). The durable checkpoint + subscription-key persist, so
+   * the producer re-dials and this host re-handshakes on the next activity.
+   */
+  runIdleDisconnectNow(): void;
 };
 
 export function createStreamProcessorHost(ctx: DurableObjectState): StreamProcessorHost {
@@ -172,6 +192,54 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
     );
   }
 
+  // In-memory idle teardown: drop retained stream stubs after a quiet spell so
+  // this subscriber DO (and the producer it pins) can hibernate. See
+  // HOST_IDLE_TEARDOWN_MS.
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function hasLiveSubscription(): boolean {
+    for (const entry of entries.values()) if (entry.stream !== undefined) return true;
+    return false;
+  }
+
+  // (Re)armed on every handshake and every delivered batch; cleared once no
+  // entry holds a live stream stub. The DO is resident while it holds stubs, so
+  // the timer is guaranteed to fire.
+  function armIdleTimer(): void {
+    if (idleTimer !== undefined) {
+      clearTimeout(idleTimer);
+      idleTimer = undefined;
+    }
+    if (!hasLiveSubscription()) return;
+    idleTimer = setTimeout(runIdleDisconnectNow, HOST_IDLE_TEARDOWN_MS);
+  }
+
+  function runIdleDisconnectNow(): void {
+    idleTimer = undefined;
+    for (const entry of entries.values()) {
+      const stream = entry.stream;
+      if (stream === undefined) continue;
+      // Bump the generation so any batch still queued on this connection is
+      // dropped by the gate in openSubscription. Then unsubscribe — the producer
+      // closes the connection and disposes its callback stub, freeing THIS DO —
+      // and dispose our retained stream stub, freeing the producer Stream DO.
+      // The durable checkpoint + subscription-key persist (we only clear the
+      // in-memory handle/stream/namespace/path), so the producer's next re-dial
+      // re-handshakes us from where we left off.
+      entry.generation += 1;
+      try {
+        entry.handle?.unsubscribe();
+      } catch {
+        // The producer may already be gone; the stub is dead either way.
+      }
+      entry.handle = undefined;
+      stream[Symbol.dispose]();
+      entry.stream = undefined;
+      entry.namespace = undefined;
+      entry.path = undefined;
+    }
+  }
+
   // (Re)opens the outbound subscription from the processor's durable checkpoint.
   // Called for the initial handshake and again by `recoverFromIngestFailure`, so
   // a failed batch replays from the last good offset instead of being skipped.
@@ -208,6 +276,8 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
         processor: announceContract(entry.processor.contract),
       },
       processEventBatch: (batch) => {
+        // A batch arrived — this subscription is active; reset the idle countdown.
+        armIdleTimer();
         // Serialize ingest per processor so the generation gate is re-checked
         // *between* batches: a batch queued on a now-dead connection must be
         // dropped, not ingested. ingest serializes internally too, but that
@@ -235,6 +305,8 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
         return entry.ingestChain;
       },
     });
+    // A fresh handshake holds a live stream stub now; start the idle countdown.
+    armIdleTimer();
   }
 
   // A failed batch never advances the checkpoint. Re-handshake from it (the
@@ -362,6 +434,7 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
               },
       };
     },
+    runIdleDisconnectNow,
   };
 }
 

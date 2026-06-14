@@ -14,6 +14,7 @@
     "dev:local": "tsx ./scripts/dev.ts --no-doppler",
     "build": "doppler run -- pnpm exec vite build",
     "rpc": "pnpm cli rpc",
+    "probe:do-duration": "tsx ./scripts/do-duration-probe.ts",
     "cf:deploy": "pnpm exec tsx ./alchemy.run.ts",
     "cf:destroy": "pnpm exec tsx ./alchemy.run.ts --destroy",
     "deploy": "doppler run --project os --config prd -- pnpm cf:deploy",

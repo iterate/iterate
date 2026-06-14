@@ -360,6 +360,51 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     for (const connection of this.#connections.values()) connection.wake();
   }
 
+  /** True if any live connection delivers outbound into a subscriber DO. */
+  hasLiveOutboundConnections(): boolean {
+    for (const connection of this.#connections.values()) {
+      if (connection.direction === "outbound") return true;
+    }
+    return false;
+  }
+
+  /**
+   * Deliberately drops every live OUTBOUND delivery connection so a quiet stream
+   * stops pinning subscriber DOs (and, via the hibernation cascade, itself) with
+   * idle cross-isolate RPC sessions. Disposes each retained callback stub
+   * (`connection.close` → `processEventBatch[Symbol.dispose]`) and appends a
+   * `subscriber-disconnected("idle")` fact. The durable `subscriptionsByKey`
+   * config is untouched, so the next append (`needsOutboundReconcile`) or a wake
+   * re-dials the subscriber, which re-handshakes from its durable checkpoint and
+   * replays anything the cursor advanced past. Returns the severed keys.
+   */
+  closeIdleOutboundConnections(): string[] {
+    const severed: string[] = [];
+    // Snapshot first: close() mutates #connections.
+    for (const [subscriptionKey, connection] of [...this.#connections]) {
+      if (connection.direction !== "outbound") continue;
+      severed.push(subscriptionKey);
+      connection.close("idle");
+    }
+    return severed;
+  }
+
+  /**
+   * True if a configured outbound subscription currently has no live or
+   * in-flight connection — i.e. one was severed (idle teardown here or on the
+   * subscriber, a clean unsubscribe, etc.) and needs re-dialing. Cheap
+   * O(subscriptions) scan; a no-op in steady state when everything is connected.
+   */
+  needsOutboundReconcile(): boolean {
+    const state = this.#currentState();
+    for (const subscriptionKey of Object.keys(state.subscriptionsByKey)) {
+      if (!this.#connections.has(subscriptionKey) && !this.#connecting.has(subscriptionKey)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Serializable debug view of the live connections, for runtimeState(). */
   connectionsRuntimeState(): Record<
     string,
