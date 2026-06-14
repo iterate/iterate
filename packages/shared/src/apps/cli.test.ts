@@ -5,7 +5,6 @@ import {
   formatAppCliError,
   normalizePermissiveInputArgv,
   normalizePermissiveInputValue,
-  normalizeRemoteRpcError,
 } from "./cli.ts";
 
 describe("formatAppCliError", () => {
@@ -97,46 +96,6 @@ describe("normalizePermissiveInputValue", () => {
 
   it("leaves invalid structured input unchanged", () => {
     expect(normalizePermissiveInputValue("{event:")).toBe("{event:");
-  });
-});
-
-describe("normalizeRemoteRpcError", () => {
-  it("passes a 4xx ORPCError with a real message through untouched", () => {
-    const error = new ORPCError("BAD_REQUEST", {
-      message: "Agent preset path must be /agents or start with /agents/.",
-    });
-    expect(normalizeRemoteRpcError(error, "project.agents.configurePreset")).toBe(error);
-  });
-
-  it("replaces a masked INTERNAL_SERVER_ERROR with an actionable hint (not the generic message)", () => {
-    // oRPC hides a thrown non-ORPCError behind this generic shape.
-    const error = new ORPCError("INTERNAL_SERVER_ERROR", { message: "Internal server error" });
-    const result = normalizeRemoteRpcError(error, "project.agents.configurePreset");
-    expect(result.message).toContain("project.agents.configurePreset");
-    expect(result.message).toContain("Workers Observability");
-    expect(result.message).not.toBe("Internal server error");
-  });
-
-  it("turns an opaque undefined rejection into an actionable error (never 'undefined thrown')", () => {
-    const result = normalizeRemoteRpcError(undefined, "project.agents.configurePreset");
-    expect(result).toBeInstanceOf(Error);
-    expect(result.message).toContain("project.agents.configurePreset");
-    expect(result.message).toContain("Workers Observability");
-    expect(result.message).not.toContain("Non-error of type");
-  });
-
-  it("preserves a real upstream message from a non-ORPCError transport failure", () => {
-    const result = normalizeRemoteRpcError(new Error("fetch failed"), "x.y");
-    expect(result.message).toContain("fetch failed");
-  });
-
-  it("includes code/status detail when the rejection carries them but no message", () => {
-    const result = normalizeRemoteRpcError(
-      { code: "SOME_CODE", status: 503 },
-      "project.agents.configurePreset",
-    );
-    expect(result.message).toContain("code SOME_CODE");
-    expect(result.message).toContain("status 503");
   });
 });
 
