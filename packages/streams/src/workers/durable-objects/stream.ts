@@ -491,17 +491,27 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     this.coreProcessor.wakeConnections();
 
     // Re-dial any configured subscription left without a live connection — e.g.
-    // an idle teardown (here or on the subscriber) severed it. The subscriber
-    // re-handshakes from its durable checkpoint, so replay covers this very
-    // event. Cheap (O(subscriptions)) and a no-op once everything is connected.
-    // Gated to DOMAIN appends: the teardown's own subscriber-disconnected fact
-    // (a `stream/*` system event) must NOT re-dial, or idle teardown would
-    // instantly undo itself. `woken`/`subscription-configured` already reconcile
-    // via the core's reduced-event side effect.
-    const hasDomainAppend = newEvents.some(
-      (event) => !event.type.startsWith("events.iterate.com/stream/"),
+    // an idle teardown (here or on the subscriber), a clean unsubscribe, etc.
+    // severed it. The subscriber re-handshakes from its durable checkpoint, so
+    // replay covers this very event. Cheap (O(subscriptions)) and a no-op once
+    // everything is connected.
+    //
+    // Exactly ONE event type is excluded as a re-dial trigger:
+    // `subscriber-disconnected`. `connection.close()` appends one as it removes
+    // the connection from the map, so at that instant `needsOutboundReconcile()`
+    // is transiently true for the just-closed key — reconciling on it would
+    // immediately re-dial and undo every teardown (idle / unsubscribed /
+    // replaced / …). Re-dial must wait for the next genuine append. Every OTHER
+    // event is safe to trigger on: `woken` and `subscription-configured` have
+    // already reconciled via the core's reduced-event side effect (so the check
+    // is a no-op), and `subscriber-connected` only lands while its key is
+    // connected/connecting (also a no-op). We deliberately do NOT exclude the
+    // whole `stream/*` namespace — only this single self-undoing event.
+    const SUBSCRIBER_DISCONNECTED_TYPE = "events.iterate.com/stream/subscriber-disconnected";
+    const hasRedialTriggeringAppend = newEvents.some(
+      (event) => event.type !== SUBSCRIBER_DISCONNECTED_TYPE,
     );
-    if (hasDomainAppend && this.coreProcessor.needsOutboundReconcile()) {
+    if (hasRedialTriggeringAppend && this.coreProcessor.needsOutboundReconcile()) {
       this.coreProcessor.reconcileConnections();
     }
 

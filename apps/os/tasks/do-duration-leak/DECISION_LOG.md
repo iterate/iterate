@@ -197,4 +197,22 @@ heavy new transport / breaking contract change).
     itx-stream-subscribe. No regressions.
     Next: subscriber-side belt-and-braces (host idle disconnect) + failing test;
     public PR; preview repro + pressure test; defense-in-depth.
-    </content>
+
+- 2026-06-14 — Public PR opened: https://github.com/iterate/iterate/pull/1518 (draft).
+- 2026-06-14 — Narrowed the re-dial gate per Jonas: exclude EXACTLY the
+  `subscriber-disconnected` event (the one self-undoing trigger), not the whole
+  `stream/*` namespace. Documented inline in `stream.ts`.
+- 2026-06-14 — Subscriber-side belt-and-braces landed (host idle disconnect):
+  - `stream-processor-host.ts`: in-memory idle timer (`HOST_IDLE_TEARDOWN_MS`, 5m),
+    reset on each delivered batch + handshake, cleared when no entry holds a live
+    stream stub; `runIdleDisconnectNow()` unsubscribes (frees this DO) and disposes
+    `entry.stream` (frees the producer), keeping the durable checkpoint so the
+    producer's re-dial re-handshakes.
+  - `stream-processor-runner.ts`: exposes `runIdleDisconnectNow()`.
+  - Lives in `createStreamProcessorHost`, so it AUTOMATICALLY protects the real
+    Agent / repo / workspace host DOs (the pinned subscribers in the leak data).
+  - New `stream-host-idle-disconnect.workers.test.ts`: host drops its stub on idle
+    → producer's outbound connection closes too → re-handshakes on next append.
+    Green: 79 node + 17 workers streams; apps/os typecheck; oxlint clean.
+    Remaining: preview repro + adversarial pressure test (real billing signal);
+    defense-in-depth recurrence guard.
