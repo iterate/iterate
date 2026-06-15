@@ -40,7 +40,7 @@ export type SlackProcessorDeps = {
    * Pre-warm the Durable Objects that will subscribe to a newly routed
    * stream, concurrently with the bootstrap append that creates it. Without
    * this the chain is serial: thread stream cold start, then its dial wakes
-   * the slack-agent host, then the agent host — each a fresh isolate.
+   * each subscribing host in turn.
    * Best-effort: the subscription dial remains the source of truth.
    */
   prewarmRoutedStreamHosts?(input: { streamPath: string }): Promise<void> | void;

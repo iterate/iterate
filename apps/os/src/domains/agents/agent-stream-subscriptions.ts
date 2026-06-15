@@ -2,16 +2,12 @@ import { z } from "zod";
 import type { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import { StreamPath as StreamPathSchema } from "@iterate-com/shared/streams/types";
 import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
-import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
 import { CloudflareAiProcessorContract } from "~/domains/agents/stream-processors/cloudflare-ai/contract.ts";
 import { OpenAiWsProcessorContract } from "~/domains/agents/stream-processors/openai-ws/contract.ts";
-import { AGENT_HOST_PROCESSOR_SLUG } from "~/domains/agents/stream-processors/agent-host/contract.ts";
 import type { AgentLlmProvider } from "~/domains/agents/agent-presets.ts";
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
-
-export { AGENT_HOST_PROCESSOR_SLUG } from "~/domains/agents/stream-processors/agent-host/contract.ts";
 
 export const AGENTS_STREAM_PATH = StreamPathSchema.parse("/agents");
 
@@ -72,12 +68,7 @@ export function agentLlmProcessorSlug(provider: AgentLlmProvider) {
 }
 
 export function defaultAgentProcessorSlugs(provider: AgentLlmProvider) {
-  return [
-    AgentChatProcessorContract.slug,
-    AgentProcessorContract.slug,
-    agentLlmProcessorSlug(provider),
-    AGENT_HOST_PROCESSOR_SLUG,
-  ];
+  return [AgentProcessorContract.slug, agentLlmProcessorSlug(provider)];
 }
 
 export function agentProcessorSubscriptionConfiguredEvents(input: {
@@ -102,11 +93,7 @@ export function agentProcessorSubscriptionConfiguredEvent(input: {
   const agentPath = StreamPathSchema.parse(input.agentPath);
   return {
     type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-    // The `:callable` suffix (previously `:workers-rpc`) makes this a NEW
-    // idempotency key, so the callable subscription lands on existing streams
-    // and replaces the legacy built-in subscriber under the same
-    // subscriptionKey.
-    idempotencyKey: `agent-processor-subscription:${input.projectId}:${agentPath}:${input.processorSlug}:callable`,
+    idempotencyKey: `agent-processor-subscription:${input.projectId}:${agentPath}:${input.processorSlug}`,
     payload: {
       subscriptionKey: agentProcessorSubscriptionKey(input),
       subscriber: durableObjectProcessorSubscriber({

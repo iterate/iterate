@@ -38,7 +38,7 @@ testWithProject("Stream TUI starts and accepts slash command input", async ({ te
   terminal.submit();
 
   await expect(
-    terminal.getByText("events.iterate.com/agent-chat/user-message-added", { strict: false }),
+    terminal.getByText("events.iterate.com/agents/tui-message-received", { strict: false }),
   ).toBeVisible();
 
   terminal.write("/e");

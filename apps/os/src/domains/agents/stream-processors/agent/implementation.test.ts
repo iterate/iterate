@@ -17,6 +17,75 @@ describe("AgentProcessor", () => {
     vi.useRealTimers();
   });
 
+  it("renders chat user messages into agent input", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agents/web-message-received",
+          payload: { content: "hello" },
+          offset: 5,
+        }),
+      ],
+      streamMaxOffset: 5,
+    });
+
+    expect(appended[0]).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "agent/event-type-explainer/events.iterate.com/agents/web-message-received",
+    });
+    expect(appended[1]).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "agent/render-chat-message@5",
+      payload: {
+        content: [
+          "```yaml",
+          "event:",
+          "  offset: 5",
+          "  type: events.iterate.com/agents/web-message-received",
+          "  content: |-",
+          "    hello",
+          "```",
+        ].join("\n"),
+      },
+    });
+  });
+
+  it("renders chat tool responses without triggering a request", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agents/web-message-sent",
+          payload: { message: "sent" },
+          offset: 9,
+        }),
+      ],
+      streamMaxOffset: 9,
+    });
+
+    expect(appended[1]).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "agent/render-chat-response@9",
+      payload: {
+        content: [
+          "```yaml",
+          "event:",
+          "  offset: 9",
+          "  type: events.iterate.com/agents/web-message-sent",
+          "  message: |-",
+          "    sent",
+          "```",
+        ].join("\n"),
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
+    });
+  });
+
   it("does not schedule LLM work for explicitly non-triggering agent input", async () => {
     const { stream, appended } = memoryStream();
     const processor = newAgentProcessor({ stream });
@@ -765,6 +834,7 @@ function newAgentProcessor(args: {
 }) {
   return new AgentProcessor({
     iterateContext: { stream: args.stream },
+    ensureItxContext: async () => undefined,
     readState: () => args.snapshot,
     readStreamEvents: args.readStreamEvents ?? (async () => []),
     ...(args.sideEffectsAfterOffset === undefined
@@ -804,7 +874,7 @@ function subscriberConnectedEvent(args: { offset: number }): StreamEvent {
   return {
     type: "events.iterate.com/stream/subscriber-connected",
     payload: {
-      subscriptionKey: "agent-host:agent",
+      subscriptionKey: "agent:agent",
       direction: "outbound" as const,
       subscriber: { incarnationId: "fresh-incarnation" },
     },

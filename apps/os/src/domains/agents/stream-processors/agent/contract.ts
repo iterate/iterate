@@ -23,6 +23,12 @@ import { CoreProcessorContract } from "@iterate-com/streams/processors/core/cont
 import { ItxContract } from "~/itx/contract.ts";
 
 export const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.6";
+export const AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE =
+  "events.iterate.com/agents/web-message-received";
+export const AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE =
+  "events.iterate.com/agents/tui-message-received";
+export const AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE = "events.iterate.com/agents/web-message-sent";
+export const AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE = "events.iterate.com/agents/tui-message-sent";
 
 export const AgentProcessorContract = defineProcessorContract({
   slug: "agent",
@@ -133,6 +139,58 @@ export const AgentProcessorContract = defineProcessorContract({
         })
         .describe("Payload for an agent input row."),
     },
+    [AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE]: {
+      description: "Inbound web chat message before it is rendered into model context.",
+      examples: [
+        {
+          description: "Web chat message",
+          payload: { content: "What can you help me with?" },
+        },
+      ],
+      payloadSchema: z.object({
+        content: z.string(),
+      }),
+    },
+    [AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE]: {
+      description: "Inbound TUI chat message before it is rendered into model context.",
+      examples: [
+        {
+          description: "TUI chat message",
+          payload: { content: "What can you help me with?" },
+        },
+      ],
+      payloadSchema: z.object({
+        content: z.string(),
+      }),
+    },
+    [AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE]: {
+      description: "User-visible web chat response emitted by a tool call.",
+      examples: [
+        {
+          description: "Assistant reply via web",
+          payload: {
+            message: "I can help you manage your project, run code, and more.",
+          },
+        },
+      ],
+      payloadSchema: z.object({
+        message: z.string(),
+      }),
+    },
+    [AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE]: {
+      description: "User-visible TUI chat response emitted by a tool call.",
+      examples: [
+        {
+          description: "Assistant reply via TUI",
+          payload: {
+            message: "I can help you manage your project, run code, and more.",
+          },
+        },
+      ],
+      payloadSchema: z.object({
+        message: z.string(),
+      }),
+    },
     "events.iterate.com/agent/output-added": {
       description: "A model-visible assistant output row.",
       payloadSchema: z.object({
@@ -220,7 +278,12 @@ export const AgentProcessorContract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/itx/capability-provided",
+    "events.iterate.com/itx/script-execution-completed",
     "events.iterate.com/stream/subscriber-connected",
+    AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE,
+    AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE,
+    AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE,
+    AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE,
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/output-added",
@@ -233,6 +296,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/status-updated",
   ],
   emits: [
+    "events.iterate.com/itx/script-execution-requested",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
@@ -258,7 +322,12 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
   // capability table is the itx core's fold, not this projection's concern).
   switch (event.type) {
     case "events.iterate.com/itx/capability-provided":
+    case "events.iterate.com/itx/script-execution-completed":
     case "events.iterate.com/stream/subscriber-connected":
+    case AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE:
+    case AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE:
+    case AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE:
+    case AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE:
       return state;
     case "events.iterate.com/agent/system-prompt-updated":
       return { ...state, systemPrompt: event.payload.systemPrompt };

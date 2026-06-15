@@ -16,12 +16,17 @@ import {
 } from "@iterate-com/streams/shared/stream-processors";
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import {
+  AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE,
+  AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE,
+  AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE,
+  AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE,
   AgentProcessorContract,
   reduceAgentEvent,
   reduceAgentEvents,
   type AgentConsumedEvent,
   type AgentState,
 } from "./contract.ts";
+import { ITX_EVENT_TYPES } from "~/itx/contract.ts";
 
 export { AgentProcessorContract } from "./contract.ts";
 
@@ -35,6 +40,11 @@ export type AgentProcessorDeps = {
    * potentially stale warm reduction (see `#requestScheduledLlmWork`).
    */
   readStreamEvents(): Promise<StreamEvent[]>;
+  /**
+   * Ensures the agent's Itx context and its own stream subscription exist
+   * before the agent enqueues script work for that context.
+   */
+  ensureItxContext(): Promise<unknown>;
 };
 
 type LlmRequestPolicy = Extract<
@@ -82,10 +92,64 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     switch (event.type) {
       case "events.iterate.com/agent/system-prompt-updated":
       case "events.iterate.com/agent/llm-config-updated":
-      case "events.iterate.com/agent/output-added":
       case "events.iterate.com/agent/llm-request-scheduled":
       case "events.iterate.com/agent/status-updated":
       case "events.iterate.com/agent/llm-request-queued":
+        return;
+      case AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE:
+      case AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE:
+        args.blockProcessorWhile(async () => {
+          await this.#appendEventTypeExplanation({ eventType: event.type });
+          await this.ctx.stream.append({
+            event: {
+              type: "events.iterate.com/agent/input-added",
+              idempotencyKey: buildProcessorIdempotencyKey({
+                processor: AgentProcessorContract,
+                key: "render-chat-message",
+                sourceEvent: event,
+              }),
+              payload: {
+                content: chatEventBlock({
+                  offset: event.offset,
+                  type: event.type,
+                  bodyTag: "content",
+                  body: event.payload.content,
+                }),
+              },
+            },
+          });
+        });
+        return;
+      case AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE:
+      case AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE:
+        args.blockProcessorWhile(async () => {
+          await this.#appendEventTypeExplanation({ eventType: event.type });
+          await this.ctx.stream.append({
+            event: {
+              type: "events.iterate.com/agent/input-added",
+              idempotencyKey: buildProcessorIdempotencyKey({
+                processor: AgentProcessorContract,
+                key: "render-chat-response",
+                sourceEvent: event,
+              }),
+              payload: {
+                content: chatEventBlock({
+                  offset: event.offset,
+                  type: event.type,
+                  bodyTag: "message",
+                  body: event.payload.message,
+                }),
+                llmRequestPolicy: { behaviour: "dont-trigger-request" },
+              },
+            },
+          });
+        });
+        return;
+      case "events.iterate.com/agent/output-added":
+        args.blockProcessorWhile(() => this.#enqueueScriptFromAgentOutput(event));
+        return;
+      case "events.iterate.com/itx/script-execution-completed":
+        args.blockProcessorWhile(() => this.#appendScriptCompletionInput(event));
         return;
       case "events.iterate.com/stream/subscriber-connected": {
         // Scheduler reconciliation. Reduced state says a request should be
@@ -294,6 +358,55 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     }
 
     await this.#emitQueued({ sourceEvent: event });
+  }
+
+  async #enqueueScriptFromAgentOutput(
+    event: Extract<AgentConsumedEvent, { type: "events.iterate.com/agent/output-added" }>,
+  ) {
+    const script = extractCodemodeScript(event.payload.content);
+    if (script == null) return;
+
+    await this.deps.ensureItxContext();
+    await this.ctx.stream.append({
+      event: {
+        type: ITX_EVENT_TYPES.scriptExecutionRequested,
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: AgentProcessorContract,
+          key: "enqueue-output-script",
+          sourceEvent: event,
+        }),
+        payload: {
+          code: script,
+          enqueued: true,
+          executionId: `agent-output-script-${event.offset}`,
+        },
+      },
+    });
+  }
+
+  async #appendScriptCompletionInput(
+    event: Extract<
+      AgentConsumedEvent,
+      { type: "events.iterate.com/itx/script-execution-completed" }
+    >,
+  ) {
+    const logs = Array.isArray(event.payload.logs) ? (event.payload.logs as string[]) : [];
+    const outcome =
+      event.payload.ok === true
+        ? ({ status: "returned", value: event.payload.result } as const)
+        : ({ error: event.payload.error ?? "Unknown script error", status: "threw" } as const);
+    if (outcome.status === "returned" && outcome.value === undefined && logs.length === 0) return;
+
+    await this.ctx.stream.append({
+      event: {
+        type: "events.iterate.com/agent/input-added",
+        idempotencyKey: `agent-itx-execution-result:${event.payload.executionId}`,
+        payload: {
+          content: itxCompletionInputBlock({ event, logs, outcome }),
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+      },
+    });
   }
 
   /**
@@ -614,6 +727,18 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 }
 
 function eventTypeExplanation(eventType: string): string | null {
+  if (eventType === AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE) {
+    return `First \`${AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE}\` event. This represents a message received from a web chat user.`;
+  }
+  if (eventType === AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE) {
+    return `First \`${AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE}\` event. This represents a message received from a TUI chat user.`;
+  }
+  if (eventType === AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE) {
+    return `First \`${AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE}\` event. This represents a message sent through the web chat response tool.`;
+  }
+  if (eventType === AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE) {
+    return `First \`${AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE}\` event. This represents a message sent through the TUI chat response tool.`;
+  }
   if (eventType === "events.iterate.com/agent/llm-request-cancelled") {
     return eventTypeExplanationBlock({
       type: eventType,
@@ -651,6 +776,20 @@ function eventBlock(args: {
   return ["```yaml", ...yamlLines, "```"].join("\n");
 }
 
+function chatEventBlock(args: {
+  offset: number;
+  type: string;
+  bodyTag: string;
+  body: string;
+}): string {
+  return eventBlock({
+    offset: args.offset,
+    type: args.type,
+    bodyTag: args.bodyTag,
+    body: args.body,
+  });
+}
+
 function yamlScalar(value: string | number): string {
   if (typeof value === "number") return String(value);
   if (/^[a-zA-Z0-9._/@:-]+$/.test(value)) return value;
@@ -668,4 +807,58 @@ function capabilityProvidedEventBlock(args: {
   type: string;
 }): string {
   return `Capability available as \`itx.${args.name}\`. ${args.instructions} (to debug further, see ${args.type} event at offset ${args.offset})`;
+}
+
+const CODEMODE_FENCE_RE =
+  /^```(?:js|javascript|codemode|ts|typescript)\s*\n([\s\S]*?)(?:\n```\s*)?$/;
+
+export function extractCodemodeScript(content: string): string | null {
+  const trimmed = content.trim();
+  if (trimmed.startsWith("async (itx) => {") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("async () => {") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+
+  const fenced = CODEMODE_FENCE_RE.exec(trimmed);
+  return fenced?.[1]?.trim() || null;
+}
+
+function itxCompletionInputBlock(input: {
+  event: Extract<AgentConsumedEvent, { type: "events.iterate.com/itx/script-execution-completed" }>;
+  logs: string[];
+  outcome: { status: "returned"; value: unknown } | { status: "threw"; error: unknown };
+}) {
+  const executionId = input.event.payload.executionId;
+  return [
+    "```yaml",
+    "event:",
+    `  offset: ${input.event.offset}`,
+    "  type: events.iterate.com/itx/script-execution-completed",
+    `  executionId: ${yamlScalar(executionId)}`,
+    "  outcome:",
+    `    status: ${input.outcome.status}`,
+    ...yamlNestedBlockScalar(
+      input.outcome.status === "returned" ? "    value" : "    error",
+      formatCodemodeOutput(
+        input.outcome.status === "returned" ? input.outcome.value : input.outcome.error,
+      ),
+    ),
+    ...(input.logs.length > 0 ? yamlNestedBlockScalar("  console", input.logs.join("\n")) : []),
+    "```",
+  ].join("\n");
+}
+
+function formatCodemodeOutput(output: unknown) {
+  if (typeof output === "string") return output;
+  try {
+    return JSON.stringify(output, null, 2) ?? String(output);
+  } catch {
+    return String(output);
+  }
+}
+
+function yamlNestedBlockScalar(key: string, value: string): string[] {
+  return [`${key}: |-`, ...value.split("\n").map((line) => `      ${line}`)];
 }

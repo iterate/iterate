@@ -88,7 +88,7 @@ test("can configure Cloudflare AI Gateway as the provider for an agent path pref
     projectId: project.id,
     afterOffset: "start",
     predicate: (event) =>
-      event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+      event.type === "events.iterate.com/agents/web-message-sent" &&
       (event.payload as { message?: unknown }).message === assistantMessage,
   });
 
@@ -128,7 +128,7 @@ test("can configure Cloudflare AI Gateway as the provider for an agent path pref
   );
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/agent-chat/assistant-response-added",
+      type: "events.iterate.com/agents/web-message-sent",
       payload: expect.objectContaining({
         message: assistantMessage,
       }),
@@ -146,7 +146,7 @@ test("a web agent holds a real conversation: user message in, visible reply out"
   // THE end-to-end conversation proof (no canned system prompt, default
   // provider): a user message on a fresh agent stream must come back as a
   // visible web reply — the LLM turn runs, codemode executes, and
-  // itx.chat.sendMessage lands assistant-response-added on the stream.
+  // itx.chat.sendMessage lands web-message-sent on the stream.
   await using fixture = await createTestProjectFixture({ slugPrefix: "agent-web-convo" });
   const { client, project } = fixture;
   const suffix = uniqueSuffix();
@@ -169,7 +169,7 @@ test("a web agent holds a real conversation: user message in, visible reply out"
     projectId: project.id,
     afterOffset: "start",
     predicate: (event) =>
-      event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+      event.type === "events.iterate.com/agents/web-message-sent" &&
       typeof (event.payload as { message?: unknown }).message === "string" &&
       (event.payload as { message: string }).message.includes(marker),
     timeoutMs: 150_000,
@@ -178,9 +178,8 @@ test("a web agent holds a real conversation: user message in, visible reply out"
   // The full round trip is on the stream: the user's message…
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/agent-chat/user-message-added",
+      type: "events.iterate.com/agents/web-message-received",
       payload: expect.objectContaining({
-        channel: "web",
         content: expect.stringContaining(marker),
       }),
     }),
@@ -188,9 +187,8 @@ test("a web agent holds a real conversation: user message in, visible reply out"
   // …the agent's visible web reply…
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/agent-chat/assistant-response-added",
+      type: "events.iterate.com/agents/web-message-sent",
       payload: expect.objectContaining({
-        channel: "web",
         message: expect.stringContaining(marker),
       }),
     }),
@@ -311,7 +309,7 @@ test("recovers and still replies when the agent host durable object is killed mi
     projectId: project.id,
     afterOffset: "start",
     predicate: (event) =>
-      event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+      event.type === "events.iterate.com/agents/web-message-sent" &&
       (event.payload as { message?: unknown }).message === assistantMessage,
   });
   const roundOneMaxOffset = Math.max(...roundOneEvents.map((event) => event.offset));
@@ -341,7 +339,7 @@ test("recovers and still replies when the agent host durable object is killed mi
     projectId: project.id,
     afterOffset: roundOneMaxOffset,
     predicate: (event) =>
-      event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+      event.type === "events.iterate.com/agents/web-message-sent" &&
       (event.payload as { message?: unknown }).message === assistantMessage,
   });
 
@@ -357,7 +355,7 @@ test("recovers and still replies when the agent host durable object is killed mi
 });
 
 test("lets agent scripts send visible agent responses through itx.chat.sendMessage", async () => {
-  await using fixture = await createTestProjectFixture({ slugPrefix: "agent-chat-tool" });
+  await using fixture = await createTestProjectFixture({ slugPrefix: "agents-chat-tool" });
   const { client, project } = fixture;
   const suffix = uniqueSuffix();
   const agentPath = `/agents/chat-tool-${suffix}`;
@@ -391,7 +389,7 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
     projectId: project.id,
     afterOffset: "start",
     predicate: (event) =>
-      event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+      event.type === "events.iterate.com/agents/web-message-sent" &&
       (event.payload as { message?: unknown }).message === message,
   });
 
@@ -414,9 +412,8 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
   expect(scriptRequestDelayMs).toBeLessThan(1_000);
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/agent-chat/assistant-response-added",
+      type: "events.iterate.com/agents/web-message-sent",
       payload: expect.objectContaining({
-        channel: "web",
         message,
       }),
     }),
@@ -670,7 +667,7 @@ test("renders codemode completions as direct auto-triggering agent inputs", asyn
   expect(
     events.some(
       (event) =>
-        event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+        event.type === "events.iterate.com/agents/web-message-sent" &&
         typeof (event.payload as { message?: unknown }).message === "string" &&
         (event.payload as { message: string }).message.includes("Codemode threw"),
     ),
@@ -726,7 +723,7 @@ itIfSlackBotToken(
       projectId: project.id,
       afterOffset: "start",
       predicate: (event) =>
-        event.type === "events.iterate.com/agent-chat/assistant-response-added" &&
+        event.type === "events.iterate.com/agents/web-message-sent" &&
         typeof (event.payload as { message?: unknown }).message === "string" &&
         (event.payload as { message: string }).message.startsWith("posted slack "),
     });
@@ -846,7 +843,7 @@ itIfSlackBotToken(
           subscriber: expect.objectContaining({
             type: "callable",
             callable: expect.objectContaining({
-              transformInput: { shallowMerge: { processorName: "agent-host" } },
+              transformInput: { shallowMerge: { processorName: "agent" } },
             }),
           }),
         }),
@@ -892,9 +889,9 @@ itIfSlackBotToken(
         }),
       }),
     );
-    expect(
-      events.filter((event) => event.type.startsWith("events.iterate.com/agent-chat/")),
-    ).toEqual([]);
+    expect(events.filter((event) => event.type.startsWith("events.iterate.com/agents/"))).toEqual(
+      [],
+    );
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "events.iterate.com/itx/script-execution-requested",
@@ -954,7 +951,7 @@ itIfSlackBotToken(
     // script is verified by the execution completing ok (and the real Slack
     // thread). The stream-URL/sanitization asserts rode on those events.
     expect(
-      debugEvents.filter((event) => event.type.startsWith("events.iterate.com/agent-chat/")),
+      debugEvents.filter((event) => event.type.startsWith("events.iterate.com/agents/")),
     ).toEqual([]);
     expect(
       events.filter(

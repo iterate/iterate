@@ -143,7 +143,7 @@ export class SlackAgentProcessor extends StreamProcessor<
                 }),
                 payload: {
                   code: bangCommand.code,
-                  // The agent-host processor runs enqueued executions; this
+                  // The generic itx processor runs enqueued executions; this
                   // flag distinguishes a queue entry from the records the
                   // runner appends about its own runs.
                   enqueued: true,

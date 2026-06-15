@@ -309,7 +309,7 @@ function subscriberConnectedEvent(args: { offset: number }): StreamEvent {
   return {
     type: "events.iterate.com/stream/subscriber-connected",
     payload: {
-      subscriptionKey: "agent-host:cloudflare-ai",
+      subscriptionKey: "agent:cloudflare-ai",
       direction: "outbound" as const,
       subscriber: { incarnationId: "fresh-incarnation" },
     },

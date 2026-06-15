@@ -379,7 +379,10 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
     ];
   }
 
-  if (event.type === "events.iterate.com/agent-chat/user-message-added") {
+  if (
+    event.type === "events.iterate.com/agents/web-message-received" ||
+    event.type === "events.iterate.com/agents/tui-message-received"
+  ) {
     const content = readStringPayloadField(event, "content");
     if (content == null) return [];
     return [
@@ -391,7 +394,10 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
     ];
   }
 
-  if (event.type === "events.iterate.com/agent-chat/assistant-response-added") {
+  if (
+    event.type === "events.iterate.com/agents/web-message-sent" ||
+    event.type === "events.iterate.com/agents/tui-message-sent"
+  ) {
     const message = readStringPayloadField(event, "message");
     if (message == null) return [];
     return [

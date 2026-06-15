@@ -10,13 +10,10 @@ agent surface) runs through this domain.
 - `durable-objects/agent-durable-object.ts` — `AgentDurableObject`, named
   `{ projectId, agentPath }`. Hosts the agent processors via
   `createStreamProcessorHost`, owns the codemode session for the stream, and
-  registers tool providers (`ctx.slack`, `ctx.repos`, `ctx.gmail`, ...).
+  registers tool providers (`itx.slack`, `itx.repos`, `itx.gmail`, ...).
 - `stream-processors/` — the processor contracts + implementations:
-  - `agent/` — the agent core: inputs, outputs, LLM request lifecycle.
-  - `agent-chat/` — chat ingress (web/tui channels) rendered into
-    `agent/input-added` rows.
-  - `agent-host/` — consumes `"*"`; OS-owned host side effects (waking the
-    agent DO, child-agent init, codemode bridging).
+  - `agent/` — the agent core: chat ingress, inputs, outputs, script
+    enqueue/completion rendering, and LLM request lifecycle.
   - `openai-ws/` / `cloudflare-ai/` — the two LLM providers; one is selected
     per agent via `events.iterate.com/os-agent/llm-provider-selected`
     (default `openai-ws`).
@@ -27,5 +24,5 @@ agent surface) runs through this domain.
   slugs per LLM provider, and the `stream/subscription-configured` events that
   attach the processors to an agent stream.
 - `entrypoints/agent-capability.ts` — small codemode capability exposing
-  `ctx.agents.create()`, which returns an RpcTarget handle for sending
+  `itx.agents.create()`, which returns an RpcTarget handle for sending
   messages to a Durable Object-backed subagent.

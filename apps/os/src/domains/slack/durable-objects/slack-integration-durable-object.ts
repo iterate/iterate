@@ -15,11 +15,7 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
 import { type AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
-import {
-  AGENT_HOST_PROCESSOR_SLUG,
-  agentProcessorSubscriptionConfiguredEvent,
-  getAgentDurableObjectName,
-} from "~/domains/agents/agent-stream-subscriptions.ts";
+import { getAgentDurableObjectName } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-streams.ts";
 import {
   getSlackAgentDurableObjectName,
@@ -81,9 +77,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
       createRoutedStreamBootstrapEvents: async ({ streamPath }) => {
         const { projectId } = await this.ensureStartedOrInitializeFromRuntimeName();
         return routedStreamBootstrapEvents({
-          agentDurableObjectName: "",
           projectId,
-          slackAgentDurableObjectName: "",
           streamPath,
         });
       },
@@ -196,9 +190,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      // ":callable" suffix so the callable subscription lands as a NEW event on
-      // streams that already carry the legacy built-in subscription.
-      idempotencyKey: `slack-subscription:${projectId}:workers-rpc:callable`,
+      idempotencyKey: `slack-subscription:${projectId}`,
       payload: {
         subscriptionKey: slackIntegrationProcessorSubscriptionKey(projectId),
         subscriber: durableObjectProcessorSubscriber({
@@ -211,27 +203,17 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
   }
 }
 
-export function routedStreamBootstrapEvents(input: {
-  agentDurableObjectName: string;
-  projectId: string;
-  slackAgentDurableObjectName: string;
-  streamPath: string;
-}) {
+export function routedStreamBootstrapEvents(input: { projectId: string; streamPath: string }) {
   const streamPath = resolveStreamPath(input.streamPath);
   return [
     {
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      // ":callable" suffix so the callable subscription lands as a NEW event on
-      // streams that already carry the legacy built-in subscription.
-      idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.streamPath}:workers-rpc:callable`,
+      idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.streamPath}`,
       payload: {
         subscriptionKey: slackAgentProcessorSubscriptionKey({
           projectId: input.projectId,
           streamPath,
         }),
-        // The SLACK_AGENT host DO name is derived here rather than taken from
-        // the input so legacy callers passing "" still produce a dialable
-        // subscriber.
         subscriber: durableObjectProcessorSubscriber({
           bindingName: "SLACK_AGENT",
           durableObjectName: getSlackAgentDurableObjectName({
@@ -242,15 +224,6 @@ export function routedStreamBootstrapEvents(input: {
         }),
       },
     },
-    // Subscribe the agent host using the same subscription key the AgentDurableObject uses, so the
-    // host this bootstrap starts and the one AgentDurableObject.onInstanceWake re-declares dedupe to
-    // a single runner. The host wakes the AgentDurableObject for this stream (see
-    // `ensureAgentRunnerForOwnStream`), which registers the LLM processors and agent setup events.
-    agentProcessorSubscriptionConfiguredEvent({
-      agentPath: streamPath,
-      processorSlug: AGENT_HOST_PROCESSOR_SLUG,
-      projectId: input.projectId,
-    }),
   ];
 }
 

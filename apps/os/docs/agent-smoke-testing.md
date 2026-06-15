@@ -70,7 +70,7 @@ doppler run --project os --config prd -- pnpm --dir apps/os cli rpc \
   --message "PING"
 ```
 
-Returns the appended `user-message-added` event with its `offset` — note it; the
+Returns the appended `web-message-received` event with its `offset` — note it; the
 reply lands at higher offsets. The LLM turn runs **asynchronously**; give it a few
 seconds.
 
