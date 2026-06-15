@@ -6,15 +6,6 @@ import { StreamPath } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
-import {
-  DEFAULT_OPENAI_AGENT_MODEL,
-  configuredAgentSetupEvents,
-  defaultAgentSystemPrompt,
-} from "~/domains/agents/agent-presets.ts";
-import {
-  agentProcessorSubscriptionConfiguredEvents,
-  defaultAgentProcessorSlugs,
-} from "~/domains/agents/agent-stream-subscriptions.ts";
 import { orpcClient } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
@@ -42,28 +33,23 @@ function NewAgentPage() {
   const createAgent = useMutation({
     mutationFn: async (content: string) => {
       const agentPath = newWebAgentPath();
-      await orpcClient.project.streams.appendBatch({
-        events: [
-          ...configuredAgentSetupEvents({
-            idempotencyKeyPrefix: "os-agent-new:web-setup",
-            model: DEFAULT_OPENAI_AGENT_MODEL,
-            provider: "openai-ws",
-            runOpts: {},
-            systemPrompt: defaultAgentSystemPrompt(agentPath),
-          }),
-          ...agentProcessorSubscriptionConfiguredEvents({
-            agentPath,
-            processorSlugs: defaultAgentProcessorSlugs("openai-ws"),
-            projectId: project.id,
-          }),
-        ],
+      await orpcClient.project.streams.create({
         projectSlugOrId: project.id,
         streamPath: agentPath,
       });
-      await orpcClient.project.agents.sendMessage({
-        agentPath,
-        message: content,
+      await waitForProjectAgentSetup({
         projectSlugOrId: project.id,
+        streamPath: agentPath,
+      });
+      await orpcClient.project.streams.append({
+        event: {
+          type: "events.iterate.com/agent/input-added",
+          payload: {
+            content,
+          },
+        },
+        projectSlugOrId: project.id,
+        streamPath: agentPath,
       });
       return agentPath;
     },
@@ -139,6 +125,22 @@ function NewAgentPage() {
 
 function newWebAgentPath() {
   return StreamPath.parse(`/agents/web/${slugifyCreationTime(new Date())}`);
+}
+
+async function waitForProjectAgentSetup(input: { projectSlugOrId: string; streamPath: string }) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const { events } = await orpcClient.project.streams.read({
+      projectSlugOrId: input.projectSlugOrId,
+      streamPath: input.streamPath,
+      beforeOffset: "end",
+    });
+    if (events.some((event) => event.idempotencyKey === "project-agent-setup:system-prompt")) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("Timed out waiting for agent setup.");
 }
 
 function slugifyCreationTime(date: Date) {

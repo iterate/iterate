@@ -31,15 +31,8 @@ Originals in `packages/shared` are left in place for the orchestrator to delete.
   - `/integrations/slack`: `slack-subscription:${projectId}:workers-rpc:callable`
     → `durableObjectProcessorSubscriber({ bindingName: "SLACK_INTEGRATION", ... , processorName: "slack" })`
     (binding names verified against `apps/os/alchemy.run.ts`).
-  - routed streams (in `routedStreamBootstrapEvents`):
-    `slack-agent-subscription:${projectId}:${streamPath}:workers-rpc:callable`
-    → `bindingName: "SLACK_AGENT"`, `processorName: "slack-agent"`. The host DO
-    name is derived inside the function (`getSlackAgentDurableObjectName`)
-    rather than taken from the (legacy, always-empty) input field; the input
-    signature is unchanged because the legacy runner still calls it.
-  - The codemode and agent-host bootstrap subscriptions in
-    `routedStreamBootstrapEvents` were left on the legacy built-in shape — they
-    belong to other domains' migrations.
+  - routed `/agents/slack/...` streams now get `slack-agent` setup from the
+    platform `ProjectProcessor` when the child stream is created.
 
 ## Decisions
 
@@ -64,11 +57,10 @@ Originals in `packages/shared` are left in place for the orchestrator to delete.
      design-note default for idempotent appends.
    - The DO-level `callSlackApi` dep keeps the legacy error-swallowing wrapper
      (Slack API failures log, never wedge the checkpoint).
-4. **`shouldApplySideEffects` / `firstAttachAfterAppend` deleted**: the base
-   class `sideEffectsAfterOffset` anchor (set by the host to the
-   subscription-configured offset, D5) replaces both. slack-agent's old 60s
-   lookback is covered because the bootstrap batch appends the subscription
-   before the route/webhook events on a fresh routed stream.
+4. **`shouldApplySideEffects` / `firstAttachAfterAppend` deleted**: hosted
+   processors replay from their durable checkpoint and run idempotency-keyed
+   side effects for delivered replay events, so slack-agent does not need a
+   separate lookback window.
 5. **Catch-up polling** (`waitFor*ProcessorCatchUp` / `getRunnerState`) now
    reads the local processor snapshot instead of the retired
    `STREAM_PROCESSOR_RUNNER`. Because delivery is contract-filtered (D9), the
@@ -94,15 +86,10 @@ Originals in `packages/shared` are left in place for the orchestrator to delete.
 
 ## Issues / follow-ups for the orchestrator
 
-- **Existing routed Slack threads only get the callable `slack-agent`
-  subscription via the route-creation path.** Threads routed before this
-  migration take the "known route → forward only" branch, so their streams
-  keep only the legacy built-in subscription (dropped by the new core) until
-  something re-appends the bootstrap batch. If existing threads must keep
-  working without a new route event, the router (or another ensure-path) needs
-  to re-append `routedStreamBootstrapEvents` idempotently on forward. Mirrors
-  the D2/I3 idempotency-key concern; left unfixed because it changes
-  legacy-path behavior beyond this slice's scope.
+- **Existing routed Slack threads rely on project-owned setup.** New routed
+  streams get the callable `slack-agent` subscription through the
+  child-stream-created side effect. Threads created before that setup existed
+  need a separate migration/backfill if they lack the subscription event.
 - `SlackIntegrationDurableObject.afterAppend` / `SlackAgentDurableObject.afterAppend`
   (legacy watcher-shaped entry points) have no callers I could find; kept with
   snapshot-backed return values, but they are candidates for deletion.

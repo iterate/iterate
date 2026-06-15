@@ -32,33 +32,12 @@ export default {
     return new Response("Hello from the project worker");
   },
 
-  // The worker is a stream processor: processEvent receives every event
-  // committed to the project root stream ("/"), in order. React to facts by
-  // appending facts — e.g. customize every new agent in this project by
-  // watching for its stream to be created and appending your own context
-  // events (the last system-prompt-updated wins; platform defaults yield to
-  // yours):
+  // The project worker is a stream processor: processEvent receives every
+  // event committed to the project root stream ("/"), in order. React to
+  // project facts here when you want customer-specific behavior.
   async processEvent({ event, streamPath }) {
     console.log("Project worker processEvent", streamPath, event.type);
   },
-
-  // async processEvent({ event }, env) {
-  //   if (event.type !== "events.iterate.com/stream/child-stream-created") return;
-  //   const agentPath = event.payload.childPath;
-  //   if (!agentPath.startsWith("/agents/")) return;
-  //   await env.STREAMS.append({
-  //     streamPath: agentPath,
-  //     event: {
-  //       type: "events.iterate.com/agent/system-prompt-updated",
-  //       payload: { systemPrompt: "You are this project's agent. ..." },
-  //     },
-  //   });
-  //   await itx.provideCapability({
-  //     name: "worker.myTool",
-  //     capability: { type: "rpc", worker: { type: "loopback" }, entrypoint: "MyToolCapability" },
-  //     instructions: "Use itx.worker.myTool({ ... }) to ...",
-  //   });
-  // },
 };
 `;
 

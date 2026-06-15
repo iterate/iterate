@@ -486,10 +486,6 @@ export class RepoDurableObject extends RepoLifecycleBase<RepoEnv> {
       path: repoStreamPath(params.repoSlug),
     });
 
-    // ":callable" suffix: the subscriber switched from the legacy built-in
-    // runner to a Callable subscription. Changing the idempotency key lets the
-    // new subscription-configured event land on existing streams that already
-    // recorded the old one.
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
       idempotencyKey: `repo-subscription:${params.projectId}:${params.repoSlug}:workers-rpc:callable`,

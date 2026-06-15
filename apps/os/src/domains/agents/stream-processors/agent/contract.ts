@@ -319,9 +319,6 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
       return {
         ...state,
         history: [...state.history, { role: "user" as const, content: event.payload.content }],
-        ...(event.payload.llmRequestPolicy.behaviour === "dont-trigger-request"
-          ? {}
-          : { pendingTriggerOffset: event.offset }),
       };
     case "events.iterate.com/agent/output-added":
       if (
@@ -346,13 +343,11 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
           scheduledOffset: event.offset,
         },
         pendingTriggerCount: 0,
-        pendingTriggerOffset: null,
       };
     case "events.iterate.com/agent/llm-request-requested":
       return {
         ...state,
         currentRequest: { phase: "requested" as const, llmRequestId: event.offset },
-        pendingTriggerOffset: null,
       };
     case "events.iterate.com/agent/llm-request-completed":
       return state.currentRequest?.phase === "requested" &&
@@ -379,7 +374,6 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
       return {
         ...state,
         pendingTriggerCount: state.pendingTriggerCount + 1,
-        pendingTriggerOffset: null,
       };
     // Consumed for side effects only; no state change.
     case "events.iterate.com/agent/status-updated":

@@ -693,7 +693,6 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
         stream: new StreamRpcTarget(this) as unknown as StreamRpc,
         subscriptionKey: args.subscriptionKey,
         streamMaxOffset: this.#coreProcessorState.maxOffset,
-        subscriptionConfiguredEvent: args.configured.latestConfiguredEvent,
         streamRuntimeState: { coreProcessorState: this.#coreProcessorState },
       } satisfies StreamSubscriptionHandshake,
     });

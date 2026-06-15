@@ -406,8 +406,9 @@ Not a big deal, though, as this is an almost complete implementation of capnweb.
 > **Superseded.** The shipped model is a single `StreamProcessor` abstract class
 > (`src/stream-processor.ts`) extended by subclasses with a `defineProcessorContract`
 > contract; hooks are `reduce` / `processEvent` / `processEventBatch`, side-effect
-> helpers are `blockProcessorWhile` / `runInBackground`, and the checkpoint anchor is
-> `sideEffectsAfterOffset`. The `implementProcessor(contract, implementation)` /
+> helpers are `blockProcessorWhile` / `runInBackground`, and catch-up replay runs
+> idempotent side effects for delivered events past the checkpoint. The
+> `implementProcessor(contract, implementation)` /
 > `build(deps) -> { afterAppend }` split described below, and the claim that a base
 > class can't get contextual param typing, never shipped. See README.md §"Stream
 > Processor Abstraction" for the current model. The text below is retained as history.

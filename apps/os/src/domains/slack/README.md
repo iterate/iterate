@@ -13,9 +13,10 @@ The incoming flow is:
 - Routed Slack streams run both `SlackAgentDurableObject` and
   `AgentDurableObject`. `slack-agent` owns Slack route context, bang commands,
   Slack status/reaction side effects, and `ctx.slack.agent.threadInfo()`.
-- The agent's codemode session already registers `ctx.slack.*`; Slack-specific
-  setup prompts tell the model to reply with
-  `ctx.slack.chat.postMessage({ channel, thread_ts, text })`.
+- The platform `ProjectProcessor` owns Slack-specific agent setup for
+  `/agents/slack/...` streams. The Slack router only forwards route and webhook
+  facts to those streams; hosted processors replay from their checkpoint and run
+  idempotent side effects for replayed events.
 
 Most durable Slack state should stay in Durable Objects where practical. D1 is
 for queryable projections, routing lookup, and cross-object indexes.

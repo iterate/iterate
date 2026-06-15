@@ -17,16 +17,6 @@ export type SlackProcessorContract = typeof SlackProcessorContract;
 
 export type SlackProcessorDeps = {
   /**
-   * Events that must land on a routed stream before the first forwarded Slack
-   * webhook (subscriptions, codemode startup, ...). Supplied by the hosting
-   * Durable Object because the bootstrap set is host-application knowledge.
-   */
-  createRoutedStreamBootstrapEvents?(input: {
-    channel: string;
-    streamPath: string;
-    threadTs: string;
-  }): Promise<StreamEventInput[]> | StreamEventInput[];
-  /**
    * Acknowledge a routed webhook to the source platform (e.g. the 👀
    * reaction) as soon as the router has decided where it goes, instead of
    * waiting for the routed stream's own processors to wake — several Durable
@@ -36,14 +26,6 @@ export type SlackProcessorDeps = {
    * routing.
    */
   acknowledgeRoutedWebhook?(input: { payload: unknown }): Promise<void> | void;
-  /**
-   * Pre-warm the Durable Objects that will subscribe to a newly routed
-   * stream, concurrently with the bootstrap append that creates it. Without
-   * this the chain is serial: thread stream cold start, then its dial wakes
-   * each subscribing host in turn.
-   * Best-effort: the subscription dial remains the source of truth.
-   */
-  prewarmRoutedStreamHosts?(input: { streamPath: string }): Promise<void> | void;
 };
 
 export class SlackProcessor extends StreamProcessor<SlackProcessorContract, SlackProcessorDeps> {
@@ -142,26 +124,25 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
           streamPath,
         },
       };
-      // The hosts that will subscribe to the new stream cold-start in
-      // parallel with its creation instead of serially after its first dial.
-      args.runInBackground(async () => {
-        await this.deps.prewarmRoutedStreamHosts?.({ streamPath });
-      });
+      // Durable obligation, NOT best-effort: this forward is the only copy of
+      // the Slack message on its way to the agent. Run it under
+      // `blockProcessorWhile` so a failed append holds the checkpoint and the
+      // host replays this webhook until it lands. `runInBackground` would
+      // swallow the error, advance the checkpoint, and silently drop the
+      // message — which is exactly the prd outage of 2026-06-15: the first
+      // message on a freshly-created project hit a cold cross-worker
+      // StreamsCapability RPC that threw after ~4s, the forward was dropped, and
+      // the agent never saw it (the thread stream was created by the prewarm
+      // below but never received the webhook). The ack/prewarm above stay
+      // best-effort and remain on `runInBackground`.
+      //
       // Every append carries an idempotency key derived from the source event,
-      // so replays after a re-handshake dedupe instead of double-forwarding.
-      args.runInBackground(async () => {
+      // so the replay dedupes instead of double-forwarding.
+      args.blockProcessorWhile(async () => {
         await this.ctx.stream.append({ event: routeEvent });
         await this.ctx.stream.appendBatch({
           streamPath,
-          events: [
-            ...((await this.deps.createRoutedStreamBootstrapEvents?.({
-              channel: route.channel,
-              streamPath,
-              threadTs: route.threadTs,
-            })) ?? []),
-            routeEvent,
-            forwardedWebhookEvent,
-          ],
+          events: [routeEvent, forwardedWebhookEvent],
         });
       });
       return;
@@ -174,7 +155,10 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
      * shapes into agent input without this router needing to understand
      * agent semantics.
      */
-    args.runInBackground(async () => {
+    // Durable obligation — same reasoning as the route-creation forward above.
+    // Block the checkpoint so a failed append replays the webhook instead of
+    // dropping it; the idempotency key makes the replay a no-op if it landed.
+    args.blockProcessorWhile(async () => {
       await this.ctx.stream.append({ streamPath, event: forwardedWebhookEvent });
     });
   }

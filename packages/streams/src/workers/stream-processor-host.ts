@@ -22,10 +22,7 @@
 // the stream pumps batches into `processor.ingest`.
 
 import type { StreamProcessorSnapshot } from "../stream-processor.ts";
-import type {
-  ProcessorContractAnnouncement,
-  SubscriptionConfiguredEvent,
-} from "../processors/core/contract.ts";
+import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
 import type { StreamEvent } from "../shared/event.ts";
 import type { StreamCoreProcessorState, StreamRpc, StreamSubscriptionHandle } from "../types.ts";
 
@@ -34,7 +31,6 @@ export type StreamSubscriptionHandshake = {
   stream: StreamRpc;
   subscriptionKey: string;
   streamMaxOffset: number;
-  subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
   streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
 };
 
@@ -62,16 +58,13 @@ export type HostedProcessorDeps = {
   };
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
-  sideEffectsAfterOffset: () => number;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
 };
 
 export type HostedProcessorRuntimeState = {
   processorName: string;
   snapshot: StreamProcessorSnapshot<unknown> | undefined;
-  subscription:
-    | { subscriptionKey: string; namespace: string; path: string; sideEffectsAfterOffset: number }
-    | undefined;
+  subscription: { subscriptionKey: string; namespace: string; path: string } | undefined;
 };
 
 // Structural: the host drives the processor's public surface only. (A
@@ -130,9 +123,9 @@ const HOST_IDLE_TEARDOWN_MS = 5 * 60_000;
 export type StreamProcessorHost = {
   /**
    * Register a named processor. The builder receives the host-provided base
-   * deps (checkpoint storage in DO KV keyed by `name`, late-bound stream
-   * context, the side-effect anchor) and must construct the processor with
-   * them. Call during DO field initialization.
+   * deps (checkpoint storage in DO KV keyed by `name` and late-bound stream
+   * context) and must construct the processor with them. Call during DO field
+   * initialization.
    */
   add<P extends AnyHostedProcessor>(name: string, build: (deps: HostedProcessorDeps) => P): P;
   /** Wire this to a public RPC method; subscription callables dial it. */
@@ -161,7 +154,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
   const hostIncarnationId = crypto.randomUUID();
 
   const snapshotKey = (name: string) => `stream-processor:${name}:snapshot`;
-  const anchorKey = (name: string) => `stream-processor:${name}:side-effects-after-offset`;
   const subscriptionKeyKey = (name: string) => `stream-processor:${name}:subscription-key`;
 
   function requireEntry(name: string): HostedEntry {
@@ -369,7 +361,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
         readState: () =>
           ctx.storage.kv.get<StreamProcessorSnapshot<any>>(snapshotKey(name)) ?? undefined,
         writeState: (snapshot) => void ctx.storage.kv.put(snapshotKey(name), snapshot),
-        sideEffectsAfterOffset: () => ctx.storage.kv.get<number>(anchorKey(name)) ?? 0,
         keepAliveWhile: (work) => void ctx.waitUntil(work()),
       });
       entries.set(name, {
@@ -389,12 +380,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       const name = resolveProcessorName(args.processorName);
       const entry = requireEntry(name);
 
-      // The anchor persists from the FIRST attach: re-handshakes after DO
-      // eviction must not move it forward, or side effects for events between
-      // the checkpoint and the stream head would be silently dropped.
-      if (ctx.storage.kv.get<number>(anchorKey(name)) === undefined) {
-        ctx.storage.kv.put(anchorKey(name), args.subscriptionConfiguredEvent.offset);
-      }
       ctx.storage.kv.put(subscriptionKeyKey(name), args.subscriptionKey);
 
       entry.handle?.unsubscribe();
@@ -430,7 +415,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
                 subscriptionKey,
                 namespace: entry.namespace,
                 path: entry.path,
-                sideEffectsAfterOffset: ctx.storage.kv.get<number>(anchorKey(name)) ?? 0,
               },
       };
     },

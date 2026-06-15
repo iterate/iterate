@@ -13,11 +13,6 @@ const JSONObject = z.record(z.string(), z.unknown());
 const ProjectScopedInput = z.object({
   projectSlugOrId: z.string(),
 });
-const AgentLlmProvider = z.enum(["openai-ws", "cloudflare-ai"]);
-const AgentPresetEvent = z.object({
-  type: z.string().trim().min(1),
-  payload: z.record(z.string(), z.unknown()),
-});
 
 export const Project = z.object({
   id: z.string(),
@@ -268,47 +263,6 @@ export const osContract = oc.router({
       .input(ProjectScopedInput)
       .output(z.unknown()),
     agents: {
-      listPresets: oc
-        .route({
-          method: "GET",
-          path: "/projects/{projectSlugOrId}/agents/presets",
-          description: "List path-prefix presets for project agents",
-          tags: ["/project", "/agents"],
-        })
-        .input(ProjectScopedInput)
-        .output(
-          z.object({
-            presets: z.array(
-              z.object({
-                basePath: StreamPath,
-                events: z.array(AgentPresetEvent),
-              }),
-            ),
-          }),
-        ),
-      configurePreset: oc
-        .route({
-          method: "POST",
-          path: "/projects/{projectSlugOrId}/agents/presets",
-          description: "Configure a path-prefix preset for project agents",
-          tags: ["/project", "/agents"],
-        })
-        .input(
-          ProjectScopedInput.extend({
-            basePath: StreamPath,
-            events: z.array(AgentPresetEvent).default([]),
-            model: z.string().trim().min(1),
-            provider: AgentLlmProvider,
-            runOpts: z.record(z.string(), z.unknown()).default({}),
-            systemPrompt: z.string().trim().min(1),
-          }),
-        )
-        .output(
-          z.object({
-            basePath: StreamPath,
-            eventCount: z.number().int().nonnegative(),
-          }),
-        ),
       sendMessage: oc
         .route({
           method: "POST",

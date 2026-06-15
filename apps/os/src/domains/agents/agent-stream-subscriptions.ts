@@ -5,11 +5,13 @@ import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/ca
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
 import { CloudflareAiProcessorContract } from "~/domains/agents/stream-processors/cloudflare-ai/contract.ts";
 import { OpenAiWsProcessorContract } from "~/domains/agents/stream-processors/openai-ws/contract.ts";
-import type { AgentLlmProvider } from "~/domains/agents/agent-presets.ts";
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 export const AGENTS_STREAM_PATH = StreamPathSchema.parse("/agents");
+export const OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE =
+  "events.iterate.com/os-agent/llm-provider-selected";
+export type AgentLlmProvider = "openai-ws" | "cloudflare-ai";
 
 export type AgentDurableObjectStructuredName = {
   agentPath: StreamPath;
@@ -93,7 +95,7 @@ export function agentProcessorSubscriptionConfiguredEvent(input: {
   const agentPath = StreamPathSchema.parse(input.agentPath);
   return {
     type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-    idempotencyKey: `agent-processor-subscription:${input.projectId}:${agentPath}:${input.processorSlug}`,
+    idempotencyKey: `agent-processor-subscription:${input.projectId}:${agentPath}:${input.processorSlug}:callable`,
     payload: {
       subscriptionKey: agentProcessorSubscriptionKey(input),
       subscriber: durableObjectProcessorSubscriber({

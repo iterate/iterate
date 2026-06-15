@@ -171,41 +171,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           );
           return;
         }
-        // Anchor-skip recovery. A triggering input below the side-effect
-        // anchor was reduced into state but its scheduling side effect never
-        // ran — this happens when the input is appended before this
-        // processor's subscription is configured (e.g. a Slack webhook racing
-        // the agent's bootstrap on a freshly created thread stream). The
-        // anchor gate keeps this recovery off the live path: triggers above
-        // the anchor are owned by the `input-added` handler, and a request
-        // fact that already covers the trigger clears `pendingTriggerOffset`
-        // in the reducer before this event is processed. Appends are keyed
-        // off the trigger event, exactly like the live path, so a raced
-        // duplicate dedups in the stream.
-        if (
-          state.pendingTriggerOffset === null ||
-          state.pendingTriggerOffset > args.sideEffectsAfterOffset
-        ) {
-          return;
-        }
-        const triggerEvent = { offset: state.pendingTriggerOffset };
-        if (state.currentRequest === null) {
-          if (this.#scheduledLlmRequest !== null) return;
-          args.blockProcessorWhile(() =>
-            this.#appendLlmRequestScheduled({ sourceEvent: triggerEvent, state }),
-          );
-          return;
-        }
-        // A request is in flight: record the skipped trigger as a durable
-        // queued fact, the same shape the live path appends, so the terminal
-        // request event schedules the follow-up turn. Recovery never
-        // interrupts in-flight work — even an interrupt-policy input degrades
-        // to after-current-request here. The scheduled phase needs no queued
-        // fact: its handoff rebuilds the request body from full committed
-        // history, which already includes the skipped trigger.
-        if (state.currentRequest.phase === "requested") {
-          args.blockProcessorWhile(() => this.#emitQueued({ sourceEvent: triggerEvent }));
-        }
         return;
       }
       case "events.iterate.com/itx/capability-provided":

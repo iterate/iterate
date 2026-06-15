@@ -57,15 +57,9 @@ import {
 } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import { stripArtifactTokenQuery } from "~/domains/repos/artifact-token.ts";
 import {
-  DEFAULT_AGENT_LLM_PROVIDER,
-  defaultAgentSetupEvents,
-  defaultAgentSystemPrompt,
-  isSlackAgentPath,
   OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
-  readAgentPathPrefixPresets,
-  selectAgentSetupPreset,
   type AgentLlmProvider,
-} from "~/domains/agents/agent-presets.ts";
+} from "~/domains/agents/agent-stream-subscriptions.ts";
 import {
   AGENTS_STREAM_PATH,
   AgentDurableObjectName,
@@ -210,17 +204,12 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
           AgentProcessorContract.slug,
         ]);
       } else {
-        await this.ensureAgentSetupEvents(params);
-        const llmProvider = await this.resolveLlmProvider(params);
+        await this.ensureAgentStreamExists(params);
         this.ctx.waitUntil(
           this.ensureAgentWorkspace(params).catch((error) => {
             console.error("[agent-workspace-setup] failed", error);
           }),
         );
-        await this.ensureAgentSubscriptions(params, [
-          AgentProcessorContract.slug,
-          agentLlmProcessorSlug(llmProvider),
-        ]);
         // Deliberately NOT awaited: context provisioning probes each rpc
         // capability for self-description, and those loopback dials can only
         // make progress once this wake hook releases the input gate — awaiting
@@ -242,6 +231,15 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       // Public methods await `ensureStartedAndCaughtUp()` instead, which runs
       // the same wait once per instance wake, outside the gate.
     });
+  }
+
+  private async ensureAgentStreamExists(params: AgentDurableObjectStructuredName) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: params.projectId,
+      path: params.agentPath,
+    });
+    await stream.getState();
   }
 
   /** See the wake hook comment: the wake-time catch-up runs outside the lifecycle gate. */
@@ -276,7 +274,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
   async sendMessage(input: { message: string; channel?: string }) {
     const params = await this.ensureStartedAndCaughtUp();
-    const origin = parseAgentChatChannel(input.channel);
+    const origin = parseAgentMessageOrigin(input.channel);
     const event = await this.streamsEntrypoint(params.agentPath).append({
       event: {
         type: "events.iterate.com/agents/user-message-received",
@@ -601,64 +599,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     });
   }
 
-  private async ensureAgentSetupEvents(params: AgentDurableObjectStructuredName) {
-    const streamApi = this.streamsEntrypoint(params.agentPath);
-    const events = await streamApi.read({ afterOffset: "start", beforeOffset: "end" });
-    const rootEvents = await this.streamsEntrypoint(AGENTS_STREAM_PATH).read({
-      afterOffset: "start",
-      beforeOffset: "end",
-    });
-    const preset = selectAgentSetupPreset({
-      agentPath: params.agentPath,
-      presets: readAgentPathPrefixPresets(rootEvents),
-    });
-    const setupEvents =
-      preset?.events ?? defaultAgentSetupEvents(DEFAULT_AGENT_LLM_PROVIDER, params.agentPath);
-    const hasSetupPrompt = setupEvents.some(
-      (event) => event.type === "events.iterate.com/agent/system-prompt-updated",
-    );
-
-    for (const [index, event] of setupEvents.entries()) {
-      const idempotencyKey = `os-agent-setup:${normalizeIdempotencyKeyPart(
-        preset?.basePath ?? "default",
-      )}:${index}:${event.type}`;
-      if (events.some((existingEvent) => existingEvent.idempotencyKey === idempotencyKey)) {
-        continue;
-      }
-      if (preset == null && hasEquivalentDefaultSetupEvent({ event, existingEvents: events })) {
-        continue;
-      }
-      await streamApi.append({
-        event: {
-          idempotencyKey,
-          payload: event.payload,
-          type: event.type,
-        },
-      });
-    }
-
-    const lastPrompt = [...events]
-      .reverse()
-      .find((event) => event.type === "events.iterate.com/agent/system-prompt-updated");
-    const systemPromptPayload = lastPrompt?.payload as { systemPrompt?: unknown } | undefined;
-    const systemPrompt =
-      typeof systemPromptPayload?.systemPrompt === "string" ? systemPromptPayload.systemPrompt : "";
-    if (
-      !hasSetupPrompt &&
-      (!systemPrompt || systemPrompt.includes("ctx.streams.append({ event:"))
-    ) {
-      await streamApi.append({
-        event: {
-          type: "events.iterate.com/agent/system-prompt-updated",
-          idempotencyKey: "agent-default-system-prompt-v2",
-          payload: {
-            systemPrompt: defaultAgentSystemPrompt(params.agentPath),
-          },
-        },
-      });
-    }
-  }
-
   private async createDebugSnapshot() {
     const project = await this.readDebugProjectInfo();
     const config = this.getAppConfig();
@@ -721,7 +661,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     return await this.streamsEntrypoint(this.structuredName.agentPath).append({
       event: {
         type:
-          parseAgentChatChannel(input.channel) === "tui"
+          parseAgentMessageOrigin(input.channel) === "tui"
             ? "events.iterate.com/agents/tui-message-sent"
             : "events.iterate.com/agents/web-message-sent",
         idempotencyKey: input.idempotencyKey,
@@ -740,11 +680,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     instructions: string;
     capability: CapabilityAddress;
   }> {
-    // Every agent gets a RICH toolset. The ONLY thing that varies by agent is
-    // the CHANNEL — how it talks to its user: a Slack agent gets `slack`, a
-    // web agent gets `chat`. (Channel-specific PROMPTING lives in the agent's
-    // system prompt — defaultAgentSystemPrompt, agent-presets.ts.) Everything
-    // else below is identical for all agents.
+    // Every agent gets a rich toolset. The only thing that varies by agent is
+    // the channel — how it talks to its user. Channel-specific prompting lives
+    // in project-owned setup events appended by the project processor.
     const channel = isSlackAgentPath(params.agentPath)
       ? {
           capability: {
@@ -819,22 +757,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   private async resolveLlmProvider(
     params: AgentDurableObjectStructuredName,
   ): Promise<AgentLlmProvider> {
-    const rootEvents = await this.streamsEntrypoint(AGENTS_STREAM_PATH).read({
-      afterOffset: "start",
-      beforeOffset: "end",
-    });
-    const preset = selectAgentSetupPreset({
-      agentPath: params.agentPath,
-      presets: readAgentPathPrefixPresets(rootEvents),
-    });
-    const presetProvider = preset?.events
-      .toReversed()
-      .map((event) => (event.payload as { provider?: unknown }).provider)
-      .find((provider) => provider === "cloudflare-ai" || provider === "openai-ws");
-    if (presetProvider === "cloudflare-ai" || presetProvider === "openai-ws") {
-      return presetProvider;
-    }
-
     const events = await this.streamsEntrypoint(params.agentPath).read({
       afterOffset: "start",
       beforeOffset: "end",
@@ -844,7 +766,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       const provider = (event.payload as { provider?: unknown }).provider;
       if (provider === "cloudflare-ai" || provider === "openai-ws") return provider;
     }
-    return DEFAULT_AGENT_LLM_PROVIDER;
+    return "openai-ws";
   }
 
   private streamsEntrypoint(streamPath: StreamPath) {
@@ -854,20 +776,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       streamPath,
     });
   }
-}
-
-function normalizeIdempotencyKeyPart(value: string) {
-  return value.replace(/[^a-zA-Z0-9._/-]+/g, "-");
-}
-
-function hasEquivalentDefaultSetupEvent(input: {
-  event: { type: string };
-  existingEvents: readonly { payload: unknown; type: string }[];
-}) {
-  if (input.event.type === "events.iterate.com/agent/system-prompt-updated") {
-    return input.existingEvents.some((event) => event.type === input.event.type);
-  }
-  return input.existingEvents.some((event) => event.type === input.event.type);
 }
 
 export function readOpenAiApiKey(env: Record<string, unknown>) {
@@ -986,7 +894,7 @@ function remoteWithToken(input: { remote: string; token: string }) {
   return url.toString();
 }
 
-function parseAgentChatChannel(channel: string | undefined) {
+function parseAgentMessageOrigin(channel: string | undefined) {
   return channel === "tui" ? "tui" : "web";
 }
 
@@ -1025,6 +933,11 @@ function parseChatToolMessage(value: unknown) {
     throw new Error("itx.chat.sendMessage requires a non-empty message string.");
   }
   return message;
+}
+
+function isSlackAgentPath(agentPath: string) {
+  const normalized = agentPath.toLowerCase();
+  return normalized === "/agents/slack" || normalized.startsWith("/agents/slack/");
 }
 
 type CloudflareSocketEventName = "open" | "message" | "close" | "error" | string;
