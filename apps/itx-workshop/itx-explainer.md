@@ -612,9 +612,17 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
 }
 ```
 
-### Root capabilities are _provided_, not built in
+### Root capabilities are injected at construction, not appended
 
-There is no special handle carrying `fetch`/`streams`/`ai`. Those come from the same verb as everything else — _something_ calls `itx.provideCapability({ path: ["fetch"], … })`. Whoever sets up a context provides its roots; a context that should have defaults from birth is handed them at construction and provides them in its setup. The core has no privileged names. (Step 12 is where the chain — project → session → agent — decides _who_ provides which roots and how a miss climbs to a parent.)
+`fetch`/`streams`/`ai` are not special-cased in a handle — but they're also _not_ provided as events on every context's stream. Appending a `capability-provided` for each root would mean rewriting thousands of streams (one per project) every time we change what the roots are. Instead the `Itx` StreamProcessor takes its **root capabilities as a constructor argument**: the host wires them in when it builds the context, `invoke` falls back to them on a miss (after the fold, before the parent), and they appear in `describe`/`list` so they're self-describing.
+
+```ts
+// the host builds a context with its roots wired in — no events appended:
+new Itx({ ...deps, roots: { fetch: (url) => env.PROJECT.getByName(id).egress(url) } });
+// invoke resolution order: own fold (provides) → roots (these) → parent (Step 11).
+```
+
+Changing a root is then a **code change** — re-injected on the next boot — not a stream rewrite. The cost is honest: a root isn't in the durable fold, and if you've already told an agent what its roots are, changing them still means updating what you told it; but you never rewrite the logs. (Step 12's chain — project → agent — decides which context gets which roots; a child inherits the parent's by climbing on a miss.)
 
 ### Where it actually runs
 
@@ -634,7 +642,7 @@ The whole thing is one idea seen from a few angles: a name → a stub or an addr
 - [x] **Project DO + `itx.fetch`** ([`steps/10-project-fetch`](./steps/10-project-fetch)) — a **Project Durable Object** owns egress, provided to a project context as the `fetch` root.
 - [x] **The context chain** ([`steps/11-chain`](./steps/11-chain)) — an agent itx extends its project itx; on a miss it climbs to super across real DOs; a child shadow wins (late binding).
 - [x] **Codemode** ([`steps/12-codemode`](./steps/12-codemode)) — `script-execution-requested`/`-completed`; run an `async (itx) => …` program in a loaded isolate with the context's itx in scope.
-- [x] **Root capabilities are provided, not built in** — injected at construction (e.g. `itx.fetch`), not special-cased in a handle; own provides shadow them.
+- [x] **Root capabilities are injected at construction** — passed to the `Itx` constructor (e.g. `itx.fetch`), not special-cased in a handle and not appended as events; `invoke` falls back to them, own provides shadow them, and they're surfaced in `describe`/`list`.
 - [ ] **The platform capability root above the project** — where defaults bottom out at a code-rooted read-only root. _(still TODO.)_
 
 ---
