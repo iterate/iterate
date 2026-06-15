@@ -682,7 +682,7 @@ async function waitForCloudflareWorkerScript(params: {
     if (response.ok) {
       visibleChecks += 1;
       if (visibleChecks >= 2) return;
-      await sleep(5_000);
+      await sleep(1_000);
       continue;
     }
 
@@ -695,7 +695,7 @@ async function waitForCloudflareWorkerScript(params: {
       );
     }
 
-    await sleep(5_000);
+    await sleep(1_000);
   }
 
   throw new Error(
@@ -714,7 +714,7 @@ async function retryCloudflareWorkerRouteCreation(createRoute: () => Promise<unk
         throw error;
       }
 
-      await sleep(5_000);
+      await sleep(2_000);
     }
   }
 }
