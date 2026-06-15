@@ -70,10 +70,16 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   // its Project DO). Own provides (the fold) shadow roots of the same name.
   #roots: Record<string, any>;
 
+  // The chain (Step 11): a child context (e.g. an agent) climbs to its parent
+  // (e.g. its project) on a capability MISS. Returns the parent's processor stub,
+  // or null at the top of the chain. A child's own caps + roots shadow the parent.
+  #parentItx: () => { invoke(input: { path: string[]; args: unknown[] }): any } | null;
+
   constructor(
     args: ConstructorParameters<typeof StreamProcessor<typeof ItxContract>>[0] & {
       dial?: (address: any) => any;
       roots?: Record<string, any>;
+      parentItx?: () => { invoke(input: { path: string[]; args: unknown[] }): any } | null;
     },
   ) {
     super(args);
@@ -83,6 +89,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
         throw new Error("this context has no dial configured (no sturdy capabilities)");
       });
     this.#roots = (args as any).roots ?? {};
+    this.#parentItx = (args as any).parentItx ?? (() => null);
   }
 
   // The fold: one pure projection of an event into the next capability table.
@@ -176,6 +183,9 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
       const name = path.slice(0, i).join(".");
       if (this.#roots[name]) return await replayPath(this.#roots[name], path.slice(i), args);
     }
+    // chain (Step 11): climb to the parent context on a miss (super).
+    const parent = this.#parentItx();
+    if (parent) return await parent.invoke({ path, args });
     throw new Error(`no capability "${path.join(".")}"`);
   }
 }

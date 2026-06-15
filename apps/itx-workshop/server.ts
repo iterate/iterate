@@ -179,21 +179,39 @@ export class ItxDO extends DurableObject<Env> {
         iterateContext: { stream: this.#log() },
         dial: (address) => this.#dial(address), // Step 09: restore a sturdy ref
         roots: this.#projectRoots(), // Step 10: itx.fetch on a project context
+        parentItx: () => this.#parentContext(), // Step 11: climb to the parent
       }),
   );
   #subscriptionConfigured = false;
 
-  // Step 10: a PROJECT-scoped context (named "prj:<id>", see Step 08) is born with
+  // A context is a project id + a path (Step 12). We name the host DO by that
+  // coordinate: "prj:<id>" is the project itx; "prj:<id>/agents/<name>" is an
+  // agent itx under it. Helpers below derive the project id and the parent.
+  #project(): string | null {
+    const name = this.ctx.id.name ?? "";
+    return name.startsWith("prj:") ? name.slice("prj:".length).split("/")[0] : null;
+  }
+
+  // Step 10: ONLY the project-root context ("prj:<id>", no sub-path) is born with
   // `fetch` as a root capability — provided, not built in — backed by that
-  // project's own Project Durable Object. `itx.fetch(url)` egresses through it.
+  // project's Project DO. Agent/sub-contexts inherit `fetch` via the chain.
   #projectRoots(): Record<string, any> {
     const name = this.ctx.id.name ?? "";
-    if (!name.startsWith("prj:")) return {};
-    const projectId = name.slice("prj:".length);
+    const projectId = this.#project();
+    if (!projectId || name !== `prj:${projectId}`) return {};
     return {
       fetch: (url: string, init?: RequestInit) =>
         this.env.PROJECT.getByName(projectId).egress(url, init),
     };
+  }
+
+  // Step 11: the parent context. An agent ("prj:<id>/agents/<name>") climbs to
+  // its project ("prj:<id>") on a miss; the project root has no parent here.
+  #parentContext(): { invoke(input: { path: string[]; args: unknown[] }): any } | null {
+    const name = this.ctx.id.name ?? "";
+    const projectId = this.#project();
+    if (!projectId || name === `prj:${projectId}`) return null; // project root: top of the chain
+    return this.env.ITX.getByName(`prj:${projectId}`).itx();
   }
 
   // dial (Step 09): turn a sturdy address into a callable by BUILDING AND RUNNING
@@ -377,6 +395,29 @@ export default {
       if (!auth.ok) return new Response(auth.message, { status: auth.status });
 
       const node = env.ITX.getByName(`prj:${project}`);
+      const main = dynamicHandle(new WorkerHandle(node));
+      const pair = new WebSocketPair();
+      const server = pair[0];
+      server.accept();
+      newWebSocketRpcSession(server as unknown as WebSocket, main);
+      ctx.waitUntil(
+        new Promise<void>((resolve) => server.addEventListener("close", () => resolve())),
+      );
+      return new Response(null, { status: 101, webSocket: pair[1] });
+    }
+
+    // Step 11 — the chain: open a project context (?project=alice) or an agent
+    // context under it (?project=alice&agent=foo). The agent's parent is the
+    // project; a miss on the agent climbs to the project (super). Auth is the
+    // same project check as Step 08.
+    if (path === "/steps/11-chain") {
+      const project = url.searchParams.get("project") ?? "";
+      const agent = url.searchParams.get("agent");
+      const auth = step08.authorizeProjectAccess(request, project);
+      if (!auth.ok) return new Response(auth.message, { status: auth.status });
+
+      const coordinate = agent ? `prj:${project}/agents/${agent}` : `prj:${project}`;
+      const node = env.ITX.getByName(coordinate);
       const main = dynamicHandle(new WorkerHandle(node));
       const pair = new WebSocketPair();
       const server = pair[0];
