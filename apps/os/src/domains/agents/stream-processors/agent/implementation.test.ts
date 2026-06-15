@@ -111,6 +111,48 @@ describe("AgentProcessor", () => {
     expect(appended).toEqual([]);
   });
 
+  it("does not render received chat messages on the agents root stream", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({
+      stream,
+      isAgentsRootStream: () => true,
+    });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agents/web-message-received",
+          payload: { content: "hello root" },
+          offset: 13,
+        }),
+      ],
+      streamMaxOffset: 13,
+    });
+
+    expect(appended).toEqual([]);
+  });
+
+  it("does not render sent chat messages on the agents root stream", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({
+      stream,
+      isAgentsRootStream: () => true,
+    });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agents/web-message-sent",
+          payload: { message: "sent from root" },
+          offset: 14,
+        }),
+      ],
+      streamMaxOffset: 14,
+    });
+
+    expect(appended).toEqual([]);
+  });
+
   it("does not enqueue agent output scripts on the agents root stream", async () => {
     const { stream, appended } = memoryStream();
     const ensureItxContext = vi.fn(async () => undefined);

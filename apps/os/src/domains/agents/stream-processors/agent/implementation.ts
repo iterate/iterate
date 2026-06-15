@@ -103,6 +103,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         return;
       case AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE:
       case AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE:
+        if (this.deps.isAgentsRootStream()) return;
         args.blockProcessorWhile(async () => {
           await this.#appendEventTypeExplanation({ eventType: event.type });
           await this.ctx.stream.append({
@@ -127,6 +128,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         return;
       case AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE:
       case AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE:
+        if (this.deps.isAgentsRootStream()) return;
         args.blockProcessorWhile(async () => {
           await this.#appendEventTypeExplanation({ eventType: event.type });
           await this.ctx.stream.append({
