@@ -39,6 +39,33 @@ export function connectGlobal(): ItxClient {
   return withItx({ baseUrl: baseUrl(), token: adminApiSecret() });
 }
 
+const TRANSIENT_PROJECT_CREATE_BACKOFF_MS = [500, 1_500, 3_000];
+
+/**
+ * Preview e2e creates many short-lived projects against a remote Worker. A
+ * transient Cap'n Web disconnect can drop the response after the server has
+ * already done useful work; retry only those transport failures.
+ */
+export async function createItxProject(
+  itx: Pick<ItxClient, "projects">,
+  input: { slug: string },
+): Promise<{ id: string; slug: string }> {
+  for (const backoffMs of TRANSIENT_PROJECT_CREATE_BACKOFF_MS) {
+    try {
+      return (await itx.projects.create(input)) as { id: string; slug: string };
+    } catch (error) {
+      if (!isTransientProjectCreateError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+  return (await itx.projects.create(input)) as { id: string; slug: string };
+}
+
+function isTransientProjectCreateError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Network connection lost");
+}
+
 /**
  * Best-effort cleanup for projects a suite creates: push every created
  * project id onto the returned array and an afterAll hook removes them via

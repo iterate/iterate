@@ -14,6 +14,7 @@ import { ITX_EXAMPLES } from "../examples.ts";
 import {
   adminApiSecret,
   baseUrl,
+  createItxProject,
   connectGlobal,
   registerCreatedProjectCleanup,
 } from "./e2e-env.ts";
@@ -57,7 +58,7 @@ let matrixSetupPromise: Promise<{ projectId: string }> | null = null;
 function ensureMatrixProject(): Promise<{ projectId: string }> {
   matrixSetupPromise ??= (async () => {
     using itx = connectGlobal();
-    const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-mx` })) as {
+    const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-mx` })) as {
       id: string;
       slug: string;
     };
@@ -117,7 +118,7 @@ for (const example of MATRIX_EXAMPLES) {
 
 test("the five-step capability flow: provide live, call, promote durable, call from a script", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-caps` })) as { id: string };
+  const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-caps` })) as { id: string };
   createdProjectIds.push(project.id);
 
   // (1) A provider written in this Node process: ONE call({ path, args })
@@ -212,7 +213,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
 
 test("platform bindings are dialable capabilities (raw + wrapped)", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-ai` })) as { id: string };
+  const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-ai` })) as { id: string };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
@@ -303,7 +304,9 @@ test.skipIf(!MCP_TEST_SERVER_URL)(
   "the first-party McpClient cap bridges a remote MCP server",
   async () => {
     using itx = connectGlobal();
-    const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-mcp` })) as { id: string };
+    const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-mcp` })) as {
+      id: string;
+    };
     createdProjectIds.push(project.id);
     using projectItx = await itx.projects.get(project.id);
 
@@ -333,7 +336,7 @@ test.skipIf(!MCP_TEST_SERVER_URL)(
 
 test("user-space caps: repo-sourced code is a first-class capability through the generic source dial", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-uw` })) as {
+  const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-uw` })) as {
     id: string;
     slug: string;
   };
@@ -407,7 +410,7 @@ export class PetstoreClient extends WorkerEntrypoint {
 
 test("the defaults arrive from the code-rooted chain end, and own rows shadow them", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-def` })) as { id: string };
+  const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-def` })) as { id: string };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
@@ -458,7 +461,9 @@ test("the defaults arrive from the code-rooted chain end, and own rows shadow th
 
 test("fetch is a shadowable capability: a live provider intercepts project egress", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-fetch` })) as { id: string };
+  const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-fetch` })) as {
+    id: string;
+  };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
@@ -568,7 +573,7 @@ test("fetch is a shadowable capability: a live provider intercepts project egres
 
 test("absolute stream refs are sugar through the one access check", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-ref` })) as { id: string };
+  const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-ref` })) as { id: string };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
@@ -617,7 +622,9 @@ test(
   { timeout: 90_000 },
   async () => {
     using itx = connectGlobal();
-    const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-rec` })) as { id: string };
+    const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-rec` })) as {
+      id: string;
+    };
     createdProjectIds.push(project.id);
 
     const response = await fetch(new URL("/api/itx/run", baseUrl()), {
@@ -656,7 +663,7 @@ test(
 
 test("worker caps hold a correctly scoped itx of their own", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-todo` })) as { id: string };
+  const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-todo` })) as { id: string };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
@@ -697,7 +704,9 @@ test("worker caps hold a correctly scoped itx of their own", async () => {
 
 test("members caps auto-proxy every public method/getter at any depth", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-proxy` })) as { id: string };
+  const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-proxy` })) as {
+    id: string;
+  };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
@@ -738,7 +747,7 @@ test("members caps auto-proxy every public method/getter at any depth", async ()
 
 test("one dynamic worker cap calls another's methods through its own itx", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-w2w` })) as { id: string };
+  const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-w2w` })) as { id: string };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
@@ -833,7 +842,7 @@ test("kernel errors cross capnweb as ItxError-shaped errors with codes", async (
 
 test("revoked and offline caps fail with instructive errors", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-err` })) as { id: string };
+  const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-err` })) as { id: string };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 

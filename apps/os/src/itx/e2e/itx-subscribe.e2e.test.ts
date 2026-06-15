@@ -5,7 +5,7 @@
 
 import { expect, test } from "vitest";
 import { coreStateToStreamState } from "../../domains/streams/stream-runtime.ts";
-import { connectGlobal, registerCreatedProjectCleanup } from "./e2e-env.ts";
+import { connectGlobal, createItxProject, registerCreatedProjectCleanup } from "./e2e-env.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const PROJECT_SLUG = `itx-sub-e2e-${RUN_SUFFIX}`;
@@ -16,7 +16,7 @@ const createdProjectIds = registerCreatedProjectCleanup();
 
 test("subscribe replays history, tails live appends, and unsubscribes", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: PROJECT_SLUG })) as { id: string };
+  const project = (await createItxProject(itx, { slug: PROJECT_SLUG })) as { id: string };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
@@ -73,7 +73,9 @@ test("subscribe replays history, tails live appends, and unsubscribes", async ()
 
 test("onStateChange pushes initial state immediately, then state after appends", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `${PROJECT_SLUG}-state` })) as { id: string };
+  const project = (await createItxProject(itx, { slug: `${PROJECT_SLUG}-state` })) as {
+    id: string;
+  };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 

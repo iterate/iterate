@@ -8,6 +8,7 @@ import { withItx } from "../client.ts";
 import {
   adminApiSecret,
   baseUrl,
+  createItxProject,
   connectGlobal,
   registerCreatedProjectCleanup,
 } from "./e2e-env.ts";
@@ -16,7 +17,9 @@ const createdProjectIds = registerCreatedProjectCleanup();
 
 test("extend: child caps shadow the parent, misses delegate up the chain", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `itx-extend-${suffix()}` })) as { id: string };
+  const project = (await createItxProject(itx, { slug: `itx-extend-${suffix()}` })) as {
+    id: string;
+  };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
@@ -78,7 +81,7 @@ test("extend: child caps shadow the parent, misses delegate up the chain", async
 
 test("extend: a path provide shadows ONE subtree of an inherited capability (longest-prefix dispatch)", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `itx-extend-path-${suffix()}` })) as {
+  const project = (await createItxProject(itx, { slug: `itx-extend-path-${suffix()}` })) as {
     id: string;
   };
   createdProjectIds.push(project.id);
@@ -145,7 +148,7 @@ test("extend: a path provide shadows ONE subtree of an inherited capability (lon
 
 test("extend: workspaces are HOST-provided — plain extensions share the project workspace", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `itx-extend-ws-${suffix()}` })) as {
+  const project = (await createItxProject(itx, { slug: `itx-extend-ws-${suffix()}` })) as {
     id: string;
   };
   createdProjectIds.push(project.id);
@@ -185,8 +188,8 @@ test("extend: workspaces are HOST-provided — plain extensions share the projec
 test("extend narrows access: a session cannot reach sibling projects", async () => {
   using itx = connectGlobal();
   // Two projects under an admin (access "all") handle.
-  const a = (await itx.projects.create({ slug: `itx-extend-a-${suffix()}` })) as { id: string };
-  const b = (await itx.projects.create({ slug: `itx-extend-b-${suffix()}` })) as { id: string };
+  const a = (await createItxProject(itx, { slug: `itx-extend-a-${suffix()}` })) as { id: string };
+  const b = (await createItxProject(itx, { slug: `itx-extend-b-${suffix()}` })) as { id: string };
   createdProjectIds.push(a.id, b.id);
 
   using projectA = await itx.projects.get(a.id);
@@ -201,7 +204,7 @@ test("extend narrows access: a session cannot reach sibling projects", async () 
 
 test("extend: child worker caps run with the owning project's authority", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `itx-extend-itx-${suffix()}` })) as {
+  const project = (await createItxProject(itx, { slug: `itx-extend-itx-${suffix()}` })) as {
     id: string;
   };
   createdProjectIds.push(project.id);
@@ -264,7 +267,7 @@ test(
   { timeout: 120_000 },
   async () => {
     using itx = connectGlobal();
-    const project = (await itx.projects.create({ slug: `itx-mw-${suffix()}` })) as { id: string };
+    const project = (await createItxProject(itx, { slug: `itx-mw-${suffix()}` })) as { id: string };
     createdProjectIds.push(project.id);
     using projectItx = await itx.projects.get(project.id);
     using child = await projectItx.extend({ name: "middleware" });
@@ -346,7 +349,9 @@ test(
   { timeout: 120_000 },
   async () => {
     using itx = connectGlobal();
-    const project = (await itx.projects.create({ slug: `itx-ind-${suffix()}` })) as { id: string };
+    const project = (await createItxProject(itx, { slug: `itx-ind-${suffix()}` })) as {
+      id: string;
+    };
     createdProjectIds.push(project.id);
     using projectItx = await itx.projects.get(project.id);
 
