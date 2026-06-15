@@ -5,8 +5,8 @@ const config = {
   issuer: "https://auth.iterate-dev.com/api/auth",
   clientId: "os-local-dev",
   clientSecret: "secret",
-  redirectURI: "http://os.localhost:65455/api/iterate-auth/callback",
-  resource: "http://os.localhost",
+  redirectURI: "http://localhost:65455/api/iterate-auth/callback",
+  resource: "http://localhost",
 } satisfies IterateAuthConfig;
 
 describe("iterate auth login", () => {
@@ -19,7 +19,7 @@ describe("iterate auth login", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe(
-      "http://os.localhost:65455/api/iterate-auth/login?return_to=%2Fprojects",
+      "http://localhost:65455/api/iterate-auth/login?return_to=%2Fprojects",
     );
     expect(response.headers.get("set-cookie")).toBeNull();
   });
@@ -27,7 +27,7 @@ describe("iterate auth login", () => {
   it("writes the OAuth state cookie on the configured callback origin", async () => {
     const handler = testAuthHandler(config);
 
-    const response = await handler(new Request("http://os.localhost:65455/api/iterate-auth/login"));
+    const response = await handler(new Request("http://localhost:65455/api/iterate-auth/login"));
 
     expect(response.status).toBe(302);
     expect(response.headers.get("set-cookie")).toContain("iterate_oauth_state=");
@@ -36,7 +36,7 @@ describe("iterate auth login", () => {
     expect(location.origin).toBe("https://auth.iterate-dev.com");
     expect(location.searchParams.get("client_id")).toBe("os-local-dev");
     expect(location.searchParams.get("redirect_uri")).toBe(
-      "http://os.localhost:65455/api/iterate-auth/callback",
+      "http://localhost:65455/api/iterate-auth/callback",
     );
     expect(location.searchParams.get("state")).toBeTruthy();
   });
@@ -47,7 +47,7 @@ describe("iterate auth login", () => {
     const handler = testAuthHandler(config, { doRefresh });
 
     await handler(
-      new Request("http://os.localhost:65455/api/iterate-auth/session?refresh=force", {
+      new Request("http://localhost:65455/api/iterate-auth/session?refresh=force", {
         headers: { cookie: sessionCookie(tokenSet) },
       }),
     );
@@ -61,7 +61,7 @@ describe("iterate auth login", () => {
     const handler = testAuthHandler(config, { doRefresh });
 
     await handler(
-      new Request("http://os.localhost:65455/api/iterate-auth/session", {
+      new Request("http://localhost:65455/api/iterate-auth/session", {
         headers: {
           cookie: sessionCookie(
             testTokenSet({ accessTokenExpiresAt: Date.now() + 60 * 60 * 1000 }),
@@ -86,7 +86,7 @@ describe("iterate auth login", () => {
     });
 
     const response = await handler(
-      new Request("http://os.localhost:65455/api/iterate-auth/session?refresh=force", {
+      new Request("http://localhost:65455/api/iterate-auth/session?refresh=force", {
         headers: { cookie: sessionCookie(signed.tokenSet) },
       }),
     );
@@ -124,8 +124,8 @@ function testAuthHandler(
     doRefresh: async () => null,
     getUserInfo: async () => null,
     cookieOpts: () => ({ httpOnly: true, path: "/", sameSite: "Lax", secure: false }) as const,
-    resource: () => "http://os.localhost",
-    audiences: () => ["http://os.localhost"],
+    resource: () => "http://localhost",
+    audiences: () => ["http://localhost"],
     ...overrides,
   } as unknown as Parameters<typeof createAuthHandler>[1];
 

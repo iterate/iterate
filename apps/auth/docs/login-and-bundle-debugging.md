@@ -5,7 +5,7 @@ Date: 2026-06-12
 ## What I observed
 
 - `apps/os` dev sign-in can look like a no-op if the user clicks the SSR-rendered button before the client has hydrated.
-- In a Playwright repro against `http://os.localhost:61975/sign-in?redirect_url=%2F`, an immediate click produced no `/api/iterate-auth/login` request. Waiting longer before clicking produced the expected request:
+- In a Playwright repro against `http://localhost:61975/sign-in?redirect_url=%2F`, an immediate click produced no `/api/iterate-auth/login` request. Waiting longer before clicking produced the expected request:
   `GET /api/iterate-auth/login?return_to=%2F`.
 - The slow hydration is made worse because the OS dev client loads `src/start.ts`, then `src/auth/middleware.ts`, then `apps/auth/src/lib/server.ts`. That pulls server auth code into the dev client graph before the sign-in button handler is active.
 - The auth worker build also has a large startup surface. A synthetic esbuild bundle of `apps/auth/src/server/worker.ts` was about `3.75 MB` unminified without code splitting.
