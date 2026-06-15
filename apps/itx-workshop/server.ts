@@ -26,7 +26,7 @@ import {
   type RequestStreamSubscriptionArgs,
 } from "@iterate-com/streams/workers/stream-processor-host";
 import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
-import { Itx } from "./itx-processor.ts";
+import { Itx, type ProvideArgs } from "./itx-processor.ts";
 import { ItxContract } from "./itx-contract.ts";
 // Incremental step folders (steps/README.md). Each is mounted under
 // /steps/<id>/* so earlier and half-built steps stay live alongside the rest.
@@ -201,10 +201,10 @@ export class ItxDO extends DurableObject<Env> {
   // the project's built-in capabilities. The ItxDO decides WHICH contexts get them
   // (the root); the ProjectDO defines WHAT they are. Agent/sub-contexts inherit
   // them via the chain (Step 11).
-  #contextBuiltinCapabilities(): Record<string, any> {
+  #contextBuiltinCapabilities(): ProvideArgs[] {
     const name = this.ctx.id.name ?? "";
     const projectId = this.#project();
-    if (!projectId || name !== `prj:${projectId}`) return {};
+    if (!projectId || name !== `prj:${projectId}`) return [];
     return ProjectDO.builtinCapabilities(this.env.PROJECT.getByName(projectId));
   }
 
@@ -428,11 +428,17 @@ export class ProjectDO extends DurableObject<Env> {
   }
 
   // The capabilities a context scoped to THIS project is born with — the project
-  // decides what it offers (here: `fetch`, wired to its own egress). The ItxDO
-  // decides WHICH contexts get them (the project root, Step 11); the project
-  // decides WHAT they are. Returns forwarders to this DO's methods.
-  static builtinCapabilities(project: DurableObjectStub<ProjectDO>): Record<string, any> {
-    return { fetch: (url: string, init?: RequestInit) => project.egress(url, init) };
+  // decides what it offers (here: `fetch`, wired to its own egress). Each entry is
+  // the SAME shape as a provideCapability call ({ path, capability, instructions? });
+  // a built-in is just a capability pre-provided in code instead of via an event.
+  static builtinCapabilities(project: DurableObjectStub<ProjectDO>): ProvideArgs[] {
+    return [
+      {
+        path: ["fetch"],
+        capability: (url: string, init?: RequestInit) => project.egress(url, init),
+        instructions: "the project's HTTP egress",
+      },
+    ];
   }
 }
 

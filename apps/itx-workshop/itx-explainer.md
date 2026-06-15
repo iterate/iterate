@@ -614,7 +614,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
 
 ### Built-in capabilities are injected at construction, not appended
 
-`fetch`/`streams`/`ai` are not special-cased in a handle — but they're also _not_ provided as events on every context's stream. Appending a `capability-provided` for each one would mean rewriting thousands of streams (one per project) every time we change what the built-ins are. Instead the `Itx` StreamProcessor takes its **built-in capabilities as a constructor argument**: the host wires them in when it builds the context, `invoke` falls back to them on a miss (after the fold, before the parent), and they appear in `describe`/`list` so they're self-describing.
+`fetch`/`streams`/`ai` are not special-cased in a handle — but they're also _not_ provided as events on every context's stream. Appending a `capability-provided` for each one would mean rewriting thousands of streams (one per project) every time we change what the built-ins are. Instead the `Itx` StreamProcessor takes its **built-in capabilities as a constructor argument** — an **array of capability descriptors in the exact same `{ path, capability, instructions? }` shape as a `provideCapability` call** (a built-in is just a capability pre-provided in code instead of via an event). The host wires them in when it builds the context, `invoke` falls back to them on a miss (after the fold, before the parent), and they appear in `describe`/`list` so they're self-describing.
 
 ```ts
 // the host builds a context with its built-in capabilities wired in — no events appended.

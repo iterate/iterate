@@ -16,6 +16,18 @@
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import { ITX_EVENTS, ItxContract } from "./itx-contract.ts";
 
+/**
+ * The one capability-descriptor shape. `provideCapability(args)` takes it, and the
+ * `builtinCapabilities` constructor argument is just an array of the same thing —
+ * a built-in is a capability pre-provided in code instead of via an event.
+ */
+export type ProvideArgs = {
+  path: string[];
+  capability: any;
+  instructions?: string;
+  types?: string;
+};
+
 /** Structural live-vs-sturdy discriminator: a sturdy address is plain `{ type: "rpc", … }` data. */
 const isCapabilityAddress = (c: any): boolean => !!c && typeof c === "object" && c.type === "rpc";
 
@@ -64,10 +76,11 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   // with only live caps never needs it.
   #dial: (address: any) => any;
 
-  // Built-in capabilities (Step 10): name → live stub, handed to the constructor,
-  // NOT provided through the event log. e.g. a project context's `fetch`, backed
-  // by its Project DO. Own provides (the fold) shadow a built-in of the same name.
-  #builtinCapabilities: Record<string, any>;
+  // Built-in capabilities (Step 10): the SAME shape as a `provideCapability` call —
+  // `{ path, capability, instructions?, types? }` — but handed to the constructor as
+  // an ARRAY instead of appended to the log. e.g. a project context's `fetch`, backed
+  // by its Project DO. Own provides (the fold) shadow a built-in at the same path.
+  #builtinCapabilities: ProvideArgs[];
 
   // The chain (Step 11): a child context (e.g. an agent) climbs to its parent
   // (e.g. its project) on a capability MISS. Returns the parent's processor stub,
@@ -77,7 +90,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   constructor(
     args: ConstructorParameters<typeof StreamProcessor<typeof ItxContract>>[0] & {
       dial?: (address: any) => any;
-      builtinCapabilities?: Record<string, any>;
+      builtinCapabilities?: ProvideArgs[];
       parentItx?: () => { invoke(input: { path: string[]; args: unknown[] }): any } | null;
     },
   ) {
@@ -87,7 +100,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
       (() => {
         throw new Error("this context has no dial configured (no sturdy capabilities)");
       });
-    this.#builtinCapabilities = (args as any).builtinCapabilities ?? {};
+    this.#builtinCapabilities = (args as any).builtinCapabilities ?? [];
     this.#parentItx = (args as any).parentItx ?? (() => null);
   }
 
@@ -137,17 +150,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   // in the in-memory bridge. There is NO self-ingest: the event flows out to the
   // stream and the stream's subscription delivers it back into the fold (Step 07).
   // We just wait for that delivery so the write is readable (read-your-writes).
-  async provideCapability({
-    path,
-    capability,
-    instructions,
-    types,
-  }: {
-    path: string[];
-    capability: any;
-    instructions?: string;
-    types?: string;
-  }) {
+  async provideCapability({ path, capability, instructions, types }: ProvideArgs) {
     const kind = isCapabilityAddress(capability) ? "rpc" : "live";
     // dup at THIS layer too: the stub arrived as an argument to this DO call and
     // capnweb disposes it when the call returns; the bridge must keep its own.
@@ -173,12 +176,8 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
 
   /** The capability table is the fold — plus the constructor's built-in capabilities (Step 10). */
   listCapabilities(): string[] {
-    return [
-      ...new Set([
-        ...Object.keys(this.#builtinCapabilities),
-        ...Object.keys(this.state.capabilities),
-      ]),
-    ];
+    const builtins = this.#builtinCapabilities.map((b) => b.path.join("."));
+    return [...new Set([...builtins, ...Object.keys(this.state.capabilities)])];
   }
 
   async revokeCapability({ path }: { path: string[] }) {
@@ -202,11 +201,14 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
       }
       return await replayPath(this.#dial(hit.record.address), hit.rest, args);
     }
-    // built-in capabilities fallback (Step 10): itx.fetch and friends, handed in at construction.
+    // built-in capabilities fallback (Step 10): same longest-prefix match as the fold,
+    // over the array of { path, capability } the host handed the constructor.
     for (let i = path.length; i >= 1; i--) {
-      const name = path.slice(0, i).join(".");
-      if (this.#builtinCapabilities[name])
-        return await replayPath(this.#builtinCapabilities[name], path.slice(i), args);
+      const prefix = path.slice(0, i);
+      const builtin = this.#builtinCapabilities.find(
+        (b) => b.path.length === i && b.path.every((seg, j) => seg === prefix[j]),
+      );
+      if (builtin) return await replayPath(builtin.capability, path.slice(i), args);
     }
     // chain (Step 11): climb to the parent context on a miss (super).
     const parent = this.#parentItx();
