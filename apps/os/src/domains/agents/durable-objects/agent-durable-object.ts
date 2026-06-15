@@ -173,6 +173,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
           const params = await this.ensureStartedOrInitializeFromRuntimeName();
           return await this.ensureItxContext(params);
         },
+        isAgentsRootStream: () => this.structuredName.agentPath === AGENTS_STREAM_PATH,
         readStreamEvents: () => this.readSubscribedStreamEvents("agent"),
       }),
   );

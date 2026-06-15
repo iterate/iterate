@@ -111,6 +111,57 @@ describe("AgentProcessor", () => {
     expect(appended).toEqual([]);
   });
 
+  it("does not enqueue agent output scripts on the agents root stream", async () => {
+    const { stream, appended } = memoryStream();
+    const ensureItxContext = vi.fn(async () => undefined);
+    const processor = newAgentProcessor({
+      stream,
+      ensureItxContext,
+      isAgentsRootStream: () => true,
+    });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agent/output-added",
+          payload: {
+            content: [
+              "async (itx) => {",
+              "  await itx.chat.sendMessage({ message: 'hello' });",
+              "}",
+            ].join("\n"),
+          },
+          offset: 13,
+        }),
+      ],
+      streamMaxOffset: 13,
+    });
+
+    expect(ensureItxContext).not.toHaveBeenCalled();
+    expect(appended).toEqual([]);
+  });
+
+  it("does not render script completions on the agents root stream", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({
+      stream,
+      isAgentsRootStream: () => true,
+    });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/itx/script-execution-completed",
+          payload: { executionId: "root-script", ok: true, result: "done" },
+          offset: 14,
+        }),
+      ],
+      streamMaxOffset: 14,
+    });
+
+    expect(appended).toEqual([]);
+  });
+
   it("ignores script completion events without a usable execution id", async () => {
     const { stream, appended } = memoryStream();
     const processor = newAgentProcessor({ stream });
@@ -872,6 +923,8 @@ function initialState(): AgentState {
 function newAgentProcessor(args: {
   stream: StreamProcessorIterateContext["stream"];
   ensureChildAgentRunner?: (childPath: string) => Promise<unknown>;
+  ensureItxContext?: () => Promise<unknown>;
+  isAgentsRootStream?: () => boolean;
   snapshot?: StreamProcessorSnapshot<AgentState>;
   readStreamEvents?: () => Promise<StreamEvent[]>;
   sideEffectsAfterOffset?: number;
@@ -879,7 +932,8 @@ function newAgentProcessor(args: {
   return new AgentProcessor({
     iterateContext: { stream: args.stream },
     ensureChildAgentRunner: args.ensureChildAgentRunner ?? (async () => undefined),
-    ensureItxContext: async () => undefined,
+    ensureItxContext: args.ensureItxContext ?? (async () => undefined),
+    isAgentsRootStream: args.isAgentsRootStream ?? (() => false),
     readState: () => args.snapshot,
     readStreamEvents: args.readStreamEvents ?? (async () => []),
     ...(args.sideEffectsAfterOffset === undefined

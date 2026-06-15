@@ -34,6 +34,7 @@ export type AgentProcessorContract = typeof AgentProcessorContract;
 
 export type AgentProcessorDeps = {
   ensureChildAgentRunner(childPath: string): Promise<unknown>;
+  isAgentsRootStream(): boolean;
   /**
    * Reads the full committed history of the agent's stream. The debounce-timer
    * handoff rebuilds agent state from durable history at the last possible
@@ -150,9 +151,11 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         });
         return;
       case "events.iterate.com/agent/output-added":
+        if (this.deps.isAgentsRootStream()) return;
         args.blockProcessorWhile(() => this.#enqueueScriptFromAgentOutput(event));
         return;
       case "events.iterate.com/itx/script-execution-completed":
+        if (this.deps.isAgentsRootStream()) return;
         args.blockProcessorWhile(() => this.#appendScriptCompletionInput(event));
         return;
       case "events.iterate.com/stream/subscriber-connected": {
