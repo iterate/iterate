@@ -5,9 +5,12 @@
   "compatibility_date": "2025-04-27",
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
-    "bindings": [{ "name": "ITX", "class_name": "ItxDO" }],
+    "bindings": [
+      { "name": "ITX", "class_name": "ItxDO" },
+      { "name": "STREAM", "class_name": "Stream" },
+    ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ItxDO"] }],
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ItxDO", "Stream"] }],
   "dev": {
     "port": 8787,
   },

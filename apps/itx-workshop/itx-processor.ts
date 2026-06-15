@@ -19,6 +19,22 @@ import { ITX_EVENTS, ItxContract } from "./itx-contract.ts";
 /** Structural live-vs-sturdy discriminator: a sturdy address is plain `{ type: "rpc", … }` data. */
 const isCapabilityAddress = (c: any): boolean => !!c && typeof c === "object" && c.type === "rpc";
 
+// Retain a live provider past the provide call's return. Over Cap'n Web / Workers
+// RPC an argument stub is disposed when the call that received it returns — so a
+// live stub kept in the bridge must be dup()'d to outlive the provide call (a
+// nested SDK object crosses by value with its function members as stubs, so we
+// walk and dup each). In pure JS there's no `dup` and this is identity.
+// (Production calls this retainLiveProvider.)
+function retainLiveProvider(target: any): any {
+  if (target && typeof target.dup === "function") return target.dup();
+  if (target && typeof target === "object") {
+    const out: any = Array.isArray(target) ? [] : {};
+    for (const k of Object.keys(target)) out[k] = retainLiveProvider(target[k]);
+    return out;
+  }
+  return target;
+}
+
 /** The longest registered path-prefix wins (so a deep shadow beats a broad mount). */
 function resolveLongestPrefix(caps: Record<string, any>, path: string[]) {
   for (let i = path.length; i >= 1; i--) {
@@ -108,7 +124,9 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     meta?: any;
   }) {
     const kind = isCapabilityAddress(capability) ? "rpc" : "live";
-    if (kind === "live") this.#live.set(path.join("."), capability);
+    // dup at THIS layer too: the stub arrived as an argument to this DO call and
+    // capnweb disposes it when the call returns; the bridge must keep its own.
+    if (kind === "live") this.#live.set(path.join("."), retainLiveProvider(capability));
     const committed = await this.ctx.stream.append({
       event: {
         type: ITX_EVENTS.capabilityProvided,
@@ -117,6 +135,11 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     });
     await this.ingest({ events: [committed], streamMaxOffset: (committed as any).offset });
     return { path };
+  }
+
+  /** The capability table is the fold — listing is just its keys. */
+  listCapabilities(): string[] {
+    return Object.keys(this.state.capabilities);
   }
 
   async revokeCapability({ path }: { path: string[] }) {
