@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
-import { withStreamConnectionFromNode } from "~/domains/streams/engine/node/connect.ts";
+import { withStreamConnectionFromNode } from "../../src/lib/node-stream-connection.ts";
 import type { StreamProcessorSnapshot } from "~/domains/streams/engine/stream-processor.ts";
 // The SAME processor the staging host DO runs.
 import { EchoExampleProcessor } from "~/domains/streams/engine/processors/examples/echo/implementation.ts";

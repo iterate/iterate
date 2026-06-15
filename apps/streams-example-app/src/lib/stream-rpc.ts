@@ -2,7 +2,7 @@ import {
   streamConnectionFromWebSocket,
   toWebSocketUrl,
   type StreamConnection,
-} from "~/domains/streams/engine/connection.ts";
+} from "./stream-connection.ts";
 
 export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
 

@@ -16,7 +16,7 @@ import {
   runProcessorReduce,
   type StreamEvent,
 } from "@iterate-com/shared/streams/stream-processors";
-import type { Event, StreamPath } from "@iterate-com/shared/streams/types";
+import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
@@ -57,7 +57,6 @@ import type {
 } from "~/domains/streams/engine/browser/stream-browser-db.ts";
 import {
   acquireStreamRuntime,
-  type BrowserStreamClientFactory,
   type StreamBrowserStore,
   type StreamRuntimeState,
 } from "~/domains/streams/engine/browser/stream-browser-store.ts";
@@ -73,7 +72,10 @@ import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
 import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
 import { connectItx } from "~/itx/itx-react.tsx";
-import { itxStreamBrowserClient } from "~/lib/itx-stream-browser-client.ts";
+import {
+  itxStreamBrowserClient,
+  type ItxStreamForBrowserRuntime,
+} from "~/lib/itx-stream-browser-client.ts";
 import { presenceLabel, sparklinePoints, useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import { useStreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useVirtualizedTailScroll } from "~/lib/use-virtualized-tail-scroll.ts";
@@ -90,6 +92,9 @@ type StreamPathLinkRenderer = (input: {
   className?: string;
   path: StreamPath;
 }) => ReactNode;
+type ItxStreamSource = (
+  streamPath: StreamPath,
+) => ItxStreamForBrowserRuntime | Promise<ItxStreamForBrowserRuntime>;
 
 const DEFAULT_RAW_EVENT_YAML =
   "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
@@ -105,9 +110,8 @@ export function ProjectStreamView({
   projectSlug,
   projectSlugOrId,
   renderStreamPathLink,
-  createStreamClient,
   showCommandPaletteTrigger = false,
-  streamUrl,
+  streamSource,
   streamPath,
 }: {
   autoFocusMessageComposer?: boolean;
@@ -118,9 +122,8 @@ export function ProjectStreamView({
   projectSlug: string;
   projectSlugOrId: string;
   renderStreamPathLink?: StreamPathLinkRenderer;
-  createStreamClient?: BrowserStreamClientFactory;
   showCommandPaletteTrigger?: boolean;
-  streamUrl?: string;
+  streamSource?: ItxStreamSource;
   streamPath: StreamPath;
 }) {
   const streamPathText = streamPath.toString();
@@ -128,14 +131,19 @@ export function ProjectStreamView({
   // chat-shaped Agent view only makes sense for streams under /agents — those
   // default to it, everything else defaults to the plain feed.
   const isAgentStream = streamPathText.startsWith("/agents/");
-  const streamClientFactory = useMemo<BrowserStreamClientFactory>(
+  const resolvedStreamSource = useMemo<ItxStreamSource>(
     () =>
-      createStreamClient ??
-      (async (input) => {
+      streamSource ??
+      (async (path) => {
         const itx = await connectItx({ projectId: projectSlug });
-        return itxStreamBrowserClient(itx.streams.get(input.streamPath));
+        return itx.streams.get(path);
       }),
-    [createStreamClient, projectSlug],
+    [projectSlug, streamSource],
+  );
+  const streamClientFactory = useMemo(
+    () => async (input: { streamPath: string }) =>
+      itxStreamBrowserClient(await resolvedStreamSource(StreamPath.parse(input.streamPath))),
+    [resolvedStreamSource],
   );
   const store = useMemo(
     () =>
@@ -143,7 +151,6 @@ export function ProjectStreamView({
         createStreamClient: streamClientFactory,
         namespace: projectSlugOrId,
         streamPath: streamPathText,
-        streamUrl,
         slug: BrowserRawEventsContract.slug,
         schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
         tables: ["events"],
@@ -161,7 +168,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [projectSlugOrId, streamClientFactory, streamPathText, streamUrl],
+    [projectSlugOrId, streamClientFactory, streamPathText],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -183,7 +190,6 @@ export function ProjectStreamView({
         createStreamClient: streamClientFactory,
         namespace: projectSlugOrId,
         streamPath: streamPathText,
-        streamUrl,
         slug: AgentUiProcessorContract.slug,
         schemaVersion: AGENT_UI_SCHEMA_VERSION,
         resetOnSchemaVersionChange: true,
@@ -202,7 +208,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [projectSlugOrId, streamClientFactory, streamPathText, streamUrl],
+    [projectSlugOrId, streamClientFactory, streamPathText],
   );
   const agentSnapshot = useSyncExternalStore(
     agentStore.subscribe,

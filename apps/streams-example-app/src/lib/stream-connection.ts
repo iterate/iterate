@@ -1,5 +1,5 @@
 import { newWebSocketRpcSession, type RpcStub } from "capnweb";
-import type { StreamRpc } from "./types.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 
 export type WebSocketFrame = {
   direction: "in" | "out";

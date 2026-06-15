@@ -7,7 +7,7 @@ import type {
 
 type StreamSubscribeInput = Parameters<StreamRpc["subscribe"]>[0];
 
-type ItxStreamForBrowserRuntime = {
+export type ItxStreamForBrowserRuntime = {
   append(args: { streamPath?: string; event: StreamEventInput }): Promise<StreamEvent>;
   appendBatch(args: { streamPath?: string; events: StreamEventInput[] }): Promise<StreamEvent[]>;
   runtimeState(): Promise<StreamRuntimeState>;

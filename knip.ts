@@ -51,11 +51,6 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "iterate",
       "miniflare",
     ],
-    ignoreFiles: [
-      // Public helper kept with the stream engine for Worker/DO callers even
-      // though OS currently uses direct in-process helpers.
-      "src/domains/streams/engine/workers/connect.ts",
-    ],
   };
 }
 

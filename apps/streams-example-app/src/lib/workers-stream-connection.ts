@@ -2,7 +2,7 @@ import {
   streamConnectionFromWebSocket,
   toWebSocketUrl,
   type StreamConnection,
-} from "../connection.ts";
+} from "./stream-connection.ts";
 
 type FetchEndpoint = (request: Request) => Promise<Response>;
 
