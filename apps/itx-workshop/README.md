@@ -135,8 +135,12 @@ is a stub whose `.apply` is a path segment, not a function.
 - `itx-processor.ts` — `Itx extends StreamProcessor<ItxContract>`, the REAL base class:
   one pure `reduce` (the fold), the verbs, the in-memory live-stub bridge. Step 11.
   Root capabilities are just provided — no built-in handle.
-- `client-lib.ts` — `connect()` (a one-line socket opener) and `sleep()`. No path
-  proxy; the naked stub is the client.
+- `client.ts` — the client library: **`withItx({ baseUrl, context })`**, the Node
+  entry point that opens an itx context and returns the bare, Disposable stub
+  (`using itx = withItx(...)`). Mirrors production's `apps/os/src/itx/client.ts`
+  (minus auth). The harness drives every itx step through it.
+- `client-lib.ts` — `connect()` (the one-line socket opener `withItx` builds on)
+  and `sleep()`. No path proxy; the naked stub is the client.
 - `min-dynamic-target.mjs` — the server-side dynamic proxy in isolation, in-process.
 - `run-swift.ts` — `swift -` runner.
 - `dialog.swift` — the native-macOS-dialog program from Step 1. It **really

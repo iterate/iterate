@@ -575,10 +575,10 @@ The whole thing is one idea seen from a few angles: a name → a stub or an addr
 
 ## Step 13 — client libraries 🚧 TODO (skeleton)
 
-> **not built yet** — the final step: the ergonomics each runtime gets on top of the naked stub.
+> the ergonomics each runtime gets on top of the naked stub.
 
-- [ ] **Runtime-specific `withItx` disposable** — the idiomatic per-runtime entry point (Node/Workers/browser) that opens the session, yields the stub, and disposes it (`using`/`await using`).
-- [ ] **React libraries** — hooks/components for consuming itx from React (e.g. a `useItx`-style surface), matching `apps/os/src/itx/use-itx.ts`.
+- [x] **Runtime-specific `withItx` disposable** — built: [`client.ts`](./client.ts) exports `withItx({ baseUrl, context })`, the Node entry point that opens the session and returns the bare, Disposable stub (`using itx = withItx(...)` closes the socket at scope end). The harness drives every itx step through it. It mirrors production's `apps/os/src/itx/client.ts` minus auth (Step 12). _(Browser variant still TODO — same `/itx` endpoint.)_
+- [ ] **React libraries** — hooks/components for consuming itx from React (e.g. a `useItx`-style surface), matching `apps/os/src/itx/use-itx.ts`. _(TODO.)_
 
 ---
 

@@ -17,12 +17,15 @@
 import http from "node:http";
 import { WebClient } from "@slack/web-api";
 import { connect, sleep } from "./client-lib.ts";
+import { withItx } from "./client.ts";
 import { runSwift, swiftAvailable } from "./run-swift.ts";
 
 const HTTP = process.env.ITX_BASE ?? "http://127.0.0.1:8787";
 const WS = HTTP.replace(/^http/, "ws");
 const CTX = `run-${Date.now()}`; // a fresh, isolated context per harness run
-const ITX = `${WS}/itx?ctx=${CTX}`;
+// The itx steps open the context through the client library's withItx; the raw
+// step0/step1 endpoints use the low-level connect().
+const openItx = <T = any>() => withItx<T>({ baseUrl: HTTP, context: CTX });
 
 type Result = { step: string; verdict: "PASS" | "FAIL"; note: string };
 const results: Result[] = [];
@@ -159,11 +162,11 @@ async function main() {
   // BOTH pillars: one client calling another's method AND real Swift on A.
   // ---------------------------------------------------------------------
   try {
-    using a = connect<ItxCore>(ITX); // client A (laptop): provides runSwift
+    using a = openItx<ItxCore>(); // client A (laptop): provides runSwift
     await a.provideCapability(["runSwift"], runSwift as any);
     await sleep(50);
 
-    using b = connect<ItxCore>(ITX); // client B (dashboard): a SEPARATE socket
+    using b = openItx<ItxCore>(); // client B (dashboard): a SEPARATE socket
     const names = await b.list();
     const out = await b.invoke(["runSwift"], [`print((2...7).reduce(1, *))`]);
     const ok = /\b5040\b/.test(String(out)) && names.includes("runSwift");
@@ -179,7 +182,7 @@ async function main() {
 
   // Step 3 control: invoking an unknown name throws "no capability".
   try {
-    using c = connect<ItxCore>(ITX);
+    using c = openItx<ItxCore>();
     let threw = "";
     try {
       await c.invoke(["totallyUnknownCap"], []);
@@ -200,10 +203,10 @@ async function main() {
   // stub routes, via the server-side dynamic proxy, to invoke(["runSwift"]).
   // ---------------------------------------------------------------------
   try {
-    using prov = connect<ItxCore>(ITX);
+    using prov = openItx<ItxCore>();
     await prov.provideCapability(["runSwift"], runSwift as any);
     await sleep(30);
-    using itx = connect<any>(ITX); // NAKED stub
+    using itx = openItx(); // NAKED stub
     const out = await itx.runSwift(`print(6 * 7)`);
     record(
       "Step 5: naked stub method call relays to invoke",
@@ -232,12 +235,12 @@ async function main() {
     users: { list: (opts: any = {}) => slack.users.list(opts) },
   };
 
-  using slackProv = connect<ItxCore>(ITX);
+  using slackProv = openItx<ItxCore>();
   await slackProv.provideCapability(["slack"], slackCap as any);
   await sleep(50);
 
   try {
-    using itx = connect<any>(ITX); // NAKED stub — no path proxy
+    using itx = openItx(); // NAKED stub — no path proxy
     const res = await itx.slack.chat.postMessage({ channel: "C123", text: "hi from itx" });
     const ok =
       res?.ok === true &&
@@ -264,7 +267,7 @@ async function main() {
     })) as any);
     await sleep(30);
 
-    using itx = connect<any>(ITX); // NAKED stub
+    using itx = openItx(); // NAKED stub
     const callsBefore = mock.calls.length;
     const shadowed = await itx.slack.chat.postMessage({ channel: "C1", text: "x" });
     const fellThrough = await itx.slack.users.list();
@@ -293,7 +296,7 @@ async function main() {
   // source of truth, persisted in the real @iterate-com/streams Stream DO.
   // ---------------------------------------------------------------------
   try {
-    using itx = connect<ItxCore>(ITX);
+    using itx = openItx<ItxCore>();
     await itx.provideCapability(["db"], { query: async (q: string) => ({ rows: [q] }) });
     await itx.provideCapability(["mailer"], (async (to: string) => `sent to ${to}`) as any);
 
