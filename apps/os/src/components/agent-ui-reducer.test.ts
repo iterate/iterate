@@ -32,8 +32,8 @@ describe("agent-ui reducer", () => {
   it("streams thinking and response deltas into the live llm step", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/web-message-received",
-        payload: { content: "count the inputs" },
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: "count the inputs", origin: "web" },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -85,8 +85,8 @@ describe("agent-ui reducer", () => {
   it("settles the activity into items when the assistant responds", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agents/web-message-received",
-        payload: { content: "hi" },
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: "hi", origin: "web" },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -279,8 +279,8 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test", runOpts: {} },
       },
       {
-        type: "events.iterate.com/agents/web-message-received",
-        payload: { content: "also, one more thing" },
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: "also, one more thing", origin: "web" },
       },
     ]);
 
@@ -303,8 +303,8 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test", runOpts: {} },
       },
       {
-        type: "events.iterate.com/agents/web-message-received",
-        payload: { content: "also, one more thing" },
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: "also, one more thing", origin: "web" },
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
@@ -349,8 +349,8 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agents/web-message-received",
-        payload: { content: "oh this is taking too long" },
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: "oh this is taking too long", origin: "web" },
       },
       {
         type: "events.iterate.com/agent/llm-request-cancelled",

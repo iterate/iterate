@@ -24,8 +24,8 @@ describe("AgentProcessor", () => {
     await processor.ingest({
       events: [
         agentEvent({
-          type: "events.iterate.com/agents/web-message-received",
-          payload: { content: "hello" },
+          type: "events.iterate.com/agents/user-message-received",
+          payload: { content: "hello", origin: "web" },
           offset: 5,
         }),
       ],
@@ -34,7 +34,7 @@ describe("AgentProcessor", () => {
 
     expect(appended[0]).toMatchObject({
       type: "events.iterate.com/agent/input-added",
-      idempotencyKey: "agent/event-type-explainer/events.iterate.com/agents/web-message-received",
+      idempotencyKey: "agent/event-type-explainer/events.iterate.com/agents/user-message-received",
     });
     expect(appended[1]).toMatchObject({
       type: "events.iterate.com/agent/input-added",
@@ -44,7 +44,8 @@ describe("AgentProcessor", () => {
           "```yaml",
           "event:",
           "  offset: 5",
-          "  type: events.iterate.com/agents/web-message-received",
+          "  type: events.iterate.com/agents/user-message-received",
+          "  origin: web",
           "  content: |-",
           "    hello",
           "```",
@@ -121,8 +122,8 @@ describe("AgentProcessor", () => {
     await processor.ingest({
       events: [
         agentEvent({
-          type: "events.iterate.com/agents/web-message-received",
-          payload: { content: "hello root" },
+          type: "events.iterate.com/agents/user-message-received",
+          payload: { content: "hello root", origin: "web" },
           offset: 13,
         }),
       ],

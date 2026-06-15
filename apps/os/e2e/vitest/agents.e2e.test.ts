@@ -178,9 +178,10 @@ test("a web agent holds a real conversation: user message in, visible reply out"
   // The full round trip is on the stream: the user's message…
   expect(events).toContainEqual(
     expect.objectContaining({
-      type: "events.iterate.com/agents/web-message-received",
+      type: "events.iterate.com/agents/user-message-received",
       payload: expect.objectContaining({
         content: expect.stringContaining(marker),
+        origin: "web",
       }),
     }),
   );

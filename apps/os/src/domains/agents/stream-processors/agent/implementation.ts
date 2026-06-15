@@ -16,10 +16,6 @@ import {
 } from "@iterate-com/streams/shared/stream-processors";
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import {
-  AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE,
-  AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE,
-  AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE,
-  AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE,
   AgentProcessorContract,
   reduceAgentEvent,
   reduceAgentEvents,
@@ -99,8 +95,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       case "events.iterate.com/stream/child-stream-created":
         args.blockProcessorWhile(() => this.deps.ensureChildAgentRunner(event.payload.childPath));
         return;
-      case AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE:
-      case AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE:
+      case "events.iterate.com/agents/user-message-received":
         if (this.deps.isAgentsRootStream()) return;
         args.blockProcessorWhile(async () => {
           await this.#appendEventTypeExplanation({ eventType: event.type });
@@ -118,14 +113,15 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
                   type: event.type,
                   bodyTag: "content",
                   body: event.payload.content,
+                  fields: { origin: event.payload.origin },
                 }),
               },
             },
           });
         });
         return;
-      case AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE:
-      case AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE:
+      case "events.iterate.com/agents/web-message-sent":
+      case "events.iterate.com/agents/tui-message-sent":
         if (this.deps.isAgentsRootStream()) return;
         args.blockProcessorWhile(async () => {
           await this.#appendEventTypeExplanation({ eventType: event.type });
@@ -714,17 +710,14 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 }
 
 function eventTypeExplanation(eventType: string): string | null {
-  if (eventType === AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE) {
-    return `First \`${AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE}\` event. This represents a message received from a web chat user.`;
+  if (eventType === "events.iterate.com/agents/user-message-received") {
+    return "First `events.iterate.com/agents/user-message-received` event. This represents a message received from a user; the payload origin says whether it came from web or TUI.";
   }
-  if (eventType === AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE) {
-    return `First \`${AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE}\` event. This represents a message received from a TUI chat user.`;
+  if (eventType === "events.iterate.com/agents/web-message-sent") {
+    return "First `events.iterate.com/agents/web-message-sent` event. This represents a message sent through the web chat response tool.";
   }
-  if (eventType === AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE) {
-    return `First \`${AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE}\` event. This represents a message sent through the web chat response tool.`;
-  }
-  if (eventType === AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE) {
-    return `First \`${AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE}\` event. This represents a message sent through the TUI chat response tool.`;
+  if (eventType === "events.iterate.com/agents/tui-message-sent") {
+    return "First `events.iterate.com/agents/tui-message-sent` event. This represents a message sent through the TUI chat response tool.";
   }
   if (eventType === "events.iterate.com/agent/llm-request-cancelled") {
     return eventTypeExplanationBlock({
@@ -766,12 +759,14 @@ function eventBlock(args: {
 function chatEventBlock(args: {
   offset: number;
   type: string;
+  fields?: Record<string, string | number>;
   bodyTag: string;
   body: string;
 }): string {
   return eventBlock({
     offset: args.offset,
     type: args.type,
+    fields: args.fields,
     bodyTag: args.bodyTag,
     body: args.body,
   });

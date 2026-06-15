@@ -379,10 +379,7 @@ function reduceEventToSemanticFeedItems(event: Event): EventsStreamBuiltInElemen
     ];
   }
 
-  if (
-    event.type === "events.iterate.com/agents/web-message-received" ||
-    event.type === "events.iterate.com/agents/tui-message-received"
-  ) {
+  if (event.type === "events.iterate.com/agents/user-message-received") {
     const content = readStringPayloadField(event, "content");
     if (content == null) return [];
     return [

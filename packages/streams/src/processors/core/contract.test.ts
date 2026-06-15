@@ -125,7 +125,7 @@ describe("core processor contract", () => {
           offset: 1,
           type: "events.iterate.com/stream/subscriber-connected",
           payload: {
-            subscriptionKey: "agent-host:agent",
+            subscriptionKey: "processor-host:agent",
             direction: "outbound",
             subscriber: { incarnationId: "host-incarnation-1" },
           },
@@ -150,8 +150,8 @@ describe("core processor contract", () => {
       ],
     });
 
-    expect(Object.keys(state.connectionsByKey)).toEqual(["agent-host:agent"]);
-    expect(state.connectionsByKey["agent-host:agent"]).toMatchObject({
+    expect(Object.keys(state.connectionsByKey)).toEqual(["processor-host:agent"]);
+    expect(state.connectionsByKey["processor-host:agent"]).toMatchObject({
       direction: "outbound",
       connectedAtOffset: 1,
       subscriber: { incarnationId: "host-incarnation-1" },

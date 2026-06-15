@@ -54,8 +54,8 @@ function ProjectStreamDetailContent() {
     await createBrowserOpenApiClient().project.streams.appendBatch({
       events: [
         {
-          type: "events.iterate.com/agents/web-message-received",
-          payload: { content: message },
+          type: "events.iterate.com/agents/user-message-received",
+          payload: { content: message, origin: "web" },
         },
       ],
       projectSlugOrId: project.id,

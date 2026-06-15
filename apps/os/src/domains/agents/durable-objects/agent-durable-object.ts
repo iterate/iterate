@@ -25,13 +25,7 @@ import {
   formatContextRef,
   projectContextRef,
 } from "~/itx/coordinates.ts";
-import {
-  AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE,
-  AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE,
-  AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE,
-  AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE,
-  AgentProcessorContract,
-} from "~/domains/agents/stream-processors/agent/contract.ts";
+import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
 import { AgentProcessor } from "~/domains/agents/stream-processors/agent/implementation.ts";
 import {
   CloudflareAiProcessor,
@@ -76,11 +70,8 @@ import {
   AGENTS_STREAM_PATH,
   AgentDurableObjectName,
   AgentDurableObjectStructuredName,
-  DELETED_AGENT_PROCESSOR_SLUGS,
   agentLlmProcessorSlug,
   agentProcessorSubscriptionConfiguredEvents,
-  agentProcessorSubscriptionRemovedEvent,
-  deletedAgentProcessorSubscriptionRemovedEvents,
   getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
@@ -274,11 +265,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
    * seeds the agent's own subscriptions and setup events.
    */
   async requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    const params = await this.ensureStartedOrInitializeFromRuntimeName();
-    if (isDeletedAgentProcessorSlug(args.processorName)) {
-      await this.removeAgentProcessorSubscription(params, args.processorName);
-      return;
-    }
+    await this.ensureStartedOrInitializeFromRuntimeName();
     return await this.host.requestStreamSubscription(args);
   }
 
@@ -289,14 +276,13 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
   async sendMessage(input: { message: string; channel?: string }) {
     const params = await this.ensureStartedAndCaughtUp();
+    const origin = parseAgentChatChannel(input.channel);
     const event = await this.streamsEntrypoint(params.agentPath).append({
       event: {
-        type:
-          parseAgentChatChannel(input.channel) === "tui"
-            ? AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE
-            : AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE,
+        type: "events.iterate.com/agents/user-message-received",
         payload: {
           content: input.message,
+          origin,
         },
       },
     });
@@ -358,32 +344,10 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       path: params.agentPath,
     });
 
-    await stream.appendBatch([
-      ...deletedAgentProcessorSubscriptionRemovedEvents({
-        agentPath: params.agentPath,
-        projectId: params.projectId,
-      }),
-      ...agentProcessorSubscriptionConfiguredEvents({
+    await stream.appendBatch(
+      agentProcessorSubscriptionConfiguredEvents({
         agentPath: params.agentPath,
         processorSlugs,
-        projectId: params.projectId,
-      }),
-    ]);
-  }
-
-  private async removeAgentProcessorSubscription(
-    params: AgentDurableObjectStructuredName,
-    processorSlug: string,
-  ) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: params.projectId,
-      path: params.agentPath,
-    });
-    await stream.append(
-      agentProcessorSubscriptionRemovedEvent({
-        agentPath: params.agentPath,
-        processorSlug,
         projectId: params.projectId,
       }),
     );
@@ -758,8 +722,8 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       event: {
         type:
           parseAgentChatChannel(input.channel) === "tui"
-            ? AGENTS_TUI_MESSAGE_SENT_EVENT_TYPE
-            : AGENTS_WEB_MESSAGE_SENT_EVENT_TYPE,
+            ? "events.iterate.com/agents/tui-message-sent"
+            : "events.iterate.com/agents/web-message-sent",
         idempotencyKey: input.idempotencyKey,
         payload: {
           message: input.message,
@@ -1024,10 +988,6 @@ function remoteWithToken(input: { remote: string; token: string }) {
 
 function parseAgentChatChannel(channel: string | undefined) {
   return channel === "tui" ? "tui" : "web";
-}
-
-function isDeletedAgentProcessorSlug(processorSlug: string | undefined): processorSlug is string {
-  return DELETED_AGENT_PROCESSOR_SLUGS.some((deletedSlug) => deletedSlug === processorSlug);
 }
 
 type DebugProjectInfo = {

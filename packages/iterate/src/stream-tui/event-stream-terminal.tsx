@@ -527,8 +527,8 @@ function StreamTerminalApp() {
 
       setAppendStatus("sending");
       const event: EventInput = {
-        type: "events.iterate.com/agents/tui-message-received",
-        payload: { content },
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content, origin: "tui" },
       };
 
       try {
