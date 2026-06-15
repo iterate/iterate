@@ -20,7 +20,6 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
 
 function NewAgentPage() {
   const params = Route.useParams();
-  const { project } = Route.useLoaderData();
   const navigate = useNavigate();
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [message, setMessage] = useState("");
