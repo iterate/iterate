@@ -26,6 +26,8 @@ export const ITX_EVENTS = {
   capabilityProvided: "events.iterate.com/itx/capability-provided",
   capabilityRevoked: "events.iterate.com/itx/capability-revoked",
   capabilityDisconnected: "events.iterate.com/itx/capability-disconnected",
+  scriptExecutionRequested: "events.iterate.com/itx/script-execution-requested",
+  scriptExecutionCompleted: "events.iterate.com/itx/script-execution-completed",
 } as const;
 
 /** One folded row of the capability table. */
@@ -87,6 +89,17 @@ export const ItxContract = defineProcessorContract({
         "A live capability's provider session broke. Record only: the entry survives (describe() reports it offline) until revoked or re-provided.",
       payloadSchema: z.looseObject({ path: z.array(z.string()) }),
     },
+    // Codemode (Step 12). These are durable RECORDS, not state changes — the
+    // fold doesn't consume them; together they bracket a script run. Declared
+    // here so they're known events on the contract-validated stream, not strays.
+    [ITX_EVENTS.scriptExecutionRequested]: {
+      description: "A script run was requested: `code` is the `async (itx) => …` program.",
+      payloadSchema: z.looseObject({ executionId: z.string(), code: z.string().optional() }),
+    },
+    [ITX_EVENTS.scriptExecutionCompleted]: {
+      description: "A script run settled. With the requested event, this is the durable record.",
+      payloadSchema: z.looseObject({ executionId: z.string() }),
+    },
   },
   consumes: [
     ITX_EVENTS.contextCreated,
@@ -98,6 +111,8 @@ export const ItxContract = defineProcessorContract({
     ITX_EVENTS.capabilityProvided,
     ITX_EVENTS.capabilityRevoked,
     ITX_EVENTS.capabilityDisconnected,
+    ITX_EVENTS.scriptExecutionRequested,
+    ITX_EVENTS.scriptExecutionCompleted,
   ],
 });
 

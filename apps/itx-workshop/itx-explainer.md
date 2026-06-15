@@ -564,7 +564,7 @@ The whole thing is one idea seen from a few angles: a name → a stub or an addr
 
 ## Step 12 — the platform layers (built incrementally in `steps/`)
 
-> The steps above derive the _core_. The platform layers that make it a real, multi-tenant system are built as **runnable step folders** ([`steps/README.md`](./steps/README.md)), each with an intent test green over real workerd:
+> The steps above derive the _core_. The platform layers that make it a real, multi-tenant system are built as **runnable step folders** ([`steps/README.md`](./steps/README.md)), each with an intent test green over real workerd. (The `steps/NN` names below are the runnable build's **own** sequence — they don't line up one-to-one with these prose step numbers; see the crosswalk in `steps/README.md`.)
 
 - [x] **A context is a project id + a path.** That's the whole identity — `<projectId>/<path>` names the context, the host DO, and the dial address. `prj:<id>` is the **project itx**; `prj:<id>/agents/<name>` is an **agent itx** under it; nest freely. No separate "session" or "namespace" — those are just paths.
 - [x] **Auth & access** ([`steps/08-auth`](./steps/08-auth)) — a bearer token names a principal → the projects it may access → an itx scoped to one project; others refused at the door.

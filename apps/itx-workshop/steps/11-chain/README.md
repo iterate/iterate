@@ -1,6 +1,6 @@
 # Step 11 — the context chain: project itx → agent itx (extend / super)
 
-**Adds:** inheritance. A context is a project id + a path (Step 12): `prj:<id>` is
+**Adds:** inheritance. A context is a project id + a path: `prj:<id>` is
 the **project** itx, `prj:<id>/agents/<name>` is an **agent** itx under it. The
 agent's parent is the project. On a capability **miss**, the agent climbs to the
 parent (super); the agent's own caps (and roots) **shadow** the project's; the
