@@ -255,7 +255,7 @@ export async function IterateDevTunnel(
       tunnelExtraHosts
         .filter((hostname) => hostname.startsWith("*."))
         .map(async (hostname) => {
-          const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
+          const { zoneId } = await findActiveZoneForHostnameFromApi(cloudflareApi, hostname);
           await ensureDevTunnelWildcardDnsRecord({
             cloudflareApi,
             zoneId,
@@ -309,6 +309,7 @@ export async function IterateRoutes(
 
   if (!app.local && routeHosts.length > 0) {
     const cloudflareApi = await createCloudflareApi({});
+    const zones = await listCloudflareZones(cloudflareApi);
 
     await waitForCloudflareWorkerScript({
       cloudflareApi,
@@ -316,26 +317,36 @@ export async function IterateRoutes(
     });
 
     const routeZoneIds = new Map<string, string>();
-    for (const hostname of routeHosts) {
-      const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
-      routeZoneIds.set(hostname, zoneId);
+    await Promise.all(
+      routeHosts.map(async (hostname) => {
+        const { zoneId } = findActiveZoneForHostname({
+          accountId: cloudflareApi.accountId,
+          hostname,
+          zones,
+        });
+        routeZoneIds.set(hostname, zoneId);
 
-      await retryCloudflareWorkerRouteCreation(() =>
-        Route(routeResourceIdForHostname(hostname), {
-          pattern: `${hostname}/*`,
-          script: worker.name,
-          adopt: true,
-          zoneId,
-        }),
-      );
-    }
+        await retryCloudflareWorkerRouteCreation(() =>
+          Route(routeResourceIdForHostname(hostname), {
+            pattern: `${hostname}/*`,
+            script: worker.name,
+            adopt: true,
+            zoneId,
+          }),
+        );
+      }),
+    );
 
     const dnsRouteHosts = routeHosts.filter(shouldCreateDnsRecordForRouteHostname);
     await Promise.all(
       dnsRouteHosts.map(async (hostname) => {
         const zoneId =
           routeZoneIds.get(hostname) ??
-          (await findActiveZoneForHostname(cloudflareApi, hostname)).zoneId;
+          findActiveZoneForHostname({
+            accountId: cloudflareApi.accountId,
+            hostname,
+            zones,
+          }).zoneId;
         const record = {
           type: "A" as const,
           name: hostname,
@@ -369,9 +380,14 @@ export async function ensureProxiedDnsForHostnames(input: {
 }) {
   if (input.hostnames.length === 0) return;
   const cloudflareApi = await createCloudflareApi({});
+  const zones = await listCloudflareZones(cloudflareApi);
   await Promise.all(
     input.hostnames.map(async (hostname) => {
-      const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
+      const { zoneId } = findActiveZoneForHostname({
+        accountId: cloudflareApi.accountId,
+        hostname,
+        zones,
+      });
       await ensureCloudflareDnsRecord({
         cloudflareApi,
         record: {
@@ -516,10 +532,7 @@ async function ensureDevTunnelWildcardDnsRecord(input: {
   }
 }
 
-async function findActiveZoneForHostname(
-  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>,
-  hostname: string,
-) {
+async function listCloudflareZones(cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>) {
   let page = 1;
   let totalPages = 1;
   const zones: CloudflareZone[] = [];
@@ -544,15 +557,35 @@ async function findActiveZoneForHostname(
     page += 1;
   } while (page <= totalPages);
 
-  const bestZone = selectBestCloudflareZoneForHostname({
+  return zones;
+}
+
+async function findActiveZoneForHostnameFromApi(
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>,
+  hostname: string,
+) {
+  const zones = await listCloudflareZones(cloudflareApi);
+  return findActiveZoneForHostname({
     accountId: cloudflareApi.accountId,
     hostname,
     zones,
   });
+}
+
+function findActiveZoneForHostname(input: {
+  accountId: string;
+  hostname: string;
+  zones: CloudflareZone[];
+}) {
+  const bestZone = selectBestCloudflareZoneForHostname({
+    accountId: input.accountId,
+    hostname: input.hostname,
+    zones: input.zones,
+  });
 
   if (!bestZone) {
     throw new Error(
-      `Could not find zone for hostname '${hostname}'. Available zones: ${zones.map((zone) => zone.name).join(", ")}`,
+      `Could not find zone for hostname '${input.hostname}'. Available zones: ${input.zones.map((zone) => zone.name).join(", ")}`,
     );
   }
 

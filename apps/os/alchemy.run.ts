@@ -335,11 +335,12 @@ const itxBuildCache = await R2Bucket("itx-build-cache", {
 const missingScripts = ctx.app.local
   ? new Set<string>()
   : await findMissingWorkerScripts(
-      // debugSubscriber is local-only and never deploys — counting it as
-      // missing would put every deploy into (harmless but pointless)
-      // bootstrap double-pass mode forever.
+      // Only cross-script Durable Object target workers need bootstrap
+      // probing. app/ingress are service-bound downstream workers, and
+      // debugSubscriber is local-only; counting any of them here makes a fresh
+      // stage do app/route work in a throwaway first pass.
       Object.entries(workerNames)
-        .filter(([id]) => id !== "debugSubscriber")
+        .filter(([id]) => id !== "app" && id !== "debugSubscriber" && id !== "ingress")
         .map(([, name]) => name),
     );
 if (missingScripts.size > 0) {
@@ -564,6 +565,15 @@ if (!ctx.app.local) {
   });
 }
 
+// Second bootstrap pass (fresh stages only): the cross-script Durable Object
+// target workers now exist, so re-running wires the bindings omitted above.
+// Do this before the dashboard app, ingress, and routes so a fresh preview
+// builds/routes them once instead of once per bootstrap pass.
+if (missingScripts.size > 0 && !process.env.OS_BOOTSTRAP_SECOND_PASS) {
+  await ctx.app.finalize();
+  await runBootstrapSecondPass();
+}
+
 // ---- The app worker (TanStack Start dashboard) -------------------------------
 
 // Hand vite the auxiliary worker list BEFORE TanStackStart spawns it. The
@@ -674,18 +684,6 @@ export const workers = {
 await ctx.app.finalize();
 await afterFinalize();
 
-// Second bootstrap pass (fresh stages only): every script now exists, so
-// re-running wires the cross-script bindings that were omitted above.
-if (missingScripts.size > 0 && !process.env.OS_BOOTSTRAP_SECOND_PASS) {
-  console.warn("[alchemy.run] Bootstrap: re-running to wire deferred cross-script bindings…");
-  const result = spawnSync("pnpm", ["exec", "tsx", fileURLToPath(import.meta.url)], {
-    cwd: fileURLToPath(new URL(".", import.meta.url)),
-    env: { ...process.env, OS_BOOTSTRAP_SECOND_PASS: "1" },
-    stdio: "inherit",
-  });
-  process.exit(result.status ?? 1);
-}
-
 if (!ctx.app.local) process.exit(0);
 
 /**
@@ -707,6 +705,16 @@ function requireEnv(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required.`);
   return value;
+}
+
+function runBootstrapSecondPass(): never {
+  console.warn("[alchemy.run] Bootstrap: re-running to wire deferred cross-script bindings…");
+  const result = spawnSync("pnpm", ["exec", "tsx", fileURLToPath(import.meta.url)], {
+    cwd: fileURLToPath(new URL(".", import.meta.url)),
+    env: { ...process.env, OS_BOOTSTRAP_SECOND_PASS: "1" },
+    stdio: "inherit",
+  });
+  process.exit(result.status ?? 1);
 }
 
 /** Which of the given worker scripts do not exist on the account yet. */
