@@ -3,7 +3,6 @@ import {
   type Event,
   type EventInput,
   type StreamCursor,
-  type StreamState,
   StreamPath,
 } from "@iterate-com/shared/streams/types";
 import type { StreamEvent, StreamEventInput } from "~/domains/streams/engine/shared/event.ts";
@@ -11,7 +10,6 @@ import { createStreamSubscription } from "~/domains/streams/engine/subscription.
 import type { StreamRpc, StreamSubscriptionHandle } from "~/domains/streams/engine/types.ts";
 import { ItxError } from "~/itx/errors.ts";
 import {
-  coreStateToStreamState,
   getStreamDurableObjectName,
   getInitializedStreamStub,
   withStreamPath,
