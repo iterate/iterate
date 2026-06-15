@@ -17,10 +17,9 @@ import {
 import { type AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import {
   agentProcessorSubscriptionConfiguredEvents,
-  defaultAgentProcessorSlugs,
   getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
-import { DEFAULT_AGENT_LLM_PROVIDER } from "~/domains/agents/agent-presets.ts";
+import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
 import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-streams.ts";
 import {
   getSlackAgentDurableObjectName,
@@ -231,7 +230,7 @@ export function routedStreamBootstrapEvents(input: { projectId: string; streamPa
     },
     ...agentProcessorSubscriptionConfiguredEvents({
       agentPath: streamPath,
-      processorSlugs: defaultAgentProcessorSlugs(DEFAULT_AGENT_LLM_PROVIDER),
+      processorSlugs: [AgentProcessorContract.slug],
       projectId: input.projectId,
     }),
   ];
