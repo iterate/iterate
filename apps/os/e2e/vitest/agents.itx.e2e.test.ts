@@ -277,12 +277,12 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
       type: "events.iterate.com/agent/output-added",
       payload: {
         content: dedent`
-        \`\`\`js
-          async (itx) => {
-            await itx.chat.sendMessage({ message: ${JSON.stringify(message)} });
-          }
-          \`\`\`
-      `,
+          \`\`\`js
+            async (itx) => {
+              await itx.chat.sendMessage({ message: ${JSON.stringify(message)} });
+            }
+            \`\`\`
+        `,
       },
     },
   })) as unknown as Event;
