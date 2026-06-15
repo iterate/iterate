@@ -173,6 +173,13 @@ export class ItxStream extends RpcTarget {
     return await this.client().read(input as never);
   }
 
+  async waitForEvent(
+    predicate: (event: StreamEvent) => boolean | Promise<boolean>,
+    opts: { afterOffset?: StreamCursor; eventTypes?: string[]; timeoutMs: number },
+  ) {
+    return await this.client().waitForEvent(opts as never, predicate as never);
+  }
+
   async getState() {
     return await this.client().getState({} as never);
   }

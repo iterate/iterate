@@ -73,6 +73,12 @@ export type StreamSubscribeInput = StreamPathInput & {
   events?: boolean;
 };
 
+export type StreamWaitForEventInput = StreamPathInput & {
+  afterOffset?: StreamCursor;
+  eventTypes?: readonly string[];
+  timeoutMs: number;
+};
+
 /** What every subscription delivery carries; `state` is the same public
  * {@link StreamState} shape `getState()` returns. */
 export type StreamSubscribeBatch = {
@@ -92,6 +98,7 @@ type StreamsBackendClient = Pick<
   | "read"
   | "stream"
   | "subscribe"
+  | "waitForEvent"
 >;
 
 /**
@@ -270,6 +277,29 @@ export class StreamsBackend extends WorkerEntrypoint<StreamsBackendEnv, StreamsB
         releaseCallback();
       },
     };
+  }
+
+  async waitForEvent(
+    input: StreamWaitForEventInput,
+    predicate: (event: Event) => boolean | Promise<boolean>,
+  ): Promise<Event> {
+    const path = this.resolveNamespacePath(input);
+    const streamStub = (this.env.STREAM as unknown as StreamDurableObjectNamespace).getByName(
+      getStreamDurableObjectName({ namespace: this.ctx.props.projectId, path }),
+    ) as unknown as StreamRpc;
+
+    const afterOffset =
+      input.afterOffset === undefined || input.afterOffset === "end"
+        ? undefined
+        : toAfterOffset(input.afterOffset);
+
+    const event = await streamStub.waitForEvent({
+      afterOffset,
+      eventTypes: input.eventTypes,
+      timeoutMs: input.timeoutMs,
+      predicate: async (rawEvent) => await predicate(withStreamPath(rawEvent, path)),
+    });
+    return withStreamPath(event, path);
   }
 
   async getState(input: StreamPathInput = {}) {
