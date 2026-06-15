@@ -1,40 +1,33 @@
 import { Copy } from "lucide-react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { projectRepoQueryOptions } from "~/lib/project-route-query.ts";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { useItxQuery } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$repoSlug")({
-  loader: async ({ context, params }) => {
-    const { project } = context;
-    await context.queryClient.ensureQueryData(
-      projectRepoQueryOptions({ projectId: project.id, repoSlug: params.repoSlug }),
-    );
-
-    return {
-      breadcrumb: params.repoSlug,
-      project,
-    };
-  },
+  ssr: false,
+  loader: ({ context, params }) => ({
+    breadcrumb: params.repoSlug,
+    project: context.project,
+  }),
   component: ProjectRepoDetailPage,
 });
 
 function ProjectRepoDetailPage() {
-  const params = Route.useParams();
-  const { project } = Route.useLoaderData();
-  const repoQuery = useQuery(
-    projectRepoQueryOptions({ projectId: project.id, repoSlug: params.repoSlug }),
+  return (
+    <ItxBoundary>
+      <ProjectRepoDetailContent />
+    </ItxBoundary>
   );
-  const repo = repoQuery.data;
+}
 
-  if (!repo) {
-    return (
-      <section className="w-full p-4">
-        <div className="rounded-lg border p-4 text-sm text-muted-foreground">Loading Repo...</div>
-      </section>
-    );
-  }
+function ProjectRepoDetailContent() {
+  const params = Route.useParams();
+  const repo = useItxQuery({
+    key: ["repo", params.repoSlug],
+    query: (itx) => itx.repos.getInfo({ slug: params.repoSlug }),
+  });
 
   return (
     <section className="w-full space-y-4 p-4">

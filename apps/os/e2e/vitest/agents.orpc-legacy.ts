@@ -1,3 +1,14 @@
+// @ts-nocheck
+/* eslint-disable */
+/**
+ * Legacy oRPC e2e reference.
+ *
+ * This file intentionally is NOT named `.test.ts`.
+ * Vitest discovers and executes `.test.ts` files under `apps/os/e2e/vitest`,
+ * and this code imports the removed oRPC stack. It is preserved only as
+ * reference material for porting Misha's original e2e coverage to ITX.
+ */
+
 /**
  * Deployment-targeted tests for OS project agents.
  *
@@ -8,10 +19,10 @@
  */
 import { expect, test } from "vitest";
 import type { Event, EventInput } from "@iterate-com/shared/streams/types";
+import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import dedent from "dedent";
-import { createTestProjectFixture } from "../test-support/create-test-project.ts";
-import type { OsClient } from "../test-support/os-client.ts";
-import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
+import { createTestProjectFixture } from "../test-support/create-test-project.orpc-legacy.ts";
+import type { OsClient } from "../test-support/os-client.orpc-legacy.ts";
 import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
 import { getSlackIntegrationDurableObjectName } from "~/domains/slack/slack-naming.ts";
 

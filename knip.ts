@@ -12,6 +12,10 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       // Reached only through the vitest.config.ts `cloudflare:workers` alias,
       // which knip does not traverse.
       "src/test/cloudflare-workers-shim.ts",
+      // Preserved oRPC e2e reference (imports the removed oRPC stack;
+      // intentionally not `.test.ts`, never imported by active code). See
+      // e2e/AGENTS.md.
+      "e2e/**/*.orpc-legacy.ts",
     ],
     entry: [
       ...(base.entry ?? []).filter(
@@ -116,16 +120,6 @@ function makeCloudflareTanStackAppWorkspace(workerEnvShim: string): WorkspaceCon
   };
 }
 
-function makePrivateContractWorkspace(): WorkspaceConfig {
-  return {
-    // These contract packages are private, tiny, and self-contained, so report
-    // unused exports even from the public entry file.
-    entry: ["src/index.ts!"],
-    project: ["src/**/*.ts!"],
-    includeEntryExports: true,
-  };
-}
-
 function makeSharedWorkspace(): WorkspaceConfig {
   return {
     // This package exposes many subpath exports from package.json rather than a
@@ -152,14 +146,12 @@ const config: KnipConfig = {
   ignoreWorkspaces: [
     "apps/*",
     "!apps/os",
-    "!apps/os-contract",
     "!apps/semaphore",
     "!apps/streams-example-app",
     "packages/*",
     "!packages/shared",
   ],
   ignoreIssues: {
-    "apps/os-contract/src/index.ts": ["exports", "types"],
     "apps/os/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
     "apps/os/src/db/queries/.generated/index.ts": ["files", "exports", "types"],
     "apps/os/src/db/queries/.generated/tables.ts": ["files", "types"],
@@ -181,7 +173,6 @@ const config: KnipConfig = {
   workspaces: {
     "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
-    "apps/os-contract": makePrivateContractWorkspace(),
     "apps/streams-example-app": makeStreamsExampleAppWorkspace(),
     "packages/shared": makeSharedWorkspace(),
   },

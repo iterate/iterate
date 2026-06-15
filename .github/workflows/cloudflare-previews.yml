@@ -24,7 +24,6 @@ on:
       - apps/iterate-com/**
       - apps/auth-example/**
       - apps/os/**
-      - apps/os-contract/**
       - apps/auth/**
       - apps/auth-contract/**
       - apps/os/src/domains/streams/**

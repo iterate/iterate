@@ -2,7 +2,7 @@ import { newWorkersRpcResponse } from "capnweb";
 import { PublicStreamRpcTarget } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 import { getStreamDurableObjectName } from "~/domains/streams/stream-runtime.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
-import { requireProjectScopedAccess } from "~/orpc/project-access.ts";
+import { requireProjectScopedAccess } from "~/domains/projects/project-access.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-backend.ts";
 import type { RequestContext } from "~/request-context.ts";
 

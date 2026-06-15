@@ -1,7 +1,18 @@
+// @ts-nocheck
+/* eslint-disable */
+/**
+ * Legacy oRPC e2e reference.
+ *
+ * This file intentionally is NOT named `.test.ts`.
+ * Vitest discovers and executes `.test.ts` files under `apps/os/e2e/vitest`,
+ * and this code imports the removed oRPC stack. It is preserved only as
+ * reference material for porting Misha's original e2e coverage to ITX.
+ */
+
 import { expect, test } from "vitest";
 import type { Event } from "@iterate-com/shared/streams/types";
-import { createTestProject } from "../test-support/create-test-project.ts";
-import { streamProjectEventsUntil } from "../test-support/os-client.ts";
+import { createTestProject } from "../test-support/create-test-project.orpc-legacy.ts";
+import { streamProjectEventsUntil } from "../test-support/os-client.orpc-legacy.ts";
 
 test("creates a disposable project and uses project streams through oRPC", async () => {
   await using handle = await createTestProject({ slugPrefix: "admin-fixture" });

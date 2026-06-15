@@ -38,16 +38,6 @@ export async function requireProjectScopedAccess(input: {
   context: RequestContext;
   projectSlugOrId: string;
 }) {
-  if (input.context.projectAccess) {
-    if (input.context.projectAccess.projectId !== input.projectSlugOrId) {
-      throw new ORPCError("FORBIDDEN", {
-        message: "Project-bound caller cannot access another project.",
-      });
-    }
-
-    return await resolveBoundProject(input);
-  }
-
   const project = await resolveProjectBySlugOrId(input);
 
   if (!input.context.principal) {
@@ -68,34 +58,6 @@ export function canReadProject(context: Pick<RequestContext, "principal">, proje
     (context.principal != null && principalIsAdmin(context.principal)) ||
     context.principal?.can("read", { projectId }) === true
   );
-}
-
-export function requireProjectScope(
-  context: RequestContext,
-): NonNullable<RequestContext["projectScope"]>["project"] {
-  if (!context.projectScope) {
-    throw new ORPCError("INTERNAL_SERVER_ERROR", {
-      message: "Project scope middleware did not run.",
-    });
-  }
-
-  return context.projectScope.project;
-}
-
-async function resolveBoundProject(input: { context: RequestContext; projectSlugOrId: string }) {
-  if (input.context.db) {
-    const project = await getProjectById(input.context.db, { id: input.projectSlugOrId });
-    if (project) return project;
-  }
-
-  const now = new Date().toISOString();
-  return {
-    id: input.projectSlugOrId,
-    slug: input.projectSlugOrId,
-    custom_hostname: null,
-    created_at: now,
-    updated_at: now,
-  };
 }
 
 async function resolveProjectBySlugOrId(input: {

@@ -1,7 +1,6 @@
 packages:
   - apps/iterate-com
   - apps/os
-  - apps/os-contract
   - apps/semaphore
   - apps/*
   - packages/*

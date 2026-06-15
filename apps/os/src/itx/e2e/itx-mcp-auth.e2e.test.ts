@@ -15,12 +15,7 @@
 // deploys with). Absent → the test skips, never fails.
 
 import { expect, test } from "vitest";
-import {
-  adminApiSecret,
-  baseUrl,
-  connectGlobal,
-  registerCreatedProjectCleanup,
-} from "./e2e-env.ts";
+import { connectGlobal, registerCreatedProjectCleanup } from "./e2e-env.ts";
 
 const CLOUDFLARE_API_TOKEN = process.env.CLOUDFLARE_API_TOKEN?.trim() ?? "";
 const MCP_SERVER_URL = "https://bindings.mcp.cloudflare.com/mcp";
@@ -76,16 +71,10 @@ test.skipIf(!CLOUDFLARE_API_TOKEN)(
     using projectItx = await itx.projects.get(project.id);
 
     // (1) The secret enters the platform exactly once, through the project
-    // secrets surface — from here on only the KEY travels.
-    const upsert = await fetch(new URL(`/api/projects/${project.id}/secrets`, baseUrl()), {
-      body: JSON.stringify({ key: SECRET_KEY, material: CLOUDFLARE_API_TOKEN }),
-      headers: {
-        authorization: `Bearer ${adminApiSecret()}`,
-        "content-type": "application/json",
-      },
-      method: "PUT",
-    });
-    expect(upsert.status, await upsert.clone().text()).toBe(200);
+    // secrets surface — from here on only the KEY travels. Project-scoped itx
+    // is the way to interact with secrets (the old REST upsert is gone).
+    const secrets = projectItx as never as Record<string, any>;
+    await secrets.secrets.setSecret({ key: SECRET_KEY, material: CLOUDFLARE_API_TOKEN });
 
     // (2) The capability address carries the PLACEHOLDER, never the material.
     await projectItx.provideCapability({

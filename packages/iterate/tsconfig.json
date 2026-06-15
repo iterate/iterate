@@ -8,7 +8,6 @@
     "types": ["node"],
     "paths": {
       "@iterate-com/auth-contract": ["../../apps/auth-contract/src/index.ts"],
-      "@iterate-com/os-contract": ["../../apps/os-contract/src/index.ts"],
       "@iterate-com/shared/*": ["../shared/src/*"],
       "@iterate-com/ui/*": ["../ui/src/*"]
     },

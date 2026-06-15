@@ -1,7 +1,7 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { requireAuthenticatedRootRedirectTargetFromSession } from "../lib/auth.ts";
 import { DocsHomePage } from "~/components/docs-portal.tsx";
-import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
+import { listMyProjectsServerFn } from "~/lib/project-server-fns.ts";
 
 export const Route = createFileRoute("/")({
   loader: async ({ context, location }) => {
@@ -14,9 +14,6 @@ export const Route = createFileRoute("/")({
       context.currentProjectHostSlug,
     );
 
-    const projectsData = await context.queryClient.ensureQueryData(
-      projectsListQueryOptions({ limit: 100, offset: 0 }),
-    );
     // `projects.list` is intentionally a merge of auth-session projects and
     // OS D1 rows. During preview/dev testing we often reset only the OS worker
     // database, leaving auth's database intact. Those auth-only projects are
@@ -27,6 +24,7 @@ export const Route = createFileRoute("/")({
     // exist in OS are valid redirect targets. If auth knows about ten projects
     // but OS has recreated only one of them, `/` should go to that one OS
     // project, not stay on the project picker because of auth-only claims.
+    const projectsData = await listMyProjectsServerFn({ data: { limit: 100, offset: 0 } });
     const projects = projectsData.projects.filter(
       (project) => !project.isOrphanedProjectFromAuthService,
     );

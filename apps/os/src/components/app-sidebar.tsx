@@ -69,7 +69,7 @@ import {
 } from "@iterate-com/ui/components/sidebar";
 import type { AppConfig } from "~/config.ts";
 import { buildProjectWorkerUrl } from "~/lib/project-host-routing.ts";
-import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
+import { myProjectsQueryOptions } from "~/lib/project-server-fns.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
 
 type PublicConfig = PublicAppConfig<AppConfig>;
@@ -106,7 +106,7 @@ export function AppSidebar({ routeConfig }: AppSidebarProps) {
 function AppSidebarHeader() {
   const matches = useMatches();
   const { isMobile } = useSidebar();
-  const { data } = useQuery(projectsListQueryOptions({ limit: 100, offset: 0 }));
+  const { data } = useQuery(myProjectsQueryOptions());
   const projects =
     data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
   const activeProjectSlug = getActiveProjectSlug(matches);
@@ -380,7 +380,7 @@ function authWorkerOrigin(config: PublicConfig) {
 function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
   const matchRoute = useMatchRoute();
   const matches = useMatches();
-  const { data } = useQuery(projectsListQueryOptions({ limit: 100, offset: 0 }));
+  const { data } = useQuery(myProjectsQueryOptions());
   const projects =
     data?.projects.filter((project) => !project.isOrphanedProjectFromAuthService) ?? [];
   const activeProjectSlug = getActiveProjectSlug(matches);

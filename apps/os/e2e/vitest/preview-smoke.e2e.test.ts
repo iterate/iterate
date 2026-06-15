@@ -1,4 +1,5 @@
 import { test } from "vitest";
+import { createAdminOsItx } from "../test-support/os-client.ts";
 
 function requireBaseUrl() {
   const baseUrl = process.env.APP_CONFIG_BASE_URL?.trim();
@@ -13,11 +14,19 @@ function readProjectMcpUrlOverride() {
   return url ? new URL(url) : null;
 }
 
-function readAdminApiSecret() {
-  return (
+/**
+ * Seeding goes through the admin itx handle, which resolves its bearer token
+ * from `OS_E2E_ADMIN_API_SECRET` / `OS_ADMIN_API_SECRET` /
+ * `APP_CONFIG_ADMIN_API_SECRET` (see `requireAdminBearerToken`). Mirror that set
+ * here so the seed is attempted whenever the itx handle could actually
+ * authenticate — otherwise we skip the project seed and only check the public
+ * surface.
+ */
+function hasAdminApiSecret() {
+  return Boolean(
+    process.env.OS_E2E_ADMIN_API_SECRET?.trim() ||
     process.env.OS_ADMIN_API_SECRET?.trim() ||
-    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ||
-    null
+    process.env.APP_CONFIG_ADMIN_API_SECRET?.trim(),
   );
 }
 
@@ -28,11 +37,6 @@ function previewSmokeProjectSlug() {
   const commit = process.env.GITHUB_SHA?.trim().slice(0, 8) || "manual";
   return `preview-mcp-smoke-${commit}`;
 }
-
-type Project = {
-  id: string;
-  slug: string;
-};
 
 async function expectStatus(input: { method?: string; status: number; url: URL }) {
   const response = await fetchWithTransientRetry({
@@ -90,49 +94,28 @@ async function expectOkText(input: { headers?: HeadersInit; url: URL }) {
   return await response.text();
 }
 
-async function fetchProjectBySlug(input: { adminApiSecret: string; baseUrl: URL; slug: string }) {
-  const response = await fetch(new URL(`/api/projects/by-slug/${input.slug}`, input.baseUrl), {
-    headers: {
-      authorization: `Bearer ${input.adminApiSecret}`,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to find MCP smoke project ${input.slug}: ${response.status} ${await response.text()}`,
-    );
-  }
-
-  return (await response.json()) as Project;
-}
-
-async function seedProject(input: { adminApiSecret: string; baseUrl: URL }) {
+/**
+ * Ensure one deterministic project exists, via project-scoped itx — the same
+ * surface the browser/CLI use now that the oRPC REST routes are gone. The smoke
+ * only needs the project to EXIST (the MCP URL is derived from the deployment
+ * host, not the project row), so a stable-slug CONFLICT from an earlier run is
+ * success, not failure — no pagination or fetch-by-slug fallback required.
+ */
+async function seedProject(input: { baseUrl: URL }) {
   const slug = previewSmokeProjectSlug();
-  const response = await fetch(new URL("/api/projects", input.baseUrl), {
-    body: JSON.stringify({
-      slug,
-    }),
-    headers: {
-      authorization: `Bearer ${input.adminApiSecret}`,
-      "content-type": "application/json",
-    },
-    method: "POST",
-  });
-
-  if (response.status === 409) {
-    return await fetchProjectBySlug({ ...input, slug });
+  using itx = createAdminOsItx({ baseUrl: input.baseUrl.toString() });
+  try {
+    await itx.projects.create({ slug });
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    const message = error instanceof Error ? error.message : String(error);
+    if (code !== "CONFLICT" && !/already exists/i.test(message)) {
+      throw error;
+    }
   }
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to create MCP smoke project at ${input.baseUrl}: ${response.status} ${await response.text()}`,
-    );
-  }
-
-  return (await response.json()) as Project;
 }
 
-function projectMcpUrlFor(input: { baseUrl: URL; project: Project }) {
+function projectMcpUrlFor(input: { baseUrl: URL }) {
   const previewMatch = /^os\.iterate-preview-(\d+)\.com$/.exec(input.baseUrl.hostname);
   if (previewMatch) {
     return new URL(`https://mcp.iterate-preview-${previewMatch[1]}.com`);
@@ -147,26 +130,24 @@ function projectMcpUrlFor(input: { baseUrl: URL; project: Project }) {
   );
 }
 
-async function seedProjectMcpUrl(input: { adminApiSecret: string; baseUrl: URL }) {
-  // The preview smoke deliberately uses the normal `projects.create` and
-  // `projects.findBySlug` procedures. `activeOrganizationMiddleware` maps the
-  // admin bearer token to a tiny synthetic organization, keeping this path close
+async function seedProjectMcpUrl(input: { baseUrl: URL }) {
+  // The preview smoke deliberately uses the normal `projects.create` itx
+  // procedure (admin handle → synthetic operator org), keeping this path close
   // to the UI while still making preview checks repeatable without Clerk.
-  const project = await seedProject(input);
-  return projectMcpUrlFor({ baseUrl: input.baseUrl, project });
+  await seedProject(input);
+  return projectMcpUrlFor({ baseUrl: input.baseUrl });
 }
 
 test("OS preview smoke", async () => {
   const baseUrl = requireBaseUrl();
   const projectMcpUrlOverride = readProjectMcpUrlOverride();
-  const adminApiSecret = readAdminApiSecret();
 
   // Keep the dashboard checks unauthenticated, then use the admin preview hook to
   // seed one deterministic project before checking the canonical MCP endpoint.
   // That makes the preview proof
   // repeatable without relying on a human Clerk session.
   await expectStatus({
-    url: new URL("/api/__internal/health", baseUrl),
+    url: new URL("/api/health", baseUrl),
     status: 200,
   });
 
@@ -180,8 +161,7 @@ test("OS preview smoke", async () => {
   }
 
   const projectMcpUrl =
-    projectMcpUrlOverride ??
-    (adminApiSecret ? await seedProjectMcpUrl({ adminApiSecret, baseUrl }) : null);
+    projectMcpUrlOverride ?? (hasAdminApiSecret() ? await seedProjectMcpUrl({ baseUrl }) : null);
 
   if (!projectMcpUrl) {
     console.log(`OS preview smoke passed for ${baseUrl.toString()} (MCP project seed skipped)`);

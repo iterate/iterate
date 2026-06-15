@@ -24,7 +24,9 @@ declare module "./types.ts" {
         "setSecret" | "listSecrets" | "deleteSecret" | "getSecretSummaryByKey"
       >
     >;
-    repos: Stubify<Pick<ReposCapability, "create" | "get" | "list" | "ensureProjectRepoInfo">>;
+    repos: Stubify<
+      Pick<ReposCapability, "create" | "get" | "getInfo" | "list" | "ensureProjectRepoInfo">
+    >;
     integrations: Stubify<
       Pick<IntegrationsCapability, "getConnection" | "startOAuthFlow" | "disconnect">
     >;

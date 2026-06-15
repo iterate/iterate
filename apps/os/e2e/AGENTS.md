@@ -5,15 +5,33 @@ deployment (dev tunnel, preview, or prod).
 
 ## Shape
 
+Active e2e tests drive OS through **itx** — the same project capability handle the dashboard,
+REPL, and CLI use. The oRPC product surface is gone; nothing here talks to oRPC anymore.
+
 - `vitest.config.ts` owns run-level config, artifact roots, and console capture. `pnpm e2e` runs
-  `e2e/vitest/**/*.test.ts` through it.
-- `test-support/create-test-project.ts` creates an OS project via public oRPC using the admin
-  bearer token and deletes it on dispose (`createTestProject` / `createTestProjectFixture`). The
-  fixture's `egressFetch` option shadows the project's `fetch` capability with a live itx cap
-  (intercepting all project egress for the fixture's lifetime); it also exports
-  `createPublicTunnel` (captun tunnel for test-defined HTTP servers).
-- `test-support/os-client.ts` contains deployment-targeted oRPC/WebSocket helpers and stream
-  waiters.
+  `e2e/vitest/**/*.test.ts` through it. Only `.test.ts` files run.
+- `test-support/os-client.ts` exposes the admin itx handle (`createAdminOsItx`, access "all")
+  plus base-URL / bearer-token resolution. There is no oRPC/WebSocket client here anymore.
+- `test-support/create-test-project.ts` creates a disposable OS project via itx and removes it on
+  dispose (`createTestProject` → `{ project, itx(context?), updateConfig, [Symbol.asyncDispose] }`).
+  `handle.itx()` returns a fresh admin itx handle narrowed to the project; reach streams and agents
+  through it (`itx.streams.get(path).{append,appendBatch,read,subscribe}`,
+  `itx.streams.create(...)`, `itx.agents.sendMessage(...)`).
+
+### Preserved oRPC reference (`*.orpc-legacy.ts`)
+
+Misha's original oRPC e2e coverage is kept verbatim as reference material, **not** as active tests:
+
+- `vitest/agents.orpc-legacy.ts`, `vitest/admin-project.orpc-legacy.ts`,
+  `test-support/create-test-project.orpc-legacy.ts`, `test-support/os-client.orpc-legacy.ts`.
+- These are intentionally **not** named `.test.ts`, so Vitest never collects them, and they are
+  never imported by active code. They still reference the removed oRPC stack (`@orpc/*`,
+  `@iterate-com/os-contract`, `~/orpc/...`), so each carries `// @ts-nocheck` + `/* eslint-disable */`
+  and knip is told to ignore `e2e/**/*.orpc-legacy.ts`.
+- Treat them as the porting spec for the active `*.itx.e2e.test.ts` equivalents — any oRPC or
+  WebSocket helper you see in them is legacy-only and not the active testing surface. The
+  crash-recovery case (agent host DO killed mid-turn) has no itx port yet: `itx.agents` exposes
+  only `sendMessage`, with no `kill` door.
 
 ## Lanes
 

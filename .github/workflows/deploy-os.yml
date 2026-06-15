@@ -15,7 +15,6 @@ on:
       - .github/ts-workflows/workflows/deploy-os.ts
       - .github/workflows/deploy-os.yml
       - apps/os/**
-      - apps/os-contract/**
       - apps/auth/**
       - apps/auth-contract/**
       - apps/os/src/domains/streams/**
