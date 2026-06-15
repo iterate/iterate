@@ -4,7 +4,7 @@ import {
   type StreamConnection,
 } from "./stream-connection.ts";
 
-export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
+type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
 
 /** Connects browser JavaScript to one stream URL over capnweb-WebSocket. */
 export async function withStreamConnectionFromBrowser(args: {

@@ -78,6 +78,9 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
     ignore: [
       // TanStack Start client entry, referenced by framework convention.
       "src/client.ts",
+      // Kept as the Worker/DO counterpart to the browser and Node stream
+      // Cap'n Web helpers in the example app.
+      "src/lib/workers-stream-connection.ts",
     ],
     vite: false,
     paths: {
