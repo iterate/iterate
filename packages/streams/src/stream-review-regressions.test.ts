@@ -39,12 +39,20 @@ const CounterContract = defineProcessorContract({
   emits: [],
 });
 type CounterContract = typeof CounterContract;
-type CounterDeps = { onBatch?: (args: { events: readonly StreamEvent[] }) => void };
+type CounterDeps = {
+  onBatch?: (args: { events: readonly StreamEvent[] }) => void;
+  onEvent?: (amount: number) => void;
+};
 
 class CounterProcessor extends StreamProcessor<CounterContract, CounterDeps> {
   readonly contract = CounterContract;
   protected override reduce(args: Parameters<StreamProcessor<CounterContract>["reduce"]>[0]) {
     return { total: args.state.total + args.event.payload.amount };
+  }
+  protected override processEvent(
+    args: Parameters<StreamProcessor<CounterContract>["processEvent"]>[0],
+  ): void {
+    this.deps.onEvent?.(args.event.payload.amount);
   }
   protected override async processEventBatch(
     args: Parameters<StreamProcessor<CounterContract>["processEventBatch"]>[0],
@@ -189,6 +197,33 @@ const subscribeArgs = (stream: ReturnType<typeof fakeStream>["stream"]) => ({
   streamMaxOffset: 0,
   subscriptionConfiguredEvent: { offset: 0 } as never,
   streamRuntimeState: { coreProcessorState: { namespace: "stream", path: "/r" } as never },
+});
+
+describe("T0 — hosted processors run side effects during catch-up replay", () => {
+  it("does not anchor side effects at the subscription-configured event offset", async () => {
+    const { ctx, settle } = fakeDurableObjectCtx();
+    const { stream, produce } = fakeStream();
+    const host = createStreamProcessorHost(ctx);
+    const sideEffects: number[] = [];
+
+    produce({ type: "test/add", payload: { amount: 5 } });
+    produce({ type: "test/add", payload: { amount: 7 } });
+
+    host.add(
+      "counter",
+      (deps) => new CounterProcessor({ ...deps, onEvent: (amount) => sideEffects.push(amount) }),
+    );
+
+    await host.requestStreamSubscription({
+      ...subscribeArgs(stream),
+      subscriptionConfiguredEvent: { offset: 3 } as never,
+    });
+    await settle();
+
+    expect(host.runtimeState("counter").snapshot?.state).toEqual({ total: 12 });
+    expect(sideEffects).toEqual([5, 7]);
+    expect(host.runtimeState("counter").subscription?.sideEffectsAfterOffset).toBe(0);
+  });
 });
 
 describe("T1 — a failed batch must not drop events under continued delivery (C1)", () => {

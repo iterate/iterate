@@ -47,11 +47,10 @@ export type StreamProcessorBaseDeps<Contract, IterateContext> = {
   keepAliveWhile?: (work: () => Promise<unknown>) => void;
   /**
    * Side-effect anchor: events at or below this offset are reduced into state
-   * but skipped by the default `processEvent` fan-out. Hosts set it to the
-   * offset where this processor was attached to the stream, so attaching to an
-   * existing stream rebuilds state from history without re-running historical
-   * side effects (e.g. re-firing LLM requests). A function so the host can
-   * re-anchor on re-subscription. Defaults to `() => 0` (everything is live).
+   * but skipped by the default `processEvent` fan-out. The default is
+   * `() => 0`, meaning catch-up replay runs side effects from the beginning.
+   * Hosts should only raise this for processors whose historical side effects
+   * are intentionally suppressed by another reconciliation path.
    */
   sideEffectsAfterOffset?: () => number;
 } & StreamProcessorStateStorage<ProcessorState<Contract>>;

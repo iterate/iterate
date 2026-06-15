@@ -135,21 +135,18 @@ This hides the real server-side error. To get it, query **Workers
 Observability** for the os workers around the time of the call (the RPC ingress
 is `os-prd`, the app logic is `os-prd-app`). See
 [Debugging deployed OS workers](./debugging-deployed-os-workers.md), or run a
-telemetry query filtered to your project id / `configurePreset`. For example, the
-"agent preset path" rule above surfaced only as a logged
-`Error: Agent preset path must be /agents or start with /agents/.` in
-`os-prd-app` — never in the terminal.
+telemetry query filtered to your project id and the stream path you appended to.
 
 Quick recipe (general Cloudflare MCP, prd account
 `04b3b57291ef2626c6a8daa9d47065a7`): `POST /accounts/{id}/workers/observability/telemetry/query`
 with `view: "events"`, a tight `timeframe`, and filters like
-`$metadata.message includes "configurePreset"` or `… includes "<your prj_ id>"`.
+`$metadata.message includes "<your stream path>"` or `… includes "<your prj_ id>"`.
 
-### `--base-path` / `--agent-path` must live under `/agents`
+### Agent paths must live under `/agents`
 
-`configure-preset` rejects any base path that isn't `/agents` or under
-`/agents/…`. The agent's stream is then at `/agents/<name>` and `send-message`
-uses the same `--agent-path`.
+Project-worker setup normally watches for child streams under `/agents/...`.
+Use the same absolute path when appending stream events and when calling
+`send-message --agent-path`.
 
 ### Use `--project os --config <cfg>`
 

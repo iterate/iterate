@@ -17,16 +17,6 @@ export type SlackProcessorContract = typeof SlackProcessorContract;
 
 export type SlackProcessorDeps = {
   /**
-   * Events that must land on a routed stream before the first forwarded Slack
-   * webhook (subscriptions, codemode startup, ...). Supplied by the hosting
-   * Durable Object because the bootstrap set is host-application knowledge.
-   */
-  createRoutedStreamBootstrapEvents?(input: {
-    channel: string;
-    streamPath: string;
-    threadTs: string;
-  }): Promise<StreamEventInput[]> | StreamEventInput[];
-  /**
    * Acknowledge a routed webhook to the source platform (e.g. the 👀
    * reaction) as soon as the router has decided where it goes, instead of
    * waiting for the routed stream's own processors to wake — several Durable
@@ -165,15 +155,7 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
         await this.ctx.stream.append({ event: routeEvent });
         await this.ctx.stream.appendBatch({
           streamPath,
-          events: [
-            ...((await this.deps.createRoutedStreamBootstrapEvents?.({
-              channel: route.channel,
-              streamPath,
-              threadTs: route.threadTs,
-            })) ?? []),
-            routeEvent,
-            forwardedWebhookEvent,
-          ],
+          events: [routeEvent, forwardedWebhookEvent],
         });
       });
       return;

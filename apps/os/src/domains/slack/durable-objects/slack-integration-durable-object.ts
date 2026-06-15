@@ -2,7 +2,6 @@ import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { NotInitializedError } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-
 import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import {
   createStreamProcessorHost,
@@ -14,12 +13,6 @@ import {
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
-import { type AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
-import {
-  AGENT_HOST_PROCESSOR_SLUG,
-  agentProcessorSubscriptionConfiguredEvent,
-  getAgentDurableObjectName,
-} from "~/domains/agents/agent-stream-subscriptions.ts";
 import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-streams.ts";
 import {
   getSlackAgentDurableObjectName,
@@ -30,7 +23,6 @@ import {
   SlackProcessor,
   SlackProcessorContract,
 } from "~/domains/slack/stream-processors/slack/implementation.ts";
-import { SlackAgentProcessorContract } from "~/domains/slack/stream-processors/slack-agent/contract.ts";
 import { eyesReactionTargetFromWebhookPayload } from "~/domains/slack/stream-processors/slack-agent/implementation.ts";
 import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
 import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-backend.ts";
@@ -51,7 +43,6 @@ export function getSlackIntegrationStub(projectId: string) {
 }
 
 type SlackIntegrationEnv = {
-  AGENT: DurableObjectNamespace<AgentDurableObject>;
   APP_CONFIG_SLACK_BOT_TOKEN?: string;
   DO_CATALOG: D1Database;
   SLACK_AGENT: DurableObjectNamespace<SlackAgentDurableObject>;
@@ -78,15 +69,6 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
   slack = this.host.add(SlackProcessorContract.slug, (deps) => {
     return new SlackProcessor({
       ...deps,
-      createRoutedStreamBootstrapEvents: async ({ streamPath }) => {
-        const { projectId } = await this.ensureStartedOrInitializeFromRuntimeName();
-        return routedStreamBootstrapEvents({
-          agentDurableObjectName: "",
-          projectId,
-          slackAgentDurableObjectName: "",
-          streamPath,
-        });
-      },
       acknowledgeRoutedWebhook: async ({ payload }) => {
         const ack = eyesReactionTargetFromWebhookPayload(payload);
         if (ack == null) return;
@@ -117,18 +99,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
           projectId,
           streamPath: resolvedStreamPath,
         });
-        const agentName = getAgentDurableObjectName({
-          agentPath: resolvedStreamPath,
-          projectId,
-        });
-        // initialize() runs each host's full wake hook (agent setup events,
-        // subscriptions, itx context) concurrently with the thread stream's
-        // bootstrap append. Everything either side appends is idempotency-
-        // keyed and order-independent, so whichever wins the race dedups.
-        await Promise.all([
-          this.env.SLACK_AGENT.getByName(slackAgentName).initialize({ name: slackAgentName }),
-          this.env.AGENT.getByName(agentName).initialize({ name: agentName }),
-        ]);
+        await this.env.SLACK_AGENT.getByName(slackAgentName).initialize({ name: slackAgentName });
       },
     });
   });
@@ -211,53 +182,6 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
   }
 }
 
-export function routedStreamBootstrapEvents(input: {
-  agentDurableObjectName: string;
-  projectId: string;
-  slackAgentDurableObjectName: string;
-  streamPath: string;
-}) {
-  const streamPath = resolveStreamPath(input.streamPath);
-  return [
-    {
-      type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      // ":callable" suffix so the callable subscription lands as a NEW event on
-      // streams that already carry the legacy built-in subscription.
-      idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.streamPath}:workers-rpc:callable`,
-      payload: {
-        subscriptionKey: slackAgentProcessorSubscriptionKey({
-          projectId: input.projectId,
-          streamPath,
-        }),
-        // The SLACK_AGENT host DO name is derived here rather than taken from
-        // the input so legacy callers passing "" still produce a dialable
-        // subscriber.
-        subscriber: durableObjectProcessorSubscriber({
-          bindingName: "SLACK_AGENT",
-          durableObjectName: getSlackAgentDurableObjectName({
-            projectId: input.projectId,
-            streamPath,
-          }),
-          processorName: SlackAgentProcessorContract.slug,
-        }),
-      },
-    },
-    // Subscribe the agent host using the same subscription key the AgentDurableObject uses, so the
-    // host this bootstrap starts and the one AgentDurableObject.onInstanceWake re-declares dedupe to
-    // a single runner. The host wakes the AgentDurableObject for this stream (see
-    // `ensureAgentRunnerForOwnStream`), which registers the LLM processors and agent setup events.
-    agentProcessorSubscriptionConfiguredEvent({
-      agentPath: streamPath,
-      processorSlug: AGENT_HOST_PROCESSOR_SLUG,
-      projectId: input.projectId,
-    }),
-  ];
-}
-
 function slackIntegrationProcessorSubscriptionKey(projectId: string) {
   return `slack:${projectId}`;
-}
-
-function slackAgentProcessorSubscriptionKey(input: { projectId: string; streamPath: string }) {
-  return `slack-agent:${input.projectId}:${input.streamPath}`;
 }

@@ -7,13 +7,15 @@ import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent
 import { CloudflareAiProcessorContract } from "~/domains/agents/stream-processors/cloudflare-ai/contract.ts";
 import { OpenAiWsProcessorContract } from "~/domains/agents/stream-processors/openai-ws/contract.ts";
 import { AGENT_HOST_PROCESSOR_SLUG } from "~/domains/agents/stream-processors/agent-host/contract.ts";
-import type { AgentLlmProvider } from "~/domains/agents/agent-presets.ts";
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
 export { AGENT_HOST_PROCESSOR_SLUG } from "~/domains/agents/stream-processors/agent-host/contract.ts";
 
 export const AGENTS_STREAM_PATH = StreamPathSchema.parse("/agents");
+export const OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE =
+  "events.iterate.com/os-agent/llm-provider-selected";
+export type AgentLlmProvider = "openai-ws" | "cloudflare-ai";
 
 export type AgentDurableObjectStructuredName = {
   agentPath: StreamPath;
