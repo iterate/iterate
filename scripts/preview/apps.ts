@@ -126,7 +126,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "-c",
       [
         "pnpm exec playwright install chromium & install_pid=$!",
-        "STREAM_STAGING_E2E=true pnpm vitest & vitest_pid=$!",
+        "STREAM_STAGING_E2E=true pnpm vitest -t @preview & vitest_pid=$!",
         "install_status=0",
         "vitest_status=0",
         'wait "$install_pid" || install_status=$?',
