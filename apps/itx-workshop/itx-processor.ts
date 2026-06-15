@@ -106,7 +106,8 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
 
   // The fold: one pure projection of an event into the next capability table.
   // Returning the same state for events we don't consume is the identity case.
-  protected override reduce({ event, state }: { event: any; state: any }) {
+  protected override reduce(args: Parameters<StreamProcessor<typeof ItxContract>["reduce"]>[0]) {
+    const { event, state } = args as { event: any; state: any };
     switch (event.type) {
       case ITX_EVENTS.capabilityProvided: {
         const { path, kind, address, instructions, types } = event.payload;

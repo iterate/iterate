@@ -6,7 +6,8 @@
   "description": "A small, runnable reproduction that empirically tests the claims in the itx workshop against real Cloudflare workerd + real capnweb clients.",
   "scripts": {
     "dev": "wrangler dev",
-    "test": "node --experimental-strip-types harness.ts",
+    "test": "node validate-steps.mjs",
+    "e2e": "node --experimental-strip-types harness.ts",
     "proof:swift": "swiftc -typecheck dialog.swift && echo 'typecheck OK' && echo 'print((2...7).reduce(1, *))' | swift - && ITX_DIALOG_AUTODISMISS=Aurora swift dialog.swift"
   },
   "dependencies": {

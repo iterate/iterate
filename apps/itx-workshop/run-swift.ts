@@ -39,7 +39,7 @@ export const runSwift = (code: string): Promise<string> =>
     const expr = m[1].trim();
     try {
       // Only allow string literals and simple arithmetic.
-      // eslint-disable-next-line no-new-func
+      // eslint-disable-next-line no-new-func -- the swift-less fallback evals the trivial print(<arithmetic>) programs the workshop itself sends
       const val = Function(`"use strict"; return (${expr});`)();
       resolve(`${val}\n`);
     } catch (e) {

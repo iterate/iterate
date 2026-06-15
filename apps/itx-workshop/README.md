@@ -9,13 +9,15 @@ WebSocket to a `wrangler dev` Worker + Durable Object.
 
 ```bash
 pnpm install
+npm test             # pure-Node model checks (steps 7–10) — no server needed; this is what CI runs
 npm run dev          # terminal 1: wrangler dev (real workerd) on :8787
-npm test             # terminal 2: the Node client harness, prints PASS/FAIL per step
+npm run e2e          # terminal 2: the Node client harness over real workerd, PASS/FAIL per step
 ```
 
-`npm test` **requires a real Swift toolchain** — Steps 1 and 4 run Swift-only
-code the JS fallback cannot fake (see below). On macOS, `swift --version` should
-work.
+`npm run e2e` **requires a real Swift toolchain** — Steps 1 and 4 run Swift-only
+code the JS fallback cannot fake (see below) — and a running `npm run dev`. On
+macOS, `swift --version` should work. (`npm test` is the server-less model checks,
+so CI can run it.)
 
 ```bash
 npm run proof:swift  # proves Swift actually RUNS (not just type-checks):
