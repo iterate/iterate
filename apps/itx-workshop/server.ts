@@ -297,6 +297,51 @@ export class ItxDO extends DurableObject<Env> {
     return this.env.STREAM.getByName(this.#coordinate()).append({ event });
   }
 
+  // Step 12 — codemode: a capability can be a whole PROGRAM. The code is an
+  // `async (itx) => …` function; we LOAD it as a worker (the Worker Loader, like
+  // dial), hand it an itx handle so it can invoke/provide against this context,
+  // and bracket the run with durable request/completed events. Everything the
+  // script does between them is invisible to the log; the two events are the record.
+  async runScript(code: string): Promise<unknown> {
+    const executionId = crypto.randomUUID();
+    const log = this.env.STREAM.getByName(this.#coordinate());
+    await log.append({
+      event: {
+        type: "events.iterate.com/itx/script-execution-requested",
+        payload: { executionId, code },
+      },
+    });
+    const source = `
+      import { WorkerEntrypoint } from "cloudflare:workers";
+      const program = ${code};
+      export class Script extends WorkerEntrypoint {
+        async run(itx) { return await program(itx); }
+      }
+    `;
+    const loaded = this.env.LOADER.get(`script:${hashString(code)}`, () => ({
+      compatibilityDate: "2025-04-27",
+      compatibilityFlags: ["nodejs_compat"],
+      mainModule: "main.js",
+      modules: { "main.js": source },
+    }));
+    // The itx handle the script receives — it can invoke and provide against this
+    // very context (the methods become RPC stubs in the loaded isolate).
+    const itxHandle = {
+      invoke: (path: string[], args: unknown[] = []) => this.#itx.invoke({ path, args }),
+      provideCapability: (path: string[], capability: any) =>
+        this.#itx.provideCapability({ path, capability }),
+      list: () => this.#itx.listCapabilities(),
+    };
+    const result = await loaded.getEntrypoint("Script").run(itxHandle);
+    await log.append({
+      event: {
+        type: "events.iterate.com/itx/script-execution-completed",
+        payload: { executionId },
+      },
+    });
+    return result;
+  }
+
   // Durability proof, server-side: build a FRESH processor and replay the whole
   // durable log into it. Its rebuilt table must match the live one — the fold is
   // the source of truth, the log survives, the processor is reconstructible.
@@ -355,6 +400,10 @@ class WorkerHandle extends RpcTarget {
   // processor should learn of it via the subscription, not via a provide call.
   appendToStream(event: unknown) {
     return this.#node.appendToStream(event);
+  }
+  // Step 12 — codemode: run an `async (itx) => …` program in a loaded isolate.
+  runScript(code: string) {
+    return this.#node.runScript(code);
   }
 }
 
