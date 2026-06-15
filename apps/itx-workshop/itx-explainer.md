@@ -2,7 +2,7 @@
 
 A coding-workshop derivation of **itx** — Iterate's capability layer — built up from a single Cap'n Web socket, one motivated step at a time. The inner core is a few hundred lines and tells one story; everything else is an addendum of layered complexity, each entry the concrete failure it buys you out of.
 
-> **runnable & verified** — The _complete, runnable_ implementations live in this folder: Steps 0–6 (wire-level) run against real `workerd` + Cap'n Web clients (`server.ts` + `harness.ts`, and the self-contained `min-dynamic-target.mjs`); Steps 7–11 (model-level — fold, ref taxonomy, dial, chain, processor) are checked by `validate-steps.mjs`; the Step 1 dialog Swift is type-checked with `swiftc`. The **inline snippets below are abbreviated for reading** — they lean on a few helpers defined once and reused (`findCapabilityByPath`, `invokeCapabilityAtPath`, `retain`) and on real workerd behavior, so don't expect every fragment to run verbatim if you paste it in isolation; the files above are the source of truth. One caveat that bites: if you _simulate_ the DO with a shared in-memory object (no wrangler), the RpcStub-vs-copy distinction and `ctx.waitUntil` vanish — and with them the whole point of Step 4. Where the first draft guessed wrong, the repro corrected it — most notably: **there is no client-side path proxy**, because a naked Cap'n Web stub already pipelines a whole dotted path into one call (see Step 6).
+> **runnable & verified** — The _complete, runnable_ implementations live in this folder: Steps 0–6 (wire-level) run against real `workerd` + Cap'n Web clients (`server.ts` + `harness.ts`, and the self-contained `min-dynamic-target.mjs`); Steps 7–11 (model-level — fold, ref taxonomy, dial, chain, processor) are checked by `validate-steps.mjs`; the Step 1 dialog Swift is type-checked with `swiftc`. The **inline snippets below are abbreviated for reading** — they lean on a few helpers defined once and reused (`findCapabilityByPath`, `invokeCapabilityAtPath`, `retain`) and on real workerd behavior, so don't expect every fragment to run verbatim if you paste it in isolation; the files above are the source of truth. One caveat that bites: if you _simulate_ the DO with a shared in-memory object (no wrangler), the RpcStub-vs-copy distinction and `ctx.waitUntil` vanish — and with them the whole point of Step 4. One thing worth flagging up front: **there is no client-side path proxy** — a naked Cap'n Web stub already pipelines a whole dotted path into one call (see Step 6).
 
 ---
 
@@ -92,36 +92,50 @@ The laptop can only offer the _one_ object it passed into _that one call_, and o
 
 ## Step 2 — provide & invoke: capabilities go dynamic
 
-> **the one new idea** — stop passing objects as call arguments. Add two verbs: `provide({ name, capability })` registers a capability under a name; `invoke({ name, args })` calls it. The set of capabilities is now a dynamic registry, grown at runtime.
+> **the one new idea** — stop passing objects as call arguments. Add two verbs: `provide({ name, capability, instructions })` registers a capability under a name — `instructions` says what it's for; `invoke({ name, args })` calls it. The set of capabilities is now a dynamic registry, grown at runtime.
 
 ```ts
 class Itx extends RpcTarget {
-  // A plain object, not a Map — deliberately: this same table becomes the
-  // StreamProcessor's reduced state in Step 8, which must be plain JSON (it gets
-  // checkpointed and replayed). Keeping it plain from the start avoids a switch.
-  #caps: Record<string, any> = {};
-  provide({ name, capability }: { name: string; capability: any }) {
-    // ⚠️ Cap'n Web disposes an argument stub when this call RETURNS — so a bare
-    // assignment is already dead by the next call (you'd get "RpcImportHook was
-    // already disposed"). Retain it with `.dup()`. A nested SDK object needs a
-    // RECURSIVE dup — see `retain` in Step 6.
-    this.#caps[name] = capability.dup?.() ?? capability;
+  // The registry: capability name → its entry. A plain object keyed by name —
+  // it stays plain JSON all the way through, which is what lets it become a
+  // durable, replayable fold in Step 8.
+  #caps: Record<string, { capability: any; instructions?: string }> = {};
+  provide({
+    name,
+    capability,
+    instructions,
+  }: {
+    name: string;
+    capability: any;
+    instructions?: string;
+  }) {
+    // ⚠️ Cap'n Web disposes an argument stub when this call RETURNS — so holding a
+    // bare reference is dead by the next call (you'd get "RpcImportHook was already
+    // disposed"). Retain it with `.dup()`. (A nested SDK object needs a recursive
+    // dup — see `retain` in Step 6.)
+    this.#caps[name] = { capability: capability.dup?.() ?? capability, instructions };
   }
   async invoke({ name, args }: { name: string; args: unknown[] }) {
-    const cap = this.#caps[name];
-    if (!cap) throw new Error(`no capability "${name}"`);
-    return await cap(...args);
+    const entry = this.#caps[name];
+    if (!entry) throw new Error(`no capability "${name}"`);
+    return await entry.capability(...args);
   }
 }
 ```
 
 ```ts
 // laptop registers its tool by name, then anyone with the handle calls it:
-await itx.provide({ name: "runSwift", capability: runSwift });
+await itx.provide({
+  name: "runSwift",
+  capability: runSwift,
+  instructions: "run a Swift program, return its stdout",
+});
 await itx.invoke({ name: "runSwift", args: [`print(1 + 1)`] }); // → "2\n"
 ```
 
-The stored `name → capability` pairing has no special label in the codebase — the act is a **provide** and what it registers is a **capability entry**. A capability is one of just two kinds: a live **stub** or, later (Step 7), a serializable **address**. In Step 6 the addressing field generalizes from `name` to a `path`.
+Every `provide` carries **`instructions`** — a sentence saying what the capability is for, for an agent or a human reading the table — and an optional **`types`** (a type surface, omitted above). The workshop stores both on the entry; it doesn't do anything with `types` yet, but they're there for when it does. (So there's no separate "describe" verb — a capability describes itself at the point it's provided.)
+
+The stored `name → capability` pairing has no special label in the codebase — the act is a **provide** and what it registers is a **capability entry**. A capability is one of just two kinds: a live **stub** or, later (Step 7), a serializable **address**. (Step 6 will generalize this addressing field from a `name` to a `path`.)
 
 (We call the verbs `provide` / `invoke` here; production spells `provide` as `provideCapability`. They may eventually move under a namespace — `itx.caps.provide`, `itx.caps.invoke`, `itx.caps.revoke`, `itx.caps.get` — to free up the bare names. `invoke` does double duty on purpose: it's the public verb _and_ the one calling convention every capability bottoms out in — `invoke({ path, args })`, the same operation one layer apart. We deliberately use `invoke` rather than `call`: `call` is a `Function.prototype` member (`fn.call(...)`), so a `call` verb/convention would collide with it — both as a reserved path segment and as a member name on the function-typed proxy. `invoke` isn't on any prototype, so it stays clean.)
 
@@ -269,7 +283,7 @@ await itx.slack.chat.postMessage({ channel: "C123", text: "hi" });
 // server — two small helpers, defined once here and reused by every later step:
 function findCapabilityByPath({ caps, path }) {
   // the LONGEST registered prefix wins — "slack" matches slack.chat.postMessage,
-  // and a deeper "slack.chat.postMessage" shadow beats "slack" (Step 6's free win).
+  // and a deeper "slack.chat.postMessage" entry beats "slack" — what enables deep shadowing.
   for (let i = path.length; i >= 1; i--) {
     const name = path.slice(0, i).join(".");
     if (caps[name]) return { name, capability: caps[name], rest: path.slice(i) };
@@ -283,7 +297,7 @@ function invokeCapabilityAtPath({ capability, path, args }) {
   return path.length ? stub[path.at(-1)](...args) : capability(...args);
 }
 
-// the verb's addressing field is now a `path`. (verb and convention are both `invoke` here — see Step 2.)
+// the verb's addressing field is now a `path`.
 invoke({ path, args }) {
   const hit = findCapabilityByPath({ caps: this.#caps, path });
   if (!hit) throw new Error(`no capability "${path.join(".")}"`);
@@ -301,22 +315,66 @@ itx.provide({ path: ["integrations", "slack"], capability: new WebClient(token) 
 await itx.integrations.slack.chat.postMessage({ channel: "C123", text: "hi" });
 ```
 
-### ⚠️ Rules the dynamic server proxy must follow
+### ⚠️ The server-side dynamic proxy
 
-`findCapabilityByPath`/`invokeCapabilityAtPath` are the easy part. The hard part is the **server-side proxy** that turns an _arbitrary_ incoming dotted path into that `invoke` — it has to answer for names it has never seen. Getting it to actually work took several non-obvious rules (all in the runnable `min-dynamic-target.mjs` — paste that, not these fragments):
+`findCapabilityByPath`/`invokeCapabilityAtPath` are the easy part. The hard part is the **server-side proxy** that turns an _arbitrary_ incoming dotted path into that `invoke` — it has to answer for names it has never seen. Here it is (this is the whole thing, runnable verbatim in `min-dynamic-target.mjs`):
 
-1. **`getOwnPropertyDescriptor` is load-bearing, not just `get`.** Server-side Cap'n Web does `Object.hasOwn(value, segment)` _before_ reading each segment, so the descriptor trap must report every non-reserved name as an own property. Without it even the **base verbs** fail — `provide` reads as "not a function", not just deep paths.
-2. **The proxy must wrap a plain `function`, not an `RpcTarget`.** Cap'n Web classifies an rpc-target by its prototype and rejects fabricated "instance properties" (it flags the real verbs too).
-3. **Retain (`dup`) provided live stubs — recursively.** Cap'n Web disposes argument stubs when `provide` returns. A plain function dups directly; a nested SDK object is copied _by value_ but its function members arrive as stubs that get disposed — so you need a recursive `retain` that dups every function it finds:
-   ```ts
-   const retain = (t) =>
-     t?.dup
-       ? t.dup()
-       : t && typeof t === "object"
-         ? Object.fromEntries(Object.entries(t).map(([k, v]) => [k, retain(v)]))
-         : t;
-   ```
-4. **The fiddly bits.** Intermediate path nodes must return `undefined` for `then` (so `await itx.slack` doesn't treat a node as a thenable) and for symbol keys (Cap'n Web probes `Symbol.iterator`/`toPrimitive`); and the root must route the real verbs (`provide`/`invoke`) to themselves before falling through to a path. (`call`/`apply`/`bind` stay reserved as path segments because they're `Function.prototype` members — exactly why the verb is named `invoke`, not `call`: a `call` verb would collide with that prototype method and the reserved set.) One reserved-name set guards both the proxy and the server-side replay.
+```ts
+const RESERVED = new Set([
+  "then",
+  "__proto__",
+  "constructor",
+  "prototype",
+  "apply",
+  "call",
+  "bind",
+  "dup",
+]);
+
+// The dynamic target. FUNCTION-typed (a Proxy over `function(){}`), so Cap'n Web
+// traverses it via Object.hasOwn and ALLOWS fabricated own properties — it rejects
+// those on a Proxy over an RpcTarget (it classifies rpc-targets by prototype). Root
+// verb names resolve to the verb; any other name extends the accumulating path; the
+// terminal call funnels into invoke({ path, args }).
+function dynamicTarget(core, path = []) {
+  const verbAt = (key) => path.length === 0 && key in core; // provide / invoke / list
+  const valueFor = (key) =>
+    verbAt(key) ? core[key].bind(core) : dynamicTarget(core, [...path, key]);
+  return new Proxy(function () {}, {
+    get(_t, key) {
+      if (typeof key === "symbol") return undefined;
+      if (key === "then" || RESERVED.has(key)) return undefined; // never a thenable; never a control word
+      return valueFor(key);
+    },
+    // LOAD-BEARING: server-side Cap'n Web does Object.hasOwn(value, segment) BEFORE
+    // reading value[segment]. Without this trap every segment reads as absent and the
+    // chain dies at ".chat of undefined" — even the base verbs read as "not a function".
+    getOwnPropertyDescriptor(_t, key) {
+      if (typeof key === "symbol" || RESERVED.has(key)) return undefined;
+      return { configurable: true, enumerable: true, writable: false, value: valueFor(key) };
+    },
+    has(_t, key) {
+      return typeof key === "symbol" ? false : !RESERVED.has(key);
+    },
+    apply(_t, _s, args) {
+      return core.invoke({ path, args }); // the accumulated dotted path, in one call
+    },
+  });
+}
+```
+
+Two more rules it relies on. **Retain (`dup`) provided live stubs — recursively**, because Cap'n Web disposes argument stubs when `provide` returns; a nested SDK object is copied by value but its function members arrive as stubs that get disposed, so `retain` dups every function it finds:
+
+```ts
+const retain = (t) =>
+  t?.dup
+    ? t.dup()
+    : t && typeof t === "object"
+      ? Object.fromEntries(Object.entries(t).map(([k, v]) => [k, retain(v)]))
+      : t;
+```
+
+And `call`/`apply`/`bind` stay reserved as path segments because they're `Function.prototype` members — exactly why the verb is named `invoke`, not `call`. One reserved-name set guards both the proxy and the server-side replay.
 
 ### 🎁 What falls out for free
 
@@ -342,20 +400,21 @@ The DO is evicted (we kept deferring it). And we still haven't said what a capab
 
 > **the one new idea** — a capability comes in just two kinds: a live **stub** (an object/function held in memory — dies with its connection) or an **address** (`{ type: "rpc", worker, props }`) — plain, serializable data describing how to _re-make_ it on demand. `CapabilityKind = "live" | "rpc"`.
 
-The motivating case: a **reusable worker that turns an OpenAPI spec into a callable API**. Write one `WorkerEntrypoint` whose props are `{ openApiSpec, baseUrl }`; it dispatches each call by `operationId` to the matching HTTP request:
+The motivating case: a **reusable first-party worker that turns an OpenAPI spec into a callable API**, specialized per-API by its props. It dispatches each call by `operationId` to the matching HTTP request:
 
 ```ts
 import { WorkerEntrypoint } from "cloudflare:workers";
 
-export class OpenApiClient extends WorkerEntrypoint<Env, { openApiSpec: Spec; baseUrl: string }> {
+export class OpenApiClient extends WorkerEntrypoint<Env, { specUrl: string; baseUrl?: string }> {
   // the kernel dispatches every capability as invoke({ path, args }):
   async invoke({ path: [operationId], args: [input = {}] }) {
-    const { openApiSpec, baseUrl } = this.ctx.props;
-    for (const [route, methods] of Object.entries(openApiSpec.paths))
+    const spec = await fetch(this.ctx.props.specUrl).then((r) => r.json());
+    const base = this.ctx.props.baseUrl ?? spec.servers?.[0]?.url;
+    for (const [route, methods] of Object.entries(spec.paths))
       for (const [method, op] of Object.entries(methods))
         if (op.operationId === operationId) {
           const url = route.replace(/\{(\w+)\}/g, (_, k) => encodeURIComponent(input[k]));
-          return fetch(new URL(url.replace(/^\//, ""), baseUrl), {
+          return fetch(new URL(url.replace(/^\//, ""), base), {
             method: method.toUpperCase(),
             ...(method === "get"
               ? {}
@@ -367,22 +426,23 @@ export class OpenApiClient extends WorkerEntrypoint<Env, { openApiSpec: Spec; ba
 }
 ```
 
-Now "the Petstore API" is a **sturdy capability** — no live connection, just a ref naming that worker plus the props that specialize it:
+Now "the Petstore API" is a **sturdy capability** — no live connection, just a ref naming that worker plus the props that specialize it. It's a **loopback** ref: a first-party entrypoint the platform already exposes, named rather than loaded from anywhere:
 
 ```ts
 itx.provide({
   name: "petstore",
   capability: {
     type: "rpc",
-    worker: { type: "source", source: { repo, commit, path: "caps/openapi-client.ts" } },
+    worker: { type: "loopback" }, // a first-party entrypoint the host exposes
     entrypoint: "OpenApiClient",
-    props: { openApiSpec, baseUrl: "https://petstore3.swagger.io/api/v3" },
+    props: { specUrl: "https://petstore3.swagger.io/api/v3/openapi.json" },
   },
-}); // survives eviction — it's just data; dial rebuilds the worker on demand
+  instructions: "the Petstore API",
+}); // survives eviction — it's just data; dial re-makes it on demand
 await itx.petstore.findPetsByStatus({ status: "available" }); // → invoke({ path: ["findPetsByStatus"], args })
 ```
 
-(iterate ships exactly this — `apps/os/src/itx/capabilities/openapi-client.ts`.)
+This is modeled on what iterate ships — `apps/os/src/itx/capabilities/openapi-client.ts`, a loopback cap (the real one also fetches the spec through project egress and derives a typed surface). A loopback is one ref kind; the other big one is a **`source`** worker — code built and run at runtime (a _dynamic worker_, via the Worker Loader). That's what `dial` does in Step 9, and what the runnable `steps/09-dial` actually exercises.
 
 A purely structural discriminator tells the two kinds apart — and `invokeCapabilityAtPath` from Step 6 just grows an **address** branch, so `invoke` itself is unchanged:
 
@@ -399,7 +459,7 @@ function invokeCapabilityAtPath({ capability, path, args }) {
 }
 ```
 
-A **`PathCallable`** is just "anything with `invoke({ path, args })`" — the one calling convention everything bottoms out in. `dial` (Step 9) returns one. (Production names this convention `call`, distinct from the `invoke` verb; we use `invoke` for both, see Step 2.)
+A **`PathCallable`** is just "anything with `invoke({ path, args })`" — the one calling convention everything bottoms out in. `dial` (Step 9) returns one. (Production names this calling convention `call`, distinct from the `invoke` verb; we use `invoke` for both, to avoid the `Function.prototype.call` clash.)
 
 ### 🚧 Why this isn't enough yet
 
@@ -438,7 +498,7 @@ export const ItxContract = defineProcessorContract({
 });
 ```
 
-The fold is then just a `switch` returning the next **plain object** (no `Map`):
+The fold is then just a `switch` returning the next **plain object**:
 
 ```ts
 reduce({ event, state }) {
@@ -458,7 +518,7 @@ reduce({ event, state }) {
 
 Last-write-wins, revoke removes, replay is deterministic — the table is never the source of truth, the log is. Note what the fold does _not_ hold: a `live` cap's event records `kind: "live"` with `address: null` — you can't serialize a socket, so the actual stub lives in an in-memory bridge map keyed by name (Step 4). That's precisely why a live cap dies on eviction and a sturdy ref (which folds to a serializable `address`) survives.
 
-So the Step-4 "bridge" and this "fold" stories are the **same** picture, not a contradiction: the **log** is the source of truth for everything _durable_ (which names exist, each one's kind, and sturdy `address`es), while the **bridge map** holds the _ephemeral_ live stubs beside it. "No hidden state" means nothing durable hides outside the fold; the live stubs are deliberately non-durable, which is the whole live-vs-sturdy distinction. (Proven over real workerd in the harness's Step 8/11: `freshFold` replays the durable log into a brand-new processor and rebuilds the identical table.)
+So the Step-4 "bridge" and this "fold" are two views of one picture: the **log** is the source of truth for everything _durable_ (which names exist, each one's kind, and sturdy `address`es), while the **bridge map** holds the _ephemeral_ live stubs beside it. "No hidden state" means nothing durable hides outside the fold; the live stubs are deliberately non-durable, which is the whole live-vs-sturdy distinction. (Proven over real workerd in the harness's Step 8/11: `freshFold` replays the durable log into a brand-new processor and rebuilds the identical table.)
 
 ### 🚧 Why this isn't enough yet
 
@@ -479,7 +539,7 @@ function dial(ref) {
 }
 ```
 
-`dial` returns a **`PathCallable`** — the very thing `invokeCapabilityAtPath` forwards to. The entrypoint's `props` arrive as `this.ctx.props` (that's how Step 7's `OpenApiClient` gets its `{ openApiSpec, baseUrl }`). `loadWorker` caches the built isolate by content, so dialing two refs with the same source shares one isolate; different content builds a new one. `ref.worker.type` is `"source"` here, but also `"binding"` (an env binding like AI), `"loopback"` (a first-party entrypoint), or `"durable-object"` — the core only knows "ref → `PathCallable` via the injected `dial`."
+`dial` returns a **`PathCallable`** — the very thing `invokeCapabilityAtPath` forwards to. The entrypoint's `props` arrive as `this.ctx.props` (that's how Step 7's `OpenApiClient` gets its `{ specUrl }`). `loadWorker` caches the built isolate by content, so dialing two refs with the same source shares one isolate; different content builds a new one. `ref.worker.type` is `"source"` here, but also `"binding"` (an env binding like AI), `"loopback"` (a first-party entrypoint), or `"durable-object"` — the core only knows "ref → `PathCallable` via the injected `dial`."
 
 ### 🚧 Why this isn't enough yet
 
@@ -489,7 +549,7 @@ A context wants the platform's defaults (`fetch`, `ai`, `secrets`) and a parent'
 
 ## Step 10 — extend & super: the context chain
 
-> **the one new idea** — a context can `extend` a parent. On a capability **miss**, dispatch climbs to `super` (the parent context). A child **shadow** wins over the parent — the deep-shadowing trick from Step 6, now up the chain.
+> **the one new idea** — a context can `extend` a parent. On a capability **miss**, dispatch climbs to `super` (the parent context). A child **shadow** wins over the parent — child capabilities shadow parent ones the same way a deeper path shadowed a shallower one in Step 6, now up the chain.
 
 ```ts
 invoke({ path, args }) {
@@ -510,9 +570,9 @@ Everything we've built (provide/revoke as events, a folded table, read-your-writ
 
 ## Step 11 — Itx _is_ a StreamProcessor (for real)
 
-> **the punchline** — Step 8's "fold a durable event log" already _is_ a `StreamProcessor`. So `Itx extends StreamProcessor<ItxContract>` — the **real** base class from `@iterate-com/streams`. We override one pure method, `reduce` (the fold), and add the verbs. `ingest` folds events and checkpoints; `state` is the fold; replay rebuilds it. Read-your-writes falls out: append, self-ingest, read.
+> **the punchline** — Step 8's "fold a durable event log" already _is_ a `StreamProcessor`. So `Itx extends StreamProcessor<ItxContract>` — the **real** base class from `@iterate-com/streams`. We override one pure method, `reduce` (the fold), and add the verbs. The stream's subscription (Step 7's wiring) delivers appended events into `ingest`, which folds them and advances the checkpoint; `state` is the fold; replay rebuilds it. Read-your-writes is then just: append, wait for the stream to deliver it back, read.
 
-This is the real class, from the runnable [`itx-processor.ts`](./itx-processor.ts) — not a toy with a hand-rolled `getState`:
+This is the real class, from the runnable [`itx-processor.ts`](./itx-processor.ts) — it extends the actual `StreamProcessor` base class, not a stand-in:
 
 ```ts
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
@@ -526,18 +586,20 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     /* the switch from Step 8 */
   }
 
-  // provide = append an event; self-ingest so the write is readable immediately.
-  // A live stub also lands in the in-memory bridge.
-  async provideCapability({ path, capability }) {
+  // provide = append an event (the live stub also lands in the bridge). There is
+  // NO second write path: the event flows out to the stream, and the stream's
+  // subscription delivers it back into the fold. We just wait for that delivery so
+  // the write is readable — read-your-writes, with the stream as the only source.
+  async provideCapability({ path, capability, instructions }) {
     const kind = isCapabilityAddress(capability) ? "rpc" : "live";
     if (kind === "live") this.#live.set(path.join("."), capability);
     const committed = await this.ctx.stream.append({
       event: {
         type: "…/capability-provided",
-        payload: { path, kind, address: kind === "rpc" ? capability : null },
+        payload: { path, kind, address: kind === "rpc" ? capability : null, instructions },
       },
     });
-    await this.ingest({ events: [committed], streamMaxOffset: committed.offset }); // read-your-writes
+    await this.awaitDelivered(committed.offset); // the subscription folds it in
   }
 
   async invoke({ path, args }) {
@@ -607,7 +669,7 @@ The **name** column is the real identifier in `apps/os/src/itx/*` — a few are 
 
 ## Addendum — everything we layered on, and why
 
-All real, all in the actual files; none of it changes the inner model. Each entry is the concrete failure it buys you out of. (Two of these — **origin threading** and **injected props / dial attribution** — are quietly load-bearing for Steps 10 and 9 as written; they live here only to keep those steps uncluttered.)
+All real, all in the actual files; none of it changes the inner model. Each entry is the concrete failure it buys you out of. (Two of these — **origin threading** and **dial's injected props** — are quietly load-bearing for Steps 9 and 10 as written; they live here only to keep those steps uncluttered.)
 
 - **Two RPC systems — Cap'n Web pipelines paths, Workers RPC doesn't.** Cap'n Web pipelines a whole dotted path from a naked stub into one call (so `itx.slack.chat.postMessage(…)` needs no client proxy; the server-side dynamic proxy only has to answer `Object.hasOwn` per segment via its `getOwnPropertyDescriptor` trap). Workers RPC (the DO stub, the dialed parent) does _not_ pipeline through property accesses — which is why the DO exposes its core via an `itx()` method and why `itx.project.processor.snapshot()` is made to work by `replayPathCall` awaiting each segment server-side.
 
