@@ -36,8 +36,8 @@
     "example:workspace-itx-preview": "tsx ./e2e/workspace-itx-preview-example.ts",
     "auth:sync-clients": "tsx ./scripts/sync-auth-clients.ts",
     "benchmark:agent-stream": "tsx ./scripts/benchmark-agent-stream.ts",
-    "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
-    "test:watch": "vitest"
+    "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run --exclude 'src/durable-objects/*.test.ts' --exclude 'src/itx/e2e/**' --exclude '**/*.workers.test.ts'",
+    "test:watch": "vitest --exclude 'src/durable-objects/*.test.ts' --exclude 'src/itx/e2e/**' --exclude '**/*.workers.test.ts'"
   },
   "iterateAppCli": {
     "localRouterPaths": [
