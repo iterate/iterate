@@ -140,6 +140,67 @@ describe("SlackProcessor", () => {
     ]);
   });
 
+  it("replays the webhook when the forward append fails instead of dropping it", async () => {
+    // Regression for the prd 2026-06-15 loss: the first message on a fresh
+    // project reached the project stream but the agent never saw it. The router
+    // forwarded it with fire-and-forget `runInBackground`, so when the (cold,
+    // cross-worker) append threw, the error was swallowed, the checkpoint
+    // advanced, and the only copy of the message was dropped.
+    //
+    // The forward must be a durable obligation: a failed append rejects the
+    // batch and HOLDS the checkpoint so the host replays the webhook. This test
+    // fails against the old `runInBackground` wiring (ingest resolves, message
+    // lost) and passes under `blockProcessorWhile`.
+    const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
+    let failNextAppend = true;
+    const processor = new SlackProcessor({
+      iterateContext: {
+        stream: {
+          append: async ({ event, streamPath }) => {
+            if (failNextAppend) {
+              failNextAppend = false;
+              throw new Error("cold StreamsCapability RPC failed");
+            }
+            appended.push({ event, streamPath });
+            return committedEvent({ ...event, offset: appended.length });
+          },
+          appendBatch: async ({ events, streamPath }) =>
+            events.map((event) => {
+              appended.push({ event, streamPath });
+              return committedEvent({ ...event, offset: appended.length });
+            }),
+        },
+      },
+      createRoutedStreamBootstrapEvents: () => [],
+    });
+
+    // First delivery: the append throws. ingest MUST reject and the checkpoint
+    // MUST stay at 0 — otherwise the webhook is gone for good.
+    await expect(
+      processor.ingest({
+        events: [webhookEvent({ offset: 7, text: "hello" })],
+        streamMaxOffset: 7,
+      }),
+    ).rejects.toThrow(/StreamsCapability/);
+    expect(processor.checkpointOffset).toBe(0);
+    expect(appended).toEqual([]);
+
+    // The host replays the same webhook from the un-advanced checkpoint; the
+    // append now succeeds, the forward lands, and the checkpoint advances.
+    await processor.ingest({
+      events: [webhookEvent({ offset: 7, text: "hello" })],
+      streamMaxOffset: 7,
+    });
+    expect(processor.checkpointOffset).toBe(7);
+    expect(
+      appended.some(
+        (entry) =>
+          entry.streamPath === "/agents/slack/c123/ts-1772136258-963519" &&
+          entry.event.type === "events.iterate.com/slack/webhook-received",
+      ),
+    ).toBe(true);
+  });
+
   it("ignores webhooks that cannot be keyed as channel:thread_ts", async () => {
     const { appended, processor } = createProcessor();
 
