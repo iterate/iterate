@@ -563,4 +563,4 @@ All real, all in the actual files; none of it changes the inner model. Each entr
 
 ---
 
-_ground truth: `apps/os/src/itx/{itx,handle,path-proxy,dial,coordinates,entrypoint,contract,types,itx-durable-object,fetch}.ts` · `packages/streams/src/stream-processor.ts`. Runnable: `server.ts` + `harness.ts`, `min-dynamic-target.mjs`, `validate-steps.mjs` in this folder._
+_ground truth: `apps/os/src/itx/{itx,handle,path-proxy,dial,coordinates,entrypoint,contract,types,itx-durable-object,fetch}.ts` · `packages/streams/src/stream-processor.ts`. Runnable: `server.ts` + `harness.ts` (Steps 0–6 over real workerd, incl. `itx.slack.chat.postMessage` on a naked stub into the real `@slack/web-api` client), `min-dynamic-target.mjs`, `validate-steps.mjs` in this folder; `dialog.swift` is the Step 1 native-dialog program, type-checked with `swiftc -typecheck dialog.swift`._

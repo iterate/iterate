@@ -1,15 +1,14 @@
 // server.ts — a complete Cloudflare Worker that hosts the itx workshop steps.
 //
-// One Worker, several WebSocket endpoints, one Durable Object. Each endpoint
-// serves a different capnweb RpcTarget so we can test each workshop step in
-// isolation against REAL workerd.
+// One Worker, three WebSocket endpoints, one Durable Object.
 //
-//   /step0   -> Server (whoami)                          [Step 0]
-//   /step1   -> RegisterServer (server calls back client) [Step 1]
-//   /itx     -> the DO's Itx core, via node.itx()         [Steps 2,3,4]
-//   /itx-proxy   -> handle(core): one-level get-trap      [Step 5]
-//   /itx-path    -> pathProxy server side (does NOT work) [Step 6 negative]
-//   /itx-pathcli -> raw core for consumer-side PathProxy  [Step 6 positive]
+//   /step0  -> Server (whoami)                            [Step 0]
+//   /step1  -> RegisterServer (server calls back client)  [Step 1]
+//   /itx    -> dynamicHandle over the DO's Itx core        [Steps 2-6]
+//
+// Steps 2-6 ALL talk to /itx with a NAKED capnweb stub — the same dynamic
+// server-side proxy serves the verbs (provide/invoke/list) and deep dotted
+// paths (itx.slack.chat.postMessage). There is no client-side path proxy.
 //
 // The DO is addressed by the constant name "itx" so every connection meets the
 // same registry (the rendezvous claim).
@@ -45,7 +44,10 @@ class Server extends RpcTarget {
 // ---------------------------------------------------------------------------
 class RegisterServer extends RpcTarget {
   async register(laptop: { runSwift: (code: string) => Promise<string> }) {
-    const out = await laptop.runSwift(`print(1 + 1)`);
+    // Real-Swift-only program: a ClosedRange folded with reduce. The harness's
+    // JS fallback can only evaluate `print(<arithmetic>)`, so `(1...10)` +
+    // `.reduce` is impossible to fake — a "55\n" here PROVES Swift actually ran.
+    const out = await laptop.runSwift(`print((1...10).reduce(0, +))`);
     return `your laptop says: ${out}`;
   }
 }
@@ -132,34 +134,49 @@ class Itx extends RpcTarget {
   }
 }
 
-// Step 5: a server-side Proxy whose unknown properties become invoke().
-function handle(core: Itx): any {
-  return new Proxy(core, {
-    get(target, key) {
-      if (typeof key === "symbol") return Reflect.get(target, key);
-      if (key in target) {
-        const v = Reflect.get(target, key);
-        return typeof v === "function" ? v.bind(target) : v;
-      }
-      if (RESERVED.has(key as string)) return undefined;
-      return (...args: unknown[]) => core.invoke(key as string, args);
-    },
-  });
-}
+// Steps 5 & 6: the ONE server-side dynamic proxy. This is the whole trick that
+// lets a NAKED capnweb client stub call `itx.runSwift(code)` AND deep paths like
+// `itx.slack.chat.postMessage(msg)` with no client-side library — capnweb
+// pipelines the dotted path from the bare stub into one message, and this proxy
+// collapses it into a single `invoke(path, args)` against the runtime registry.
+//
+// Three non-obvious requirements (each cost a debugging round; all proven in
+// min-dynamic-target.mjs and now live over real workerd):
+//   1. The target must be FUNCTION-typed (a Proxy over `function(){}`), NOT a
+//      Proxy over an RpcTarget. capnweb classifies an rpc-target by prototype
+//      and forbids fabricated "instance properties"; a function-typed target is
+//      traversed via Object.hasOwn, where fabricated own properties are allowed.
+//   2. getOwnPropertyDescriptor is load-bearing, not just get. Server-side
+//      capnweb does Object.hasOwn(value, segment) BEFORE reading value[segment];
+//      without the descriptor trap every segment reads as absent and the chain
+//      dies at ".chat of undefined". (This single missing trap was the entire
+//      reason an earlier draft thought server-side path pipelining "didn't work"
+//      over workerd — it does; the trap just has to be there.)
+//   3. `has` must answer for non-reserved names too.
+// Root verb names (provideCapability/invoke/list) resolve to the verb; any other
+// name extends the accumulating path; the terminal call funnels into invoke().
+const VERBS = new Set(["provideCapability", "invoke", "list"]);
 
-// Step 6 (negative test): a server-side PATH proxy that accumulates a path via
-// nested get-traps. We expose this to see whether capnweb relays nested
-// property accesses through to the server proxy over workerd. The workshop
-// CLAIMS it does NOT.
-function serverPathProxy(core: Itx, path: string[] = []): any {
+function dynamicHandle(target: WorkerHandle, path: string[] = []): any {
+  const verbAt = (key: string) => path.length === 0 && VERBS.has(key);
+  const valueFor = (key: string) =>
+    verbAt(key) ? (target as any)[key].bind(target) : dynamicHandle(target, [...path, key]);
   return new Proxy(function () {}, {
-    get(_t, key) {
-      if (typeof key === "symbol") return undefined;
-      if (key === "then") return undefined;
-      return serverPathProxy(core, [...path, key as string]);
+    get(t, key) {
+      if (typeof key === "symbol") return Reflect.get(t, key);
+      if (key === "then" || RESERVED.has(key)) return undefined;
+      return valueFor(key);
+    },
+    getOwnPropertyDescriptor(t, key) {
+      if (typeof key === "symbol" || RESERVED.has(key as string))
+        return Reflect.getOwnPropertyDescriptor(t, key);
+      return { configurable: true, enumerable: true, writable: false, value: valueFor(key) };
+    },
+    has(t, key) {
+      return typeof key === "symbol" ? key in t : !RESERVED.has(key as string);
     },
     apply(_t, _s, args) {
-      return core.invoke(path, args as unknown[]);
+      return target.invoke(path, args as unknown[]);
     },
   });
 }
@@ -170,16 +187,6 @@ export class ItxDO extends DurableObject {
   // a METHOD that returns the RPC target (workerd can't pipeline through a property)
   itx() {
     return this.#itx;
-  }
-
-  // Step 5: serve the one-level proxy-wrapped core
-  itxProxy() {
-    return handle(this.#itx);
-  }
-
-  // Step 6 negative: serve the server-side path proxy
-  itxPathProxy() {
-    return serverPathProxy(this.#itx);
   }
 }
 
@@ -234,21 +241,12 @@ export default {
 
     // Everything else rendezvouses in the ONE shared DO named "itx". The capnweb
     // session is terminated HERE, in the stateless Worker — the DO only exposes
-    // its target via an RPC method (node.itx()).
-    if (
-      path === "/itx" ||
-      path === "/itx-proxy" ||
-      path === "/itx-path" ||
-      path === "/itx-pathcli"
-    ) {
+    // its target via an RPC method (node.itx()). The client receives a NAKED
+    // stub of the dynamic handle: it calls the verbs directly AND pipelines deep
+    // dotted paths (itx.slack.chat.postMessage(...)) with no client-side library.
+    if (path === "/itx") {
       const node = env.ITX.getByName("itx");
-      const handleTarget = new WorkerHandle(node);
-      const main =
-        path === "/itx-proxy"
-          ? handle(handleTarget as any) // server-side get-trap proxy (Step 5)
-          : path === "/itx-path"
-            ? serverPathProxy(handleTarget as any) // server-side path proxy (Step 6 negative)
-            : handleTarget;
+      const main = dynamicHandle(new WorkerHandle(node));
 
       const pair = new WebSocketPair();
       const server = pair[0];
@@ -268,7 +266,7 @@ export default {
       return new Response(null, { status: 101, webSocket: pair[1] });
     }
 
-    return new Response("itx-workshop-repro: try /step0 /step1 /itx ...", {
+    return new Response("itx-workshop-repro: try /step0 /step1 /itx", {
       status: 404,
     });
   },

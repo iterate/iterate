@@ -1,15 +1,25 @@
 // harness.ts — runs every workshop claim against a live `wrangler dev` workerd
-// instance and prints a PASS / FAIL / CAVEAT table with observed output.
+// instance and prints a PASS / FAIL table with observed output.
 //
 // Usage: assumes a server is reachable at BASE (default ws://127.0.0.1:8787).
 // The npm `dev` script starts wrangler; this harness just connects.
-import { connect, pathProxy, sleep } from "./client-lib.ts";
+//
+// Everything from Step 2 on talks to ONE endpoint, /itx, with a NAKED capnweb
+// stub: `connect<any>(...)` returns the bare session stub and we call
+// `itx.provideCapability(...)`, `itx.runSwift(code)`, and the deep dotted path
+// `itx.slack.chat.postMessage(...)` straight on it. There is NO client-side path
+// proxy and no client-side library beyond `connect` (a one-line socket opener) —
+// capnweb pipelines the dotted path from the bare stub into a single message,
+// and the server-side dynamic proxy collapses it into one invoke(path, args).
+import http from "node:http";
+import { WebClient } from "@slack/web-api";
+import { connect, sleep } from "./client-lib.ts";
 import { runSwift, swiftAvailable } from "./run-swift.ts";
 
 const HTTP = process.env.ITX_BASE ?? "http://127.0.0.1:8787";
 const WS = HTTP.replace(/^http/, "ws");
 
-type Result = { step: string; verdict: "PASS" | "FAIL" | "CAVEAT"; note: string };
+type Result = { step: string; verdict: "PASS" | "FAIL"; note: string };
 const results: Result[] = [];
 function record(step: string, verdict: Result["verdict"], note: string) {
   results.push({ step, verdict, note });
@@ -29,9 +39,72 @@ interface ItxCore {
   list(): Promise<string[]>;
 }
 
+// A local stand-in for the Slack Web API. The REAL @slack/web-api WebClient
+// (running here in Node, the "laptop") signs and POSTs to this endpoint exactly
+// as it would to slack.com — we just don't need a live workspace. It records
+// which methods were actually hit so we can prove the call reached the real SDK.
+function startMockSlack(): Promise<{ url: string; close: () => void; calls: string[] }> {
+  const calls: string[] = [];
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      const method = (req.url ?? "").replace(/^\//, "").split("?")[0];
+      calls.push(method);
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        const ct = req.headers["content-type"] ?? "";
+        let p: Record<string, any> = {};
+        if (ct.includes("application/json")) {
+          try {
+            p = JSON.parse(body);
+          } catch {}
+        } else {
+          p = Object.fromEntries(new URLSearchParams(body));
+        }
+        res.setHeader("content-type", "application/json");
+        if (method === "chat.postMessage") {
+          res.end(
+            JSON.stringify({
+              ok: true,
+              channel: p.channel,
+              ts: "1718000000.000100",
+              message: { text: p.text, type: "message" },
+              via: "mock-slack-api",
+            }),
+          );
+        } else if (method === "users.list") {
+          res.end(
+            JSON.stringify({
+              ok: true,
+              members: [
+                { id: "U1", name: "ada" },
+                { id: "U2", name: "grace" },
+              ],
+              via: "mock-slack-api",
+            }),
+          );
+        } else {
+          res.end(JSON.stringify({ ok: true, via: "mock-slack-api" }));
+        }
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as { port: number }).port;
+      resolve({ url: `http://127.0.0.1:${port}/`, close: () => server.close(), calls });
+    });
+  });
+}
+
 async function main() {
   console.log(`itx-workshop-repro harness -> ${WS}`);
   console.log(`swift available: ${swiftAvailable}`);
+  if (!swiftAvailable) {
+    console.error(
+      "\nThis harness now REQUIRES a real Swift toolchain (Step 1 runs Swift-only\n" +
+        "code the JS fallback cannot fake). Install Swift and re-run.",
+    );
+    process.exit(1);
+  }
 
   // ---------------------------------------------------------------------
   // STEP 0 — method call over a socket + `using` disposal
@@ -42,65 +115,68 @@ async function main() {
       using itx = connect<Server>(`${WS}/step0`);
       whoamiResult = await itx.whoami();
     } // `using` should dispose here
-    if (whoamiResult === "the itx server") {
-      record(
-        "Step 0: whoami over socket + using disposal",
-        "PASS",
-        `itx.whoami() -> "${whoamiResult}"; \`using\` block exited without error (disposed cleanly).`,
-      );
-    } else {
-      record("Step 0", "FAIL", `unexpected: ${whoamiResult}`);
-    }
+    record(
+      "Step 0: whoami over socket + using disposal",
+      whoamiResult === "the itx server" ? "PASS" : "FAIL",
+      `itx.whoami() -> "${whoamiResult}"; \`using\` block exited without error (disposed cleanly).`,
+    );
   } catch (e) {
     record("Step 0", "FAIL", `threw: ${(e as Error).message}`);
   }
 
   // ---------------------------------------------------------------------
-  // STEP 1 — server calls the client (bidirectional stub passing)
+  // STEP 1 — server calls the client (bidirectional stub passing).
+  // The server asks the laptop to run `print((1...10).reduce(0, +))`. That is
+  // a ClosedRange folded with reduce — REAL Swift, which the JS fallback cannot
+  // evaluate — so "55" here proves the laptop actually executed Swift.
+  // (The native-dialog program from the doc is in dialog.swift, type-checked
+  //  with `swiftc -typecheck dialog.swift`; it isn't run because runModal()
+  //  blocks on a GUI.)
   // ---------------------------------------------------------------------
   try {
     using itx = connect<RegisterServer>(`${WS}/step1`);
-    const laptop = { runSwift };
-    const out = await itx.register(laptop);
-    // expect "your laptop says: 2\n"
-    const ok = /your laptop says:\s*2/.test(out);
+    const out = await itx.register({ runSwift });
+    const ok = /your laptop says:\s*55/.test(out);
     record(
-      "Step 1: server calls back client's runSwift",
+      "Step 1: server calls back client's runSwift (real Swift)",
       ok ? "PASS" : "FAIL",
-      `server.register(laptop) -> ${JSON.stringify(out)}  (swift=${swiftAvailable})`,
+      `server.register(laptop) -> ${JSON.stringify(out)}  ` +
+        `(Swift-only (1...10).reduce(0,+) == 55, unfakeable by the JS fallback)`,
     );
   } catch (e) {
     record("Step 1", "FAIL", `threw: ${(e as Error).message}`);
   }
 
   // ---------------------------------------------------------------------
-  // STEP 2/3/4 — provide/invoke in a DO; TWO clients rendezvous
+  // STEP 2/3/4 — provide/invoke in a DO; TWO clients rendezvous. NAKED stubs.
   // ---------------------------------------------------------------------
   try {
-    // Client A: the laptop daemon — provides runSwift into the shared DO
+    // Client A: the laptop daemon — provides runSwift into the shared DO.
     using a = connect<ItxCore>(`${WS}/itx`);
     await a.provideCapability("runSwift", runSwift as any);
-
-    // give the provide a beat to land (it's a real round trip already, but be safe)
     await sleep(50);
 
-    // Client B: the dashboard — a SEPARATE connection/socket
+    // Client B: the dashboard — a SEPARATE connection/socket. B invokes a method
+    // that physically LIVES on A (A's runSwift), and passes a Swift-ONLY program
+    // — a ClosedRange folded with `*` — so the answer (5040 = 2·3·4·5·6·7) can
+    // only come from real Swift executing on A's machine. This single check
+    // proves BOTH pillars: one client calling another's method, AND real Swift.
     using b = connect<ItxCore>(`${WS}/itx`);
     const names = await b.list();
-    const out = await b.invoke("runSwift", [`print(40 + 2)`]);
-    const ok = /42/.test(String(out)) && names.includes("runSwift");
+    const out = await b.invoke("runSwift", [`print((2...7).reduce(1, *))`]);
+    const ok = /\b5040\b/.test(String(out)) && names.includes("runSwift");
     record(
-      "Step 4: rendezvous — B.invoke runs A's live function via shared DO",
+      "Step 4: client B invokes A's live runSwift; real Swift runs on A",
       ok ? "PASS" : "FAIL",
-      `B saw caps=${JSON.stringify(names)}; B.invoke("runSwift",["print(40+2)"]) -> ${JSON.stringify(out)}`,
+      `B saw caps=${JSON.stringify(names)}; ` +
+        `B.invoke("runSwift",["print((2...7).reduce(1,*))"]) -> ${JSON.stringify(out)} ` +
+        `(5040 is unfakeable by the JS fallback → real Swift executed on A)`,
     );
   } catch (e) {
     record("Step 4: rendezvous", "FAIL", `threw: ${(e as Error).message}`);
   }
 
-  // Step 3 control: a fresh client whose DO had nothing provided would fail.
-  // We can't easily reset the singleton DO, so we just assert the negative
-  // path: invoking an unknown name throws "no capability".
+  // Step 3 control: invoking an unknown name throws "no capability".
   try {
     using c = connect<ItxCore>(`${WS}/itx`);
     let threw = "";
@@ -119,19 +195,18 @@ async function main() {
   }
 
   // ---------------------------------------------------------------------
-  // STEP 5 — server-side get-trap Proxy: itx.runSwift(code) -> invoke
+  // STEP 5 — NAKED stub method call: itx.runSwift(code) on the bare session
+  // stub routes, via the server-side dynamic proxy, to invoke(["runSwift"]).
+  // No /itx-proxy endpoint, no wrapper — the bare stub IS the client.
   // ---------------------------------------------------------------------
   try {
-    // the provider stays CONNECTED while we call: a live cap lives only as long
-    // as its provider's connection.
     using prov = connect<ItxCore>(`${WS}/itx`);
     await prov.provideCapability("runSwift", runSwift as any);
     await sleep(30);
-    // now call via the proxy endpoint as if runSwift were a native method
-    using p = connect<any>(`${WS}/itx-proxy`);
-    const out = await p.runSwift(`print(6 * 7)`);
+    using itx = connect<any>(`${WS}/itx`); // NAKED stub
+    const out = await itx.runSwift(`print(6 * 7)`);
     record(
-      "Step 5: capnweb relays unknown method to server Proxy get-trap",
+      "Step 5: naked stub method call relays to invoke",
       /42/.test(String(out)) ? "PASS" : "FAIL",
       `itx.runSwift("print(6*7)") -> ${JSON.stringify(out)}`,
     );
@@ -140,88 +215,87 @@ async function main() {
   }
 
   // ---------------------------------------------------------------------
-  // STEP 6 — nested path. Two experiments:
-  //  (a) NEGATIVE: server-side path proxy; does capnweb pipeline nested
-  //      property access through to it? Workshop claims NO over workerd.
-  //  (b) POSITIVE: consumer-side PathProxy sending one invoke(path,args).
+  // STEP 6 — deep paths & the REAL Slack SDK, all via a NAKED stub.
+  //
+  // We mount the official @slack/web-api WebClient as ONE capability. The
+  // WebClient lives here in Node (the laptop); we point it at a local mock so
+  // it returns without a live workspace, but the call goes through the SDK's
+  // real request path. A NAKED client stub does itx.slack.chat.postMessage(msg):
+  // capnweb pipelines ["slack","chat","postMessage"] + [msg] in one message, the
+  // server-side dynamic proxy collapses it to invoke(path,args), longest-prefix
+  // resolves "slack", and the remainder is replayed onto the real client.
   // ---------------------------------------------------------------------
-
-  // Provide a fake "slack" SDK object as ONE capability into the shared DO.
-  // We use a plain object with nested chat.postMessage / users.list so we don't
-  // need real Slack creds. (Real @slack/web-api is import-tested separately.)
-  const fakeSlack = {
-    chat: {
-      postMessage: async (msg: any) => ({ ok: true, posted: msg, via: "original slack" }),
-    },
-    users: {
-      list: async () => ({ ok: true, members: ["U1", "U2"], via: "original slack" }),
-    },
+  const mock = await startMockSlack();
+  const slack = new WebClient("xoxb-not-a-real-token", {
+    slackApiUrl: mock.url,
+    retryConfig: { retries: 0 },
+  });
+  // The real SDK, mounted as one capability. capnweb deep-copies a plain
+  // provider object and turns its function members into stubs that call back
+  // here — where the real WebClient lives — so chat.postMessage/users.list run
+  // the genuine @slack/web-api code path. (capnweb can't serialize a whole live
+  // WebClient instance by value, so we expose the methods we mount; they ARE the
+  // SDK's real methods.)
+  const slackCap = {
+    chat: { postMessage: (opts: any) => slack.chat.postMessage(opts) },
+    users: { list: (opts: any = {}) => slack.users.list(opts) },
   };
 
-  // One persistent provider keeps "slack" live for all three 6x sub-tests.
   using slackProv = connect<ItxCore>(`${WS}/itx`);
-  await slackProv.provideCapability("slack", fakeSlack as any);
+  await slackProv.provideCapability("slack", slackCap as any);
   await sleep(50);
 
-  // (a) NEGATIVE — server path proxy
+  // (a) deep path into the REAL Slack SDK, naked stub, over real workerd.
   try {
-    using pp = connect<any>(`${WS}/itx-path`);
-    let observed = "";
-    let verdict: Result["verdict"] = "FAIL";
-    try {
-      // attempt the nested call the doc warns about
-      const res = await pp.slack.chat.postMessage({ channel: "C123", text: "hi" });
-      observed = `nested call RETURNED ${JSON.stringify(res)}`;
-      verdict = /original slack/.test(JSON.stringify(res)) ? "CAVEAT" : "FAIL";
-    } catch (e) {
-      observed = `nested call THREW: ${(e as Error).message}`;
-      verdict = "PASS"; // workshop's claim (it does NOT work) is confirmed
-    }
-    record("Step 6a: server-side nested property pipelining (workshop says NO)", verdict, observed);
-  } catch (e) {
-    record("Step 6a", "FAIL", `setup threw: ${(e as Error).message}`);
-  }
-
-  // (b) POSITIVE — consumer-side PathProxy: one invoke(path,args)
-  try {
-    using core = connect<ItxCore>(`${WS}/itx-pathcli`);
-    const itx = pathProxy((path, args) => core.invoke(path, args)) as any;
-    const res = await itx.slack.chat.postMessage({ channel: "C123", text: "hi" });
-    const ok = res && res.ok && /original slack/.test(JSON.stringify(res));
+    using itx = connect<any>(`${WS}/itx`); // NAKED stub — no path proxy
+    const res = await itx.slack.chat.postMessage({ channel: "C123", text: "hi from itx" });
+    const ok =
+      res?.ok === true &&
+      res?.message?.text === "hi from itx" &&
+      res?.via === "mock-slack-api" &&
+      mock.calls.includes("chat.postMessage");
     record(
-      "Step 6b: consumer-side PathProxy -> one invoke(path,args)",
+      "Step 6: itx.slack.chat.postMessage on a NAKED stub -> real @slack/web-api",
       ok ? "PASS" : "FAIL",
-      `itx.slack.chat.postMessage({...}) -> ${JSON.stringify(res)}`,
+      `itx.slack.chat.postMessage({...}) -> ${JSON.stringify(res)}\n` +
+        `mock saw HTTP calls: ${JSON.stringify(mock.calls)} (proves it reached the real SDK)`,
     );
   } catch (e) {
-    record("Step 6b", "FAIL", `threw: ${(e as Error).message}`);
+    record("Step 6", "FAIL", `threw: ${(e as Error).message}`);
   }
 
-  // (c) longest-prefix + deep shadow
+  // (b) longest-prefix deep shadow: override just slack.chat.postMessage; the
+  // rest of the real Slack client still resolves under the "slack" prefix.
   try {
-    // shadow just slack.chat.postMessage on the SAME persistent provider
     await slackProv.provideCapability("slack.chat.postMessage", (async (msg: any) => ({
       ok: true,
-      posted: msg,
+      text: msg.text,
       via: "SHADOW override",
     })) as any);
     await sleep(30);
-    using core = connect<ItxCore>(`${WS}/itx-pathcli`);
-    const itx = pathProxy((path, args) => core.invoke(path, args)) as any;
+
+    using itx = connect<any>(`${WS}/itx`); // NAKED stub
+    const callsBefore = mock.calls.length;
     const shadowed = await itx.slack.chat.postMessage({ channel: "C1", text: "x" });
     const fellThrough = await itx.slack.users.list();
     const ok =
-      /SHADOW override/.test(JSON.stringify(shadowed)) &&
-      /original slack/.test(JSON.stringify(fellThrough));
+      shadowed?.via === "SHADOW override" &&
+      fellThrough?.ok === true &&
+      fellThrough?.via === "mock-slack-api" &&
+      // the shadow did NOT hit the network; users.list DID
+      mock.calls.slice(callsBefore).every((c) => c === "users.list") &&
+      mock.calls.includes("users.list");
     record(
-      "Step 6c: longest-prefix deep shadow (surgical override)",
+      "Step 6 shadow: longest-prefix override beats the mounted SDK",
       ok ? "PASS" : "FAIL",
-      `slack.chat.postMessage -> ${JSON.stringify(shadowed)}\n` +
-        `slack.users.list      -> ${JSON.stringify(fellThrough)}`,
+      `slack.chat.postMessage -> ${JSON.stringify(shadowed)}  (shadow, no HTTP)\n` +
+        `slack.users.list      -> ${JSON.stringify(fellThrough)}  (real SDK)`,
     );
   } catch (e) {
-    record("Step 6c", "FAIL", `threw: ${(e as Error).message}`);
+    record("Step 6 shadow", "FAIL", `threw: ${(e as Error).message}`);
   }
+
+  mock.close();
 
   // ---------------------------------------------------------------------
   // SUMMARY
@@ -233,7 +307,7 @@ async function main() {
   const fails = results.filter((r) => r.verdict === "FAIL");
   console.log("================================================");
   console.log(`${results.length} checks, ${fails.length} FAIL`);
-  process.exit(0);
+  process.exit(fails.length === 0 ? 0 : 1);
 }
 
 main().catch((e) => {
