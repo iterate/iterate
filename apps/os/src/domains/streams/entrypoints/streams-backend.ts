@@ -63,6 +63,7 @@ type StreamEventsInput = StreamPathInput & {
 export type StreamGetEventInput = StreamPathInput & Parameters<StreamRpc["getEvent"]>[0];
 export type StreamGetEventsInput = StreamPathInput &
   NonNullable<Parameters<StreamRpc["getEvents"]>[0]>;
+export type StreamWaitForEventInput = StreamPathInput & Parameters<StreamRpc["waitForEvent"]>[0];
 export type StreamSubscribeInput = StreamPathInput & Parameters<StreamRpc["subscribe"]>[0];
 export type StreamSubscribeBatch = Parameters<StreamSubscribeInput["processEventBatch"]>[0];
 export type StreamReduceInput = StreamPathInput & Parameters<StreamRpc["reduce"]>[0];
@@ -84,6 +85,7 @@ type StreamsBackendClient = Pick<
   | "runtimeState"
   | "stream"
   | "subscribe"
+  | "waitForEvent"
 >;
 
 /**
@@ -252,6 +254,20 @@ export class StreamsBackend extends WorkerEntrypoint<StreamsBackendEnv, StreamsB
         releaseCallback();
       },
     };
+  }
+
+  async waitForEvent(input: StreamWaitForEventInput): Promise<StreamEvent> {
+    const path = this.resolveNamespacePath(input);
+    const streamStub = (this.env.STREAM as unknown as StreamDurableObjectNamespace).getByName(
+      getStreamDurableObjectName({ namespace: this.ctx.props.projectId, path }),
+    ) as unknown as StreamRpc;
+
+    return await streamStub.waitForEvent({
+      afterOffset: input.afterOffset,
+      eventTypes: input.eventTypes,
+      timeoutMs: input.timeoutMs,
+      predicate: input.predicate,
+    });
   }
 
   async getState(input: StreamPathInput = {}) {

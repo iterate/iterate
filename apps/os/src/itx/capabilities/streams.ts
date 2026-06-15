@@ -173,6 +173,10 @@ export class ItxStream extends RpcTarget {
     return await this.client().runtimeState({} as never);
   }
 
+  async waitForEvent(input: Parameters<StreamRpc["waitForEvent"]>[0]) {
+    return await this.client().waitForEvent(input as never);
+  }
+
   async kill() {
     return await this.client().kill({} as never);
   }

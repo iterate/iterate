@@ -385,13 +385,14 @@ async function osWorker<B extends Bindings>(
   },
 ) {
   const name = workerNames[id];
+  const eventSources = ctx.app.local ? props.eventSources : undefined;
   const worker = await Worker(id, {
     name,
     adopt: true,
     entrypoint: props.entrypoint,
     bundle: { minify: true },
     compatibilityFlags: props.compatibilityFlags,
-    eventSources: props.eventSources,
+    eventSources,
     bindings: {
       ...withoutBindingsToMissingScripts(name, props.bindings),
       APP_CONFIG: ctx.app.local
@@ -552,6 +553,16 @@ const [
     },
   }),
 ]);
+
+if (!ctx.app.local) {
+  const cloudflareApi = await createCloudflareApi({});
+  await waitForCloudflareWorkerScript({ cloudflareApi, workerName: workerNames.repo });
+  await ensureCloudflareQueueConsumer({
+    cloudflareApi,
+    queueId: artifactEventsQueue.id,
+    scriptName: workerNames.repo,
+  });
+}
 
 // ---- The app worker (TanStack Start dashboard) -------------------------------
 
@@ -719,4 +730,125 @@ async function findMissingWorkerScripts(names: string[]) {
     }),
   );
   return missing;
+}
+
+async function waitForCloudflareWorkerScript(input: {
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  workerName: string;
+}) {
+  const deadline = Date.now() + 120_000;
+  let visibleChecks = 0;
+  let lastStatus = 0;
+  let lastBody = "";
+
+  while (Date.now() < deadline) {
+    const response = await input.cloudflareApi.get(
+      `/accounts/${input.cloudflareApi.accountId}/workers/scripts/${encodeURIComponent(input.workerName)}`,
+    );
+
+    if (response.ok) {
+      visibleChecks += 1;
+      if (visibleChecks >= 2) return;
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      continue;
+    }
+
+    lastStatus = response.status;
+    lastBody = await response.text();
+
+    if (response.status !== 404) {
+      throw new Error(
+        `Failed to check worker script ${input.workerName}: ${response.status} ${lastBody}`,
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+
+  throw new Error(
+    `Worker script ${input.workerName} was not visible before queue consumer creation. Last status: ${lastStatus}. Last body: ${lastBody}`,
+  );
+}
+
+async function ensureCloudflareQueueConsumer(input: {
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  queueId: string;
+  scriptName: string;
+}) {
+  const deadline = Date.now() + 120_000;
+  let lastError = "";
+
+  while (Date.now() < deadline) {
+    const existing = await findCloudflareQueueConsumer(input);
+    if (existing) {
+      const updated = await updateCloudflareQueueConsumer({ ...input, consumerId: existing.id });
+      if (updated) return;
+      lastError = `consumer ${existing.id} disappeared before it could be updated`;
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      continue;
+    }
+
+    const response = await input.cloudflareApi.post(
+      `/accounts/${input.cloudflareApi.accountId}/queues/${input.queueId}/consumers`,
+      { script_name: input.scriptName, type: "worker" },
+    );
+
+    if (response.ok) return;
+
+    const body = await response.text();
+    lastError = `${response.status} ${body}`;
+
+    if (response.status !== 400 || !body.includes("already has a consumer")) {
+      throw new Error(
+        `Failed to create queue consumer for ${input.queueId}: ${response.status} ${body}`,
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+
+  throw new Error(
+    `Queue consumer for ${input.queueId} was not configurable before timeout. Last error: ${lastError}`,
+  );
+}
+
+async function updateCloudflareQueueConsumer(input: {
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  queueId: string;
+  consumerId: string;
+  scriptName: string;
+}) {
+  const response = await input.cloudflareApi.put(
+    `/accounts/${input.cloudflareApi.accountId}/queues/${input.queueId}/consumers/${input.consumerId}`,
+    { script_name: input.scriptName, type: "worker" },
+  );
+
+  if (response.ok) return true;
+  if (response.status === 404) return false;
+
+  throw new Error(
+    `Failed to update queue consumer ${input.consumerId}: ${response.status} ${await response.text()}`,
+  );
+}
+
+async function findCloudflareQueueConsumer(input: {
+  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
+  queueId: string;
+}) {
+  const response = await input.cloudflareApi.get(
+    `/accounts/${input.cloudflareApi.accountId}/queues/${input.queueId}/consumers`,
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Failed to list queue consumers for ${input.queueId}: ${response.status} ${await response.text()}`,
+    );
+  }
+
+  const data = (await response.json()) as {
+    result?: Array<{ consumer_id?: string; id?: string }>;
+  };
+  const consumer = data.result?.find((candidate) => candidate.consumer_id ?? candidate.id);
+  const id = consumer?.consumer_id ?? consumer?.id;
+  return id ? { id } : undefined;
 }

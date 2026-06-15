@@ -440,9 +440,9 @@ test("project config worker customizes fresh agents by appending events", async 
     "export default {",
     '  async fetch() { return new Response("ok"); },',
     "",
-    "  // The config worker is a stream processor: this receives every event on",
-    "  // the project root stream. New agent streams announce themselves as",
-    "  // child-stream-created; react by appending agent context events.",
+    "  // The config worker is a stream processor: this receives project-root",
+    "  // facts. New agent streams announce themselves as child-stream-created;",
+    "  // react by appending agent context events.",
     "  async processEvent({ event }, env) {",
     '    if (event.type !== "events.iterate.com/stream/child-stream-created") return;',
     "    const agentPath = event.payload.childPath;",
@@ -494,9 +494,9 @@ test("project config worker customizes fresh agents by appending events", async 
   ).toMatchObject({ ok: true });
 
   // Phase 2: a FRESH agent path wakes. Its stream creation announces a
-  // child-stream-created on the project root stream; the project-config-worker
-  // processor forwards it (blocking on a fresh checkout, so the just-pushed
-  // worker sees it); the config worker appends the custom context.
+  // child-stream-created on the project root stream; ProjectProcessor forwards
+  // it (blocking on a fresh checkout, so the just-pushed worker sees it); the
+  // config worker appends the custom context.
   await client.project.agents.runtimeState({
     agentPath: customizedPath,
     projectSlugOrId: project.id,

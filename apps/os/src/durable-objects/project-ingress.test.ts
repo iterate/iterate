@@ -393,11 +393,11 @@ test("project config worker receives root-stream events and appends facts back",
     expect.objectContaining({ type: "events.iterate.com/project/create-completed" }),
   ]);
 
-  // Append a fact to the project root stream. The project-config-worker
-  // processor (subscribed to "/") forwards it to the config worker's
-  // afterAppend export, which echoes it onto /config-worker-saw — proving the
-  // whole chain: subscription wiring, blocking forward, entrypoint
-  // resolution, and the object-export env argument, all in real workerd.
+  // Append a fact to the project root stream. ProjectProcessor forwards it to
+  // the config worker's processEvent export, which echoes it onto
+  // /config-worker-saw — proving the whole chain: subscription wiring,
+  // checkpointed forward, entrypoint resolution, and the object-export env
+  // argument, all in real workerd.
   const appendResponse = await SELF.fetch(
     "https://os.iterate.localhost/__test/append-project-event?n=42",
   );

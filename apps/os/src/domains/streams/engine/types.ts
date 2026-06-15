@@ -60,6 +60,16 @@ export type StreamRpc = {
     limit?: number;
   }): MaybePromise<StreamEvent[]>;
   /**
+   * Waits for the first event after `afterOffset` whose predicate returns true.
+   * Omitting `afterOffset` waits from the live edge; pass 0 to include history.
+   */
+  waitForEvent(args: {
+    afterOffset?: number;
+    eventTypes?: readonly string[];
+    predicate: (event: StreamEvent) => MaybePromise<boolean>;
+    timeoutMs: number;
+  }): MaybePromise<StreamEvent>;
+  /**
    * Subscribes to catch-up then live event batches. Every subscription
    * immediately receives one batch carrying the current `state` and
    * `streamMaxOffset` (plus the replayed events when `replayAfterOffset`

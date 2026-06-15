@@ -9,12 +9,10 @@ import { ORPCError } from "@orpc/server";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 import type { RequestContext } from "~/request-context.ts";
 import {
-  countAllProjects,
   deleteProject,
   getProjectById,
   getProjectBySlug,
   insertProject,
-  listAllProjects,
 } from "~/db/queries/.generated/index.ts";
 import { getProjectDurableObjectStub } from "~/domains/projects/durable-objects/project-durable-object-ref.ts";
 import { isProjectId } from "~/domains/projects/project-id.ts";
@@ -31,6 +29,7 @@ type ProjectRow = {
 type ProjectListItem = {
   id: string;
   slug: string;
+  organizationId: string | null;
   customHostname: string | null;
   createdAt: string | null;
   updatedAt: string | null;
@@ -59,21 +58,15 @@ export class ProjectsCapability extends RpcTarget {
     const context = this.props.context;
     const limit = input.limit ?? 100;
     const offset = input.offset ?? 0;
-    if (context.principal != null && principalIsAdmin(context.principal)) {
-      const [totalRow, rows] = await Promise.all([
-        countAllProjects(context.db),
-        listAllProjects(context.db, { limit, offset }),
-      ]);
-
-      return { projects: rows.map(toProject), total: totalRow?.total ?? 0 };
-    }
 
     const authProjects = listSignedProjectClaims(context);
     const page = authProjects.slice(offset, offset + limit);
     const projects = await Promise.all(
       page.map(async (authProject) => {
         const row = await getProjectById(context.db, { id: authProject.id });
-        return row ? toProject(row) : toOrphanedProjectFromAuthService(authProject);
+        return row
+          ? toProject(row, { organizationId: authProject.organizationId })
+          : toOrphanedProjectFromAuthService(authProject);
       }),
     );
 
@@ -218,10 +211,14 @@ export class ProjectsCapability extends RpcTarget {
   }
 }
 
-export function toProject(row: ProjectRow): ProjectListItem {
+export function toProject(
+  row: ProjectRow,
+  input: { organizationId?: string | null } = {},
+): ProjectListItem {
   return {
     id: row.id,
     slug: row.slug,
+    organizationId: input.organizationId ?? null,
     customHostname: row.custom_hostname ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -307,6 +304,7 @@ function toOrphanedProjectFromAuthService(project: AuthProject): ProjectListItem
   return {
     id: project.id,
     slug: project.slug,
+    organizationId: project.organizationId,
     customHostname: null,
     createdAt: null,
     updatedAt: null,

@@ -28,6 +28,7 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "e2e/tui-test/run.ts",
       // Mounted into the CLI by packages/iterate/src/os/router.ts, which knip
       // doesn't traverse (the iterate package isn't a knip workspace).
+      "scripts/itx-agent-smoke.ts",
       "scripts/itx-run.ts",
       "scripts/seed-iterate-config-base-repo.ts",
       "scripts/setup-artifact-event-subscriptions.ts",

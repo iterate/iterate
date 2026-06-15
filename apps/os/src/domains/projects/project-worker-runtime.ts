@@ -18,9 +18,10 @@ export type ProjectWorkerEntrypoint = {
   [Symbol.dispose]?(): void;
   fetch(request: Request): Response | Promise<Response>;
   /**
-   * Optional hook: the worker as a stream processor. Receives every event
-   * committed to the project's root stream, in order, checkpointed (dialed
-   * by the project-config-worker processor).
+   * Optional hook: the worker as a stream processor. Receives project-root
+   * facts in order, checkpointed by ProjectProcessor. The platform
+   * create-requested trigger is consumed by ProjectProcessor to bootstrap the
+   * project before worker delivery starts.
    */
   processEvent?(input: { event: Event; streamPath: string }): unknown | Promise<unknown>;
 };

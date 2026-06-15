@@ -652,6 +652,12 @@ export interface ItxStream {
     beforeOffset?: number | null;
     limit?: number;
   }): Promise<StreamEvent[]>;
+  waitForEvent(args: {
+    afterOffset?: number;
+    eventTypes?: readonly string[];
+    predicate(event: StreamEvent): boolean | Promise<boolean>;
+    timeoutMs: number;
+  }): Promise<StreamEvent>;
   runtimeState(): Promise<StreamRuntimeState>;
   kill(): Promise<void>;
   reset(): Promise<void>;
