@@ -21,7 +21,13 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { RpcTarget, newWorkersRpcResponse, newWebSocketRpcSession } from "capnweb";
+import {
+  createStreamProcessorHost,
+  type RequestStreamSubscriptionArgs,
+} from "@iterate-com/streams/workers/stream-processor-host";
+import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import { Itx } from "./itx-processor.ts";
+import { ItxContract } from "./itx-contract.ts";
 // Incremental step folders (steps/README.md). Each is mounted under
 // /steps/<id>/* so earlier and half-built steps stay live alongside the rest.
 import * as step01 from "./steps/01-socket/worker.ts";
@@ -139,18 +145,16 @@ interface Env {
 // itself is the real `Stream` Durable Object, dialed by name.
 // ---------------------------------------------------------------------------
 export class ItxDO extends DurableObject<Env> {
-  #itx: Itx;
-
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    this.#itx = new Itx({
-      iterateContext: { stream: this.#log() }, // the durable event log
-      // the fold's checkpoint — a disposable cache, in this DO's own storage:
-      readState: () => this.ctx.storage.kv.get("itx-checkpoint"),
-      writeState: (snapshot) => this.ctx.storage.kv.put("itx-checkpoint", snapshot),
-      keepAliveWhile: (work) => this.ctx.waitUntil(work()),
-    });
-  }
+  // The processor is hosted (not just newed) so the stream can deliver batches
+  // to it: createStreamProcessorHost wires the checkpoint storage + keep-alive,
+  // and on subscription handshake it pumps every appended batch into the
+  // processor's ingest. (Same pattern as apps/os/src/itx/itx-durable-object.ts.)
+  host = createStreamProcessorHost(this.ctx);
+  #itx = this.host.add(
+    ItxContract.slug,
+    (deps) => new Itx({ ...deps, iterateContext: { stream: this.#log() } }),
+  );
+  #subscriptionConfigured = false;
 
   // This context's durable event log is its OWN stream, named by coordinate —
   // a context IS its stream coordinate (Step 11). Re-resolve the stub per call
@@ -165,9 +169,51 @@ export class ItxDO extends DurableObject<Env> {
     };
   }
 
+  // Configure the stream → processor subscription ONCE (idempotent): append a
+  // `subscription-configured` event pointing the stream at THIS DO's
+  // requestStreamSubscription. The Stream DO then dials us and pumps every
+  // appended batch into the processor — automatic delivery, including events
+  // written by anyone else (not just this context's own provides).
+  #ensureSubscriptionConfigured(): void {
+    if (this.#subscriptionConfigured) return;
+    this.#subscriptionConfigured = true;
+    const name = this.ctx.id.name ?? "itx";
+    this.ctx.waitUntil(
+      this.env.STREAM.getByName(this.#coordinate()).append({
+        event: {
+          type: "events.iterate.com/stream/subscription-configured",
+          idempotencyKey: `itx-subscription:${name}`,
+          payload: {
+            subscriptionKey: `itx:${name}`,
+            subscriber: durableObjectProcessorSubscriber({
+              bindingName: "ITX",
+              durableObjectName: name,
+              processorName: ItxContract.slug,
+            }),
+          },
+        },
+      } as any),
+    );
+  }
+
   // A METHOD that returns the processor (workerd can't pipeline through a property).
   itx(): Itx {
+    this.#ensureSubscriptionConfigured();
     return this.#itx;
+  }
+
+  // The Stream DO dials this to start delivering batches to the host's processor.
+  requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
+    this.#ensureSubscriptionConfigured();
+    return this.host.requestStreamSubscription(args);
+  }
+
+  // Step 07 intent: append an event to the stream WITHOUT touching the processor
+  // — an "external writer". The processor must learn of it purely via the
+  // subscription delivery (proving the stream pushes, not just self-ingest).
+  appendToStream(event: unknown): Promise<unknown> {
+    this.#ensureSubscriptionConfigured();
+    return this.env.STREAM.getByName(this.#coordinate()).append({ event });
   }
 
   // Durability proof, server-side: build a FRESH processor and replay the whole
@@ -223,6 +269,11 @@ class WorkerHandle extends RpcTarget {
   }
   freshFold() {
     return this.#node.freshFoldCapabilityNames();
+  }
+  // Step 07: append straight to the durable log (an "external writer"); the
+  // processor should learn of it via the subscription, not via a provide call.
+  appendToStream(event: unknown) {
+    return this.#node.appendToStream(event);
   }
 }
 
