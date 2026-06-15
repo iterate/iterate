@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { Alert, AlertDescription, AlertTitle } from "@iterate-com/ui/components/alert";
 import { Button } from "@iterate-com/ui/components/button";
@@ -16,9 +16,8 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { AlertCircle, Circle, Mail, MessageSquare } from "lucide-react";
 import { z } from "zod";
-import { ItxBoundary, ItxResourceError, ItxResourceLoading } from "~/components/itx-boundary.tsx";
-import { useItx } from "~/itx/use-itx.ts";
-import { useItxResource } from "~/itx/use-itx-resource.ts";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 import type { ItxHandle } from "~/itx/types.ts";
 
 type Connection = Awaited<ReturnType<ItxHandle["integrations"]["getConnection"]>>;
@@ -50,21 +49,20 @@ function ProjectIntegrationsContent() {
   const { project } = Route.useLoaderData();
   const { session } = useAuthClient();
   const userId = session?.authenticated ? session.user.id : null;
-  const itx = useItx(project.id);
-  const {
-    data: connections,
-    status,
-    error,
-    refetch,
-  } = useItxResource(async (): Promise<{ slack: Connection; google: Connection }> => {
-    const [slack, google] = await Promise.all([
-      itx.integrations.getConnection({ provider: "slack" }),
-      itx.integrations.getConnection({ provider: "google" }),
-    ]);
-    return { slack, google };
-  }, [itx]);
-  const slackConnection = connections?.slack;
-  const googleConnection = connections?.google;
+  const itx = useItx();
+  const queryClient = useQueryClient();
+  const connections = useItxQuery({
+    key: ["integrations", project.slug],
+    query: async (itx): Promise<{ slack: Connection; google: Connection }> => {
+      const [slack, google] = await Promise.all([
+        itx.integrations.getConnection({ provider: "slack" }),
+        itx.integrations.getConnection({ provider: "google" }),
+      ]);
+      return { slack, google };
+    },
+  });
+  const slackConnection = connections.slack;
+  const googleConnection = connections.google;
   const oauthErrorLabel = search.error ? formatOAuthError(search.error) : null;
 
   const startSlack = useMutation({
@@ -84,7 +82,7 @@ function ProjectIntegrationsContent() {
   const disconnectSlack = useMutation({
     mutationFn: async () => await itx.integrations.disconnect({ provider: "slack" }),
     onSuccess: async () => {
-      await refetch();
+      await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", project.slug] });
       toast.success("Slack disconnected");
     },
     onError: (error) => toast.error(`Failed to disconnect Slack: ${error.message}`),
@@ -106,27 +104,11 @@ function ProjectIntegrationsContent() {
   const disconnectGoogle = useMutation({
     mutationFn: async () => await itx.integrations.disconnect({ provider: "google" }),
     onSuccess: async () => {
-      await refetch();
+      await queryClient.invalidateQueries({ queryKey: ["itx", "integrations", project.slug] });
       toast.success("Google disconnected");
     },
     onError: (error) => toast.error(`Failed to disconnect Google: ${error.message}`),
   });
-
-  if (status === "error") {
-    return (
-      <section className="max-w-md space-y-4 p-4">
-        <ItxResourceError label="integrations" error={error} onRetry={() => void refetch()} />
-      </section>
-    );
-  }
-
-  if (status === "loading") {
-    return (
-      <section className="max-w-md space-y-4 p-4">
-        <ItxResourceLoading label="integrations" />
-      </section>
-    );
-  }
 
   return (
     <section className="max-w-md space-y-4 p-4">

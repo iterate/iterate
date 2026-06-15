@@ -2,7 +2,7 @@ import { Suspense, useMemo } from "react";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
-import { useItx } from "~/itx/use-itx.ts";
+import { useItx } from "~/itx/itx-react.tsx";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 
@@ -49,7 +49,7 @@ function ProjectStreamDetailContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
   const { project, streamPath } = Route.useLoaderData();
-  const itx = useItx(project.id);
+  const itx = useItx();
   const source = useMemo(() => (path: StreamPathType) => itx.streams.get(path), [itx]);
 
   async function submitMessage(message: string) {

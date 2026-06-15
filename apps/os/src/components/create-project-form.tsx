@@ -20,7 +20,7 @@ import {
 } from "@iterate-com/ui/components/select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
-import { getBrowserItx, reconnectBrowserItx } from "~/itx/use-itx.ts";
+import { connectItx, reconnectItx } from "~/itx/itx-react.tsx";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -39,7 +39,7 @@ export function CreateProjectForm() {
   const organizations = session?.authenticated ? session.session.organizations : [];
   const createProject = useMutation({
     mutationFn: async (input: { slug: string; organizationSlug: string }) => {
-      const itx = await getBrowserItx();
+      const itx = await connectItx();
       return await itx.projects.create({
         slug: input.slug,
         organizationSlug: input.organizationSlug || undefined,
@@ -52,7 +52,7 @@ export function CreateProjectForm() {
       await refresh({ force: true });
       // Drop the global itx socket so it re-dials with the refreshed claims —
       // otherwise itx.projects.list (connect-time principal) omits this project.
-      reconnectBrowserItx();
+      reconnectItx();
       await router.invalidate({ sync: true });
       await router.navigate({
         to: "/projects/$projectSlug",

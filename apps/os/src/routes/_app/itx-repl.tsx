@@ -3,12 +3,12 @@
 // do here you can do from Node, a worker cap, or the config worker — and the
 // browser can PROVIDE live capabilities too (see the examples).
 //
-// The REPL rides the ONE browser itx primitive — useItx / the pool
-// (~/itx/use-itx.ts). It does NOT open its own socket: the global repl shares
-// the tab's global socket, the project repl shares that project's socket, and
-// neither owns the connection. ConnectedItxRepl is the single connect wrapper
-// both routes use. See the use-itx.ts header for the single-socket-per-context
-// model and the disposal contract.
+// The REPL rides the ONE browser itx primitive — useItx (~/itx/itx-react.tsx).
+// It does NOT open its own socket: the global repl shares the tab's global
+// socket, the project repl shares that project's socket, and neither owns the
+// connection. ConnectedItxRepl is the single connect wrapper both routes use.
+// See the itx-react.tsx header for the single-socket-per-context model and the
+// disposal contract.
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { ClientOnly, createFileRoute } from "@tanstack/react-router";
@@ -21,7 +21,7 @@ import {
 } from "~/itx/browser-repl.ts";
 import { ITX_EXAMPLES } from "~/itx/examples.ts";
 import type { ItxHandle } from "~/itx/handle.ts";
-import { useItx } from "~/itx/use-itx.ts";
+import { useItx } from "~/itx/itx-react.tsx";
 import { ItxRepl } from "~/components/itx-repl.tsx";
 
 export const Route = createFileRoute("/_app/itx-repl")({
@@ -81,7 +81,7 @@ function ItxReplConnected({
   initialCode?: string;
   scope?: Record<string, unknown>;
 }) {
-  const itx = useItx(poolContext);
+  const itx = useItx({ projectId: poolContext });
   return <ItxReplPage itx={itx} context={context} initialCode={initialCode} scope={scope} />;
 }
 

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
@@ -23,13 +23,12 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import { ItxBoundary, ItxResourceError, ItxResourceLoading } from "~/components/itx-boundary.tsx";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { repoArtifactName } from "~/domains/repos/repo-artifact-name.ts";
 import { buildArtifactViewerUrl } from "~/lib/artifact-viewer-url.ts";
 import { formatRelativeTime } from "~/lib/format-relative-time.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { useItx } from "~/itx/use-itx.ts";
-import { useItxResource } from "~/itx/use-itx-resource.ts";
+import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 const CreateRepoForm = z.object({
   slug: z
@@ -73,20 +72,22 @@ function ProjectReposIndexContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
   const { project, routeConfig } = Route.useLoaderData();
-  const itx = useItx(project.id);
+  const itx = useItx();
+  const queryClient = useQueryClient();
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<{ key: SortKey; direction: SortDirection }>({
     key: "lastWokenAt",
     direction: "desc",
   });
-  const { data: reposList, status, error, refetch } = useItxResource(() => itx.repos.list(), [itx]);
+  const reposKey = ["repos", project.slug];
+  const reposList = useItxQuery({ key: reposKey, query: (itx) => itx.repos.list() });
   const createRepo = useMutation({
     mutationFn: async (input: { slug: string }) => {
       await itx.repos.create({ projectSlug: params.projectSlug, slug: input.slug });
       return input.slug;
     },
     onSuccess: async (slug) => {
-      await refetch();
+      await queryClient.invalidateQueries({ queryKey: ["itx", ...reposKey] });
       form.reset();
       void navigate({
         to: "/projects/$projectSlug/repos/$repoSlug",
@@ -112,7 +113,7 @@ function ProjectReposIndexContent() {
     },
   });
 
-  const repos = useMemo(() => reposList ?? [], [reposList]);
+  const repos = reposList;
   const visibleRepos = useMemo(() => {
     const query = filter.trim().toLowerCase();
     return repos
@@ -196,11 +197,7 @@ function ProjectReposIndexContent() {
         </Button>
       </div>
 
-      {status === "error" ? (
-        <ItxResourceError label="repos" error={error} onRetry={() => void refetch()} />
-      ) : status === "loading" ? (
-        <ItxResourceLoading label="repos" />
-      ) : status === "ready" && repos.length === 0 ? (
+      {repos.length === 0 ? (
         <Empty className="rounded-lg border">
           <EmptyHeader>
             <EmptyTitle>No Repos</EmptyTitle>

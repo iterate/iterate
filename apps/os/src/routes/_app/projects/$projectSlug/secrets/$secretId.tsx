@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
 import { z } from "zod";
 import { Button } from "@iterate-com/ui/components/button";
@@ -15,10 +15,9 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { Textarea } from "@iterate-com/ui/components/textarea";
-import { ItxBoundary, ItxResourceError } from "~/components/itx-boundary.tsx";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { parseMetadataJson } from "~/domains/secrets/metadata-json.ts";
-import { useItx } from "~/itx/use-itx.ts";
-import { useItxResource } from "~/itx/use-itx-resource.ts";
+import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 
 const UpdateSecretForm = z.object({
   material: z.string().min(1, "Secret material is required"),
@@ -46,15 +45,15 @@ function ProjectSecretDetailContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
   const { project } = Route.useLoaderData();
-  const itx = useItx(project.id);
-  const {
-    data: secrets,
-    status,
-    error,
-    refetch,
-  } = useItxResource(() => itx.secrets.listSecrets(), [itx]);
+  const itx = useItx();
+  const queryClient = useQueryClient();
+  const secretsKey = ["secrets", project.slug];
+  const secrets = useItxQuery({
+    key: secretsKey,
+    query: (itx) => itx.secrets.listSecrets(),
+  });
   const secret = useMemo(
-    () => secrets?.find((row) => row.id === params.secretId) ?? null,
+    () => secrets.find((row) => row.id === params.secretId) ?? null,
     [secrets, params.secretId],
   );
 
@@ -74,7 +73,7 @@ function ProjectSecretDetailContent() {
       return await itx.secrets.setSecret(input);
     },
     onSuccess: async () => {
-      await refetch();
+      await queryClient.invalidateQueries({ queryKey: ["itx", ...secretsKey] });
       form.reset();
       toast.success("Secret updated");
     },
@@ -116,18 +115,6 @@ function ProjectSecretDetailContent() {
       });
     },
   });
-
-  if (status === "error") {
-    return (
-      <div className="m-4">
-        <ItxResourceError label="secret" error={error} onRetry={() => void refetch()} />
-      </div>
-    );
-  }
-
-  if (status === "loading") {
-    return <div className="p-4 text-sm text-muted-foreground">Loading secret...</div>;
-  }
 
   if (!secret) {
     return (

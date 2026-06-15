@@ -1,14 +1,13 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { ItxBoundary, ItxResourceError, ItxResourceLoading } from "~/components/itx-boundary.tsx";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { useItx } from "~/itx/use-itx.ts";
-import { useItxResource } from "~/itx/use-itx-resource.ts";
+import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 import type { ItxProjects } from "~/itx/handle.ts";
 
 type ProjectSummary = Awaited<ReturnType<ItxProjects["list"]>>["projects"][number];
@@ -43,22 +42,22 @@ function ProjectsIndexPage() {
 function ProjectsIndexContent() {
   const { routeConfig } = Route.useLoaderData();
   const itx = useItx();
+  const queryClient = useQueryClient();
   // Orphan recovery deferred — itx.projects.list returns OS-DB projects only and
   // intentionally does NOT merge auth-service orphans yet; see follow-up.
-  const {
-    data: list,
-    status,
-    error,
-    refetch,
-  } = useItxResource(() => itx.projects.list({ limit: 20, offset: 0 }), [itx]);
-  const projects: ProjectSummary[] = list?.projects ?? [];
+  const projectsKey = ["projects"];
+  const list = useItxQuery({
+    key: projectsKey,
+    query: (itx) => itx.projects.list({ limit: 20, offset: 0 }),
+  });
+  const projects: ProjectSummary[] = list.projects ?? [];
 
   const deleteProject = useMutation({
     mutationFn: async (input: { id: string }) => {
       return await itx.projects.remove(input);
     },
     onSuccess: async () => {
-      await refetch();
+      await queryClient.invalidateQueries({ queryKey: ["itx", ...projectsKey] });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
   });
@@ -79,11 +78,7 @@ function ProjectsIndexContent() {
         ) : null}
       </div>
 
-      {status === "error" ? (
-        <ItxResourceError label="projects" error={error} onRetry={() => void refetch()} />
-      ) : status === "loading" ? (
-        <ItxResourceLoading label="projects" />
-      ) : !hasProjects ? (
+      {!hasProjects ? (
         <div className="rounded-xl border border-dashed bg-card/60 px-6 py-14 text-center">
           <div className="mx-auto flex max-w-md flex-col items-center gap-4">
             <div className="flex size-12 items-center justify-center rounded-full bg-muted">

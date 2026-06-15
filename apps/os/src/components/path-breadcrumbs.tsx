@@ -15,7 +15,7 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { getBrowserItx } from "~/itx/use-itx.ts";
+import { connectItx } from "~/itx/itx-react.tsx";
 import type {
   RouteBreadcrumbLoaderData,
   RouteBreadcrumbStaticData,
@@ -136,19 +136,24 @@ export function PathBreadcrumbs() {
 
 /**
  * The child paths of one stream, fetched into local state while `enabled`
- * (popover open). One getState round trip over the project's itx socket
- * (getBrowserItx) per open — no query cache, no subscription; the popover is
- * short-lived and reopening refetches. These components only mount on stream
- * pages (streamBreadcrumb loaderData), which are `ssr: false` routes, so the
- * browser-only itx hook contract holds.
+ * (popover open). One getState round trip over the project's itx socket per
+ * open — no query cache, no subscription; the popover is short-lived and
+ * reopening refetches. PathBreadcrumbs renders in the GLOBAL app chrome
+ * (`_app.tsx`), NOT under the project provider, and itx here is deliberately
+ * OPTIONAL: a slow or down socket may only degrade this navigator, never
+ * suspend or blank the chrome. So we dial LAZILY and non-suspending via
+ * `connectItx` inside the effect (gated by `enabled`) rather than the
+ * suspending `useItx` hook — addressing the project by SLUG so we share the
+ * same pooled socket the project page already warmed (the provider keys on
+ * slug), instead of opening a second socket for the same project.
  */
 function useStreamChildPaths(input: {
   enabled: boolean;
-  projectId: string;
+  projectSlug: string;
   streamPath: StreamPathType;
 }): StreamPathType[] | undefined {
   const [childPaths, setChildPaths] = useState<StreamPathType[]>();
-  const { enabled, projectId, streamPath } = input;
+  const { enabled, projectSlug, streamPath } = input;
 
   useEffect(() => {
     // Reset on every input change INCLUDING close: a reopened popover (or a
@@ -157,7 +162,7 @@ function useStreamChildPaths(input: {
     setChildPaths(undefined);
     if (!enabled) return;
     let cancelled = false;
-    void getBrowserItx(projectId)
+    void connectItx({ projectId: projectSlug })
       .then(async (itx) => await itx.streams.get(streamPath).getState())
       .then((state) => {
         if (!cancelled) setChildPaths([...StreamState.parse(state).childPaths]);
@@ -169,7 +174,7 @@ function useStreamChildPaths(input: {
     return () => {
       cancelled = true;
     };
-  }, [enabled, projectId, streamPath]);
+  }, [enabled, projectSlug, streamPath]);
 
   return childPaths;
 }
@@ -222,7 +227,7 @@ function StreamSegmentNavigator({
   const parentPath = streamPathParent(segmentPath);
   const fetchedSiblings = useStreamChildPaths({
     enabled: open,
-    projectId: streamBreadcrumb.projectId,
+    projectSlug: streamBreadcrumb.projectSlug,
     streamPath: parentPath,
   });
   const siblingPaths = useMemo(() => {
@@ -284,7 +289,7 @@ function StreamChildrenBreadcrumb({
   const [newChildSegment, setNewChildSegment] = useState("");
   const fetchedChildren = useStreamChildPaths({
     enabled: open,
-    projectId: streamBreadcrumb.projectId,
+    projectSlug: streamBreadcrumb.projectSlug,
     streamPath: streamBreadcrumb.streamPath,
   });
   const children = useMemo(

@@ -11,7 +11,6 @@ import { Button } from "@iterate-com/ui/components/button";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { releaseItxSubscription } from "~/itx/use-itx.ts";
 
 /**
  * Where tree nodes get their state: path → stream handle. Project pages pass
@@ -21,9 +20,17 @@ import { releaseItxSubscription } from "~/itx/use-itx.ts";
  * current state, later pushes follow every append), so the tree is LIVE — no
  * query cache, plain component state.
  */
+type StreamSubscription = { unsubscribe(): unknown };
+
 export type StreamTreeSource = (streamPath: StreamPathType) => {
-  onStateChange(onState: (state: StreamStateType) => void): Promise<{ unsubscribe(): unknown }>;
+  onStateChange(onState: (state: StreamStateType) => void): Promise<StreamSubscription>;
 };
+
+/** Tear down one live stream subscription (best-effort unsubscribe + dispose). */
+function disposeStreamSubscription(subscription: StreamSubscription): void {
+  void Promise.resolve(subscription.unsubscribe()).catch(() => {});
+  (subscription as Partial<Disposable>)[Symbol.dispose]?.();
+}
 
 type NodeState =
   | { status: "loading" }
@@ -58,8 +65,8 @@ function useLiveStreamState(input: {
         setNode({ status: "live", state: StreamState.parse(next) });
       })
       .then((subscription) => {
-        if (disposed) releaseItxSubscription(subscription);
-        else release = () => releaseItxSubscription(subscription);
+        if (disposed) disposeStreamSubscription(subscription);
+        else release = () => disposeStreamSubscription(subscription);
       })
       .catch((error: unknown) => {
         if (disposed) return;

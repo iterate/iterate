@@ -5,7 +5,7 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { buttonVariants } from "@iterate-com/ui/components/button";
 import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
-import { useItx } from "~/itx/use-itx.ts";
+import { useItx } from "~/itx/itx-react.tsx";
 
 const AGENTS_ROOT = StreamPath.parse("/agents");
 
@@ -32,8 +32,7 @@ function ProjectAgentsIndexPage() {
 function ProjectAgentsIndexContent() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const { project } = Route.useLoaderData();
-  const itx = useItx(project.id);
+  const itx = useItx();
   const source = useMemo(() => (streamPath: StreamPathType) => itx.streams.get(streamPath), [itx]);
 
   function openPath(streamPath: StreamPathType) {

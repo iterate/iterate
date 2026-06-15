@@ -14,7 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@iterate-com/ui/components/table";
-import { useItx } from "~/itx/use-itx.ts";
+import { useItx } from "~/itx/itx-react.tsx";
 
 const PAGE_SIZE = 100;
 

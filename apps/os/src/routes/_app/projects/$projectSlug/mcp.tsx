@@ -6,7 +6,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { buildProjectMcpUrl } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
-import { useItx } from "~/itx/use-itx.ts";
+import { useItx } from "~/itx/itx-react.tsx";
 
 // Inbound MCP sessions live under this stream root (project-mcp-server-connection.ts
 // names each session `/mcp-server-sessions/<slug>`).
@@ -134,8 +134,7 @@ function ProjectMcpPage() {
 function McpSessionsExplorer() {
   const params = Route.useParams();
   const navigate = useNavigate();
-  const { project } = Route.useLoaderData();
-  const itx = useItx(project.id);
+  const itx = useItx();
   const source = useMemo(() => (streamPath: StreamPathType) => itx.streams.get(streamPath), [itx]);
 
   function openStream(streamPath: StreamPathType) {

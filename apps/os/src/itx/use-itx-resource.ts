@@ -21,7 +21,13 @@ export type ItxResource<T> = {
   refetch: () => Promise<void>;
 };
 
-export function useItxResource<T>(load: () => Promise<T>, deps: unknown[]): ItxResource<T> {
+export function useItxResource<T>({
+  load,
+  deps,
+}: {
+  load: () => Promise<T>;
+  deps: unknown[];
+}): ItxResource<T> {
   const loadRef = useRef(load);
   loadRef.current = load;
   // The last error message we toasted, so a refetch/poll that keeps failing

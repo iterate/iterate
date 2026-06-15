@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
 import type { Project } from "@iterate-com/os-contract";
 import { Button } from "@iterate-com/ui/components/button";
@@ -10,8 +10,7 @@ import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 import { getPublicRouteConfig, type PublicRouteConfig } from "~/lib/public-route-config.ts";
-import { useItx } from "~/itx/use-itx.ts";
-import { useItxResource } from "~/itx/use-itx-resource.ts";
+import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
 import type { ItxProjects } from "~/itx/handle.ts";
 
 type CustomHostnameStatus = Awaited<ReturnType<ItxProjects["customHostnameStatus"]>>;
@@ -44,8 +43,9 @@ function ProjectDetailContent({
   routeConfig: PublicRouteConfig;
 }) {
   const router = useRouter();
-  // Hostname operations live on the GLOBAL itx handle's `projects` surface.
-  const itx = useItx();
+  // Hostname/projects ops live on the GLOBAL itx handle — force it past the project provider.
+  const itx = useItx({});
+  const queryClient = useQueryClient();
   const [customHostname, setCustomHostname] = useState(project.customHostname ?? "");
   const [hostnameToActivate, setHostnameToActivate] = useState("");
   const dnsInstructions = customHostnameDnsInstructions({
@@ -54,19 +54,16 @@ function ProjectDetailContent({
     projectHostnameBases: routeConfig.projectHostnameBases,
   });
 
-  const {
-    data: hostnameStatus,
-    status: resourceStatus,
-    refetch: refreshStatus,
-  } = useItxResource<CustomHostnameStatus | undefined>(
-    () =>
+  const hostnameStatusKey = ["customHostnameStatus", project.slug];
+  const hostnameStatus = useItxQuery<CustomHostnameStatus | undefined>({
+    key: hostnameStatusKey,
+    query: (itx) =>
       project.customHostname
         ? itx.projects.customHostnameStatus({ id: project.id })
         : Promise.resolve(undefined),
-    [itx, project.id, project.customHostname],
-  );
-  // Still resolving the FIRST status for a configured custom hostname.
-  const statusPending = Boolean(project.customHostname) && resourceStatus === "loading";
+  });
+  const refreshStatus = () =>
+    queryClient.invalidateQueries({ queryKey: ["itx", ...hostnameStatusKey] });
 
   // Poll every 5s while any certificate is not yet active; stop once all are
   // (or there is no custom hostname to watch). `data` is a real dep, so the
@@ -78,7 +75,8 @@ function ProjectDetailContent({
     if (!project.customHostname || allCertsActive) return;
     const timer = setInterval(() => void refreshStatus(), 5_000);
     return () => clearInterval(timer);
-  }, [project.customHostname, allCertsActive, refreshStatus]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refreshStatus is a stable invalidate call; re-running only on the stop-condition inputs is intentional
+  }, [project.customHostname, allCertsActive]);
 
   const updateConfig = useMutation({
     mutationFn: async (input: { id: string; customHostname: string | null }) => {
@@ -153,7 +151,7 @@ function ProjectDetailContent({
           <CustomHostnameDnsInstructions instructions={dnsInstructions} />
           {project.customHostname ? (
             <div className="space-y-2">
-              <CustomHostnameCloudflareStatus status={hostnameStatus} isPending={statusPending} />
+              <CustomHostnameCloudflareStatus status={hostnameStatus} isPending={false} />
               <div className="flex gap-2">
                 <Input
                   placeholder={`app1.${project.customHostname}`}

@@ -14,7 +14,7 @@ import {
   presetConfiguredEvent,
 } from "~/domains/agents/agent-presets.ts";
 import { AGENTS_STREAM_PATH } from "~/domains/agents/agent-stream-subscriptions.ts";
-import { useItx } from "~/itx/use-itx.ts";
+import { useItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new-preset")({
   ssr: false,
@@ -42,9 +42,8 @@ function NewAgentPresetPage() {
 
 function NewAgentPresetContent() {
   const params = Route.useParams();
-  const { project } = Route.useLoaderData();
   const navigate = useNavigate();
-  const itx = useItx(project.id);
+  const itx = useItx();
 
   const savePreset = useMutation({
     mutationFn: async (input: { preview: PresetPreview; values: AgentSetupFormValues }) => {

@@ -34,7 +34,7 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@iterate-com/ui/components/sidebar";
-import { reconnectBrowserItx, useItx } from "~/itx/use-itx.ts";
+import { reconnectItx, useItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/admin")({
   component: AdminLayout,
@@ -91,11 +91,11 @@ type AdminAuthority =
   | { status: "ready" };
 
 function AdminGate() {
-  // The admin handle is the global pooled itx socket — the SAME connection the
-  // rest of the tab uses (one browser itx primitive, one /api/itx route; see
-  // ~/itx/use-itx.ts). Its global authority comes from the admin cookie on the
-  // WebSocket handshake, so unlock re-dials the pooled socket
-  // (reconnectBrowserItx) and useItx re-suspends here, re-running the probe — no
+  // The admin handle is the global itx socket — the SAME connection the rest of
+  // the tab uses (one browser itx primitive, one /api/itx route; see
+  // ~/itx/itx-react.tsx). Its global authority comes from the admin cookie on the
+  // WebSocket handshake, so unlock re-dials the socket
+  // (reconnectItx) and useItx re-suspends here, re-running the probe — no
   // epoch, no private socket, no manual connect lifecycle.
   const itx = useItx();
   const [authority, setAuthority] = useState<AdminAuthority>({ status: "checking" });
@@ -132,7 +132,7 @@ function AdminGate() {
     // Unlock set the admin cookie; evict the pooled socket so useItx re-dials a
     // handshake that carries it (and re-runs this probe). The pool owns the
     // socket — we never close it here.
-    return <AdminUnlockForm reason={authority.reason} onUnlocked={() => reconnectBrowserItx()} />;
+    return <AdminUnlockForm reason={authority.reason} onUnlocked={() => reconnectItx()} />;
   }
   // Children just call useItx() for the same global pooled handle — no admin
   // context to thread, and they only render here, under the authorized gate.

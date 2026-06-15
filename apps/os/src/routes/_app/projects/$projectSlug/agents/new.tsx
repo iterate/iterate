@@ -15,7 +15,7 @@ import {
   defaultAgentProcessorSlugs,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { agentPathFromInput } from "~/lib/agent-links.ts";
-import { useItx } from "~/itx/use-itx.ts";
+import { useItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
   ssr: false,
@@ -40,7 +40,7 @@ function NewAgentContent() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const navigate = useNavigate();
-  const itx = useItx(project.id);
+  const itx = useItx();
 
   const createAgent = useMutation({
     mutationFn: async (preview: NewAgentPreview) => {

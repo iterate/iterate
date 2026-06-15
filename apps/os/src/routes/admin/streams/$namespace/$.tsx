@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
-import { useItx } from "~/itx/use-itx.ts";
+import { useItx } from "~/itx/itx-react.tsx";
 import { adminStreamRpcPath } from "~/lib/stream-rpc-paths.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 

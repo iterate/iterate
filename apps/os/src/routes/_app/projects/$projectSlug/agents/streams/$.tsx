@@ -2,7 +2,7 @@ import { Suspense, useMemo } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { getBrowserItx } from "~/itx/use-itx.ts";
+import { connectItx } from "~/itx/itx-react.tsx";
 import type { StreamTreeSource } from "~/components/stream-tree-browser.tsx";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
@@ -52,17 +52,18 @@ function ProjectAgentDetailContent() {
   const navigate = useNavigate();
   const { project, streamPath } = Route.useLoaderData();
   // itx backs ONLY the ⌘K stream tree, and is dialed lazily when the tree
-  // subscribes (not via the suspending useItx) so itx being slow or down
-  // degrades just the navigator, never the feed. getBrowserItx shares the
-  // same pooled socket useItx would.
+  // subscribes (via connectItx, NOT the suspending useItx hook) so itx being
+  // slow or down degrades just the navigator, never the feed. Keying on
+  // the slug lands on the SAME pooled socket the project provider already
+  // warmed, instead of opening a second one.
   const source = useMemo<StreamTreeSource>(
     () => (path: StreamPathType) => ({
       async onStateChange(onState) {
-        const itx = await getBrowserItx(project.id);
+        const itx = await connectItx({ projectId: params.projectSlug });
         return itx.streams.get(path).onStateChange(onState);
       },
     }),
-    [project.id],
+    [params.projectSlug],
   );
   // The stream view subscribes live, so a send needs no cache invalidation —
   // the new events arrive over the socket. agents.sendMessage routes through
@@ -70,7 +71,7 @@ function ProjectAgentDetailContent() {
   // (ensureStartedAndCaughtUp) so cold/legacy agents respond, not just freshly
   // created ones.
   async function submitAgentMessage(message: string) {
-    const itx = await getBrowserItx(project.id);
+    const itx = await connectItx({ projectId: params.projectSlug });
     await itx.agents.sendMessage({ agentPath: streamPath, message, channel: "web" });
   }
 
