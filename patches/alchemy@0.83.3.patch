@@ -1,5 +1,20 @@
+diff --git a/lib/cloudflare/api.js b/lib/cloudflare/api.js
+index a5efe2bc3d3c348bebe4f41716cc5fad0ebd9f4e..3e246e3dc17adcec4c74b5bce239ab7fe0c2a46f 100644
+--- a/lib/cloudflare/api.js
++++ b/lib/cloudflare/api.js
+@@ -119,6 +119,10 @@ export class CloudflareApi {
+         else if (init.headers) {
+             headers = init.headers;
+         }
++        // Node 26 + undici Agent can expose gzip response bytes without the
++        // content-encoding header, which makes response.json() parse gzip data.
++        if (!Object.keys(headers).some((key) => key.toLowerCase() === "accept-encoding"))
++            headers["accept-encoding"] = "identity";
+         headers = {
+             ...(await CloudflareAuth.formatHeadersWithRefresh({
+                 profile: this.profile,
 diff --git a/lib/cloudflare/bindings.d.ts b/lib/cloudflare/bindings.d.ts
-index 202181c..4e779fe 100644
+index 202181cef7ab4088dbb3067bebdf6fd1f7a82b05..4e779fe056d3bd65aa94a0974009fcfa48faf059 100644
 --- a/lib/cloudflare/bindings.d.ts
 +++ b/lib/cloudflare/bindings.d.ts
 @@ -42,10 +42,14 @@ export declare namespace Bindings {
@@ -35,18 +50,38 @@ index 202181c..4e779fe 100644
  /**
   * AI binding type
   */
-@@ -414,4 +426,4 @@ export interface WorkerBindingWorkerLoader {
-     /** Type identifier for Worker Loader binding */
-     type: "worker_loader";
- }
--//# sourceMappingURL=bindings.d.ts.map
-\ No newline at end of file
-+//# sourceMappingURL=bindings.d.ts.map
+diff --git a/lib/cloudflare/miniflare/build-worker-options.js b/lib/cloudflare/miniflare/build-worker-options.js
+index be105c388e307286e3675784ba5a4406ae02c7fe..a555191ad5decc2c4513f6f361b7cce6174aae3e 100644
+--- a/lib/cloudflare/miniflare/build-worker-options.js
++++ b/lib/cloudflare/miniflare/build-worker-options.js
+@@ -124,11 +124,16 @@ export const buildWorkerOptions = async (input) => {
+                 };
+                 // This matches Wrangler configuration for exposing durable objects as an entrypoint.
+                 // See https://github.com/cloudflare/workers-sdk/blob/ae0c806087c203da6a3d7da450e8fabe0d81c987/packages/wrangler/src/dev/miniflare/index.ts#L1266
+-                options.unsafeDirectSockets.push({
+-                    entrypoint: binding.className,
+-                    serviceName: binding.scriptName,
+-                    proxy: true,
+-                });
++                // Wrangler only exposes a worker's OWN durable object classes this way
++                // (cross-script bindings resolve through the dev registry proxy). Pushing a
++                // direct socket for a cross-script binding points workerd at a service that
++                // may not exist in this Miniflare instance and fails config assembly.
++                if (binding.scriptName == null || binding.scriptName === input.name) {
++                    options.unsafeDirectSockets.push({
++                        entrypoint: binding.className,
++                        proxy: true,
++                    });
++                }
+                 break;
+             }
+             case "hyperdrive": {
 diff --git a/lib/cloudflare/worker-metadata.js b/lib/cloudflare/worker-metadata.js
-index d521d20..e1ff04d 100644
+index d521d2027b397c0f1191932f56e103133ab74865..4b9ca968dfbc363d590bdd4107a99933d9015f92 100644
 --- a/lib/cloudflare/worker-metadata.js
 +++ b/lib/cloudflare/worker-metadata.js
-@@ -90,5 +90,20 @@ export async function prepareWorkerMetadata(api, props) {
+@@ -91,6 +91,21 @@ export async function prepareWorkerMetadata(api, props) {
+         return [];
      });
      const observability = camelToSnakeObjectDeep(props.observability);
 +    const durableObjectBindingTags = Object.entries(props.bindings ?? {}).flatMap(([bindingName, binding]) => isDurableObjectNamespace(binding) || isContainer(binding)
@@ -67,7 +102,7 @@ index d521d20..e1ff04d 100644
      // Prepare metadata with bindings
      const meta = {
          compatibility_date: props.compatibilityDate,
-@@ -102,15 +117,7 @@ export async function prepareWorkerMetadata(api, props) {
+@@ -104,15 +119,7 @@ export async function prepareWorkerMetadata(api, props) {
          logpush: props.logpush ?? false,
          // TODO(sam): base64 encode instead? 0 collision risk vs readability.
          tags: [
@@ -84,7 +119,7 @@ index d521d20..e1ff04d 100644
          ],
          migrations: {
              old_tag: oldMigrationTag,
-@@ -330,6 +330,13 @@ export async function prepareWorkerMetadata(api, props) {
+@@ -330,6 +337,13 @@ export async function prepareWorkerMetadata(api, props) {
                  name: bindingName,
              });
          }
@@ -98,30 +133,29 @@ index d521d20..e1ff04d 100644
          else if (binding.type === "version_metadata") {
              meta.bindings.push({
                  type: "version_metadata",
-@@ -469,4 +476,4 @@ export async function getWorkerSettings(api, workerName) {
-         throw error;
-     });
- }
--//# sourceMappingURL=worker-metadata.js.map
-\ No newline at end of file
-+//# sourceMappingURL=worker-metadata.js.map
-diff --git a/lib/cloudflare/api.js b/lib/cloudflare/api.js
-index 3c8efda..7cc64ec 100644
---- a/lib/cloudflare/api.js
-+++ b/lib/cloudflare/api.js
-@@ -102,6 +102,10 @@ export class CloudflareApi {
-         else if (init.headers) {
-             headers = init.headers;
+diff --git a/lib/cloudflare/worker.js b/lib/cloudflare/worker.js
+index 7912452941df70a2c9dc30299ca8bdc721403aea..da9bc9f78c0ac1906fb947f52ff5bed9beeab848 100644
+--- a/lib/cloudflare/worker.js
++++ b/lib/cloudflare/worker.js
+@@ -263,15 +263,7 @@ const _Worker = Resource("cloudflare::Worker", {
+         const oldName = this.output.name ?? this.output.id;
+         const newName = options.name;
+         if (oldName && oldName !== newName) {
+-            if (options.dispatchNamespace) {
+-                this.replace(true);
+-            }
+-            else {
+-                const renameResponse = await api.patch(`/accounts/${api.accountId}/workers/services/${oldName}`, { id: newName });
+-                if (!renameResponse.ok) {
+-                    await handleApiError(renameResponse, "rename", "worker", oldName);
+-                }
+-            }
++            this.replace(true);
          }
-+        // Node 26 + undici Agent can expose gzip response bytes without the
-+        // content-encoding header, which makes response.json() parse gzip data.
-+        if (!Object.keys(headers).some((key) => key.toLowerCase() === "accept-encoding"))
-+            headers["accept-encoding"] = "identity";
-         headers = {
-             ...(await CloudflareAuth.formatHeadersWithRefresh({
-                 profile: this.profile,
+     }
+     const assets = options.assets
 diff --git a/lib/cloudflare/wrangler.json.js b/lib/cloudflare/wrangler.json.js
-index 43dfd76..ea4821b 100644
+index 43dfd76f5968da5ee49ac4396c3c4d240de13024..ea4821bf3f5aef50ed93e594b5203e2c5274ae92 100644
 --- a/lib/cloudflare/wrangler.json.js
 +++ b/lib/cloudflare/wrangler.json.js
 @@ -138,6 +138,7 @@ async function processBindings(spec, bindings, eventSources, workerName, workerC
@@ -154,31 +188,4 @@ index 43dfd76..ea4821b 100644
 +        spec.artifacts = artifacts;
 +    }
  }
--//# sourceMappingURL=wrangler.json.js.map
-\ No newline at end of file
-+//# sourceMappingURL=wrangler.json.js.map
-diff --git a/lib/cloudflare/miniflare/build-worker-options.js b/lib/cloudflare/miniflare/build-worker-options.js
---- a/lib/cloudflare/miniflare/build-worker-options.js
-+++ b/lib/cloudflare/miniflare/build-worker-options.js
-@@ -124,11 +124,16 @@
-                 };
-                 // This matches Wrangler configuration for exposing durable objects as an entrypoint.
-                 // See https://github.com/cloudflare/workers-sdk/blob/ae0c806087c203da6a3d7da450e8fabe0d81c987/packages/wrangler/src/dev/miniflare/index.ts#L1266
--                options.unsafeDirectSockets.push({
--                    entrypoint: binding.className,
--                    serviceName: binding.scriptName,
--                    proxy: true,
--                });
-+                // Wrangler only exposes a worker's OWN durable object classes this way
-+                // (cross-script bindings resolve through the dev registry proxy). Pushing a
-+                // direct socket for a cross-script binding points workerd at a service that
-+                // may not exist in this Miniflare instance and fails config assembly.
-+                if (binding.scriptName == null || binding.scriptName === input.name) {
-+                    options.unsafeDirectSockets.push({
-+                        entrypoint: binding.className,
-+                        proxy: true,
-+                    });
-+                }
-                 break;
-             }
-             case "hyperdrive": {
+ //# sourceMappingURL=wrangler.json.js.map
