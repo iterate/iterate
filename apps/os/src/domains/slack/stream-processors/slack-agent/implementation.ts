@@ -10,9 +10,9 @@
 //   legacy ordering by sharing one blocking closure.
 // - Pure follow-up appends carry idempotency keys derived from the source
 //   event and run through `runInBackground`.
-// - The old `firstAttachAfterAppend` 60s lookback is replaced by the base
-//   class's `sideEffectsAfterOffset` anchor, set by the host to the
-//   subscription-configured offset.
+// - Replay runs the same idempotency-keyed side effects as live delivery. The
+//   processor checkpoint is the guardrail; failed batches replay from the last
+//   fully processed offset.
 
 import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";

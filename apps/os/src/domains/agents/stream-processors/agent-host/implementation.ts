@@ -5,7 +5,6 @@
 // since the DO constructs this processor in a class field initializer.
 
 import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
-import { StreamPath as StreamPathSchema } from "@iterate-com/shared/streams/types";
 import type { StreamEventInput } from "@iterate-com/streams/shared/event";
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import { AgentHostProcessorContract } from "./contract.ts";
@@ -21,11 +20,6 @@ import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-
 export { AGENT_HOST_PROCESSOR_SLUG, AgentHostProcessorContract } from "./contract.ts";
 
 export type AgentHostProcessorContract = typeof AgentHostProcessorContract;
-
-// Core lifecycle event type emitted by the @iterate-com/streams runtime. Uses the
-// `events.iterate.com/stream/` prefix (NOT the legacy `@iterate-com/shared/streams` `/core/`
-// prefix, which never matches new-runtime events).
-const STREAM_CHILD_STREAM_CREATED_TYPE = "events.iterate.com/stream/child-stream-created";
 
 export type AgentHostProcessorDeps = {
   agentNamespace: DurableObjectNamespace<AgentDurableObject> | undefined;
@@ -125,11 +119,6 @@ export class AgentHostProcessor extends StreamProcessor<
     }
 
     args.blockProcessorWhile(async () => {
-      await ensureChildAgentRunner({
-        agentNamespace: this.deps.agentNamespace,
-        event,
-        projectId,
-      });
       await handleItxExecutionCompletedForAgent({
         appendInput: async (input) => {
           await this.ctx.stream.append({
@@ -143,33 +132,10 @@ export class AgentHostProcessor extends StreamProcessor<
   }
 }
 
-export async function ensureChildAgentRunner(args: {
-  agentNamespace: DurableObjectNamespace<AgentDurableObject> | undefined;
-  event: Event;
-  projectId: string;
-}) {
-  if (args.agentNamespace === undefined) return;
-  if (args.event.type !== STREAM_CHILD_STREAM_CREATED_TYPE) return;
-
-  const payload = args.event.payload as { childPath?: unknown };
-  const childPath = StreamPathSchema.safeParse(payload.childPath);
-  if (!childPath.success) return;
-
-  const name = getAgentDurableObjectName({
-    agentPath: childPath.data,
-    projectId: args.projectId,
-  });
-  const stub = args.agentNamespace.getByName(name);
-  await stub.initialize({ name });
-}
-
-// Ensures the AgentDurableObject for the stream the host processor is running on is initialized.
-//
-// Agent streams created by routing (e.g. Slack-routed `/agents/slack/<channel>/<ts>` streams) are
-// bootstrapped with only the `slack-agent` and `agent-host` subscriptions. Unlike the UI new-agent
-// flow, nothing registers the LLM processors (`agent-chat`/`agent`/the provider processor) or seeds
-// the agent setup events. Waking the AgentDurableObject here runs its `onInstanceWake` hook, which
-// registers those processors and setup events.
+// Ensures the AgentDurableObject for the stream this host processor is running
+// on is initialized. The processor subscriptions and setup events are stream
+// facts, normally appended by the project processor; this only wakes the host
+// that serves those subscriptions.
 export async function ensureAgentRunnerForOwnStream(args: {
   agentNamespace: DurableObjectNamespace<AgentDurableObject> | undefined;
   projectId: string;

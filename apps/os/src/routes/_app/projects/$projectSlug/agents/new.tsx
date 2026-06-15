@@ -6,15 +6,6 @@ import { StreamPath } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
-import {
-  DEFAULT_OPENAI_AGENT_MODEL,
-  configuredAgentSetupEvents,
-  defaultAgentSystemPrompt,
-} from "~/domains/agents/agent-presets.ts";
-import {
-  agentProcessorSubscriptionConfiguredEvents,
-  defaultAgentProcessorSlugs,
-} from "~/domains/agents/agent-stream-subscriptions.ts";
 import { connectItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
@@ -43,24 +34,16 @@ function NewAgentPage() {
     mutationFn: async (content: string) => {
       const agentPath = newWebAgentPath();
       // connectItx (imperative, not the suspending hook) lands on the project
-      // provider's pooled socket; seed the agent stream, then send the message
-      // through itx.agents.sendMessage (force-wakes the agent DO).
+      // provider's socket. Agent setup is seeded server-side now (#1524): create
+      // the stream, wait for the project-agent-setup processor to write the
+      // system prompt, then append the user's first input.
       const itx = await connectItx({ projectId: params.projectSlug });
-      await itx.streams.get(agentPath).appendBatch([
-        ...configuredAgentSetupEvents({
-          idempotencyKeyPrefix: "os-agent-new:web-setup",
-          model: DEFAULT_OPENAI_AGENT_MODEL,
-          provider: "openai-ws",
-          runOpts: {},
-          systemPrompt: defaultAgentSystemPrompt(agentPath),
-        }),
-        ...agentProcessorSubscriptionConfiguredEvents({
-          agentPath,
-          processorSlugs: defaultAgentProcessorSlugs("openai-ws"),
-          projectId: project.id,
-        }),
-      ]);
-      await itx.agents.sendMessage({ agentPath, message: content, channel: "web" });
+      await itx.streams.create({ streamPath: agentPath });
+      await waitForProjectAgentSetup(itx, agentPath);
+      await itx.streams.get(agentPath).append({
+        type: "events.iterate.com/agent/input-added",
+        payload: { content },
+      });
       return agentPath;
     },
     onSuccess: (agentPath) => {
@@ -135,6 +118,28 @@ function NewAgentPage() {
 
 function newWebAgentPath() {
   return StreamPath.parse(`/agents/web/${slugifyCreationTime(new Date())}`);
+}
+
+async function waitForProjectAgentSetup(
+  itx: Awaited<ReturnType<typeof connectItx>>,
+  streamPath: string,
+) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    // itx's streams.read returns the Event[] directly (no { events } wrapper).
+    const events = await itx.streams.get(streamPath).read({ beforeOffset: "end" });
+    if (
+      events.some(
+        (event) =>
+          (event as { idempotencyKey?: string }).idempotencyKey ===
+          "project-agent-setup:system-prompt",
+      )
+    ) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("Timed out waiting for agent setup.");
 }
 
 function slugifyCreationTime(date: Date) {
