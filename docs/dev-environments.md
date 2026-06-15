@@ -310,13 +310,13 @@ and outlives any app deploy. Enable it for your dev server with env vars only
 (no code change):
 
 ```bash
-CAPTUN_NAME=jonas pnpm dev     # https://jonas.tunnels.iterate.com
+CAPTUN_TUNNEL_NAME=jonas pnpm dev     # https://jonas.tunnels.iterate.com
 ```
 
 The captun Vite plugin (`apps/os/vite.config.ts`) activates when
-`CAPTUN_NAME` is set. `APP_CONFIG.baseUrl` is still the app's public URL; it
-does not start a tunnel by itself. The plugin forwards public **HTTP** to your
-local dev server. Its forwarder is plain `fetch`, so it does **not** carry
+`CAPTUN_TUNNEL_NAME` is set. `APP_CONFIG.baseUrl` is still the app's public URL;
+it does not start a tunnel by itself. The plugin forwards public **HTTP** to
+your local dev server. Its forwarder is plain `fetch`, so it does **not** carry
 WebSockets — HMR and itx (`/api/itx`, capnweb-over-WS) stay on the local URL.
 
 For WebSocket traffic over the tunnel (e.g. driving itx against a local dev
@@ -336,8 +336,8 @@ a small captun follow-up.) Tests open tunnels via `createPublicTunnel`
 
 Tunnels are not scarce. The genuinely scarce thing is the webhook-source
 configuration — a Slack app points at exactly one delivery URL at a time —
-so set a stable `CAPTUN_NAME` per person (held in `dev_<user>`) to keep that
-URL working.
+so set a stable `CAPTUN_TUNNEL_NAME` per person (held in `dev_<user>`) to keep
+that URL working.
 
 ## Slack end-to-end testing
 

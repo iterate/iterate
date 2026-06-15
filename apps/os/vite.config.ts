@@ -27,12 +27,12 @@ function readAuxiliaryWorkers(command: string) {
 const host = process.env.HOST ?? "127.0.0.1";
 const port = process.env.PORT ? Number(process.env.PORT) : 5173;
 
-// Public tunnel for the dev server, driven by Doppler. CAPTUN_NAME pins the
+// Public tunnel for the dev server, driven by Doppler. CAPTUN_TUNNEL_NAME pins the
 // stable tunnel name; CAPTUN_GATEWAY + CAPTUN_TOKEN target a self-hosted
 // gateway. Plain HTTP only (webhooks, previews, e2e) — HMR and WebSockets stay
 // on the local URL. See docs/dev-environments.md.
 const captunGateway = process.env.CAPTUN_GATEWAY?.trim() || "https://tunnels.iterate.com";
-const captunName = process.env.CAPTUN_NAME?.trim();
+const captunName = process.env.CAPTUN_TUNNEL_NAME?.trim();
 
 export default defineConfig(({ command }) => ({
   // wa-sqlite ships an Emscripten `.mjs` + `.wasm` pair that must stay together.
