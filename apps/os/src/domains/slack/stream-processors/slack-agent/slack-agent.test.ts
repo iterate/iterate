@@ -129,7 +129,13 @@ describe("SlackAgentProcessor", () => {
   });
 
   it("emits a Slack-posting codemode script for the debug bang command", async () => {
-    const { appended, processor } = createProcessor();
+    const calls: string[] = [];
+    const { appended, processor } = createProcessor({
+      ensureItxContext: async () => {
+        calls.push("ensure-itx");
+      },
+      onAppend: () => calls.push("append"),
+    });
 
     await processor.ingest({
       events: [webhookEvent({ offset: 42, text: "!debug" })],
@@ -137,6 +143,7 @@ describe("SlackAgentProcessor", () => {
     });
     await flushBackgroundWork();
 
+    expect(calls).toEqual(["ensure-itx", "append"]);
     expect(appended).toHaveLength(1);
     expect(appended[0]!.event).toMatchObject({
       type: "events.iterate.com/itx/script-execution-requested",
@@ -471,7 +478,7 @@ describe("SlackAgentProcessor", () => {
 });
 
 function createProcessor(
-  deps: SlackAgentProcessorDeps & {
+  deps: Partial<SlackAgentProcessorDeps> & {
     onAppend?: (event: StreamEventInput) => void;
     sideEffectsAfterOffset?: () => number;
   } = {},
@@ -496,6 +503,7 @@ function createProcessor(
       },
     },
     ...processorDeps,
+    ensureItxContext: processorDeps.ensureItxContext ?? (async () => {}),
   });
   return { appended, processor };
 }

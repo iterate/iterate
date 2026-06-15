@@ -28,6 +28,7 @@ export type SlackAgentProcessorContract = typeof SlackAgentProcessorContract;
 
 export type SlackAgentProcessorDeps = {
   callSlackApi?(method: string, body: Record<string, unknown>): Promise<void>;
+  ensureItxContext(): Promise<unknown>;
 };
 
 export class SlackAgentProcessor extends StreamProcessor<
@@ -133,6 +134,7 @@ export class SlackAgentProcessor extends StreamProcessor<
           // The script request must commit before the eyes reaction signals
           // receipt, so both run in one blocking closure.
           args.blockProcessorWhile(async () => {
+            await this.deps.ensureItxContext();
             await this.ctx.stream.append({
               event: {
                 type: "events.iterate.com/itx/script-execution-requested",

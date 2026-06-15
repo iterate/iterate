@@ -15,6 +15,10 @@ import {
   type StreamDurableObjectNamespace,
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
+import {
+  getAgentDurableObjectName,
+  type AgentDurableObject,
+} from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import { getProjectSecret } from "~/domains/secrets/secrets-store.ts";
 import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
 import {
@@ -39,6 +43,7 @@ export function getSlackAgentDurableObjectName(input: SlackAgentDurableObjectStr
 }
 
 type SlackAgentEnv = {
+  AGENT: DurableObjectNamespace<AgentDurableObject>;
   APP_CONFIG_SLACK_BOT_TOKEN?: string;
   DO_CATALOG: D1Database;
   SLACK_BOT_TOKEN?: string;
@@ -82,6 +87,17 @@ export class SlackAgentDurableObject extends SlackAgentLifecycleBase<SlackAgentE
             streamPath,
           });
         }
+      },
+      ensureItxContext: async () => {
+        const params = await this.ensureStartedOrInitializeFromRuntimeName();
+        const agentName = getAgentDurableObjectName({
+          agentPath: params.streamPath,
+          projectId: params.projectId,
+        });
+        await this.env.AGENT.getByName(agentName).ensureItxContext({
+          agentPath: params.streamPath,
+          projectId: params.projectId,
+        });
       },
     });
   });

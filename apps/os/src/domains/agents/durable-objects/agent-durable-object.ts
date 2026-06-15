@@ -147,6 +147,7 @@ const AgentLifecycleBase = createIterateDurableObjectBase<
  * onto its own context (each provide appends an itx/capability-provided event
  * that both folds into the capability table and renders into the LLM's view). */
 const AGENT_CONTEXT_CAPABILITIES_VERSION = "8";
+const DELETED_AGENT_PROCESSOR_SLUGS = new Set(["agent-chat", "agent-host"]);
 
 export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv> {
   host = createStreamProcessorHost(this.ctx);
@@ -257,6 +258,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
    */
   async requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
     await this.ensureStartedOrInitializeFromRuntimeName();
+    if (args.processorName != null && DELETED_AGENT_PROCESSOR_SLUGS.has(args.processorName)) {
+      return;
+    }
     return await this.host.requestStreamSubscription(args);
   }
 
