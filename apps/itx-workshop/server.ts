@@ -31,6 +31,7 @@ import { ItxContract } from "./itx-contract.ts";
 // Incremental step folders (steps/README.md). Each is mounted under
 // /steps/<id>/* so earlier and half-built steps stay live alongside the rest.
 import * as step01 from "./steps/01-socket/worker.ts";
+import * as step08 from "./steps/08-auth/worker.ts";
 // The real durable event log from @iterate-com/streams — re-exported so wrangler
 // hosts it as a Durable Object.
 export { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
@@ -285,6 +286,25 @@ export default {
     // Incremental step folders (steps/README.md).
     if (path === "/steps/01-socket") {
       return step01.handle(request);
+    }
+
+    // Step 08 — auth: only complete the socket if the token grants the project,
+    // and scope the itx to that project's own context (named by project id).
+    if (path === "/steps/08-auth") {
+      const project = url.searchParams.get("project") ?? "";
+      const auth = step08.authorizeProjectAccess(request, project);
+      if (!auth.ok) return new Response(auth.message, { status: auth.status });
+
+      const node = env.ITX.getByName(`prj:${project}`);
+      const main = dynamicHandle(new WorkerHandle(node));
+      const pair = new WebSocketPair();
+      const server = pair[0];
+      server.accept();
+      newWebSocketRpcSession(server as unknown as WebSocket, main);
+      ctx.waitUntil(
+        new Promise<void>((resolve) => server.addEventListener("close", () => resolve())),
+      );
+      return new Response(null, { status: 101, webSocket: pair[1] });
     }
 
     if (path === "/step0") {

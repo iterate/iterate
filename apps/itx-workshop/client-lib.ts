@@ -11,8 +11,13 @@ import { newWebSocketRpcSession } from "capnweb";
 
 // capnweb's newWebSocketRpcSession wants a browser-style WebSocket. The `ws`
 // package is close enough; capnweb attaches via .addEventListener("message"/...).
-export function connect<T>(url: string): T {
-  const ws = new WebSocket(url) as unknown as globalThis.WebSocket;
+export function connect<T>(url: string, headers?: Record<string, string>): T {
+  // `ws` (unlike a browser WebSocket) can set request headers on the upgrade —
+  // that's how a Node client sends its `Authorization: Bearer …` token (Step 08).
+  const ws = new WebSocket(
+    url,
+    headers ? { headers } : undefined,
+  ) as unknown as globalThis.WebSocket;
   return newWebSocketRpcSession<T>(ws);
 }
 
