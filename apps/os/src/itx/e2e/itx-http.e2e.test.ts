@@ -7,13 +7,15 @@
 //                exposed caps are public, unexposed caps don't exist (404)
 
 import { expect, test } from "vitest";
-import { connectGlobal, registerCreatedProjectCleanup } from "./e2e-env.ts";
+import { connectGlobal, createItxProject, registerCreatedProjectCleanup } from "./e2e-env.ts";
 
 const createdProjectIds = registerCreatedProjectCleanup();
 
 test("facet caps keep private durable state across invocations", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `itx-facet-${suffix()}` })) as { id: string };
+  const project = (await createItxProject(itx, { slug: `itx-facet-${suffix()}` })) as {
+    id: string;
+  };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 
@@ -60,7 +62,7 @@ test("facet caps keep private durable state across invocations", async () => {
 test("HTTP-exposed caps serve their own hostname publicly; unexposed caps 404", async () => {
   using itx = connectGlobal();
   const slug = `itx-http-${suffix()}`;
-  const project = (await itx.projects.create({ slug })) as { id: string };
+  const project = (await createItxProject(itx, { slug })) as { id: string };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
 

@@ -56,7 +56,7 @@ function ProjectHomePage() {
                   size="default"
                   render={
                     <Link
-                      to="/projects/$projectSlug/agents/streams/$"
+                      to="/projects/$projectSlug/streams/$"
                       params={{
                         _splat: "/agents/onboarding",
                         projectSlug: params.projectSlug,

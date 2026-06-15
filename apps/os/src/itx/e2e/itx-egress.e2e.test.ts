@@ -16,6 +16,7 @@ import { expect, test } from "vitest";
 import {
   adminApiSecret,
   baseUrl,
+  createItxProject,
   connectGlobal,
   registerCreatedProjectCleanup,
 } from "./e2e-env.ts";
@@ -28,7 +29,9 @@ const createdProjectIds = registerCreatedProjectCleanup();
 
 test("itx.fetch substitutes secrets through project egress (explicit door)", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `itx-egress-${suffix()}` })) as { id: string };
+  const project = (await createItxProject(itx, { slug: `itx-egress-${suffix()}` })) as {
+    id: string;
+  };
   createdProjectIds.push(project.id);
   using projectItx = await itx.projects.get(project.id);
   await waitForProjectReady(projectItx);
@@ -45,7 +48,7 @@ test("itx.fetch substitutes secrets through project egress (explicit door)", asy
 
 test("bare fetch() in a project itx script goes through egress (implicit door)", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `itx-egress-run-${suffix()}` })) as {
+  const project = (await createItxProject(itx, { slug: `itx-egress-run-${suffix()}` })) as {
     id: string;
   };
   createdProjectIds.push(project.id);
@@ -83,7 +86,7 @@ test("bare fetch() in a project itx script goes through egress (implicit door)",
 
 test("bare fetch() inside a worker cap goes through egress (implicit door)", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `itx-egress-cap-${suffix()}` })) as {
+  const project = (await createItxProject(itx, { slug: `itx-egress-cap-${suffix()}` })) as {
     id: string;
   };
   createdProjectIds.push(project.id);
@@ -130,7 +133,7 @@ test("bare fetch() inside a worker cap goes through egress (implicit door)", asy
 
 test("itx.secrets: set a secret through the default, then fetch with its placeholder", async () => {
   using itx = connectGlobal();
-  const project = (await itx.projects.create({ slug: `itx-secrets-${suffix()}` })) as {
+  const project = (await createItxProject(itx, { slug: `itx-secrets-${suffix()}` })) as {
     id: string;
   };
   createdProjectIds.push(project.id);

@@ -20,7 +20,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/u
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { cn } from "@iterate-com/ui/lib/utils";
-import { AGENT_UI_FEED_TABLE } from "~/domains/streams/browser-processors/agent-ui-processor.ts";
+import { AGENT_UI_FEED_TABLE } from "~/domains/streams/engine/processors/browser-event-feed/implementation.ts";
 import { useStreamQuery } from "~/domains/streams/engine/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/engine/browser/stream-browser-db.ts";
 import { useVirtualizedTailScroll } from "~/lib/use-virtualized-tail-scroll.ts";

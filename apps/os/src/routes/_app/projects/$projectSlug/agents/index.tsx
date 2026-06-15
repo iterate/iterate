@@ -35,17 +35,8 @@ function ProjectAgentsIndexContent() {
   const source = useMemo(() => (streamPath: StreamPathType) => itx.streams.get(streamPath), [itx]);
 
   function openPath(streamPath: StreamPathType) {
-    // /agents itself is not an agent — open its raw stream. Anything under it
-    // is an agent: open the chat view.
-    if (streamPath === AGENTS_ROOT) {
-      void navigate({
-        to: "/projects/$projectSlug/streams/$",
-        params: { projectSlug: params.projectSlug, _splat: streamPath },
-      });
-      return;
-    }
     void navigate({
-      to: "/projects/$projectSlug/agents/streams/$",
+      to: "/projects/$projectSlug/streams/$",
       params: { projectSlug: params.projectSlug, _splat: streamPath },
     });
   }

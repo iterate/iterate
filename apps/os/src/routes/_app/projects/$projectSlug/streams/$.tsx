@@ -7,7 +7,7 @@ import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
-  staticData: { hideAppHeader: true, commandPalette: { stream: { mode: "stream" } } },
+  staticData: { hideAppHeader: true },
   validateSearch: StreamViewSearch,
   params: {
     parse: (raw) => ({
@@ -49,7 +49,7 @@ function ProjectStreamDetailPage() {
 function ProjectStreamDetailContent() {
   const params = Route.useParams();
   const { project, streamPath } = Route.useLoaderData();
-  const itx = useItx();
+  const itx = useItx({ projectId: project.id });
 
   async function submitMessage(message: string) {
     await itx.streams.get(streamPath).appendBatch({
@@ -62,15 +62,31 @@ function ProjectStreamDetailContent() {
     });
   }
 
+  async function interruptMessage(llmRequestId: number) {
+    await itx.streams.get(streamPath).append({
+      event: {
+        type: "events.iterate.com/agent/llm-request-cancelled",
+        payload: {
+          phase: "requested",
+          llmRequestId,
+          reason: "interrupted-by-user-input",
+        },
+      },
+    });
+  }
+
+  const isAgentStream = streamPath.toString().startsWith("/agents/");
+
   return (
     <StreamExplorerDetail
       currentPath={streamPath}
       showCommandPaletteTrigger
       streamView={{
-        defaultComposerMode: "raw",
+        defaultComposerMode: isAgentStream ? "message" : "raw",
         messageComposer: {
+          ...(isAgentStream ? { onInterrupt: interruptMessage } : {}),
           onSubmit: submitMessage,
-          placeholder: "Message this stream",
+          placeholder: isAgentStream ? "Message this agent" : "Message this stream",
         },
         projectSlug: params.projectSlug,
         projectSlugOrId: project.id,

@@ -18,6 +18,7 @@ import { expect, test } from "vitest";
 import {
   adminApiSecret,
   baseUrl,
+  createItxProject,
   connectGlobal,
   registerCreatedProjectCleanup,
 } from "./e2e-env.ts";
@@ -29,7 +30,7 @@ test(
   { timeout: 120_000 },
   async () => {
     using itx = connectGlobal();
-    const project = (await itx.projects.create({
+    const project = (await createItxProject(itx, {
       slug: `itx-openapi-${crypto.randomUUID().slice(0, 8)}`,
     })) as { id: string };
     createdProjectIds.push(project.id);
@@ -97,7 +98,7 @@ test(
   },
   async () => {
     using itx = connectGlobal();
-    const project = (await itx.projects.create({
+    const project = (await createItxProject(itx, {
       slug: `itx-petstore-${crypto.randomUUID().slice(0, 8)}`,
     })) as { id: string };
     createdProjectIds.push(project.id);

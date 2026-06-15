@@ -15,7 +15,7 @@
 // deploys with). Absent → the test skips, never fails.
 
 import { expect, test } from "vitest";
-import { connectGlobal, registerCreatedProjectCleanup } from "./e2e-env.ts";
+import { connectGlobal, createItxProject, registerCreatedProjectCleanup } from "./e2e-env.ts";
 
 const CLOUDFLARE_API_TOKEN = process.env.CLOUDFLARE_API_TOKEN?.trim() ?? "";
 const MCP_SERVER_URL = "https://bindings.mcp.cloudflare.com/mcp";
@@ -30,7 +30,7 @@ test(
   { timeout: 90_000 },
   async () => {
     using itx = connectGlobal();
-    const project = (await itx.projects.create({
+    const project = (await createItxProject(itx, {
       slug: `itx-mcp-pub-${crypto.randomUUID().slice(0, 8)}`,
     })) as { id: string };
     createdProjectIds.push(project.id);
@@ -64,7 +64,7 @@ test.skipIf(!CLOUDFLARE_API_TOKEN)(
   { timeout: 90_000 },
   async () => {
     using itx = connectGlobal();
-    const project = (await itx.projects.create({
+    const project = (await createItxProject(itx, {
       slug: `itx-mcp-auth-${crypto.randomUUID().slice(0, 8)}`,
     })) as { id: string };
     createdProjectIds.push(project.id);
