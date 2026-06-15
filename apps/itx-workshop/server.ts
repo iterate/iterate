@@ -133,6 +133,7 @@ function dynamicHandle(target: any, path: string[] = []): any {
 
 interface Env {
   ITX: DurableObjectNamespace<ItxDO>;
+  PROJECT: DurableObjectNamespace<ProjectDO>;
   STREAM: DurableObjectNamespace<any>;
   // Worker Loader (Step 09): build + run a worker from a ref at runtime.
   LOADER: {
@@ -177,9 +178,23 @@ export class ItxDO extends DurableObject<Env> {
         ...deps,
         iterateContext: { stream: this.#log() },
         dial: (address) => this.#dial(address), // Step 09: restore a sturdy ref
+        roots: this.#projectRoots(), // Step 10: itx.fetch on a project context
       }),
   );
   #subscriptionConfigured = false;
+
+  // Step 10: a PROJECT-scoped context (named "prj:<id>", see Step 08) is born with
+  // `fetch` as a root capability — provided, not built in — backed by that
+  // project's own Project Durable Object. `itx.fetch(url)` egresses through it.
+  #projectRoots(): Record<string, any> {
+    const name = this.ctx.id.name ?? "";
+    if (!name.startsWith("prj:")) return {};
+    const projectId = name.slice("prj:".length);
+    return {
+      fetch: (url: string, init?: RequestInit) =>
+        this.env.PROJECT.getByName(projectId).egress(url, init),
+    };
+  }
 
   // dial (Step 09): turn a sturdy address into a callable by BUILDING AND RUNNING
   // its worker via the Worker Loader. `{ type: "rpc", worker: { type: "source",
@@ -322,6 +337,25 @@ class WorkerHandle extends RpcTarget {
   // processor should learn of it via the subscription, not via a provide call.
   appendToStream(event: unknown) {
     return this.#node.appendToStream(event);
+  }
+}
+
+// Step 10 — the Project Durable Object. One per project; it owns the project's
+// egress. Its `egress` method does the actual outbound fetch (named `egress`, not
+// `fetch`, because a DO's `fetch` is its HTTP entrypoint). A project-scoped itx is
+// born with this wired as the `fetch` root (see ItxDO.#projectRoots), so
+// `itx.fetch(url)` routes here — egress is the project's, tagged with its id.
+export class ProjectDO extends DurableObject<Env> {
+  async egress(
+    url: string,
+    init?: RequestInit,
+  ): Promise<{ status: number; body: string; viaProject: string }> {
+    const response = await fetch(url, init);
+    return {
+      status: response.status,
+      body: await response.text(),
+      viaProject: this.ctx.id.name ?? "?",
+    };
   }
 }
 

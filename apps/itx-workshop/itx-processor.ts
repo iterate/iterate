@@ -64,9 +64,16 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   // with only live caps never needs it.
   #dial: (address: any) => any;
 
+  // Root capabilities (Step 10): name → live stub, injected at CONSTRUCTION, not
+  // provided through the event log. There is no privileged handle — `itx.fetch`
+  // is just a root the host seeded (e.g. a project context's `fetch`, backed by
+  // its Project DO). Own provides (the fold) shadow roots of the same name.
+  #roots: Record<string, any>;
+
   constructor(
     args: ConstructorParameters<typeof StreamProcessor<typeof ItxContract>>[0] & {
       dial?: (address: any) => any;
+      roots?: Record<string, any>;
     },
   ) {
     super(args);
@@ -75,6 +82,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
       (() => {
         throw new Error("this context has no dial configured (no sturdy capabilities)");
       });
+    this.#roots = (args as any).roots ?? {};
   }
 
   // The fold: one pure projection of an event into the next capability table.
@@ -137,9 +145,9 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     return { path };
   }
 
-  /** The capability table is the fold — listing is just its keys. */
+  /** The capability table is the fold — plus the injected roots (Step 10). */
   listCapabilities(): string[] {
-    return Object.keys(this.state.capabilities);
+    return [...new Set([...Object.keys(this.#roots), ...Object.keys(this.state.capabilities)])];
   }
 
   async revokeCapability({ path }: { path: string[] }) {
@@ -149,18 +157,25 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     await this.ingest({ events: [committed], streamMaxOffset: (committed as any).offset });
   }
 
-  // invoke resolves over the FOLD (this.state), then borrows: a live entry's
-  // stub from the bridge, a sturdy entry's address via dial. The remainder of
-  // the path is replayed onto whatever we borrowed.
+  // invoke resolves over the FOLD (this.state) first — own caps win — then falls
+  // back to the injected roots. Then it borrows: a live entry's stub from the
+  // bridge, a sturdy entry's address via dial; the remaining path is replayed.
   async invoke({ path, args = [] }: { path: string[]; args?: unknown[] }) {
     const hit = resolveLongestPrefix(this.state.capabilities, path);
-    if (!hit) throw new Error(`no capability "${path.join(".")}"`);
-    if (hit.record.kind === "live") {
-      const stub = this.#live.get(hit.name);
-      if (!stub)
-        throw new Error(`capability "${hit.name}" is offline (live provider disconnected)`);
-      return await replayPath(stub, hit.rest, args);
+    if (hit) {
+      if (hit.record.kind === "live") {
+        const stub = this.#live.get(hit.name);
+        if (!stub)
+          throw new Error(`capability "${hit.name}" is offline (live provider disconnected)`);
+        return await replayPath(stub, hit.rest, args);
+      }
+      return await replayPath(this.#dial(hit.record.address), hit.rest, args);
     }
-    return await replayPath(this.#dial(hit.record.address), hit.rest, args);
+    // root fallback (Step 10): itx.fetch and friends, seeded at construction.
+    for (let i = path.length; i >= 1; i--) {
+      const name = path.slice(0, i).join(".");
+      if (this.#roots[name]) return await replayPath(this.#roots[name], path.slice(i), args);
+    }
+    throw new Error(`no capability "${path.join(".")}"`);
   }
 }
