@@ -198,8 +198,8 @@ const commandRouter = {
       })
       .handler(async ({ context, input }) => {
         const event: EventInput = {
-          type: "events.iterate.com/agent-chat/user-message-added",
-          payload: { channel: "tui", content: input.content },
+          type: "events.iterate.com/agents/user-message-received",
+          payload: { content: input.content, origin: "tui" },
         };
         const appended = await context.streamApi.append({ event, streamPath: input.streamPath });
         context.toast.success(`sent offset ${appended.offset}`);

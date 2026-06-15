@@ -24,7 +24,7 @@ curl -fsS -X POST "$BASE_URL" \
     "type": "events.iterate.com/agent/system-prompt-updated",
     "idempotencyKey": "debug-system-prompt-v1",
     "payload": {
-      "systemPrompt": "Reply with a fenced JavaScript async function and use ctx.chat.sendMessage({ message })."
+      "systemPrompt": "Reply with a fenced JavaScript async function and use itx.chat.sendMessage({ message })."
     }
   }'
 ```
@@ -35,10 +35,9 @@ Then send user input:
 curl -fsS -X POST "$BASE_URL" \
   -H 'content-type: application/json' \
   -d '{
-    "type": "events.iterate.com/agent-chat/user-message-added",
+    "type": "events.iterate.com/agents/web-message-received",
     "payload": {
-      "channel": "web",
-      "content": "Say hello via ctx.chat.sendMessage."
+      "content": "Say hello via itx.chat.sendMessage."
     }
   }'
 ```
@@ -121,7 +120,7 @@ curl -fsS -X POST "https://os.iterate-preview-2.com/api/projects/${PROJECT_ID}/s
   }'
 ```
 
-Then send the same `agent-chat/user-message-added` to both streams and compare
+Then send the same `agents/web-message-received` to both streams and compare
 the time between:
 
 - `events.iterate.com/agent/output-added`
@@ -158,9 +157,8 @@ curl -i -N \
 curl -fsS -X POST "$BASE_URL" \
   -H 'content-type: application/json' \
   -d '{
-    "type": "events.iterate.com/agent-chat/user-message-added",
+    "type": "events.iterate.com/agents/web-message-received",
     "payload": {
-      "channel": "web",
       "content": "Trigger the same codemode reply."
     }
   }'

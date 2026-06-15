@@ -209,7 +209,7 @@ export class CloudflareAiProcessor extends StreamProcessor<
     if (danglingIds.length === 0) return;
 
     // Claim synchronously, before the first await: one batch routinely
-    // carries several subscriber-connected events (an agent host
+    // carries several subscriber-connected events (a processor host
     // re-handshake appends one per co-hosted processor subscription) and
     // their blocking reconciles run concurrently — without the eager claim
     // each would observe the same dangling entries and start duplicate LLM

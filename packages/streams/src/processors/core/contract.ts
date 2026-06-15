@@ -202,6 +202,12 @@ export const CoreProcessorContract = defineProcessorContract({
         subscriber: SupportedOutboundSubscriber,
       }),
     },
+    "events.iterate.com/stream/subscription-removed": {
+      description: "Removes a previously configured outbound subscription for this stream.",
+      payloadSchema: z.object({
+        subscriptionKey: z.string().trim().min(1),
+      }),
+    },
     "events.iterate.com/stream/subscriber-connected": {
       description:
         "A delivery connection to one subscriber opened. Appended by the stream itself, once per actual open — which is why presence facts carry no idempotency keys: a re-handshake after a transient break genuinely is a new connection and must re-land on the roster. Reconciling processors treat this as 'someone's runtime state was reset'; it is always the tail of any batch it shares (appended after the handshake fixes the replay offset), so state-at-event equals batch-final state.",
@@ -254,6 +260,7 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/metadata-updated",
     "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/stream/subscription-configured",
+    "events.iterate.com/stream/subscription-removed",
     "events.iterate.com/stream/subscriber-connected",
     "events.iterate.com/stream/subscriber-disconnected",
     "events.iterate.com/stream/error-occurred",

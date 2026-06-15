@@ -32,8 +32,8 @@ describe("agent-ui reducer", () => {
   it("streams thinking and response deltas into the live llm step", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agent-chat/user-message-added",
-        payload: { channel: "web", content: "count the inputs" },
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: "count the inputs", origin: "web" },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -85,8 +85,8 @@ describe("agent-ui reducer", () => {
   it("settles the activity into items when the assistant responds", () => {
     const state = reduceAll([
       {
-        type: "events.iterate.com/agent-chat/user-message-added",
-        payload: { channel: "web", content: "hi" },
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: "hi", origin: "web" },
       },
       {
         type: "events.iterate.com/agent/llm-request-requested",
@@ -111,8 +111,8 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agent-chat/assistant-response-added",
-        payload: { channel: "web", message: "There are 12 inputs." },
+        type: "events.iterate.com/agents/web-message-sent",
+        payload: { message: "There are 12 inputs." },
       },
     ]);
 
@@ -177,7 +177,7 @@ describe("agent-ui reducer", () => {
       {
         type: "events.iterate.com/stream/subscriber-connected",
         payload: {
-          subscriptionKey: "agent-host:agent",
+          subscriptionKey: "agent:agent",
           direction: "outbound",
           subscriber: {
             incarnationId: "i1",
@@ -204,7 +204,7 @@ describe("agent-ui reducer", () => {
 
     expect(state.presence).toHaveLength(2);
     expect(state.presence[0]).toMatchObject({
-      subscriptionKey: "agent-host:agent",
+      subscriptionKey: "agent:agent",
       connected: true,
       processor: { slug: "agent", version: "0.1.0" },
     });
@@ -241,7 +241,7 @@ describe("agent-ui reducer", () => {
         payload: { executionId: "exec-2", code: "2+2" },
       },
       {
-        type: "events.iterate.com/agent-chat/assistant-response-added",
+        type: "events.iterate.com/agents/web-message-sent",
         payload: { message: "all done" },
       },
     ]);
@@ -279,8 +279,8 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test", runOpts: {} },
       },
       {
-        type: "events.iterate.com/agent-chat/user-message-added",
-        payload: { channel: "web", content: "also, one more thing" },
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: "also, one more thing", origin: "web" },
       },
     ]);
 
@@ -303,8 +303,8 @@ describe("agent-ui reducer", () => {
         payload: { model: "gpt-test", runOpts: {} },
       },
       {
-        type: "events.iterate.com/agent-chat/user-message-added",
-        payload: { channel: "web", content: "also, one more thing" },
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: "also, one more thing", origin: "web" },
       },
       {
         type: "events.iterate.com/agent/llm-request-completed",
@@ -349,8 +349,8 @@ describe("agent-ui reducer", () => {
         },
       },
       {
-        type: "events.iterate.com/agent-chat/user-message-added",
-        payload: { channel: "web", content: "oh this is taking too long" },
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: "oh this is taking too long", origin: "web" },
       },
       {
         type: "events.iterate.com/agent/llm-request-cancelled",

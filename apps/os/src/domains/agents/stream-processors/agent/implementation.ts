@@ -22,12 +22,15 @@ import {
   type AgentConsumedEvent,
   type AgentState,
 } from "./contract.ts";
+import { ITX_EVENT_TYPES } from "~/itx/contract.ts";
 
 export { AgentProcessorContract } from "./contract.ts";
 
 export type AgentProcessorContract = typeof AgentProcessorContract;
 
 export type AgentProcessorDeps = {
+  ensureChildAgentRunner(childPath: string): Promise<unknown>;
+  isAgentsRootStream(): boolean;
   /**
    * Reads the full committed history of the agent's stream. The debounce-timer
    * handoff rebuilds agent state from durable history at the last possible
@@ -35,6 +38,11 @@ export type AgentProcessorDeps = {
    * potentially stale warm reduction (see `#requestScheduledLlmWork`).
    */
   readStreamEvents(): Promise<StreamEvent[]>;
+  /**
+   * Ensures the agent's Itx context and its own stream subscription exist
+   * before the agent enqueues script work for that context.
+   */
+  ensureItxContext(): Promise<unknown>;
 };
 
 type LlmRequestPolicy = Extract<
@@ -45,9 +53,7 @@ type LlmRequestPolicy = Extract<
 type ScheduledLlmRequest = {
   requestId: string;
   timer: ReturnType<typeof setTimeout>;
-  /** Absent for checkpoints written before scheduledOffset existed; the
-   * handoff then resolves the scheduled event from stream history. */
-  scheduledEvent?: { offset: number };
+  scheduledEvent: { offset: number };
 };
 
 /**
@@ -68,6 +74,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    */
   #scheduledLlmRequest: ScheduledLlmRequest | null = null;
   #llmRequestSeq = 0;
+  #triggerSchedulingInProgress = new Set<number>();
 
   protected override reduce(
     args: Parameters<StreamProcessor<AgentProcessorContract>["reduce"]>[0],
@@ -82,10 +89,71 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     switch (event.type) {
       case "events.iterate.com/agent/system-prompt-updated":
       case "events.iterate.com/agent/llm-config-updated":
-      case "events.iterate.com/agent/output-added":
       case "events.iterate.com/agent/llm-request-scheduled":
       case "events.iterate.com/agent/status-updated":
       case "events.iterate.com/agent/llm-request-queued":
+        return;
+      case "events.iterate.com/stream/child-stream-created":
+        args.blockProcessorWhile(() => this.deps.ensureChildAgentRunner(event.payload.childPath));
+        return;
+      case "events.iterate.com/agents/user-message-received":
+        if (this.deps.isAgentsRootStream()) return;
+        args.blockProcessorWhile(async () => {
+          await this.#appendEventTypeExplanation({ eventType: event.type });
+          await this.ctx.stream.append({
+            event: {
+              type: "events.iterate.com/agent/input-added",
+              idempotencyKey: buildProcessorIdempotencyKey({
+                processor: AgentProcessorContract,
+                key: "render-chat-message",
+                sourceEvent: event,
+              }),
+              payload: {
+                content: chatEventBlock({
+                  offset: event.offset,
+                  type: event.type,
+                  bodyTag: "content",
+                  body: event.payload.content,
+                  fields: { origin: event.payload.origin },
+                }),
+              },
+            },
+          });
+        });
+        return;
+      case "events.iterate.com/agents/web-message-sent":
+      case "events.iterate.com/agents/tui-message-sent":
+        if (this.deps.isAgentsRootStream()) return;
+        args.blockProcessorWhile(async () => {
+          await this.#appendEventTypeExplanation({ eventType: event.type });
+          await this.ctx.stream.append({
+            event: {
+              type: "events.iterate.com/agent/input-added",
+              idempotencyKey: buildProcessorIdempotencyKey({
+                processor: AgentProcessorContract,
+                key: "render-chat-response",
+                sourceEvent: event,
+              }),
+              payload: {
+                content: chatEventBlock({
+                  offset: event.offset,
+                  type: event.type,
+                  bodyTag: "message",
+                  body: event.payload.message,
+                }),
+                llmRequestPolicy: { behaviour: "dont-trigger-request" },
+              },
+            },
+          });
+        });
+        return;
+      case "events.iterate.com/agent/output-added":
+        if (this.deps.isAgentsRootStream()) return;
+        args.blockProcessorWhile(() => this.#enqueueScriptFromAgentOutput(event));
+        return;
+      case "events.iterate.com/itx/script-execution-completed":
+        if (this.deps.isAgentsRootStream()) return;
+        args.blockProcessorWhile(() => this.#appendScriptCompletionInput(event));
         return;
       case "events.iterate.com/stream/subscriber-connected": {
         // Scheduler reconciliation. Reduced state says a request should be
@@ -99,9 +167,22 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           args.blockProcessorWhile(() =>
             this.#requestLlmWorkForSchedule({
               requestId: scheduled.requestId,
-              ...(scheduled.scheduledOffset === undefined
-                ? {}
-                : { scheduledEvent: { offset: scheduled.scheduledOffset } }),
+              scheduledEvent: { offset: scheduled.scheduledOffset },
+            }),
+          );
+          return;
+        }
+        if (
+          state.currentRequest === null &&
+          state.pendingTriggerOffset !== null &&
+          this.#scheduledLlmRequest === null &&
+          !this.#triggerSchedulingInProgress.has(state.pendingTriggerOffset)
+        ) {
+          const pendingTriggerOffset = state.pendingTriggerOffset;
+          args.blockProcessorWhile(() =>
+            this.#appendLlmRequestScheduled({
+              sourceEvent: { offset: pendingTriggerOffset },
+              state,
             }),
           );
           return;
@@ -226,39 +307,96 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     const { event, state, policy } = args;
     if (policy.behaviour === "dont-trigger-request") return;
 
-    if (state.currentRequest == null) {
-      await this.#appendLlmRequestScheduled({ sourceEvent: event, state });
-      return;
-    }
+    this.#triggerSchedulingInProgress.add(event.offset);
+    try {
+      if (state.currentRequest == null) {
+        await this.#appendLlmRequestScheduled({ sourceEvent: event, state });
+        return;
+      }
 
-    if (state.currentRequest.phase === "scheduled") {
-      if (policy.behaviour === "interrupt-current-request") {
-        await this.#cancelCurrentScheduledRequest({
+      if (state.currentRequest.phase === "scheduled") {
+        if (policy.behaviour === "interrupt-current-request") {
+          await this.#cancelCurrentScheduledRequest({
+            requestId: state.currentRequest.requestId,
+            sourceEvent: event,
+          });
+          await this.#appendLlmRequestScheduled({ sourceEvent: event, state });
+          return;
+        }
+
+        this.#resetScheduledLlmRequestTimer({
           requestId: state.currentRequest.requestId,
+          debounceMs: state.llmConfig.debounceMs,
+          scheduledOffset: state.currentRequest.scheduledOffset,
+        });
+        return;
+      }
+
+      if (policy.behaviour === "interrupt-current-request") {
+        await this.#cancelCurrentInFlightRequest({
+          llmRequestId: state.currentRequest.llmRequestId,
           sourceEvent: event,
         });
         await this.#appendLlmRequestScheduled({ sourceEvent: event, state });
         return;
       }
 
-      this.#resetScheduledLlmRequestTimer({
-        requestId: state.currentRequest.requestId,
-        debounceMs: state.llmConfig.debounceMs,
-        scheduledOffset: state.currentRequest.scheduledOffset,
-      });
-      return;
+      await this.#emitQueued({ sourceEvent: event });
+    } finally {
+      this.#triggerSchedulingInProgress.delete(event.offset);
     }
+  }
 
-    if (policy.behaviour === "interrupt-current-request") {
-      await this.#cancelCurrentInFlightRequest({
-        llmRequestId: state.currentRequest.llmRequestId,
-        sourceEvent: event,
-      });
-      await this.#appendLlmRequestScheduled({ sourceEvent: event, state });
-      return;
-    }
+  async #enqueueScriptFromAgentOutput(
+    event: Extract<AgentConsumedEvent, { type: "events.iterate.com/agent/output-added" }>,
+  ) {
+    const script = extractCodemodeScript(event.payload.content);
+    if (script == null) return;
 
-    await this.#emitQueued({ sourceEvent: event });
+    await this.deps.ensureItxContext();
+    await this.ctx.stream.append({
+      event: {
+        type: ITX_EVENT_TYPES.scriptExecutionRequested,
+        idempotencyKey: buildProcessorIdempotencyKey({
+          processor: AgentProcessorContract,
+          key: "enqueue-output-script",
+          sourceEvent: event,
+        }),
+        payload: {
+          code: script,
+          enqueued: true,
+          executionId: `agent-output-script-${event.offset}`,
+        },
+      },
+    });
+  }
+
+  async #appendScriptCompletionInput(
+    event: Extract<
+      AgentConsumedEvent,
+      { type: "events.iterate.com/itx/script-execution-completed" }
+    >,
+  ) {
+    const executionId = event.payload.executionId;
+    if (typeof executionId !== "string" || executionId.trim() === "") return;
+
+    const logs = Array.isArray(event.payload.logs) ? (event.payload.logs as string[]) : [];
+    const outcome =
+      event.payload.ok === true
+        ? ({ status: "returned", value: event.payload.result } as const)
+        : ({ error: event.payload.error ?? "Unknown script error", status: "threw" } as const);
+    if (outcome.status === "returned" && outcome.value === undefined && logs.length === 0) return;
+
+    await this.ctx.stream.append({
+      event: {
+        type: "events.iterate.com/agent/input-added",
+        idempotencyKey: `agent-itx-execution-result:${executionId}`,
+        payload: {
+          content: itxCompletionInputBlock({ event, logs, outcome }),
+          llmRequestPolicy: { behaviour: "after-current-request" },
+        },
+      },
+    });
   }
 
   /**
@@ -378,28 +516,25 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   #resetScheduledLlmRequestTimer(args: {
     requestId: string;
     debounceMs: number;
-    scheduledOffset: number | undefined;
+    scheduledOffset: number;
   }) {
-    // The durable scheduledOffset is the fallback: after a restart the warm
-    // timer is gone but the reduced state still knows which scheduled event
-    // this debounce belongs to, so the timer re-arms instead of silently
-    // dropping the schedule. (For checkpoints predating scheduledOffset the
-    // handoff resolves the scheduled event from history when the timer fires.)
-    const scheduledEvent =
-      this.#scheduledLlmRequest?.scheduledEvent ??
-      (args.scheduledOffset === undefined ? undefined : { offset: args.scheduledOffset });
+    // The durable scheduledOffset lets a fresh instance re-arm without losing
+    // the idempotency key for the original scheduled event.
+    const scheduledEvent = this.#scheduledLlmRequest?.scheduledEvent ?? {
+      offset: args.scheduledOffset,
+    };
     this.#cancelScheduledLlmRequest({ requestId: args.requestId });
     this.#armLlmRequestDebounceTimer({
       requestId: args.requestId,
       debounceMs: args.debounceMs,
-      ...(scheduledEvent === undefined ? {} : { scheduledEvent }),
+      scheduledEvent,
     });
   }
 
   #armLlmRequestDebounceTimer(args: {
     requestId: string;
     debounceMs: number;
-    scheduledEvent?: { offset: number };
+    scheduledEvent: { offset: number };
   }) {
     const timer = setTimeout(() => {
       // The timer fires outside any batch, so the base class's keep-alive-backed
@@ -409,7 +544,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     this.#scheduledLlmRequest = {
       requestId: args.requestId,
       timer,
-      ...(args.scheduledEvent === undefined ? {} : { scheduledEvent: args.scheduledEvent }),
+      scheduledEvent: args.scheduledEvent,
     };
   }
 
@@ -420,7 +555,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     this.#scheduledLlmRequest = null;
     await this.#requestLlmWorkForSchedule({
       requestId: args.requestId,
-      ...(scheduledEvent === undefined ? {} : { scheduledEvent }),
+      scheduledEvent,
     });
   }
 
@@ -441,7 +576,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    */
   async #requestLlmWorkForSchedule(args: {
     requestId: string;
-    scheduledEvent?: { offset: number };
+    scheduledEvent: { offset: number };
   }) {
     const events = await this.deps.readStreamEvents();
     const stateAtRequest = reduceAgentEvents({ events });
@@ -450,24 +585,6 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       stateAtRequest.currentRequest?.phase !== "scheduled" ||
       stateAtRequest.currentRequest.requestId !== args.requestId
     ) {
-      return;
-    }
-
-    // Checkpoints written before scheduledOffset existed don't know which
-    // event the debounce belongs to; recover it from the committed history
-    // just read (the scheduled event must be there — reduced state only says
-    // "scheduled" because it was committed).
-    const scheduledEvent =
-      args.scheduledEvent ??
-      events.find(
-        (event) =>
-          event.type === "events.iterate.com/agent/llm-request-scheduled" &&
-          (event.payload as { requestId?: string }).requestId === args.requestId,
-      );
-    if (scheduledEvent === undefined) {
-      console.error("[agent] scheduled llm request has no llm-request-scheduled event", {
-        requestId: args.requestId,
-      });
       return;
     }
 
@@ -480,7 +597,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
           idempotencyKey: buildProcessorIdempotencyKey({
             processor: AgentProcessorContract,
             key: "llm-request-requested",
-            sourceEvent: scheduledEvent,
+            sourceEvent: args.scheduledEvent,
           }),
           payload: {
             model: stateAtRequest.llmConfig.model,
@@ -497,7 +614,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       this.#armLlmRequestDebounceTimer({
         requestId: args.requestId,
         debounceMs: LLM_REQUEST_HANDOFF_RETRY_MS,
-        scheduledEvent: { offset: scheduledEvent.offset },
+        scheduledEvent: args.scheduledEvent,
       });
     }
   }
@@ -579,6 +696,15 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
 }
 
 function eventTypeExplanation(eventType: string): string | null {
+  if (eventType === "events.iterate.com/agents/user-message-received") {
+    return "First `events.iterate.com/agents/user-message-received` event. This represents a message received from a user; the payload origin says whether it came from web or TUI.";
+  }
+  if (eventType === "events.iterate.com/agents/web-message-sent") {
+    return "First `events.iterate.com/agents/web-message-sent` event. This represents a message sent through the web chat response tool.";
+  }
+  if (eventType === "events.iterate.com/agents/tui-message-sent") {
+    return "First `events.iterate.com/agents/tui-message-sent` event. This represents a message sent through the TUI chat response tool.";
+  }
   if (eventType === "events.iterate.com/agent/llm-request-cancelled") {
     return eventTypeExplanationBlock({
       type: eventType,
@@ -616,6 +742,22 @@ function eventBlock(args: {
   return ["```yaml", ...yamlLines, "```"].join("\n");
 }
 
+function chatEventBlock(args: {
+  offset: number;
+  type: string;
+  fields?: Record<string, string | number>;
+  bodyTag: string;
+  body: string;
+}): string {
+  return eventBlock({
+    offset: args.offset,
+    type: args.type,
+    fields: args.fields,
+    bodyTag: args.bodyTag,
+    body: args.body,
+  });
+}
+
 function yamlScalar(value: string | number): string {
   if (typeof value === "number") return String(value);
   if (/^[a-zA-Z0-9._/@:-]+$/.test(value)) return value;
@@ -633,4 +775,58 @@ function capabilityProvidedEventBlock(args: {
   type: string;
 }): string {
   return `Capability available as \`itx.${args.name}\`. ${args.instructions} (to debug further, see ${args.type} event at offset ${args.offset})`;
+}
+
+const CODEMODE_FENCE_RE =
+  /^```(?:js|javascript|codemode|ts|typescript)\s*\n([\s\S]*?)(?:\n```\s*)?$/;
+
+export function extractCodemodeScript(content: string): string | null {
+  const trimmed = content.trim();
+  if (trimmed.startsWith("async (itx) => {") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+  if (trimmed.startsWith("async () => {") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+
+  const fenced = CODEMODE_FENCE_RE.exec(trimmed);
+  return fenced?.[1]?.trim() || null;
+}
+
+function itxCompletionInputBlock(input: {
+  event: Extract<AgentConsumedEvent, { type: "events.iterate.com/itx/script-execution-completed" }>;
+  logs: string[];
+  outcome: { status: "returned"; value: unknown } | { status: "threw"; error: unknown };
+}) {
+  const executionId = input.event.payload.executionId;
+  return [
+    "```yaml",
+    "event:",
+    `  offset: ${input.event.offset}`,
+    "  type: events.iterate.com/itx/script-execution-completed",
+    `  executionId: ${yamlScalar(executionId)}`,
+    "  outcome:",
+    `    status: ${input.outcome.status}`,
+    ...yamlNestedBlockScalar(
+      input.outcome.status === "returned" ? "    value" : "    error",
+      formatCodemodeOutput(
+        input.outcome.status === "returned" ? input.outcome.value : input.outcome.error,
+      ),
+    ),
+    ...(input.logs.length > 0 ? yamlNestedBlockScalar("  console", input.logs.join("\n")) : []),
+    "```",
+  ].join("\n");
+}
+
+function formatCodemodeOutput(output: unknown) {
+  if (typeof output === "string") return output;
+  try {
+    return JSON.stringify(output, null, 2) ?? String(output);
+  } catch {
+    return String(output);
+  }
+}
+
+function yamlNestedBlockScalar(key: string, value: string): string[] {
+  return [`${key}: |-`, ...value.split("\n").map((line) => `      ${line}`)];
 }

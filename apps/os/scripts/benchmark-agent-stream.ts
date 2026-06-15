@@ -7,7 +7,7 @@ import type { appRouter } from "~/orpc/root.ts";
 
 type OrpcClient = RouterClient<typeof appRouter>;
 
-type TrafficKind = "raw-openai-ws" | "mixed-control" | "agent-chat-responses";
+type TrafficKind = "raw-openai-ws" | "mixed-control" | "web-message-sent";
 
 type Options = {
   agentPath: string;
@@ -30,7 +30,7 @@ const BENCHMARK_EVENT_TYPES = new Set([
   "events.iterate.com/openai-ws/websocket-message-received",
   "events.iterate.com/openai-ws/config-updated",
   "events.iterate.com/agent/system-prompt-updated",
-  "events.iterate.com/agent-chat/assistant-response-added",
+  "events.iterate.com/agents/web-message-sent",
 ]);
 
 async function main() {
@@ -150,12 +150,11 @@ async function appendTerminalEvents(input: {
 }) {
   const terminalEvents: EventInput[] = [
     {
-      type: "events.iterate.com/agent-chat/assistant-response-added",
+      type: "events.iterate.com/agents/web-message-sent",
       payload: {
-        channel: "web",
-        message: `benchmark terminal agent-chat ${input.benchmarkId}`,
+        message: `benchmark terminal web message ${input.benchmarkId}`,
       },
-      metadata: benchmarkMetadata(input.benchmarkId, "terminal-agent-chat"),
+      metadata: benchmarkMetadata(input.benchmarkId, "terminal-web-message"),
     },
     {
       type: "events.iterate.com/agent/system-prompt-updated",
@@ -194,11 +193,10 @@ function benchmarkEvent(input: {
   options: Options;
 }): EventInput {
   const padding = "x".repeat(input.options.payloadBytes);
-  if (input.options.traffic === "agent-chat-responses") {
+  if (input.options.traffic === "web-message-sent") {
     return {
-      type: "events.iterate.com/agent-chat/assistant-response-added",
+      type: "events.iterate.com/agents/web-message-sent",
       payload: {
-        channel: "web",
         message: `benchmark response ${input.index} ${padding}`,
       },
       metadata: benchmarkMetadata(input.benchmarkId, input.index),
@@ -319,8 +317,8 @@ async function readBenchmarkEvents(input: {
 function targetOffsetByProcessor(events: readonly AppendedEvent[]) {
   const targets = new Map<string, number>();
   for (const item of events) {
-    if (item.event.type === "events.iterate.com/agent-chat/assistant-response-added") {
-      targets.set("agent-chat", item.event.offset);
+    if (item.event.type === "events.iterate.com/agents/web-message-sent") {
+      targets.set("agent", item.event.offset);
     }
     if (item.event.type === "events.iterate.com/agent/system-prompt-updated") {
       targets.set("agent", item.event.offset);
@@ -489,10 +487,10 @@ function booleanOption(values: Map<string, string>, key: string, fallback: boole
 
 function trafficOption(values: Map<string, string>, key: string, fallback: TrafficKind) {
   const value = values.get(key) ?? fallback;
-  if (value === "raw-openai-ws" || value === "mixed-control" || value === "agent-chat-responses") {
+  if (value === "raw-openai-ws" || value === "mixed-control" || value === "web-message-sent") {
     return value;
   }
-  throw new Error(`--${key} must be raw-openai-ws, mixed-control, or agent-chat-responses.`);
+  throw new Error(`--${key} must be raw-openai-ws, mixed-control, or web-message-sent.`);
 }
 
 function requireProjectSlugOrId(value: string | null) {
