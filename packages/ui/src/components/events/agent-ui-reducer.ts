@@ -551,15 +551,17 @@ function readUsageTokens(usage: unknown): { input?: number; output?: number } {
 
 function readProcessorAnnouncement(value: unknown): AgentUiProcessorAnnouncement | null {
   if (!isRecord(value)) return null;
-  if (typeof value.slug !== "string" || typeof value.version !== "string") return null;
+  const announcement = isRecord(value.announcement) ? value.announcement : value;
+  if (typeof announcement.slug !== "string" || typeof announcement.version !== "string")
+    return null;
   return {
-    slug: value.slug,
-    version: value.version,
-    description: typeof value.description === "string" ? value.description : "",
-    consumes: readStringArray(value.consumes),
-    emits: readStringArray(value.emits),
-    ownedEvents: Array.isArray(value.ownedEvents)
-      ? value.ownedEvents
+    slug: announcement.slug,
+    version: announcement.version,
+    description: typeof announcement.description === "string" ? announcement.description : "",
+    consumes: readStringArray(announcement.consumes),
+    emits: readStringArray(announcement.emits),
+    ownedEvents: Array.isArray(announcement.ownedEvents)
+      ? announcement.ownedEvents
           .filter((owned): owned is Record<string, unknown> => isRecord(owned))
           .filter((owned) => typeof owned.type === "string")
           .map((owned) => ({

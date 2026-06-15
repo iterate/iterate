@@ -182,6 +182,15 @@ Host-provided constructor deps (`StreamProcessorBaseDeps`):
 - `keepAliveWhile(work)` — keeps the host runtime alive while detached async
   work is in flight (e.g. a Durable Object's `ctx.waitUntil`).
 
+Terminology:
+
+- A **processor snapshot** is the replay checkpoint: `{ offset, state }`, where
+  `state` is the processor's reduced state at that stream offset.
+- A **processor runtime state** is the broad live inspection value returned by
+  `processor.getRuntimeState()`. It contains the snapshot plus optional runtime
+  data such as health or metrics. Runtime state is observational; the snapshot
+  remains the replay cursor.
+
 Catch-up replay runs side effects for every delivered event past the durable
 checkpoint. Side effects must therefore be idempotency-keyed and safe to retry.
 
@@ -190,8 +199,11 @@ Hosting:
 - Workers: `createStreamProcessorHost(this.ctx)` in
   `src/workers/stream-processor-host.ts` hosts named processors inside a
   Durable Object. The host passes each processor's contract announcement in
-  its subscribe call; the stream appends it as part of the
-  `events.iterate.com/stream/subscriber-connected` presence fact — there is no
+  its subscribe call as `subscriber.processor.announcement`, alongside an
+  optional live `subscriber.processor.getRuntimeState` capability; the stream
+  appends the serializable announcement as part of the
+  `events.iterate.com/stream/subscriber-connected` presence fact and retains the
+  runtime-state capability only while the connection is live. There is no
   per-processor `standardProcessorBehavior` self-registration anymore.
 - Browser: `acquireStreamRuntime` in `src/browser/stream-browser-store.ts`
   hosts a processor over an injected stream client with a Web Locks writer

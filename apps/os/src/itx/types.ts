@@ -632,6 +632,13 @@ export type StreamRuntimeState = {
   coreProcessorState: StreamCoreProcessorState;
   runtime: { connections: Record<string, unknown> };
 };
+export type ProcessorRuntimeState = {
+  snapshot: {
+    offset: number;
+    state: unknown;
+  };
+  runtime?: Record<string, unknown>;
+};
 export type StreamSubscriptionHandle = { unsubscribe(): void };
 export type StreamSubscriberDescriptor = { description?: string; [key: string]: unknown };
 export type StreamSubscriptionBatch = {
@@ -659,6 +666,9 @@ export interface ItxStream {
     timeoutMs: number;
   }): Promise<StreamEvent>;
   runtimeState(): Promise<StreamRuntimeState>;
+  getProcessorRuntimeState(args: {
+    subscriptionKey: string;
+  }): Promise<ProcessorRuntimeState | null>;
   kill(): Promise<void>;
   reset(): Promise<void>;
   reduce(args: {

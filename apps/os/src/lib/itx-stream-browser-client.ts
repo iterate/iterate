@@ -11,6 +11,9 @@ export type ItxStreamForBrowserRuntime = {
   append(args: { streamPath?: string; event: StreamEventInput }): Promise<StreamEvent>;
   appendBatch(args: { streamPath?: string; events: StreamEventInput[] }): Promise<StreamEvent[]>;
   runtimeState(): Promise<StreamRuntimeState>;
+  getProcessorRuntimeState(
+    args: Parameters<StreamRpc["getProcessorRuntimeState"]>[0],
+  ): ReturnType<StreamRpc["getProcessorRuntimeState"]>;
   subscribe(args: {
     subscriptionKey?: string;
     processEventBatch(batch: { events: StreamEvent[]; streamMaxOffset: number }): unknown;
@@ -27,6 +30,10 @@ export function itxStreamBrowserClient(stream: ItxStreamForBrowserRuntime): Brow
     append: (args) => stream.append(args),
     appendBatch: (args) => stream.appendBatch(args),
     runtimeState: () => stream.runtimeState(),
+    getProcessorRuntimeState: (args) =>
+      stream.getProcessorRuntimeState(args) as Promise<
+        Awaited<ReturnType<StreamRpc["getProcessorRuntimeState"]>>
+      >,
     async subscribe(args) {
       const subscription = await stream.subscribe({
         subscriptionKey: args.subscriptionKey,

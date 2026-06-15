@@ -12,10 +12,16 @@
 // connection (so a follower can still append / read runtimeState) and — only as leader —
 // hosts the processor over a fresh subscription, mirroring StreamProcessorRunner.
 
+import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
 import type { StreamEvent, StreamEventInput } from "../shared/event.ts";
-import type { ProcessorStream } from "../types.ts";
-import type { StreamProcessorSnapshot } from "../stream-processor.ts";
-import type { StreamCoreProcessorState } from "../types.ts";
+import type {
+  LiveStreamSubscriberDescriptor,
+  ProcessorRuntimeState,
+  ProcessorStream,
+  StreamCoreProcessorState,
+  SubscriptionKey,
+} from "../types.ts";
+import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "../stream-processor.ts";
 import { deleteBrowserProcessorState } from "./processor-state-storage.ts";
 import { acquireWriterRole, streamWriterLockName, type WriterRole } from "./stream-leader.ts";
 import {
@@ -34,7 +40,16 @@ export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed
  * `ingest`. Structural so views construct whatever processor class they like.
  */
 type BrowserHostedProcessor = {
+  contract: {
+    slug: string;
+    version?: string;
+    description?: string;
+    consumes: readonly string[];
+    emits?: readonly string[];
+    events: Record<string, { description?: string; payloadSchema?: unknown }>;
+  };
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
+  getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>>;
   ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void>;
 };
 
@@ -92,6 +107,9 @@ export type StreamRpcResult<T> = Promise<T> & Disposable;
 export type BrowserStreamClient = Disposable &
   ProcessorStream & {
     runtimeState(): Promise<StreamRuntimeState>;
+    getProcessorRuntimeState(args: {
+      subscriptionKey: SubscriptionKey;
+    }): Promise<ProcessorRuntimeState | null>;
     subscribe(args: {
       subscriptionKey?: string;
       processEventBatch: (batch: {
@@ -99,7 +117,7 @@ export type BrowserStreamClient = Disposable &
         streamMaxOffset: number;
       }) => unknown;
       replayAfterOffset?: number;
-      subscriber?: { description: string };
+      subscriber?: LiveStreamSubscriberDescriptor;
     }): Promise<{ unsubscribe(): void }>;
     kill(): Promise<void> | void;
     reset(): Promise<void>;
@@ -119,6 +137,9 @@ export type StreamBrowserStore = Disposable & {
   readonly streamDatabase: StreamBrowserDatabase;
   appendBatch(args: { events: StreamEventInput[] }): StreamRpcResult<StreamEvent[]>;
   runtimeState(): StreamRpcResult<StreamRuntimeState>;
+  getProcessorRuntimeState(args: {
+    subscriptionKey: SubscriptionKey;
+  }): StreamRpcResult<ProcessorRuntimeState | null>;
   clearLocalDatabase(): Promise<void>;
   kill(): Promise<void>;
   reset(): Promise<void>;
@@ -610,6 +631,13 @@ function createStreamRuntime(
         lastDeliveredOffset = checkpoint.offset;
         return {
           replayAfterOffset: checkpoint.offset,
+          subscriber: {
+            description: "browser",
+            processor: {
+              announcement: announceContract(processor.contract),
+              getRuntimeState: () => processor.getRuntimeState(),
+            },
+          },
           // Counters are bumped inside ingestWithSelfHeal, AFTER its
           // supersede guard: a batch delivered to a replaced election is
           // dropped and must not count as progress (it never advances
@@ -627,7 +655,7 @@ function createStreamRuntime(
             subscriptionKey,
             processEventBatch: ready.processEventBatch,
             replayAfterOffset: ready.replayAfterOffset,
-            subscriber: { description: "browser" },
+            subscriber: ready.subscriber,
           }),
         );
       })
@@ -945,6 +973,11 @@ function createStreamRuntime(
     runtimeState() {
       return callWhenReady((rpc) => rpc.runtimeState() as Promise<StreamRuntimeState>);
     },
+    getProcessorRuntimeState(args) {
+      return callWhenReady(
+        (rpc) => rpc.getProcessorRuntimeState(args) as Promise<ProcessorRuntimeState | null>,
+      );
+    },
     async clearLocalDatabase() {
       stopSubscriptionElection();
       stream?.[Symbol.dispose]();
@@ -1015,6 +1048,22 @@ function raceWithTimeout<T>(promise: Promise<T>, ms: number, message: string): P
 
 function isWriteStatement(sql: string) {
   return /^\s*(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|REPLACE|PRAGMA\s+user_version)/i.test(sql);
+}
+
+function announceContract(
+  contract: BrowserHostedProcessor["contract"],
+): ProcessorContractAnnouncement {
+  return {
+    slug: contract.slug,
+    version: contract.version ?? "0",
+    description: contract.description ?? "",
+    consumes: [...contract.consumes],
+    emits: [...(contract.emits ?? [])],
+    ownedEvents: Object.entries(contract.events).map(([type, definition]) => ({
+      type,
+      ...(definition.description === undefined ? {} : { description: definition.description }),
+    })),
+  };
 }
 
 function resolveStreamUrl(args: {
