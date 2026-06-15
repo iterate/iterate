@@ -1,5 +1,5 @@
 import { useForm } from "@tanstack/react-form";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
 import { useAuthClient } from "@iterate-com/auth/client";
 import { Button } from "@iterate-com/ui/components/button";
@@ -20,8 +20,7 @@ import {
 } from "@iterate-com/ui/components/select";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
-import { cacheCreatedProjectQueries } from "~/lib/cache-created-project-queries.ts";
-import { orpc } from "~/orpc/client.ts";
+import { connectItx, reconnectItx } from "~/itx/itx-react.tsx";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -36,27 +35,36 @@ const CreateProjectInput = z.object({
 
 export function CreateProjectForm() {
   const router = useRouter();
-  const queryClient = useQueryClient();
   const { refresh, session } = useAuthClient();
   const organizations = session?.authenticated ? session.session.organizations : [];
-  const createProject = useMutation(
-    orpc.projects.create.mutationOptions({
-      onSuccess: async (project) => {
-        cacheCreatedProjectQueries({ project, queryClient });
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
-        await refresh({ force: true });
-        await router.invalidate({ sync: true });
-        await router.navigate({
-          to: "/projects/$projectSlug/agents/streams/$",
-          params: {
-            _splat: "/agents/onboarding",
-            projectSlug: project.slug,
-          },
-        });
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
+  const createProject = useMutation({
+    mutationFn: async (input: { slug: string; organizationSlug: string }) => {
+      const itx = await connectItx();
+      return await itx.projects.create({
+        slug: input.slug,
+        organizationSlug: input.organizationSlug || undefined,
+      });
+    },
+    onSuccess: async (project) => {
+      // Refresh the browser auth session so it carries the new project's
+      // claim BEFORE navigating to the project-scoped route (#1516); without
+      // this the project route loads before the session knows the project.
+      await refresh({ force: true });
+      // Drop the global itx socket so it re-dials with the refreshed claims —
+      // otherwise itx.projects.list (connect-time principal) omits this project.
+      reconnectItx();
+      await router.invalidate({ sync: true });
+      // New projects land in the agent onboarding flow (origin/main UX).
+      await router.navigate({
+        to: "/projects/$projectSlug/agents/streams/$",
+        params: {
+          _splat: "/agents/onboarding",
+          projectSlug: project.slug,
+        },
+      });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
 
   const form = useForm({
     defaultValues: { slug: "", organizationSlug: organizations[0]?.slug ?? "" },
@@ -68,7 +76,7 @@ export function CreateProjectForm() {
       const parsed = CreateProjectInput.parse(value);
       await createProject.mutateAsync({
         slug: parsed.slug,
-        organizationSlug: parsed.organizationSlug || undefined,
+        organizationSlug: parsed.organizationSlug,
       });
       form.reset();
     },

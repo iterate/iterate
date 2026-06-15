@@ -1,25 +1,22 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link, createFileRoute } from "@tanstack/react-router";
 import { FolderPlus } from "lucide-react";
-import type { Project } from "@iterate-com/os-contract";
-import { useAuthClient } from "@iterate-com/auth/client";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { cacheCreatedProjectQueries } from "~/lib/cache-created-project-queries.ts";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
-import { projectsListQueryOptions } from "~/lib/project-route-query.ts";
 import { getPublicRouteConfig } from "~/lib/public-route-config.ts";
-import { orpc } from "~/orpc/client.ts";
+import { useItx, useItxQuery } from "~/itx/itx-react.tsx";
+import type { ItxProjects } from "~/itx/handle.ts";
+
+type ProjectSummary = Awaited<ReturnType<ItxProjects["list"]>>["projects"][number];
 
 export const Route = createFileRoute("/_app/projects/")({
-  loader: async ({ context }) => {
-    await context.queryClient.ensureQueryData(projectsListQueryOptions({ limit: 20, offset: 0 }));
-
-    return {
-      routeConfig: await getPublicRouteConfig(),
-    };
-  },
+  ssr: false,
+  loader: async () => ({
+    routeConfig: await getPublicRouteConfig(),
+  }),
   component: ProjectsIndexPage,
 });
 
@@ -35,41 +32,37 @@ function buildProjectHostname(input: {
 }
 
 function ProjectsIndexPage() {
-  const router = useRouter();
-  const queryClient = useQueryClient();
-  const { refresh } = useAuthClient();
+  return (
+    <ItxBoundary>
+      <ProjectsIndexContent />
+    </ItxBoundary>
+  );
+}
+
+function ProjectsIndexContent() {
   const { routeConfig } = Route.useLoaderData();
-  const { data: projectsData } = useQuery(projectsListQueryOptions({ limit: 20, offset: 0 }));
+  const itx = useItx();
+  const queryClient = useQueryClient();
+  // Orphan recovery deferred — itx.projects.list returns OS-DB projects only and
+  // intentionally does NOT merge auth-service orphans yet; see follow-up.
+  const projectsKey = ["projects"];
+  const list = useItxQuery({
+    key: projectsKey,
+    query: (itx) => itx.projects.list({ limit: 20, offset: 0 }),
+  });
+  const projects: ProjectSummary[] = list.projects ?? [];
 
-  const createProject = useMutation(
-    orpc.projects.create.mutationOptions({
-      onSuccess: async (project) => {
-        cacheCreatedProjectQueries({ project, queryClient });
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
-        await refresh({ force: true });
-        await router.invalidate({ sync: true });
-        await router.navigate({
-          to: "/projects/$projectSlug/agents/streams/$",
-          params: {
-            _splat: "/agents/onboarding",
-            projectSlug: project.slug,
-          },
-        });
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
+  const deleteProject = useMutation({
+    mutationFn: async (input: { id: string }) => {
+      return await itx.projects.remove(input);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["itx", ...projectsKey] });
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
 
-  const deleteProject = useMutation(
-    orpc.projects.remove.mutationOptions({
-      onSuccess: () => {
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
-
-  const hasProjects = (projectsData?.projects.length ?? 0) > 0;
+  const hasProjects = projects.length > 0;
 
   return (
     <section className="space-y-4 p-4">
@@ -112,7 +105,7 @@ function ProjectsIndexPage() {
             <div>Created</div>
             <div />
           </div>
-          {projectsData?.projects.map((project) => {
+          {projects.map((project) => {
             const hostname = buildProjectHostname({
               slug: project.slug,
               customHostname: project.customHostname,
@@ -127,12 +120,10 @@ function ProjectsIndexPage() {
                 <Identifier value={project.id} textClassName="text-xs text-muted-foreground" />
                 <ProjectSlugCell project={project} />
                 <div className="truncate text-xs text-muted-foreground">
-                  {project.isOrphanedProjectFromAuthService
-                    ? "Not created in OS"
-                    : (project.customHostname ?? "None")}
+                  {project.customHostname ?? "None"}
                 </div>
                 <div className="truncate text-xs">
-                  {!project.isOrphanedProjectFromAuthService && hostname ? (
+                  {hostname ? (
                     <a
                       href={`https://${hostname}`}
                       target="_blank"
@@ -146,28 +137,16 @@ function ProjectsIndexPage() {
                   )}
                 </div>
                 <div className="text-xs text-muted-foreground">{project.createdAt ?? "-"}</div>
-                {project.isOrphanedProjectFromAuthService ? (
-                  <Button
-                    size="sm"
-                    onClick={() => createProject.mutate({ id: project.id, slug: project.slug })}
-                    disabled={createProject.isPending && createProject.variables?.id === project.id}
-                  >
-                    {createProject.isPending && createProject.variables?.id === project.id
-                      ? "Creating..."
-                      : "Create"}
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => deleteProject.mutate({ id: project.id })}
-                    disabled={deleteProject.isPending && deleteProject.variables?.id === project.id}
-                  >
-                    {deleteProject.isPending && deleteProject.variables?.id === project.id
-                      ? "Deleting..."
-                      : "Delete"}
-                  </Button>
-                )}
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => deleteProject.mutate({ id: project.id })}
+                  disabled={deleteProject.isPending && deleteProject.variables?.id === project.id}
+                >
+                  {deleteProject.isPending && deleteProject.variables?.id === project.id
+                    ? "Deleting..."
+                    : "Delete"}
+                </Button>
               </div>
             );
           })}
@@ -177,16 +156,7 @@ function ProjectsIndexPage() {
   );
 }
 
-function ProjectSlugCell({ project }: { project: Project }) {
-  if (project.isOrphanedProjectFromAuthService) {
-    return (
-      <div className="min-w-0">
-        <div className="truncate font-medium">{project.slug}</div>
-        <div className="text-xs text-muted-foreground">Available from Auth</div>
-      </div>
-    );
-  }
-
+function ProjectSlugCell({ project }: { project: ProjectSummary }) {
   return (
     <Link
       to="/projects/$projectSlug/agents/new"

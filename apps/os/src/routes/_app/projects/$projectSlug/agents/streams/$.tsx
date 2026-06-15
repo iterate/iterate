@@ -1,14 +1,11 @@
 import { Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation } from "@tanstack/react-query";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
-import { getBrowserItx } from "~/itx/use-itx.ts";
-import { projectAgentRuntimeStateQueryOptions } from "~/lib/project-route-query.ts";
+import { connectItx } from "~/itx/itx-react.tsx";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { orpc } from "~/orpc/client.ts";
 
 const AGENTS_ROOT = StreamPath.parse("/agents");
 
@@ -27,12 +24,9 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
     }),
   },
   ssr: false,
-  loader: async ({ context, params }) => {
+  loader: ({ context, params }) => {
     const agentPath = params._splat;
     const { project } = context;
-    await context.queryClient.ensureQueryData(
-      projectAgentRuntimeStateQueryOptions({ agentPath, projectId: project.id }),
-    );
 
     return breadcrumbLoaderData({
       breadcrumb: agentPath,
@@ -63,28 +57,25 @@ function ProjectAgentDetailContent() {
   const params = Route.useParams();
   const { project, streamPath } = Route.useLoaderData();
   // The stream view subscribes live, so a send needs no cache invalidation —
-  // the new events arrive over the socket.
-  const sendMessage = useMutation(orpc.project.agents.sendMessage.mutationOptions());
-
+  // the new events arrive over the socket. agents.sendMessage routes through
+  // the agent DO's own sendMessage, which force-wakes it
+  // (ensureStartedAndCaughtUp) so cold/legacy agents respond, not just freshly
+  // created ones.
   async function submitAgentMessage(message: string) {
-    await sendMessage.mutateAsync({
-      agentPath: streamPath,
-      message,
-      projectSlugOrId: project.id,
-    });
+    const itx = await connectItx({ projectId: params.projectSlug });
+    await itx.agents.sendMessage({ agentPath: streamPath, message, channel: "web" });
   }
 
   async function interruptAgentMessage(llmRequestId: number) {
-    await getBrowserItx(project.id).then((itx) =>
-      itx.streams.get(streamPath).append({
-        type: "events.iterate.com/agent/llm-request-cancelled",
-        payload: {
-          phase: "requested",
-          llmRequestId,
-          reason: "interrupted-by-user-input",
-        },
-      }),
-    );
+    const itx = await connectItx({ projectId: params.projectSlug });
+    await itx.streams.get(streamPath).append({
+      type: "events.iterate.com/agent/llm-request-cancelled",
+      payload: {
+        phase: "requested",
+        llmRequestId,
+        reason: "interrupted-by-user-input",
+      },
+    });
   }
 
   return (

@@ -75,7 +75,7 @@ describe("itx REPL TypeScript declarations", () => {
       "const target: object = new RpcTarget();",
       "const fn: ItxFn<StreamEvent[]> = (handle: ItxHandle) =>",
       '  handle.streams.get({ path: "/chat" }).read();',
-      "const previous: unknown[] = [$_, _, vars.anything, env.anything];",
+      "const previous: unknown[] = [$_, _, vars.anything];",
       "[projectScoped, target, fn, previous];",
     ].join("\n");
     const env = createReplTypeScriptEnv(code);

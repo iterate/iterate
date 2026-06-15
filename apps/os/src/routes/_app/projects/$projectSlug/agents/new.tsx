@@ -6,7 +6,7 @@ import { StreamPath } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { orpcClient } from "~/orpc/client.ts";
+import { connectItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
   staticData: { hideAppHeader: true },
@@ -20,7 +20,6 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
 
 function NewAgentPage() {
   const params = Route.useParams();
-  const { project } = Route.useLoaderData();
   const navigate = useNavigate();
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [message, setMessage] = useState("");
@@ -33,23 +32,16 @@ function NewAgentPage() {
   const createAgent = useMutation({
     mutationFn: async (content: string) => {
       const agentPath = newWebAgentPath();
-      await orpcClient.project.streams.create({
-        projectSlugOrId: project.id,
-        streamPath: agentPath,
-      });
-      await waitForProjectAgentSetup({
-        projectSlugOrId: project.id,
-        streamPath: agentPath,
-      });
-      await orpcClient.project.streams.append({
-        event: {
-          type: "events.iterate.com/agent/input-added",
-          payload: {
-            content,
-          },
-        },
-        projectSlugOrId: project.id,
-        streamPath: agentPath,
+      // connectItx (imperative, not the suspending hook) lands on the project
+      // provider's socket. Agent setup is seeded server-side now (#1524): create
+      // the stream, wait for the project-agent-setup processor to write the
+      // system prompt, then append the user's first input.
+      const itx = await connectItx({ projectId: params.projectSlug });
+      await itx.streams.create({ streamPath: agentPath });
+      await waitForProjectAgentSetup(itx, agentPath);
+      await itx.streams.get(agentPath).append({
+        type: "events.iterate.com/agent/input-added",
+        payload: { content },
       });
       return agentPath;
     },
@@ -127,15 +119,21 @@ function newWebAgentPath() {
   return StreamPath.parse(`/agents/web/${slugifyCreationTime(new Date())}`);
 }
 
-async function waitForProjectAgentSetup(input: { projectSlugOrId: string; streamPath: string }) {
+async function waitForProjectAgentSetup(
+  itx: Awaited<ReturnType<typeof connectItx>>,
+  streamPath: string,
+) {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    const { events } = await orpcClient.project.streams.read({
-      projectSlugOrId: input.projectSlugOrId,
-      streamPath: input.streamPath,
-      beforeOffset: "end",
-    });
-    if (events.some((event) => event.idempotencyKey === "project-agent-setup:system-prompt")) {
+    // itx's streams.read returns the Event[] directly (no { events } wrapper).
+    const events = await itx.streams.get(streamPath).read({ beforeOffset: "end" });
+    if (
+      events.some(
+        (event) =>
+          (event as { idempotencyKey?: string }).idempotencyKey ===
+          "project-agent-setup:system-prompt",
+      )
+    ) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 100));

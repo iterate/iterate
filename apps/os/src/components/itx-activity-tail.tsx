@@ -7,11 +7,11 @@
 // If the socket dies, useItx re-suspends and hands back a fresh handle; the
 // effect re-subscribes from "start" again and dedupes the replay by offset.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Event as StreamEvent } from "@iterate-com/shared/streams/types";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
-import { useItx } from "~/itx/use-itx.ts";
+import { useItxEffect } from "~/itx/itx-react.tsx";
 
 const MAX_BUFFERED_EVENTS = 500;
 
@@ -32,23 +32,21 @@ const FRIENDLY_RENDERERS: Record<string, (payload: Record<string, unknown>) => s
 
 type TailStatus = "connecting" | "live" | "error";
 
-export function ItxActivityTail({ projectId }: { projectId: string }) {
-  const itx = useItx(projectId);
+export function ItxActivityTail(_props: { projectId: string }) {
+  // The project layout route wraps this in <ItxProvider projectId={slug}>, so
+  // useItxEffect's injected handle is THIS project's shared socket — the projectId
+  // prop is no longer needed to address the connection.
   const [raw, setRaw] = useState(false);
   const [events, setEvents] = useState<readonly StreamEvent[]>([]);
   const [status, setStatus] = useState<TailStatus>("connecting");
   const [error, setError] = useState<string>();
 
-  useEffect(() => {
-    let disposed = false;
-    let release: (() => void) | null = null;
+  useItxEffect(async (itx) => {
     setStatus("connecting");
     setError(undefined);
-    itx.streams
-      .get(PROJECT_CONTEXT_PATH)
-      .subscribe(
+    try {
+      const subscription = await itx.streams.get(PROJECT_CONTEXT_PATH).subscribe(
         (batch) => {
-          if (disposed) return;
           setEvents((previous) => {
             // Re-subscribing replays from "start"; offsets dedupe the overlap.
             const lastOffset = previous.at(-1)?.offset;
@@ -61,27 +59,14 @@ export function ItxActivityTail({ projectId }: { projectId: string }) {
           });
         },
         { afterOffset: "start" },
-      )
-      .then((subscription) => {
-        const releaseSubscription = () =>
-          void Promise.resolve(subscription.unsubscribe()).catch(() => {});
-        if (disposed) {
-          releaseSubscription();
-          return;
-        }
-        release = releaseSubscription;
-        setStatus("live");
-      })
-      .catch((subscribeError: unknown) => {
-        if (disposed) return;
-        setStatus("error");
-        setError(subscribeError instanceof Error ? subscribeError.message : String(subscribeError));
-      });
-    return () => {
-      disposed = true;
-      release?.();
-    };
-  }, [itx]);
+      );
+      setStatus("live");
+      return () => subscription[Symbol.dispose]();
+    } catch (subscribeError: unknown) {
+      setStatus("error");
+      setError(subscribeError instanceof Error ? subscribeError.message : String(subscribeError));
+    }
+  }, []);
 
   const rows = raw
     ? events.map((event) => ({ event, text: null }))

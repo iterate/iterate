@@ -20,9 +20,17 @@ import { cn } from "@iterate-com/ui/lib/utils";
  * current state, later pushes follow every append), so the tree is LIVE — no
  * query cache, plain component state.
  */
+type StreamSubscription = { unsubscribe(): unknown };
+
 export type StreamTreeSource = (streamPath: StreamPathType) => {
-  onStateChange(onState: (state: StreamStateType) => void): Promise<{ unsubscribe(): unknown }>;
+  onStateChange(onState: (state: StreamStateType) => void): Promise<StreamSubscription>;
 };
+
+/** Tear down one live stream subscription (best-effort unsubscribe + dispose). */
+function disposeStreamSubscription(subscription: StreamSubscription): void {
+  void Promise.resolve(subscription.unsubscribe()).catch(() => {});
+  (subscription as Partial<Disposable>)[Symbol.dispose]?.();
+}
 
 type NodeState =
   | { status: "loading" }
@@ -57,12 +65,8 @@ function useLiveStreamState(input: {
         setNode({ status: "live", state: StreamState.parse(next) });
       })
       .then((subscription) => {
-        // The far end may already be gone when we unsubscribe — never let
-        // that reject unhandled.
-        const releaseSubscription = () =>
-          void Promise.resolve(subscription.unsubscribe()).catch(() => {});
-        if (disposed) releaseSubscription();
-        else release = releaseSubscription;
+        if (disposed) disposeStreamSubscription(subscription);
+        else release = () => disposeStreamSubscription(subscription);
       })
       .catch((error: unknown) => {
         if (disposed) return;

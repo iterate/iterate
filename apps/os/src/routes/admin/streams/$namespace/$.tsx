@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
-import { useAdminItx } from "~/lib/admin-itx.ts";
+import { useItx } from "~/itx/itx-react.tsx";
 import { adminStreamRpcPath } from "~/lib/stream-rpc-paths.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 
@@ -21,7 +21,7 @@ export const Route = createFileRoute("/admin/streams/$namespace/$")({
 
 function AdminStreamDetailPage() {
   const { namespace, _splat: streamPath } = Route.useParams();
-  const itx = useAdminItx();
+  const itx = useItx();
   const navigate = useNavigate();
   const source = useMemo(
     () => (path: StreamPathType) => itx.streams.namespace(namespace).get(path),

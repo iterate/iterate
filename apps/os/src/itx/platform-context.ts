@@ -120,11 +120,37 @@ const PLATFORM_PROJECT_CAPABILITIES: PlatformCapability[] = [
     name: "secrets",
   },
   {
+    // The project's third-party integrations (slack, google): the read +
+    // connect/disconnect surface the dashboard settings use. OAuth material
+    // itself never crosses itx — startOAuthFlow only returns a provider
+    // authorization URL; tokens land in the secret store via the callback.
+    address: { entrypoint: "IntegrationsCapability", type: "rpc", worker: { type: "loopback" } },
+    instructions:
+      "Project integrations (slack, google): itx.integrations.getConnection({ provider }) " +
+      "returns connection status (connected, displayName, scopes, redacted token summary); " +
+      "startOAuthFlow({ provider, callbackUrl?, userId }) returns { authorizationUrl } to begin " +
+      "the provider OAuth flow (userId is the browser session's user — it only binds the OAuth " +
+      "state; the callback's requireCallbackUser check is the real backstop); disconnect({ provider }) revokes the connection and " +
+      "appends the disconnected event to the project's /integrations/<provider> stream.",
+    name: "integrations",
+  },
+  {
     address: { entrypoint: "ReposCapability", type: "rpc", worker: { type: "loopback" } },
     instructions:
       "The project's git repos: itx.repos.ensureProjectRepoInfo({ projectSlug }), " +
       "list(), create({ slug }), get({ slug }) — repo handles expose commitFiles/readFiles/readLog.",
     name: "repos",
+  },
+  {
+    // The project's agents. sendMessage FORCE-WAKES the agent Durable Object
+    // (ensureStartedAndCaughtUp) before appending, so chat works even for a
+    // cold or never-started/legacy agent — a raw stream append would not.
+    address: { entrypoint: "AgentsCapability", type: "rpc", worker: { type: "loopback" } },
+    instructions:
+      "The project's agents: itx.agents.sendMessage({ agentPath, message, channel? }) wakes " +
+      "the agent (cold/legacy included) and posts a user message, returning { event }. " +
+      "List agents and read/write presets directly via itx.streams on the /agents tree.",
+    name: "agents",
   },
   {
     // The workspace is provided EXPLICITLY (props.workspaceId) — workspaces

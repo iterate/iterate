@@ -1,10 +1,10 @@
 import { Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
+import { useItx } from "~/itx/itx-react.tsx";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 import { StreamViewSearch } from "~/lib/stream-view-search.ts";
-import { createBrowserOpenApiClient } from "~/orpc/client.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
   staticData: { hideAppHeader: true, commandPalette: { stream: { mode: "stream" } } },
@@ -49,18 +49,15 @@ function ProjectStreamDetailPage() {
 function ProjectStreamDetailContent() {
   const params = Route.useParams();
   const { project, streamPath } = Route.useLoaderData();
+  const itx = useItx();
 
   async function submitMessage(message: string) {
-    await createBrowserOpenApiClient().project.streams.appendBatch({
-      events: [
-        {
-          type: "events.iterate.com/agents/user-message-received",
-          payload: { content: message, origin: "web" },
-        },
-      ],
-      projectSlugOrId: project.id,
-      streamPath,
-    });
+    await itx.streams.get(streamPath).appendBatch([
+      {
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: message, origin: "web" },
+      },
+    ]);
   }
 
   return (

@@ -293,10 +293,17 @@ const DIALABLE_BINDINGS: ReadonlySet<string> = new Set(["AI"]);
  */
 const DIALABLE_LOOPBACKS: ReadonlySet<string> = new Set([
   "AgentCapability",
+  // Routes to the agent DO's sendMessage scoped strictly by the dial-injected
+  // projectId (props.projectId, always overwritten by the injection), so a
+  // provider can never reach another project's agents.
+  "AgentsCapability",
   "AgentToolsCapability",
   "BindingCapability",
   "EgressPipe",
   "GmailCapability",
+  // Project integrations (OAuth connect/disconnect/status) scoped strictly by
+  // the dial-injected projectId; the OAuth callback re-verifies the user.
+  "IntegrationsCapability",
   "McpClient",
   // Like McpClient: only provider props (specUrl/baseUrl/headers) + the
   // dial-injected attribution — every fetch rides the originating project's

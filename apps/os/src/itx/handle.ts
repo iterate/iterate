@@ -48,7 +48,10 @@ import {
   PLATFORM_PROJECT_CONTEXT_ID,
 } from "./platform-context.ts";
 import { GLOBAL_CONTEXT_ID, type ProjectAccess } from "./refs.ts";
-import type { CapabilityProvision as CapabilityProvisionContract } from "./types.ts";
+import type {
+  CapabilityProvision as CapabilityProvisionContract,
+  KnownCapabilities,
+} from "./types.ts";
 import type { AppConfig } from "~/config.ts";
 import {
   countAllProjects,
@@ -57,9 +60,19 @@ import {
   getProjectBySlug,
   insertProject,
   listAllProjects,
+  updateProjectConfig,
 } from "~/db/queries/.generated/index.ts";
 import type { ProjectDurableObject } from "~/domains/projects/durable-objects/project-durable-object.ts";
 import { getProjectDurableObjectName } from "~/domains/projects/durable-objects/project-durable-object-ref.ts";
+import {
+  ensureProjectCustomHostname,
+  ensureProjectCustomHostnameStatus,
+} from "~/domains/projects/cloudflare-custom-hostnames.ts";
+import {
+  isReservedProjectHostname,
+  isValidCustomHostname,
+  normalizeCustomHostname,
+} from "~/lib/project-host-routing.ts";
 import { isProjectId } from "~/domains/projects/project-id.ts";
 import { createAuthWorkerServiceClient } from "~/auth/auth-worker-service.ts";
 
@@ -86,6 +99,23 @@ export type ItxRuntime = {
   env: Env;
   /** The parent worker's loopback exports (ctx.exports). */
   exports: Record<string, (options: { props: Record<string, unknown> }) => unknown>;
+  /**
+   * The connect-time principal — ONLY threaded onto the GLOBAL handle (minted
+   * at connect, never restored in an isolate, so this live value never has to
+   * serialize). It exists for exactly one job: org-membership project creation
+   * (itx.projects.create) for non-admin users, which needs their org claims.
+   * Absent everywhere else; the access set is the permission model for all
+   * other paths.
+   */
+  principal?: ItxUserPrincipal | null;
+};
+
+/** The slice of the connect-time user principal the global create path needs:
+ * the org claims to authorize "create only in an org you're in", and the
+ * userId the auth worker mints/adopts as. */
+export type ItxUserPrincipal = {
+  userId: string;
+  organizations: { slug: string }[];
 };
 
 /** Whether `prop` resolves through a getter anywhere on the prototype chain. */
@@ -96,6 +126,14 @@ function isAccessor(target: object, prop: PropertyKey): boolean {
   }
   return false;
 }
+
+// Declaration-merge the typed cap fallthrough (KnownCapabilities:
+// secrets/repos/integrations/agents) onto the runtime class, so a
+// RpcStub<ItxHandle> exposes itx.secrets.listSecrets() etc. cast-free. The
+// class keeps its own (RpcTarget-extending) projects/streams member types —
+// only the fallthrough names are added. The runtime delivers these via the
+// constructor's Proxy; this interface is the compile-time mirror.
+export interface ItxHandle extends KnownCapabilities {}
 
 export class ItxHandle extends RpcTarget {
   readonly #runtime: ItxRuntime;
@@ -285,7 +323,11 @@ export class ItxHandle extends RpcTarget {
     };
   }
 
-  /** Fallthrough target — also reachable explicitly as itx.capability("name"). */
+  /** Fallthrough target — also reachable explicitly as itx.capability("name").
+   * A known cap name (merged into KnownCapabilities) resolves to its typed
+   * stub; any other name falls through to `unknown`. */
+  capability<K extends keyof KnownCapabilities>(name: K): KnownCapabilities[K];
+  capability(name: string): unknown;
   capability(name: string): unknown {
     return new PathProxy(async ({ path, args }) => {
       return await this.#itx().invoke({ args, path: [name, ...path] });
@@ -519,12 +561,37 @@ export class ItxProjects extends RpcTarget {
   }
 
   /**
-   * Admin-only for now: org-membership project creation stays in oRPC until
-   * that flow moves over (DECISIONS.md D7).
+   * Create a project. Two paths:
+   *
+   *  - ADMIN handle (access "all"): the operator/recovery path — auth mints a
+   *    fresh prj_ id (or an explicit one is adopted), no owning org.
+   *  - NON-ADMIN user (org claims threaded onto the GLOBAL handle): the
+   *    product path the dashboard uses — create only in an organization the
+   *    user belongs to, via the auth worker's createForOrganization (the same
+   *    flow the oRPC handler used). Mirrors project-directory.ts.
+   *
+   * The principal only rides the global handle, so this path needs no project
+   * context — it is the one create that runs before any narrowing.
    */
-  async create(input: { id?: string; slug: string }) {
-    this.requireAllAccess("create projects");
+  async create(input: { id?: string; slug: string; organizationSlug?: string }) {
     const db = this.db();
+
+    // Non-admin user with org claims: create in one of their orgs. Auth is the
+    // id authority — createForOrganization mints prj_ and we adopt it.
+    if (this.runtime.access !== "all") {
+      const principal = this.requireUserPrincipalForCreate();
+      const organizationSlug = resolveCreateOrganizationSlug(principal, input.organizationSlug);
+      const created = await createAuthWorkerServiceClient(
+        { config: this.runtime.config },
+        { asUserId: principal.userId },
+      ).internal.project.createForOrganization({
+        name: input.slug,
+        organizationSlug,
+        slug: input.slug,
+      });
+      return await this.finishCreate(db, { id: created.id, slug: created.slug });
+    }
+
     // Auth is the canonical minter of the one prj_ id space — even this
     // admin-only operator/recovery path (no owning auth org) round-trips
     // through it. A supplied id must already be a project id (legacy
@@ -543,10 +610,15 @@ export class ItxProjects extends RpcTarget {
           config: this.runtime.config,
         }).internal.project.mintProjectId()
       ).id;
+    return await this.finishCreate(db, { id, slug: input.slug });
+  }
 
+  /** Shared tail of create: idempotent insert + Project DO bootstrap. */
+  private async finishCreate(db: ReturnType<typeof this.db>, input: { id: string; slug: string }) {
+    const { id, slug } = input;
     const existingById = await getProjectById(db, { id });
     if (existingById) {
-      if (existingById.slug !== input.slug) {
+      if (existingById.slug !== slug) {
         throw new ItxError({
           code: "CONFLICT",
           details: { existingSlug: existingById.slug, id },
@@ -555,17 +627,17 @@ export class ItxProjects extends RpcTarget {
       }
       return toProjectSummary(existingById);
     }
-    if (await getProjectBySlug(db, { slug: input.slug })) {
+    if (await getProjectBySlug(db, { slug })) {
       throw new ItxError({
         code: "CONFLICT",
-        details: { slug: input.slug },
-        message: `A project with slug ${input.slug} already exists.`,
+        details: { slug },
+        message: `A project with slug ${slug} already exists.`,
       });
     }
 
-    await insertProject(db, { id, slug: input.slug });
+    await insertProject(db, { id, slug });
     try {
-      await projectStub(this.runtime.env, id).createProject({ projectId: id, slug: input.slug });
+      await projectStub(this.runtime.env, id).createProject({ projectId: id, slug });
     } catch (error) {
       await deleteProject(db, { id }).catch((cleanupError) => {
         console.error(
@@ -576,13 +648,153 @@ export class ItxProjects extends RpcTarget {
       throw error;
     }
     const row = await getProjectById(db, { id });
-    return toProjectSummary(row ?? { id, slug: input.slug });
+    return toProjectSummary(row ?? { id, slug });
+  }
+
+  private requireUserPrincipalForCreate() {
+    const principal = this.runtime.principal;
+    if (!principal) {
+      // A non-admin handle with no threaded principal cannot create: this is
+      // the operator/recovery posture without "all" access, or a narrowed
+      // (project) handle that never carries the connect principal.
+      throw new ItxError({
+        code: "FORBIDDEN",
+        message:
+          "Creating a project requires either admin access or a connect-time user principal " +
+          "with organization membership. Create from the global itx handle while logged in.",
+      });
+    }
+    return principal;
   }
 
   async remove(input: { id: string }) {
-    this.requireAllAccess("remove projects");
+    // Symmetric with create: an admin handle ("all") may delete any project;
+    // a non-admin may delete a project its handle holds a claim for. The
+    // claim check is requireProjectRow (existence-masked NOT_FOUND otherwise),
+    // the same gate every other project-scoped op uses — mirrors the oRPC
+    // handler's requireProject. (Bugbot: non-admins must be able to delete
+    // the projects they can create.)
+    if (this.runtime.access !== "all") {
+      await this.requireProjectRow(input.id);
+    }
     await deleteProject(this.db(), { id: input.id });
     return { deleted: true, id: input.id, ok: true as const };
+  }
+
+  /**
+   * Cloudflare custom-hostname status for the project's configured custom
+   * hostname. Mirrors the oRPC `projects.customHostnameStatus` handler.
+   */
+  async customHostnameStatus(input: { id: string }) {
+    const row = await this.requireProjectRow(input.id);
+    return await ensureProjectCustomHostnameStatus({
+      apiToken: this.runtime.config.cloudflare.apiToken?.exposeSecret(),
+      customHostname: row.custom_hostname,
+      projectHostnameBase: this.runtime.config.projectHostnameBases[0],
+    });
+  }
+
+  /**
+   * Activate a Cloudflare custom hostname (the configured custom hostname or a
+   * subdomain of it). Mirrors the oRPC `projects.ensureCustomHostname` handler.
+   */
+  async ensureCustomHostname(input: { id: string; hostname: string }) {
+    const row = await this.requireProjectRow(input.id);
+    if (!row.custom_hostname) {
+      throw new ItxError({
+        code: "BAD_REQUEST",
+        message: "Set a custom hostname before activating app hostnames.",
+      });
+    }
+
+    const hostname = normalizeCustomHostname(input.hostname);
+    if (!hostname || !isValidCustomHostname(hostname)) {
+      throw new ItxError({
+        code: "BAD_REQUEST",
+        message: "Hostname must be a valid DNS hostname.",
+      });
+    }
+
+    return await ensureProjectCustomHostname({
+      apiToken: this.runtime.config.cloudflare.apiToken?.exposeSecret(),
+      customHostname: row.custom_hostname,
+      hostname,
+      projectHostnameBase: this.runtime.config.projectHostnameBases[0],
+    });
+  }
+
+  /**
+   * Update the project's config (custom hostname). Mirrors the oRPC
+   * `projects.updateConfig` handler; returns the project with its ingress URL.
+   */
+  async updateConfig(input: { id: string; customHostname?: string | null }) {
+    const existing = await this.requireProjectRow(input.id);
+    const db = this.db();
+
+    const normalizedCustomHostname = this.normalizeConfigCustomHostname(input.customHostname);
+    const nextCustomHostname =
+      normalizedCustomHostname === undefined
+        ? (existing.custom_hostname ?? null)
+        : normalizedCustomHostname;
+    try {
+      await updateProjectConfig(db, { customHostname: nextCustomHostname }, { id: input.id });
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new ItxError({
+          code: "CONFLICT",
+          message: `Custom hostname ${nextCustomHostname} is already assigned.`,
+        });
+      }
+      throw error;
+    }
+
+    const row = await getProjectById(db, { id: input.id });
+    if (!row) {
+      throw new ItxError({
+        code: "INTERNAL",
+        message: `Project ${input.id} was not returned after update`,
+      });
+    }
+
+    if (row.custom_hostname) {
+      await ensureProjectCustomHostnameStatus({
+        apiToken: this.runtime.config.cloudflare.apiToken?.exposeSecret(),
+        customHostname: row.custom_hostname,
+        projectHostnameBase: this.runtime.config.projectHostnameBases[0],
+      });
+    }
+
+    return await this.toProjectWithIngressUrl(row);
+  }
+
+  private normalizeConfigCustomHostname(input: string | null | undefined) {
+    if (input === undefined) return undefined;
+
+    const customHostname = normalizeCustomHostname(input);
+    if (customHostname === null) return null;
+
+    if (!isValidCustomHostname(customHostname)) {
+      throw new ItxError({
+        code: "BAD_REQUEST",
+        message: "Custom hostname must be a valid DNS hostname.",
+      });
+    }
+
+    if (isReservedProjectHostname(customHostname, this.runtime.config.projectHostnameBases)) {
+      throw new ItxError({
+        code: "BAD_REQUEST",
+        message: "Custom hostname cannot use a reserved OS project hostname.",
+      });
+    }
+
+    return customHostname;
+  }
+
+  private async toProjectWithIngressUrl(row: { id: string; slug: string; [key: string]: unknown }) {
+    return {
+      ...toProjectSummary(row),
+      ingressUrl: await projectStub(this.runtime.env, row.id).ingressUrl(),
+    };
   }
 
   private async requireProjectRow(projectIdOrSlug: string) {
@@ -617,6 +829,38 @@ export class ItxProjects extends RpcTarget {
   private db() {
     return createD1Client(this.runtime.env.DB);
   }
+}
+
+function isUniqueConstraintError(error: unknown) {
+  return error instanceof Error && error.message.includes("UNIQUE constraint failed");
+}
+
+/** Choose the org to create in: the requested one (must be a member) or, when
+ * omitted, the user's single org. Mirrors project-directory.ts'
+ * resolveOrganizationSlugForCreate, in ItxError terms. */
+function resolveCreateOrganizationSlug(
+  principal: ItxUserPrincipal,
+  requestedSlug: string | undefined,
+): string {
+  const organizations = principal.organizations;
+  if (requestedSlug) {
+    const organization = organizations.find((candidate) => candidate.slug === requestedSlug);
+    if (!organization) {
+      throw new ItxError({
+        code: "FORBIDDEN",
+        message: `Organization ${requestedSlug} is not available to this user.`,
+      });
+    }
+    return organization.slug;
+  }
+  if (organizations.length === 1) return organizations[0]!.slug;
+  throw new ItxError({
+    code: "BAD_REQUEST",
+    message:
+      organizations.length === 0
+        ? "Project creation requires organization membership."
+        : "Pass organizationSlug to choose which organization should own the project.",
+  });
 }
 
 function toProjectSummary(row: { id: string; slug: string; [key: string]: unknown }) {

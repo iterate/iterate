@@ -91,8 +91,6 @@ declare global {
 
   /** The connected Iterate context handle for this REPL session. */
   const itx: ItxHandle;
-  /** Environment-style values injected into this REPL session. */
-  const env: Record<string, unknown>;
   /**
    * Script parameters — always in scope, so the catalogue examples
    * (src/itx/examples.ts) run unchanged in every runtime. Assign your own

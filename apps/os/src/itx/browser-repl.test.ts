@@ -1,7 +1,6 @@
 import { RpcStub, RpcTarget } from "capnweb";
 import { describe, expect, test, vi } from "vitest";
 import {
-  browserReplExternalScopesEqual,
   compileBrowserReplFunction,
   createBrowserReplScope,
   DEFAULT_BROWSER_REPL_CODE,
@@ -85,22 +84,6 @@ describe("browser Cap'n Web REPL", () => {
       result: { projects: [{ id: "proj_123" }], total: 1, limit: 5 },
       status: "success",
     });
-  });
-
-  test("external scope comparison preserves REPL bindings across equivalent renders", () => {
-    const currentScope = createBrowserReplScope({ projectId: "proj_123" });
-    currentScope.$_ = 42;
-    currentScope._ = 42;
-
-    expect(
-      browserReplExternalScopesEqual({ projectId: "proj_123" }, { projectId: "proj_123" }),
-    ).toBe(true);
-    expect(currentScope.$_).toBe(42);
-    expect(currentScope._).toBe(42);
-
-    expect(
-      browserReplExternalScopesEqual({ projectId: "proj_123" }, { projectId: "proj_456" }),
-    ).toBe(false);
   });
 
   test("REPL supports SDK-shaped calls through a server-side path target", async () => {
@@ -355,7 +338,7 @@ const persisted = answer();
     expect(scope).not.toHaveProperty("nested");
   });
 
-  test("session snippets cannot shadow injected itx or env bindings", async () => {
+  test("session snippets cannot shadow injected itx binding", async () => {
     const scope: Record<string, unknown> = {};
     const itx = { marker: "injected itx" };
 
@@ -375,15 +358,6 @@ const persisted = answer();
       }),
     ).resolves.toBe("injected itx");
     expect(scope).not.toHaveProperty("itx");
-
-    await expect(
-      evalBrowserReplSessionCode({
-        code: "function env() {}",
-        itx,
-        scope,
-      }),
-    ).rejects.toThrow('REPL binding "env" is reserved.');
-    expect(scope).not.toHaveProperty("env");
   });
 
   test("route entry runner exposes the last result through aliases", async () => {

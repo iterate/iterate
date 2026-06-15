@@ -1,16 +1,18 @@
 import { useCallback, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
-import type { Project, ProjectCustomHostnameStatus } from "@iterate-com/os-contract";
+import type { Project } from "@iterate-com/os-contract";
 import { Button } from "@iterate-com/ui/components/button";
 import { Identifier } from "@iterate-com/ui/components/identifier";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { StreamDebugLink } from "~/components/stream-debug-link.tsx";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
-import { projectCustomHostnameStatusQueryOptions } from "~/lib/project-route-query.ts";
 import type { PublicRouteConfig } from "~/lib/public-route-config.ts";
-import { orpc } from "~/orpc/client.ts";
+import { useItx } from "~/itx/itx-react.tsx";
+import type { ItxProjects } from "~/itx/handle.ts";
+
+type CustomHostnameStatus = Awaited<ReturnType<ItxProjects["customHostnameStatus"]>>;
 
 export function ProjectSettingsPanel({
   project,
@@ -21,6 +23,7 @@ export function ProjectSettingsPanel({
 }) {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const itx = useItx();
   const [customHostname, setCustomHostname] = useState(project.customHostname ?? "");
   const [hostnameToActivate, setHostnameToActivate] = useState("");
   const dnsInstructions = customHostnameDnsInstructions({
@@ -28,36 +31,37 @@ export function ProjectSettingsPanel({
     project,
     projectHostnameBases: routeConfig.projectHostnameBases,
   });
+  const statusKey = ["itx", "customHostnameStatus", project.slug];
   const customHostnameStatusQuery = useQuery({
-    ...projectCustomHostnameStatusQueryOptions(project.id),
+    queryKey: statusKey,
+    queryFn: () => itx.projects.customHostnameStatus({ id: project.id }),
     enabled: Boolean(project.customHostname),
     refetchInterval: (query) =>
       query.state.data?.hostnames.some((hostname) => hostname.sslStatus !== "active")
         ? 10_000
         : false,
   });
-  const updateConfig = useMutation(
-    orpc.projects.updateConfig.mutationOptions({
-      onSuccess: () => {
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.find.key() });
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.findBySlug.key() });
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.customHostnameStatus.key() });
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.list.key() });
-        void router.invalidate();
-        toast.success("Project config saved.");
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
-  const ensureCustomHostname = useMutation(
-    orpc.projects.ensureCustomHostname.mutationOptions({
-      onSuccess: () => {
-        void queryClient.invalidateQueries({ queryKey: orpc.projects.customHostnameStatus.key() });
-        toast.success("Custom hostname activated.");
-      },
-      onError: (error) => toast.error(error.message),
-    }),
-  );
+  const updateConfig = useMutation({
+    mutationFn: (input: { id: string; customHostname: string | null }) =>
+      itx.projects.updateConfig(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: statusKey });
+      // The project itself comes from the route loader — re-run it to pick up
+      // the saved config (the itx surface has no separate find/list cache).
+      void router.invalidate();
+      toast.success("Project config saved.");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
+  const ensureCustomHostname = useMutation({
+    mutationFn: (input: { id: string; hostname: string }) =>
+      itx.projects.ensureCustomHostname(input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: statusKey });
+      toast.success("Custom hostname activated.");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+  });
 
   const handleUpdateConfig = useCallback(() => {
     updateConfig.mutate({
@@ -219,7 +223,7 @@ function CustomHostnameCloudflareStatus({
   status,
 }: {
   isPending: boolean;
-  status: ProjectCustomHostnameStatus | undefined;
+  status: CustomHostnameStatus | undefined;
 }) {
   if (isPending) {
     return <p className="text-xs text-muted-foreground">Checking Cloudflare hostname status...</p>;
