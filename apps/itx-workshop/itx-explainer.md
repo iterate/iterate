@@ -92,7 +92,7 @@ The laptop can only offer the _one_ object it passed into _that one call_, and o
 
 ## Step 2 — provide & invoke: capabilities go dynamic
 
-> **the one new idea** — stop passing objects as call arguments. Add two verbs: `provide({ name, capability })` registers a capability under a name; `invoke({ name, args })` calls it. The set of capabilities is now a dynamic registry, grown at runtime. (Every itx verb is a single **bag of props**, matching production — there are no positional signatures.)
+> **the one new idea** — stop passing objects as call arguments. Add two verbs: `provide({ name, capability })` registers a capability under a name; `invoke({ name, args })` calls it. The set of capabilities is now a dynamic registry, grown at runtime.
 
 ```ts
 class Itx extends RpcTarget {
@@ -118,7 +118,7 @@ await itx.provide({ name: "runSwift", capability: runSwift });
 await itx.invoke({ name: "runSwift", args: [`print(1 + 1)`] }); // → "2\n"
 ```
 
-The stored `name → capability` pairing has no special label in the codebase — the act is a **provide** and the folded row is a **capability entry**. A capability is one of just two kinds: a live **stub** or, later (Step 7), a serializable **address**. In Step 6 the addressing field generalizes from `name` to a `path`.
+The stored `name → capability` pairing has no special label in the codebase — the act is a **provide** and what it registers is a **capability entry**. A capability is one of just two kinds: a live **stub** or, later (Step 7), a serializable **address**. In Step 6 the addressing field generalizes from `name` to a `path`.
 
 (We call the verbs `provide` / `invoke` here; production spells `provide` as `provideCapability`. They may eventually move under a namespace — `itx.caps.provide`, `itx.caps.invoke`, `itx.caps.revoke`, `itx.caps.get` — to free up the bare names. `invoke` does double duty on purpose: it's the public verb _and_ the one calling convention every capability bottoms out in — `invoke({ path, args })`, the same operation one layer apart. We deliberately use `invoke` rather than `call`: `call` is a `Function.prototype` member (`fn.call(...)`), so a `call` verb/convention would collide with it — both as a reserved path segment and as a member name on the function-typed proxy. `invoke` isn't on any prototype, so it stays clean.)
 
@@ -402,29 +402,58 @@ If the registry is just a `Map` in memory, it dies with the DO anyway — even t
 
 ---
 
-## Step 8 — Durability: the table is the fold of the context's stream
+## Step 8 — A context is just a durable event log
 
-> **the one new idea** — don't store the registry; store the **events** and _fold_ them (a fold is just `reduce` over the event log). `reduceItxEvent(state, event)` is the single source of truth; the registry is `events.reduce(reduceItxEvent, empty)`. Provide/revoke append events; the table is derived. Replaying the stream reproduces the registry exactly — no hidden **durable** state.
+> **the one new idea** — stop thinking of the registry as a thing you mutate. It's a **durable event log** you _fold_. You don't write a `Map`; you write the event **schemas** and a **reducer**, and the table is `events.reduce(reduce, initial)`. Provide/revoke append events; the table is derived; replaying the log reproduces it exactly — no hidden durable state.
+
+Because it's an event log, the honest thing to write down is the **schema of the events** — and that reads cleanly. This is the real contract from the runnable [`itx-contract.ts`](./itx-contract.ts), defined with the platform's own `defineProcessorContract` (the workshop _depends_ on `@iterate-com/streams`, it doesn't reimplement it):
 
 ```ts
-function reduceItxEvent(state, event) {
-  const next = new Map(state);
+export const ItxContract = defineProcessorContract({
+  slug: "itx",
+  // State is a PLAIN OBJECT — the processor checkpoints and validates it against
+  // this schema. (A Map can't be the reduced state.) The table is derived, never
+  // the source.
+  stateSchema: z.object({
+    capabilities: z.record(z.string(), CapabilityRecord).default({}),
+    context: ContextRecord.nullable().default(null), // name + parent (the chain link)
+  }),
+  events: {
+    "events.iterate.com/itx/capability-provided": {
+      payloadSchema: z.looseObject({
+        path: z.array(z.string()),
+        kind: z.enum(["live", "rpc"]),
+        address: CapabilityAddress.nullable().optional(), // sturdy caps only
+      }),
+    },
+    "events.iterate.com/itx/capability-revoked": { payloadSchema: z.looseObject({ path: z.array(z.string()) }) },
+    "events.iterate.com/itx/context-created": { payloadSchema: /* name + parent */ },
+    // …capability-disconnected (a live provider's session broke)
+  },
+});
+```
+
+The fold is then just a `switch` returning the next **plain object** (no `Map`):
+
+```ts
+reduce({ event, state }) {
   switch (event.type) {
-    case "capability-provided":
-      // the durable entry: name, kind, and (for sturdy caps) the ref/address + meta.
-      next.set(event.name, { kind: event.kind, address: event.address ?? null, meta: event.meta });
-      break;
-    case "capability-revoked":
-      next.delete(event.name);
-      break;
+    case "…/capability-provided": {
+      const name = event.payload.path.join(".");
+      return { ...state, capabilities: { ...state.capabilities, [name]: row(event.payload) } };
+    }
+    case "…/capability-revoked": {
+      const { [event.payload.path.join(".")]: _gone, ...rest } = state.capabilities;
+      return { ...state, capabilities: rest };
+    }
+    default: return state; // an event we don't consume leaves state untouched
   }
-  return next;
 }
 ```
 
-Last-write-wins, revoke removes, and replay is deterministic — the table is never the source of truth, the stream is. Note what the fold does _not_ hold: a `live` cap's event records `kind: "live"` with `address: null` — you can't serialize a socket, so the actual stub lives in the DO's in-memory bridge map keyed by name (Step 4). That's precisely why a live cap dies on eviction and a sturdy ref (which folds to a serializable `address`) survives.
+Last-write-wins, revoke removes, replay is deterministic — the table is never the source of truth, the log is. Note what the fold does _not_ hold: a `live` cap's event records `kind: "live"` with `address: null` — you can't serialize a socket, so the actual stub lives in an in-memory bridge map keyed by name (Step 4). That's precisely why a live cap dies on eviction and a sturdy ref (which folds to a serializable `address`) survives.
 
-So the Step-4 "bridge" and this "fold" stories are the **same** picture, not a contradiction: the **stream** is the source of truth for everything _durable_ (which names exist, each one's kind, and sturdy `address`es), while the **bridge map** holds the _ephemeral_ live stubs beside it. "No hidden state" means nothing durable hides outside the fold; the live stubs are deliberately non-durable, which is the whole live-vs-sturdy distinction.
+So the Step-4 "bridge" and this "fold" stories are the **same** picture, not a contradiction: the **log** is the source of truth for everything _durable_ (which names exist, each one's kind, and sturdy `address`es), while the **bridge map** holds the _ephemeral_ live stubs beside it. "No hidden state" means nothing durable hides outside the fold; the live stubs are deliberately non-durable, which is the whole live-vs-sturdy distinction. (Proven end-to-end in [`validate-streamprocessor.ts`](./validate-streamprocessor.ts): a fresh processor replaying the same log rebuilds the identical table.)
 
 ### 🚧 Why this isn't enough yet
 
@@ -474,41 +503,78 @@ Everything we've built (provide/revoke as events, a folded table, read-your-writ
 
 ---
 
-## Step 11 — Itx _is_ a StreamProcessor
+## Step 11 — Itx _is_ a StreamProcessor (for real)
 
-> **the punchline** — `Itx extends StreamProcessor`. `provide` == append an event; `getState()` == the fold; so the materialized registry equals `reduceItxEvent` over the appended stream, and you read your own writes. A context **is** its stream coordinate `<namespace>:/<path>` — which is also the host DO's name and its dial address.
+> **the punchline** — Step 8's "fold a durable event log" already _is_ a `StreamProcessor`. So `Itx extends StreamProcessor<ItxContract>` — the **real** base class from `@iterate-com/streams`. We override one pure method, `reduce` (the fold), and add the verbs. `ingest` folds events and checkpoints; `state` is the fold; replay rebuilds it. Read-your-writes falls out: append, self-ingest, read.
 
-`StreamProcessor` (from the streams package) is the missing base: `append(event)` writes the durable event log; `getState()` returns the fold (`events.reduce(reduce, init)`); subscribers get current state on connect. Read-your-writes falls out — append, then `getState()` folds the event you just wrote. `Itx` is just that, with `reduceItxEvent` as the fold and the two verbs as append/read:
+This is the real class, from the runnable [`itx-processor.ts`](./itx-processor.ts) — not a toy with a hand-rolled `getState`:
 
 ```ts
-class Itx extends StreamProcessor {
+import { StreamProcessor } from "@iterate-com/streams/stream-processor";
+
+export class Itx extends StreamProcessor<typeof ItxContract> {
+  readonly contract = ItxContract;
   #live = new Map(); // the Step-4 bridge: name → live stub (in-memory, NOT durable)
-  constructor() {
-    super(reduceItxEvent);
+
+  // the fold (Step 8) — one pure projection of an event into the next state:
+  reduce({ event, state }) {
+    /* the switch from Step 8 */
   }
-  provide({ name, capability }) {
+
+  // provide = append an event; self-ingest so the write is readable immediately.
+  // A live stub also lands in the in-memory bridge.
+  async provideCapability({ path, capability }) {
     const kind = isCapabilityAddress(capability) ? "rpc" : "live";
-    if (kind === "live") this.#live.set(name, retain(capability)); // stub → bridge map (Step 4)
-    // the durable event carries only the serializable part (Step 8's shape):
-    this.append({
-      type: "capability-provided",
-      name,
-      kind,
-      address: kind === "rpc" ? capability : null,
+    if (kind === "live") this.#live.set(path.join("."), capability);
+    const committed = await this.ctx.stream.append({
+      event: {
+        type: "…/capability-provided",
+        payload: { path, kind, address: kind === "rpc" ? capability : null },
+      },
     });
+    await this.ingest({ events: [committed], streamMaxOffset: committed.offset }); // read-your-writes
   }
-  invoke({ path, args }) {
-    const hit = findCapabilityByPath({ caps: this.getState(), path }); // resolve over the fold
+
+  async invoke({ path, args }) {
+    const hit = resolveLongestPrefix(this.state.capabilities, path); // resolve over the fold
     if (!hit) throw new Error(`no capability "${path.join(".")}"`);
-    // the fold row carries the kind; the live STUB is in the bridge map, the ADDRESS is in the row:
-    const capability =
-      hit.capability.kind === "live" ? this.#live.get(hit.name) : hit.capability.address;
-    return invokeCapabilityAtPath({ capability, path: hit.rest, args });
+    const target =
+      hit.record.kind === "live" ? this.#live.get(hit.name) : this.dial(hit.record.address);
+    return replayPath(target, hit.rest, args);
   }
 }
 ```
 
-The whole thing is one idea seen from a few angles: a name → a stub or an address, a table that is the fold of the context's stream living in one Durable Object, a server-side proxy that makes calling it feel native, paths that mount whole SDKs and shadow deep, borrow-or-dial, and a climb to the parent on a miss.
+### Root capabilities are _provided_, not built in
+
+There is no special handle carrying `fetch`/`streams`/`ai`. Those come from the same verb as everything else — _something_ calls `itx.provideCapability({ path: ["fetch"], … })`. Whoever sets up a context provides its roots; a context that should have defaults from birth is handed them at construction and provides them in its setup. The core has no privileged names. (Step 12 is where the chain — project → session → agent — decides _who_ provides which roots and how a miss climbs to a parent.)
+
+### Where it actually runs
+
+In production each context is one Durable Object named by its coordinate `<namespace>:/<path>`, and that DO hosts this exact processor against its own **durable event log** — the real `Stream` Durable Object from `@iterate-com/streams` (`apps/os/src/itx/itx-durable-object.ts` is the host; `packages/streams/src/workers/durable-objects/stream.ts` is the log). The coordinate is the DO's name _and_ its dial address. The runnable [`validate-streamprocessor.ts`](./validate-streamprocessor.ts) drives the real `Itx` processor in-process against a stand-in log so you can watch provide → fold → invoke, revoke, and replay-rebuilds-the-table without a Worker.
+
+The whole thing is one idea seen from a few angles: a name → a stub or an address, a table that is the fold of the context's durable event log, a server-side proxy that makes calling it feel native, paths that mount whole SDKs and shadow deep, borrow-or-dial, and a climb to the parent on a miss.
+
+---
+
+## Step 12 — the application layer 🚧 TODO (skeleton)
+
+> **not built yet** — the steps above derive the _core_. This step makes it _complete_: the application-level wiring that turns the core into the platform.
+
+- [ ] **Sessions** carry their own stream + project id; a session's context is `<namespace>:/<path>`.
+- [ ] **Stream-path agents** — an agent is a context at a stream path under its project.
+- [ ] **The full inheritance chain** — project → session → agent, with shadow/super across real Durable Objects.
+- [ ] **The global/platform capability root** — where the platform defaults come from, and how a context bottoms out at a code-rooted read-only root.
+- [ ] **Root capabilities are provided, not built in** — `fetch`/`streams`/`extend`/`super` arrive via `provideCapability` (injected at construction), not special-cased in a handle. _(open question: exactly where the root caps get provided — likely passed into the constructor.)_
+
+---
+
+## Step 13 — client libraries 🚧 TODO (skeleton)
+
+> **not built yet** — the final step: the ergonomics each runtime gets on top of the naked stub.
+
+- [ ] **Runtime-specific `withItx` disposable** — the idiomatic per-runtime entry point (Node/Workers/browser) that opens the session, yields the stub, and disposes it (`using`/`await using`).
+- [ ] **React libraries** — hooks/components for consuming itx from React (e.g. a `useItx`-style surface), matching `apps/os/src/itx/use-itx.ts`.
 
 ---
 
@@ -541,7 +607,7 @@ All real, all in the actual files; none of it changes the inner model. Each entr
 
 - **Live-stub retention** — `dup()` provided stubs (deep-walk plain-object providers); teardown appends a `capability-disconnected` event so `describe()` shows it offline.
 
-- **The handle is more than the proxy** — the real `ItxHandle` also carries built-ins (`projects`, `streams`, `fetch`, `extend`, `super`) that don't fall through to `invoke`, plus reserved-name gating; it's what the Worker serves (a thin wrapper dialing the DO node's `itx()`).
+- **The handle is more than the proxy** — today's `ItxHandle` also carries built-ins (`projects`, `streams`, `fetch`, `extend`, `super`) that don't fall through to `invoke`, plus reserved-name gating; it's what the Worker serves (a thin wrapper dialing the DO node's `itx()`). 🔄 **we want to change this** — those roots shouldn't be privileged names baked into a handle; they should be _provided_ like any other capability (Step 11), injected by whoever sets up the context. The clean version has no special handle, just `provideCapability`.
 
 - **The ref taxonomy and dial's reach** — beyond `source`, a ref's `worker` can be `binding`, `loopback`, or `durable-object`; `dial` handles Worker-Loader isolate caching (by content, per origin), facets, and allowlists.
 
@@ -563,4 +629,4 @@ All real, all in the actual files; none of it changes the inner model. Each entr
 
 ---
 
-_ground truth: `apps/os/src/itx/{itx,handle,path-proxy,dial,coordinates,entrypoint,contract,types,itx-durable-object,fetch}.ts` · `packages/streams/src/stream-processor.ts`. Runnable: `server.ts` + `harness.ts` (Steps 0–6 over real workerd, incl. `itx.slack.chat.postMessage` on a naked stub into the real `@slack/web-api` client), `min-dynamic-target.mjs`, `validate-steps.mjs` in this folder; `dialog.swift` is the Step 1 native-dialog program, type-checked with `swiftc -typecheck dialog.swift`._
+_ground truth: `apps/os/src/itx/{itx,handle,path-proxy,dial,coordinates,entrypoint,contract,types,itx-durable-object,fetch}.ts` · `packages/streams/src/stream-processor.ts`. Runnable in this folder: `server.ts` + `harness.ts` (Steps 0–6 over real workerd, incl. `itx.slack.chat.postMessage` on a naked stub into the real `@slack/web-api` client); `min-dynamic-target.mjs` (the server-side dynamic proxy); `itx-contract.ts` + `itx-processor.ts` + `validate-streamprocessor.ts` (Steps 8 & 11 — `Itx extends` the real `@iterate-com/streams` StreamProcessor, folding a durable event log); `validate-steps.mjs` (model checks for Steps 7–10); `dialog.swift` (the Step 1 native dialog — really runs, `npm run proof:swift`)._

@@ -7,12 +7,15 @@
   "scripts": {
     "dev": "wrangler dev",
     "test": "node --experimental-strip-types harness.ts",
-    "proof:swift": "swiftc -typecheck dialog.swift && echo 'typecheck OK' && echo 'print((2...7).reduce(1, *))' | swift - && ITX_DIALOG_AUTODISMISS=Aurora swift dialog.swift"
+    "proof:swift": "swiftc -typecheck dialog.swift && echo 'typecheck OK' && echo 'print((2...7).reduce(1, *))' | swift - && ITX_DIALOG_AUTODISMISS=Aurora swift dialog.swift",
+    "validate:streamprocessor": "node --experimental-strip-types validate-streamprocessor.ts"
   },
   "dependencies": {
     "capnweb": "^0.8.0",
     "ws": "^8.18.0",
-    "@slack/web-api": "^7.0.0"
+    "@slack/web-api": "^7.0.0",
+    "@iterate-com/streams": "workspace:*",
+    "zod": "~4.3.6"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",

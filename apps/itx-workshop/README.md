@@ -27,6 +27,16 @@ npm run proof:swift  # proves Swift actually RUNS (not just type-checks):
                      #         auto-dismisses, prints the value)
 ```
 
+Model-level checks (pure Node, no workerd):
+
+```bash
+npm run validate:streamprocessor  # Steps 8 & 11: Itx extends the REAL
+                                  # @iterate-com/streams StreamProcessor, folding a
+                                  # durable event log (provide→fold→invoke, revoke,
+                                  # replay-rebuilds-the-table, root caps just provided)
+node validate-steps.mjs           # Steps 7–10: live/sturdy, dial, chain
+```
+
 ## What it proves (7/7 PASS, all against real workerd)
 
 | Step     | Claim                                                                                                                                   | Result                                     |
@@ -133,5 +143,13 @@ is a stub whose `.apply` is a path segment, not a function.
   See `npm run proof:swift`.
 - `harness.ts` — the Node client that drives every step (naked stubs) and prints
   the table; mounts the real `@slack/web-api` client against a local mock.
-- `validate-steps.mjs` — pure-Node model checks for steps 7–11 (fold, ref
-  taxonomy, dial, chain, processor).
+- `itx-contract.ts` — the itx event log defined as a real `defineProcessorContract`
+  (`@iterate-com/streams`): the `events.iterate.com/itx/*` event schemas + plain-object
+  state. Step 8's "it's just a durable event log."
+- `itx-processor.ts` — `Itx extends StreamProcessor<ItxContract>`, the REAL base class:
+  one pure `reduce` (the fold), the verbs, the in-memory live-stub bridge. Step 11.
+- `validate-streamprocessor.ts` — drives the real `Itx` processor in-process: provide →
+  fold → invoke, deep shadow, revoke, and replay-rebuilds-the-table. Root caps are just
+  provided (no built-in handle).
+- `validate-steps.mjs` — pure-Node model checks for steps 7–10 (live/sturdy, ref
+  taxonomy, dial, chain).

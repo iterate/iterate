@@ -459,6 +459,9 @@ importers:
 
   apps/itx-workshop:
     dependencies:
+      '@iterate-com/streams':
+        specifier: workspace:*
+        version: link:../../packages/streams
       '@slack/web-api':
         specifier: ^7.0.0
         version: 7.14.1
@@ -468,6 +471,9 @@ importers:
       ws:
         specifier: 8.19.0
         version: 8.19.0
+      zod:
+        specifier: ~4.3.6
+        version: 4.3.6
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.20250101.0
