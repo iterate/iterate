@@ -1,15 +1,14 @@
 import { fileURLToPath } from "node:url";
 import alchemy from "alchemy";
-import { Route, TanStackStart, Tunnel, createCloudflareApi } from "alchemy/cloudflare";
+import { Route, TanStackStart, createCloudflareApi } from "alchemy/cloudflare";
 import type { Bindings, WorkerProps } from "alchemy/cloudflare";
 import type { BaseAppConfig } from "../config.ts";
 import { slugify } from "../slugify.ts";
 import type { initAlchemy } from "./init.ts";
-import { startCloudflared } from "./start-cloudflared.ts";
 
 /**
  * Create a standard Iterate app worker with automatic route derivation, DNS,
- * observability, and dev tunnel support.
+ * and observability.
  *
  * This is the standard way to deploy an Iterate app to Cloudflare Workers. It
  * wraps alchemy's TanStackStart (https://alchemy.run/providers/cloudflare/tanstack-start/)
@@ -22,13 +21,6 @@ import { startCloudflared } from "./start-cloudflared.ts";
  * not enough — Cloudflare requires a DNS record on the zone for the proxied
  * hostname to resolve. See https://developers.cloudflare.com/workers/configuration/routing/routes/
  *
- * **Dev tunnel (local development):**
- * When running locally with a real `baseUrl` (not localhost), creates a Cloudflare
- * Tunnel so the app is reachable at the configured domain. The tunnel resource
- * auto-creates DNS CNAMEs for each ingress hostname. See
- * https://alchemy.run/providers/cloudflare/tunnel/ and
- * docs/devops-cloudflare-doppler-alchemy-setup.md.
- *
  * **Observability:**
  * All Iterate workers use the same observability config: full sampling with
  * persistent logs and traces. See https://developers.cloudflare.com/workers/observability/
@@ -36,11 +28,10 @@ import { startCloudflared } from "./start-cloudflared.ts";
  * ```ts
  * const ctx = await initAlchemy("my-app", AppConfig, process.env);
  * const db = await D1Database("db", { name: `${ctx.workerName}-db` });
- * const { worker, afterFinalize } = await IterateApp(ctx, {
+ * const worker = await IterateApp(ctx, {
  *   bindings: { DB: db },
  * });
  * await ctx.app.finalize();
- * await afterFinalize();
  * ```
  */
 /**
@@ -111,10 +102,6 @@ export async function IterateApp<B extends Bindings>(ctx: IterateCtx, props: Ite
   const routeHosts = deriveWorkerRouteHosts(runtimeConfig.baseUrl, props.extraRouteHostnames);
 
   const worker = await IterateAppWorker(ctx, props);
-  const { afterFinalize } = await IterateDevTunnel(ctx, {
-    extraRouteHostnames: props.extraRouteHostnames,
-    worker,
-  });
   await IterateRoutes(ctx, { hostnames: routeHosts, worker });
 
   console.dir(
@@ -126,7 +113,7 @@ export async function IterateApp<B extends Bindings>(ctx: IterateCtx, props: Ite
     { depth: null },
   );
 
-  return { worker, afterFinalize };
+  return worker;
 }
 
 /**
@@ -172,114 +159,15 @@ export async function IterateAppWorker<B extends Bindings>(
     build: buildCommand,
     dev: props.dev ?? {
       // --strictPort: fail loudly if the port is taken instead of vite silently
-      // falling through to the next one. The local-dev flow bakes a specific
-      // port into APP_CONFIG_BASE_URL + the discovery file, so a silent drift
-      // would leave the running server, base URL, and OAuth resource pointing
-      // at different ports.
+      // falling through to the next one. The local-dev flow writes a specific
+      // port into the discovery file, so silent drift would leave CLIs and
+      // tests pointing at the wrong local server.
       command:
         "pnpm exec vite dev --config vite.config.ts --strictPort --host ${HOST:-127.0.0.1} --port ${PORT:-5173}",
     },
   });
 
   return worker;
-}
-
-/**
- * Dev tunnel: route real domains to the local vite server.
- *
- * When baseUrl points to a real domain (not localhost) in local mode, create
- * a Cloudflare Tunnel so the app is reachable at that domain during dev.
- * The Tunnel resource auto-creates DNS CNAMEs for each ingress hostname.
- * https://alchemy.run/providers/cloudflare/tunnel/
- *
- * Returns `afterFinalize` — call it after `app.finalize()` to start
- * cloudflared. No-op (and no tunnel resource) outside tunnel-backed dev.
- */
-export async function IterateDevTunnel(
-  ctx: IterateCtx,
-  props: {
-    extraRouteHostnames?: string[];
-    /** The locally-served worker the tunnel points at (its url carries the vite port). */
-    worker: { url?: string };
-  },
-) {
-  const { app, slug } = ctx;
-  const runtimeConfig = ctx.runtimeConfig as BaseAppConfig;
-  const { worker } = props;
-
-  let tunnelToken: string | undefined;
-  let tunnelVitePort: number | undefined;
-
-  const baseUrlHostname = runtimeConfig.baseUrl
-    ? new URL(runtimeConfig.baseUrl).hostname
-    : undefined;
-  // `*.localhost` resolves to loopback in every browser (RFC 6761) — those
-  // base URLs are fully local and never need a tunnel.
-  const baseUrlIsLoopback =
-    !!baseUrlHostname &&
-    (baseUrlHostname === "localhost" ||
-      baseUrlHostname.endsWith(".localhost") ||
-      baseUrlHostname === "127.0.0.1" ||
-      baseUrlHostname === "::1");
-
-  if (app.local && baseUrlHostname && !baseUrlIsLoopback && worker.url) {
-    tunnelVitePort = Number(new URL(worker.url).port || "5173");
-
-    const tunnelExtraHosts = (props.extraRouteHostnames ?? []).filter(
-      (hostname) => hostname !== baseUrlHostname,
-    );
-
-    console.log(
-      `Creating dev tunnel: ${[baseUrlHostname, ...tunnelExtraHosts].join(", ")} -> localhost:${tunnelVitePort}`,
-    );
-
-    const tunnel = await Tunnel(`dev-tunnel-${app.stage}`, {
-      name: `dev-${app.stage}-${slug}`,
-      adopt: true,
-      // Don't auto-delete dev tunnels — they persist across sessions so
-      // DNS records stay stable and cloudflared reconnects instantly.
-      delete: false,
-      ingress: [
-        { hostname: baseUrlHostname, service: `http://localhost:${tunnelVitePort}` },
-        ...tunnelExtraHosts.map((hostname) => ({
-          hostname,
-          service: `http://localhost:${tunnelVitePort}`,
-        })),
-        // Catch-all rule required by the Cloudflare tunnel API.
-        { service: "http_status:404" as const },
-      ],
-    });
-
-    const cloudflareApi = await createCloudflareApi({});
-    await Promise.all(
-      tunnelExtraHosts
-        .filter((hostname) => hostname.startsWith("*."))
-        .map(async (hostname) => {
-          const { zoneId } = await findActiveZoneForHostname(cloudflareApi, hostname);
-          await ensureDevTunnelWildcardDnsRecord({
-            cloudflareApi,
-            zoneId,
-            name: hostname,
-            target: `${tunnel.tunnelId}.cfargotunnel.com`,
-            comment: `Managed by ${slug} dev tunnel (${app.stage}).`,
-          });
-        }),
-    );
-
-    tunnelToken = tunnel.token.unencrypted;
-  }
-
-  /** Call after `app.finalize()` to start cloudflared. No-op when no tunnel is active. */
-  async function afterFinalize() {
-    if (!tunnelToken || !tunnelVitePort) return;
-    await startCloudflared({
-      tunnelToken,
-      vitePort: tunnelVitePort,
-      displayUrl: runtimeConfig.baseUrl ?? `localhost:${tunnelVitePort}`,
-    });
-  }
-
-  return { afterFinalize };
 }
 
 /**
@@ -454,64 +342,6 @@ async function ensureCloudflareDnsRecord(input: {
   if (!response.ok) {
     throw new Error(
       `Failed to upsert DNS record ${input.record.name}: ${response.status} ${await response.text()}`,
-    );
-  }
-}
-
-async function ensureDevTunnelWildcardDnsRecord(input: {
-  cloudflareApi: Awaited<ReturnType<typeof createCloudflareApi>>;
-  comment: string;
-  name: string;
-  target: string;
-  zoneId: string;
-}) {
-  const params = new URLSearchParams({ name: input.name, per_page: "100" });
-  const listResponse = await input.cloudflareApi.get(
-    `/zones/${input.zoneId}/dns_records?${params.toString()}`,
-  );
-  if (!listResponse.ok) {
-    throw new Error(
-      `Failed to check dev tunnel wildcard DNS record ${input.name}: ${listResponse.status} ${await listResponse.text()}`,
-    );
-  }
-
-  const listResult = (await listResponse.json()) as {
-    result?: Array<{
-      content?: string;
-      id: string;
-      name?: string;
-      proxied?: boolean;
-      type?: string;
-    }>;
-  };
-  const records = listResult.result?.filter((record) => record.name === input.name) ?? [];
-  const cname = records.find((record) => record.type === "CNAME");
-  const conflictingRecords = records.filter((record) => record.type !== "CNAME");
-
-  if (conflictingRecords.length > 0) {
-    throw new Error(
-      `Dev tunnel wildcard DNS record ${input.name} has conflicting ${[
-        ...new Set(conflictingRecords.map((record) => record.type ?? "unknown")),
-      ].join(", ")} record(s). Replace them with a proxied CNAME to ${input.target}.`,
-    );
-  }
-
-  const record = {
-    type: "CNAME" as const,
-    name: input.name,
-    content: input.target,
-    proxied: true,
-    ttl: 1,
-    comment: input.comment,
-  };
-
-  const response = cname
-    ? await input.cloudflareApi.put(`/zones/${input.zoneId}/dns_records/${cname.id}`, record)
-    : await input.cloudflareApi.post(`/zones/${input.zoneId}/dns_records`, record);
-
-  if (!response.ok) {
-    throw new Error(
-      `Failed to upsert dev tunnel wildcard DNS record ${input.name}: ${response.status} ${await response.text()}`,
     );
   }
 }

@@ -41,6 +41,27 @@ describe("iterate auth login", () => {
     expect(location.searchParams.get("state")).toBeTruthy();
   });
 
+  it("resolves relative return paths against the configured public return origin", async () => {
+    const handler = testAuthHandler({
+      ...config,
+      redirectURI: "https://misha.tunnels.iterate.com/api/iterate-auth/callback",
+      logoutReturnToOrigins: ["https://misha.tunnels.iterate.com"],
+    });
+
+    const response = await handler(
+      new Request("http://127.0.0.1:49572/api/iterate-auth/login?return_to=%2F"),
+    );
+
+    expect(response.status).toBe(302);
+    const location = new URL(response.headers.get("location") ?? "");
+    expect(location.searchParams.get("redirect_uri")).toBe(
+      "https://misha.tunnels.iterate.com/api/iterate-auth/callback",
+    );
+    expect(oauthStateCookie(response)).toMatchObject({
+      returnTo: "https://misha.tunnels.iterate.com/",
+    });
+  });
+
   it("force refreshes session cookies before reading claims", async () => {
     const tokenSet = testTokenSet({ accessTokenExpiresAt: Date.now() + 60 * 60 * 1000 });
     const doRefresh = vi.fn(async (current: TokenSet) => current);
@@ -145,6 +166,14 @@ function testTokenSet(overrides: Partial<TokenSet> = {}): TokenSet {
 
 function sessionCookie(tokenSet: TokenSet) {
   return `iterate_session=${encodeURIComponent(JSON.stringify(tokenSet))}`;
+}
+
+function oauthStateCookie(response: Response) {
+  const match = /(?:^|;\s*)iterate_oauth_state=([^;]+)/u.exec(
+    response.headers.get("set-cookie") ?? "",
+  );
+  if (!match) throw new Error("Missing iterate_oauth_state cookie");
+  return JSON.parse(decodeURIComponent(match[1]!)) as { returnTo?: string };
 }
 
 async function signedTokenSet(overrides: Partial<TokenSet> = {}) {

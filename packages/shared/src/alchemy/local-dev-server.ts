@@ -6,15 +6,17 @@ import { join } from "node:path";
  * Fully-local dev server bootstrap: free-port picking, a curlable localhost
  * base URL, and a per-worktree discovery file.
  *
- * Default local dev runs with zero Cloudflare resources: no tunnel, no
- * per-user domain. The app's canonical URL is `http://localhost:<port>` so
- * curl/Node clients work without special DNS setup. Browser-only project hosts
- * work as `<proj-slug>.localhost:<port>`.
+ * Default local dev runs with zero Cloudflare resources. The curlable local
+ * server URL is `http://localhost:<port>` so curl/Node clients work without
+ * special DNS setup. Browser-only project hosts work as
+ * `<proj-slug>.localhost:<port>`.
  *
- * The port is picked at startup and baked into `APP_CONFIG_BASE_URL` (env is
- * the source of truth — request-sniffing doesn't work for cron/scheduled
- * work). `.alchemy/dev-server.json` records {pid, port, baseUrl, logPath,
- * stoppedAt?} so CLIs and scripts can find "the" dev server without flags.
+ * The port is picked at startup. `.alchemy/dev-server.json` records
+ * {pid, port, baseUrl, logPath, stoppedAt?} so CLIs and scripts can find
+ * "the" dev server without flags. When no public app URL is configured, the
+ * local URL is also exposed as `APP_CONFIG_BASE_URL`; when a public app URL is
+ * configured in `APP_CONFIG.baseUrl`, runtime config keeps that public URL and
+ * the discovery file remains the source of truth for the local target.
  * One dev server per worktree: a second `pnpm dev` refuses to start while the
  * recorded pid is alive.
  */
@@ -117,13 +119,13 @@ async function pickFreePort(preferred?: number) {
 
 /**
  * Prepare the fully-local dev flow. No-op (returns null) unless this is a
- * local run (`ALCHEMY_LOCAL`) without an explicit `APP_CONFIG_BASE_URL` —
- * tunnel-backed per-user configs and explicit localhost configs keep their
- * existing behavior untouched.
+ * local run (`ALCHEMY_LOCAL`) without an explicit `APP_CONFIG_BASE_URL`.
  *
- * Mutates `env`: sets `PORT`, `HOST`, and `APP_CONFIG_BASE_URL`
- * (`http://localhost:<port>`), writes the discovery file, and installs exit
- * handlers that mark the server stopped while preserving the last port.
+ * Mutates `env`: sets `PORT` and `HOST`, writes the discovery file, and
+ * installs exit handlers that mark the server stopped while preserving the
+ * last port. Also sets `APP_CONFIG_BASE_URL` to `http://localhost:<port>` when
+ * no explicit base URL exists in either `APP_CONFIG_BASE_URL` or
+ * `APP_CONFIG.baseUrl`.
  */
 export async function prepareLocalDevServer(
   env: Record<string, string | undefined>,
@@ -152,7 +154,8 @@ export async function prepareLocalDevServer(
   const logPath = env.DEV_SERVER_LOG_PATH?.trim() || localDevServerLogPath(appDir);
   env.PORT = String(port);
   env.HOST ||= "127.0.0.1";
-  env.APP_CONFIG_BASE_URL = baseUrl;
+  const rawAppConfig = JSON.parse(env.APP_CONFIG ?? "{}") as { baseUrl?: string };
+  env.APP_CONFIG_BASE_URL = rawAppConfig.baseUrl || baseUrl;
   // The vite dev command is spawned with the real process env, which may not
   // be the same object as `env` — keep them in sync for the port/host.
   process.env.PORT = env.PORT;

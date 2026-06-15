@@ -17,7 +17,7 @@ const coordinator = DurableObjectNamespace<ResourceCoordinator>("resource-coordi
   sqlite: true,
 });
 
-const { worker, afterFinalize } = await IterateApp(ctx, {
+const worker = await IterateApp(ctx, {
   main: "./src/worker.ts",
   bindings: { DB: db, RESOURCE_COORDINATOR: coordinator },
 });
@@ -25,6 +25,5 @@ const { worker, afterFinalize } = await IterateApp(ctx, {
 export { worker };
 
 await ctx.app.finalize();
-await afterFinalize();
 
 if (!ctx.app.local) process.exit(0);

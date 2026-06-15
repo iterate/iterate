@@ -56,9 +56,12 @@ pnpm dev          # fully-local OS dev server on http://localhost:<port>
   all `dev_<user>` and preview logins once; cleaned out of `dev_*` and the
   `preview` root on 2026-06-12.)
 
-- The chosen port is baked into the env (`APP_CONFIG_BASE_URL`) at startup and
-  recorded in **`apps/os/.alchemy/dev-server.json`**
+- The chosen port is recorded in **`apps/os/.alchemy/dev-server.json`**
   (`{pid, port, baseUrl, logPath, stoppedAt?}`).
+  When no public app URL is configured, local dev also exposes that URL through
+  `APP_CONFIG_BASE_URL`; when `APP_CONFIG.baseUrl` is already set to a public
+  captun URL, runtime config keeps the public URL and the discovery file remains
+  the local target.
   Scripts and CLIs that need "the local dev server" read that file — no
   flags, no guessing. One dev server per worktree: a second `pnpm dev` refuses
   while the first is alive. The file appears ~10–15s before the port actually
@@ -307,13 +310,13 @@ and outlives any app deploy. Enable it for your dev server with env vars only
 (no code change):
 
 ```bash
-CAPTUN_ENABLED=true pnpm dev          # random tunnel name on the default gateway
-CAPTUN_TUNNEL_NAME=jonas pnpm dev     # stable name → https://jonas.tunnels.iterate.com
+CAPTUN_NAME=jonas pnpm dev     # https://jonas.tunnels.iterate.com
 ```
 
 The captun Vite plugin (`apps/os/vite.config.ts`) activates when
-`CAPTUN_ENABLED`/`CAPTUN_TUNNEL_NAME` is set and forwards public **HTTP** to
-your local dev server. Its forwarder is plain `fetch`, so it does **not** carry
+`CAPTUN_NAME` is set. `APP_CONFIG.baseUrl` is still the app's public URL; it
+does not start a tunnel by itself. The plugin forwards public **HTTP** to your
+local dev server. Its forwarder is plain `fetch`, so it does **not** carry
 WebSockets — HMR and itx (`/api/itx`, capnweb-over-WS) stay on the local URL.
 
 For WebSocket traffic over the tunnel (e.g. driving itx against a local dev
@@ -333,8 +336,8 @@ a small captun follow-up.) Tests open tunnels via `createPublicTunnel`
 
 Tunnels are not scarce. The genuinely scarce thing is the webhook-source
 configuration — a Slack app points at exactly one delivery URL at a time —
-so set a stable `CAPTUN_TUNNEL_NAME` per person (held in `dev_<user>`) to
-keep that URL working.
+so set a stable `CAPTUN_NAME` per person (held in `dev_<user>`) to keep that
+URL working.
 
 ## Slack end-to-end testing
 

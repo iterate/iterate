@@ -4,21 +4,8 @@ const RETRY_DELAY_MS = 1_000;
 const MAX_RETRIES = 30;
 const DEV_STAGE_PREFIX = "dev-";
 const DEV_TARGET_PREFIX = "dev_";
-const DEV_HOST_PREFIX = "os.iterate-dev-";
-const DEV_HOST_SUFFIX = ".com";
 
 export function resolveDevAuthClientSyncTarget(env: Record<string, string | undefined>) {
-  const baseUrl = env.APP_CONFIG_BASE_URL?.trim();
-  if (baseUrl && URL.canParse(baseUrl)) {
-    const hostname = new URL(baseUrl).hostname.toLowerCase();
-    if (hostname.startsWith(DEV_HOST_PREFIX) && hostname.endsWith(DEV_HOST_SUFFIX)) {
-      const user = hostname.slice(DEV_HOST_PREFIX.length, -DEV_HOST_SUFFIX.length);
-      if (user.length > 0) {
-        return `${DEV_TARGET_PREFIX}${user}`;
-      }
-    }
-  }
-
   const stage = env.ALCHEMY_STAGE?.trim().toLowerCase();
   if (stage?.startsWith(DEV_STAGE_PREFIX)) {
     const user = stage.slice(DEV_STAGE_PREFIX.length);
@@ -35,7 +22,7 @@ export async function ensureLocalDevOAuthClient(env: Record<string, string | und
   if (!target) return;
 
   const authIssuer = env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? env.ITERATE_OAUTH_ISSUER;
-  const baseUrl = env.APP_CONFIG_BASE_URL?.trim();
+  const baseUrl = env.APP_CONFIG_BASE_URL;
   const serviceToken = env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? env.ITERATE_AUTH_SERVICE_TOKEN;
 
   if (
