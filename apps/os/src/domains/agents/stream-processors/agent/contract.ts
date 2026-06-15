@@ -62,11 +62,9 @@ export const AgentProcessorContract = defineProcessorContract({
            * debounce: a fresh instance (whose in-memory timer died with its
            * predecessor) re-derives the request handoff — and its idempotency
            * key — from this, so the recovery path and the timer path converge
-           * on the same llm-request-requested append. Optional so checkpoints
-           * written before this field existed still parse; recovery falls
-           * back to finding the scheduled event in stream history.
+           * on the same llm-request-requested append.
            */
-          scheduledOffset: z.number().int().positive().optional(),
+          scheduledOffset: z.number().int().positive(),
         }),
         z.object({ phase: z.literal("requested"), llmRequestId: z.number().int().positive() }),
       ])
@@ -82,8 +80,7 @@ export const AgentProcessorContract = defineProcessorContract({
      * scheduling side effect never ran — e.g. the input landed at or below the
      * host's side-effect anchor because it was appended before this processor's
      * subscription was configured — and the `subscriber-connected`
-     * reconciliation owes the stream a schedule for it. Optional so checkpoints
-     * written before this field existed still parse.
+     * reconciliation owes the stream a schedule for it.
      */
     pendingTriggerOffset: z.number().int().positive().nullable().default(null),
   }),
@@ -217,7 +214,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-requested": {
       description:
         "The agent has prepared an LLM request. A subscribed LLM request processor must execute it and respond with agent output and a terminal llm-request-completed event. The llmRequestId used by response events is this event's stream offset. REQUEST-BY-REFERENCE: the event carries no conversation body — embedding it would store a full copy of the growing history in every request (O(N²) stream growth). Providers rebuild the chat request by reducing committed history up to this event's offset (buildLlmChatRequest), which reproduces the exact model-visible context from the stream forever.",
-      payloadSchema: z.object({
+      payloadSchema: z.strictObject({
         model: z.string().min(1),
         runOpts: z.json().default({}),
       }),

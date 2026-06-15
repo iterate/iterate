@@ -363,7 +363,6 @@ describe("AgentProcessor", () => {
           type: "events.iterate.com/agent/llm-request-requested",
           payload: {
             model: "test-model",
-            body: { messages: [{ role: "user", content: "hello" }] },
             runOpts: {},
           },
           offset: 43,
@@ -782,40 +781,6 @@ describe("AgentProcessor", () => {
       expect.objectContaining({
         type: "events.iterate.com/agent/llm-request-requested",
         idempotencyKey: "agent/llm-request-requested@7",
-      }),
-    ]);
-  });
-
-  it("recovers the scheduled offset from history for checkpoints written before scheduledOffset existed", async () => {
-    const { stream, appended } = memoryStream();
-    const processor = newAgentProcessor({
-      stream,
-      snapshot: {
-        offset: 9,
-        state: {
-          ...initialState(),
-          // Old checkpoint shape: no scheduledOffset.
-          currentRequest: { phase: "scheduled", requestId: "req_old" },
-        },
-      },
-      readStreamEvents: async () => [
-        agentEvent({
-          type: "events.iterate.com/agent/llm-request-scheduled",
-          payload: { requestId: "req_old", debounceMs: 1000, model: "test-model" },
-          offset: 9,
-        }),
-      ],
-    });
-
-    await processor.ingest({
-      events: [subscriberConnectedEvent({ offset: 10 })],
-      streamMaxOffset: 10,
-    });
-
-    expect(appended).toEqual([
-      expect.objectContaining({
-        type: "events.iterate.com/agent/llm-request-requested",
-        idempotencyKey: "agent/llm-request-requested@9",
       }),
     ]);
   });
