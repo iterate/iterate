@@ -39,7 +39,11 @@ async function main() {
     // The PROJECT provides a capability (its connection stays open so the live
     // stub remains callable when the agent climbs to it).
     using project = connect<any>(projectUrl, bearer("alice-token"));
-    await project.provideCapability(["db"], (async (q: string) => `project-db:${q}`) as any);
+    await project.provideCapability({
+      path: ["db"],
+      capability: (async (q: string) => `project-db:${q}`) as any,
+      instructions: "the project's database",
+    });
     await sleep(50);
 
     // The AGENT — a child context of the project.
@@ -57,8 +61,31 @@ async function main() {
       `viaProject=${f?.viaProject}`,
     );
 
+    // The AGENT DO defines its OWN built-in (whoami) — the agent context is born
+    // with it (no provide). This proves the `Agent extends DurableObject` simulacrum
+    // is wired: a project-scoped context has fetch; an agent-scoped one ALSO has whoami.
+    const who = await agent.whoami();
+    check(
+      "agent has its OWN built-in from the Agent DO (whoami)",
+      who === "agent alice/agents/foo",
+      who,
+    );
+
+    // whoami is agent-scoped, not the project's — the project context never sees it.
+    let projectHasWhoami = true;
+    try {
+      await project.whoami();
+    } catch {
+      projectHasWhoami = false;
+    }
+    check("the project context does NOT have the agent-only whoami", !projectHasWhoami);
+
     // The agent provides its OWN db — it shadows the inherited one.
-    await agent.provideCapability(["db"], (async (q: string) => `agent-db:${q}`) as any);
+    await agent.provideCapability({
+      path: ["db"],
+      capability: (async (q: string) => `agent-db:${q}`) as any,
+      instructions: "the agent's own database (shadows the project's)",
+    });
     await sleep(50);
     check(
       "the agent's own cap shadows the inherited one",

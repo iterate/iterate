@@ -1,7 +1,7 @@
 # Step 10 — the Project Durable Object, and `itx.fetch`
 
 **Adds:** a real platform Durable Object, and the first **built-in capability**. Every
-project has a **Project Durable Object** (`ProjectDO`) that owns the project's
+project has a **Project Durable Object** (`Project`) that owns the project's
 egress. A project-scoped itx (the `prj:<id>` context from Step 08) is born with
 `fetch` wired as a built-in capability backed by that DO, so `itx.fetch(url)` egresses
 through the project.
@@ -9,12 +9,12 @@ through the project.
 ```ts
 // inside a project context:
 await itx.fetch("https://example.com/thing");
-// → routes to ProjectDO.egress(url) for THIS project; { status, body, viaProject: "prj:<id>" }
+// → routes to Project.egress(url) for THIS project; { status, body, viaProject: "prj:<id>" }
 ```
 
-- `ProjectDO.egress(url, init)` does the actual outbound `fetch` (named `egress`,
+- `Project.egress(url, init)` does the actual outbound `fetch` (named `egress`,
   not `fetch`, because a DO's `fetch` is its HTTP entrypoint). One DO per project.
-- `ProjectDO.builtinCapabilities(stub)` **defines what a project context is born
+- `Project.builtinCapabilities(stub)` **defines what a project context is born
   with** — an array of capability descriptors in the same `{ path, capability,
 instructions? }` shape as a provide call, e.g. `{ path: ["fetch"], capability: (url)
 => stub.egress(url) }`. The project owns _what_ it offers.

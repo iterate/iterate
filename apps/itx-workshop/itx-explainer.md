@@ -2,7 +2,7 @@
 
 A coding-workshop derivation of **itx** — Iterate's capability layer — built up from a single Cap'n Web socket, one motivated step at a time. The inner core is a few hundred lines and tells one story; everything else is an addendum of layered complexity, each entry the concrete failure it buys you out of.
 
-> **runnable & verified** — The _complete, runnable_ implementations live in this folder: Steps 0–6 (wire-level) run against real `workerd` + Cap'n Web clients (`server.ts` + `harness.ts`, and the self-contained `min-dynamic-target.mjs`); Steps 7–11 (model-level — fold, ref taxonomy, dial, chain, processor) are checked by `validate-steps.mjs`; the Step 1 dialog Swift is type-checked with `swiftc`. The **inline snippets below are abbreviated for reading** — they lean on a few helpers defined once and reused (`findCapabilityByPath`, `invokeCapabilityAtPath`, `retain`) and on real workerd behavior, so don't expect every fragment to run verbatim if you paste it in isolation; the files above are the source of truth. One caveat that bites: if you _simulate_ the DO with a shared in-memory object (no wrangler), the RpcStub-vs-copy distinction and `ctx.waitUntil` vanish — and with them the whole point of Step 4. One thing worth flagging up front: **there is no client-side path proxy** — a naked Cap'n Web stub already pipelines a whole dotted path into one call (see Step 6).
+> **runnable & verified** — The _complete, runnable_ implementations live in this folder: Steps 0–6 (wire-level) run against real `workerd` + Cap'n Web clients (`server.ts` + `harness.ts`, and the self-contained `min-dynamic-target.mjs`); Steps 7–10 (model-level — ref taxonomy, dial, fold, chain, processor) are checked by `validate-steps.mjs`; the Step 1 dialog Swift is type-checked with `swiftc`. The **inline snippets below are abbreviated for reading** — they lean on a few helpers defined once and reused (`findCapabilityByPath`, `invokeCapabilityAtPath`, `retain`) and on real workerd behavior, so don't expect every fragment to run verbatim if you paste it in isolation; the files above are the source of truth. One caveat that bites: if you _simulate_ the DO with a shared in-memory object (no wrangler), the RpcStub-vs-copy distinction and `ctx.waitUntil` vanish — and with them the whole point of Step 4. One thing worth flagging up front: **there is no client-side path proxy** — a naked Cap'n Web stub already pipelines a whole dotted path into one call (see Step 6).
 
 ---
 
@@ -29,11 +29,12 @@ export default {
 Client — connect, call, dispose:
 
 ```ts
-import { newWebSocketRpcSession } from "capnweb";
+import { newWebSocketRpcSession, type RpcStub } from "capnweb";
 
 // pass a URL; capnweb opens the socket. `using` (TS 5.2 explicit resource
 // management) disposes the session — closing the socket — at end of scope.
-using itx = newWebSocketRpcSession<Server>("wss://your-worker.example/api");
+// `newWebSocketRpcSession<Server>(…)` returns an `RpcStub<Server>`.
+using itx: RpcStub<Server> = newWebSocketRpcSession<Server>("wss://your-worker.example/api");
 await itx.greet("ada"); // → "hello, ada"
 ```
 
@@ -56,7 +57,7 @@ const runSwift = (code: string) => {
   return text(swift.stdout); // Promise<string> of the output
 };
 
-using itx = newWebSocketRpcSession<Server>("wss://your-worker.example/api");
+using itx: RpcStub<Server> = newWebSocketRpcSession<Server>("wss://your-worker.example/api");
 await itx.register({ runSwift }); // hand the server our laptop tool
 ```
 
@@ -133,7 +134,7 @@ await itx.provide({
 await itx.invoke({ name: "runSwift", args: [`print(1 + 1)`] }); // → "2\n"
 ```
 
-Every `provide` carries **`instructions`** — a sentence saying what the capability is for, for an agent or a human reading the table — and an optional **`types`** (a type surface, omitted above). The workshop stores both on the entry; it doesn't do anything with `types` yet, but they're there for when it does. (So there's no separate "describe" verb — a capability describes itself at the point it's provided.)
+A `provide` can carry two pieces of metadata, **both optional**: **`instructions`** — a sentence saying what the capability is for, for an agent or a human reading the table — and **`types`**, a type surface for the cap. `instructions` is the one you'll usually set; `types` is genuinely optional and most caps omit it (it's carried for when something acts on it; nothing does yet). Whatever you pass rides the `provideCapability({ path, capability, instructions?, types? })` bag over the wire, the fold records it on the capability entry, and a context-level `describe()` reads it back — a cap **describes itself at the point it's provided**, so there's no separate per-capability describe step to maintain; `describe()` just surfaces the metadata the fold already holds (`null` for whatever you left out). (The runnable harness asserts both directions: provide `db` with `instructions` + `types` and `describe().db` returns them; provide `mailer` bare and `describe().mailer` comes back `{ instructions: null, types: null }`.)
 
 The stored `name → capability` pairing has no special label in the codebase — the act is a **provide** and what it registers is a **capability entry**. A capability is one of just two kinds: a live **stub** or, later (Step 7), a serializable **address**. (Step 6 will generalize this addressing field from a `name` to a `path`.)
 
@@ -153,11 +154,11 @@ The registry lives in one server's memory, reachable only by that connection. Th
 const url = "wss://your-worker.example/api";
 
 // client A (laptop): its own socket → its own Itx; provides runSwift
-using a = newWebSocketRpcSession<Itx>(url);
+using a: RpcStub<Itx> = newWebSocketRpcSession<Itx>(url);
 await a.provide({ name: "runSwift", capability: runSwift });
 
 // client B (dashboard): a SEPARATE socket → a SEPARATE Itx; wants what A provided
-using b = newWebSocketRpcSession<Itx>(url);
+using b: RpcStub<Itx> = newWebSocketRpcSession<Itx>(url);
 await b.invoke({ name: "runSwift", args: [`print(40 + 2)`] });
 // ❌ Error: no capability "runSwift" — B's socket got its own empty Itx; A's #caps is on A's socket
 ```
@@ -198,9 +199,9 @@ const itx = itxDurableObject.itx(); // RpcStub<Itx> — .provide()/.invoke() rou
 
 Now A's provide and B's invoke meet in the DO → B runs A's live function.
 
-This is the real shape, minimally: the workshop's `server.ts` has exactly one `ItxDO` that holds the `Itx` and exposes it via an `itx()` **method** (never a field — workerd can't pipeline through properties). What's still missing here is what the `Itx` is constructed _with_: Step 11 fills that in — the constructor takes its **durable event log** (a real the platform `Stream` DO) and a checkpoint — and the same `ItxDO` is what every step from here on runs against. (Production's `apps/os/src/itx/itx-durable-object.ts` is this plus the chain/dial of Step 12.)
+This is the real shape, minimally: the workshop's `server.ts` has exactly one `ItxDO` that holds the `Itx` and exposes it via an `itx()` **method** (never a field — workerd can't pipeline through properties). What's still missing here is what the `Itx` is constructed _with_: Step 10 fills that in — the constructor takes its **durable event log** (a real the platform `Stream` DO) and a checkpoint — and the same `ItxDO` is what every step from here on runs against. (Production's `apps/os/src/itx/itx-durable-object.ts` is this plus the chain/dial of Step 11.)
 
-That constant name (`"itx"`) is really the context's **address**. In production it's a **project id + a path** — `<projectId>/<path>` (e.g. `prj_abc/agents/foo`) — that doubles as the DO's name _and_ the dial address. `prj_abc/` is the project itx; `prj_abc/agents/foo` is an agent itx under it (Step 12). For now, one constant name = one shared context.
+That constant name (`"itx"`) is really the context's **address**. In production it's a **project id + a path** — `<projectId>/<path>` (e.g. `prj_abc/agents/foo`) — that doubles as the DO's name _and_ the dial address. `prj_abc/` is the project itx; `prj_abc/agents/foo` is an agent itx under it (Step 11). For now, one constant name = one shared context.
 
 ### 🌉 The DO is the bridge, the edge does the rest
 
@@ -336,28 +337,31 @@ const RESERVED = new Set([
 // those on a Proxy over an RpcTarget (it classifies rpc-targets by prototype). Root
 // verb names resolve to the verb; any other name extends the accumulating path; the
 // terminal call funnels into invoke({ path, args }).
-function dynamicTarget(core, path = []) {
-  const verbAt = (key) => path.length === 0 && key in core; // provide / invoke / list
+function dynamicTarget({ rpcTarget, path = [] }) {
+  const verbAt = (key) => path.length === 0 && key in rpcTarget; // provide / invoke / list
   const valueFor = (key) =>
-    verbAt(key) ? core[key].bind(core) : dynamicTarget(core, [...path, key]);
+    verbAt(key)
+      ? rpcTarget[key].bind(rpcTarget)
+      : dynamicTarget({ rpcTarget, path: [...path, key] });
   return new Proxy(function () {}, {
-    get(_t, key) {
-      if (typeof key === "symbol") return undefined;
+    get(t, key) {
+      if (typeof key === "symbol") return Reflect.get(t, key);
       if (key === "then" || RESERVED.has(key)) return undefined; // never a thenable; never a control word
       return valueFor(key);
     },
     // LOAD-BEARING: server-side Cap'n Web does Object.hasOwn(value, segment) BEFORE
     // reading value[segment]. Without this trap every segment reads as absent and the
     // chain dies at ".chat of undefined" — even the base verbs read as "not a function".
-    getOwnPropertyDescriptor(_t, key) {
-      if (typeof key === "symbol" || RESERVED.has(key)) return undefined;
+    getOwnPropertyDescriptor(t, key) {
+      if (typeof key === "symbol" || RESERVED.has(key))
+        return Reflect.getOwnPropertyDescriptor(t, key);
       return { configurable: true, enumerable: true, writable: false, value: valueFor(key) };
     },
-    has(_t, key) {
-      return typeof key === "symbol" ? false : !RESERVED.has(key);
+    has(t, key) {
+      return typeof key === "symbol" ? key in t : !RESERVED.has(key);
     },
     apply(_t, _s, args) {
-      return core.invoke({ path, args }); // the accumulated dotted path, in one call
+      return rpcTarget.invoke({ path, args }); // the accumulated dotted path, in one call
     },
   });
 }
@@ -375,6 +379,8 @@ const retain = (t) =>
 ```
 
 And `call`/`apply`/`bind` stay reserved as path segments because they're `Function.prototype` members — exactly why the verb is named `invoke`, not `call`. One reserved-name set guards both the proxy and the server-side replay.
+
+(In the runnable code this `retain` is in `server.ts`, applied at the Worker edge; the Durable Object applies it again as `retainLiveProvider` in `itx-processor.ts` — each RPC hop must keep its own copy.)
 
 ### 🎁 What falls out for free
 
@@ -442,7 +448,7 @@ itx.provide({
 await itx.petstore.findPetsByStatus({ status: "available" }); // → invoke({ path: ["findPetsByStatus"], args })
 ```
 
-This is modeled on what iterate ships — `apps/os/src/itx/capabilities/openapi-client.ts`, a loopback cap (the real one also fetches the spec through project egress and derives a typed surface). A loopback is one ref kind; the other big one is a **`source`** worker — code built and run at runtime (a _dynamic worker_, via the Worker Loader). That's what `dial` does in Step 9, and what the runnable `steps/09-dial` actually exercises.
+This is modeled on what iterate ships — `apps/os/src/itx/capabilities/openapi-client.ts`, a loopback cap (the real one also fetches the spec through project egress and derives a typed surface). A loopback is one ref kind; the other big one is a **`source`** worker — code built and run at runtime (a _dynamic worker_, via the Worker Loader). That's what `dial` does, just below, and what the runnable `steps/09-dial` actually exercises.
 
 A purely structural discriminator tells the two kinds apart — and `invokeCapabilityAtPath` from Step 6 just grows an **address** branch, so `invoke` itself is unchanged:
 
@@ -459,7 +465,20 @@ function invokeCapabilityAtPath({ capability, path, args }) {
 }
 ```
 
-A **`PathCallable`** is just "anything with `invoke({ path, args })`" — the one calling convention everything bottoms out in. `dial` (Step 9) returns one. (Production names this calling convention `call`, distinct from the `invoke` verb; we use `invoke` for both, to avoid the `Function.prototype.call` clash.)
+A **`PathCallable`** is just "anything with `invoke({ path, args })`" — the one calling convention everything bottoms out in, and exactly what `dial` returns. (Production names this calling convention `call`, distinct from the `invoke` verb; we use `invoke` for both, to avoid the `Function.prototype.call` clash.)
+
+So what is `dial`? It's an injected effect that turns a sturdy ref back into a `PathCallable`. For a `source` worker it **builds the project worker from the repo and runs it as a dynamic worker** (the Worker Loader), caching the isolate by content — same content, same isolate:
+
+```ts
+function dial(ref) {
+  if (ref.type !== "rpc") throw new Error("not dialable");
+  // build (or reuse, cached by content) the worker; get the named entrypoint, passing props:
+  const worker = loadWorker(ref.worker); // Worker Loader: same source content → same isolate
+  return worker.getEntrypoint(ref.entrypoint, { props: ref.props }); // a PathCallable
+}
+```
+
+The entrypoint's `props` arrive as `this.ctx.props` (that's how `OpenApiClient` above gets its `{ specUrl }`). `loadWorker` caches the built isolate by content, so dialing two refs with the same source shares one isolate; different content builds a new one. `ref.worker.type` is `"source"` here, but also `"binding"` (an env binding like AI), `"loopback"` (a first-party entrypoint), or `"durable-object"` — the core only knows "ref → `PathCallable` via the injected `dial`." (The runnable `steps/09-dial` exercises this over the real Worker Loader.)
 
 ### 🚧 Why this isn't enough yet
 
@@ -469,7 +488,7 @@ If the registry is just a `Map` in memory, it dies with the DO anyway — even t
 
 ## Step 8 — A context is just a durable event log
 
-> **the one new idea** — stop thinking of the registry as a thing you mutate. It's a **durable event log** you _fold_. You don't write a `Map`; you write the event **schemas** and a **reducer**, and the table is `events.reduce(reduce, initial)`. Provide/revoke append events; the table is derived; replaying the log reproduces it exactly — no hidden durable state.
+> **the one new idea** — stop thinking of the registry as a thing you mutate. It's a **durable event log** you _fold_. You don't keep a mutable table at all; you write the event **schemas** and a **reducer**, and the table is `events.reduce(reduce, initial)`. Provide/revoke append events; the table is derived; replaying the log reproduces it exactly — no hidden durable state.
 
 Because it's an event log, the honest thing to write down is the **schema of the events** — and that reads cleanly. This is the real contract from the runnable [`itx-contract.ts`](./itx-contract.ts), defined with the platform's own `defineProcessorContract` (the workshop _depends_ on the platform streams engine (now in apps/os/src/domains/streams), it doesn't reimplement it):
 
@@ -518,36 +537,15 @@ reduce({ event, state }) {
 
 Last-write-wins, revoke removes, replay is deterministic — the table is never the source of truth, the log is. Note what the fold does _not_ hold: a `live` cap's event records `kind: "live"` with `address: null` — you can't serialize a socket, so the actual stub lives in an in-memory bridge map keyed by name (Step 4). That's precisely why a live cap dies on eviction and a sturdy ref (which folds to a serializable `address`) survives.
 
-So the Step-4 "bridge" and this "fold" are two views of one picture: the **log** is the source of truth for everything _durable_ (which names exist, each one's kind, and sturdy `address`es), while the **bridge map** holds the _ephemeral_ live stubs beside it. "No hidden state" means nothing durable hides outside the fold; the live stubs are deliberately non-durable, which is the whole live-vs-sturdy distinction. (Proven over real workerd in the harness's Step 8/11: `freshFold` replays the durable log into a brand-new processor and rebuilds the identical table.)
+So the Step-4 "bridge" and this "fold" are two views of one picture: the **log** is the source of truth for everything _durable_ (which names exist, each one's kind, and sturdy `address`es), while the **bridge map** holds the _ephemeral_ live stubs beside it. "No hidden state" means nothing durable hides outside the fold; the live stubs are deliberately non-durable, which is the whole live-vs-sturdy distinction. (Proven over real workerd in the harness's Step 8/10: `rebuildFromLog` replays the durable log into a brand-new processor and rebuilds the identical table.)
 
 ### 🚧 Why this isn't enough yet
 
-A sturdy ref is just data. Something has to turn `{ type:"rpc", worker:{ type:"source", … } }` back into a callable. That's `dial`.
+A context wants the platform's defaults (`fetch`, `ai`, `secrets`) — and to build on the capabilities of a context it sits under, without re-providing them all. We need contexts to **inherit** from a base context (Step 9 calls that base the **parent**).
 
 ---
 
-## Step 9 — dial: restoring a ref by running the project worker
-
-> **the one new idea** — `dial(ref)` is an injected effect that turns a sturdy ref into a `PathCallable`. For a `source` worker it **builds the project worker from the repo and runs it as a dynamic worker** (the Worker Loader), caching the isolate by content — same content, same isolate.
-
-```ts
-function dial(ref) {
-  if (ref.type !== "rpc") throw new Error("not dialable");
-  // build (or reuse, cached by content) the worker; get the named entrypoint, passing props:
-  const worker = loadWorker(ref.worker); // Worker Loader: same source content → same isolate
-  return worker.getEntrypoint(ref.entrypoint, { props: ref.props }); // a PathCallable
-}
-```
-
-`dial` returns a **`PathCallable`** — the very thing `invokeCapabilityAtPath` forwards to. The entrypoint's `props` arrive as `this.ctx.props` (that's how Step 7's `OpenApiClient` gets its `{ specUrl }`). `loadWorker` caches the built isolate by content, so dialing two refs with the same source shares one isolate; different content builds a new one. `ref.worker.type` is `"source"` here, but also `"binding"` (an env binding like AI), `"loopback"` (a first-party entrypoint), or `"durable-object"` — the core only knows "ref → `PathCallable` via the injected `dial`."
-
-### 🚧 Why this isn't enough yet
-
-A context wants the platform's defaults (`fetch`, `ai`, `secrets`) and a parent's capabilities without re-providing them all. We need contexts to inherit.
-
----
-
-## Step 10 — extend & super: the context chain
+## Step 9 — extend & super: the context chain
 
 > **the one new idea** — a context can `extend` a parent. On a capability **miss**, dispatch climbs to `super` (the parent context). A child **shadow** wins over the parent — child capabilities shadow parent ones the same way a deeper path shadowed a shallower one in Step 6, now up the chain.
 
@@ -568,7 +566,7 @@ Everything we've built (provide/revoke as events, a folded table, read-your-writ
 
 ---
 
-## Step 11 — Itx _is_ a StreamProcessor (for real)
+## Step 10 — Itx _is_ a StreamProcessor (for real)
 
 > **the punchline** — Step 8's "fold a durable event log" already _is_ a `StreamProcessor`. So `Itx extends StreamProcessor<ItxContract>` — the **real** base class from the platform streams engine (now in apps/os/src/domains/streams). We override one pure method, `reduce` (the fold), and add the verbs. The stream's subscription (Step 7's wiring) delivers appended events into `ingest`, which folds them and advances the checkpoint; `state` is the fold; replay rebuilds it. Read-your-writes is then just: append, wait for the stream to deliver it back, read.
 
@@ -579,7 +577,7 @@ import { StreamProcessor } from "@iterate-com/os/src/domains/streams/engine/stre
 
 export class Itx extends StreamProcessor<typeof ItxContract> {
   readonly contract = ItxContract;
-  #live = new Map(); // the Step-4 bridge: name → live stub (in-memory, NOT durable)
+  #liveCapabilities = new Map(); // the Step-4 bridge: name → live stub (in-memory, NOT durable)
 
   // the fold (Step 8) — one pure projection of an event into the next state:
   reduce({ event, state }) {
@@ -592,7 +590,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   // the write is readable — read-your-writes, with the stream as the only source.
   async provideCapability({ path, capability, instructions }) {
     const kind = isCapabilityAddress(capability) ? "rpc" : "live";
-    if (kind === "live") this.#live.set(path.join("."), capability);
+    if (kind === "live") this.#liveCapabilities.set(path.join("."), capability);
     const committed = await this.ctx.stream.append({
       event: {
         type: "…/capability-provided",
@@ -606,7 +604,9 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     const hit = resolveLongestPrefix(this.state.capabilities, path); // resolve over the fold
     if (!hit) throw new Error(`no capability "${path.join(".")}"`);
     const target =
-      hit.record.kind === "live" ? this.#live.get(hit.name) : this.dial(hit.record.address);
+      hit.record.kind === "live"
+        ? this.#liveCapabilities.get(hit.name)
+        : this.dial(hit.record.address);
     return replayPath(target, hit.rest, args);
   }
 }
@@ -618,44 +618,49 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
 
 ```ts
 // the host builds a context with its built-in capabilities wired in — no events appended.
-// For a project context they come from the ProjectDO, which defines what it offers (Step 10):
+// They come from the DOMAIN object the context is scoped to: a project context's from
+// the `Project` DO (its `fetch`/egress), an agent context's from the `Agent` DO (its own
+// `whoami`). The host picks by coordinate (Step 9 — both are real DOs in the toy):
 new Itx({
   ...deps,
-  builtinCapabilities: ProjectDO.builtinCapabilities(env.PROJECT.getByName(id)),
+  builtinCapabilities: isAgent
+    ? Agent.builtinCapabilities(env.AGENT.getByName(agentCoordinate)) // e.g. whoami
+    : Project.builtinCapabilities(env.PROJECT.getByName(projectId)), // e.g. fetch (egress)
 });
-// invoke resolution order: own fold (provides) → built-in capabilities → parent (Step 11).
+// invoke resolution order: own fold (provides) → built-in capabilities → parent (Step 10).
+// So an agent sees its OWN whoami AND the project's fetch — inherited by climbing the chain.
 ```
 
-Changing a built-in is then a **code change** — re-injected on the next boot — not a stream rewrite. The cost is honest: a built-in isn't in the durable fold, and if you've already told an agent what capabilities it has, changing them still means updating what you told it; but you never rewrite the logs. (Step 12's chain — project → agent — decides which context gets which built-ins; a child inherits the parent's by climbing on a miss.)
+Changing a built-in is then a **code change** — re-injected on the next boot — not a stream rewrite. The cost is honest: a built-in isn't in the durable fold, and if you've already told an agent what capabilities it has, changing them still means updating what you told it; but you never rewrite the logs. (Step 11's chain — project → agent — decides which context gets which built-ins; a child inherits the parent's by climbing on a miss.)
 
 ### Where it actually runs
 
-This actually runs. The workshop's `server.ts` has **one** `ItxDO` — a Durable Object that hosts this exact `Itx` processor and backs it with the real `Stream` Durable Object from the platform streams engine (now in apps/os/src/domains/streams) as its durable event log (the DO is named by its context coordinate; the log is a stream at that coordinate). Every step from 2 on — provide/invoke, the live cross-client rendezvous, the deep Slack path, and Step 8/11's provide → fold → invoke → revoke → `freshFold` (replay the durable log into a fresh processor → identical table) — is driven over real workerd by `harness.ts`. Production is the same shape with more around it: `apps/os/src/itx/itx-durable-object.ts` is the host, `apps/os/src/domains/streams/engine/workers/durable-objects/stream.ts` is the log, plus the chain/dial/coordinates of Step 12.
+This actually runs. The workshop's `server.ts` has **one** `ItxDO` — a Durable Object that hosts this exact `Itx` processor and backs it with the real `Stream` Durable Object from the platform streams engine (now in apps/os/src/domains/streams) as its durable event log (the DO is named by its context coordinate; the log is a stream at that coordinate). Every step from 2 on — provide/invoke, the live cross-client rendezvous, the deep Slack path, and Step 8/10's provide → fold → invoke → revoke → `rebuildFromLog` (replay the durable log into a fresh processor → identical table) — is driven over real workerd by `harness.ts`. Production is the same shape with more around it: `apps/os/src/itx/itx-durable-object.ts` is the host, `apps/os/src/domains/streams/engine/workers/durable-objects/stream.ts` is the log, plus the chain/dial/coordinates of Step 11.
 
 The whole thing is one idea seen from a few angles: a name → a stub or an address, a table that is the fold of the context's durable event log, a server-side proxy that makes calling it feel native, paths that mount whole SDKs and shadow deep, borrow-or-dial, and a climb to the parent on a miss.
 
 ---
 
-## Step 12 — the platform layers (built incrementally in `steps/`)
+## Step 11 — the platform layers (built incrementally in `steps/`)
 
 > The steps above derive the _core_. The platform layers that make it a real, multi-tenant system are built as **runnable step folders** ([`steps/README.md`](./steps/README.md)), each with an intent test green over real workerd. (The `steps/NN` names below are the runnable build's **own** sequence — they don't line up one-to-one with these prose step numbers; see the crosswalk in `steps/README.md`.)
 
 - [x] **A context is a project id + a path.** That's the whole identity — `<projectId>/<path>` names the context, the host DO, and the dial address. `prj:<id>` is the **project itx**; `prj:<id>/agents/<name>` is an **agent itx** under it; nest freely. No separate "session" or "namespace" — those are just paths.
 - [x] **Auth & access** ([`steps/08-auth`](./steps/08-auth)) — a bearer token names a principal → the projects it may access → an itx scoped to one project; others refused at the door.
 - [x] **dial / code-loading** ([`steps/09-dial`](./steps/09-dial)) — a sturdy ref is restored by **building + running its worker** via the Worker Loader (`env.LOADER`), `props` → `this.ctx.props`.
-- [x] **Project DO + `itx.fetch`** ([`steps/10-project-fetch`](./steps/10-project-fetch)) — a **Project Durable Object** owns egress, provided to a project context as the `fetch` root.
-- [x] **The context chain** ([`steps/11-chain`](./steps/11-chain)) — an agent itx extends its project itx; on a miss it climbs to super across real DOs; a child shadow wins (late binding).
+- [x] **Project & Agent DOs + built-ins** ([`steps/10-project-fetch`](./steps/10-project-fetch)) — a **`Project extends DurableObject`** owns egress, provided to a project context as the `fetch` root; an **`Agent extends DurableObject`** under it owns its identity, provided to an agent context as `whoami`. The toy ships both so the project↔agent picture is concrete and runnable.
+- [x] **The context chain** ([`steps/11-chain`](./steps/11-chain)) — an agent itx extends its project itx; on a miss it climbs to super across the two real DOs (so an agent reaches its own `whoami` AND the project's inherited `fetch`); a child shadow wins (late binding).
 - [x] **Codemode** ([`steps/12-codemode`](./steps/12-codemode)) — `script-execution-requested`/`-completed`; run an `async (itx) => …` program in a loaded isolate with the context's itx in scope.
 - [x] **Root capabilities are injected at construction** — passed to the `Itx` constructor (e.g. `itx.fetch`), not special-cased in a handle and not appended as events; `invoke` falls back to them, own provides shadow them, and they're surfaced in `describe`/`list`.
 - [ ] **The platform capability root above the project** — where defaults bottom out at a code-rooted read-only root. _(still TODO.)_
 
 ---
 
-## Step 13 — client libraries 🚧 TODO (skeleton)
+## Step 12 — client libraries 🚧 TODO (skeleton)
 
 > the ergonomics each runtime gets on top of the naked stub.
 
-- [x] **Runtime-specific `withItx` disposable** — built: [`client.ts`](./client.ts) exports `withItx({ baseUrl, context })`, the Node entry point that opens the session and returns the bare, Disposable stub (`using itx = withItx(...)` closes the socket at scope end). The harness drives every itx step through it. It mirrors production's `apps/os/src/itx/client.ts` minus auth (Step 12). _(Browser variant still TODO — same `/itx` endpoint.)_
+- [x] **Runtime-specific `withItx` disposable** — built: [`client.ts`](./client.ts) exports `withItx({ baseUrl, context })`, the Node entry point that opens the session and returns the bare, Disposable stub (`using itx = withItx(...)` closes the socket at scope end). The harness drives every itx step through it. It mirrors production's `apps/os/src/itx/client.ts` minus auth (Step 11). _(Browser variant still TODO — same `/itx` endpoint.)_
 - [ ] **React libraries** — hooks/components for consuming itx from React (e.g. a `useItx`-style surface), matching `apps/os/src/itx/use-itx.ts`. _(TODO.)_
 
 ---
@@ -689,7 +694,7 @@ All real, all in the actual files; none of it changes the inner model. Each entr
 
 - **Live-stub retention** — `dup()` provided stubs (deep-walk plain-object providers); teardown appends a `capability-disconnected` event so `describe()` shows it offline.
 
-- **The handle is more than the proxy** — today's `ItxHandle` also carries built-ins (`projects`, `streams`, `fetch`, `extend`, `super`) that don't fall through to `invoke`, plus reserved-name gating; it's what the Worker serves (a thin wrapper dialing the DO node's `itx()`). 🔄 **we want to change this** — those shouldn't be privileged names baked into a handle; they're **built-in capabilities** handed to the `Itx` constructor by whoever builds the context (Step 11), resolved as an `invoke` fallback. No special handle.
+- **The handle is more than the proxy** — today's `ItxHandle` also carries built-ins (`projects`, `streams`, `fetch`, `extend`, `super`) that don't fall through to `invoke`, plus reserved-name gating; it's what the Worker serves (a thin wrapper dialing the DO node's `itx()`). 🔄 **we want to change this** — those shouldn't be privileged names baked into a handle; they're **built-in capabilities** handed to the `Itx` constructor by whoever builds the context (Step 10), resolved as an `invoke` fallback. No special handle.
 
 - **The ref taxonomy and dial's reach** — beyond `source`, a ref's `worker` can be `binding`, `loopback`, or `durable-object`; `dial` handles Worker-Loader isolate caching (by content, per origin), facets, and allowlists.
 
@@ -711,4 +716,4 @@ All real, all in the actual files; none of it changes the inner model. Each entr
 
 ---
 
-_ground truth: `apps/os/src/itx/{itx,handle,path-proxy,dial,coordinates,entrypoint,contract,types,itx-durable-object,fetch}.ts` · `apps/os/src/domains/streams/engine/stream-processor.ts`. Runnable in this folder, all over real workerd via `server.ts` + `harness.ts`: Steps 0–6 (incl. `itx.slack.chat.postMessage` on a naked stub into the real `@slack/web-api` client) and Steps 8/11 (one `ItxDO` hosting `Itx extends StreamProcessor` from `itx-contract.ts` + `itx-processor.ts`, backed by the real the platform `Stream` DO as its durable event log). Also `min-dynamic-target.mjs` (the server-side dynamic proxy, in isolation); `validate-steps.mjs` (model checks for Steps 7–10); `dialog.swift` (the Step 1 native dialog — really runs, `npm run proof:swift`)._
+_ground truth: `apps/os/src/itx/{itx,handle,path-proxy,dial,coordinates,entrypoint,contract,types,itx-durable-object,fetch}.ts` · `apps/os/src/domains/streams/engine/stream-processor.ts`. Runnable in this folder, all over real workerd via `server.ts` + `harness.ts`: Steps 0–6 (incl. `itx.slack.chat.postMessage` on a naked stub into the real `@slack/web-api` client) and Steps 8/10 (one `ItxDO` hosting `Itx extends StreamProcessor` from `itx-contract.ts` + `itx-processor.ts`, backed by the real the platform `Stream` DO as its durable event log). Also `min-dynamic-target.mjs` (the server-side dynamic proxy, in isolation); `validate-steps.mjs` (model checks for Steps 7–10); `dialog.swift` (the Step 1 native dialog — really runs, `npm run proof:swift`)._

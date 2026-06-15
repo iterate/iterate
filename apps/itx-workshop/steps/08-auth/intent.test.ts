@@ -14,7 +14,12 @@ const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 
 interface ItxCore {
   list(): Promise<string[]>;
-  provideCapability(path: string[], capability: any): Promise<any>;
+  provideCapability(args: {
+    path: string[];
+    capability: any;
+    instructions?: string;
+    types?: string;
+  }): Promise<any>;
   invoke(path: string[], args: unknown[]): Promise<any>;
 }
 
@@ -50,7 +55,7 @@ async function main() {
   // A scoped itx works normally within its project.
   try {
     using itx = connect<ItxCore>(url("alice"), bearer("alice-token"));
-    await itx.provideCapability(["ping"], (async () => "pong") as any);
+    await itx.provideCapability({ path: ["ping"], capability: (async () => "pong") as any });
     check(
       "a scoped itx provides + invokes within its project",
       (await itx.invoke(["ping"], [])) === "pong",

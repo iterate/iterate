@@ -46,11 +46,24 @@ interface RegisterServer {
 // The itx context's verbs are bag-of-path-and-args; the WorkerHandle adapts the
 // bare-stub convention to the processor. Paths are arrays.
 interface ItxCore {
-  provideCapability(path: string[], capability: any): Promise<any>;
+  // provide is a BAG: { path, capability, instructions?, types? } — instructions
+  // (what it's for) and types (its surface) travel with the cap; describe() reads them back.
+  provideCapability(args: {
+    path: string[];
+    capability: any;
+    instructions?: string;
+    types?: string;
+  }): Promise<any>;
   invoke(path: string[], args: unknown[]): Promise<any>;
   revokeCapability(path: string[]): Promise<any>;
   list(): Promise<string[]>;
-  freshFold(): Promise<string[]>; // replay the durable log into a fresh processor
+  describe(): Promise<
+    Record<
+      string,
+      { name: string; kind: string; instructions: string | null; types: string | null }
+    >
+  >;
+  rebuildFromLog(): Promise<string[]>; // replay the durable log into a fresh processor
 }
 
 // A local stand-in for the Slack Web API. The REAL @slack/web-api WebClient
@@ -163,7 +176,12 @@ async function main() {
   // ---------------------------------------------------------------------
   try {
     using a = openItx<ItxCore>(); // client A (laptop): provides runSwift
-    await a.provideCapability(["runSwift"], runSwift as any);
+    await a.provideCapability({
+      path: ["runSwift"],
+      capability: runSwift as any,
+      instructions: "run a Swift program on the laptop, return its stdout",
+      types: "(code: string) => Promise<string>",
+    });
     await sleep(50);
 
     using b = openItx<ItxCore>(); // client B (dashboard): a SEPARATE socket
@@ -204,7 +222,12 @@ async function main() {
   // ---------------------------------------------------------------------
   try {
     using prov = openItx<ItxCore>();
-    await prov.provideCapability(["runSwift"], runSwift as any);
+    await prov.provideCapability({
+      path: ["runSwift"],
+      capability: runSwift as any,
+      instructions: "run a Swift program on the laptop, return its stdout",
+      types: "(code: string) => Promise<string>",
+    });
     await sleep(30);
     using itx = openItx(); // NAKED stub
     const out = await itx.runSwift(`print(6 * 7)`);
@@ -236,7 +259,11 @@ async function main() {
   };
 
   using slackProv = openItx<ItxCore>();
-  await slackProv.provideCapability(["slack"], slackCap as any);
+  await slackProv.provideCapability({
+    path: ["slack"],
+    capability: slackCap as any,
+    instructions: "the project's Slack workspace (the real @slack/web-api WebClient)",
+  });
   await sleep(50);
 
   try {
@@ -260,11 +287,14 @@ async function main() {
   // longest-prefix deep shadow: override just slack.chat.postMessage; the rest
   // of the real client still resolves under the "slack" prefix.
   try {
-    await slackProv.provideCapability(["slack", "chat", "postMessage"], (async (m: any) => ({
-      ok: true,
-      text: m.text,
-      via: "SHADOW override",
-    })) as any);
+    await slackProv.provideCapability({
+      path: ["slack", "chat", "postMessage"],
+      capability: (async (m: any) => ({
+        ok: true,
+        text: m.text,
+        via: "SHADOW override",
+      })) as any,
+    });
     await sleep(30);
 
     using itx = openItx(); // NAKED stub
@@ -292,17 +322,36 @@ async function main() {
   // STEP 8 & 11 — a context IS a durable event log folded by a real
   // StreamProcessor. provide appends an event the fold projects into the table;
   // revoke removes it; and REPLAYING the durable log into a FRESH processor
-  // (freshFold, server-side) rebuilds the identical table — the fold is the
+  // (rebuildFromLog, server-side) rebuilds the identical table — the fold is the
   // source of truth, persisted in the real platform Stream DO.
   // ---------------------------------------------------------------------
   try {
     using itx = openItx<ItxCore>();
-    await itx.provideCapability(["db"], { query: async (q: string) => ({ rows: [q] }) });
-    await itx.provideCapability(["mailer"], (async (to: string) => `sent to ${to}`) as any);
+    // provide carries the instructions/types COMBO — what the cap is for + its surface.
+    await itx.provideCapability({
+      path: ["db"],
+      capability: { query: async (q: string) => ({ rows: [q] }) },
+      instructions: "the project's primary database",
+      types: "{ query(sql: string): Promise<{ rows: string[] }> }",
+    });
+    await itx.provideCapability({
+      path: ["mailer"],
+      capability: (async (to: string) => `sent to ${to}`) as any,
+    });
 
     const listed = await itx.list();
-    const replayed = await itx.freshFold(); // fresh processor, same durable log
+    const replayed = await itx.rebuildFromLog(); // fresh processor, same durable log
     const dbCall = await itx.invoke(["db", "query"], ["select 1"]);
+
+    // The instructions/types provided WITH the cap survived the wire → fold → here.
+    // Both are OPTIONAL: db carries instructions + types; mailer was provided bare,
+    // so it round-trips as { instructions: null, types: null }.
+    const described = await itx.describe();
+    const metaRoundTrips =
+      described.db?.instructions === "the project's primary database" &&
+      described.db?.types === "{ query(sql: string): Promise<{ rows: string[] }> }" &&
+      described.mailer?.instructions === null &&
+      described.mailer?.types === null;
 
     await itx.revokeCapability(["mailer"]);
     const afterRevoke = await itx.list();
@@ -315,13 +364,18 @@ async function main() {
       afterRevoke.includes("db") &&
       !afterRevoke.includes("mailer");
     record(
-      "Step 8/11: durable event log folded by a real StreamProcessor (replay rebuilds the table)",
+      "Step 8/10: durable event log folded by a real StreamProcessor (replay rebuilds the table)",
       ok ? "PASS" : "FAIL",
-      `list=${JSON.stringify(listed)}; freshFold(replay)=${JSON.stringify(replayed)}; ` +
+      `list=${JSON.stringify(listed)}; rebuildFromLog(replay)=${JSON.stringify(replayed)}; ` +
         `after revoke(mailer)=${JSON.stringify(afterRevoke)}`,
     );
+    record(
+      "Step 2: provide carries optional instructions + types (both round-trip via describe; bare = null/null)",
+      metaRoundTrips ? "PASS" : "FAIL",
+      `describe(db)=${JSON.stringify(described.db)}; describe(mailer)=${JSON.stringify(described.mailer)}`,
+    );
   } catch (e) {
-    record("Step 8/11: StreamProcessor", "FAIL", `threw: ${(e as Error).message}`);
+    record("Step 8/10: StreamProcessor", "FAIL", `threw: ${(e as Error).message}`);
   }
 
   // ---------------------------------------------------------------------

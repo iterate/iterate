@@ -22,12 +22,16 @@ async function main() {
   using itx = open();
 
   // A capability the script will call.
-  await itx.provideCapability(["greeter"], (async (n: string) => `hi ${n}`) as any);
+  await itx.provideCapability({
+    path: ["greeter"],
+    capability: (async (n: string) => `hi ${n}`) as any,
+    instructions: "greet someone by name",
+  });
 
   // The PROGRAM: it invokes an existing cap AND provides a new one, then returns.
   const code = `async (itx) => {
     const greeting = await itx.invoke(["greeter"], ["from-the-script"]);
-    await itx.provideCapability(["scriptMade"], async () => "made inside the script");
+    await itx.provideCapability({ path: ["scriptMade"], capability: async () => "made inside the script" });
     return greeting;
   }`;
 

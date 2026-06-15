@@ -32,11 +32,15 @@ async function main() {
   using itx = open();
 
   // Provide a STURDY capability: not a live stub, just a serializable ref.
-  await itx.provideCapability(["calc"], {
-    type: "rpc",
-    worker: { type: "source", source: CALC_SOURCE },
-    entrypoint: "Calc",
-    props: { base: 100 },
+  await itx.provideCapability({
+    path: ["calc"],
+    capability: {
+      type: "rpc",
+      worker: { type: "source", source: CALC_SOURCE },
+      entrypoint: "Calc",
+      props: { base: 100 },
+    },
+    instructions: "a calculator, built + run from source on demand",
   });
 
   // Invoking it dials the ref → builds + runs the worker → calls the method.

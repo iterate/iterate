@@ -7,13 +7,14 @@
   "durable_objects": {
     "bindings": [
       { "name": "ITX", "class_name": "ItxDO" },
-      { "name": "PROJECT", "class_name": "ProjectDO" },
+      { "name": "PROJECT", "class_name": "Project" },
+      { "name": "AGENT", "class_name": "Agent" },
       { "name": "REGISTRY", "class_name": "RegistryDO" },
       { "name": "STREAM", "class_name": "Stream" },
     ],
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["ItxDO", "ProjectDO", "RegistryDO", "Stream"] },
+    { "tag": "v1", "new_sqlite_classes": ["ItxDO", "Project", "Agent", "RegistryDO", "Stream"] },
   ],
   // Step 09 — dial: the Worker Loader builds + runs a worker from a ref at runtime.
   "worker_loaders": [{ "binding": "LOADER" }],

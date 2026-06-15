@@ -26,21 +26,6 @@ import { newMessagePortRpcSession } from "capnweb";
 // Registry: empty at construction, mutated at runtime.
 const registry = new Map();
 
-// Longest-prefix dispatch + receiver-preserving replay of the remainder.
-function invoke(path, args) {
-  for (let i = path.length; i >= 1; i--) {
-    if (registry.has(path.slice(0, i).join("."))) {
-      const recv = registry.get(path.slice(0, i).join("."));
-      const rest = path.slice(i);
-      if (rest.length === 0) return typeof recv === "function" ? recv(...args) : recv;
-      let parent = recv;
-      for (let j = 0; j < rest.length - 1; j++) parent = parent[rest[j]];
-      return parent[rest.at(-1)](...args);
-    }
-  }
-  throw new Error(`no capability "${path.join(".")}"`);
-}
-
 // Retain a provided capability past the provide call's return: capnweb disposes
 // argument stubs when the call returns; dup() each stub (a plain object crosses
 // by value with its function members as stubs, so walk and dup them).
@@ -66,45 +51,64 @@ const RESERVED = new Set([
   "onRpcBroken",
 ]);
 
-// The built-in verbs that read/mutate the runtime registry.
-const verbs = {
+// rpcTarget: the runtime verbs + invoke, all on the ONE object the dynamic proxy
+// wraps. invoke() does longest-prefix dispatch + receiver-preserving replay of
+// the remainder. Empty at construction, mutated at runtime (via provideCapability).
+const rpcTarget = {
   provideCapability: (name, target) => {
     registry.set(name, retain(target));
     return `provided ${name}`;
   },
-  invoke: (name, args) => invoke(Array.isArray(name) ? name : [name], args),
   list: () => [...registry.keys()],
+  invoke({ path, args }) {
+    for (let i = path.length; i >= 1; i--) {
+      if (registry.has(path.slice(0, i).join("."))) {
+        const recv = registry.get(path.slice(0, i).join("."));
+        const rest = path.slice(i);
+        if (rest.length === 0) return typeof recv === "function" ? recv(...args) : recv;
+        let parent = recv;
+        for (let j = 0; j < rest.length - 1; j++) parent = parent[rest[j]];
+        return parent[rest.at(-1)](...args);
+      }
+    }
+    throw new Error(`no capability "${path.join(".")}"`);
+  },
 };
 
-// THE single dynamic target. Function-typed (see note 1). Root verb names
-// resolve to the verb; any other name extends the path; the terminal call
-// funnels into invoke().
-function node(path) {
-  const verbAt = (key) => path.length === 0 && key in verbs;
+// THE single dynamic target. Function-typed (see note 1). A root verb name
+// resolves to the verb on rpcTarget; any other name extends the path; the
+// terminal call funnels into rpcTarget.invoke({ path, args }).
+function dynamicTarget({ rpcTarget, path = [] }) {
+  const verbAt = (key) => path.length === 0 && key in rpcTarget; // provide / invoke / list
+  const valueFor = (key) =>
+    verbAt(key)
+      ? rpcTarget[key].bind(rpcTarget)
+      : dynamicTarget({ rpcTarget, path: [...path, key] });
   return new Proxy(function () {}, {
     get(t, key) {
       if (typeof key === "symbol") return Reflect.get(t, key);
-      if (key === "then" || RESERVED.has(key)) return undefined;
-      if (verbAt(key)) return verbs[key];
-      return node([...path, key]);
+      if (key === "then" || RESERVED.has(key)) return undefined; // never a thenable; never a control word
+      return valueFor(key);
     },
+    // LOAD-BEARING: server-side Cap'n Web does Object.hasOwn(value, segment) BEFORE
+    // reading value[segment]. Without this trap every segment reads as absent and the
+    // chain dies at ".chat of undefined" — even the base verbs read as "not a function".
     getOwnPropertyDescriptor(t, key) {
       if (typeof key === "symbol" || RESERVED.has(key))
         return Reflect.getOwnPropertyDescriptor(t, key);
-      const value = verbAt(key) ? verbs[key] : node([...path, key]);
-      return { configurable: true, enumerable: true, writable: false, value };
+      return { configurable: true, enumerable: true, writable: false, value: valueFor(key) };
     },
     has(t, key) {
       return typeof key === "symbol" ? key in t : !RESERVED.has(key);
     },
     apply(_t, _s, args) {
-      return invoke(path, args);
+      return rpcTarget.invoke({ path, args }); // the accumulated dotted path, in one call
     },
   });
 }
 
 const { port1, port2 } = new MessageChannel();
-newMessagePortRpcSession(port1, node([])); // server: ONE dynamic target
+newMessagePortRpcSession(port1, dynamicTarget({ rpcTarget })); // server: ONE dynamic target
 const stub = newMessagePortRpcSession(port2); // client: a NAKED stub, no proxy
 
 // The server had no knowledge of "slack" when node([]) was constructed.

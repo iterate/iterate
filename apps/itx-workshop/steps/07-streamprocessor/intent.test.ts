@@ -29,7 +29,11 @@ async function main() {
 
   // Baseline: provide folds into the table and is immediately invokable
   // (read-your-writes through the processor).
-  await itx.provideCapability(["greeter"], async (n: string) => `hi ${n}`);
+  await itx.provideCapability({
+    path: ["greeter"],
+    capability: async (n: string) => `hi ${n}`,
+    instructions: "greet someone by name",
+  });
   check(
     "provide → fold → invoke (read-your-writes)",
     (await itx.invoke(["greeter"], ["ada"])) === "hi ada",

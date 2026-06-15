@@ -4,14 +4,14 @@
 //
 //   /step0  -> Server (whoami)                            [Step 0]
 //   /step1  -> RegisterServer (server calls back client)  [Step 1]
-//   /itx    -> the ITX Durable Object, served over capnweb [Steps 2-11]
+//   /itx    -> the ITX Durable Object, served over capnweb [Steps 2-10]
 //
 // There is ONE itx context here and it is the real thing: ItxDO hosts
 // `Itx extends StreamProcessor<ItxContract>` (itx-processor.ts) — the actual
 // class from apps/os — and backs it with the real `Stream` Durable
 // Object as its durable event log. Steps 2-6 (provide/invoke, the live
 // cross-client rendezvous, deep dotted paths into the real Slack SDK) and
-// Steps 8/11 (the fold of a durable event log; replay rebuilds the table) all
+// Steps 8/10 (the fold of a durable event log; replay rebuilds the table) all
 // run against that one context. A NAKED capnweb stub drives it — the dynamic
 // server-side proxy serves the verbs and pipelines deep paths; there is no
 // client-side path proxy.
@@ -106,15 +106,17 @@ const RESERVED = new Set([
 //      without the descriptor trap every segment reads as absent and the chain
 //      dies at ".chat of undefined".
 //   3. `has` must answer for non-reserved names too.
-function dynamicHandle(target: any, path: string[] = []): any {
+function dynamicHandle({ rpcTarget, path = [] }: { rpcTarget: any; path?: string[] }): any {
   // A name is a VERB if the served handle actually has a method by that name
   // (provideCapability / invoke / revokeCapability / list / …); anything else
   // extends the accumulating path. Deriving this from the target keeps the proxy
   // agnostic to which handle it wraps.
   const verbAt = (key: string) =>
-    path.length === 0 && !RESERVED.has(key) && typeof target[key] === "function";
+    path.length === 0 && !RESERVED.has(key) && typeof rpcTarget[key] === "function";
   const valueFor = (key: string) =>
-    verbAt(key) ? (target as any)[key].bind(target) : dynamicHandle(target, [...path, key]);
+    verbAt(key)
+      ? (rpcTarget as any)[key].bind(rpcTarget)
+      : dynamicHandle({ rpcTarget, path: [...path, key] });
   return new Proxy(function () {}, {
     get(t, key) {
       if (typeof key === "symbol") return Reflect.get(t, key);
@@ -131,14 +133,15 @@ function dynamicHandle(target: any, path: string[] = []): any {
     },
     apply(_t, _s, args) {
       // A bare-stub deep path lands here: invoke the accumulated path.
-      return target.invoke(path, args as unknown[]);
+      return rpcTarget.invoke(path, args as unknown[]);
     },
   });
 }
 
 interface Env {
   ITX: DurableObjectNamespace<ItxDO>;
-  PROJECT: DurableObjectNamespace<ProjectDO>;
+  PROJECT: DurableObjectNamespace<Project>;
+  AGENT: DurableObjectNamespace<Agent>;
   STREAM: DurableObjectNamespace<any>;
   // Worker Loader (Step 09): build + run a worker from a ref at runtime.
   LOADER: {
@@ -165,7 +168,7 @@ function hashString(s: string): string {
 // THE itx context — one Durable Object hosting the real StreamProcessor.
 //
 // The capability table is the FOLD of a durable event log: provide appends an
-// event, the fold projects it, replaying the log rebuilds it (Steps 8/11). The
+// event, the fold projects it, replaying the log rebuilds it (Steps 8/10). The
 // processor's checkpoint is a disposable cache in this DO's storage; the live
 // stubs (Step 4's bridge) are an in-memory field inside the processor; the log
 // itself is the real `Stream` Durable Object, dialed by name.
@@ -183,7 +186,7 @@ export class ItxDO extends DurableObject<Env> {
         ...deps,
         iterateContext: { stream: this.#log() },
         dial: (address) => this.#dial(address), // Step 09: restore a sturdy ref
-        builtinCapabilities: this.#contextBuiltinCapabilities(), // Step 10: from the ProjectDO
+        builtinCapabilities: this.#contextBuiltinCapabilities(), // Step 10: from the Project/Agent DO
         parentItx: () => this.#parentContext(), // Step 11: climb to the parent
       }),
   );
@@ -197,15 +200,25 @@ export class ItxDO extends DurableObject<Env> {
     return name.startsWith("prj:") ? name.slice("prj:".length).split("/")[0] : null;
   }
 
-  // Step 10: ONLY the project-root context ("prj:<id>", no sub-path) is born with
-  // the project's built-in capabilities. The ItxDO decides WHICH contexts get them
-  // (the root); the ProjectDO defines WHAT they are. Agent/sub-contexts inherit
-  // them via the chain (Step 11).
+  // Step 10: a context is born with built-in capabilities defined by the DOMAIN
+  // object it's scoped to. The project-root context ("prj:<id>") gets the
+  // `Project` DO's built-ins (fetch); an agent context ("prj:<id>/agents/<name>")
+  // gets the `Agent` DO's own built-ins (whoami) AND inherits the project's via
+  // the chain (Step 11). The ItxDO decides WHICH context maps to WHICH domain
+  // object (by coordinate); the domain object defines WHAT it offers.
   #contextBuiltinCapabilities(): ProvideArgs[] {
     const name = this.ctx.id.name ?? "";
     const projectId = this.#project();
-    if (!projectId || name !== `prj:${projectId}`) return [];
-    return ProjectDO.builtinCapabilities(this.env.PROJECT.getByName(projectId));
+    if (!projectId) return [];
+    if (name === `prj:${projectId}`) {
+      return Project.builtinCapabilities(this.env.PROJECT.getByName(projectId));
+    }
+    // an agent context: prj:<id>/agents/<name> — its own DO is keyed by the
+    // sub-coordinate "<id>/agents/<name>".
+    if (/^prj:[^/]+\/agents\/.+$/.test(name)) {
+      return Agent.builtinCapabilities(this.env.AGENT.getByName(name.slice("prj:".length)));
+    }
+    return [];
   }
 
   // Step 11: the parent context. An agent ("prj:<id>/agents/<name>") climbs to
@@ -331,9 +344,14 @@ export class ItxDO extends DurableObject<Env> {
     // very context (the methods become RPC stubs in the loaded isolate).
     const itxHandle = {
       invoke: (path: string[], args: unknown[] = []) => this.#itx.invoke({ path, args }),
-      provideCapability: (path: string[], capability: any) =>
-        this.#itx.provideCapability({ path, capability }),
+      provideCapability: (args: {
+        path: string[];
+        capability: any;
+        instructions?: string;
+        types?: string;
+      }) => this.#itx.provideCapability(args),
       list: () => this.#itx.listCapabilities(),
+      describe: () => this.#itx.describeCapabilities(),
     };
     const result = await loaded.getEntrypoint("Script").run(itxHandle);
     await log.append({
@@ -348,7 +366,7 @@ export class ItxDO extends DurableObject<Env> {
   // Durability proof, server-side: build a FRESH processor and replay the whole
   // durable log into it. Its rebuilt table must match the live one — the fold is
   // the source of truth, the log survives, the processor is reconstructible.
-  async freshFoldCapabilityNames(): Promise<string[]> {
+  async rebuildFromLog(): Promise<string[]> {
     const log = this.env.STREAM.getByName(this.#coordinate());
     const events = await log.getEvents({});
     const fresh = new Itx({
@@ -381,11 +399,20 @@ class WorkerHandle extends RpcTarget {
     super();
     this.#node = node;
   }
-  provideCapability(path: string[], capability: any) {
+  // The wire `provide` is a BAG ({ path, capability, instructions?, types? }) — the
+  // SAME shape as the model's ProvideArgs and production's itx.provideCapability.
+  // `instructions` (what the cap is for) and optional `types` (its surface) travel
+  // with the capability; the fold carries them, describe() reads them back.
+  provideCapability(args: {
+    path: string[];
+    capability: any;
+    instructions?: string;
+    types?: string;
+  }) {
     // Dup at THIS (Worker) layer first: `capability` is a capnweb import from the
     // client; when this provide call returns, capnweb disposes that import, which
     // would break the DO's copy. dup() retains it so client→Worker→DO survives.
-    return this.#node.itx().provideCapability({ path, capability: retain(capability) });
+    return this.#node.itx().provideCapability({ ...args, capability: retain(args.capability) });
   }
   invoke(path: string[], args: unknown[]) {
     return this.#node.itx().invoke({ path, args });
@@ -396,8 +423,13 @@ class WorkerHandle extends RpcTarget {
   list() {
     return this.#node.itx().listCapabilities();
   }
-  freshFold() {
-    return this.#node.freshFoldCapabilityNames();
+  // The self-describing view: each capability with the instructions/types it was
+  // provided with (built-ins included). The metadata round-trips client→DO→fold→here.
+  describe() {
+    return this.#node.itx().describeCapabilities();
+  }
+  rebuildFromLog() {
+    return this.#node.rebuildFromLog();
   }
   // Step 07: append straight to the durable log (an "external writer"); the
   // processor should learn of it via the subscription, not via a provide call.
@@ -410,11 +442,19 @@ class WorkerHandle extends RpcTarget {
   }
 }
 
-// Step 10 — the Project Durable Object. One per project; it owns the project's
-// egress AND defines the built-in capabilities a context scoped to it is born
-// with. `egress` does the actual outbound fetch (named `egress`, not `fetch`,
-// because a DO's `fetch` is its HTTP entrypoint).
-export class ProjectDO extends DurableObject<Env> {
+// Step 10/11 — the domain objects. A context's identity is a project id + a path,
+// and at each coordinate sits a real domain Durable Object: the project root is a
+// `Project`, an agent under it is an `Agent`. Each owns its resources AND defines
+// the built-in capabilities a context scoped to it is born with. This is the
+// production shape in miniature: apps/os has Project and Agent durable objects;
+// the itx context attaches to them by coordinate, and the agent's itx parent is
+// the project's itx (the chain).
+
+// The Project DO. One per project; it owns the project's egress AND defines the
+// built-ins a project-scoped context is born with. `egress` does the actual
+// outbound fetch (named `egress`, not `fetch`, because a DO's `fetch` is its HTTP
+// entrypoint).
+export class Project extends DurableObject<Env> {
   async egress(
     url: string,
     init?: RequestInit,
@@ -431,12 +471,33 @@ export class ProjectDO extends DurableObject<Env> {
   // decides what it offers (here: `fetch`, wired to its own egress). Each entry is
   // the SAME shape as a provideCapability call ({ path, capability, instructions? });
   // a built-in is just a capability pre-provided in code instead of via an event.
-  static builtinCapabilities(project: DurableObjectStub<ProjectDO>): ProvideArgs[] {
+  static builtinCapabilities(project: DurableObjectStub<Project>): ProvideArgs[] {
     return [
       {
         path: ["fetch"],
         capability: (url: string, init?: RequestInit) => project.egress(url, init),
         instructions: "the project's HTTP egress",
+      },
+    ];
+  }
+}
+
+// The Agent DO. One per agent, living UNDER a project (coordinate
+// "<projectId>/agents/<name>"). It owns its identity and defines its own
+// built-ins — here `whoami`. An agent context is born with these AND, on a miss,
+// climbs to its project's context (the chain, Step 11): so an agent can call its
+// own `whoami` AND the project's inherited `fetch` without re-providing it.
+export class Agent extends DurableObject<Env> {
+  whoami(): string {
+    return `agent ${this.ctx.id.name ?? "?"}`;
+  }
+
+  static builtinCapabilities(agent: DurableObjectStub<Agent>): ProvideArgs[] {
+    return [
+      {
+        path: ["whoami"],
+        capability: () => agent.whoami(),
+        instructions: "the agent's own identity",
       },
     ];
   }
@@ -469,7 +530,7 @@ export default {
       if (!auth.ok) return new Response(auth.message, { status: auth.status });
 
       const node = env.ITX.getByName(`prj:${project}`);
-      const main = dynamicHandle(new WorkerHandle(node));
+      const main = dynamicHandle({ rpcTarget: new WorkerHandle(node) });
       const pair = new WebSocketPair();
       const server = pair[0];
       server.accept();
@@ -492,7 +553,7 @@ export default {
 
       const coordinate = agent ? `prj:${project}/agents/${agent}` : `prj:${project}`;
       const node = env.ITX.getByName(coordinate);
-      const main = dynamicHandle(new WorkerHandle(node));
+      const main = dynamicHandle({ rpcTarget: new WorkerHandle(node) });
       const pair = new WebSocketPair();
       const server = pair[0];
       server.accept();
@@ -520,7 +581,7 @@ export default {
       // durable log) you meet — a fresh name = a fresh context. Clients that want
       // to rendezvous pass the same name; the default "itx" is the shared one.
       const node = env.ITX.getByName(url.searchParams.get("ctx") ?? "itx");
-      const main = dynamicHandle(new WorkerHandle(node));
+      const main = dynamicHandle({ rpcTarget: new WorkerHandle(node) });
 
       const pair = new WebSocketPair();
       const server = pair[0];

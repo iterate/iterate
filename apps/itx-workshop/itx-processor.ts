@@ -1,6 +1,6 @@
 // itx-processor.ts — Itx IS a real StreamProcessor.
 //
-// This is Step 11 for real: `Itx extends StreamProcessor<ItxContract>` from the
+// This is Step 10 for real: `Itx extends StreamProcessor<ItxContract>` from the
 // platform streams engine (apps/os/src/domains/streams/engine). We override exactly one pure method,
 // `reduce` (the fold), and add the two verbs (`provideCapability` / `invoke`)
 // plus revoke. Everything durable — what names exist, each one's kind and
@@ -70,9 +70,9 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   // The Step-4 bridge: name → live stub. In memory, NOT durable — a live cap
   // dies with its provider, which is exactly why the fold records it with
   // address: null and the actual stub lives here beside the fold.
-  #live = new Map<string, any>();
+  #liveCapabilities = new Map<string, any>();
 
-  // Injected restorer for sturdy addresses (Step 9's dial). Optional: a context
+  // Injected restorer for sturdy addresses (Step 7's dial). Optional: a context
   // with only live caps never needs it.
   #dial: (address: any) => any;
 
@@ -82,7 +82,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   // by its Project DO. Own provides (the fold) shadow a built-in at the same path.
   #builtinCapabilities: ProvideArgs[];
 
-  // The chain (Step 11): a child context (e.g. an agent) climbs to its parent
+  // The chain (Step 9): a child context (e.g. an agent) climbs to its parent
   // (e.g. its project) on a capability MISS. Returns the parent's processor stub,
   // or null at the top of the chain. A child's own caps + built-ins shadow the parent.
   #parentItx: () => { invoke(input: { path: string[]; args: unknown[] }): any } | null;
@@ -155,7 +155,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     const kind = isCapabilityAddress(capability) ? "rpc" : "live";
     // dup at THIS layer too: the stub arrived as an argument to this DO call and
     // capnweb disposes it when the call returns; the bridge must keep its own.
-    if (kind === "live") this.#live.set(path.join("."), retainLiveProvider(capability));
+    if (kind === "live") this.#liveCapabilities.set(path.join("."), retainLiveProvider(capability));
     const committed = await this.ctx.stream.append({
       event: {
         type: ITX_EVENTS.capabilityProvided,
@@ -181,6 +181,40 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     return [...new Set([...builtins, ...Object.keys(this.state.capabilities)])];
   }
 
+  // The self-describing view: every capability with the `instructions` (what it's
+  // for) and `types` (its surface) it was provided WITH. This is why there's no
+  // separate per-capability "describe" verb — a cap describes itself at provide
+  // time and the fold carries that metadata forward. Built-ins describe themselves
+  // too (their instructions/types come from the constructor array); an own provide
+  // shadows a built-in at the same name. (Production calls this describe.)
+  describeCapabilities(): Record<
+    string,
+    { name: string; kind: string; instructions: string | null; types: string | null }
+  > {
+    const out: Record<
+      string,
+      { name: string; kind: string; instructions: string | null; types: string | null }
+    > = {};
+    for (const b of this.#builtinCapabilities) {
+      const name = b.path.join(".");
+      out[name] = {
+        name,
+        kind: isCapabilityAddress(b.capability) ? "rpc" : "live",
+        instructions: b.instructions ?? null,
+        types: b.types ?? null,
+      };
+    }
+    for (const [name, rec] of Object.entries(this.state.capabilities)) {
+      out[name] = {
+        name,
+        kind: rec.kind,
+        instructions: rec.instructions ?? null,
+        types: rec.types ?? null,
+      };
+    }
+    return out;
+  }
+
   async revokeCapability({ path }: { path: string[] }) {
     const committed = await this.ctx.stream.append({
       event: { type: ITX_EVENTS.capabilityRevoked, payload: { path } },
@@ -195,7 +229,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     const hit = resolveLongestPrefix(this.state.capabilities, path);
     if (hit) {
       if (hit.record.kind === "live") {
-        const stub = this.#live.get(hit.name);
+        const stub = this.#liveCapabilities.get(hit.name);
         if (!stub)
           throw new Error(`capability "${hit.name}" is offline (live provider disconnected)`);
         return await replayPath(stub, hit.rest, args);
@@ -211,7 +245,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
       );
       if (builtin) return await replayPath(builtin.capability, path.slice(i), args);
     }
-    // chain (Step 11): climb to the parent context on a miss (super).
+    // chain (Step 9): climb to the parent context on a miss (super).
     const parent = this.#parentItx();
     if (parent) return await parent.invoke({ path, args });
     throw new Error(`no capability "${path.join(".")}"`);

@@ -130,12 +130,12 @@ const foldStream = (events) => events.reduce(reduceItxEvent, new Map());
     worker: { type: "source", source: { repo: "r", commit: "c2", path: "agent.ts" } },
   };
   const r3 = await dial(ref2)("new"); // different content → new isolate
-  check("Step 9: dialing a source ref runs the built worker", r1 === "worker#1(hello)");
+  check("Step 7: dialing a source ref runs the built worker", r1 === "worker#1(hello)");
   check(
-    "Step 9: same content reuses the cached isolate (no rebuild)",
+    "Step 7: same content reuses the cached isolate (no rebuild)",
     r2 === "worker#1(again)" && buildsAfterSameContent === 1,
   );
-  check("Step 9: different content builds a new isolate", r3 === "worker#2(new)" && builds === 2);
+  check("Step 7: different content builds a new isolate", r3 === "worker#2(new)" && builds === 2);
 }
 
 // ===========================================================================
@@ -164,9 +164,9 @@ const foldStream = (events) => events.reduce(reduceItxEvent, new Map());
     ],
     parent,
   );
-  check("Step 10: a miss on the child climbs to super", child.invoke("ai").value === "parent.ai");
-  check("Step 10: child's own cap resolves locally", child.invoke("slack").from === "self");
-  check("Step 10: child shadow wins over parent", child.invoke("fetch").value === "child.fetch");
+  check("Step 9: a miss on the child climbs to super", child.invoke("ai").value === "parent.ai");
+  check("Step 9: child's own cap resolves locally", child.invoke("slack").from === "self");
+  check("Step 9: child shadow wins over parent", child.invoke("fetch").value === "child.fetch");
 }
 
 // ===========================================================================
@@ -209,12 +209,12 @@ const foldStream = (events) => events.reduce(reduceItxEvent, new Map());
   itx.provideCapability("slack", "live", "s1"); // read-your-writes: last wins
   const readBack = itx.invoke("slack");
   const foldedDirectly = foldStream(itx.events).get("slack").value;
-  check("Step 11: read-your-writes through getState()", readBack === "s1");
+  check("Step 10: read-your-writes through getState()", readBack === "s1");
   check(
-    "Step 11: materialized state == reduceItxEvent fold of the stream",
+    "Step 10: materialized state == reduceItxEvent fold of the stream",
     readBack === foldedDirectly,
   );
 }
 
-console.log(`\n${failures === 0 ? "ALL MODEL STEPS VALID" : `${failures} FAILED`} (steps 7-11)`);
+console.log(`\n${failures === 0 ? "ALL MODEL STEPS VALID" : `${failures} FAILED`} (steps 7-10)`);
 process.exit(failures === 0 ? 0 : 1);
