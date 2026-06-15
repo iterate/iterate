@@ -96,16 +96,19 @@ The laptop can only offer the _one_ object it passed into _that one call_, and o
 
 ```ts
 class Itx extends RpcTarget {
-  #caps = new Map<string, any>();
+  // A plain object, not a Map — deliberately: this same table becomes the
+  // StreamProcessor's reduced state in Step 8, which must be plain JSON (it gets
+  // checkpointed and replayed). Keeping it plain from the start avoids a switch.
+  #caps: Record<string, any> = {};
   provide({ name, capability }: { name: string; capability: any }) {
     // ⚠️ Cap'n Web disposes an argument stub when this call RETURNS — so a bare
-    // `set(name, capability)` is already dead by the next call (you'd get
-    // "RpcImportHook was already disposed"). Retain it with `.dup()`. A nested
-    // SDK object needs a RECURSIVE dup — see `retain` in Step 6.
-    this.#caps.set(name, capability.dup?.() ?? capability);
+    // assignment is already dead by the next call (you'd get "RpcImportHook was
+    // already disposed"). Retain it with `.dup()`. A nested SDK object needs a
+    // RECURSIVE dup — see `retain` in Step 6.
+    this.#caps[name] = capability.dup?.() ?? capability;
   }
   async invoke({ name, args }: { name: string; args: unknown[] }) {
-    const cap = this.#caps.get(name);
+    const cap = this.#caps[name];
     if (!cap) throw new Error(`no capability "${name}"`);
     return await cap(...args);
   }
@@ -181,7 +184,9 @@ const itx = itxDurableObject.itx(); // RpcStub<Itx> — .provide()/.invoke() rou
 
 Now A's provide and B's invoke meet in the DO → B runs A's live function.
 
-That constant name (`"itx"`) is really the context's **address**. In production it's a coordinate `<namespace>:/<path>` (e.g. `prj_abc:/agents/foo`) that doubles as the DO's name _and_ the dial address — the same identity Step 11 leans on. For now, one constant name = one shared context.
+This is the real shape, minimally: the workshop's `server.ts` has exactly one `ItxDO` that holds the `Itx` and exposes it via an `itx()` **method** (never a field — workerd can't pipeline through properties). What's still missing here is what the `Itx` is constructed _with_: Step 11 fills that in — the constructor takes its **durable event log** (a real `@iterate-com/streams` `Stream` DO) and a checkpoint — and the same `ItxDO` is what every step from here on runs against. (Production's `apps/os/src/itx/itx-durable-object.ts` is this plus the chain/dial of Step 12.)
+
+That constant name (`"itx"`) is really the context's **address**. In production it's a **project id + a path** — `<projectId>/<path>` (e.g. `prj_abc/agents/foo`) — that doubles as the DO's name _and_ the dial address. `prj_abc/` is the project itx; `prj_abc/agents/foo` is an agent itx under it (Step 12). For now, one constant name = one shared context.
 
 ### 🌉 The DO is the bridge, the edge does the rest
 
@@ -267,7 +272,7 @@ function findCapabilityByPath({ caps, path }) {
   // and a deeper "slack.chat.postMessage" shadow beats "slack" (Step 6's free win).
   for (let i = path.length; i >= 1; i--) {
     const name = path.slice(0, i).join(".");
-    if (caps.has(name)) return { name, capability: caps.get(name), rest: path.slice(i) };
+    if (caps[name]) return { name, capability: caps[name], rest: path.slice(i) };
   }
   return null;
 }
@@ -561,10 +566,9 @@ The whole thing is one idea seen from a few angles: a name → a stub or an addr
 
 > **not built yet** — the steps above derive the _core_. This step makes it _complete_: the application-level wiring that turns the core into the platform.
 
-- [ ] **Sessions** carry their own stream + project id; a session's context is `<namespace>:/<path>`.
-- [ ] **Stream-path agents** — an agent is a context at a stream path under its project.
-- [ ] **The full inheritance chain** — project → session → agent, with shadow/super across real Durable Objects.
-- [ ] **The global/platform capability root** — where the platform defaults come from, and how a context bottoms out at a code-rooted read-only root.
+- [ ] **An itx is just a project id + a path.** That's the whole identity — `<projectId>/<path>` names the context, the host DO, and the dial address. `<projectId>/` (the root path) is the **project itx**; `<projectId>/agents/foo` is an **agent itx**; you can nest as many as you want under a project. There's no separate "session" or "namespace" concept — those are just paths.
+- [ ] **The inheritance chain follows the path** — an agent itx (`<projectId>/agents/foo`) extends the project itx (`<projectId>/`); shadow/super climb the path across real Durable Objects.
+- [ ] **The platform capability root** — where the platform defaults come from, and how a context bottoms out at a code-rooted read-only root above the project.
 - [ ] **Root capabilities are provided, not built in** — `fetch`/`streams`/`extend`/`super` arrive via `provideCapability` (injected at construction), not special-cased in a handle. _(open question: exactly where the root caps get provided — likely passed into the constructor.)_
 
 ---
@@ -613,7 +617,7 @@ All real, all in the actual files; none of it changes the inner model. Each entr
 
 - **Dial allowlists & spoof-proofing** — reach is gated at _invoke_ time, not provide time; every dialed capability gets injected props (`capabilityPath`, `context`, `projectId`) that overwrite caller-supplied ones.
 
-- **A context _is_ its stream coordinate** — identity is the ref `<namespace>:/<path>`, also the host DO's name and dial address; no synthetic ids, no directory table.
+- **A context _is_ its stream coordinate** — identity is a **project id + a path** (`<projectId>/<path>`), also the host DO's name and dial address; no synthetic ids, no directory table.
 
 - **Hibernation, deferred** — the session terminates in the stateless Worker; the DO exposes the `Itx` via `itx()`. Positions us to adopt capnweb hibernation later.
 
