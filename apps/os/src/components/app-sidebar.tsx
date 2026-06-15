@@ -527,6 +527,18 @@ function ProjectSidebarGroup({
                 }),
               )}
             />
+            <ProjectSidebarMenuItem
+              icon={SquareTerminal}
+              label="Repl"
+              render={<Link to="/projects/$projectSlug/repl" params={{ projectSlug }} />}
+              isActive={Boolean(
+                matchRoute({
+                  to: "/projects/$projectSlug/repl",
+                  params: { projectSlug },
+                  fuzzy: false,
+                }),
+              )}
+            />
             {customWorkerUrl ? (
               <ProjectSidebarMenuItem
                 icon={ExternalLink}
