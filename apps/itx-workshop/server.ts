@@ -31,6 +31,8 @@ import { ItxContract } from "./itx-contract.ts";
 // Incremental step folders (steps/README.md). Each is mounted under
 // /steps/<id>/* so earlier and half-built steps stay live alongside the rest.
 import * as step01 from "./steps/01-socket/worker.ts";
+import * as step02 from "./steps/02-server-calls-client/worker.ts";
+import * as step03 from "./steps/03-provide-invoke/worker.ts";
 import * as step08 from "./steps/08-auth/worker.ts";
 // The real durable event log from @iterate-com/streams — re-exported so wrangler
 // hosts it as a Durable Object.
@@ -434,6 +436,12 @@ export default {
     // Incremental step folders (steps/README.md).
     if (path === "/steps/01-socket") {
       return step01.handle(request);
+    }
+    if (path === "/steps/02-server-calls-client") {
+      return step02.handle(request);
+    }
+    if (path === "/steps/03-provide-invoke") {
+      return step03.handle(request);
     }
 
     // Step 08 — auth: only complete the socket if the token grants the project,

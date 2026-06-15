@@ -27,8 +27,8 @@ shared core (`../server.ts` + `../harness.ts`), and the folder is a TODO.
 | Folder                   | Status | Adds                                                                                                                                 |
 | ------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------ |
 | `01-socket`              | ✅     | a method call over a Cap'n Web socket — the whole primitive                                                                          |
-| `02-server-calls-client` | ⏳     | bidirectional stubs: the server calls back a capability the client passed                                                            |
-| `03-provide-invoke`      | ⏳     | `provide`/`invoke` — a runtime capability registry                                                                                   |
+| `02-server-calls-client` | ✅     | bidirectional stubs: the server calls back a capability the client passed                                                            |
+| `03-provide-invoke`      | ✅     | `provide`/`invoke` — a runtime capability registry (per-connection; motivates 04)                                                    |
 | `04-durable-object`      | ⏳     | the registry in a Durable Object; two clients rendezvous on a live cap                                                               |
 | `05-dynamic-proxy`       | ⏳     | the server-side dynamic proxy: naked-stub deep paths + a real SDK, no client proxy                                                   |
 | `06-live-vs-sturdy`      | ⏳     | the two capability kinds: a live stub vs a serializable address                                                                      |
