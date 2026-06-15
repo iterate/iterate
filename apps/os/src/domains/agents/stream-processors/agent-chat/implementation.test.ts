@@ -2,9 +2,9 @@
 // not change.
 
 import { describe, expect, it } from "vitest";
-import type { StreamEvent, StreamEventInput } from "@iterate-com/streams/shared/event";
-import type { StreamProcessorIterateContext } from "@iterate-com/streams/stream-processor";
+import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { AgentChatProcessor } from "./implementation.ts";
+import type { StreamProcessorIterateContext } from "~/domains/streams/engine/stream-processor.ts";
 
 describe("AgentChatProcessor", () => {
   it("renders user chat messages into agent input rows", async () => {

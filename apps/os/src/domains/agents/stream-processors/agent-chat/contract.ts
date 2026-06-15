@@ -6,7 +6,7 @@
 // curated `agent/input-added` rows for the Agent processor.
 
 import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
+import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import { AgentProcessorContract } from "../agent/contract.ts";
 
 export const AgentChatChannel = z.enum(["web", "tui"]);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "@iterate-com/streams/shared/event";
+import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
 import { ProjectConfigWorkerProcessor } from "./implementation.ts";
 
 describe("ProjectConfigWorkerProcessor", () => {

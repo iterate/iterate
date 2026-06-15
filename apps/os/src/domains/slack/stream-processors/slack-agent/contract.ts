@@ -5,7 +5,7 @@
 // handshake; the reducer lives on the `SlackAgentProcessor` class.
 
 import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
+import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import { SlackProcessorContract } from "../slack/contract.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
 

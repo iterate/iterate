@@ -16,7 +16,7 @@ on:
       - apps/os-contract/**
       - apps/auth/**
       - apps/auth-contract/**
-      - packages/streams/**
+      - apps/os/src/domains/streams/**
       - packages/shared/**
       - packages/ui/**
       - packages/mock-http-proxy/**

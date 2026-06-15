@@ -1,11 +1,11 @@
 # Streams Domain
 
-Streams is the OS project-bound adapter around the namespace/path stream runtime
-from `@iterate-com/streams`.
+Streams is the OS domain for namespace/path event streams.
 
 OS uses the stable Project ID as the stream namespace for project streams, but
 stream paths remain project-local and must not encode `/projects/{projectId}`.
 
-The stream Durable Object itself comes from `@iterate-com/streams` (bound as
-`STREAM`); this folder holds the OS adapters (`stream-runtime.ts`, the
-streams capability, project stream RPC).
+The stream Durable Object is bound as `STREAM`. The lower-level runtime that
+used to live in `packages/streams` now lives under `engine/`; OS-facing adapters
+stay at the domain boundary (`stream-runtime.ts`, the streams capability, and
+project/admin stream RPC).

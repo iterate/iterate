@@ -2,7 +2,7 @@
 // sideEffectsAfterOffset anchor test.
 
 import { describe, expect, it } from "vitest";
-import type { StreamEvent, StreamEventInput } from "@iterate-com/streams/shared/event";
+import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import {
   SlackAgentProcessor,
   eyesReactionTargetFromWebhookPayload,

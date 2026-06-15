@@ -5,7 +5,7 @@
 // initializing child-agent DOs, and bridging codemode script execution.
 
 import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
+import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import { AgentProcessorContract } from "../agent/contract.ts";
 
 export const AGENT_HOST_PROCESSOR_SLUG = "agent-host";

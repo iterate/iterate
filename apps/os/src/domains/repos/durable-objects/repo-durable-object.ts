@@ -3,8 +3,8 @@ import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-obje
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
-} from "@iterate-com/streams/workers/stream-processor-host";
-import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
+} from "~/domains/streams/engine/workers/stream-processor-host.ts";
+import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,

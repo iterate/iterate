@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { ORPCError } from "@orpc/server";
-import { createStreamSubscription } from "@iterate-com/streams/subscription";
-import type { StreamRpc } from "@iterate-com/streams/types";
+import { createStreamSubscription } from "~/domains/streams/engine/subscription.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 import type { RequestContext } from "~/request-context.ts";
 import {
   getStreamsBackend,

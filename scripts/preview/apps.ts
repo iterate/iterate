@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const CloudflarePreviewAppSlug = z.enum(["os", "semaphore", "auth"]);
+export const CloudflarePreviewAppSlug = z.enum(["os", "semaphore", "auth", "streams-example-app"]);
 
 export type CloudflarePreviewAppSlug = z.infer<typeof CloudflarePreviewAppSlug>;
 
@@ -52,8 +52,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "apps/os-contract/**",
       "apps/auth/**",
       "apps/auth-contract/**",
-      // apps/os compiles in @iterate-com/streams (see apps/os/src/worker.ts).
-      "packages/streams/**",
+      "apps/os/src/domains/streams/**",
     ],
     // The slot's auth deploys before OS so OS's deploy-time JWKS bake (issuer
     // keys + forge pubkey) can fetch from auth.iterate-preview-N.com.
@@ -104,6 +103,23 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "bash",
       "-c",
       'curl -fsS "$AUTH_BASE_URL/api/auth/.well-known/openid-configuration" | grep -q \'"authorization_endpoint"\'',
+    ],
+  },
+  "streams-example-app": {
+    slug: "streams-example-app",
+    displayName: "Streams Example App",
+    appPath: "apps/streams-example-app",
+    dopplerProject: "streams-example-app",
+    paths: ["apps/streams-example-app/**", "apps/os/src/domains/streams/**"],
+    previewTestBaseUrlEnvVar: "WORKER_URL",
+    previewTestCommandArgs: [
+      "bash",
+      "-c",
+      [
+        "STREAM_STAGING_E2E=true pnpm vitest",
+        "pnpm exec playwright install --with-deps chromium",
+        "pnpm playwright",
+      ].join(" && "),
     ],
   },
 };

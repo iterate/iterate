@@ -28,8 +28,7 @@ import {
   buildProcessorIdempotencyKey,
   type ConsumedEvent,
   type StreamEvent,
-} from "@iterate-com/streams/shared/stream-processors";
-import { StreamProcessor } from "@iterate-com/streams/stream-processor";
+} from "@iterate-com/shared/streams/stream-processors";
 import {
   buildAgentLlmRequestBody,
   findDanglingLlmRequestIds,
@@ -37,6 +36,7 @@ import {
   parseLlmRequestRequestedEventAt,
 } from "../llm-request-helpers.ts";
 import { OpenAiWsProcessorContract, type OpenAiWsState } from "./contract.ts";
+import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
 
 export { OpenAiWsProcessorContract } from "./contract.ts";
 

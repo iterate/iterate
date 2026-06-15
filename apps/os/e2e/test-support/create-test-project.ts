@@ -4,7 +4,7 @@ import { createCaptunTunnel } from "captun";
 import { RpcTarget } from "capnweb";
 import { expect } from "vitest";
 import { slugify } from "@iterate-com/shared/slug";
-import type { ProcessorContractShape } from "@iterate-com/streams/shared/stream-processors";
+import type { ProcessorContractShape } from "@iterate-com/shared/streams/stream-processors";
 import {
   createAdminOsClient,
   requireBaseUrl,

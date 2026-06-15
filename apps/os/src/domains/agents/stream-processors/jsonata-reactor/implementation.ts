@@ -8,13 +8,13 @@
 
 import { z } from "zod";
 import { getCompiledJsonata } from "@iterate-com/shared/streams/compiled-jsonata";
-import type { StreamEvent } from "@iterate-com/streams/shared/stream-processors";
-import { StreamProcessor } from "@iterate-com/streams/stream-processor";
+import type { StreamEvent } from "@iterate-com/shared/streams/stream-processors";
 import {
   JsonataReactorProcessorContract,
   jsonataReactorEventTypes,
   type JsonataReactorState,
 } from "./contract.ts";
+import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
 
 export { JsonataReactorProcessorContract } from "./contract.ts";
 

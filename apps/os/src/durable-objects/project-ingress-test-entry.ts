@@ -140,7 +140,7 @@ export {
   MockArtifactAgentDurableObject as AgentDurableObject,
   MockArtifactsBinding,
 } from "./mock-artifacts-binding.ts";
-export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
+export { Stream as StreamDurableObject } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 export { PROJECT_STREAM_PATH } from "~/domains/projects/stream-processors/project/contract.ts";
 export { ProjectIngressEntrypoint } from "~/domains/projects/entrypoints/project-ingress-entrypoint.ts";
 export { ProjectMcpServerEntrypoint } from "~/domains/inbound-mcp-server/entrypoints/project-mcp-server-entrypoint.ts";

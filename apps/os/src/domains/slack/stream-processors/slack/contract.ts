@@ -4,8 +4,8 @@
 // handshake; the reducer lives on the `SlackProcessor` class.
 
 import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
-import { CoreProcessorContract } from "@iterate-com/streams/processors/core/contract";
+import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
+import { CoreProcessorContract } from "~/domains/streams/engine/processors/core/contract.ts";
 
 const NullableOptionalString = z.preprocess(
   (value) => (value === null ? undefined : value),

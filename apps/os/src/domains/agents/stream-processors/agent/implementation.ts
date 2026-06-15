@@ -13,8 +13,7 @@ import {
   assertNever,
   buildProcessorIdempotencyKey,
   type StreamEvent,
-} from "@iterate-com/streams/shared/stream-processors";
-import { StreamProcessor } from "@iterate-com/streams/stream-processor";
+} from "@iterate-com/shared/streams/stream-processors";
 import {
   AgentProcessorContract,
   reduceAgentEvent,
@@ -22,6 +21,7 @@ import {
   type AgentConsumedEvent,
   type AgentState,
 } from "./contract.ts";
+import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
 
 export { AgentProcessorContract } from "./contract.ts";
 

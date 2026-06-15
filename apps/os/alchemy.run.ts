@@ -23,7 +23,6 @@ import {
   IterateRoutes,
 } from "@iterate-com/shared/alchemy/iterate-app";
 import { prepareLocalDevServer } from "@iterate-com/shared/alchemy/local-dev-server";
-import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
 import { ensureLocalDevOAuthClient } from "./src/auth/dev-oauth-client-bootstrap.ts";
 import { AppConfig } from "./src/config.ts";
 import type { ItxDurableObject } from "./src/itx/itx-durable-object.ts";
@@ -36,6 +35,7 @@ import type { SlackAgentDurableObject } from "./src/domains/slack/durable-object
 import type { SlackIntegrationDurableObject } from "./src/domains/slack/durable-objects/slack-integration-durable-object.ts";
 import type { WorkspaceDurableObject } from "./src/domains/workspaces/durable-objects/workspace-durable-object.ts";
 import { eventDocsHostnameForAppBaseUrl } from "./src/lib/event-docs-host.ts";
+import type { Stream } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 
 const resolvedAuthIssuer =
   process.env.APP_CONFIG_ITERATE_AUTH__ISSUER ?? process.env.ITERATE_OAUTH_ISSUER;

@@ -16,12 +16,12 @@
 
 import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
-import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import {
   assertNever,
   buildProcessorIdempotencyKey,
-} from "@iterate-com/streams/shared/stream-processors";
+} from "@iterate-com/shared/streams/stream-processors";
 import { SlackAgentProcessorContract, type SlackAgentProcessorState } from "./contract.ts";
+import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
 export { SlackAgentProcessorContract } from "./contract.ts";
 
 export type SlackAgentProcessorContract = typeof SlackAgentProcessorContract;

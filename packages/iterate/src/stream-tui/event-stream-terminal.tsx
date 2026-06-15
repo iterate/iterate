@@ -13,7 +13,7 @@ import {
   reduceStreamViewEvents,
   StreamViewProcessorContract,
 } from "@iterate-com/ui/components/events/stream-view-processor/contract";
-import { getInitialProcessorState } from "@iterate-com/streams/shared/stream-processors";
+import { getInitialProcessorState } from "@iterate-com/shared/streams/stream-processors";
 import { createCliRenderer, type KeyEvent } from "@opentui/core";
 import { createRoot, useKeyboard, useRenderer } from "@opentui/react";
 import { createORPCClient } from "@orpc/client";

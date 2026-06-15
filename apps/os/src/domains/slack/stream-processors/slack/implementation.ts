@@ -4,13 +4,13 @@
 // — changing them breaks dedup against events already committed to streams.
 
 import { z } from "zod";
-import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import {
   assertNever,
   buildProcessorIdempotencyKey,
-} from "@iterate-com/streams/shared/stream-processors";
-import type { StreamEventInput } from "@iterate-com/streams/shared/event";
+} from "@iterate-com/shared/streams/stream-processors";
+import type { StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { SlackProcessorContract, type SlackProcessorState } from "./contract.ts";
+import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
 export { SlackProcessorContract } from "./contract.ts";
 
 export type SlackProcessorContract = typeof SlackProcessorContract;

@@ -3,11 +3,11 @@
 // types, its control flow, and its transport; what they share are these
 // stateless functions over agent stream history and reduced request state.
 
-import type { StreamEvent } from "@iterate-com/streams/shared/stream-processors";
+import type { StreamEvent } from "@iterate-com/shared/streams/stream-processors";
 import {
   getConsumedEventDefinition,
   getEventSchema,
-} from "@iterate-com/streams/shared/stream-processors";
+} from "@iterate-com/shared/streams/stream-processors";
 import {
   AgentProcessorContract,
   buildLlmChatRequest,

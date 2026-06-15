@@ -27,8 +27,9 @@ on:
       - apps/os-contract/**
       - apps/auth/**
       - apps/auth-contract/**
-      - packages/streams/**
+      - apps/os/src/domains/streams/**
       - apps/semaphore/**
+      - apps/streams-example-app/**
 jobs:
   preview:
     if: github.event.action != 'closed'

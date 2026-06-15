@@ -6,7 +6,7 @@
  * that bind STREAM back. Cyclic cross-script DO bindings are fine once both
  * scripts exist; see docs/worker-topology.md (bootstrap).
  */
-export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
+export { Stream as StreamDurableObject } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 
 export default {
   fetch: () => Response.json({ worker: "os-stream" }, { status: 404 }),

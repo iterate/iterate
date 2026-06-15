@@ -10,9 +10,9 @@
 import {
   assertNever,
   buildProcessorIdempotencyKey,
-} from "@iterate-com/streams/shared/stream-processors";
-import { StreamProcessor } from "@iterate-com/streams/stream-processor";
+} from "@iterate-com/shared/streams/stream-processors";
 import { AgentChatProcessorContract, type AgentChatChannel } from "./contract.ts";
+import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
 
 export { AgentChatProcessorContract } from "./contract.ts";
 

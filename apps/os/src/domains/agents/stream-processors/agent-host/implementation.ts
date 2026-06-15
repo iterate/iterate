@@ -6,9 +6,9 @@
 
 import type { Event, EventInput, StreamPath } from "@iterate-com/shared/streams/types";
 import { StreamPath as StreamPathSchema } from "@iterate-com/shared/streams/types";
-import type { StreamEventInput } from "@iterate-com/streams/shared/event";
-import { StreamProcessor } from "@iterate-com/streams/stream-processor";
+import type { StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { AgentHostProcessorContract } from "./contract.ts";
+import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
 import {
   AGENTS_STREAM_PATH,
   getAgentDurableObjectName,
@@ -22,7 +22,7 @@ export { AGENT_HOST_PROCESSOR_SLUG, AgentHostProcessorContract } from "./contrac
 
 export type AgentHostProcessorContract = typeof AgentHostProcessorContract;
 
-// Core lifecycle event type emitted by the @iterate-com/streams runtime. Uses the
+// Core lifecycle event type emitted by the streams engine. Uses the
 // `events.iterate.com/stream/` prefix (NOT the legacy `@iterate-com/shared/streams` `/core/`
 // prefix, which never matches new-runtime events).
 const STREAM_CHILD_STREAM_CREATED_TYPE = "events.iterate.com/stream/child-stream-created";
