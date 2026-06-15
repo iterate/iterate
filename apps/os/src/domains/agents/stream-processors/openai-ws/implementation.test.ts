@@ -545,7 +545,7 @@ function subscriberConnectedEvent(args: { offset: number }): StreamEvent {
   return {
     type: "events.iterate.com/stream/subscriber-connected",
     payload: {
-      subscriptionKey: "agent-host:openai-ws",
+      subscriptionKey: "agent:openai-ws",
       direction: "outbound" as const,
       subscriber: { incarnationId: "fresh-incarnation" },
     },

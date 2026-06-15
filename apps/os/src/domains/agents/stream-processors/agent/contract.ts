@@ -56,17 +56,25 @@ export const AgentProcessorContract = defineProcessorContract({
            * debounce: a fresh instance (whose in-memory timer died with its
            * predecessor) re-derives the request handoff — and its idempotency
            * key — from this, so the recovery path and the timer path converge
-           * on the same llm-request-requested append. Optional so checkpoints
-           * written before this field existed still parse; recovery falls
-           * back to finding the scheduled event in stream history.
+           * on the same llm-request-requested append.
            */
-          scheduledOffset: z.number().int().positive().optional(),
+          scheduledOffset: z.number().int().positive(),
         }),
         z.object({ phase: z.literal("requested"), llmRequestId: z.number().int().positive() }),
       ])
       .nullable()
       .default(null),
     pendingTriggerCount: z.number().int().nonnegative().default(0),
+    /**
+     * Offset of the latest model-visible input that asked for an LLM request
+     * but is not yet covered by a durable scheduling/queueing fact. Set by a
+     * triggering `input-added`, cleared by `llm-request-scheduled` /
+     * `llm-request-requested` / `llm-request-queued`. In live operation the
+     * window between set and clear is brief; if it survives in reduced state
+     * after a restart, `subscriber-connected` reconciliation can re-run the
+     * idempotent scheduling append for that input.
+     */
+    pendingTriggerOffset: z.number().int().positive().nullable().default(null),
   }),
   initialState: {},
   // The core contract owns `stream/subscriber-connected`, the scheduler's
@@ -120,6 +128,51 @@ export const AgentProcessorContract = defineProcessorContract({
         })
         .describe("Payload for an agent input row."),
     },
+    "events.iterate.com/agents/user-message-received": {
+      description: "Inbound user chat message before it is rendered into model context.",
+      examples: [
+        {
+          description: "Web chat message",
+          payload: { content: "What can you help me with?", origin: "web" },
+        },
+        {
+          description: "TUI chat message",
+          payload: { content: "What can you help me with?", origin: "tui" },
+        },
+      ],
+      payloadSchema: z.object({
+        origin: z.enum(["web", "tui"]),
+        content: z.string(),
+      }),
+    },
+    "events.iterate.com/agents/web-message-sent": {
+      description: "User-visible web chat response emitted by a tool call.",
+      examples: [
+        {
+          description: "Assistant reply via web",
+          payload: {
+            message: "I can help you manage your project, run code, and more.",
+          },
+        },
+      ],
+      payloadSchema: z.object({
+        message: z.string(),
+      }),
+    },
+    "events.iterate.com/agents/tui-message-sent": {
+      description: "User-visible TUI chat response emitted by a tool call.",
+      examples: [
+        {
+          description: "Assistant reply via TUI",
+          payload: {
+            message: "I can help you manage your project, run code, and more.",
+          },
+        },
+      ],
+      payloadSchema: z.object({
+        message: z.string(),
+      }),
+    },
     "events.iterate.com/agent/output-added": {
       description: "A model-visible assistant output row.",
       payloadSchema: z.object({
@@ -146,7 +199,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/llm-request-requested": {
       description:
         "The agent has prepared an LLM request. A subscribed LLM request processor must execute it and respond with agent output and a terminal llm-request-completed event. The llmRequestId used by response events is this event's stream offset. REQUEST-BY-REFERENCE: the event carries no conversation body — embedding it would store a full copy of the growing history in every request (O(N²) stream growth). Providers rebuild the chat request by reducing committed history up to this event's offset (buildLlmChatRequest), which reproduces the exact model-visible context from the stream forever.",
-      payloadSchema: z.object({
+      payloadSchema: z.strictObject({
         model: z.string().min(1),
         runOpts: z.json().default({}),
       }),
@@ -207,7 +260,12 @@ export const AgentProcessorContract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/itx/capability-provided",
+    "events.iterate.com/itx/script-execution-completed",
+    "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/stream/subscriber-connected",
+    "events.iterate.com/agents/user-message-received",
+    "events.iterate.com/agents/web-message-sent",
+    "events.iterate.com/agents/tui-message-sent",
     "events.iterate.com/agent/system-prompt-updated",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/output-added",
@@ -220,6 +278,7 @@ export const AgentProcessorContract = defineProcessorContract({
     "events.iterate.com/agent/status-updated",
   ],
   emits: [
+    "events.iterate.com/itx/script-execution-requested",
     "events.iterate.com/agent/input-added",
     "events.iterate.com/agent/llm-request-scheduled",
     "events.iterate.com/agent/llm-request-requested",
@@ -245,7 +304,12 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
   // capability table is the itx core's fold, not this projection's concern).
   switch (event.type) {
     case "events.iterate.com/itx/capability-provided":
+    case "events.iterate.com/itx/script-execution-completed":
+    case "events.iterate.com/stream/child-stream-created":
     case "events.iterate.com/stream/subscriber-connected":
+    case "events.iterate.com/agents/user-message-received":
+    case "events.iterate.com/agents/web-message-sent":
+    case "events.iterate.com/agents/tui-message-sent":
       return state;
     case "events.iterate.com/agent/system-prompt-updated":
       return { ...state, systemPrompt: event.payload.systemPrompt };
@@ -253,6 +317,10 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
       return {
         ...state,
         history: [...state.history, { role: "user" as const, content: event.payload.content }],
+        pendingTriggerOffset:
+          event.payload.llmRequestPolicy.behaviour === "dont-trigger-request"
+            ? state.pendingTriggerOffset
+            : event.offset,
       };
     case "events.iterate.com/agent/output-added":
       if (
@@ -277,11 +345,13 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
           scheduledOffset: event.offset,
         },
         pendingTriggerCount: 0,
+        pendingTriggerOffset: null,
       };
     case "events.iterate.com/agent/llm-request-requested":
       return {
         ...state,
         currentRequest: { phase: "requested" as const, llmRequestId: event.offset },
+        pendingTriggerOffset: null,
       };
     case "events.iterate.com/agent/llm-request-completed":
       return state.currentRequest?.phase === "requested" &&
@@ -308,6 +378,7 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
       return {
         ...state,
         pendingTriggerCount: state.pendingTriggerCount + 1,
+        pendingTriggerOffset: null,
       };
     // Consumed for side effects only; no state change.
     case "events.iterate.com/agent/status-updated":

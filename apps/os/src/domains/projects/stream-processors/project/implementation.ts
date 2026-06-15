@@ -343,7 +343,7 @@ export class ProjectProcessor extends StreamProcessor<
         },
         ...agentProcessorSubscriptionConfiguredEvents({
           agentPath: input.agentPath,
-          processorSlugs: ["agent-chat", "agent", "openai-ws", "agent-host"],
+          processorSlugs: ["agent", "openai-ws"],
           projectId: input.projectId,
         }),
         ...(isSlackAgentPath(input.agentPath)

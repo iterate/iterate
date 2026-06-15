@@ -72,16 +72,16 @@ Code Mode can call project tools directly. `execute-script` returns the script r
 ```bash
 doppler run --config prd -- pnpm cli rpc project codemode execute-script \
       --project-slug-or-id iterate \
-      --code "async (ctx) => {
+      --code "async (itx) => {
         const streamPath = \"/debugging-docs/example\";
-        const appended = await ctx.streams.append({
+        const appended = await itx.streams.append({
           streamPath,
           event: {
             type: \"events.iterate.com/debugging-docs/example\",
             payload: { source: \"codemode\" },
           },
         });
-        const history = await ctx.streams.read({
+        const history = await itx.streams.read({
           streamPath,
           afterOffset: appended.offset - 1,
         });

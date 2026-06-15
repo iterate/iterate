@@ -17,6 +17,212 @@ describe("AgentProcessor", () => {
     vi.useRealTimers();
   });
 
+  it("renders chat user messages into agent input", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agents/user-message-received",
+          payload: { content: "hello", origin: "web" },
+          offset: 5,
+        }),
+      ],
+      streamMaxOffset: 5,
+    });
+
+    expect(appended[0]).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "agent/event-type-explainer/events.iterate.com/agents/user-message-received",
+    });
+    expect(appended[1]).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "agent/render-chat-message@5",
+      payload: {
+        content: [
+          "```yaml",
+          "event:",
+          "  offset: 5",
+          "  type: events.iterate.com/agents/user-message-received",
+          "  origin: web",
+          "  content: |-",
+          "    hello",
+          "```",
+        ].join("\n"),
+      },
+    });
+  });
+
+  it("renders chat tool responses without triggering a request", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agents/web-message-sent",
+          payload: { message: "sent" },
+          offset: 9,
+        }),
+      ],
+      streamMaxOffset: 9,
+    });
+
+    expect(appended[1]).toMatchObject({
+      type: "events.iterate.com/agent/input-added",
+      idempotencyKey: "agent/render-chat-response@9",
+      payload: {
+        content: [
+          "```yaml",
+          "event:",
+          "  offset: 9",
+          "  type: events.iterate.com/agents/web-message-sent",
+          "  message: |-",
+          "    sent",
+          "```",
+        ].join("\n"),
+        llmRequestPolicy: { behaviour: "dont-trigger-request" },
+      },
+    });
+  });
+
+  it("wakes child agent runners from child stream creation events", async () => {
+    const { stream, appended } = memoryStream();
+    const childPaths: string[] = [];
+    const processor = newAgentProcessor({
+      stream,
+      ensureChildAgentRunner: async (childPath) => {
+        childPaths.push(childPath);
+      },
+    });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/stream/child-stream-created",
+          payload: { childPath: "/agents/child" },
+          offset: 12,
+        }),
+      ],
+      streamMaxOffset: 12,
+    });
+
+    expect(childPaths).toEqual(["/agents/child"]);
+    expect(appended).toEqual([]);
+  });
+
+  it("does not render received chat messages on the agents root stream", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({
+      stream,
+      isAgentsRootStream: () => true,
+    });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agents/user-message-received",
+          payload: { content: "hello root", origin: "web" },
+          offset: 13,
+        }),
+      ],
+      streamMaxOffset: 13,
+    });
+
+    expect(appended).toEqual([]);
+  });
+
+  it("does not render sent chat messages on the agents root stream", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({
+      stream,
+      isAgentsRootStream: () => true,
+    });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agents/web-message-sent",
+          payload: { message: "sent from root" },
+          offset: 14,
+        }),
+      ],
+      streamMaxOffset: 14,
+    });
+
+    expect(appended).toEqual([]);
+  });
+
+  it("does not enqueue agent output scripts on the agents root stream", async () => {
+    const { stream, appended } = memoryStream();
+    const ensureItxContext = vi.fn(async () => undefined);
+    const processor = newAgentProcessor({
+      stream,
+      ensureItxContext,
+      isAgentsRootStream: () => true,
+    });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agent/output-added",
+          payload: {
+            content: [
+              "async (itx) => {",
+              "  await itx.chat.sendMessage({ message: 'hello' });",
+              "}",
+            ].join("\n"),
+          },
+          offset: 13,
+        }),
+      ],
+      streamMaxOffset: 13,
+    });
+
+    expect(ensureItxContext).not.toHaveBeenCalled();
+    expect(appended).toEqual([]);
+  });
+
+  it("does not render script completions on the agents root stream", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({
+      stream,
+      isAgentsRootStream: () => true,
+    });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/itx/script-execution-completed",
+          payload: { executionId: "root-script", ok: true, result: "done" },
+          offset: 14,
+        }),
+      ],
+      streamMaxOffset: 14,
+    });
+
+    expect(appended).toEqual([]);
+  });
+
+  it("ignores script completion events without a usable execution id", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/itx/script-execution-completed",
+          payload: { executionId: "", ok: true, result: "done" },
+          offset: 13,
+        }),
+      ],
+      streamMaxOffset: 13,
+    });
+
+    expect(appended).toEqual([]);
+  });
+
   it("does not schedule LLM work for explicitly non-triggering agent input", async () => {
     const { stream, appended } = memoryStream();
     const processor = newAgentProcessor({ stream });
@@ -158,7 +364,6 @@ describe("AgentProcessor", () => {
           type: "events.iterate.com/agent/llm-request-requested",
           payload: {
             model: "test-model",
-            body: { messages: [{ role: "user", content: "hello" }] },
             runOpts: {},
           },
           offset: 43,
@@ -328,6 +533,33 @@ describe("AgentProcessor", () => {
     ]);
   });
 
+  it("recovers a triggering input whose schedule append was not reduced before restart", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({
+      stream,
+      snapshot: {
+        offset: 42,
+        state: {
+          ...initialState(),
+          history: [{ role: "user", content: "hi" }],
+          pendingTriggerOffset: 42,
+        },
+      },
+    });
+
+    await processor.ingest({
+      events: [subscriberConnectedEvent({ offset: 43 })],
+      streamMaxOffset: 43,
+    });
+
+    expect(appended).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        idempotencyKey: "agent/llm-request-scheduled@42",
+      }),
+    ]);
+  });
+
   it("does not re-request when the scheduled phase was already cancelled in history", async () => {
     const { stream, appended } = memoryStream();
     const processor = newAgentProcessor({
@@ -430,40 +662,6 @@ describe("AgentProcessor", () => {
       expect.objectContaining({
         type: "events.iterate.com/agent/llm-request-requested",
         idempotencyKey: "agent/llm-request-requested@7",
-      }),
-    ]);
-  });
-
-  it("recovers the scheduled offset from history for checkpoints written before scheduledOffset existed", async () => {
-    const { stream, appended } = memoryStream();
-    const processor = newAgentProcessor({
-      stream,
-      snapshot: {
-        offset: 9,
-        state: {
-          ...initialState(),
-          // Old checkpoint shape: no scheduledOffset.
-          currentRequest: { phase: "scheduled", requestId: "req_old" },
-        },
-      },
-      readStreamEvents: async () => [
-        agentEvent({
-          type: "events.iterate.com/agent/llm-request-scheduled",
-          payload: { requestId: "req_old", debounceMs: 1000, model: "test-model" },
-          offset: 9,
-        }),
-      ],
-    });
-
-    await processor.ingest({
-      events: [subscriberConnectedEvent({ offset: 10 })],
-      streamMaxOffset: 10,
-    });
-
-    expect(appended).toEqual([
-      expect.objectContaining({
-        type: "events.iterate.com/agent/llm-request-requested",
-        idempotencyKey: "agent/llm-request-requested@9",
       }),
     ]);
   });
@@ -612,11 +810,17 @@ function initialState(): AgentState {
 
 function newAgentProcessor(args: {
   stream: StreamProcessorIterateContext["stream"];
+  ensureChildAgentRunner?: (childPath: string) => Promise<unknown>;
+  ensureItxContext?: () => Promise<unknown>;
+  isAgentsRootStream?: () => boolean;
   snapshot?: StreamProcessorSnapshot<AgentState>;
   readStreamEvents?: () => Promise<StreamEvent[]>;
 }) {
   return new AgentProcessor({
     iterateContext: { stream: args.stream },
+    ensureChildAgentRunner: args.ensureChildAgentRunner ?? (async () => undefined),
+    ensureItxContext: args.ensureItxContext ?? (async () => undefined),
+    isAgentsRootStream: args.isAgentsRootStream ?? (() => false),
     readState: () => args.snapshot,
     readStreamEvents: args.readStreamEvents ?? (async () => []),
   });
@@ -653,7 +857,7 @@ function subscriberConnectedEvent(args: { offset: number }): StreamEvent {
   return {
     type: "events.iterate.com/stream/subscriber-connected",
     payload: {
-      subscriptionKey: "agent-host:agent",
+      subscriptionKey: "agent:agent",
       direction: "outbound" as const,
       subscriber: { incarnationId: "fresh-incarnation" },
     },

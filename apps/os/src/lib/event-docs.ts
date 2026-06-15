@@ -1,8 +1,6 @@
 import { z } from "zod";
 import { CircuitBreakerContract } from "~/domains/streams/engine/processors/circuit-breaker/contract.ts";
 import { CoreProcessorContract } from "~/domains/streams/engine/processors/core/contract.ts";
-import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
-import { AgentHostProcessorContract } from "~/domains/agents/stream-processors/agent-host/contract.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
 import { CloudflareAiProcessorContract } from "~/domains/agents/stream-processors/cloudflare-ai/contract.ts";
 import { JsonataReactorProcessorContract } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
@@ -37,8 +35,6 @@ const processorContracts = [
   ProjectProcessorContract,
   RepoStreamProcessorContract,
   AgentProcessorContract,
-  AgentChatProcessorContract,
-  AgentHostProcessorContract,
   CloudflareAiProcessorContract,
   JsonataReactorProcessorContract,
   OpenAiWsProcessorContract,

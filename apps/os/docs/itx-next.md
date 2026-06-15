@@ -1087,9 +1087,8 @@ deep: { thought: (q) => … } } })` works directly, callable at any depth
 - ~~Script calling convention?~~ → ONE shape: `async (itx) => …`, the single
   argument is the handle. No conventions in the runner; parameterization is
   the caller's concern (/api/itx/run bakes its `vars` into the source).
-  All ctx-era vocabulary swept; `extractCodemodeScript` tolerates the
-  legacy `async (ctx)` prefix from old histories (param name is the
-  author's business).
+  All ctx-era vocabulary swept; `extractCodemodeScript` accepts the documented
+  `async (itx)` function shape only.
 - ~~project-worker ref mechanism?~~ → SHIPPED, then the union kind DELETED
   on review ("just have a ProjectWorker named entrypoint on the loopback
   type"). The one spelling: `worker: { type: "loopback" }, entrypoint:

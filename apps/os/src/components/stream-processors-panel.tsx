@@ -255,7 +255,7 @@ function ProcessorsOverview({
 
 function isLlmish(entry: AgentUiPresenceEntry): boolean {
   const slug = entry.processor?.slug ?? "";
-  return ["agent", "agent-chat", "openai-ws", "cloudflare-ai", "itx"].includes(slug);
+  return ["agent", "openai-ws", "cloudflare-ai", "itx"].includes(slug);
 }
 
 function fakeRtt(subscriptionKey: string, rttNow: number): number {

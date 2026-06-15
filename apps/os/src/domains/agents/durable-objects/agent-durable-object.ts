@@ -25,8 +25,6 @@ import {
   formatContextRef,
   projectContextRef,
 } from "~/itx/coordinates.ts";
-import { AgentChatProcessorContract } from "~/domains/agents/stream-processors/agent-chat/contract.ts";
-import { AgentChatProcessor } from "~/domains/agents/stream-processors/agent-chat/implementation.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
 import { AgentProcessor } from "~/domains/agents/stream-processors/agent/implementation.ts";
 import {
@@ -40,7 +38,6 @@ import {
 } from "~/domains/agents/stream-processors/openai-ws/implementation.ts";
 import { JsonataReactorProcessorContract } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
 import { JsonataReactorProcessor } from "~/domains/agents/stream-processors/jsonata-reactor/implementation.ts";
-import { AgentHostProcessor } from "~/domains/agents/stream-processors/agent-host/implementation.ts";
 import {
   getInitializedStreamStub,
   getStreamDurableObjectName,
@@ -64,7 +61,6 @@ import {
   type AgentLlmProvider,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import {
-  AGENT_HOST_PROCESSOR_SLUG,
   AGENTS_STREAM_PATH,
   AgentDurableObjectName,
   AgentDurableObjectStructuredName,
@@ -75,7 +71,6 @@ import {
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
 
 export {
-  AGENT_HOST_PROCESSOR_SLUG,
   AGENTS_STREAM_PATH,
   AgentDurableObjectStructuredName,
   agentLlmProcessorSlug,
@@ -144,20 +139,34 @@ const AGENT_CONTEXT_CAPABILITIES_VERSION = "8";
 
 export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv> {
   host = createStreamProcessorHost(this.ctx);
-  agentChatProcessor = this.host.add("agent-chat", (deps) => new AgentChatProcessor(deps));
   agentProcessor = this.host.add(
     "agent",
     (deps) =>
       new AgentProcessor({
         ...deps,
+        ensureChildAgentRunner: async (childPath) => {
+          const params = await this.ensureStartedOrInitializeFromRuntimeName();
+          const agentPath = StreamPath.safeParse(childPath);
+          if (!agentPath.success) return;
+          const name = getAgentDurableObjectName({
+            agentPath: agentPath.data,
+            projectId: params.projectId,
+          });
+          await this.env.AGENT.getByName(name).initialize({ name });
+        },
+        ensureItxContext: async () => {
+          const params = await this.ensureStartedOrInitializeFromRuntimeName();
+          return await this.ensureItxContext(params);
+        },
+        isAgentsRootStream: () => this.structuredName.agentPath === AGENTS_STREAM_PATH,
         readStreamEvents: () => this.readSubscribedStreamEvents("agent"),
       }),
   );
   openAiWsProcessor = this.host.add("openai-ws", (deps) => {
     const apiKey = readOpenAiApiKey(this.env as unknown as Record<string, unknown>);
     if (apiKey.trim() === "") {
-      // Legacy parity with the old runner: without an OpenAI API key, the
-      // "openai-ws" subscription is served by the Cloudflare AI processor.
+      // Without an OpenAI API key, the "openai-ws" subscription is served by
+      // the Cloudflare AI processor.
       return new CloudflareAiProcessor({
         ...deps,
         ai: this.env.AI,
@@ -184,22 +193,6 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     "jsonata-reactor",
     (deps) => new JsonataReactorProcessor(deps),
   );
-  agentHostProcessor = this.host.add(
-    AGENT_HOST_PROCESSOR_SLUG,
-    (deps) =>
-      new AgentHostProcessor({
-        ...deps,
-        agentNamespace: this.env.AGENT,
-        getItxContext: async () => {
-          const params = await this.ensureStartedOrInitializeFromRuntimeName();
-          const { context } = await this.ensureItxContext(params);
-          return { context };
-        },
-        getStreamContext: () => this.subscribedStreamContext(AGENT_HOST_PROCESSOR_SLUG),
-        runnerEnv: this.env as unknown as Env,
-        workerExports: this.ctx.exports,
-      }),
-  );
 
   constructor(ctx: DurableObjectState, env: AgentDurableObjectEnv) {
     super(ctx, env);
@@ -208,7 +201,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       if (params.agentPath === AGENTS_STREAM_PATH) {
         await this.ensureAgentSubscriptions(params, [
           JsonataReactorProcessorContract.slug,
-          AGENT_HOST_PROCESSOR_SLUG,
+          AgentProcessorContract.slug,
         ]);
       } else {
         await this.ensureAgentStreamExists(params);
@@ -281,12 +274,13 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
   async sendMessage(input: { message: string; channel?: string }) {
     const params = await this.ensureStartedAndCaughtUp();
+    const origin = parseAgentMessageOrigin(input.channel);
     const event = await this.streamsEntrypoint(params.agentPath).append({
       event: {
-        type: "events.iterate.com/agent-chat/user-message-added",
+        type: "events.iterate.com/agents/user-message-received",
         payload: {
-          channel: parseAgentChatChannel(input.channel),
           content: input.message,
+          origin,
         },
       },
     });
@@ -332,7 +326,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
     const message = parseChatToolMessage(input.args[0]);
     const event = await this.appendAssistantResponse({
-      idempotencyKey: `agent-chat-tool:send-message:${input.callId}`,
+      idempotencyKey: `agents-chat-tool:send-message:${input.callId}`,
       message,
     });
     return { event };
@@ -396,7 +390,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     }
   }
 
-  /** Per-processor checkpoints — the honest shape (legacy runner fields died). */
+  /** Per-processor checkpoints. */
   private async getAgentRuntimeState(params: AgentDurableObjectStructuredName) {
     const processorSlugs = await this.agentProcessorSlugs(params);
     return {
@@ -409,25 +403,21 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
   private async agentProcessorSlugs(params: AgentDurableObjectStructuredName) {
     if (params.agentPath === AGENTS_STREAM_PATH) {
-      return [JsonataReactorProcessorContract.slug, AGENT_HOST_PROCESSOR_SLUG];
+      return [JsonataReactorProcessorContract.slug, AgentProcessorContract.slug];
     }
     return [
-      AgentChatProcessorContract.slug,
       AgentProcessorContract.slug,
       agentLlmProcessorSlug(await this.resolveLlmProvider(params)),
-      AGENT_HOST_PROCESSOR_SLUG,
     ];
   }
 
   /** The processor instance registered under a host name (the subscription slug). */
   private hostedProcessor(processorSlug: string) {
     const processors: Record<string, { contract: { consumes: readonly string[] } }> = {
-      "agent-chat": this.agentChatProcessor,
       agent: this.agentProcessor,
       "openai-ws": this.openAiWsProcessor,
       "cloudflare-ai": this.cloudflareAiProcessor,
       "jsonata-reactor": this.jsonataReactorProcessor,
-      [AGENT_HOST_PROCESSOR_SLUG]: this.agentHostProcessor,
     };
     const processor = processors[processorSlug];
     if (processor === undefined) {
@@ -670,10 +660,12 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
   }) {
     return await this.streamsEntrypoint(this.structuredName.agentPath).append({
       event: {
-        type: "events.iterate.com/agent-chat/assistant-response-added",
+        type:
+          parseAgentMessageOrigin(input.channel) === "tui"
+            ? "events.iterate.com/agents/tui-message-sent"
+            : "events.iterate.com/agents/web-message-sent",
         idempotencyKey: input.idempotencyKey,
         payload: {
-          channel: parseAgentChatChannel(input.channel),
           message: input.message,
         },
       },
@@ -902,7 +894,7 @@ function remoteWithToken(input: { remote: string; token: string }) {
   return url.toString();
 }
 
-function parseAgentChatChannel(channel: string | undefined) {
+function parseAgentMessageOrigin(channel: string | undefined) {
   return channel === "tui" ? "tui" : "web";
 }
 
@@ -934,11 +926,11 @@ function formatDebugMessage(snapshot: DebugSnapshot) {
 
 function parseChatToolMessage(value: unknown) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error("ctx.chat.sendMessage requires an object argument.");
+    throw new Error("itx.chat.sendMessage requires an object argument.");
   }
   const message = (value as { message?: unknown }).message;
   if (typeof message !== "string" || message.trim() === "") {
-    throw new Error("ctx.chat.sendMessage requires a non-empty message string.");
+    throw new Error("itx.chat.sendMessage requires a non-empty message string.");
   }
   return message;
 }

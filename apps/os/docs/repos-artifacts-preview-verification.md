@@ -25,8 +25,8 @@ The oRPC layer is only an adapter. It resolves the project, constructs
 Codemode uses the capability directly:
 
 ```ts
-const info = await ctx.repos.create({ slug: "banana" }).getInfo();
-const existing = await ctx.repos.get({ slug: "banana" }).getInfo();
+const info = await itx.repos.create({ slug: "banana" }).getInfo();
+const existing = await itx.repos.get({ slug: "banana" }).getInfo();
 ```
 
 `getInfo()` is intentionally generous. It returns the remote URL, default branch,
@@ -69,7 +69,7 @@ Two live-preview failures shaped the final implementation:
 - Codemode also cannot rely on a raw Durable Object stub crossing every
   capability/session boundary. `ReposCapability.create()` and `get()` now return
   a tiny `RepoHandle extends RpcTarget` with `getInfo()`, backed by the Repo DO.
-  This keeps the codemode surface as `ctx.repos.create(...).getInfo()` while
+  This keeps the codemode surface as `itx.repos.create(...).getInfo()` while
   avoiding raw DO stub serialization.
 
 Cloudflare Artifacts token responses in preview returned the token as
@@ -105,8 +105,8 @@ Codemode creation was verified through
 `POST /api/projects/haha/codemode-scripts` with a `repos` provider that called:
 
 ```ts
-async (ctx) => {
-  const info = await ctx.repos.create({ slug: "codemode-artifacts-1778534416072" }).getInfo();
+async (itx) => {
+  const info = await itx.repos.create({ slug: "codemode-artifacts-1778534416072" }).getInfo();
   return {
     slug: info.slug,
     remote: info.remote,
