@@ -33,10 +33,13 @@ import { ItxContract } from "./itx-contract.ts";
 import * as step01 from "./steps/01-socket/worker.ts";
 import * as step02 from "./steps/02-server-calls-client/worker.ts";
 import * as step03 from "./steps/03-provide-invoke/worker.ts";
+import * as step04 from "./steps/04-durable-object/worker.ts";
 import * as step08 from "./steps/08-auth/worker.ts";
 // The real durable event log from @iterate-com/streams — re-exported so wrangler
 // hosts it as a Durable Object.
 export { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
+// The simple registry DO shared by steps 04-06 (the pre-StreamProcessor tier).
+export { RegistryDO } from "./steps/04-durable-object/registry-do.ts";
 
 // Retain a provided capability past the provide call's return. capnweb disposes
 // argument stubs when the call returns; a stub exposes dup(), and a plain object
@@ -442,6 +445,9 @@ export default {
     }
     if (path === "/steps/03-provide-invoke") {
       return step03.handle(request);
+    }
+    if (path === "/steps/04-durable-object") {
+      return step04.handle(request, env as any, ctx);
     }
 
     // Step 08 — auth: only complete the socket if the token grants the project,
