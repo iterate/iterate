@@ -12,6 +12,8 @@ on:
     branches:
       - main
     paths:
+      - .github/ts-workflows/workflows/deploy-streams-example-app.ts
+      - .github/workflows/deploy-streams-example-app.yml
       - apps/streams-example-app/**
       - apps/os/src/domains/streams/**
       - packages/shared/**

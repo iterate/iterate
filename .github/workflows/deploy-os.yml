@@ -12,6 +12,8 @@ on:
     branches:
       - main
     paths:
+      - .github/ts-workflows/workflows/deploy-os.ts
+      - .github/workflows/deploy-os.yml
       - apps/os/**
       - apps/os-contract/**
       - apps/auth/**
