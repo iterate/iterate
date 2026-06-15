@@ -17,7 +17,7 @@ import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { CoreProcessorContract } from "~/domains/streams/engine/processors/core/contract.ts";
-import { normalizeIngressHost } from "~/ingress/host-routing.ts";
+import { normalizeIngressHost } from "~/ingress/host-headers.ts";
 import type { AppConfig } from "~/config.ts";
 
 export const PROJECT_STREAM_PATH = StreamPath.parse("/");

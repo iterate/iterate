@@ -15,15 +15,11 @@ import type { CommitRepoFilesInput, CommitRepoFilesResult } from "~/domains/repo
 import { PROJECT_REPO_SLUG } from "~/domains/repos/project-repo.ts";
 import { PROJECT_REPO_AGENTS_MD } from "~/domains/repos/project-repo-template.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
-import {
-  dispatchFetchCallable,
-  matchIngressRequest,
-  normalizeIngressHost,
-} from "~/ingress/host-routing.ts";
-import { lookupIngressRule } from "~/ingress/lookup.ts";
+import { normalizeIngressHost } from "~/ingress/host-headers.ts";
 import { resolveItx } from "~/itx/entrypoint.ts";
 import { PROJECT_WORKER_SOURCE } from "~/itx/platform-context.ts";
 import { repoSourceMemoKey } from "~/itx/source-build.ts";
+import { decideIngressRoute } from "~/workers/shared/router.ts";
 
 const MOCK_ARTIFACT_REMOTE_BASE = "https://artifacts.example.test/";
 const TEST_PROJECT_WORKER_SOURCE = `import app1 from "./apps/app1/worker.js";
@@ -379,29 +375,39 @@ export default {
       return Response.json(repo satisfies RepoInfo);
     }
 
-    const ingressMatch = await matchIngressRequest({
-      request,
-      lookupRule: (host) =>
-        lookupIngressRule({
-          appHostname: "os.iterate.localhost",
-          db: env.DB,
-          host,
-          projectHostnameBases: ["iterate.localhost"],
-        }),
+    const decision = await decideIngressRoute({
+      config: {
+        baseUrl: "https://os.iterate.localhost",
+        projectHostnameBases: ["iterate.localhost"],
+      },
+      db: env.DB,
+      headers: request.headers,
+      method: request.method,
+      url: request.url,
     });
 
-    if (!ingressMatch) {
-      return new Response("No ingress route matched.", { status: 404 });
+    if (decision.lane === "project") {
+      const headers = new Headers(request.headers);
+      if (decision.headers) {
+        for (const [name, value] of Object.entries(decision.headers)) headers.set(name, value);
+      }
+      return await ctx.exports
+        .ProjectIngressEntrypoint({ props: { projectId: decision.resolved.projectId } })
+        .fetch(new Request(request, { headers }));
     }
 
-    return await dispatchFetchCallable({
-      callable: ingressMatch.rule.callable,
-      context: {
-        env: env as unknown as Record<string, unknown>,
-        exports: ctx.exports,
-      },
-      request,
-    });
+    if (decision.lane === "itx") {
+      return await ctx.exports
+        .ItxCapabilityIngress({
+          props: {
+            capability: decision.resolved.capability,
+            projectId: decision.resolved.projectId,
+          },
+        })
+        .fetch(request);
+    }
+
+    return new Response("No ingress route matched.", { status: 404 });
   },
 } satisfies ExportedHandler<Env>;
 
