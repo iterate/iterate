@@ -456,6 +456,7 @@ const [
   osWorker("slackAgent", {
     entrypoint: "./src/workers/slack-agent.ts",
     bindings: {
+      AGENT: agent,
       DO_CATALOG: db,
       SLACK_AGENT: slackAgent,
       STREAM: stream,

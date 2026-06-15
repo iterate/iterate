@@ -136,9 +136,6 @@ function emitItem(state: AgentUiState, ops: AgentUiOp[], item: AgentUiItem): Age
 // Event types
 // ---------------------------------------------------------------------------
 
-const AGENT_CHAT_USER_MESSAGE_ADDED = "events.iterate.com/agent-chat/user-message-added";
-const AGENT_CHAT_ASSISTANT_RESPONSE_ADDED =
-  "events.iterate.com/agent-chat/assistant-response-added";
 const AGENT_LLM_REQUEST_REQUESTED = "events.iterate.com/agent/llm-request-requested";
 const AGENT_LLM_REQUEST_COMPLETED = "events.iterate.com/agent/llm-request-completed";
 const AGENT_LLM_REQUEST_CANCELLED = "events.iterate.com/agent/llm-request-cancelled";
@@ -171,7 +168,7 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
   const timestampMs = Date.parse(event.createdAt);
 
   switch (event.type) {
-    case AGENT_CHAT_USER_MESSAGE_ADDED: {
+    case "events.iterate.com/agents/user-message-received": {
       const text = readString(event, "content");
       if (text == null) return state;
       // A user message while steps are still running must not archive those
@@ -192,7 +189,8 @@ function reduceAgentUiEvent(previous: AgentUiState, event: Event, ops: AgentUiOp
       return emitItem(base, ops, item);
     }
 
-    case AGENT_CHAT_ASSISTANT_RESPONSE_ADDED: {
+    case "events.iterate.com/agents/web-message-sent":
+    case "events.iterate.com/agents/tui-message-sent": {
       const text = readString(event, "message");
       if (text == null) return state;
       const settled = settleLive(state, timestampMs, ops);

@@ -54,8 +54,8 @@ function ProjectStreamDetailContent() {
   async function submitMessage(message: string) {
     await itx.streams.get(streamPath).appendBatch([
       {
-        type: "events.iterate.com/agent-chat/user-message-added",
-        payload: { channel: "web", content: message },
+        type: "events.iterate.com/agents/user-message-received",
+        payload: { content: message, origin: "web" },
       },
     ]);
   }

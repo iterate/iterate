@@ -36,7 +36,7 @@ export const SlackAgentProcessorContract = defineProcessorContract({
   events: {
     "events.iterate.com/itx/script-execution-requested": {
       description:
-        "An itx script execution record/queue entry on this stream. With `enqueued: true` the agent-host processor runs it; otherwise it is the runner's own record (itx-next.md §4).",
+        "An itx script execution record/queue entry on this stream. With `enqueued: true` the itx processor runs it; otherwise it is the runner's own record (itx-next.md §4).",
       payloadSchema: z.object({
         code: z.string(),
         context: z.string().optional(),

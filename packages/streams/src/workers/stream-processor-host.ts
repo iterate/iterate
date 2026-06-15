@@ -6,7 +6,7 @@
 // export class AgentDurableObject extends DurableObject<Env> {
 //   host = createStreamProcessorHost(this.ctx);
 //   agent = this.host.add("agent", (deps) => new AgentProcessor({ ...deps, openai }));
-//   chat = this.host.add("agent-chat", (deps) => new AgentChatProcessor(deps));
+//   search = this.host.add("search", (deps) => new SearchProcessor(deps));
 //
 //   requestStreamSubscription(args: RequestStreamSubscriptionArgs) {
 //     return this.host.requestStreamSubscription(args);
