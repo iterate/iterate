@@ -22,6 +22,9 @@
 import { DurableObject } from "cloudflare:workers";
 import { RpcTarget, newWorkersRpcResponse, newWebSocketRpcSession } from "capnweb";
 import { Itx } from "./itx-processor.ts";
+// Incremental step folders (steps/README.md). Each is mounted under
+// /steps/<id>/* so earlier and half-built steps stay live alongside the rest.
+import * as step01 from "./steps/01-socket/worker.ts";
 // The real durable event log from @iterate-com/streams — re-exported so wrangler
 // hosts it as a Durable Object.
 export { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
@@ -227,6 +230,11 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
+
+    // Incremental step folders (steps/README.md).
+    if (path === "/steps/01-socket") {
+      return step01.handle(request);
+    }
 
     if (path === "/step0") {
       return newWorkersRpcResponse(request, new Server());
