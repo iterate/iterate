@@ -50,9 +50,10 @@ What this doctrine buys, every time:
   journal. Delete it and replay rebuilds it. The stream is the only
   authority.
 - **Side effects live in `processEvent`, never in `reduce`.** Replay
-  rebuilds state without re-running effects (`sideEffectsAfterOffset`);
-  serialized batches give in-order execution; the requested/completed
-  event pair makes at-least-once reruns detectable.
+  rebuilds state and can re-run side effects for events past the durable
+  checkpoint, so side effects must be idempotency-keyed; serialized batches
+  give in-order execution and requested/completed event pairs make
+  at-least-once reruns detectable.
 - **Host machinery is a facet, composition is one line.** A domain DO
   embeds its processors as facets (private storage, no checkpoint
   wiring in the host) or as a processor-composition subclass — the host

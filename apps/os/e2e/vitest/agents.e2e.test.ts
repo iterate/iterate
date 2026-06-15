@@ -7,7 +7,7 @@
  *   pnpm --dir apps/os e2e -t "agent"
  */
 import { expect, test } from "vitest";
-import type { Event } from "@iterate-com/shared/streams/types";
+import type { Event, EventInput } from "@iterate-com/shared/streams/types";
 import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import dedent from "dedent";
 import { createTestProjectFixture } from "../test-support/create-test-project.ts";
@@ -16,6 +16,7 @@ import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processo
 import { getSlackIntegrationDurableObjectName } from "~/domains/slack/slack-naming.ts";
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
+const DEFAULT_AGENT_DEBOUNCE_MS = 200;
 
 type SlackChannel = {
   id: string;
@@ -36,19 +37,18 @@ type SlackConversationsListResponse =
 
 const itIfSlackBotToken = process.env.APP_CONFIG_SLACK_BOT_TOKEN?.trim() ? test : test.skip;
 
-test("can configure Cloudflare AI Gateway as the provider for an agent path prefix", async () => {
-  await using fixture = await createTestProjectFixture({ slugPrefix: "agent-cloudflare-preset" });
+test("can configure Cloudflare AI Gateway as the provider for an agent stream", async () => {
+  await using fixture = await createTestProjectFixture({ slugPrefix: "agent-cloudflare-setup" });
   const { client, project } = fixture;
   const suffix = uniqueSuffix();
-  const basePath = `/agents/cloudflare-preset-${suffix}`;
-  const agentPath = `${basePath}/child`;
+  const agentPath = `/agents/cloudflare-setup-${suffix}`;
   const assistantMessage = `cloudflare ai gateway chat proof ${suffix}`;
 
-  await client.project.agents.configurePreset({
-    basePath,
-    events: [],
+  await appendAgentSetup({
+    agentPath,
+    client,
     model: DEFAULT_WORKERS_AI_AGENT_MODEL,
-    projectSlugOrId: project.id,
+    projectId: project.id,
     provider: "cloudflare-ai",
     runOpts: { gateway: { id: "default" } },
     systemPrompt: [
@@ -62,15 +62,6 @@ test("can configure Cloudflare AI Gateway as the provider for an agent path pref
       `,
     ].join("\n"),
   });
-
-  const presets = await client.project.agents.listPresets({
-    projectSlugOrId: project.id,
-  });
-  expect(presets.presets).toContainEqual(
-    expect.objectContaining({
-      basePath,
-    }),
-  );
 
   await client.project.agents.runtimeState({
     agentPath,
@@ -271,15 +262,14 @@ test("recovers and still replies when the agent host durable object is killed mi
   await using fixture = await createTestProjectFixture({ slugPrefix: "agent-crash-recovery" });
   const { client, project } = fixture;
   const suffix = uniqueSuffix();
-  const basePath = `/agents/crash-recovery-${suffix}`;
-  const agentPath = `${basePath}/child`;
+  const agentPath = `/agents/crash-recovery-${suffix}`;
   const assistantMessage = `crash recovery proof ${suffix}`;
 
-  await client.project.agents.configurePreset({
-    basePath,
-    events: [],
+  await appendAgentSetup({
+    agentPath,
+    client,
     model: DEFAULT_WORKERS_AI_AGENT_MODEL,
-    projectSlugOrId: project.id,
+    projectId: project.id,
     provider: "cloudflare-ai",
     systemPrompt: [
       "For every user message, reply with exactly one fenced JavaScript code block and no surrounding prose.",
@@ -683,15 +673,15 @@ itIfSlackBotToken(
     await using fixture = await createTestProjectFixture({ slugPrefix: "agent-slack" });
     const { client, project } = fixture;
     const suffix = uniqueSuffix();
-    const agentPath = `/agents/slack-${suffix}`;
+    const agentPath = `/agents/slack/manual-${suffix}`;
     const slackChannelId = await requireSlackChannelId();
     const slackText = `OS agent Slack proof ${suffix}`;
 
-    await client.project.agents.configurePreset({
-      basePath: agentPath,
-      events: [],
+    await appendAgentSetup({
+      agentPath,
+      client,
       model: "gpt-5.5",
-      projectSlugOrId: project.id,
+      projectId: project.id,
       provider: "openai-ws",
       runOpts: {},
       systemPrompt: [
@@ -974,15 +964,10 @@ itIfSlackBotToken(
 itIfSlackBotToken(
   "schedules and completes an LLM request for a plain routed Slack message",
   async () => {
-    // Regression test for the 2026-06-10 prod outage: on a freshly
-    // bootstrapped Slack thread stream, the slack-agent processor rendered
-    // the webhook into a triggering agent input before the agent processor's
-    // subscription was configured. The host anchored side effects at the
-    // subscription-configured offset, so the trigger was replayed as
-    // historical and no LLM request was ever scheduled — the agent never
-    // replied. The subscriber-connected reconciliation must recover the
-    // skipped trigger, so the LLM turn completes no matter which side wins
-    // the bootstrap race.
+    // Regression test for the 2026-06-10 prod outage: on a freshly routed Slack
+    // thread stream, the webhook-to-agent-input and agent LLM scheduling setup
+    // can be configured in either order. Catch-up replay must still run the
+    // idempotent side effects needed to complete the LLM turn.
     await using fixture = await createTestProjectFixture({ slugPrefix: "slack-agent-llm" });
     const { client, project } = fixture;
     const suffix = uniqueSuffix();
@@ -1160,6 +1145,77 @@ async function readUntil(input: {
   throw new Error(
     `Timed out waiting for agent stream event. Saw: ${JSON.stringify(result.events)}`,
   );
+}
+
+async function appendAgentSetup(input: {
+  agentPath: string;
+  client: OsClient;
+  model: string;
+  projectId: string;
+  provider: "openai-ws" | "cloudflare-ai";
+  runOpts?: Record<string, unknown>;
+  systemPrompt: string;
+}) {
+  const events: EventInput[] = [
+    {
+      type: "events.iterate.com/os-agent/llm-provider-selected",
+      idempotencyKey: "e2e-agent-setup:provider",
+      payload: { provider: input.provider },
+    },
+    ...(input.provider === "openai-ws"
+      ? [
+          {
+            type: "events.iterate.com/openai-ws/config-updated",
+            idempotencyKey: "e2e-agent-setup:openai-ws-config",
+            payload: { model: input.model },
+          } satisfies EventInput,
+        ]
+      : []),
+    {
+      type: "events.iterate.com/agent/llm-config-updated",
+      idempotencyKey: "e2e-agent-setup:llm-config",
+      payload: {
+        debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
+        model: input.model,
+        runOpts: input.runOpts ?? {},
+      },
+    },
+    {
+      type: "events.iterate.com/agent/system-prompt-updated",
+      idempotencyKey: "e2e-agent-setup:system-prompt",
+      payload: { systemPrompt: input.systemPrompt },
+    },
+    ...agentProcessorSubscriptionConfiguredEvents({
+      agentPath: input.agentPath,
+      processorSlugs: ["agent-chat", "agent", input.provider, "agent-host"],
+      projectId: input.projectId,
+    }),
+  ];
+
+  await input.client.project.streams.appendBatch({
+    events,
+    projectSlugOrId: input.projectId,
+    streamPath: input.agentPath,
+  });
+}
+
+function agentProcessorSubscriptionConfiguredEvents(input: {
+  agentPath: string;
+  processorSlugs: readonly string[];
+  projectId: string;
+}): EventInput[] {
+  return input.processorSlugs.map((processorSlug) => ({
+    type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
+    idempotencyKey: `agent-processor-subscription:${input.projectId}:${input.agentPath}:${processorSlug}:callable`,
+    payload: {
+      subscriptionKey: `agent:${input.projectId}:${input.agentPath}:${processorSlug}`,
+      subscriber: durableObjectProcessorSubscriber({
+        bindingName: "AGENT",
+        durableObjectName: `${input.projectId}:${input.agentPath}`,
+        processorName: processorSlug,
+      }),
+    },
+  }));
 }
 
 function requiredEvent(events: readonly Event[], type: string) {

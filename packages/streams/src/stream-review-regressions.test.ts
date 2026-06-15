@@ -39,12 +39,20 @@ const CounterContract = defineProcessorContract({
   emits: [],
 });
 type CounterContract = typeof CounterContract;
-type CounterDeps = { onBatch?: (args: { events: readonly StreamEvent[] }) => void };
+type CounterDeps = {
+  onBatch?: (args: { events: readonly StreamEvent[] }) => void;
+  onEvent?: (amount: number) => void;
+};
 
 class CounterProcessor extends StreamProcessor<CounterContract, CounterDeps> {
   readonly contract = CounterContract;
   protected override reduce(args: Parameters<StreamProcessor<CounterContract>["reduce"]>[0]) {
     return { total: args.state.total + args.event.payload.amount };
+  }
+  protected override processEvent(
+    args: Parameters<StreamProcessor<CounterContract>["processEvent"]>[0],
+  ): void {
+    this.deps.onEvent?.(args.event.payload.amount);
   }
   protected override async processEventBatch(
     args: Parameters<StreamProcessor<CounterContract>["processEventBatch"]>[0],
@@ -187,8 +195,32 @@ const subscribeArgs = (stream: ReturnType<typeof fakeStream>["stream"]) => ({
   stream: stream as never,
   subscriptionKey: "k",
   streamMaxOffset: 0,
-  subscriptionConfiguredEvent: { offset: 0 } as never,
   streamRuntimeState: { coreProcessorState: { namespace: "stream", path: "/r" } as never },
+});
+
+describe("T0 — hosted processors run side effects during catch-up replay", () => {
+  it("does not anchor side effects at the subscription-configured event offset", async () => {
+    const { ctx, settle } = fakeDurableObjectCtx();
+    const { stream, produce } = fakeStream();
+    const host = createStreamProcessorHost(ctx);
+    const sideEffects: number[] = [];
+
+    produce({ type: "test/add", payload: { amount: 5 } });
+    produce({ type: "test/add", payload: { amount: 7 } });
+
+    host.add(
+      "counter",
+      (deps) => new CounterProcessor({ ...deps, onEvent: (amount) => sideEffects.push(amount) }),
+    );
+
+    await host.requestStreamSubscription({
+      ...subscribeArgs(stream),
+    });
+    await settle();
+
+    expect(host.runtimeState("counter").snapshot?.state).toEqual({ total: 12 });
+    expect(sideEffects).toEqual([5, 7]);
+  });
 });
 
 describe("T1 — a failed batch must not drop events under continued delivery (C1)", () => {
@@ -356,10 +388,8 @@ describe("T5 — circuit-breaker token bucket on a backwards clock (M3)", () => 
   });
 });
 
-describe("T6 — circuit-breaker misses a flood after tripping during replay (M4)", () => {
-  // Fixed in Stage 3: the trip is level-triggered (fires whenever the bucket is
-  // in deficit on a live event), not edge-triggered on the previous state.
-  it("pauses on live events even when it tripped at/below the anchor", async () => {
+describe("T6 — circuit-breaker pauses once the bucket is in deficit (M4)", () => {
+  it("pauses during catch-up once the bucket is in deficit", async () => {
     const committed: StreamEvent[] = [];
     const processor = new CircuitBreakerProcessor({
       iterateContext: {
@@ -372,8 +402,6 @@ describe("T6 — circuit-breaker misses a flood after tripping during replay (M4
           appendBatch: () => [],
         },
       },
-      // anchor = 4: offsets <= 4 reduce but run no side effects (replay).
-      sideEffectsAfterOffset: () => 4,
     });
 
     await processor.ingest({
@@ -383,9 +411,9 @@ describe("T6 — circuit-breaker misses a flood after tripping during replay (M4
           refillRatePerMinute: 1,
         }),
         event("test.widget", 2, 2_000),
-        event("test.widget", 3, 3_000), // trips here (offset 3 <= anchor 4)
+        event("test.widget", 3, 3_000),
         event("test.widget", 4, 4_000),
-        event("test.widget", 5, 5_000), // LIVE: should pause
+        event("test.widget", 5, 5_000),
         event("test.widget", 6, 6_000),
       ],
       streamMaxOffset: 6,

@@ -2142,9 +2142,9 @@
             <strong
               >Side effects live in <code>processEvent</code>, never in <code>reduce</code>.</strong
             >
-            Replay rebuilds state without re-running effects (<code>sideEffectsAfterOffset</code>);
-            serialized batches give in-order execution; a requested/completed event pair makes
-            at-least-once reruns detectable.
+            Replay rebuilds state and can re-run side effects for events past the durable
+            checkpoint; serialized batches give in-order execution, and a requested/completed event
+            pair makes at-least-once reruns detectable.
           </li>
           <li>
             <strong>Self-describing, always.</strong> Every domain object answers
@@ -2236,12 +2236,11 @@
         <p>
           <strong>Step 4 — side effects in <code>processEventBatch</code>, never in reduce.</strong>
           The alarm handler appends <code>fire-requested { enqueued: true }</code>;
-          <code>processEventBatch</code> sees it (past <code>sideEffectsAfterOffset</code>, still
-          pending in batch-final state), runs the script — the side effect — and appends
-          <code>fire-completed</code>. A replay rebuilds <code>pendingFires</code> without
-          re-running anything; a crash between the pair leaves a pending entry that the next wake
-          detects and re-runs (at-least-once, detectable). Setting the next alarm is also a
-          <code>processEvent</code> concern, derived from folded state.
+          <code>processEventBatch</code> sees it (still pending in batch-final state), runs the
+          script — the side effect — and appends <code>fire-completed</code>. A replay rebuilds
+          <code>pendingFires</code>; completed work dedupes, while a crash between the pair leaves a
+          pending entry that the next wake detects and re-runs (at-least-once, detectable). Setting
+          the next alarm is also a <code>processEvent</code> concern, derived from folded state.
         </p>
 
         <p>

@@ -1,6 +1,3 @@
-// State is built by ingesting events; first-attach lookback is covered by the
-// sideEffectsAfterOffset anchor test.
-
 import { describe, expect, it } from "vitest";
 import type { StreamEvent, StreamEventInput } from "@iterate-com/streams/shared/event";
 import {
@@ -232,35 +229,6 @@ describe("SlackAgentProcessor", () => {
     ]);
   });
 
-  it("reduces but does not re-run side effects for events at or below the anchor", async () => {
-    const { appended, processor } = createProcessor({ sideEffectsAfterOffset: () => 2 });
-
-    await processor.ingest({
-      events: [routeEvent(), webhookEvent({ offset: 2, text: "historical message" })],
-      streamMaxOffset: 3,
-    });
-    await flushBackgroundWork();
-
-    // State rebuilt from history...
-    expect(processor.state).toMatchObject({
-      channel: "C123",
-      threadTs: "1772136258.963519",
-      latestMessageTs: "1772136259.000000",
-    });
-    // ...without re-registering the provider or re-sending agent input.
-    expect(appended).toEqual([]);
-
-    await processor.ingest({
-      events: [webhookEvent({ offset: 3, text: "live message" })],
-      streamMaxOffset: 3,
-    });
-    await flushBackgroundWork();
-    expect(appended.map(({ event }) => event.type)).toEqual([
-      "events.iterate.com/agent/input-added",
-    ]);
-    expect(appended[0]!.event.idempotencyKey).toBe("slack-agent/slack-webhook-to-agent-input@3");
-  });
-
   it("emits agent input for raw Slack interactivity payloads", async () => {
     const { appended, processor } = createProcessor();
 
@@ -473,7 +441,6 @@ describe("SlackAgentProcessor", () => {
 function createProcessor(
   deps: SlackAgentProcessorDeps & {
     onAppend?: (event: StreamEventInput) => void;
-    sideEffectsAfterOffset?: () => number;
   } = {},
 ) {
   const { onAppend, ...processorDeps } = deps;
