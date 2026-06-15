@@ -97,13 +97,21 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   protected override reduce({ event, state }: { event: any; state: any }) {
     switch (event.type) {
       case ITX_EVENTS.capabilityProvided: {
-        const { path, kind, address, meta } = event.payload;
+        const { path, kind, address, instructions, types } = event.payload;
         const name = path.join(".");
         return {
           ...state,
           capabilities: {
             ...state.capabilities,
-            [name]: { name, kind, address: address ?? null, meta: meta ?? {} },
+            // `instructions` (what the cap is for) is provided alongside the cap;
+            // `types` is optional and not yet used for anything — it's just carried.
+            [name]: {
+              name,
+              kind,
+              address: address ?? null,
+              instructions: instructions ?? null,
+              types: types ?? null,
+            },
           },
         };
       }
@@ -125,18 +133,21 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     }
   }
 
-  // provide = append an event. A live stub also lands in the in-memory bridge.
-  // We self-ingest the committed event so the write is readable immediately
-  // (read-your-writes) — the same event later re-delivered by the stream
-  // subscription is deduped by offset.
+  // provide = append an event. A capability is provided with `instructions` (what
+  // it's for) and optional `types` (carried, not yet used). A live stub also lands
+  // in the in-memory bridge. There is NO self-ingest: the event flows out to the
+  // stream and the stream's subscription delivers it back into the fold (Step 07).
+  // We just wait for that delivery so the write is readable (read-your-writes).
   async provideCapability({
     path,
     capability,
-    meta,
+    instructions,
+    types,
   }: {
     path: string[];
     capability: any;
-    meta?: any;
+    instructions?: string;
+    types?: string;
   }) {
     const kind = isCapabilityAddress(capability) ? "rpc" : "live";
     // dup at THIS layer too: the stub arrived as an argument to this DO call and
@@ -145,11 +156,20 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     const committed = await this.ctx.stream.append({
       event: {
         type: ITX_EVENTS.capabilityProvided,
-        payload: { path, kind, address: kind === "rpc" ? capability : null, meta },
+        payload: { path, kind, address: kind === "rpc" ? capability : null, instructions, types },
       },
     });
-    await this.ingest({ events: [committed], streamMaxOffset: (committed as any).offset });
+    await this.#awaitDelivered((committed as any).offset);
     return { path };
+  }
+
+  // Read-your-writes without self-ingest: after appending, wait for the stream's
+  // subscription to deliver our own event back into the fold (the checkpoint
+  // catches up to the appended offset). The stream is the single source of truth.
+  async #awaitDelivered(offset: number): Promise<void> {
+    for (let i = 0; i < 400 && this.checkpointOffset < offset; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
   }
 
   /** The capability table is the fold — plus the injected roots (Step 10). */
@@ -161,7 +181,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     const committed = await this.ctx.stream.append({
       event: { type: ITX_EVENTS.capabilityRevoked, payload: { path } },
     });
-    await this.ingest({ events: [committed], streamMaxOffset: (committed as any).offset });
+    await this.#awaitDelivered((committed as any).offset);
   }
 
   // invoke resolves over the FOLD (this.state) first — own caps win — then falls

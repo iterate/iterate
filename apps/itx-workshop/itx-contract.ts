@@ -35,7 +35,11 @@ const CapabilityRecord = z.object({
   name: z.string(),
   kind: z.enum(["live", "rpc"]),
   address: CapabilityAddress.nullable().default(null),
-  meta: z.record(z.string(), z.unknown()).default({}),
+  // Every capability is provided with `instructions` (what it's for, for an agent
+  // or a human reading the table) and optional `types` (a type surface we carry
+  // but don't yet do anything with).
+  instructions: z.string().nullable().default(null),
+  types: z.string().nullable().default(null),
 });
 
 /** A parent context reference — the chain link the birth certificate records. */
@@ -77,7 +81,8 @@ export const ItxContract = defineProcessorContract({
         path: z.array(z.string()),
         kind: z.enum(["live", "rpc"]),
         address: CapabilityAddress.nullable().optional(),
-        meta: z.record(z.string(), z.unknown()).optional(),
+        instructions: z.string().optional(),
+        types: z.string().optional(),
       }),
     },
     [ITX_EVENTS.capabilityRevoked]: {
