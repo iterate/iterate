@@ -37,16 +37,16 @@ node validate-steps.mjs   # Steps 7–10: live/sturdy discriminator, dial, the c
 
 ## What it proves (8/8 PASS, all against real workerd)
 
-| Step     | Claim                                                                                                                                                                                                                        | Result                                     |
-| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| 0        | Worker serves an `RpcTarget`; client `newWebSocketRpcSession` + `using` disposal                                                                                                                                             | **PASS**                                   |
-| 1        | The **server calls the client**: client passes `{ runSwift }`, server calls it back; the laptop runs **real Swift**                                                                                                          | **PASS** (`(1...10).reduce(0,+)` → `55\n`) |
-| 2/3/4    | `provideCapability`/`invoke` registry in a Durable Object; **client B invokes a method living on client A** — and A runs **real Swift**                                                                                      | **PASS** (`B → A.runSwift → "5040\n"`)     |
-| 3        | unknown capability rejects                                                                                                                                                                                                   | **PASS**                                   |
-| 5        | **naked-stub method call**: `itx.runSwift(code)` on the bare session stub routes (via the server-side dynamic proxy) to `invoke`                                                                                             | **PASS**                                   |
-| 6        | **deep path into the real `@slack/web-api` SDK** from a **naked stub**: `itx.slack.chat.postMessage(msg)` → one pipelined message                                                                                            | **PASS** (real SDK hits the mock endpoint) |
-| 6 shadow | **longest-prefix deep shadow**: override `slack.chat.postMessage`; `slack.users.list` still resolves to the real mounted client                                                                                              | **PASS**                                   |
-| 8/11     | the context is a **durable event log** folded by the **real `@iterate-com/streams` StreamProcessor**: provide → fold → invoke → revoke, and `freshFold` (replay the log into a fresh processor) rebuilds the identical table | **PASS** (replay == live table)            |
+| Step     | Claim                                                                                                                                                                                                          | Result                                     |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| 0        | Worker serves an `RpcTarget`; client `newWebSocketRpcSession` + `using` disposal                                                                                                                               | **PASS**                                   |
+| 1        | The **server calls the client**: client passes `{ runSwift }`, server calls it back; the laptop runs **real Swift**                                                                                            | **PASS** (`(1...10).reduce(0,+)` → `55\n`) |
+| 2/3/4    | `provideCapability`/`invoke` registry in a Durable Object; **client B invokes a method living on client A** — and A runs **real Swift**                                                                        | **PASS** (`B → A.runSwift → "5040\n"`)     |
+| 3        | unknown capability rejects                                                                                                                                                                                     | **PASS**                                   |
+| 5        | **naked-stub method call**: `itx.runSwift(code)` on the bare session stub routes (via the server-side dynamic proxy) to `invoke`                                                                               | **PASS**                                   |
+| 6        | **deep path into the real `@slack/web-api` SDK** from a **naked stub**: `itx.slack.chat.postMessage(msg)` → one pipelined message                                                                              | **PASS** (real SDK hits the mock endpoint) |
+| 6 shadow | **longest-prefix deep shadow**: override `slack.chat.postMessage`; `slack.users.list` still resolves to the real mounted client                                                                                | **PASS**                                   |
+| 8/11     | the context is a **durable event log** folded by the **real platform StreamProcessor**: provide → fold → invoke → revoke, and `freshFold` (replay the log into a fresh processor) rebuilds the identical table | **PASS** (replay == live table)            |
 
 ## There is no client-side path proxy — and there shouldn't be
 
@@ -128,11 +128,11 @@ is a stub whose `.apply` is a path segment, not a function.
 ## Files
 
 - `server.ts` — the Worker + the single **`ItxDO`** Durable Object that hosts the
-  real `Itx extends StreamProcessor` (backed by the `@iterate-com/streams` `Stream`
+  real `Itx extends StreamProcessor` (backed by the the platform streams engine (now in apps/os/src/domains/streams) `Stream`
   DO as its durable event log) + the server-side `dynamicHandle` (the descriptor-trap
   dynamic proxy) + the re-exported `Stream` DO. `/itx?ctx=<name>` selects a context.
 - `itx-contract.ts` — the itx event log defined as a real `defineProcessorContract`
-  (`@iterate-com/streams`): the `events.iterate.com/itx/*` event schemas + plain-object
+  (the platform streams engine (now in apps/os/src/domains/streams)): the `events.iterate.com/itx/*` event schemas + plain-object
   state. Step 8's "it's just a durable event log."
 - `itx-processor.ts` — `Itx extends StreamProcessor<ItxContract>`, the REAL base class:
   one pure `reduce` (the fold), the verbs, the in-memory live-stub bridge. Step 11.

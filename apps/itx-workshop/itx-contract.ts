@@ -3,7 +3,7 @@
 // This is the whole of Step 8's idea in one place: an itx context is not a
 // registry you mutate, it's a STREAM of events you fold. So we don't write a
 // `Map`; we write the event *schemas* and a reducer, and let the real
-// `@iterate-com/streams` StreamProcessor do the folding, checkpointing, and
+// platform StreamProcessor do the folding, checkpointing, and
 // replay. `defineProcessorContract` is the same helper every other processor in
 // the platform uses — the workshop depends on the real package, it doesn't
 // reimplement it.
@@ -15,7 +15,7 @@
 // lives in an in-memory bridge beside the fold (see itx-processor.ts).
 
 import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
+import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 
 /** A sturdy capability address — plain data; `dial` turns it back into a callable. */
 export const CapabilityAddress = z.looseObject({ type: z.string() });

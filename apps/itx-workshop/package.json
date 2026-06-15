@@ -14,8 +14,9 @@
     "capnweb": "^0.8.0",
     "ws": "^8.18.0",
     "@slack/web-api": "^7.0.0",
-    "@iterate-com/streams": "workspace:*",
-    "zod": "~4.3.6"
+    "zod": "~4.3.6",
+    "@iterate-com/os": "workspace:*",
+    "@iterate-com/shared": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",

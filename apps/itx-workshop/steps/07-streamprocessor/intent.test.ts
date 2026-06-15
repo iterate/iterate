@@ -1,5 +1,5 @@
 // Intent: a context is a durable event log folded by the real
-// @iterate-com/streams StreamProcessor, and the stream DELIVERS appended events
+// platform StreamProcessor, and the stream DELIVERS appended events
 // to the processor automatically (via its subscription) — not only the
 // processor's own provides.
 //

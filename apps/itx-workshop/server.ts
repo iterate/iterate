@@ -8,7 +8,7 @@
 //
 // There is ONE itx context here and it is the real thing: ItxDO hosts
 // `Itx extends StreamProcessor<ItxContract>` (itx-processor.ts) — the actual
-// class from @iterate-com/streams — and backs it with the real `Stream` Durable
+// class from apps/os — and backs it with the real `Stream` Durable
 // Object as its durable event log. Steps 2-6 (provide/invoke, the live
 // cross-client rendezvous, deep dotted paths into the real Slack SDK) and
 // Steps 8/11 (the fold of a durable event log; replay rebuilds the table) all
@@ -24,8 +24,8 @@ import { RpcTarget, newWorkersRpcResponse, newWebSocketRpcSession } from "capnwe
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
-} from "@iterate-com/streams/workers/stream-processor-host";
-import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
+} from "@iterate-com/os/src/domains/streams/engine/workers/stream-processor-host.ts";
+import { durableObjectProcessorSubscriber } from "@iterate-com/os/src/domains/streams/engine/shared/callable-subscriber.ts";
 import { Itx, type ProvideArgs } from "./itx-processor.ts";
 import { ItxContract } from "./itx-contract.ts";
 // Incremental step folders (steps/README.md). Each is mounted under
@@ -35,9 +35,9 @@ import * as step02 from "./steps/02-server-calls-client/worker.ts";
 import * as step03 from "./steps/03-provide-invoke/worker.ts";
 import * as step04 from "./steps/04-durable-object/worker.ts";
 import * as step08 from "./steps/08-auth/worker.ts";
-// The real durable event log from @iterate-com/streams — re-exported so wrangler
+// The real durable event log from apps/os — re-exported so wrangler
 // hosts it as a Durable Object.
-export { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
+export { Stream } from "@iterate-com/os/src/domains/streams/engine/workers/durable-objects/stream.ts";
 // The simple registry DO shared by steps 04-06 (the pre-StreamProcessor tier).
 export { RegistryDO } from "./steps/04-durable-object/registry-do.ts";
 

@@ -1,7 +1,7 @@
 // itx-processor.ts — Itx IS a real StreamProcessor.
 //
 // This is Step 11 for real: `Itx extends StreamProcessor<ItxContract>` from the
-// actual `@iterate-com/streams` package. We override exactly one pure method,
+// platform streams engine (apps/os/src/domains/streams/engine). We override exactly one pure method,
 // `reduce` (the fold), and add the two verbs (`provideCapability` / `invoke`)
 // plus revoke. Everything durable — what names exist, each one's kind and
 // address — is the fold of the event log; the only non-durable state is the
@@ -13,7 +13,7 @@
 // fold; own provides shadow them; they show up in describe/list. Changing them is
 // a code change, not a rewrite of every project's stream.
 
-import { StreamProcessor } from "@iterate-com/streams/stream-processor";
+import { StreamProcessor } from "@iterate-com/os/src/domains/streams/engine/stream-processor.ts";
 import { ITX_EVENTS, ItxContract } from "./itx-contract.ts";
 
 /**

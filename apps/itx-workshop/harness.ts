@@ -12,7 +12,7 @@
 // and the server-side dynamic proxy collapses it into one invoke(path, args).
 //
 // The one itx context is the REAL thing: ItxDO hosts `Itx extends StreamProcessor`
-// backed by the real @iterate-com/streams `Stream` DO. `?ctx=<name>` selects a
+// backed by the real platform `Stream` DO. `?ctx=<name>` selects a
 // context; we use a fresh name per run so the durable log starts empty.
 import http from "node:http";
 import { WebClient } from "@slack/web-api";
@@ -293,7 +293,7 @@ async function main() {
   // StreamProcessor. provide appends an event the fold projects into the table;
   // revoke removes it; and REPLAYING the durable log into a FRESH processor
   // (freshFold, server-side) rebuilds the identical table — the fold is the
-  // source of truth, persisted in the real @iterate-com/streams Stream DO.
+  // source of truth, persisted in the real platform Stream DO.
   // ---------------------------------------------------------------------
   try {
     using itx = openItx<ItxCore>();

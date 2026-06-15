@@ -459,9 +459,12 @@ importers:
 
   apps/itx-workshop:
     dependencies:
-      '@iterate-com/streams':
+      '@iterate-com/os':
         specifier: workspace:*
-        version: link:../../packages/streams
+        version: link:../os
+      '@iterate-com/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@slack/web-api':
         specifier: ^7.0.0
         version: 7.14.1

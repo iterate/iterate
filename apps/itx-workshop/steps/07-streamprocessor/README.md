@@ -2,7 +2,7 @@
 
 **Adds:** durability and automatic delivery. The capability table stops being an
 in-memory registry and becomes the **fold of a durable event log**:
-`Itx extends StreamProcessor<ItxContract>` (the real `@iterate-com/streams` base
+`Itx extends StreamProcessor<ItxContract>` (the real platform `StreamProcessor` base
 class), hosted in `ItxDO` via `createStreamProcessorHost`, backed by the real
 `Stream` Durable Object as the log.
 

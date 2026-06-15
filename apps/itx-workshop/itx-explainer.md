@@ -198,7 +198,7 @@ const itx = itxDurableObject.itx(); // RpcStub<Itx> — .provide()/.invoke() rou
 
 Now A's provide and B's invoke meet in the DO → B runs A's live function.
 
-This is the real shape, minimally: the workshop's `server.ts` has exactly one `ItxDO` that holds the `Itx` and exposes it via an `itx()` **method** (never a field — workerd can't pipeline through properties). What's still missing here is what the `Itx` is constructed _with_: Step 11 fills that in — the constructor takes its **durable event log** (a real `@iterate-com/streams` `Stream` DO) and a checkpoint — and the same `ItxDO` is what every step from here on runs against. (Production's `apps/os/src/itx/itx-durable-object.ts` is this plus the chain/dial of Step 12.)
+This is the real shape, minimally: the workshop's `server.ts` has exactly one `ItxDO` that holds the `Itx` and exposes it via an `itx()` **method** (never a field — workerd can't pipeline through properties). What's still missing here is what the `Itx` is constructed _with_: Step 11 fills that in — the constructor takes its **durable event log** (a real the platform `Stream` DO) and a checkpoint — and the same `ItxDO` is what every step from here on runs against. (Production's `apps/os/src/itx/itx-durable-object.ts` is this plus the chain/dial of Step 12.)
 
 That constant name (`"itx"`) is really the context's **address**. In production it's a **project id + a path** — `<projectId>/<path>` (e.g. `prj_abc/agents/foo`) — that doubles as the DO's name _and_ the dial address. `prj_abc/` is the project itx; `prj_abc/agents/foo` is an agent itx under it (Step 12). For now, one constant name = one shared context.
 
@@ -471,7 +471,7 @@ If the registry is just a `Map` in memory, it dies with the DO anyway — even t
 
 > **the one new idea** — stop thinking of the registry as a thing you mutate. It's a **durable event log** you _fold_. You don't write a `Map`; you write the event **schemas** and a **reducer**, and the table is `events.reduce(reduce, initial)`. Provide/revoke append events; the table is derived; replaying the log reproduces it exactly — no hidden durable state.
 
-Because it's an event log, the honest thing to write down is the **schema of the events** — and that reads cleanly. This is the real contract from the runnable [`itx-contract.ts`](./itx-contract.ts), defined with the platform's own `defineProcessorContract` (the workshop _depends_ on `@iterate-com/streams`, it doesn't reimplement it):
+Because it's an event log, the honest thing to write down is the **schema of the events** — and that reads cleanly. This is the real contract from the runnable [`itx-contract.ts`](./itx-contract.ts), defined with the platform's own `defineProcessorContract` (the workshop _depends_ on the platform streams engine (now in apps/os/src/domains/streams), it doesn't reimplement it):
 
 ```ts
 export const ItxContract = defineProcessorContract({
@@ -570,12 +570,12 @@ Everything we've built (provide/revoke as events, a folded table, read-your-writ
 
 ## Step 11 — Itx _is_ a StreamProcessor (for real)
 
-> **the punchline** — Step 8's "fold a durable event log" already _is_ a `StreamProcessor`. So `Itx extends StreamProcessor<ItxContract>` — the **real** base class from `@iterate-com/streams`. We override one pure method, `reduce` (the fold), and add the verbs. The stream's subscription (Step 7's wiring) delivers appended events into `ingest`, which folds them and advances the checkpoint; `state` is the fold; replay rebuilds it. Read-your-writes is then just: append, wait for the stream to deliver it back, read.
+> **the punchline** — Step 8's "fold a durable event log" already _is_ a `StreamProcessor`. So `Itx extends StreamProcessor<ItxContract>` — the **real** base class from the platform streams engine (now in apps/os/src/domains/streams). We override one pure method, `reduce` (the fold), and add the verbs. The stream's subscription (Step 7's wiring) delivers appended events into `ingest`, which folds them and advances the checkpoint; `state` is the fold; replay rebuilds it. Read-your-writes is then just: append, wait for the stream to deliver it back, read.
 
 This is the real class, from the runnable [`itx-processor.ts`](./itx-processor.ts) — it extends the actual `StreamProcessor` base class, not a stand-in:
 
 ```ts
-import { StreamProcessor } from "@iterate-com/streams/stream-processor";
+import { StreamProcessor } from "@iterate-com/os/src/domains/streams/engine/stream-processor.ts";
 
 export class Itx extends StreamProcessor<typeof ItxContract> {
   readonly contract = ItxContract;
@@ -630,7 +630,7 @@ Changing a built-in is then a **code change** — re-injected on the next boot �
 
 ### Where it actually runs
 
-This actually runs. The workshop's `server.ts` has **one** `ItxDO` — a Durable Object that hosts this exact `Itx` processor and backs it with the real `Stream` Durable Object from `@iterate-com/streams` as its durable event log (the DO is named by its context coordinate; the log is a stream at that coordinate). Every step from 2 on — provide/invoke, the live cross-client rendezvous, the deep Slack path, and Step 8/11's provide → fold → invoke → revoke → `freshFold` (replay the durable log into a fresh processor → identical table) — is driven over real workerd by `harness.ts`. Production is the same shape with more around it: `apps/os/src/itx/itx-durable-object.ts` is the host, `packages/streams/src/workers/durable-objects/stream.ts` is the log, plus the chain/dial/coordinates of Step 12.
+This actually runs. The workshop's `server.ts` has **one** `ItxDO` — a Durable Object that hosts this exact `Itx` processor and backs it with the real `Stream` Durable Object from the platform streams engine (now in apps/os/src/domains/streams) as its durable event log (the DO is named by its context coordinate; the log is a stream at that coordinate). Every step from 2 on — provide/invoke, the live cross-client rendezvous, the deep Slack path, and Step 8/11's provide → fold → invoke → revoke → `freshFold` (replay the durable log into a fresh processor → identical table) — is driven over real workerd by `harness.ts`. Production is the same shape with more around it: `apps/os/src/itx/itx-durable-object.ts` is the host, `apps/os/src/domains/streams/engine/workers/durable-objects/stream.ts` is the log, plus the chain/dial/coordinates of Step 12.
 
 The whole thing is one idea seen from a few angles: a name → a stub or an address, a table that is the fold of the context's durable event log, a server-side proxy that makes calling it feel native, paths that mount whole SDKs and shadow deep, borrow-or-dial, and a climb to the parent on a miss.
 
@@ -711,4 +711,4 @@ All real, all in the actual files; none of it changes the inner model. Each entr
 
 ---
 
-_ground truth: `apps/os/src/itx/{itx,handle,path-proxy,dial,coordinates,entrypoint,contract,types,itx-durable-object,fetch}.ts` · `packages/streams/src/stream-processor.ts`. Runnable in this folder, all over real workerd via `server.ts` + `harness.ts`: Steps 0–6 (incl. `itx.slack.chat.postMessage` on a naked stub into the real `@slack/web-api` client) and Steps 8/11 (one `ItxDO` hosting `Itx extends StreamProcessor` from `itx-contract.ts` + `itx-processor.ts`, backed by the real `@iterate-com/streams` `Stream` DO as its durable event log). Also `min-dynamic-target.mjs` (the server-side dynamic proxy, in isolation); `validate-steps.mjs` (model checks for Steps 7–10); `dialog.swift` (the Step 1 native dialog — really runs, `npm run proof:swift`)._
+_ground truth: `apps/os/src/itx/{itx,handle,path-proxy,dial,coordinates,entrypoint,contract,types,itx-durable-object,fetch}.ts` · `apps/os/src/domains/streams/engine/stream-processor.ts`. Runnable in this folder, all over real workerd via `server.ts` + `harness.ts`: Steps 0–6 (incl. `itx.slack.chat.postMessage` on a naked stub into the real `@slack/web-api` client) and Steps 8/11 (one `ItxDO` hosting `Itx extends StreamProcessor` from `itx-contract.ts` + `itx-processor.ts`, backed by the real the platform `Stream` DO as its durable event log). Also `min-dynamic-target.mjs` (the server-side dynamic proxy, in isolation); `validate-steps.mjs` (model checks for Steps 7–10); `dialog.swift` (the Step 1 native dialog — really runs, `npm run proof:swift`)._
