@@ -251,56 +251,65 @@ Verified at the pump (packages/streams stream.workers.test.ts), through the
 capability loopback (`pnpm test:itx-stream-subscribe`), and over capnweb
 (itx-subscribe.e2e.test.ts).
 
-## D21: The browser layer is ONE hook — useItx (supersedes D19 and the shared-socket-per-tab decision)
+## D21: The browser layer is ONE file — `itx-react.tsx` (supersedes D19 and the shared-socket-per-tab decision)
 
 Owner decision: the TanStack-Query-for-itx + SSR + shared-socket architecture
 was too complicated for what the browser actually needs, which is "a connected
-handle, please". `apps/os/src/itx/use-itx.ts` replaces all of it:
+handle, please". `apps/os/src/itx/itx-react.tsx` is the **entire** browser
+surface in one file — the socket lifecycle plus FOUR small primitives:
 
-- **`useItx(context?)` suspends until connected** (React 19 `use()` on a
-  module-singleton promise per context key) and returns the live
-  `RpcStub<Itx>`. `getBrowserItx(context?)` is the same singleton for
-  non-hook code (event handlers). That's the whole API.
-- **Per-context module-singleton sockets, no refcounting, no teardown on
-  unmount.** The map exists because Suspense needs a stable promise across
-  render replays AND so every component on a context shares one socket that
-  persists across client-side navigations. One socket PER CONTEXT (global +
-  each project) — `admin`, `global`, and a project are just different context
-  keys (the connect endpoint), never different primitives. The global repl,
-  project repl, and admin layout all ride the pool now — no component opens
-  its own socket. The pool owns the socket's lifetime; a component never
-  disposes the root stub or closes the socket on unmount (that would kill the
-  shared connection — capnweb closes the WebSocket when the root stub is
-  disposed). The only deliberate root-dispose is `reconnectBrowserItx()`
-  (evict), used when the connect-time principal must change (creating a
-  project; unlocking admin). Per-component RPC objects (subscription stubs,
-  callbacks) ARE owned by the component and disposed on unmount.
-- **No query cache.** Stream-shaped data subscribes (`onStateChange` /
-  `subscribe` — D20 is the protocol this rides on: every subscription's
-  initial push carries current state, so a subscription alone paints a first
-  render). One-shot lookups are an awaited `getState()` into component state.
-- **No reconnect machinery.** Socket death evicts the map entry and
-  re-renders subscribers (useSyncExternalStore); they find no entry, dial
-  fresh, re-suspend. No backoff, no offset resume, no liveness probes:
-  re-fetching current state via the initial push IS the recovery.
-- **No SSR for itx components — the hook THROWS on the server.** Verified
-  posture: a forever-pending `use()` during streaming SSR keeps the response
-  stream open (React waits for suspended boundaries before closing it),
-  while a server-side throw inside a Suspense boundary streams the fallback
-  and recovers client-side — and outside one it fails loudly instead of
-  hanging the worker. Consumers sit under `ssr: false` routes (the streams
-  pages), behind `<ClientOnly>` (the repl's activity tail), or behind a
-  client-only connect effect (the admin layout).
+- **`useItx(override?)` suspends until connected** (React 19 `use()` on a
+  module-cached promise per context) and returns the live `RpcStub<ItxHandle>`.
+  **`connectItx(override?)`** is its imperative sibling — the same socket as a
+  Promise, for event handlers / mutationFns / closures that can't call a hook.
+  A connection is addressed by a plain `{ projectId?, path?, baseUrl? }` tuple
+  (only `projectId` — a project slug — keys the socket today; `path`/`baseUrl`
+  reserved). `ItxProvider` holds that address in context so `useItx()` resolves
+  `override ?? provider ?? global` then always connects. Mutations are just
+  imperative calls on the handle (`itx.projects.remove({ id })`) — no primitive.
+- **Reads ride TanStack Query; subscriptions are one hook.** `useItxQuery({ key,
+query })` is the one read — it wraps `useSuspenseQuery` (the QueryClient already
+  exists, and `use()` needs a cached promise, so a hand-rolled cache earned
+  nothing). **`useItxEffect((itx) => cleanup, deps)`** is the one live-subscription
+  hook: its cleanup is `() => sub[Symbol.dispose]()` and it threads the connected
+  handle into its deps so a reconnect re-subscribes (D20 is the protocol — every
+  subscription's initial push carries current state, so a subscription alone
+  paints a first render).
+- **One socket PER CONTEXT in a module `Map`, no refcounting, no teardown on
+  unmount.** The Map exists because Suspense needs a stable promise across render
+  replays AND so every component on a context shares one socket that persists
+  across client-side navigations. `admin`, `global`, and a project are just
+  different context keys, never different primitives — the global repl, project
+  repl, activity tail, and admin layout all ride the shared socket; no component
+  opens its own. A component never disposes the root stub (capnweb closes the
+  WebSocket when the root stub is disposed, killing the shared connection);
+  per-component RPC objects (subscription stubs, callbacks) ARE component-owned
+  and disposed on unmount. The only deliberate root-dispose is **`reconnectItx()`**
+  (evict + re-dial), used when the connect-time principal must change (creating a
+  project; unlocking admin).
+- **No reconnect machinery.** Socket death drops the Map entry and wakes mounted
+  readers (`useSyncExternalStore`); the next render dials fresh and re-suspends.
+  No backoff, no offset resume, no liveness probes: re-reading current state via
+  the initial push IS the recovery.
+- **No SSR for itx components — the hook THROWS on the server.** A forever-pending
+  `use()` during streaming SSR keeps the response stream open (React waits for
+  suspended boundaries before closing it), while a server-side throw inside a
+  Suspense boundary streams the fallback and recovers client-side. Consumers sit
+  under `ssr: false` routes (the streams pages), behind `<ClientOnly>` (the repl's
+  activity tail), or reach itx lazily via `connectItx` inside a closure (so a
+  slow/down socket degrades only that widget — the ⌘K tree, the agent feed).
 
-Deleted with this: `itx/react/` (provider, connection with
-backoff-reconnect, query bridge, stream-tail multiplexer, useStreamEvents),
-`itx/server.ts` (`getServerItx`), `itx/loader.ts`
-(`getLoaderItx`/`prefetchItxQuery`), `lib/itx-queries.ts`, and the
-itx-server-handle worker test harness — D19's SSR/loader-prefetch design and
-the plan's "one global-context WebSocket per tab" decision are superseded.
-`errors.ts` (`getItxErrorCode`/`isItxAccessError`) stays: catch blocks and
-error boundaries still read codes; there is just no retry-predicate layer to
-feed them to.
+Deleted with this: `itx/react/` (provider, connection with backoff-reconnect,
+query bridge, stream-tail multiplexer, useStreamEvents), `itx/server.ts`
+(`getServerItx`), `itx/loader.ts` (`getLoaderItx`/`prefetchItxQuery`),
+`lib/itx-queries.ts`, and the itx-server-handle worker test harness — D19's
+SSR/loader-prefetch design and the plan's "one global-context WebSocket per tab"
+decision are superseded. A later simplicity pass then collapsed the surface into
+this single file: it dropped the interim `use-itx.ts` / `getBrowserItx`, the
+hand-rolled `useItxResource` read (TanStack Query does it), and the
+`createSocketSuspenseCache` factory (a plain module `Map` + ~10 lines of dial).
+`errors.ts` (`getItxErrorCode`/`isItxAccessError`) stays: catch blocks and error
+boundaries still read codes; there is just no retry-predicate layer to feed them.
 
 ## D22: fetch on the project IS egress; ingress is stateless; creation is events
 

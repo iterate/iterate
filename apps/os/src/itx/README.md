@@ -333,8 +333,8 @@ Handles are minted in exactly three ways (Law 3/4):
 - **platform wiring**: `wireIsolateEnv` hands isolates a handle scoped to
   their home context, with `capabilityPath` as pure attribution.
 
-Client plumbing: `client.ts` (`withItx` for Node, Scene 2), `use-itx.ts`
-(the browser hook), `browser-repl.ts` (REPL compiler), `errors.ts`
+Client plumbing: `client.ts` (`withItx` for Node, Scene 2), `itx-react.tsx`
+(the whole browser React surface), `browser-repl.ts` (REPL compiler), `errors.ts`
 (`ItxError` codes that survive capnweb's name-dropping reconstruction, plus
 existence-masking — missing and forbidden are byte-identical NOT_FOUND).
 
@@ -375,29 +375,29 @@ caps are public; then one core dispatch with `[...capabilityPath, "fetch"]`.
 
 ## Files
 
-| File                    | Role                  | Owns                                                                                                                             |
-| ----------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `itx.ts`                | THE CORE              | `Itx` (the four verbs, stream write/consume seam, live table, longest-prefix dispatch, chain), capability data model, validation |
-| `contract.ts`           | the stream contract   | `ItxContract`, `ITX_EVENT_TYPES`, `ItxState` (zod schemas — deliberately loose so old streams never wedge the fold)              |
-| `path-proxy.ts`         | Law 6, client-safe    | `PathProxy`, `replayPathCall`, `RESERVED_PATH_SEGMENTS`                                                                          |
-| `coordinates.ts`        | the coordinate system | refs (`<namespace>:<path>`), context addresses, `dialContext`, `createContext` (subscription + birth certificate)                |
-| `dial.ts`               | reach                 | `makeDial` (allowlists, loader/facet wiring, prop injection), `durableObjectFacetsHook`, `resolveDialableTargets`                |
-| `platform-context.ts`   | the chain root        | `PlatformContext` (read-only code context), `PLATFORM_PROJECT_CAPABILITIES`, `getPlatformContext`                                |
-| `itx-durable-object.ts` | THE host              | `ItxDurableObject`: name = ref, the `itx` processor + subscription, descriptor from state, `itx()`                               |
-| `handle.ts`             | the handle            | `ItxHandle` + built-ins, `CapabilityProvision`, the bare-function probe/wrap, `ItxProjects`                                      |
-| `entrypoint.ts`         | restorer + egress     | `resolveItx`, `ItxEntrypoint` (env.ITERATE), `ProjectEgress` (globalOutbound), `EgressPipe`, `BindingCapability`                 |
-| `isolate.ts`            | isolate wiring        | `wireIsolateEnv` — the one trust posture for every platform-loaded isolate                                                       |
-| `run.ts`                | the script runner     | `runItxScript`: loader isolate + the two-event record on the context's stream                                                    |
-| `fetch.ts`              | connect + run         | `/api/itx[/:ref]`, `/api/itx/run`, project-host `/__itx`                                                                         |
-| `access.ts`             | connect-time access   | `accessForPrincipal`, `resolveAccessibleContextRef`                                                                              |
-| `http.ts`               | routable capabilities | hostname rule, `ItxCapabilityIngress`                                                                                            |
-| `refs.ts`               | wire refs             | `ItxProps`, `ProjectAccess`, `GLOBAL_CONTEXT_ID`, `isChildContextId` (import-light)                                              |
-| `types.ts`              | design of record      | the handwritten, import-free agent-facing surface (feeds the REPL editor)                                                        |
-| `capabilities/`         | first-party targets   | `StreamsCapability`, `McpClient`                                                                                                 |
-| `client.ts`             | tier-3 clients        | `withItx` for Node                                                                                                               |
-| `use-itx.ts`            | the browser hook      | `useItx`/`getBrowserItx`: singleton sockets, Suspense, never SSRs                                                                |
-| `browser-repl.ts`       | dev tooling           | the REPL snippet compiler (not part of the kernel)                                                                               |
-| `admin-auth-cookie.ts`  | test bridge           | browser-WebSocket admin auth (cookies, since WS can't set headers)                                                               |
+| File                    | Role                  | Owns                                                                                                                                                                                                                       |
+| ----------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `itx.ts`                | THE CORE              | `Itx` (the four verbs, stream write/consume seam, live table, longest-prefix dispatch, chain), capability data model, validation                                                                                           |
+| `contract.ts`           | the stream contract   | `ItxContract`, `ITX_EVENT_TYPES`, `ItxState` (zod schemas — deliberately loose so old streams never wedge the fold)                                                                                                        |
+| `path-proxy.ts`         | Law 6, client-safe    | `PathProxy`, `replayPathCall`, `RESERVED_PATH_SEGMENTS`                                                                                                                                                                    |
+| `coordinates.ts`        | the coordinate system | refs (`<namespace>:<path>`), context addresses, `dialContext`, `createContext` (subscription + birth certificate)                                                                                                          |
+| `dial.ts`               | reach                 | `makeDial` (allowlists, loader/facet wiring, prop injection), `durableObjectFacetsHook`, `resolveDialableTargets`                                                                                                          |
+| `platform-context.ts`   | the chain root        | `PlatformContext` (read-only code context), `PLATFORM_PROJECT_CAPABILITIES`, `getPlatformContext`                                                                                                                          |
+| `itx-durable-object.ts` | THE host              | `ItxDurableObject`: name = ref, the `itx` processor + subscription, descriptor from state, `itx()`                                                                                                                         |
+| `handle.ts`             | the handle            | `ItxHandle` + built-ins, `CapabilityProvision`, the bare-function probe/wrap, `ItxProjects`                                                                                                                                |
+| `entrypoint.ts`         | restorer + egress     | `resolveItx`, `ItxEntrypoint` (env.ITERATE), `ProjectEgress` (globalOutbound), `EgressPipe`, `BindingCapability`                                                                                                           |
+| `isolate.ts`            | isolate wiring        | `wireIsolateEnv` — the one trust posture for every platform-loaded isolate                                                                                                                                                 |
+| `run.ts`                | the script runner     | `runItxScript`: loader isolate + the two-event record on the context's stream                                                                                                                                              |
+| `fetch.ts`              | connect + run         | `/api/itx[/:ref]`, `/api/itx/run`, project-host `/__itx`                                                                                                                                                                   |
+| `access.ts`             | connect-time access   | `accessForPrincipal`, `resolveAccessibleContextRef`                                                                                                                                                                        |
+| `http.ts`               | routable capabilities | hostname rule, `ItxCapabilityIngress`                                                                                                                                                                                      |
+| `refs.ts`               | wire refs             | `ItxProps`, `ProjectAccess`, `GLOBAL_CONTEXT_ID`, `isChildContextId` (import-light)                                                                                                                                        |
+| `types.ts`              | design of record      | the handwritten, import-free agent-facing surface (feeds the REPL editor)                                                                                                                                                  |
+| `capabilities/`         | first-party targets   | `StreamsCapability`, `McpClient`                                                                                                                                                                                           |
+| `client.ts`             | tier-3 clients        | `withItx` for Node                                                                                                                                                                                                         |
+| `itx-react.tsx`         | the browser surface   | the whole React surface in one file — `useItx`/`connectItx` (get the handle), `useItxQuery` (read), `useItxEffect` (subscribe), `ItxProvider`/`reconnectItx`; one socket per context in a module Map, Suspense, never SSRs |
+| `browser-repl.ts`       | dev tooling           | the REPL snippet compiler (not part of the kernel)                                                                                                                                                                         |
+| `admin-auth-cookie.ts`  | test bridge           | browser-WebSocket admin auth (cookies, since WS can't set headers)                                                                                                                                                         |
 
 Everything else in apps/os (oRPC, dashboard routes, domain entrypoints) sits
 _on top of_ this layer or beside it — never underneath it.
