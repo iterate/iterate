@@ -4,7 +4,6 @@ packages:
   - apps/semaphore
   - apps/*
   - packages/*
-  - packages/*/example-app
   - .github/ts-workflows
   - scripts
 

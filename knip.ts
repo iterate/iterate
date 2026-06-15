@@ -40,6 +40,9 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "src/durable-objects/project-ingress-test-entry.ts",
       "src/durable-objects/itx-stream-subscribe.vitest.config.ts",
       "src/durable-objects/itx-stream-subscribe-test-entry.ts",
+      "src/domains/streams/engine/vitest.workers.config.ts",
+      "src/domains/streams/engine/vitest.config.ts",
+      "src/domains/streams/engine/workers/test-entry.ts",
     ],
     ignoreDependencies: [
       ...(base.ignoreDependencies ?? []),
@@ -47,6 +50,11 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "@opentui/react",
       "iterate",
       "miniflare",
+    ],
+    ignoreFiles: [
+      // Public helper kept with the stream engine for Worker/DO callers even
+      // though OS currently uses direct in-process helpers.
+      "src/domains/streams/engine/workers/connect.ts",
     ],
   };
 }
@@ -57,6 +65,36 @@ function makeSemaphoreCloudflareAppWorkspace(workerEnvShim: string): WorkspaceCo
     ...base,
     entry: [...(base.entry ?? []), "sqlfu.config.ts"],
     ignoreDependencies: [...(base.ignoreDependencies ?? []), "miniflare"],
+  };
+}
+
+function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
+  return {
+    entry: [
+      "alchemy.run.ts",
+      "vite.config.ts",
+      "playwright.config.ts",
+      "vitest.config.ts",
+      "src/worker.ts!",
+      "e2e/**/*.ts",
+    ],
+    project: ["src/**/*.{ts,tsx}!", "e2e/**/*.ts", "!dist/**!", "!.alchemy/**!"],
+    ignore: [
+      // TanStack Start client entry, referenced by framework convention.
+      "src/client.ts",
+    ],
+    vite: false,
+    paths: {
+      "~/*": ["../os/src/*"],
+    },
+    ignoreDependencies: [
+      "cloudflare",
+      "tailwindcss",
+      // Used by OS stream-engine source imported through the example app's
+      // `~` alias; knip attributes that import to the OS workspace instead.
+      "@journeyapps/wa-sqlite",
+    ],
+    ignoreBinaries: ["playwright"],
   };
 }
 
@@ -105,7 +143,14 @@ const config: KnipConfig = {
   // Keep this root command intentionally scoped. When Knip includes dependent
   // workspaces for a selected package, we still do not want it wandering into
   // unrelated apps with heavyweight config loading.
-  ignoreWorkspaces: ["apps/*", "!apps/os", "!apps/semaphore", "packages/*", "!packages/shared"],
+  ignoreWorkspaces: [
+    "apps/*",
+    "!apps/os",
+    "!apps/semaphore",
+    "!apps/streams-example-app",
+    "packages/*",
+    "!packages/shared",
+  ],
   ignoreIssues: {
     "apps/os/src/db/migrations/.generated/migrations.ts": ["files", "exports", "types"],
     "apps/os/src/db/queries/.generated/index.ts": ["files", "exports", "types"],
@@ -113,6 +158,7 @@ const config: KnipConfig = {
     "apps/os/e2e/test-support/app-config-env.ts": ["files", "exports"],
     "apps/os/src/**": ["exports", "types"],
     "apps/os/e2e/test-support/**": ["exports", "types"],
+    "apps/streams-example-app/src/lib/use-initial-tail-scroll.ts": ["types"],
     // TanStack Start resolves the router factory by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/semaphore/src/router.tsx": ["exports"],
@@ -127,6 +173,7 @@ const config: KnipConfig = {
   workspaces: {
     "apps/semaphore": makeSemaphoreCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
     "apps/os": makeOsCloudflareAppWorkspace("./src/lib/worker-env.d.ts"),
+    "apps/streams-example-app": makeStreamsExampleAppWorkspace(),
     "packages/shared": makeSharedWorkspace(),
   },
 };

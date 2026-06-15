@@ -24,8 +24,7 @@
 // pipeline calls through property accesses, so the method form keeps
 // `node.itx().invoke(…)` a single pipelined round trip.
 
-import { StreamProcessor } from "@iterate-com/streams/stream-processor";
-import type { StreamEvent } from "@iterate-com/streams/shared/event";
+import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
 import { ItxContract, ITX_EVENT_TYPES, type ItxState } from "./contract.ts";
 import {
   replayPathCall,
@@ -45,6 +44,7 @@ import {
   type WorkerRef,
   type WorkerSource,
 } from "./types.ts";
+import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
 
 // Server-side one-stop: the calling-convention pieces live in path-proxy.ts
 // only because Node/browser providers import them at runtime, and the data

@@ -4,18 +4,18 @@
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { getInitialProcessorState } from "@iterate-com/streams/shared/stream-processors";
-import type { StreamEvent, StreamEventInput } from "@iterate-com/streams/shared/event";
-import type {
-  StreamProcessorIterateContext,
-  StreamProcessorSnapshot,
-} from "@iterate-com/streams/stream-processor";
+import { getInitialProcessorState } from "@iterate-com/shared/streams/stream-processors";
+import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import { OpenAiWsProcessorContract, type OpenAiWsState } from "./contract.ts";
 import {
   OpenAiWsProcessor,
   type OpenAiResponsesWebSocket,
   type OpenAiResponsesWebSocketStreamMessage,
 } from "./implementation.ts";
+import type {
+  StreamProcessorIterateContext,
+  StreamProcessorSnapshot,
+} from "~/domains/streams/engine/stream-processor.ts";
 
 type JsonValue = z.infer<ReturnType<typeof z.json>>;
 

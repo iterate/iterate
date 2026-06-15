@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
-// One-time/idempotent provisioning of per-slot auth preview configs.
+// One-time/idempotent provisioning of per-slot preview configs.
 //
 // Each preview slot N gets its own auth deployment (auth.iterate-preview-N.com)
 // for a completely clean, controlled e2e slate. Doppler is the source of truth
@@ -55,6 +55,38 @@ function freshSecret() {
   return randomBytes(32).toString("hex");
 }
 
+async function getWorkersDevSubdomain(project: string, config: string) {
+  const accountId = getSecret(project, config, "CLOUDFLARE_ACCOUNT_ID");
+  const apiToken = getSecret(project, config, "CLOUDFLARE_API_TOKEN");
+  if (!accountId || !apiToken) {
+    throw new Error(`${project}/${config} is missing Cloudflare credentials`);
+  }
+
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/subdomain`,
+    { headers: { authorization: `Bearer ${apiToken}` } },
+  );
+  const parsed = (await response.json()) as {
+    errors?: Array<{ message?: string }>;
+    result?: { subdomain?: unknown };
+    success?: boolean;
+  };
+  if (!response.ok || parsed.success !== true) {
+    const message =
+      parsed.errors
+        ?.map((error) => error.message)
+        .filter(Boolean)
+        .join("; ") || `${response.status} ${response.statusText}`;
+    throw new Error(`Failed to read Workers subdomain for ${project}/${config}: ${message}`);
+  }
+
+  if (typeof parsed.result?.subdomain !== "string" || parsed.result.subdomain.trim() === "") {
+    throw new Error(`Cloudflare returned no Workers subdomain for ${project}/${config}`);
+  }
+
+  return parsed.result.subdomain.trim();
+}
+
 // --- auth root `preview` config: values shared by every slot --------------
 // (CF creds / ALCHEMY_* arrive via Config Inheritance from _shared/preview.)
 const sharedFromDev = [
@@ -76,14 +108,21 @@ for (const name of sharedFromDev) {
 setSecrets("auth", "preview", rootValues);
 console.log("auth/preview root config ensured");
 
+const streamsExampleWorkersSubdomain = await getWorkersDevSubdomain(
+  "streams-example-app",
+  "preview",
+);
+
 // --- per-slot branch configs ----------------------------------------------
 for (const slot of SLOTS) {
   const config = `preview_${slot}`;
   const authOrigin = `https://auth.iterate-preview-${slot}.com`;
   const osOrigin = `https://os.iterate-preview-${slot}.com`;
+  const streamsExampleOrigin = `https://streams-example-app-preview-${slot}.${streamsExampleWorkersSubdomain}.workers.dev`;
   const clientId = `os-preview-${slot}`;
 
   ensureConfig("auth", config);
+  ensureConfig("streams-example-app", config);
 
   const existingSeed = rotate ? null : getSecret("auth", config, "AUTH_SEED_OAUTH_CLIENTS");
   const existingSecret = existingSeed
@@ -124,7 +163,13 @@ for (const slot of SLOTS) {
     APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: serviceToken,
   });
 
-  console.log(`slot ${slot}: auth/${config} + os/${config} ensured (client ${clientId})`);
+  setSecrets("streams-example-app", config, {
+    APP_CONFIG_BASE_URL: streamsExampleOrigin,
+  });
+
+  console.log(
+    `slot ${slot}: auth/${config} + os/${config} + streams-example-app/${config} ensured (client ${clientId})`,
+  );
 }
 
 console.log("done");

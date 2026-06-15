@@ -71,6 +71,21 @@ describe("itx socket map", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
+  test("a dial that closes before opening rejects awaiters instead of hanging", async () => {
+    // Regression: a failed/timed-out dial used to leave the cached connecting
+    // promise forever-pending, so `await connectItx()` (event handlers,
+    // mutationFns) hung. It must reject so imperative callers fail fast.
+    const { connectItx } = await import("./itx-react.tsx");
+    const first = connectItx({ projectId: "acme" });
+    onlySocket().fire("close"); // closed before it ever opened
+    await expect(first).rejects.toThrow(/closed before connecting/);
+
+    // The entry was still dropped, so the next connect dials a fresh socket.
+    const second = connectItx({ projectId: "acme" });
+    expect(second).not.toBe(first);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
   test("a stale socket's death never drops its successor", async () => {
     const { connectItx } = await import("./itx-react.tsx");
     connectItx({ projectId: "acme" });

@@ -2,12 +2,13 @@ import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { createIterateDurableObjectBase } from "@iterate-com/shared/durable-object-utils/iterate-durable-object";
 import { NotInitializedError } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
+
+import { getSlackIntegrationDurableObjectName } from "../slack-naming.ts";
+import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
-} from "@iterate-com/streams/workers/stream-processor-host";
-import { getSlackIntegrationDurableObjectName } from "../slack-naming.ts";
+} from "~/domains/streams/engine/workers/stream-processor-host.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,

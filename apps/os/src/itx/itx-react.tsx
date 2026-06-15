@@ -124,7 +124,11 @@ function socketFor(context: string | undefined): Promise<Itx> {
   );
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(url);
-  const { promise, resolve } = Promise.withResolvers<Itx>();
+  const { promise, resolve, reject } = Promise.withResolvers<Itx>();
+  // Keep an internal handler so a dial that rejects with no live awaiter (the
+  // reader unmounted, or only the hook ever held it) never surfaces as an
+  // unhandledrejection — real `connectItx()` awaiters still observe it.
+  void promise.catch(() => {});
   // A dial that never connects must not suspend forever: time out and close, so
   // the close handler below drops the entry and the next render re-dials.
   const timeout = setTimeout(() => ws.close(), DIAL_TIMEOUT_MS);
@@ -133,16 +137,23 @@ function socketFor(context: string | undefined): Promise<Itx> {
     resolve(newWebSocketRpcSession<ItxHandle>(ws));
   });
   // `close` fires for a failed dial AND for a later death — either way the socket
-  // is gone. We deliberately NEVER reject the promise (that would throw `use()`
-  // to an error boundary and blank the subtree on a transient drop); instead we
-  // drop the entry and wake readers so the next render re-dials. Identity-guarded:
-  // a stale socket's death never evicts its successor under the same context.
+  // is gone: drop the entry and wake readers so the next render re-dials.
+  // Identity-guarded so a stale socket's death never evicts its successor.
+  //
+  // Then settle the connecting promise. Once a dial has opened it already
+  // RESOLVED, so this reject is a no-op — a transient post-open drop stays a
+  // clean re-dial for `use()`, never an error-boundary throw (the deliberate
+  // design). But a dial that closes BEFORE opening never resolved: reject it so
+  // imperative `connectItx()` awaiters fail fast instead of hanging on a
+  // forever-pending promise. The hook re-dials regardless — `wake()` re-points
+  // its snapshot to the fresh promise before this rejection is observed.
   ws.addEventListener("close", () => {
     clearTimeout(timeout);
     if (sockets.get(context) === promise) {
       sockets.delete(context);
       wake();
     }
+    reject(new Error("itx WebSocket closed before connecting"));
   });
   sockets.set(context, promise);
   return promise;

@@ -4,9 +4,9 @@
 // side effects of its own.
 
 import { z } from "zod";
-import { StreamProcessor } from "@iterate-com/streams/stream-processor";
-import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
+import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import { StreamPath } from "@iterate-com/shared/streams/types";
+import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
 
 export function repoStreamPath(repoSlug: string) {
   return StreamPath.parse(`/repos/${repoSlug}`);

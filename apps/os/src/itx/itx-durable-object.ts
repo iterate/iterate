@@ -18,10 +18,6 @@
 // entries carry no provenance field.
 
 import { DurableObject } from "cloudflare:workers";
-import {
-  createStreamProcessorHost,
-  type RequestStreamSubscriptionArgs,
-} from "@iterate-com/streams/workers/stream-processor-host";
 import { Itx, ItxContract, type CapabilityAddress, type ItxStub } from "./itx.ts";
 import { makeDial, durableObjectFacetsHook, resolveDialableTargets } from "./dial.ts";
 import {
@@ -35,6 +31,10 @@ import {
 } from "./coordinates.ts";
 import { runItxScript } from "./run.ts";
 import type { ItxRuntime } from "./handle.ts";
+import {
+  createStreamProcessorHost,
+  type RequestStreamSubscriptionArgs,
+} from "~/domains/streams/engine/workers/stream-processor-host.ts";
 import { parseConfig } from "~/config.ts";
 
 export class ItxDurableObject extends DurableObject<Env> {

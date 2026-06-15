@@ -8,8 +8,6 @@ import {
   getOAuthClientByClientId,
   getOAuthClientByReferenceId,
   getOrganizationBySlug,
-  getProjectById,
-  getProjectBySlug,
   getUserByEmail,
   getUserById,
   insertMembership,
@@ -30,6 +28,7 @@ import {
   toProjectRecordFromReturnedRow,
   toUserRecord,
 } from "./_shared.ts";
+import { resolveProjectCreateTarget } from "./project-slugs.ts";
 
 function extractCookieHeader(setCookieHeader: string | null): string | null {
   if (!setCookieHeader) return null;
@@ -195,24 +194,25 @@ const createForOrganization = os.internal.project.createForOrganization
       throw new ORPCError("NOT_FOUND", { message: "Organization not found" });
     }
 
-    const slug = await resolveUniqueSlug({
+    const target = await resolveProjectCreateTarget({
+      db: context.db,
+      id: input.id,
       name: input.name,
+      organizationId: organization.id,
       slug: input.slug,
-      isTaken: async (candidate) =>
-        Boolean(await getProjectBySlug(context.db, { slug: candidate })),
     });
+    if (target.kind === "existing") {
+      return toProjectRecordFromReturnedRow(target.project);
+    }
 
     const projectId = input.id ?? generateId("prj");
-    if (input.id && (await getProjectById(context.db, { id: input.id }))) {
-      throw new ORPCError("CONFLICT", { message: "Project ID already exists" });
-    }
 
     const now = Date.now();
     const created = await insertProjectReturning(context.db, {
       id: projectId,
       organizationId: organization.id,
       name: input.name,
-      slug,
+      slug: target.slug,
       metadata: JSON.stringify(input.metadata ?? {}),
       archivedAt: null,
       createdAt: now,

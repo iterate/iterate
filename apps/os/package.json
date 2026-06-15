@@ -27,15 +27,17 @@
     "routes:generate": "tsx ./scripts/generate-route-tree.ts",
     "routes:check": "tsx ./scripts/generate-route-tree.ts --check",
     "typecheck": "pnpm routes:check && tsc --noEmit",
-    "test": "vitest run --exclude 'src/durable-objects/*.test.ts' --exclude 'src/itx/e2e/**'",
+    "test": "pnpm test:unit && pnpm test:streams-workers",
+    "test:unit": "vitest run --exclude 'src/durable-objects/*.test.ts' --exclude 'src/itx/e2e/**' --exclude '**/*.workers.test.ts'",
     "test:itx-stream-subscribe": "OS_ITX_STREAM_SUBSCRIBE_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os/src/durable-objects/itx-stream-subscribe.vitest.config.ts",
     "test:project-ingress": "OS_PROJECT_INGRESS_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os/src/durable-objects/project-ingress.vitest.config.ts",
     "test:project-mcp-server-connection": "OS_ITERATE_MCP_SERVER_TEST_APP_ROOT=$PWD pnpm --dir ../../packages/shared exec vitest run --config ../../apps/os/src/durable-objects/iterate-mcp-server.vitest.config.ts",
+    "test:streams-workers": "pnpm exec vitest run --config src/domains/streams/engine/vitest.workers.config.ts",
     "e2e": "vitest --config e2e/vitest.config.ts",
     "example:workspace-itx-preview": "tsx ./e2e/workspace-itx-preview-example.ts",
     "auth:sync-clients": "tsx ./scripts/sync-auth-clients.ts",
-    "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run",
-    "test:watch": "vitest"
+    "test:smoke": "RUNTIME_SMOKE_FULL=1 vitest run --exclude 'src/durable-objects/*.test.ts' --exclude 'src/itx/e2e/**' --exclude '**/*.workers.test.ts'",
+    "test:watch": "vitest --exclude 'src/durable-objects/*.test.ts' --exclude 'src/itx/e2e/**' --exclude '**/*.workers.test.ts'"
   },
   "iterateAppCli": {
     "localRouterPaths": [
@@ -56,7 +58,6 @@
     "@iterate-com/auth": "workspace:*",
     "@iterate-com/auth-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
-    "@iterate-com/streams": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@opentui/core": "0.1.102",
@@ -86,10 +87,12 @@
     "sqlfu": "0.0.3-14",
     "tailwindcss": "^4.1.18",
     "yaml": "^2.8.3",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "@journeyapps/wa-sqlite": "^1.7.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",
+    "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
     "@cloudflare/workers-types": "catalog:cloudflare",
     "@iterate-com/mock-http-proxy": "workspace:*",
     "@microsoft/tui-test": "0.0.4",
@@ -101,7 +104,7 @@
     "@types/react-dom": "^19.2.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^6.0.1",
-    "@vitest/browser-playwright": "4.0.15",
+    "@vitest/browser-playwright": "^4.1.7",
     "alchemy": "^0.83.3",
     "esbuild": "^0.27.4",
     "iterate": "workspace:*",
@@ -112,7 +115,7 @@
     "tsx": "^4.20.3",
     "typescript": "^5.9.3",
     "vite": "^8.0.0",
-    "vitest": "4.0.15",
+    "vitest": "^4.1.7",
     "wrangler": "catalog:cloudflare",
     "ws": "8.19.0"
   }

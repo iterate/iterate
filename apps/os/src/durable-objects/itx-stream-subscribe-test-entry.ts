@@ -9,7 +9,7 @@ import { ItxStream } from "~/itx/capabilities/streams.ts";
 import { getStreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
-export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
+export { Stream as StreamDurableObject } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 
 const projectId = "proj__test__itxsubscribe";
 

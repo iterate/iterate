@@ -10,7 +10,7 @@
 // the fold (itx.ts reduceItxEvent), never wedge ingestion.
 
 import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
+import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import type { CapabilityAddress, WorkerRef, WorkerSource } from "./types.ts";
 
 export const ITX_EVENT_TYPES = {

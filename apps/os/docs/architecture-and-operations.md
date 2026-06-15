@@ -114,7 +114,7 @@ canonical MCP endpoint (below).
 
 ## Streams
 
-`StreamDurableObject` is supplied by `@iterate-com/streams`. It knows about
+`StreamDurableObject` is supplied by the OS streams domain. It knows about
 `namespace` and `path`, not projects. OS uses the stable Project ID as the
 stream namespace, which means OS stream paths are project-local, such as
 `/codemode-sessions/<id>`.

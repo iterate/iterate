@@ -19,11 +19,11 @@
  */
 import { expect, test } from "vitest";
 import type { Event, EventInput } from "@iterate-com/shared/streams/types";
-import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import dedent from "dedent";
 import { createTestProject } from "../test-support/create-test-project.ts";
 import { DEFAULT_WORKERS_AI_AGENT_MODEL } from "~/domains/agents/stream-processors/agent/contract.ts";
 import { getSlackIntegrationDurableObjectName } from "~/domains/slack/slack-naming.ts";
+import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
 
 type ProjectItx = ReturnType<Awaited<ReturnType<typeof createTestProject>>["itx"]>;
 

@@ -9,14 +9,14 @@
 // behavior.
 
 import { describe, expect, it } from "vitest";
-import { getInitialProcessorState } from "@iterate-com/streams/shared/stream-processors";
-import type { StreamEvent, StreamEventInput } from "@iterate-com/streams/shared/event";
+import { getInitialProcessorState } from "@iterate-com/shared/streams/stream-processors";
+import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
+import { CloudflareAiProcessorContract, type CloudflareAiState } from "./contract.ts";
+import { CloudflareAiProcessor } from "./implementation.ts";
 import type {
   StreamProcessorIterateContext,
   StreamProcessorSnapshot,
-} from "@iterate-com/streams/stream-processor";
-import { CloudflareAiProcessorContract, type CloudflareAiState } from "./contract.ts";
-import { CloudflareAiProcessor } from "./implementation.ts";
+} from "~/domains/streams/engine/stream-processor.ts";
 
 describe("CloudflareAiProcessor", () => {
   it("executes a fresh agent LLM request", async () => {

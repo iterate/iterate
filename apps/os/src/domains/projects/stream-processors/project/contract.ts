@@ -14,9 +14,9 @@
 // worker lifecycle events belong to the REPO's stream (future manifest work).
 
 import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
-import { CoreProcessorContract } from "@iterate-com/streams/processors/core/contract";
+import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import { StreamPath } from "@iterate-com/shared/streams/types";
+import { CoreProcessorContract } from "~/domains/streams/engine/processors/core/contract.ts";
 import { normalizeIngressHost } from "~/ingress/host-routing.ts";
 import type { AppConfig } from "~/config.ts";
 

@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": true,
+    "allowImportingTsExtensions": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": ["@cloudflare/workers-types", "node", "vite/client", "vitest"],
+    "paths": {
+      "~/*": ["../os/src/*"],
+      "@iterate-com/shared/*": ["../../packages/shared/src/*"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "e2e/**/*.ts",
+    "../os/src/domains/streams/engine/**/*.ts"
+  ],
+  "exclude": [
+    "../os/src/domains/streams/engine/**/*.workers.test.ts",
+    "../os/src/domains/streams/engine/vitest.workers.config.ts"
+  ]
+}

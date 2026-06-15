@@ -1,6 +1,10 @@
 import { OrganizationRole } from "@iterate-com/auth-contract";
 import { parseProjectMetadata, parseTimestampMs } from "../../db/helpers.ts";
-import type { insertProjectReturning, updateProjectReturning } from "../../db/queries/index.ts";
+import type {
+  getProjectBySlug,
+  insertProjectReturning,
+  updateProjectReturning,
+} from "../../db/queries/index.ts";
 
 export function generateId(prefix: string) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
@@ -52,14 +56,25 @@ export function toMembershipRole(role: string | null | undefined): OrganizationR
   return OrganizationRole.parse(role ?? "member");
 }
 
-type ReturnedProjectRow = (insertProjectReturning.Result | updateProjectReturning.Result) &
+type ReturnedProjectRow = (
+  | getProjectBySlug.Result
+  | insertProjectReturning.Result
+  | updateProjectReturning.Result
+) &
   Partial<{ organizationId: string; archivedAt?: number }>;
 
 export function toProjectRecordFromReturnedRow(project: ReturnedProjectRow) {
   const organizationId =
-    typeof project.organizationId === "string" ? project.organizationId : project.organization_id;
+    "organization_id" in project && typeof project.organization_id === "string"
+      ? project.organization_id
+      : project.organizationId;
   const archivedAt =
-    typeof project.archivedAt === "number" ? project.archivedAt : project.archived_at;
+    "archived_at" in project && typeof project.archived_at === "number"
+      ? project.archived_at
+      : project.archivedAt;
+  if (!organizationId) {
+    throw new Error(`Project ${project.id} is missing organization id`);
+  }
 
   return toProjectRecord({
     id: project.id,

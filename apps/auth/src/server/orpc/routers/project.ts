@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/server";
-import { resolveUniqueSlug, slugify } from "@iterate-com/shared/slug";
+import { slugify } from "@iterate-com/shared/slug";
 import {
   organizationAdminMiddleware,
   organizationScopedMiddleware,
@@ -10,13 +10,12 @@ import {
 import { parseProjectMetadata, parseTimestampMs } from "../../db/helpers.ts";
 import {
   deleteProjectById,
-  getProjectById,
-  getProjectBySlug,
   insertProjectReturning,
   listProjectsByOrganizationId,
   updateProjectReturning,
 } from "../../db/queries/index.ts";
 import { generateId, toProjectRecord, toProjectRecordFromReturnedRow } from "./_shared.ts";
+import { resolveProjectCreateTarget } from "./project-slugs.ts";
 
 const list = os.project.list.use(organizationScopedMiddleware).handler(async ({ context }) => {
   const projects = await listProjectsByOrganizationId(context.db, {
@@ -42,23 +41,25 @@ const bySlug = os.project.bySlug.use(projectScopedMiddleware).handler(async ({ c
 const create = os.project.create
   .use(organizationAdminMiddleware)
   .handler(async ({ context, input }) => {
-    const slug = await resolveUniqueSlug({
+    const target = await resolveProjectCreateTarget({
+      db: context.db,
+      id: input.id,
       name: input.name,
+      organizationId: context.organization.id,
       slug: input.slug,
-      isTaken: async (candidate) =>
-        Boolean(await getProjectBySlug(context.db, { slug: candidate })),
     });
-    const projectId = input.id ?? generateId("prj");
-    if (input.id && (await getProjectById(context.db, { id: input.id }))) {
-      throw new ORPCError("CONFLICT", { message: "Project ID already exists" });
+    if (target.kind === "existing") {
+      return toProjectRecordFromReturnedRow(target.project);
     }
+
+    const projectId = input.id ?? generateId("prj");
 
     const now = Date.now();
     const created = await insertProjectReturning(context.db, {
       id: projectId,
       organizationId: context.organization.id,
       name: input.name,
-      slug,
+      slug: target.slug,
       metadata: JSON.stringify(input.metadata ?? {}),
       archivedAt: null,
       createdAt: now,

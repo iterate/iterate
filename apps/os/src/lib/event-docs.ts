@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { CircuitBreakerContract } from "@iterate-com/streams/processors/circuit-breaker/contract";
-import { CoreProcessorContract } from "@iterate-com/streams/processors/core/contract";
+import { CircuitBreakerContract } from "~/domains/streams/engine/processors/circuit-breaker/contract.ts";
+import { CoreProcessorContract } from "~/domains/streams/engine/processors/core/contract.ts";
 import { AgentProcessorContract } from "~/domains/agents/stream-processors/agent/contract.ts";
 import { CloudflareAiProcessorContract } from "~/domains/agents/stream-processors/cloudflare-ai/contract.ts";
 import { JsonataReactorProcessorContract } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";

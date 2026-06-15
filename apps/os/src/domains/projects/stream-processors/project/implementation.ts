@@ -17,11 +17,11 @@
 // NOT this processor's job: the sibling project-config-worker processor owns
 // that, with checkpointed at-least-once delivery.
 
-import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import { projectFacts, ProjectProcessorContract, type ProjectProcessorState } from "./contract.ts";
+import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
+import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,

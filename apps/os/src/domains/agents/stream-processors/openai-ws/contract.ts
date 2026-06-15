@@ -5,9 +5,9 @@
 // Responses streaming. https://developers.openai.com/api/docs/guides/websocket-mode
 
 import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
-import { CoreProcessorContract } from "@iterate-com/streams/processors/core/contract";
+import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import { AgentProcessorContract } from "../agent/contract.ts";
+import { CoreProcessorContract } from "~/domains/streams/engine/processors/core/contract.ts";
 
 const LlmRequestId = z.number().int().positive();
 

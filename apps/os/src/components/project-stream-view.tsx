@@ -10,30 +10,12 @@ import {
 import { Link } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDownIcon, FilterIcon, SearchIcon } from "lucide-react";
-import {
-  acquireStreamRuntime,
-  type StreamBrowserStore,
-  type StreamRuntimeState,
-} from "@iterate-com/streams/browser/stream-browser-store";
-import { useStreamQuery } from "@iterate-com/streams/browser/hooks/use-stream-query";
-import type {
-  SqliteQueryStatus,
-  StreamBrowserDatabase,
-  StreamEventRow,
-} from "@iterate-com/streams/browser/stream-browser-db";
-import { browserProcessorStateStorage } from "@iterate-com/streams/browser/processor-state-storage";
-import {
-  BROWSER_RAW_EVENTS_SCHEMA_VERSION,
-  BrowserRawEventsContract,
-  BrowserRawEventsProcessor,
-  type BrowserRawEventsState,
-} from "@iterate-com/streams/processors/browser-raw-events/implementation";
-import { StreamEventInput } from "@iterate-com/streams/shared/event";
+import { StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import {
   getInitialProcessorState,
   runProcessorReduce,
   type StreamEvent,
-} from "@iterate-com/streams/shared/stream-processors";
+} from "@iterate-com/shared/streams/stream-processors";
 import type { Event, StreamPath } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
@@ -58,14 +40,32 @@ import type {
   AgentUiState,
   AgentUiStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { cn } from "@iterate-com/ui/lib/utils";
+import { parse as parseYaml } from "yaml";
 import {
   AGENT_UI_FEED_TABLE,
   AGENT_UI_SCHEMA_VERSION,
   AgentUiProcessor,
   AgentUiProcessorContract,
-} from "@iterate-com/ui/components/events/agent-ui-processor";
-import { cn } from "@iterate-com/ui/lib/utils";
-import { parse as parseYaml } from "yaml";
+} from "~/domains/streams/browser-processors/agent-ui-processor.ts";
+import { useStreamQuery } from "~/domains/streams/engine/browser/hooks/use-stream-query.ts";
+import { browserProcessorStateStorage } from "~/domains/streams/engine/browser/processor-state-storage.ts";
+import type {
+  SqliteQueryStatus,
+  StreamBrowserDatabase,
+  StreamEventRow,
+} from "~/domains/streams/engine/browser/stream-browser-db.ts";
+import {
+  acquireStreamRuntime,
+  type StreamBrowserStore,
+  type StreamRuntimeState,
+} from "~/domains/streams/engine/browser/stream-browser-store.ts";
+import {
+  BROWSER_RAW_EVENTS_SCHEMA_VERSION,
+  BrowserRawEventsContract,
+  BrowserRawEventsProcessor,
+  type BrowserRawEventsState,
+} from "~/domains/streams/engine/processors/browser-raw-events/implementation.ts";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";

@@ -483,7 +483,7 @@ The legacy (non-class) processor model is now deleted everywhere.
   `DurableObjectStorage`-derived types). The Stream DO has its own inline SQL;
   nothing imported them — and removing them is what lets `packages/ui`
   (lib: dom, no workers types) typecheck against
-  `@iterate-com/streams/shared/stream-processors`.
+  `@iterate-com/shared/streams/stream-processors`.
 - The `createRepoStreamProcessor` old-model compile shim in
   `repo-stream-processor.ts` and the legacy-runner re-export block in
   `agent-durable-object.ts`.
@@ -495,7 +495,7 @@ import now targets the new homes — codemode contract/implementation →
 `~/domains/agents/stream-processors/jsonata-reactor/contract.ts`, and model
 helpers (`getInitialProcessorState`, `ProcessorContractShape`,
 `ProcessorStreamApi`, `defineProcessorContract`, `runProcessorReduce`) →
-`@iterate-com/streams/shared/stream-processors`. `packages/ui` gained a
+`@iterate-com/shared/streams/stream-processors`. `packages/ui` gained a
 `@iterate-com/streams` workspace dep. The agent contract's
 `CodemodeProcessorContract` dep now points at the new codemode contract — no
 import cycle appeared (codemode's contract only imports zod/Callable/streams).
