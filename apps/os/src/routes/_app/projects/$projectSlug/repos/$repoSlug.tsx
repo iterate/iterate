@@ -2,9 +2,8 @@ import { Copy } from "lucide-react";
 import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "@iterate-com/ui/components/button";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { ItxBoundary, ItxResourceError, ItxResourceLoading } from "~/components/itx-boundary.tsx";
-import { useItx } from "~/itx/use-itx.ts";
-import { useItxResource } from "~/itx/use-itx-resource.ts";
+import { ItxBoundary } from "~/components/itx-boundary.tsx";
+import { useItxQuery } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/repos/$repoSlug")({
   ssr: false,
@@ -25,30 +24,10 @@ function ProjectRepoDetailPage() {
 
 function ProjectRepoDetailContent() {
   const params = Route.useParams();
-  const { project } = Route.useLoaderData();
-  const itx = useItx(project.id);
-  const {
-    data: repo,
-    status,
-    error,
-    refetch,
-  } = useItxResource(() => itx.repos.getInfo({ slug: params.repoSlug }), [itx, params.repoSlug]);
-
-  if (status === "error") {
-    return (
-      <section className="w-full p-4">
-        <ItxResourceError label="repo" error={error} onRetry={() => void refetch()} />
-      </section>
-    );
-  }
-
-  if (!repo) {
-    return (
-      <section className="w-full p-4">
-        <ItxResourceLoading label="repo" />
-      </section>
-    );
-  }
+  const repo = useItxQuery({
+    key: ["repo", params.repoSlug],
+    query: (itx) => itx.repos.getInfo({ slug: params.repoSlug }),
+  });
 
   return (
     <section className="w-full space-y-4 p-4">
