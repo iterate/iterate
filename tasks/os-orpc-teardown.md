@@ -22,10 +22,11 @@ rollback plan.
   deleted in PR #1472.)
 - **PR #1472** — subscriptions carry reduced state (`events: false`
   state-only mode, initial push, `ItxStream.onStateChange`; DECISIONS D20)
-  and the browser layer collapsed to ONE hook: `useItx(context?)` /
-  `getBrowserItx` (`apps/os/src/itx/use-itx.ts`, DECISIONS D21 — per-context
-  singleton sockets, Suspense until connected, no query cache, no SSR, no
-  reconnect machinery). Streams tree/detail, breadcrumb navigators, and
+  and the browser layer collapsed to the one-hook model: `useItx` /
+  `connectItx` (later unified into `apps/os/src/itx/itx-react.tsx` in #1478,
+  DECISIONS D21 — one socket per context in a module Map, Suspense until
+  connected, no SSR, no reconnect machinery; reads ride TanStack Query via
+  `useItxQuery`). Streams tree/detail, breadcrumb navigators, and
   `ItxActivityTail` converted.
 - Codemode → itx processor is `tasks/os-codemode-to-itx-processor.md`
   (separate effort; its oRPC procedures die there).
