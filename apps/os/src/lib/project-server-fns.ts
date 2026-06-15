@@ -18,6 +18,7 @@ import { requireRequestContext } from "~/request-context.ts";
 export type Project = {
   id: string;
   slug: string;
+  organizationId: string | null;
   customHostname: string | null;
   createdAt: string | null;
   updatedAt: string | null;
@@ -27,6 +28,14 @@ export type Project = {
 export type ProjectWithIngressUrl = Project & { ingressUrl: string };
 
 export type ProjectListResult = { projects: Project[]; total: number };
+
+export const createProjectServerFn: (input: {
+  data: { id?: string; slug: string; organizationSlug?: string };
+}) => Promise<ProjectWithIngressUrl> = createServerFn({ method: "POST" })
+  .inputValidator((input: { id?: string; slug: string; organizationSlug?: string }) => input)
+  .handler(async ({ data }) => {
+    return await new ProjectsCapability({ context: requireRequestContext() }).create(data);
+  });
 
 /** The session principal's accessible projects (mirrors the former `projects.list`). */
 export const listMyProjectsServerFn: (input: {
