@@ -86,6 +86,49 @@ describe("AgentProcessor", () => {
     });
   });
 
+  it("wakes child agent runners from child stream creation events", async () => {
+    const { stream, appended } = memoryStream();
+    const childPaths: string[] = [];
+    const processor = newAgentProcessor({
+      stream,
+      ensureChildAgentRunner: async (childPath) => {
+        childPaths.push(childPath);
+      },
+    });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/stream/child-stream-created",
+          payload: { childPath: "/agents/child" },
+          offset: 12,
+        }),
+      ],
+      streamMaxOffset: 12,
+    });
+
+    expect(childPaths).toEqual(["/agents/child"]);
+    expect(appended).toEqual([]);
+  });
+
+  it("ignores script completion events without a usable execution id", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/itx/script-execution-completed",
+          payload: { executionId: "", ok: true, result: "done" },
+          offset: 13,
+        }),
+      ],
+      streamMaxOffset: 13,
+    });
+
+    expect(appended).toEqual([]);
+  });
+
   it("does not schedule LLM work for explicitly non-triggering agent input", async () => {
     const { stream, appended } = memoryStream();
     const processor = newAgentProcessor({ stream });
@@ -828,12 +871,14 @@ function initialState(): AgentState {
 
 function newAgentProcessor(args: {
   stream: StreamProcessorIterateContext["stream"];
+  ensureChildAgentRunner?: (childPath: string) => Promise<unknown>;
   snapshot?: StreamProcessorSnapshot<AgentState>;
   readStreamEvents?: () => Promise<StreamEvent[]>;
   sideEffectsAfterOffset?: number;
 }) {
   return new AgentProcessor({
     iterateContext: { stream: args.stream },
+    ensureChildAgentRunner: args.ensureChildAgentRunner ?? (async () => undefined),
     ensureItxContext: async () => undefined,
     readState: () => args.snapshot,
     readStreamEvents: args.readStreamEvents ?? (async () => []),

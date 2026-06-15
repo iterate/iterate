@@ -279,6 +279,7 @@ export const AgentProcessorContract = defineProcessorContract({
   consumes: [
     "events.iterate.com/itx/capability-provided",
     "events.iterate.com/itx/script-execution-completed",
+    "events.iterate.com/stream/child-stream-created",
     "events.iterate.com/stream/subscriber-connected",
     AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE,
     AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE,
@@ -323,6 +324,7 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
   switch (event.type) {
     case "events.iterate.com/itx/capability-provided":
     case "events.iterate.com/itx/script-execution-completed":
+    case "events.iterate.com/stream/child-stream-created":
     case "events.iterate.com/stream/subscriber-connected":
     case AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE:
     case AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE:

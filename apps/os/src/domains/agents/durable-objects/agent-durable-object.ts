@@ -91,6 +91,7 @@ export {
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 
 export type AgentDurableObjectEnv = {
+  AGENT: DurableObjectNamespace<AgentDurableObject>;
   AI: CloudflareAiBinding;
   APP_CONFIG: string;
   ITX_CONTEXT: DurableObjectNamespace<ItxDurableObject>;
@@ -156,6 +157,16 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
     (deps) =>
       new AgentProcessor({
         ...deps,
+        ensureChildAgentRunner: async (childPath) => {
+          const params = await this.ensureStartedOrInitializeFromRuntimeName();
+          const agentPath = StreamPath.safeParse(childPath);
+          if (!agentPath.success) return;
+          const name = getAgentDurableObjectName({
+            agentPath: agentPath.data,
+            projectId: params.projectId,
+          });
+          await this.env.AGENT.getByName(name).initialize({ name });
+        },
         ensureItxContext: async () => {
           const params = await this.ensureStartedOrInitializeFromRuntimeName();
           return await this.ensureItxContext(params);
@@ -200,7 +211,10 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
     this.registerOnInstanceWake(async (params) => {
       if (params.agentPath === AGENTS_STREAM_PATH) {
-        await this.ensureAgentSubscriptions(params, [JsonataReactorProcessorContract.slug]);
+        await this.ensureAgentSubscriptions(params, [
+          JsonataReactorProcessorContract.slug,
+          AgentProcessorContract.slug,
+        ]);
       } else {
         await this.ensureAgentSetupEvents(params);
         const llmProvider = await this.resolveLlmProvider(params);
@@ -401,7 +415,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
   private async agentProcessorSlugs(params: AgentDurableObjectStructuredName) {
     if (params.agentPath === AGENTS_STREAM_PATH) {
-      return [JsonataReactorProcessorContract.slug];
+      return [JsonataReactorProcessorContract.slug, AgentProcessorContract.slug];
     }
     return [
       AgentProcessorContract.slug,

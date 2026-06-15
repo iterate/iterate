@@ -33,6 +33,7 @@ export { AgentProcessorContract } from "./contract.ts";
 export type AgentProcessorContract = typeof AgentProcessorContract;
 
 export type AgentProcessorDeps = {
+  ensureChildAgentRunner(childPath: string): Promise<unknown>;
   /**
    * Reads the full committed history of the agent's stream. The debounce-timer
    * handoff rebuilds agent state from durable history at the last possible
@@ -95,6 +96,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       case "events.iterate.com/agent/llm-request-scheduled":
       case "events.iterate.com/agent/status-updated":
       case "events.iterate.com/agent/llm-request-queued":
+        return;
+      case "events.iterate.com/stream/child-stream-created":
+        args.blockProcessorWhile(() => this.deps.ensureChildAgentRunner(event.payload.childPath));
         return;
       case AGENTS_WEB_MESSAGE_RECEIVED_EVENT_TYPE:
       case AGENTS_TUI_MESSAGE_RECEIVED_EVENT_TYPE:
@@ -390,6 +394,9 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       { type: "events.iterate.com/itx/script-execution-completed" }
     >,
   ) {
+    const executionId = event.payload.executionId;
+    if (typeof executionId !== "string" || executionId.trim() === "") return;
+
     const logs = Array.isArray(event.payload.logs) ? (event.payload.logs as string[]) : [];
     const outcome =
       event.payload.ok === true
@@ -400,7 +407,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     await this.ctx.stream.append({
       event: {
         type: "events.iterate.com/agent/input-added",
-        idempotencyKey: `agent-itx-execution-result:${event.payload.executionId}`,
+        idempotencyKey: `agent-itx-execution-result:${executionId}`,
         payload: {
           content: itxCompletionInputBlock({ event, logs, outcome }),
           llmRequestPolicy: { behaviour: "after-current-request" },
