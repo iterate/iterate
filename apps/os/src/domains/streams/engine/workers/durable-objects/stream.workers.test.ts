@@ -175,6 +175,33 @@ describe("T8 — Stream DO smoke (coverage)", () => {
       }
     });
   });
+
+  it("waitForEvent resolves with the first matching live event", async () => {
+    await runInDurableObject(freshStream(), async (stream) => {
+      const pending = stream.waitForEvent({
+        timeoutMs: 1_000,
+        predicate: (event) => event.type === "test.wait.match",
+      });
+
+      await stream.append({ event: { type: "test.wait.ignore", payload: { ok: false } } });
+      const match = await stream.append({
+        event: { type: "test.wait.match", payload: { ok: true } },
+      });
+
+      await expect(pending).resolves.toEqual(match);
+    });
+  });
+
+  it("waitForEvent times out when no event matches", async () => {
+    await runInDurableObject(freshStream(), async (stream) => {
+      await expect(
+        stream.waitForEvent({
+          timeoutMs: 1,
+          predicate: (event) => event.type === "test.wait.never",
+        }),
+      ).rejects.toThrow(/Timed out waiting for stream event/);
+    });
+  });
 });
 
 describe("subscription protocol — every batch carries state, every subscribe gets an initial push", () => {
