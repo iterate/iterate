@@ -13,11 +13,13 @@
 // create-completed: ingress requests build on demand, so a failed build
 // self-heals on the next request.
 //
-// Forwarding root-stream events to the worker's own processEvent hook is
-// NOT this processor's job: the sibling project-config-worker processor owns
-// that, with checkpointed at-least-once delivery.
+// This processor also forwards project-root facts to the project's own worker
+// processEvent hook, with checkpointed at-least-once delivery. The platform's
+// create-requested trigger is consumed here to bootstrap the project; the
+// worker starts from the emitted facts.
 
 import { StreamPath } from "@iterate-com/shared/streams/types";
+import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { projectFacts, ProjectProcessorContract, type ProjectProcessorState } from "./contract.ts";
 import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
@@ -78,6 +80,12 @@ export type ProjectProcessorDeps = {
   /** The hosting DO's own project id — payloads must match (see #ownEvent). */
   projectId: () => string;
   appConfig: () => AppConfig;
+  /**
+   * Delivers one root-stream event to the project's worker processEvent hook.
+   * User-code failures are swallowed by the host; platform failures throw so
+   * the processor checkpoint holds and the event is replayed.
+   */
+  forwardToProjectWorker: (event: StreamEvent) => Promise<void>;
 };
 
 export class ProjectProcessor extends StreamProcessor<
@@ -119,62 +127,78 @@ export class ProjectProcessor extends StreamProcessor<
     }
   }
 
-  protected override processEvent(
-    args: Parameters<StreamProcessor<ProjectProcessorContract>["processEvent"]>[0],
-  ): void {
-    const { event } = args;
+  protected override async processEventBatch(
+    args: Parameters<StreamProcessor<ProjectProcessorContract>["processEventBatch"]>[0],
+  ): Promise<void> {
+    for (const reducedEvent of args.reducedEvents) {
+      await this.#processRootEvent({
+        event: reducedEvent.event,
+        state: reducedEvent.state,
+      });
+    }
+  }
+
+  async #processRootEvent(args: {
+    event: Parameters<StreamProcessor<ProjectProcessorContract>["processEvent"]>[0]["event"];
+    state: ProjectProcessorState;
+  }) {
+    const { event, state } = args;
     if (event.type === "events.iterate.com/stream/child-stream-created") {
       const childPath = StreamPath.safeParse(event.payload.childPath);
-      if (!childPath.success) return;
-      if (!isAgentStreamPath(childPath.data)) return;
-      args.blockProcessorWhile(() =>
-        this.#ensureAgentStreamSetup({
+      if (childPath.success && isAgentStreamPath(childPath.data)) {
+        await this.#ensureAgentStreamSetup({
           agentPath: childPath.data,
           projectId: this.deps.projectId(),
-        }),
-      );
+        });
+      }
+    }
+
+    if (event.type === "events.iterate.com/project/create-requested") {
+      if (!this.#ownEvent(event.payload)) {
+        console.warn(
+          `[project] ignoring create-requested for "${event.payload.projectId}" ` +
+            `on project "${this.deps.projectId()}" (offset ${event.offset}).`,
+        );
+      } else {
+        await this.#createProject(event.payload);
+      }
       return;
     }
 
-    if (event.type !== "events.iterate.com/project/create-requested") return;
-    if (!this.#ownEvent(event.payload)) {
-      console.warn(
-        `[project] ignoring create-requested for "${event.payload.projectId}" ` +
-          `on project "${this.deps.projectId()}" (offset ${event.offset}).`,
-      );
-      return;
-    }
-    const { projectId, slug } = event.payload;
+    if (state.project === null) return;
 
-    args.blockProcessorWhile(async () => {
-      const facts = projectFacts({ config: this.deps.appConfig(), projectId, slug });
-      await this.#upsertProjectProjection({ projectId, slug });
-      await this.#crossPostToGlobalProjects({ projectId, slug });
-      await this.ctx.stream.append({
-        event: {
-          type: "events.iterate.com/project/created",
-          idempotencyKey: `project-created:${projectId}`,
-          payload: facts,
-        },
-      });
-      await this.#ensureProjectRepo({ projectId, slug });
-      await this.#seedOnboardingBootstrap({ projectId, slug });
-      await this.#ensureExampleEgressSecret(projectId);
-      await this.#ensureAgentsRoot(projectId);
-      await this.#ensureOnboardingAgent(projectId);
-      await this.#ensureAgentStreamSetup({ agentPath: ONBOARDING_AGENT_PATH, projectId });
-      await this.#appendOnboardingAgentInput(projectId);
-      await this.ctx.stream.append({
-        event: {
-          type: "events.iterate.com/project/create-completed",
-          idempotencyKey: `project-create-completed:${projectId}`,
-          payload: { projectId },
-        },
-      });
-    });
+    await this.deps.forwardToProjectWorker(event);
   }
 
   // ---- creation steps -------------------------------------------------------
+
+  async #createProject(input: { projectId: string; slug: string }) {
+    const { projectId, slug } = input;
+    const facts = projectFacts({ config: this.deps.appConfig(), projectId, slug });
+    await this.#upsertProjectProjection({ projectId, slug });
+    await this.#crossPostToGlobalProjects({ projectId, slug });
+    await this.ctx.stream.append({
+      event: {
+        type: "events.iterate.com/project/created",
+        idempotencyKey: `project-created:${projectId}`,
+        payload: facts,
+      },
+    });
+    await this.#ensureProjectRepo({ projectId, slug });
+    await this.#seedOnboardingBootstrap({ projectId, slug });
+    await this.#ensureExampleEgressSecret(projectId);
+    await this.#ensureAgentsRoot(projectId);
+    await this.#ensureOnboardingAgent(projectId);
+    await this.#ensureAgentStreamSetup({ agentPath: ONBOARDING_AGENT_PATH, projectId });
+    await this.#appendOnboardingAgentInput(projectId);
+    await this.ctx.stream.append({
+      event: {
+        type: "events.iterate.com/project/create-completed",
+        idempotencyKey: `project-create-completed:${projectId}`,
+        payload: { projectId },
+      },
+    });
+  }
 
   /**
    * The one D1 projection of project identity. Platform-host routing

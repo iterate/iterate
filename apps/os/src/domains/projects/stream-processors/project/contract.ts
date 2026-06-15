@@ -52,8 +52,9 @@ export function projectFacts(input: {
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
-  version: "0.3.0",
-  description: "Projects the Project's lifecycle events and drives creation side effects.",
+  version: "0.4.0",
+  description:
+    "Projects the Project's lifecycle events, drives creation side effects, and forwards project-root facts to the Project worker.",
   stateSchema: z.object({
     onboarding: z.enum(["in-progress", "completed"]).default("in-progress"),
     phase: z.enum(["none", "creating", "ready"]).default("none"),
@@ -101,6 +102,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     },
   },
   consumes: [
+    "*",
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-completed",
