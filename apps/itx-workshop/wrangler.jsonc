@@ -11,6 +11,8 @@
     ],
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ItxDO", "Stream"] }],
+  // Step 09 — dial: the Worker Loader builds + runs a worker from a ref at runtime.
+  "worker_loaders": [{ "binding": "LOADER" }],
   "dev": {
     "port": 8787,
   },

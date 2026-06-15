@@ -134,6 +134,25 @@ function dynamicHandle(target: any, path: string[] = []): any {
 interface Env {
   ITX: DurableObjectNamespace<ItxDO>;
   STREAM: DurableObjectNamespace<any>;
+  // Worker Loader (Step 09): build + run a worker from a ref at runtime.
+  LOADER: {
+    get(
+      id: string,
+      getCode: () => {
+        compatibilityDate: string;
+        compatibilityFlags: string[];
+        mainModule: string;
+        modules: Record<string, string>;
+      },
+    ): { getEntrypoint(name?: string, options?: { props?: Record<string, unknown> }): any };
+  };
+}
+
+// Content-addressed cache key for a loaded isolate: same source → same isolate.
+function hashString(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
 }
 
 // ---------------------------------------------------------------------------
@@ -153,9 +172,37 @@ export class ItxDO extends DurableObject<Env> {
   host = createStreamProcessorHost(this.ctx);
   #itx = this.host.add(
     ItxContract.slug,
-    (deps) => new Itx({ ...deps, iterateContext: { stream: this.#log() } }),
+    (deps) =>
+      new Itx({
+        ...deps,
+        iterateContext: { stream: this.#log() },
+        dial: (address) => this.#dial(address), // Step 09: restore a sturdy ref
+      }),
   );
   #subscriptionConfigured = false;
+
+  // dial (Step 09): turn a sturdy address into a callable by BUILDING AND RUNNING
+  // its worker via the Worker Loader. `{ type: "rpc", worker: { type: "source",
+  // source }, entrypoint, props }` → a live entrypoint stub whose methods run in
+  // the loaded isolate, with `props` arriving as `this.ctx.props`. The isolate is
+  // cached by content (same source → same isolate, no rebuild).
+  #dial(address: any): any {
+    if (address?.type !== "rpc") throw new Error("capability address is not dialable");
+    const worker = address.worker;
+    if (worker?.type !== "source") {
+      throw new Error(`worker type "${worker?.type}" is not supported here (only "source")`);
+    }
+    const loaded = this.env.LOADER.get(
+      `src:${address.entrypoint}:${hashString(worker.source)}`,
+      () => ({
+        compatibilityDate: "2025-04-27",
+        compatibilityFlags: ["nodejs_compat"],
+        mainModule: "main.js",
+        modules: { "main.js": worker.source },
+      }),
+    );
+    return loaded.getEntrypoint(address.entrypoint, { props: address.props ?? {} });
+  }
 
   // This context's durable event log is its OWN stream, named by coordinate —
   // a context IS its stream coordinate (Step 11). Re-resolve the stub per call
