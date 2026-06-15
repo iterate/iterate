@@ -144,7 +144,7 @@ Durable Object's fetch handler:
 where `<kind>` is one of `project`, `codemode-session`,
 `project-mcp-server-connection`, `stream` (`src/debug-routes.ts`). Other debug
 routes there: `/__debug/append-chain`, `/__debug/seed-iterate-config-base`,
-and the itx egress echo at `/api/itx/egress-echo`.
+and `/api/itx/openapi-fixture`.
 
 ## MCP Directionality
 

@@ -42,6 +42,12 @@ const MATRIX_EXAMPLES = ITX_EXAMPLES.filter(
     example.runtimes.some((runtime) => (MATRIX_RUNTIMES as readonly string[]).includes(runtime)) &&
     EXAMPLE_CASES[example.id] !== undefined,
 );
+const matrixTest =
+  process.env.OS_ITX_E2E_SKIP_MATRIX === "true"
+    ? test.skip
+    : process.env.OS_ITX_E2E_MATRIX_CONCURRENT === "true"
+      ? test.concurrent
+      : test;
 
 test("every catalogue example is either matrix-tested or explicitly excluded", () => {
   for (const example of ITX_EXAMPLES) {
@@ -81,7 +87,7 @@ for (const example of MATRIX_EXAMPLES) {
   const exampleCase = EXAMPLE_CASES[example.id]!;
   // Cold isolates, a config-worker rebuild per call, and a spawned CLI per
   // cli-tagged example make these the slowest tests in the suite.
-  test(
+  matrixTest(
     `catalogue example "${example.id}" runs identically across runtimes`,
     {
       timeout: 240_000,

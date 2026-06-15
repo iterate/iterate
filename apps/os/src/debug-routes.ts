@@ -9,7 +9,6 @@ import { seedIterateConfigBaseRepo } from "~/domains/repos/iterate-config-base-s
 import { DEBUG_APPEND_CHAIN_EVENT_TYPE } from "~/durable-objects/debug-append-chain-subscriber.ts";
 import { authenticateAdminBearer } from "~/auth/admin.ts";
 
-const EGRESS_ECHO_PATH = "/api/itx/egress-echo";
 const OPENAPI_FIXTURE_BASE = "/api/itx/openapi-fixture";
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
 
@@ -24,39 +23,18 @@ export async function handleDebugRoutes(input: {
   config: AppConfig;
 }): Promise<Response | null> {
   return (
-    handleEgressEchoFetch(input) ??
     (await handleOpenApiFixtureFetch(input)) ??
     (await handleDebugAppendChainFetch(input)) ??
     (await handleSeedIterateConfigBaseFetch(input))
   );
 }
 
-/** Echo request metadata back, for verifying worker egress paths end to end. */
-function handleEgressEchoFetch(input: { request: Request; config: AppConfig }) {
-  const url = new URL(input.request.url);
-  if (url.pathname !== EGRESS_ECHO_PATH) return null;
-
-  const expectedToken = input.config.adminApiSecret?.exposeSecret();
-  if (
-    expectedToken == null ||
-    input.request.headers.get("authorization") !== `Bearer ${expectedToken}`
-  ) {
-    return Response.json({ error: "Unauthorized." }, { status: 401 });
-  }
-
-  return Response.json({
-    headers: Object.fromEntries(input.request.headers),
-    method: input.request.method,
-    url: url.toString(),
-  });
-}
-
 /**
  * A tiny, deterministic OpenAPI service — the spec document plus the API it
  * describes — so the OpenApiClient e2e never depends on a live third-party
- * demo server. Admin-token-gated like the egress echo: the e2e provides the
- * capability with an admin bearer in props.headers, which also proves that
- * headers ride every API call (nothing here answers without them).
+ * demo server. The e2e provides the capability with an admin bearer in
+ * props.headers, which also proves that headers ride every API call (nothing
+ * here answers without them).
  */
 async function handleOpenApiFixtureFetch(input: {
   request: Request;

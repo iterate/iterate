@@ -30,7 +30,7 @@ test.beforeEach(async ({ page }) => {
 // Baseline end-to-end smoke test for the simplified browser mirror: a composer append must
 // go to the server, be delivered back through the single elected subscriber, land in SQLite,
 // and show up through the visible-range SQL query.
-test("stream page appends through the shared browser mirror", async ({ page }) => {
+test("stream page appends through the shared browser mirror @preview", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath }));
 
@@ -869,7 +869,7 @@ test("event-feed view renders specific renderers as singletons and groups by typ
 
 // The state view has no processor or table: it reads the stream's reduced + runtime state
 // live over the runtimeState() RPC and renders it in a fixed-width block.
-test("state view renders the stream runtime state over RPC", async ({ page }) => {
+test("state view renders the stream runtime state over RPC @preview", async ({ page }) => {
   const streamPath = `/e2e/${crypto.randomUUID()}`;
   await page.goto(streamRoute({ path: streamPath, view: "browser-state" }));
   await expect(page.getByTestId("stream-state")).toContainText("maxOffset", { timeout: 20_000 });

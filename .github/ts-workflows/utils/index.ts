@@ -10,6 +10,11 @@ export const runsOnDepotUbuntu = {
   "runs-on": "depot-ubuntu-24.04-32",
 };
 
+/** Use this for high-parallelism preview lifecycle jobs. */
+export const runsOnDepotUbuntu64 = {
+  "runs-on": "depot-ubuntu-24.04-64",
+};
+
 /** checkout, setup pnpm, setup node, install dependencies. Accepts an optional ref override (e.g. for workflow_dispatch inputs). */
 export const getSetupRepo = ({ ref }: { ref?: string } = {}) =>
   [

@@ -70,12 +70,16 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "-c",
       [
         'pnpm e2e -t "OS preview smoke" & smoke_pid=$!',
-        "OS_ITX_E2E_FILE_PARALLELISM=true pnpm e2e:itx --project node & itx_pid=$!",
+        // Keep the catalogue matrix out of the broad file-parallel run: mixing
+        // both forms of parallelism overloaded preview workers in probes, but
+        // the same matrix passed quickly as its own concurrent phase.
+        "OS_ITX_E2E_FILE_PARALLELISM=true OS_ITX_E2E_SKIP_MATRIX=true pnpm e2e:itx --project node & itx_pid=$!",
         "smoke_status=0",
         "itx_status=0",
         'wait "$smoke_pid" || smoke_status=$?',
         'wait "$itx_pid" || itx_status=$?',
         'if [ "$smoke_status" -ne 0 ] || [ "$itx_status" -ne 0 ]; then exit 1; fi',
+        "OS_ITX_E2E_MATRIX_CONCURRENT=true pnpm e2e:itx --project node src/itx/e2e/itx.e2e.test.ts -t 'catalogue example'",
       ].join("; "),
     ],
   },
@@ -119,10 +123,15 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "bash",
       "-c",
       [
-        "STREAM_STAGING_E2E=true pnpm vitest",
-        "pnpm exec playwright install --with-deps chromium",
-        "pnpm playwright",
-      ].join(" && "),
+        "pnpm exec playwright install chromium & install_pid=$!",
+        "STREAM_STAGING_E2E=true pnpm vitest & vitest_pid=$!",
+        "install_status=0",
+        "vitest_status=0",
+        'wait "$install_pid" || install_status=$?',
+        'wait "$vitest_pid" || vitest_status=$?',
+        'if [ "$install_status" -ne 0 ] || [ "$vitest_status" -ne 0 ]; then exit 1; fi',
+        "pnpm playwright --grep @preview --reporter=list",
+      ].join("; "),
     ],
   },
 };

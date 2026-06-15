@@ -132,7 +132,7 @@ function createPreviewLifecycleJob(input: {
   return {
     if: input.if,
     name: input.name,
-    ...utils.runsOnDepotUbuntu,
+    ...utils.runsOnDepotUbuntu64,
     concurrency: {
       group: `cloudflare-preview-lifecycle-\${{ github.event.pull_request.number }}`,
       "cancel-in-progress": false,

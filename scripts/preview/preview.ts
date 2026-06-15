@@ -37,7 +37,7 @@ const defaultPreviewLeaseMs = 60 * 60 * 1000;
 // returning immediately once the health endpoint is reachable.
 const defaultPreviewReadyTimeoutMs = 600_000;
 const defaultPreviewReadyUrlPath = "/api/__internal/health";
-const defaultPreviewTestMaxAttempts = 2;
+const defaultPreviewTestMaxAttempts = 1;
 const defaultPreviewTestRetryDelayMs = 5_000;
 const defaultPreviewAppConcurrency = 5;
 export type PreviewSemaphoreResourceClient = {
@@ -298,6 +298,8 @@ export async function testCloudflarePreviewForPullRequest(
           return null;
         }
 
+        const startedAt = Date.now();
+        console.error(`[preview] test start: ${app.slug}`);
         const testResult = await runCommandWithRetries({
           args: [
             "run",
@@ -317,6 +319,10 @@ export async function testCloudflarePreviewForPullRequest(
           signal: params.signal,
           workingDirectory: resolve(params.repositoryRoot, app.appPath),
         });
+        const testDurationMs = Date.now() - startedAt;
+        console.error(
+          `[preview] test ${testResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(testDurationMs)})`,
+        );
 
         return CloudflarePreviewAppEntry.parse({
           ...existingEntry,
@@ -328,6 +334,7 @@ export async function testCloudflarePreviewForPullRequest(
               : commandFailureMessage(testResult, "Preview tests failed after deploy."),
           runUrl: params.workflowRunUrl ?? existingEntry.runUrl ?? null,
           status: testResult.exitCode === 0 ? "deployed" : "tests-failed",
+          testDurationMs,
           updatedAt: new Date().toISOString(),
         });
       })
@@ -390,6 +397,8 @@ export async function cleanupCloudflarePreviewForPullRequest(
   const cleanupBatches = [...batchPreviewAppsByDependencies(appsToCleanUp)].reverse();
   for (const batch of cleanupBatches) {
     const entries = await mapWithConcurrency(batch, defaultPreviewAppConcurrency, async (app) => {
+      const startedAt = Date.now();
+      console.error(`[preview] cleanup start: ${app.slug}`);
       const destroyResult = await runPreviewAlchemyCommand({
         app,
         commandEnvironment: params.commandEnvironment,
@@ -398,6 +407,10 @@ export async function cleanupCloudflarePreviewForPullRequest(
         repositoryRoot: params.repositoryRoot,
         signal: params.signal,
       });
+      const cleanupDurationMs = Date.now() - startedAt;
+      console.error(
+        `[preview] cleanup ${destroyResult.exitCode === 0 ? "passed" : "failed"}: ${app.slug} (${formatDurationMs(cleanupDurationMs)})`,
+      );
       const existingEntry = latestState.apps[app.slug];
       return CloudflarePreviewAppEntry.parse({
         ...existingEntry,
@@ -407,6 +420,7 @@ export async function cleanupCloudflarePreviewForPullRequest(
           destroyResult.exitCode === 0
             ? "Preview app released."
             : commandFailureMessage(destroyResult, "Preview teardown failed."),
+        cleanupDurationMs,
         status: destroyResult.exitCode === 0 ? "released" : "cleanup-failed",
         updatedAt: new Date().toISOString(),
       });
@@ -505,12 +519,27 @@ async function deployPreviewAppWithStatus(input: {
   runUrl: string | null;
   signal?: AbortSignal;
 }) {
+  const startedAt = Date.now();
+  console.error(`[preview] deploy start: ${input.app.slug}`);
   try {
-    return await deployPreviewApp(input);
+    const entry = await deployPreviewApp(input);
+    const deployDurationMs = Date.now() - startedAt;
+    console.error(
+      `[preview] deploy ${entry.status === "awaiting-tests" ? "passed" : "failed"}: ${input.app.slug} (${formatDurationMs(deployDurationMs)})`,
+    );
+    return CloudflarePreviewAppEntry.parse({
+      ...entry,
+      deployDurationMs,
+    });
   } catch (error) {
+    const deployDurationMs = Date.now() - startedAt;
+    console.error(
+      `[preview] deploy failed: ${input.app.slug} (${formatDurationMs(deployDurationMs)})`,
+    );
     return CloudflarePreviewAppEntry.parse({
       appDisplayName: input.app.displayName,
       appSlug: input.app.slug,
+      deployDurationMs,
       headSha: input.pullRequestHeadSha,
       message: formatPreviewErrorMessage(error),
       runUrl: input.runUrl,
@@ -1055,6 +1084,14 @@ function canRunPreviewTests(entry: CloudflarePreviewAppEntry | undefined) {
   return Boolean(
     entry?.publicUrl && ["awaiting-tests", "deployed", "tests-failed"].includes(entry.status),
   );
+}
+
+function formatDurationMs(durationMs: number) {
+  if (durationMs < 1_000) {
+    return `${Math.round(durationMs)}ms`;
+  }
+
+  return `${(durationMs / 1_000).toFixed(1)}s`;
 }
 
 async function runCommandWithRetries(

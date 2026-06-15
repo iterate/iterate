@@ -5,7 +5,7 @@
 
 import { expect, test } from "vitest";
 import { connectGlobal, registerCreatedProjectCleanup } from "./e2e-env.ts";
-import { coreStateToStreamState } from "~/domains/streams/stream-runtime.ts";
+import { coreStateToStreamState } from "../../domains/streams/stream-runtime.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const PROJECT_SLUG = `itx-sub-e2e-${RUN_SUFFIX}`;
