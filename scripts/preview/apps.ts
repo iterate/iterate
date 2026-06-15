@@ -10,7 +10,6 @@ export type CloudflarePreviewApp = {
   appPath: `apps/${string}`;
   dopplerProject: string;
   paths: string[];
-  deploymentDependencies?: CloudflarePreviewAppSlug[];
   previewDependencies?: CloudflarePreviewAppSlug[];
   /** Readiness probe path on the app's public URL (default /api/__internal/health). */
   previewReadyUrlPath?: string;
