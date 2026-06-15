@@ -8,9 +8,9 @@
 // effect re-subscribes from "start" again and dedupes the replay by offset.
 
 import { useState } from "react";
-import type { Event as StreamEvent } from "@iterate-com/shared/streams/types";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
+import type { StreamEvent } from "~/domains/streams/engine/shared/event.ts";
 import { useItxEffect } from "~/itx/itx-react.tsx";
 
 const MAX_BUFFERED_EVENTS = 500;
@@ -45,8 +45,9 @@ export function ItxActivityTail(_props: { projectId: string }) {
     setStatus("connecting");
     setError(undefined);
     try {
-      const subscription = await itx.streams.get(PROJECT_CONTEXT_PATH).subscribe(
-        (batch) => {
+      const subscription = await itx.streams.get(PROJECT_CONTEXT_PATH).subscribe({
+        replayAfterOffset: 0,
+        processEventBatch: (batch) => {
           setEvents((previous) => {
             // Re-subscribing replays from "start"; offsets dedupe the overlap.
             const lastOffset = previous.at(-1)?.offset;
@@ -58,10 +59,9 @@ export function ItxActivityTail(_props: { projectId: string }) {
               : [...previous, ...fresh].slice(-MAX_BUFFERED_EVENTS);
           });
         },
-        { afterOffset: "start" },
-      );
+      });
       setStatus("live");
-      return () => subscription[Symbol.dispose]();
+      return () => subscription.unsubscribe();
     } catch (subscribeError: unknown) {
       setStatus("error");
       setError(subscribeError instanceof Error ? subscribeError.message : String(subscribeError));

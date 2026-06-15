@@ -52,10 +52,10 @@ function fakeStream(seed: Array<{ type: string; payload: Record<string, unknown>
   return {
     events,
     stream: {
-      append: async (event: { type: string; payload: Record<string, unknown> }) => {
-        return { offset: push(event).offset };
+      append: async (args: { event: { type: string; payload: Record<string, unknown> } }) => {
+        return { offset: push(args.event).offset };
       },
-      read: async (input: { afterOffset: number }) =>
+      getEvents: async (input: { afterOffset: number }) =>
         events.filter((event) => event.offset > input.afterOffset),
     },
   };

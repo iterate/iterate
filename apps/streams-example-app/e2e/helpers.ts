@@ -1,5 +1,5 @@
 import { streamViewSearch } from "../src/lib/stream-view-search.ts";
-import { normalizeStreamPath, streamRpcPath } from "~/domains/streams/engine/browser/connect.ts";
+import { normalizeStreamPath, streamRpcPath } from "../src/lib/stream-rpc.ts";
 
 export function e2eWorkerUrl() {
   return process.env.WORKER_URL ?? "http://localhost:5173";

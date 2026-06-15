@@ -551,7 +551,7 @@ appendedAtMs`. No correlation map, no await — `append` stays fire-and-forget. 
 
 > **Superseded.** This scratchpad sketches a `connectStream` / `createStreamSubscription`
 > / `processorRunner.run` client library that never shipped under those names. The real
-> surfaces are `withStreamConnectionFromBrowser` + `acquireStreamRuntime` (browser) and
+> surfaces are `acquireStreamRuntime` with an injected stream client (browser) and
 > `createStreamProcessorHost` (workers); connections are synchronously `Disposable`, not
 > `AsyncDisposable`. Retained as history.
 

@@ -14,8 +14,8 @@
  *       (force-wakes the agent DO via ensureStartedAndCaughtUp)
  *   - agents.kill(…)                    → no itx door exists; the crash-recovery
  *       case is skipped below until the agents capability exposes a kill.
- *   - project.streams.{append,appendBatch,read} → itx.streams.get(path).{…};
- *       read() returns Event[] directly (no { events } wrapper).
+ *   - project.streams.{append,appendBatch,read} → itx.streams.get(path).{append,appendBatch,getEvents};
+ *       getEvents() returns Event[] directly (no { events } wrapper).
  */
 import { expect, test } from "vitest";
 import type { Event, EventInput } from "@iterate-com/shared/streams/types";
@@ -273,15 +273,17 @@ test("lets agent scripts send visible agent responses through itx.chat.sendMessa
   // append returns the bare appended Event (offset, createdAt, …); the cast
   // steps past capnweb's lossy stub-type projection of the branded Event type.
   const output = (await itx.streams.get(agentPath).append({
-    type: "events.iterate.com/agent/output-added",
-    payload: {
-      content: dedent`
+    event: {
+      type: "events.iterate.com/agent/output-added",
+      payload: {
+        content: dedent`
         \`\`\`js
           async (itx) => {
             await itx.chat.sendMessage({ message: ${JSON.stringify(message)} });
           }
           \`\`\`
       `,
+      },
     },
   })) as unknown as Event;
 
@@ -373,8 +375,10 @@ test("project config worker customizes fresh agents by appending events", async 
     "}",
   ].join("\n");
   await itx.streams.get(pusherPath).append({
-    type: "events.iterate.com/agent/output-added",
-    payload: { content: ["```js", pushScript, "```"].join("\n") },
+    event: {
+      type: "events.iterate.com/agent/output-added",
+      payload: { content: ["```js", pushScript, "```"].join("\n") },
+    },
   });
   const pushEvents = await readUntil({
     agentPath: pusherPath,
@@ -489,23 +493,27 @@ test("renders codemode completions as direct auto-triggering agent inputs", asyn
   await itx.streams.create({ streamPath: agentPath });
 
   await itx.streams.get(agentPath).append({
-    type: "events.iterate.com/itx/script-execution-completed",
-    idempotencyKey: `agent-codemode-completion-returned:${suffix}`,
-    payload: {
-      durationMs: 12,
-      executionId: returnedScriptExecutionId,
-      ok: true,
-      result: { ok: true, suffix },
+    event: {
+      type: "events.iterate.com/itx/script-execution-completed",
+      idempotencyKey: `agent-codemode-completion-returned:${suffix}`,
+      payload: {
+        durationMs: 12,
+        executionId: returnedScriptExecutionId,
+        ok: true,
+        result: { ok: true, suffix },
+      },
     },
   });
   await itx.streams.get(agentPath).append({
-    type: "events.iterate.com/itx/script-execution-completed",
-    idempotencyKey: `agent-codemode-completion-threw:${suffix}`,
-    payload: {
-      durationMs: 12,
-      error: `expected codemode failure ${suffix}`,
-      executionId: threwScriptExecutionId,
-      ok: false,
+    event: {
+      type: "events.iterate.com/itx/script-execution-completed",
+      idempotencyKey: `agent-codemode-completion-threw:${suffix}`,
+      payload: {
+        durationMs: 12,
+        error: `expected codemode failure ${suffix}`,
+        executionId: threwScriptExecutionId,
+        ok: false,
+      },
     },
   });
 
@@ -646,27 +654,29 @@ itIfSlackBotToken(
       threadTs: rootMessage.ts,
     });
 
-    await itx.streams
-      .get("/integrations/slack")
-      .append(slackProcessorSubscriptionEvent({ projectId: fixture.project.id, suffix }));
+    await itx.streams.get("/integrations/slack").append({
+      event: slackProcessorSubscriptionEvent({ projectId: fixture.project.id, suffix }),
+    });
 
     await itx.streams.get("/integrations/slack").append({
-      type: "events.iterate.com/slack/webhook-received",
-      idempotencyKey: `slack-agent-e2e-webhook:${suffix}`,
-      payload: {
-        slackTeamId: "T_E2E",
-        body: {
-          type: "event_callback",
-          team_id: "T_E2E",
-          event_id: `Ev${suffix}`,
-          event: {
-            type: "message",
-            channel: slackChannelId,
-            channel_type: "channel",
-            user: "U_E2E",
-            ts: rootMessage.ts,
-            event_ts: rootMessage.ts,
-            text: `!slack.chat.postMessage({ channel: ${JSON.stringify(slackChannelId)}, thread_ts: ${JSON.stringify(rootMessage.ts)}, text: ${JSON.stringify(replyText)} })`,
+      event: {
+        type: "events.iterate.com/slack/webhook-received",
+        idempotencyKey: `slack-agent-e2e-webhook:${suffix}`,
+        payload: {
+          slackTeamId: "T_E2E",
+          body: {
+            type: "event_callback",
+            team_id: "T_E2E",
+            event_id: `Ev${suffix}`,
+            event: {
+              type: "message",
+              channel: slackChannelId,
+              channel_type: "channel",
+              user: "U_E2E",
+              ts: rootMessage.ts,
+              event_ts: rootMessage.ts,
+              text: `!slack.chat.postMessage({ channel: ${JSON.stringify(slackChannelId)}, thread_ts: ${JSON.stringify(rootMessage.ts)}, text: ${JSON.stringify(replyText)} })`,
+            },
           },
         },
       },
@@ -764,23 +774,25 @@ itIfSlackBotToken(
     const debugAfterOffset = Math.max(...events.map((event) => event.offset));
     const debugMessageTs = `${Date.now()}.123456`;
     await itx.streams.get("/integrations/slack").append({
-      type: "events.iterate.com/slack/webhook-received",
-      idempotencyKey: `slack-agent-e2e-debug-webhook:${suffix}`,
-      payload: {
-        slackTeamId: "T_E2E",
-        body: {
-          type: "event_callback",
-          team_id: "T_E2E",
-          event_id: `EvDebug${suffix}`,
-          event: {
-            type: "message",
-            channel: slackChannelId,
-            channel_type: "channel",
-            user: "U_E2E",
-            ts: debugMessageTs,
-            thread_ts: rootMessage.ts,
-            event_ts: debugMessageTs,
-            text: "!debug",
+      event: {
+        type: "events.iterate.com/slack/webhook-received",
+        idempotencyKey: `slack-agent-e2e-debug-webhook:${suffix}`,
+        payload: {
+          slackTeamId: "T_E2E",
+          body: {
+            type: "event_callback",
+            team_id: "T_E2E",
+            event_id: `EvDebug${suffix}`,
+            event: {
+              type: "message",
+              channel: slackChannelId,
+              channel_type: "channel",
+              user: "U_E2E",
+              ts: debugMessageTs,
+              thread_ts: rootMessage.ts,
+              event_ts: debugMessageTs,
+              text: "!debug",
+            },
           },
         },
       },
@@ -845,27 +857,29 @@ itIfSlackBotToken(
       threadTs: rootMessage.ts,
     });
 
-    await itx.streams
-      .get("/integrations/slack")
-      .append(slackProcessorSubscriptionEvent({ projectId: fixture.project.id, suffix }));
+    await itx.streams.get("/integrations/slack").append({
+      event: slackProcessorSubscriptionEvent({ projectId: fixture.project.id, suffix }),
+    });
 
     await itx.streams.get("/integrations/slack").append({
-      type: "events.iterate.com/slack/webhook-received",
-      idempotencyKey: `slack-agent-e2e-llm-webhook:${suffix}`,
-      payload: {
-        slackTeamId: "T_E2E",
-        body: {
-          type: "event_callback",
-          team_id: "T_E2E",
-          event_id: `EvLlm${suffix}`,
-          event: {
-            type: "message",
-            channel: slackChannelId,
-            channel_type: "channel",
-            user: "U_E2E",
-            ts: rootMessage.ts,
-            event_ts: rootMessage.ts,
-            text: `please acknowledge: ${rootText}`,
+      event: {
+        type: "events.iterate.com/slack/webhook-received",
+        idempotencyKey: `slack-agent-e2e-llm-webhook:${suffix}`,
+        payload: {
+          slackTeamId: "T_E2E",
+          body: {
+            type: "event_callback",
+            team_id: "T_E2E",
+            event_id: `EvLlm${suffix}`,
+            event: {
+              type: "message",
+              channel: slackChannelId,
+              channel_type: "channel",
+              user: "U_E2E",
+              ts: rootMessage.ts,
+              event_ts: rootMessage.ts,
+              text: `please acknowledge: ${rootText}`,
+            },
           },
         },
       },
@@ -981,18 +995,19 @@ async function readUntil(input: {
 }) {
   const startedAt = Date.now();
   const timeoutMs = input.timeoutMs ?? 120_000;
+  const afterOffset = input.afterOffset === "start" ? 0 : input.afterOffset;
   while (Date.now() - startedAt < timeoutMs) {
-    // itx's streams.read returns the Event[] directly (no { events } wrapper).
+    // itx's streams.getEvents returns the Event[] directly (no { events } wrapper).
     const events = (await input.itx.streams
       .get(input.agentPath)
-      .read({ afterOffset: input.afterOffset })) as Event[];
+      .getEvents({ afterOffset })) as unknown as Event[];
     if (events.some(input.predicate)) return events;
     await delay(1_000);
   }
 
   const events = (await input.itx.streams
     .get(input.agentPath)
-    .read({ afterOffset: input.afterOffset })) as Event[];
+    .getEvents({ afterOffset })) as unknown as Event[];
   throw new Error(`Timed out waiting for agent stream event. Saw: ${JSON.stringify(events)}`);
 }
 
@@ -1041,7 +1056,7 @@ async function appendAgentSetup(input: {
     }),
   ];
 
-  await input.itx.streams.get(input.agentPath).appendBatch(events);
+  await input.itx.streams.get(input.agentPath).appendBatch({ events });
 }
 
 function agentProcessorSubscriptionConfiguredEvents(input: {

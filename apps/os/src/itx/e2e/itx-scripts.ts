@@ -45,15 +45,17 @@ export function todoCapabilitySource() {
       async add({ text }) {
         const itx = await this.env.ITERATE.context;
         const appended = await itx.streams.get(TODO_STREAM).append({
-          payload: { text },
-          type: TODO_EVENT,
+          event: {
+            payload: { text },
+            type: TODO_EVENT,
+          },
         });
         return { offset: appended.offset, text };
       }
 
       async list() {
         const itx = await this.env.ITERATE.context;
-        const events = await itx.streams.get(TODO_STREAM).read();
+        const events = await itx.streams.get(TODO_STREAM).getEvents();
         return events
           .filter((event) => event.type === TODO_EVENT)
           .map((event) => event.payload.text);

@@ -2,7 +2,7 @@ import {
   streamConnectionFromWebSocket,
   toWebSocketUrl,
   type StreamConnection,
-} from "../connection.ts";
+} from "~/domains/streams/engine/connection.ts";
 
 export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
 
@@ -44,7 +44,7 @@ export function streamDurableObjectName(args: { namespace: string; path: string 
   return `${args.namespace}:${args.path}`;
 }
 
-/** Parse `/api/streams?path=…&namespace=…` into stream DO identity parts. */
+/** Parse `/api/streams?path=...&namespace=...` into stream DO identity parts. */
 export function parseStreamRpcRequest(args: { url: URL }) {
   if (args.url.pathname !== "/api/streams") {
     throw new Error(`Unexpected stream RPC path: ${args.url.pathname}`);

@@ -57,7 +57,7 @@ WORKER_URL=https://streams-example-app.iterate-preview-2.com pnpm --dir apps/os 
 Use the browser client library with a full stream URL:
 
 ```ts
-import { withStreamConnectionFromBrowser } from "./src/browser/connect.ts";
+import { withStreamConnectionFromBrowser } from "apps/streams-example-app/src/lib/stream-rpc.ts";
 
 using connection = await withStreamConnectionFromBrowser({
   url: "wss://streams-example-app.iterate-preview-2.com/api/streams?path=%2Fexample",
@@ -194,8 +194,9 @@ Hosting:
   `events.iterate.com/stream/subscriber-connected` presence fact — there is no
   per-processor `standardProcessorBehavior` self-registration anymore.
 - Browser: `acquireStreamRuntime` in `src/browser/stream-browser-store.ts`
-  hosts a processor over a capnweb connection with a Web Locks writer election
-  (see `CONTEXT.md`).
+  hosts a processor over an injected stream client with a Web Locks writer
+  election. OS injects an ITX stream client; the streams example app injects its
+  capnweb demo client (see `CONTEXT.md`).
 
 Keep durable event type strings inline in the `events` object, `consumes`,
 `emits`, and reducer. Repeating the string inside one processor definition is

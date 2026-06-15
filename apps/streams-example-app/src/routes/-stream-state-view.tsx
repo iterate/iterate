@@ -3,10 +3,7 @@
 
 import { useEffect, useState } from "react";
 import type { StreamViewSearch } from "../lib/stream-view-search.ts";
-import {
-  withStreamConnectionFromBrowser,
-  streamRpcPath,
-} from "~/domains/streams/engine/browser/connect.ts";
+import { streamRpcPath, withStreamConnectionFromBrowser } from "../lib/stream-rpc.ts";
 
 const POLL_INTERVAL_MS = 1_000;
 

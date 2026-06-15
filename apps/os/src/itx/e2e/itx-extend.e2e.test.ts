@@ -223,14 +223,16 @@ test("extend: child worker caps run with the owning project's authority", async 
             "cap.js": `
               import { WorkerEntrypoint } from "cloudflare:workers";
               export default class extends WorkerEntrypoint {
-                async note({ text }) {
-                  const itx = await this.env.ITERATE.context;
-                  const appended = await itx.streams.get("/itx-e2e/notes").append({
-                    payload: { text },
-                    type: "events.iterate.test/itx/note",
-                  });
-                  return { context: (await itx.describe()).context, offset: appended.offset };
-                }
+	                async note({ text }) {
+	                  const itx = await this.env.ITERATE.context;
+	                  const appended = await itx.streams.get("/itx-e2e/notes").append({
+	                    event: {
+	                      payload: { text },
+	                      type: "events.iterate.test/itx/note",
+	                    },
+	                  });
+	                  return { context: (await itx.describe()).context, offset: appended.offset };
+	                }
               }
             `,
           },
@@ -244,7 +246,7 @@ test("extend: child worker caps run with the owning project's authority", async 
   })) as { context: string };
   expect(noted.context).toContain(":/itx/");
 
-  const events = (await projectItx.streams.get("/itx-e2e/notes").read()) as Array<{
+  const events = (await projectItx.streams.get("/itx-e2e/notes").getEvents()) as Array<{
     payload: { text?: string };
     type: string;
   }>;

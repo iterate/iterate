@@ -15,6 +15,7 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { coreStateToStreamState } from "~/domains/streams/stream-runtime.ts";
 import { connectItx } from "~/itx/itx-react.tsx";
 import type {
   RouteBreadcrumbLoaderData,
@@ -212,9 +213,13 @@ function useStreamChildPaths(input: {
     if (!enabled) return;
     let cancelled = false;
     void connectItx({ projectId: projectSlug })
-      .then(async (itx) => await itx.streams.get(streamPath).getState())
+      .then(async (itx) => await itx.streams.get(streamPath).runtimeState())
       .then((state) => {
-        if (!cancelled) setChildPaths([...StreamState.parse(state).childPaths]);
+        if (!cancelled) {
+          setChildPaths([
+            ...StreamState.parse(coreStateToStreamState(state.coreProcessorState)).childPaths,
+          ]);
+        }
       })
       .catch(() => {
         // Navigation chrome: a failed lookup just means no siblings to offer.

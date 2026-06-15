@@ -627,45 +627,46 @@ export type StreamEventInput = {
   idempotencyKey?: string;
 };
 
-/** The public state of one stream — what `getState()` returns and what every
- * subscription batch carries as `state`. */
-export type StreamState = {
-  namespace: string;
-  path: string;
-  eventCount: number;
-  childPaths: string[];
-  metadata: Record<string, unknown>;
+export type StreamCoreProcessorState = unknown;
+export type StreamRuntimeState = {
+  coreProcessorState: StreamCoreProcessorState;
+  runtime: { connections: Record<string, unknown> };
+};
+export type StreamSubscriptionHandle = { unsubscribe(): void };
+export type StreamSubscriberDescriptor = { description?: string; [key: string]: unknown };
+export type StreamSubscriptionBatch = {
+  events: StreamEvent[];
+  state: StreamCoreProcessorState;
+  streamMaxOffset: number;
 };
 
 /** A handle pinned to one stream. */
 export interface ItxStream {
-  describe(): { namespace: string; path: string };
-  append(event: StreamEventInput): Promise<StreamEvent>;
-  appendBatch(events: StreamEventInput[]): Promise<StreamEvent[]>;
-  read(input?: {
-    afterOffset?: number | "start" | "end";
-    beforeOffset?: number | "start" | "end";
+  append(args: { streamPath?: string; event: StreamEventInput }): Promise<StreamEvent>;
+  appendBatch(args: { streamPath?: string; events: StreamEventInput[] }): Promise<StreamEvent[]>;
+  getEvent(
+    args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
+  ): Promise<StreamEvent | undefined>;
+  getEvents(args?: {
+    afterOffset?: number;
+    beforeOffset?: number | null;
+    limit?: number;
   }): Promise<StreamEvent[]>;
-  getState(): Promise<unknown>;
-  listChildren(): Promise<unknown>;
-  /**
-   * The ONE reactive primitive. Catch-up from `afterOffset`, then every
-   * committed batch, pushed until unsubscribed. Every batch carries `state`
-   * (the `getState()` shape as of `streamMaxOffset`), and every subscription
-   * receives an immediate first batch so the first render needs no separate
-   * getState call. `events: false` = state-only: batches with `events: []`
-   * on every state change, implicitly live-from-now (`afterOffset` ignored).
-   */
-  subscribe(
-    onEventBatch: (batch: {
-      events: StreamEvent[];
-      state: StreamState;
-      streamMaxOffset: number;
-    }) => unknown,
-    opts: { afterOffset: number | "start" | "end"; events?: boolean },
-  ): Promise<{ unsubscribe(): void }>;
-  /** Sugar: subscribe(batch => onState(batch.state), { events: false, afterOffset: "end" }). */
-  onStateChange(onState: (state: StreamState) => unknown): Promise<{ unsubscribe(): void }>;
+  runtimeState(): Promise<StreamRuntimeState>;
+  kill(): Promise<void>;
+  reset(): Promise<void>;
+  reduce(args: {
+    event: StreamEvent;
+    coreProcessorState?: StreamCoreProcessorState;
+  }): Promise<StreamCoreProcessorState>;
+  subscribe(args: {
+    subscriptionKey?: string;
+    processEventBatch(batch: StreamSubscriptionBatch): unknown;
+    replayAfterOffset?: number;
+    eventTypes?: readonly string[];
+    events?: boolean;
+    subscriber?: StreamSubscriberDescriptor;
+  }): Promise<StreamSubscriptionHandle>;
 }
 
 /** The streams collection, namespace-bound by the handle. */

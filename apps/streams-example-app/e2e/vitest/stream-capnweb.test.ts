@@ -2,7 +2,7 @@ import { RpcTarget } from "capnweb";
 import { describe, expect, it } from "vitest";
 import { e2eStreamPath, e2eStreamPathLabel, toStreamWebSocketUrl } from "../helpers.ts";
 import type { StreamEvent, StreamEventInput } from "~/domains/streams/engine/shared/event.ts";
-import { withStreamConnectionFromBrowser } from "~/domains/streams/engine/browser/connect.ts";
+import { withStreamConnectionFromBrowser } from "../../src/lib/stream-rpc.ts";
 import { withStreamConnectionFromNode } from "~/domains/streams/engine/node/connect.ts";
 import type { WebSocketFrame } from "~/domains/streams/engine/connection.ts";
 import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";

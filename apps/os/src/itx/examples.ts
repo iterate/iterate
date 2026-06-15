@@ -85,13 +85,15 @@ return await project.describe();
 // stored event (with its assigned offset).
 const stream = itx.streams.get("/repl/demo");
 const appended = await stream.append({
-  type: "events.iterate.repl/demo",
-  payload: { note: vars.note ?? "hello from the REPL", at: Date.now() },
+  event: {
+    type: "events.iterate.repl/demo",
+    payload: { note: vars.note ?? "hello from the REPL", at: Date.now() },
+  },
 });
 
 // Read the whole path back. Streams also carry platform events, so in real
 // code you'd filter by type.
-const events = await stream.read();
+const events = await stream.getEvents();
 return { appended, count: events.length };
 `.trim(),
   },
@@ -285,12 +287,14 @@ await itx.provideCapability({
             export default class extends WorkerEntrypoint {
               async add({ text }) {
                 const itx = await this.env.ITERATE.context;     // the cap's own handle
-                const e = await itx.streams.get(STREAM).append({ type: TYPE, payload: { text } });
+                const e = await itx.streams.get(STREAM).append({
+                  event: { type: TYPE, payload: { text } },
+                });
                 return { offset: e.offset, text };
               }
               async list() {
                 const itx = await this.env.ITERATE.context;
-                const events = await itx.streams.get(STREAM).read();
+                const events = await itx.streams.get(STREAM).getEvents();
                 return events.filter((e) => e.type === TYPE).map((e) => e.payload.text);
               }
             }
@@ -533,8 +537,8 @@ await itx.provideCapability({
 });
 await itx.revokeCapability({ name });
 
-// The context's stream is an ordinary stream — same read API as anything.
-const events = await itx.streams.get("/").read();
+// The context's stream is an ordinary stream — same getEvents API as anything.
+const events = await itx.streams.get("/").getEvents();
 const record = events
   .filter((e) => Array.isArray(e.payload?.path) && e.payload.path.join(".") === name)
   .map((e) => e.type.split("/").pop());

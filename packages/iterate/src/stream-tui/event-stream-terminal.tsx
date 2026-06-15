@@ -180,21 +180,23 @@ function StreamTerminalApp() {
     setStatus("connecting");
 
     void (async () => {
-      // Live tail via itx: poll `itx.streams.get(path).read({ afterOffset })`
+      // Live tail via itx: poll `itx.streams.get(path).getEvents({ afterOffset })`
       // over /api/itx/run, advancing the cursor each round. The oRPC
       // `streams.streamEvents` server-sent iterator is gone; itx is the way.
-      let afterOffset: number | "start" = "start";
+      let afterOffset = 0;
       try {
         setStatus("streaming");
         while (!abortController.signal.aborted) {
           const result = (await runItxScript({
             authedFetch: osClient.authedFetch,
             functionSource:
-              "async ({ itx, vars }) => await itx.streams.get(vars.streamPath).read({ afterOffset: vars.afterOffset })",
+              "async ({ itx, vars }) => await itx.streams.get(vars.streamPath).getEvents({ afterOffset: vars.afterOffset })",
             vars: { streamPath: currentStreamPath, afterOffset },
-          })) as { events?: unknown[] };
+          })) as unknown[];
           if (abortController.signal.aborted) return;
-          const events = (result.events ?? []).map((value) => Event.parse(value));
+          const events = result.map((value) =>
+            Event.parse({ ...(value as object), streamPath: currentStreamPath }),
+          );
           if (events.length > 0) {
             setRawEvents((previous) => [...previous, ...events]);
             afterOffset = events[events.length - 1]!.offset;
@@ -247,23 +249,24 @@ function StreamTerminalApp() {
   const streamApi = useMemo<StreamApi>(
     () => ({
       append: async (input) => {
+        const streamPath = resolveStreamPath(input.streamPath);
         const result = (await runItxScript({
           authedFetch: osClient.authedFetch,
           functionSource:
-            "async ({ itx, vars }) => await itx.streams.get(vars.streamPath).append(vars.event)",
-          vars: { streamPath: resolveStreamPath(input.streamPath), event: input.event },
-        })) as { event: Event };
-        return result.event;
+            "async ({ itx, vars }) => await itx.streams.get(vars.streamPath).append({ event: vars.event })",
+          vars: { streamPath, event: input.event },
+        })) as object;
+        return Event.parse({ ...result, streamPath });
       },
       getState: async (input = {}) =>
         runItxScript({
           authedFetch: osClient.authedFetch,
           functionSource:
-            "async ({ itx, vars }) => await itx.streams.get(vars.streamPath).getState()",
+            "async ({ itx, vars }) => (await itx.streams.get(vars.streamPath).runtimeState()).coreProcessorState",
           vars: { streamPath: resolveStreamPath(input.streamPath) },
         }),
       listChildren: async (input = {}) => {
-        // Walk the tree inside ONE itx script: each getState is a Durable
+        // Walk the tree inside ONE itx script: each runtimeState is a Durable
         // Object hop, but running the loop server-side costs a single dynamic
         // worker load instead of one per stream.
         const descendantPaths = (await runItxScript({
@@ -275,7 +278,7 @@ function StreamTerminalApp() {
               const path = queue.shift();
               if (seen.has(path)) continue;
               seen.add(path);
-              const state = await itx.streams.get(path).getState();
+              const state = (await itx.streams.get(path).runtimeState()).coreProcessorState;
               queue.push(...(state.childPaths ?? []));
             }
             seen.delete(vars.basePath);
