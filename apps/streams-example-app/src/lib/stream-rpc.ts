@@ -14,7 +14,8 @@ export async function withStreamConnectionFromBrowser(args: {
     error: string | undefined,
   ) => void;
 }): Promise<StreamConnection> {
-  const webSocket = new WebSocket(toWebSocketUrl(args.url));
+  const browserUrl = new URL(args.url, window.location.href);
+  const webSocket = new WebSocket(toWebSocketUrl(browserUrl));
   args.onConnectionStatusChange?.("connecting", undefined);
   webSocket.addEventListener("open", () => args.onConnectionStatusChange?.("connected", undefined));
   webSocket.addEventListener("close", (event) =>
