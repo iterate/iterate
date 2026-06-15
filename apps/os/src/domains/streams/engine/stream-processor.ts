@@ -104,6 +104,13 @@ export type StreamProcessorSnapshot<State> = {
 };
 
 type MaybePromise<T> = T | Promise<T>;
+type StateChangeCallback<State> = (state: State) => unknown;
+type RetainedStateChangeCallback<State> = StateChangeCallback<State> & Disposable;
+type RetainableStateChangeCallback<State> = StateChangeCallback<State> &
+  Partial<Disposable> & {
+    dup?(): RetainedStateChangeCallback<State>;
+  };
+export type StreamProcessorStateUnsubscribe = (() => void) & Disposable;
 
 /**
  * Where checkpoints live. Hosts inject these; when omitted the processor keeps
@@ -178,6 +185,7 @@ export abstract class StreamProcessor<
   readonly #writeState: (
     snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>,
   ) => MaybePromise<void>;
+  readonly #stateChangeCallbacks = new Set<RetainedStateChangeCallback<ProcessorState<Contract>>>();
 
   constructor(args: StreamProcessorConstructorArgs<Contract, Deps, IterateContext>) {
     super();
@@ -222,6 +230,34 @@ export abstract class StreamProcessor<
     const next = this.#processing.then(() => this.#ingest(args));
     this.#processing = next.catch(() => undefined);
     return await next;
+  }
+
+  async onStateChange(
+    cb: StateChangeCallback<ProcessorState<Contract>>,
+  ): Promise<StreamProcessorStateUnsubscribe> {
+    await this.#loadState();
+    const retained = retainStateChangeCallback(cb);
+    this.#stateChangeCallbacks.add(retained);
+
+    let disposed = false;
+    const unsubscribe = Object.assign(
+      () => {
+        if (disposed) return;
+        disposed = true;
+        this.#stateChangeCallbacks.delete(retained);
+        retained[Symbol.dispose]();
+      },
+      { [Symbol.dispose]: () => unsubscribe() },
+    );
+
+    try {
+      this.#callStateChangeCallback(retained, this.#getState());
+    } catch (error) {
+      unsubscribe();
+      throw error;
+    }
+
+    return unsubscribe;
   }
 
   /**
@@ -352,6 +388,26 @@ export abstract class StreamProcessor<
     await this.#writeState({ offset: checkpointOffset, state });
     this.#state = state;
     this.#checkpointOffset = checkpointOffset;
+    if (!Object.is(previousState, state)) this.#notifyStateChange(state);
+  }
+
+  #notifyStateChange(state: ProcessorState<Contract>): void {
+    for (const callback of [...this.#stateChangeCallbacks]) {
+      try {
+        this.#callStateChangeCallback(callback, state);
+      } catch (error) {
+        this.#stateChangeCallbacks.delete(callback);
+        callback[Symbol.dispose]();
+        console.error("stream processor state change callback failed", error);
+      }
+    }
+  }
+
+  #callStateChangeCallback(
+    callback: StateChangeCallback<ProcessorState<Contract>>,
+    state: ProcessorState<Contract>,
+  ): void {
+    disposeIgnoredRpcResult(callback(state));
   }
 
   // keepAliveWhile is fire-and-forget from the host's point of view (it only
@@ -396,5 +452,28 @@ export abstract class StreamProcessor<
   #getState(): ProcessorState<Contract> {
     this.#state ??= getInitialProcessorState(this.contract);
     return this.#state;
+  }
+}
+
+function retainStateChangeCallback<State>(
+  cb: StateChangeCallback<State>,
+): RetainedStateChangeCallback<State> {
+  const retainable = cb as RetainableStateChangeCallback<State>;
+  const retained = retainable.dup?.() ?? retainable;
+  const dispose = retained[Symbol.dispose]?.bind(retained);
+  return Object.assign((state: State) => retained(state), {
+    [Symbol.dispose]() {
+      dispose?.();
+    },
+  });
+}
+
+function disposeIgnoredRpcResult(result: unknown): void {
+  if (
+    result !== null &&
+    (typeof result === "object" || typeof result === "function") &&
+    Symbol.dispose in result
+  ) {
+    (result as Disposable)[Symbol.dispose]();
   }
 }
