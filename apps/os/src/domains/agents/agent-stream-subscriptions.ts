@@ -104,7 +104,7 @@ export function agentProcessorSubscriptionConfiguredEvent(input: {
   const agentPath = StreamPathSchema.parse(input.agentPath);
   return {
     type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-    idempotencyKey: `agent-processor-subscription:${input.projectId}:${agentPath}:${input.processorSlug}`,
+    idempotencyKey: `agent-processor-subscription:${input.projectId}:${agentPath}:${input.processorSlug}:callable`,
     payload: {
       subscriptionKey: agentProcessorSubscriptionKey(input),
       subscriber: durableObjectProcessorSubscriber({

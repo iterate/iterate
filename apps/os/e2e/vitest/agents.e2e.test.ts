@@ -1206,7 +1206,7 @@ function agentProcessorSubscriptionConfiguredEvents(input: {
 }): EventInput[] {
   return input.processorSlugs.map((processorSlug) => ({
     type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-    idempotencyKey: `agent-processor-subscription:${input.projectId}:${input.agentPath}:${processorSlug}`,
+    idempotencyKey: `agent-processor-subscription:${input.projectId}:${input.agentPath}:${processorSlug}:callable`,
     payload: {
       subscriptionKey: `agent:${input.projectId}:${input.agentPath}:${processorSlug}`,
       subscriber: durableObjectProcessorSubscriber({

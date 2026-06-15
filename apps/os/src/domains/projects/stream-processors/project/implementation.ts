@@ -162,6 +162,7 @@ export class ProjectProcessor extends StreamProcessor<
       await this.#ensureExampleEgressSecret(projectId);
       await this.#ensureAgentsRoot(projectId);
       await this.#ensureOnboardingAgent(projectId);
+      await this.#ensureAgentStreamSetup({ agentPath: ONBOARDING_AGENT_PATH, projectId });
       await this.#appendOnboardingAgentInput(projectId);
       await this.ctx.stream.append({
         event: {
@@ -383,7 +384,7 @@ function slackAgentProcessorSubscriptionConfiguredEvent(input: {
 }) {
   return {
     type: "events.iterate.com/stream/subscription-configured",
-    idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.agentPath}`,
+    idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.agentPath}:workers-rpc:callable`,
     payload: {
       subscriptionKey: `slack-agent:${input.projectId}:${input.agentPath}`,
       subscriber: durableObjectProcessorSubscriber({

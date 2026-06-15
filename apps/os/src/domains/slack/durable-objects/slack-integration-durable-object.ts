@@ -152,7 +152,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      idempotencyKey: `slack-subscription:${projectId}`,
+      idempotencyKey: `slack-subscription:${projectId}:workers-rpc:callable`,
       payload: {
         subscriptionKey: slackIntegrationProcessorSubscriptionKey(projectId),
         subscriber: durableObjectProcessorSubscriber({
