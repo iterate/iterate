@@ -289,6 +289,13 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
         };
         break;
 
+      case "events.iterate.com/stream/subscription-removed": {
+        const { [args.event.payload.subscriptionKey]: _removed, ...subscriptionsByKey } =
+          next.subscriptionsByKey;
+        next = { ...next, subscriptionsByKey };
+        break;
+      }
+
       default:
         break;
     }
@@ -312,6 +319,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     switch (args.event.type) {
       case "events.iterate.com/stream/woken":
       case "events.iterate.com/stream/subscription-configured":
+      case "events.iterate.com/stream/subscription-removed":
         this.reconcileConnections();
         return;
       case "events.iterate.com/stream/created":

@@ -92,6 +92,32 @@ describe("core processor contract", () => {
     expect(state.subscriptionsByKey.echo.latestConfiguredEvent.offset).toBe(1);
   });
 
+  it("removes subscription configuration by key", () => {
+    const state = reduceEvents({
+      events: [
+        {
+          offset: 1,
+          type: "events.iterate.com/stream/subscription-configured",
+          idempotencyKey: "subscription:echo",
+          payload: {
+            subscriptionKey: "echo",
+            subscriber: callableSubscriber("echo-example"),
+          },
+          createdAt: "2026-06-01T12:00:01.000Z",
+        },
+        {
+          offset: 2,
+          type: "events.iterate.com/stream/subscription-removed",
+          idempotencyKey: "subscription-removed:echo",
+          payload: { subscriptionKey: "echo" },
+          createdAt: "2026-06-01T12:00:02.000Z",
+        },
+      ],
+    });
+
+    expect(state.subscriptionsByKey.echo).toBeUndefined();
+  });
+
   it("maintains the presence roster from subscriber connect/disconnect facts", () => {
     const state = reduceEvents({
       events: [

@@ -8,8 +8,10 @@ import { OpenAiWsProcessorContract } from "~/domains/agents/stream-processors/op
 import type { AgentLlmProvider } from "~/domains/agents/agent-presets.ts";
 
 const STREAM_SUBSCRIPTION_CONFIGURED_TYPE = "events.iterate.com/stream/subscription-configured";
+const STREAM_SUBSCRIPTION_REMOVED_TYPE = "events.iterate.com/stream/subscription-removed";
 
 export const AGENTS_STREAM_PATH = StreamPathSchema.parse("/agents");
+export const DELETED_AGENT_PROCESSOR_SLUGS = ["agent-chat", "agent-host"] as const;
 
 export type AgentDurableObjectStructuredName = {
   agentPath: StreamPath;
@@ -85,6 +87,19 @@ export function agentProcessorSubscriptionConfiguredEvents(input: {
   );
 }
 
+export function deletedAgentProcessorSubscriptionRemovedEvents(input: {
+  agentPath: StreamPath | string;
+  projectId: string;
+}): EventInput[] {
+  return DELETED_AGENT_PROCESSOR_SLUGS.map((processorSlug) =>
+    agentProcessorSubscriptionRemovedEvent({
+      agentPath: input.agentPath,
+      processorSlug,
+      projectId: input.projectId,
+    }),
+  );
+}
+
 export function agentProcessorSubscriptionConfiguredEvent(input: {
   agentPath: StreamPath | string;
   processorSlug: string;
@@ -104,6 +119,21 @@ export function agentProcessorSubscriptionConfiguredEvent(input: {
         }),
         processorName: input.processorSlug,
       }),
+    },
+  };
+}
+
+export function agentProcessorSubscriptionRemovedEvent(input: {
+  agentPath: StreamPath | string;
+  processorSlug: string;
+  projectId: string;
+}): EventInput {
+  const agentPath = StreamPathSchema.parse(input.agentPath);
+  return {
+    type: STREAM_SUBSCRIPTION_REMOVED_TYPE,
+    idempotencyKey: `agent-processor-subscription-removed:${input.projectId}:${agentPath}:${input.processorSlug}`,
+    payload: {
+      subscriptionKey: agentProcessorSubscriptionKey(input),
     },
   };
 }

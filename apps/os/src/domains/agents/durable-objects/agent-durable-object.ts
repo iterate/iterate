@@ -76,8 +76,11 @@ import {
   AGENTS_STREAM_PATH,
   AgentDurableObjectName,
   AgentDurableObjectStructuredName,
+  DELETED_AGENT_PROCESSOR_SLUGS,
   agentLlmProcessorSlug,
   agentProcessorSubscriptionConfiguredEvents,
+  agentProcessorSubscriptionRemovedEvent,
+  deletedAgentProcessorSubscriptionRemovedEvents,
   getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
@@ -148,7 +151,6 @@ const AgentLifecycleBase = createIterateDurableObjectBase<
  * onto its own context (each provide appends an itx/capability-provided event
  * that both folds into the capability table and renders into the LLM's view). */
 const AGENT_CONTEXT_CAPABILITIES_VERSION = "8";
-const DELETED_AGENT_PROCESSOR_SLUGS = new Set(["agent-chat", "agent-host"]);
 
 export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv> {
   host = createStreamProcessorHost(this.ctx);
@@ -271,8 +273,9 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
    * seeds the agent's own subscriptions and setup events.
    */
   async requestStreamSubscription(args: RequestStreamSubscriptionArgs): Promise<void> {
-    await this.ensureStartedOrInitializeFromRuntimeName();
-    if (args.processorName != null && DELETED_AGENT_PROCESSOR_SLUGS.has(args.processorName)) {
+    const params = await this.ensureStartedOrInitializeFromRuntimeName();
+    if (isDeletedAgentProcessorSlug(args.processorName)) {
+      await this.removeAgentProcessorSubscription(params, args.processorName);
       return;
     }
     return await this.host.requestStreamSubscription(args);
@@ -354,10 +357,32 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
       path: params.agentPath,
     });
 
-    await stream.appendBatch(
-      agentProcessorSubscriptionConfiguredEvents({
+    await stream.appendBatch([
+      ...deletedAgentProcessorSubscriptionRemovedEvents({
+        agentPath: params.agentPath,
+        projectId: params.projectId,
+      }),
+      ...agentProcessorSubscriptionConfiguredEvents({
         agentPath: params.agentPath,
         processorSlugs,
+        projectId: params.projectId,
+      }),
+    ]);
+  }
+
+  private async removeAgentProcessorSubscription(
+    params: AgentDurableObjectStructuredName,
+    processorSlug: string,
+  ) {
+    const stream = await getInitializedStreamStub({
+      durableObjectNamespace: this.env.STREAM as unknown as StreamDurableObjectNamespace,
+      namespace: params.projectId,
+      path: params.agentPath,
+    });
+    await stream.append(
+      agentProcessorSubscriptionRemovedEvent({
+        agentPath: params.agentPath,
+        processorSlug,
         projectId: params.projectId,
       }),
     );
@@ -998,6 +1023,10 @@ function remoteWithToken(input: { remote: string; token: string }) {
 
 function parseAgentChatChannel(channel: string | undefined) {
   return channel === "tui" ? "tui" : "web";
+}
+
+function isDeletedAgentProcessorSlug(processorSlug: string | undefined): processorSlug is string {
+  return DELETED_AGENT_PROCESSOR_SLUGS.some((deletedSlug) => deletedSlug === processorSlug);
 }
 
 type DebugProjectInfo = {
