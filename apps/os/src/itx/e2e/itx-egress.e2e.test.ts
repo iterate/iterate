@@ -11,7 +11,7 @@
 // "example-secret-value"). The tests send getSecret(...) placeholders to a
 // public echo endpoint and assert the remote side saw the substituted material.
 
-import { expect, test } from "vitest";
+import { expect, test as baseTest } from "vitest";
 import {
   adminApiSecret,
   baseUrl,
@@ -25,6 +25,7 @@ const HEADER = "x-itx-egress-probe";
 const PUBLIC_ECHO_URL = "https://postman-echo.com/get";
 
 const createdProjectIds = registerCreatedProjectCleanup();
+const test = process.env.OS_ITX_E2E_EGRESS_CONCURRENT === "true" ? baseTest.concurrent : baseTest;
 
 test("itx.fetch substitutes secrets through project egress (explicit door)", async () => {
   using itx = connectGlobal();
