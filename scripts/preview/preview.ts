@@ -288,12 +288,12 @@ export async function testCloudflarePreviewForPullRequest(
     };
   }
 
-  let ok = true;
-  let latestState = current.state;
-  for (const batch of batchPreviewAppsByDependencies(testableApps)) {
-    const entries = (
-      await mapWithConcurrency(batch, defaultPreviewAppConcurrency, async (app) => {
-        const existingEntry = latestState.apps[app.slug];
+  const entries = (
+    await mapPreviewAppsByDependencyReadiness(
+      testableApps,
+      defaultPreviewAppConcurrency,
+      async (app) => {
+        const existingEntry = current.state.apps[app.slug];
         if (!existingEntry?.publicUrl) {
           return null;
         }
@@ -337,17 +337,12 @@ export async function testCloudflarePreviewForPullRequest(
           testDurationMs,
           updatedAt: new Date().toISOString(),
         });
-      })
-    ).filter((entry): entry is NonNullable<typeof entry> => entry != null);
+      },
+    )
+  ).filter((entry): entry is NonNullable<typeof entry> => entry != null);
 
-    if (entries.some((entry) => entry.status === "tests-failed")) {
-      ok = false;
-    }
-
-    if (entries.length === 0) {
-      continue;
-    }
-
+  const ok = !entries.some((entry) => entry.status === "tests-failed");
+  if (entries.length > 0) {
     const update = await updatePreviewState(params, (state) => ({
       ...state,
       apps: {
@@ -355,12 +350,15 @@ export async function testCloudflarePreviewForPullRequest(
         ...Object.fromEntries(entries.map((entry) => [entry.appSlug, entry])),
       },
     }));
-    latestState = update.state;
+    return {
+      ok,
+      state: update.state,
+    };
   }
 
   return {
     ok,
-    state: latestState,
+    state: current.state,
   };
 }
 
@@ -868,6 +866,55 @@ export function batchPreviewAppsByDependencies(apps: readonly PreviewAppRuntime[
   }
 
   return batches;
+}
+
+export async function mapPreviewAppsByDependencyReadiness<Result>(
+  apps: readonly PreviewAppRuntime[],
+  concurrency: number,
+  mapItem: (item: PreviewAppRuntime, index: number) => Promise<Result>,
+) {
+  const appsBySlug = new Map(apps.map((app) => [app.slug, app]));
+  const remainingSlugs = new Set(appsBySlug.keys());
+  const completedSlugs = new Set<CloudflarePreviewAppSlugType>();
+  const running = new Map<
+    CloudflarePreviewAppSlugType,
+    Promise<{ index: number; item: PreviewAppRuntime; result: Result }>
+  >();
+  const results = new Array<Result>(apps.length);
+
+  const startReady = () => {
+    for (let index = 0; index < apps.length && running.size < concurrency; index += 1) {
+      const app = apps[index]!;
+      if (!remainingSlugs.has(app.slug)) continue;
+      const dependenciesReady = (app.previewDependencies ?? []).every(
+        (dependency) => !appsBySlug.has(dependency) || completedSlugs.has(dependency),
+      );
+      if (!dependenciesReady) continue;
+
+      remainingSlugs.delete(app.slug);
+      running.set(
+        app.slug,
+        mapItem(app, index).then((result) => ({ index, item: app, result })),
+      );
+    }
+  };
+
+  startReady();
+  while (running.size > 0) {
+    const completed = await Promise.race(running.values());
+    running.delete(completed.item.slug);
+    completedSlugs.add(completed.item.slug);
+    results[completed.index] = completed.result;
+    startReady();
+  }
+
+  if (remainingSlugs.size > 0) {
+    throw new Error(
+      `Could not order preview apps by dependencies: ${[...remainingSlugs].join(", ")}`,
+    );
+  }
+
+  return results;
 }
 
 async function mapWithConcurrency<T, Result>(

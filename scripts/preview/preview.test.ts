@@ -7,6 +7,7 @@ import {
 import {
   batchPreviewAppsByDependencies,
   expandPreviewDependencies,
+  mapPreviewAppsByDependencyReadiness,
   resolvePreviewReadinessUrls,
   resolvePreviewCompareBaseSha,
   selectPreviewAppsNeedingRetry,
@@ -34,6 +35,39 @@ describe("preview app dependency batches", () => {
         cloudflarePreviewApps.semaphore,
       ]).map((batch) => batch.map((app) => app.slug)),
     ).toEqual([["os", "semaphore"]]);
+  });
+
+  it("starts dependents as soon as their own dependency finishes", async () => {
+    const semaphore = deferred<void>();
+    const streams = deferred<void>();
+    const started: string[] = [];
+    const completed: string[] = [];
+
+    const run = mapPreviewAppsByDependencyReadiness(
+      [
+        cloudflarePreviewApps.os,
+        cloudflarePreviewApps.semaphore,
+        cloudflarePreviewApps.auth,
+        cloudflarePreviewApps["streams-example-app"],
+      ],
+      5,
+      async (app) => {
+        started.push(app.slug);
+        if (app.slug === "semaphore") await semaphore.promise;
+        if (app.slug === "streams-example-app") await streams.promise;
+        completed.push(app.slug);
+        return app.slug;
+      },
+    );
+
+    await waitFor(() => started.includes("os"));
+    expect(completed).toContain("auth");
+    expect(completed).not.toContain("semaphore");
+    expect(completed).not.toContain("streams-example-app");
+
+    semaphore.resolve();
+    streams.resolve();
+    await expect(run).resolves.toEqual(["os", "semaphore", "auth", "streams-example-app"]);
   });
 });
 
@@ -135,3 +169,22 @@ describe("preview retry selection", () => {
     ).toEqual([]);
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
+}
+
+async function waitFor(predicate: () => boolean) {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  expect(predicate()).toBe(true);
+}
