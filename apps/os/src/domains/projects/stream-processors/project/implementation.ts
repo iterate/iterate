@@ -311,90 +311,44 @@ export class ProjectProcessor extends StreamProcessor<
   }
 
   async #ensureAgentStreamSetup(input: { agentPath: StreamPath; projectId: string }) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.deps.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: input.projectId,
-      path: input.agentPath,
-    });
-    const existingEvents = await stream.history({ before: "end" });
-    const existingTypes = new Set(existingEvents.map((event) => event.type));
-    const existingIdempotencyKeys = new Set(
-      existingEvents.map((event) => event.idempotencyKey).filter((key) => key != null),
-    );
-    const selectedProvider = existingEvents
-      .toReversed()
-      .find((event) => event.type === OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE)?.payload as
-      | { provider?: unknown }
-      | undefined;
-    const provider =
-      selectedProvider?.provider === "cloudflare-ai" || selectedProvider?.provider === "openai-ws"
-        ? selectedProvider.provider
-        : undefined;
-    const shouldDefaultOpenAi = provider == null || provider === "openai-ws";
-
-    const setupEvents = [
-      ...(provider == null
-        ? [
-            {
-              type: OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
-              idempotencyKey: "project-agent-setup:provider",
-              payload: { provider: "openai-ws" },
-            },
-          ]
-        : []),
-      ...(shouldDefaultOpenAi && !existingTypes.has("events.iterate.com/openai-ws/config-updated")
-        ? [
-            {
-              type: "events.iterate.com/openai-ws/config-updated",
-              idempotencyKey: "project-agent-setup:openai-ws-config",
-              payload: { model: DEFAULT_OPENAI_AGENT_MODEL },
-            },
-          ]
-        : []),
-      ...(!existingTypes.has("events.iterate.com/agent/llm-config-updated")
-        ? [
-            {
-              type: "events.iterate.com/agent/llm-config-updated",
-              idempotencyKey: "project-agent-setup:llm-config",
-              payload: {
-                debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
-                model: DEFAULT_OPENAI_AGENT_MODEL,
-                runOpts: {},
-              },
-            },
-          ]
-        : []),
-      ...(!existingTypes.has("events.iterate.com/agent/system-prompt-updated")
-        ? [
-            {
-              type: "events.iterate.com/agent/system-prompt-updated",
-              idempotencyKey: "project-agent-setup:system-prompt",
-              payload: {
-                systemPrompt: defaultAgentSystemPrompt(input.agentPath),
-              },
-            },
-          ]
-        : []),
-    ];
-    const subscriptionEvents = [
-      ...agentProcessorSubscriptionConfiguredEvents({
-        agentPath: input.agentPath,
-        processorSlugs: ["agent-chat", "agent", "openai-ws", "agent-host"],
-        projectId: input.projectId,
-      }),
-      ...(isSlackAgentPath(input.agentPath)
-        ? [slackAgentProcessorSubscriptionConfiguredEvent(input)]
-        : []),
-    ].filter(
-      (event) => event.idempotencyKey == null || !existingIdempotencyKeys.has(event.idempotencyKey),
-    );
-    const events = [...setupEvents, ...subscriptionEvents];
-
-    if (events.length === 0) return;
-
     await this.ctx.stream.appendBatch({
       streamPath: input.agentPath,
-      events,
+      events: [
+        {
+          type: OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
+          idempotencyKey: "project-agent-setup:provider",
+          payload: { provider: "openai-ws" },
+        },
+        {
+          type: "events.iterate.com/openai-ws/config-updated",
+          idempotencyKey: "project-agent-setup:openai-ws-config",
+          payload: { model: DEFAULT_OPENAI_AGENT_MODEL },
+        },
+        {
+          type: "events.iterate.com/agent/llm-config-updated",
+          idempotencyKey: "project-agent-setup:llm-config",
+          payload: {
+            debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
+            model: DEFAULT_OPENAI_AGENT_MODEL,
+            runOpts: {},
+          },
+        },
+        {
+          type: "events.iterate.com/agent/system-prompt-updated",
+          idempotencyKey: "project-agent-setup:system-prompt",
+          payload: {
+            systemPrompt: defaultAgentSystemPrompt(input.agentPath),
+          },
+        },
+        ...agentProcessorSubscriptionConfiguredEvents({
+          agentPath: input.agentPath,
+          processorSlugs: ["agent-chat", "agent", "openai-ws", "agent-host"],
+          projectId: input.projectId,
+        }),
+        ...(isSlackAgentPath(input.agentPath)
+          ? [slackAgentProcessorSubscriptionConfiguredEvent(input)]
+          : []),
+      ],
     });
   }
 }
@@ -429,7 +383,7 @@ function slackAgentProcessorSubscriptionConfiguredEvent(input: {
 }) {
   return {
     type: "events.iterate.com/stream/subscription-configured",
-    idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.agentPath}:workers-rpc:callable`,
+    idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.agentPath}`,
     payload: {
       subscriptionKey: `slack-agent:${input.projectId}:${input.agentPath}`,
       subscriber: durableObjectProcessorSubscriber({

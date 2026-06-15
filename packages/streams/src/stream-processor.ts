@@ -45,14 +45,6 @@ export type StreamProcessorContract = {
 export type StreamProcessorBaseDeps<Contract, IterateContext> = {
   iterateContext: IterateContext;
   keepAliveWhile?: (work: () => Promise<unknown>) => void;
-  /**
-   * Side-effect anchor: events at or below this offset are reduced into state
-   * but skipped by the default `processEvent` fan-out. The default is
-   * `() => 0`, meaning catch-up replay runs side effects from the beginning.
-   * Hosts should only raise this for processors whose historical side effects
-   * are intentionally suppressed by another reconciliation path.
-   */
-  sideEffectsAfterOffset?: () => number;
 } & StreamProcessorStateStorage<ProcessorState<Contract>>;
 
 // These arg shapes are intentionally not exported: subclass overrides annotate their
@@ -87,15 +79,6 @@ type ProcessEventArgs<Contract> = ReducedEvent<Contract> &
      * completes — the last event offset in the batch, not this event's offset.
      */
     checkpointOffset: number;
-    /**
-     * The side-effect anchor (see `StreamProcessorBaseDeps`). The default
-     * `processEventBatch` already skips `processEvent` for events at or below
-     * it; it is surfaced here so live handlers (e.g. reconciliation on
-     * `subscriber-connected`) can tell whether an earlier event's side effects
-     * were skipped as historical and recover the ones that are durable
-     * obligations.
-     */
-    sideEffectsAfterOffset: number;
   };
 
 type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
@@ -109,13 +92,6 @@ type ProcessEventBatchArgs<Contract> = SideEffectHelpers & {
   state: ProcessorState<Contract>;
   streamMaxOffset: number;
   checkpointOffset: number;
-  /**
-   * The side-effect anchor for this batch (see `StreamProcessorBaseDeps`).
-   * The default implementation skips `processEvent` for reduced events at or
-   * below it; batch overrides should apply the same rule to their own side
-   * effects (pure projections can ignore it).
-   */
-  sideEffectsAfterOffset: number;
 };
 
 /**
@@ -196,7 +172,6 @@ export abstract class StreamProcessor<
   #state: ProcessorState<Contract> | undefined;
   #memorySnapshot: StreamProcessorSnapshot<ProcessorState<Contract>> | undefined;
   readonly #keepAliveWhile: ((work: () => Promise<unknown>) => void) | undefined;
-  readonly #sideEffectsAfterOffset: () => number;
   readonly #readState: () => MaybePromise<
     StreamProcessorSnapshot<ProcessorState<Contract>> | undefined
   >;
@@ -207,18 +182,10 @@ export abstract class StreamProcessor<
   constructor(args: StreamProcessorConstructorArgs<Contract, Deps, IterateContext>) {
     super();
     // Base deps are destructured out; everything else is the subclass's Deps.
-    const {
-      iterateContext,
-      keepAliveWhile,
-      sideEffectsAfterOffset,
-      readState,
-      writeState,
-      ...deps
-    } = args;
+    const { iterateContext, keepAliveWhile, readState, writeState, ...deps } = args;
     this.ctx = iterateContext;
     this.deps = deps as Deps;
     this.#keepAliveWhile = keepAliveWhile;
-    this.#sideEffectsAfterOffset = sideEffectsAfterOffset ?? (() => 0);
     this.#readState = readState ?? (() => this.#memorySnapshot);
     this.#writeState =
       writeState ??
@@ -285,14 +252,10 @@ export abstract class StreamProcessor<
    */
   protected async processEventBatch(args: ProcessEventBatchArgs<Contract>): Promise<void> {
     for (const reducedEvent of args.reducedEvents) {
-      // Events at or below the anchor are historical replay: reduced into
-      // state (already done by the batch loop) but no side effects.
-      if (reducedEvent.event.offset <= args.sideEffectsAfterOffset) continue;
       this.processEvent({
         ...reducedEvent,
         streamMaxOffset: args.streamMaxOffset,
         checkpointOffset: args.checkpointOffset,
-        sideEffectsAfterOffset: args.sideEffectsAfterOffset,
         blockProcessorWhile: args.blockProcessorWhile,
         runInBackground: args.runInBackground,
       });
@@ -366,7 +329,6 @@ export abstract class StreamProcessor<
         state,
         streamMaxOffset: args.streamMaxOffset,
         checkpointOffset,
-        sideEffectsAfterOffset: this.#sideEffectsAfterOffset(),
         blockProcessorWhile: (work) => {
           blockingWork.push(this.#runKeepAliveBackedWork(work));
         },

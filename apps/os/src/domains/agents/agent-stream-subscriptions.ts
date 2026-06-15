@@ -104,11 +104,7 @@ export function agentProcessorSubscriptionConfiguredEvent(input: {
   const agentPath = StreamPathSchema.parse(input.agentPath);
   return {
     type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-    // The `:callable` suffix (previously `:workers-rpc`) makes this a NEW
-    // idempotency key, so the callable subscription lands on existing streams
-    // and replaces the legacy built-in subscriber under the same
-    // subscriptionKey.
-    idempotencyKey: `agent-processor-subscription:${input.projectId}:${agentPath}:${input.processorSlug}:callable`,
+    idempotencyKey: `agent-processor-subscription:${input.projectId}:${agentPath}:${input.processorSlug}`,
     payload: {
       subscriptionKey: agentProcessorSubscriptionKey(input),
       subscriber: durableObjectProcessorSubscriber({

@@ -483,7 +483,6 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const run = this.deps.runScript;
     if (!run) return;
     for (const { event } of args.reducedEvents) {
-      if (event.offset <= args.sideEffectsAfterOffset) continue;
       if (event.type !== ITX_EVENT_TYPES.scriptExecutionRequested) continue;
       const payload = event.payload as {
         code?: unknown;

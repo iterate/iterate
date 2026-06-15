@@ -119,26 +119,6 @@ describe("echo example processor", () => {
     ]);
     expect(processor.checkpointOffset).toBe(6);
   });
-
-  it("reduces pre-anchor events into state but only runs side effects past the anchor", async () => {
-    const { stream, committed } = memoryStream();
-    const processor = new EchoExampleProcessor({
-      iterateContext: { stream },
-      sideEffectsAfterOffset: () => 10,
-    });
-
-    await processor.ingest({
-      events: [echoInput(9), echoInput(10), echoInput(11)],
-      streamMaxOffset: 11,
-    });
-    await tick();
-
-    // All three inputs reduce, but only offset 11 (past the anchor) echoes.
-    expect(processor.state).toEqual({ seen: 3 });
-    expect(committed).toMatchObject([
-      { type: "events.iterate.com/echo-example/output-echoed", payload: { seen: 3 } },
-    ]);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -232,7 +212,7 @@ describe("core stream state and subscription processors", () => {
       type: "events.iterate.com/stream/created",
       payload: { namespace: "stream", path: "/cb" },
     });
-    const subscriptionConfigured = sim.append("/cb", {
+    sim.append("/cb", {
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
         subscriptionKey: "circuit-breaker",
@@ -267,8 +247,6 @@ describe("core stream state and subscription processors", () => {
         },
       },
       writeState: (snapshot) => void writes.push(snapshot),
-      // The subscription anchor: replay before it reduces but stays side-effect free.
-      sideEffectsAfterOffset: () => subscriptionConfigured.offset,
     });
 
     await processor.ingest({
@@ -282,32 +260,5 @@ describe("core stream state and subscription processors", () => {
     expect(() => sim.append("/cb", { type: "test.widget", payload: { afterPause: true } })).toThrow(
       "stream paused",
     );
-  });
-
-  it("does not pause the stream from pre-anchor circuit breaker replay", async () => {
-    const { stream, committed } = memoryStream();
-    const processor = new CircuitBreakerProcessor({
-      iterateContext: { stream },
-      sideEffectsAfterOffset: () => 4,
-    });
-
-    await processor.ingest({
-      events: [
-        event({
-          type: "events.iterate.com/circuit-breaker/configured",
-          offset: 1,
-          payload: { burstCapacity: 1, refillRatePerMinute: 1 },
-          createdAtMs: 1_000,
-        }),
-        event({ type: "test.widget", offset: 2, payload: {}, createdAtMs: 2_000 }),
-        event({ type: "test.widget", offset: 3, payload: {}, createdAtMs: 3_000 }),
-      ],
-      streamMaxOffset: 3,
-    });
-    await tick();
-
-    // The breaker tripped during replay (offsets <= anchor), so no paused append.
-    expect(committed).toEqual([]);
-    expect(processor.checkpointOffset).toBe(3);
   });
 });

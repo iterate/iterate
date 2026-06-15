@@ -14,18 +14,13 @@ import {
   type StreamDurableObject,
 } from "~/domains/streams/stream-runtime.ts";
 import { SLACK_INTEGRATION_STREAM_PATH } from "~/domains/secrets/integration-streams.ts";
-import {
-  getSlackAgentDurableObjectName,
-  readSlackToken,
-  type SlackAgentDurableObject,
-} from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
+import { readSlackToken } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import {
   SlackProcessor,
   SlackProcessorContract,
 } from "~/domains/slack/stream-processors/slack/implementation.ts";
 import { eyesReactionTargetFromWebhookPayload } from "~/domains/slack/stream-processors/slack-agent/implementation.ts";
 import { callSlackWebApi } from "~/domains/slack/entrypoints/slack-capability.ts";
-import { resolveStreamPath } from "~/domains/streams/entrypoints/streams-backend.ts";
 
 export { getSlackIntegrationDurableObjectName };
 
@@ -45,7 +40,6 @@ export function getSlackIntegrationStub(projectId: string) {
 type SlackIntegrationEnv = {
   APP_CONFIG_SLACK_BOT_TOKEN?: string;
   DO_CATALOG: D1Database;
-  SLACK_AGENT: DurableObjectNamespace<SlackAgentDurableObject>;
   SLACK_BOT_TOKEN?: string;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
@@ -91,15 +85,6 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
             projectId,
           });
         }
-      },
-      prewarmRoutedStreamHosts: async ({ streamPath }) => {
-        const { projectId } = await this.ensureStartedOrInitializeFromRuntimeName();
-        const resolvedStreamPath = resolveStreamPath(streamPath);
-        const slackAgentName = getSlackAgentDurableObjectName({
-          projectId,
-          streamPath: resolvedStreamPath,
-        });
-        await this.env.SLACK_AGENT.getByName(slackAgentName).initialize({ name: slackAgentName });
       },
     });
   });
@@ -167,9 +152,7 @@ export class SlackIntegrationDurableObject extends SlackIntegrationLifecycleBase
 
     await stream.append({
       type: STREAM_SUBSCRIPTION_CONFIGURED_TYPE,
-      // ":callable" suffix so the callable subscription lands as a NEW event on
-      // streams that already carry the legacy built-in subscription.
-      idempotencyKey: `slack-subscription:${projectId}:workers-rpc:callable`,
+      idempotencyKey: `slack-subscription:${projectId}`,
       payload: {
         subscriptionKey: slackIntegrationProcessorSubscriptionKey(projectId),
         subscriber: durableObjectProcessorSubscriber({

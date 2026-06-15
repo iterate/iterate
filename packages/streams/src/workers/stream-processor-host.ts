@@ -22,10 +22,7 @@
 // the stream pumps batches into `processor.ingest`.
 
 import type { StreamProcessorSnapshot } from "../stream-processor.ts";
-import type {
-  ProcessorContractAnnouncement,
-  SubscriptionConfiguredEvent,
-} from "../processors/core/contract.ts";
+import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
 import type { StreamEvent } from "../shared/event.ts";
 import type { StreamCoreProcessorState, StreamRpc, StreamSubscriptionHandle } from "../types.ts";
 
@@ -34,7 +31,6 @@ export type StreamSubscriptionHandshake = {
   stream: StreamRpc;
   subscriptionKey: string;
   streamMaxOffset: number;
-  subscriptionConfiguredEvent: SubscriptionConfiguredEvent;
   streamRuntimeState: { coreProcessorState: StreamCoreProcessorState };
 };
 
@@ -62,17 +58,13 @@ export type HostedProcessorDeps = {
   };
   readState: () => StreamProcessorSnapshot<any> | undefined;
   writeState: (snapshot: StreamProcessorSnapshot<any>) => void;
-  /** Hosted subscriptions replay from the saved checkpoint and run side effects for every delivered event. */
-  sideEffectsAfterOffset: () => number;
   keepAliveWhile: (work: () => Promise<unknown>) => void;
 };
 
 export type HostedProcessorRuntimeState = {
   processorName: string;
   snapshot: StreamProcessorSnapshot<unknown> | undefined;
-  subscription:
-    | { subscriptionKey: string; namespace: string; path: string; sideEffectsAfterOffset: number }
-    | undefined;
+  subscription: { subscriptionKey: string; namespace: string; path: string } | undefined;
 };
 
 // Structural: the host drives the processor's public surface only. (A
@@ -369,7 +361,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
         readState: () =>
           ctx.storage.kv.get<StreamProcessorSnapshot<any>>(snapshotKey(name)) ?? undefined,
         writeState: (snapshot) => void ctx.storage.kv.put(snapshotKey(name), snapshot),
-        sideEffectsAfterOffset: () => 0,
         keepAliveWhile: (work) => void ctx.waitUntil(work()),
       });
       entries.set(name, {
@@ -424,7 +415,6 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
                 subscriptionKey,
                 namespace: entry.namespace,
                 path: entry.path,
-                sideEffectsAfterOffset: 0,
               },
       };
     },

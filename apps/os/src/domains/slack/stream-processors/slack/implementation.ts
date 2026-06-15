@@ -26,14 +26,6 @@ export type SlackProcessorDeps = {
    * routing.
    */
   acknowledgeRoutedWebhook?(input: { payload: unknown }): Promise<void> | void;
-  /**
-   * Pre-warm the Durable Objects that will subscribe to a newly routed
-   * stream, concurrently with the bootstrap append that creates it. Without
-   * this the chain is serial: thread stream cold start, then its dial wakes
-   * the slack-agent host, then the agent host — each a fresh isolate.
-   * Best-effort: the subscription dial remains the source of truth.
-   */
-  prewarmRoutedStreamHosts?(input: { streamPath: string }): Promise<void> | void;
 };
 
 export class SlackProcessor extends StreamProcessor<SlackProcessorContract, SlackProcessorDeps> {
@@ -132,11 +124,6 @@ export class SlackProcessor extends StreamProcessor<SlackProcessorContract, Slac
           streamPath,
         },
       };
-      // The hosts that will subscribe to the new stream cold-start in
-      // parallel with its creation instead of serially after its first dial.
-      args.runInBackground(async () => {
-        await this.deps.prewarmRoutedStreamHosts?.({ streamPath });
-      });
       // Durable obligation, NOT best-effort: this forward is the only copy of
       // the Slack message on its way to the agent. Run it under
       // `blockProcessorWhile` so a failed append holds the checkpoint and the

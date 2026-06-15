@@ -221,15 +221,11 @@ describe("SlackProcessor", () => {
     expect(appended).toEqual([]);
   });
 
-  it("acknowledges routed webhooks and pre-warms hosts for new routes", async () => {
+  it("acknowledges routed webhooks for new routes", async () => {
     const acknowledged: unknown[] = [];
-    const prewarmed: string[] = [];
     const { processor } = createProcessor({
       acknowledgeRoutedWebhook: ({ payload }) => {
         acknowledged.push(payload);
-      },
-      prewarmRoutedStreamHosts: ({ streamPath }) => {
-        prewarmed.push(streamPath);
       },
     });
 
@@ -240,18 +236,13 @@ describe("SlackProcessor", () => {
     await flushBackgroundWork();
 
     expect(acknowledged).toEqual([webhookEvent({ offset: 7, text: "hello" }).payload]);
-    expect(prewarmed).toEqual(["/agents/slack/c123/ts-1772136258-963519"]);
   });
 
-  it("acknowledges webhooks on existing routes without pre-warming again", async () => {
+  it("acknowledges webhooks on existing routes", async () => {
     const acknowledged: unknown[] = [];
-    const prewarmed: string[] = [];
     const { processor } = createProcessor({
       acknowledgeRoutedWebhook: ({ payload }) => {
         acknowledged.push(payload);
-      },
-      prewarmRoutedStreamHosts: ({ streamPath }) => {
-        prewarmed.push(streamPath);
       },
     });
 
@@ -273,7 +264,6 @@ describe("SlackProcessor", () => {
     await flushBackgroundWork();
 
     expect(acknowledged).toHaveLength(1);
-    expect(prewarmed).toEqual([]);
   });
 
   it("does not acknowledge unroutable webhooks", async () => {
@@ -298,31 +288,9 @@ describe("SlackProcessor", () => {
 
     expect(acknowledged).toEqual([]);
   });
-
-  it("skips side effects for events at or below the side-effect anchor", async () => {
-    const { appended, processor } = createProcessor({ sideEffectsAfterOffset: () => 10 });
-
-    await processor.ingest({
-      events: [webhookEvent({ offset: 9, text: "historical" })],
-      streamMaxOffset: 12,
-    });
-    await flushBackgroundWork();
-
-    // Reduced (no route table change for plain messages) but no forwarding.
-    expect(appended).toEqual([]);
-
-    await processor.ingest({
-      events: [webhookEvent({ offset: 11, text: "live" })],
-      streamMaxOffset: 12,
-    });
-    await flushBackgroundWork();
-    expect(appended.length).toBeGreaterThan(0);
-  });
 });
 
-function createProcessor(
-  deps: SlackProcessorDeps & { sideEffectsAfterOffset?: () => number } = {},
-) {
+function createProcessor(deps: SlackProcessorDeps = {}) {
   const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
   const processor = new SlackProcessor({
     iterateContext: {

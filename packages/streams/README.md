@@ -184,11 +184,9 @@ Host-provided constructor deps (`StreamProcessorBaseDeps`):
   Durable Object storage or browser SQLite in real hosts).
 - `keepAliveWhile(work)` — keeps the host runtime alive while detached async
   work is in flight (e.g. a Durable Object's `ctx.waitUntil`).
-- `sideEffectsAfterOffset` — the side-effect anchor. Events at or below it are
-  reduced into state but skipped by the default `processEvent` fan-out.
-  Ordinary hosted processors use `0`, so catch-up replay runs side effects from
-  the beginning; side effects must be idempotency-keyed and safe to retry from
-  the durable checkpoint.
+
+Catch-up replay runs side effects for every delivered event past the durable
+checkpoint. Side effects must therefore be idempotency-keyed and safe to retry.
 
 Hosting:
 

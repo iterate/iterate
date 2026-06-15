@@ -195,7 +195,6 @@ const subscribeArgs = (stream: ReturnType<typeof fakeStream>["stream"]) => ({
   stream: stream as never,
   subscriptionKey: "k",
   streamMaxOffset: 0,
-  subscriptionConfiguredEvent: { offset: 0 } as never,
   streamRuntimeState: { coreProcessorState: { namespace: "stream", path: "/r" } as never },
 });
 
@@ -216,13 +215,11 @@ describe("T0 — hosted processors run side effects during catch-up replay", () 
 
     await host.requestStreamSubscription({
       ...subscribeArgs(stream),
-      subscriptionConfiguredEvent: { offset: 3 } as never,
     });
     await settle();
 
     expect(host.runtimeState("counter").snapshot?.state).toEqual({ total: 12 });
     expect(sideEffects).toEqual([5, 7]);
-    expect(host.runtimeState("counter").subscription?.sideEffectsAfterOffset).toBe(0);
   });
 });
 
@@ -391,10 +388,8 @@ describe("T5 — circuit-breaker token bucket on a backwards clock (M3)", () => 
   });
 });
 
-describe("T6 — circuit-breaker misses a flood after tripping during replay (M4)", () => {
-  // Fixed in Stage 3: the trip is level-triggered (fires whenever the bucket is
-  // in deficit on a live event), not edge-triggered on the previous state.
-  it("pauses on live events even when it tripped at/below the anchor", async () => {
+describe("T6 — circuit-breaker pauses once the bucket is in deficit (M4)", () => {
+  it("pauses during catch-up once the bucket is in deficit", async () => {
     const committed: StreamEvent[] = [];
     const processor = new CircuitBreakerProcessor({
       iterateContext: {
@@ -407,8 +402,6 @@ describe("T6 — circuit-breaker misses a flood after tripping during replay (M4
           appendBatch: () => [],
         },
       },
-      // anchor = 4: offsets <= 4 reduce but run no side effects (replay).
-      sideEffectsAfterOffset: () => 4,
     });
 
     await processor.ingest({
@@ -418,9 +411,9 @@ describe("T6 — circuit-breaker misses a flood after tripping during replay (M4
           refillRatePerMinute: 1,
         }),
         event("test.widget", 2, 2_000),
-        event("test.widget", 3, 3_000), // trips here (offset 3 <= anchor 4)
+        event("test.widget", 3, 3_000),
         event("test.widget", 4, 4_000),
-        event("test.widget", 5, 5_000), // LIVE: should pause
+        event("test.widget", 5, 5_000),
         event("test.widget", 6, 6_000),
       ],
       streamMaxOffset: 6,
