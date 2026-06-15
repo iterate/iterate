@@ -29,8 +29,8 @@ const port = process.env.PORT ? Number(process.env.PORT) : 5173;
 
 // Public tunnel for the dev server, driven by Doppler. CAPTUN_TUNNEL_NAME pins the
 // stable tunnel name; CAPTUN_GATEWAY + CAPTUN_TOKEN target a self-hosted
-// gateway. Plain HTTP only (webhooks, previews, e2e) — HMR and WebSockets stay
-// on the local URL. See docs/dev-environments.md.
+// gateway. HTTP and WebSockets both route through Captun, including Vite HMR.
+// See docs/dev-environments.md.
 const captunGateway = process.env.CAPTUN_GATEWAY?.trim() || "https://tunnels.iterate.com";
 const captunName = process.env.CAPTUN_TUNNEL_NAME?.trim();
 

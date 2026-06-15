@@ -568,8 +568,8 @@ importers:
         specifier: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
         version: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz
       captun:
-        specifier: https://pkg.pr.new/captun@27
-        version: https://pkg.pr.new/captun@27(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0)
+        specifier: https://pkg.pr.new/captun@6aa1207
+        version: https://pkg.pr.new/captun@6aa1207(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0)
       comlink:
         specifier: ^4.4.2
         version: 4.4.2
@@ -829,8 +829,8 @@ importers:
         specifier: ^0.83.3
         version: 0.83.3(patch_hash=7080b0225edf4d3dcd3d6397a1cdc0244ddd2e52f883b76a0d33c58fe8c27e6c)(@aws-sdk/client-s3@3.1002.0)(@cloudflare/vite-plugin@1.33.2(vite@8.0.16(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260424.1)(wrangler@4.85.0(@cloudflare/workers-types@4.20260426.1)))(@libsql/client@0.15.15)(@neondatabase/serverless@1.0.2)(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(@types/pg@8.18.0)(better-sqlite3@12.6.2)(kysely@0.28.16)(mysql2@3.18.2(@types/node@25.6.0))(pg@8.19.0)(postgres@3.4.8)(sql.js@1.14.1)(vite@8.0.16(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(workerd@1.20260424.1)(wrangler@4.85.0(@cloudflare/workers-types@4.20260426.1))
       captun:
-        specifier: https://pkg.pr.new/captun@27
-        version: https://pkg.pr.new/captun@27(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(vite@8.0.16(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0)
+        specifier: https://pkg.pr.new/captun@6aa1207
+        version: https://pkg.pr.new/captun@6aa1207(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(vite@8.0.16(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0)
       zod:
         specifier: ^4.3.6
         version: 4.3.6
@@ -8076,9 +8076,10 @@ packages:
     resolution: {tarball: https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz}
     version: 0.8.0
 
-  captun@https://pkg.pr.new/captun@27:
-    resolution: {tarball: https://pkg.pr.new/captun@27}
+  captun@https://pkg.pr.new/captun@6aa1207:
+    resolution: {tarball: https://pkg.pr.new/captun@6aa1207}
     version: 0.0.3
+    engines: {node: '>=22.4'}
     hasBin: true
     peerDependencies:
       vite: '>=5.1.0'
@@ -22083,7 +22084,7 @@ snapshots:
 
   capnweb@https://github.com/iterate/capnweb/releases/download/v0.8.0-websocket.1/capnweb-0.8.0.tgz: {}
 
-  captun@https://pkg.pr.new/captun@27(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(vite@8.0.16(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0):
+  captun@https://pkg.pr.new/captun@6aa1207(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(effect@3.19.19)(valibot@1.2.0(typescript@5.9.3))(vite@8.0.16(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0):
     dependencies:
       '@inquirer/prompts': 8.4.3(@types/node@25.6.0)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
@@ -22103,7 +22104,7 @@ snapshots:
       - valibot
       - ws
 
-  captun@https://pkg.pr.new/captun@27(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0):
+  captun@https://pkg.pr.new/captun@6aa1207(@opentelemetry/api@1.9.0)(@trpc/server@11.12.0(typescript@5.9.3))(@types/node@25.6.0)(@valibot/to-json-schema@1.5.0(valibot@1.2.0(typescript@5.9.3)))(crossws@0.4.4(srvx@0.11.12))(valibot@1.2.0(typescript@5.9.3))(vite@8.0.9(@types/node@25.6.0)(esbuild@0.27.4)(jiti@2.7.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.3))(ws@8.19.0):
     dependencies:
       '@inquirer/prompts': 8.4.3(@types/node@25.6.0)
       '@orpc/server': 1.13.14(@opentelemetry/api@1.9.0)(crossws@0.4.4(srvx@0.11.12))(ws@8.19.0)
