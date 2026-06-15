@@ -51,13 +51,15 @@ export function projectFacts(input: {
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
-  version: "0.2.0",
+  version: "0.3.0",
   description: "Projects the Project's lifecycle events and drives creation side effects.",
   stateSchema: z.object({
+    onboarding: z.enum(["in-progress", "completed"]).default("in-progress"),
     phase: z.enum(["none", "creating", "ready"]).default("none"),
     project: ProjectFacts.nullable().default(null),
   }),
   initialState: {
+    onboarding: "in-progress",
     phase: "none",
     project: null,
   },
@@ -87,11 +89,20 @@ export const ProjectProcessorContract = defineProcessorContract({
         projectId: z.string().trim().min(1),
       }),
     },
+    "events.iterate.com/project/onboarding-completed": {
+      description: "The Project's initial onboarding memory was committed to the project repo.",
+      payloadSchema: z.object({
+        agentPath: z.literal("/agents/onboarding"),
+        commitOid: z.string().trim().min(1),
+        projectId: z.string().trim().min(1),
+      }),
+    },
   },
   consumes: [
     "events.iterate.com/project/create-requested",
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-completed",
+    "events.iterate.com/project/onboarding-completed",
   ],
   emits: [
     "events.iterate.com/project/created",

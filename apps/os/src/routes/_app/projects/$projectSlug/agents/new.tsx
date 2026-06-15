@@ -1,128 +1,146 @@
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { Play } from "lucide-react";
-import { EventInput, StreamPath } from "@iterate-com/shared/streams/types";
+import { ArrowUpIcon } from "lucide-react";
+import { StreamPath } from "@iterate-com/shared/streams/types";
+import { Button } from "@iterate-com/ui/components/button";
+import { Spinner } from "@iterate-com/ui/components/spinner";
 import { toast } from "@iterate-com/ui/components/sonner";
-import { AgentSetupFormPage, type AgentSetupFormValues } from "~/components/agent-setup-form.tsx";
-import { ItxBoundary } from "~/components/itx-boundary.tsx";
 import {
+  DEFAULT_OPENAI_AGENT_MODEL,
   configuredAgentSetupEvents,
-  parseAgentEventInputsYaml,
-  parseAgentRunOptsJson,
+  defaultAgentSystemPrompt,
 } from "~/domains/agents/agent-presets.ts";
 import {
   agentProcessorSubscriptionConfiguredEvents,
   defaultAgentProcessorSlugs,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
-import { agentPathFromInput } from "~/lib/agent-links.ts";
-import { useItx } from "~/itx/itx-react.tsx";
+import { connectItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/new")({
-  ssr: false,
-  loader: ({ context }) => ({
-    breadcrumb: "New Agent",
-    project: context.project,
-  }),
+  staticData: { hideAppHeader: true },
+  loader: async ({ context }) => {
+    const { project } = context;
+
+    return { project };
+  },
   component: NewAgentPage,
 });
 
-type NewAgentPreview = { agentPath: StreamPath; error?: string; events: EventInput[] };
-
 function NewAgentPage() {
-  return (
-    <ItxBoundary>
-      <NewAgentContent />
-    </ItxBoundary>
-  );
-}
-
-function NewAgentContent() {
   const params = Route.useParams();
   const { project } = Route.useLoaderData();
   const navigate = useNavigate();
-  const itx = useItx();
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    composerRef.current?.focus();
+  }, []);
 
   const createAgent = useMutation({
-    mutationFn: async (preview: NewAgentPreview) => {
-      if (preview.error) throw new Error(preview.error);
-      await itx.streams.get(preview.agentPath).appendBatch(preview.events);
-      return preview;
+    mutationFn: async (content: string) => {
+      const agentPath = newWebAgentPath();
+      // connectItx (imperative, not the suspending hook) lands on the project
+      // provider's pooled socket; seed the agent stream, then send the message
+      // through itx.agents.sendMessage (force-wakes the agent DO).
+      const itx = await connectItx({ projectId: params.projectSlug });
+      await itx.streams.get(agentPath).appendBatch([
+        ...configuredAgentSetupEvents({
+          idempotencyKeyPrefix: "os-agent-new:web-setup",
+          model: DEFAULT_OPENAI_AGENT_MODEL,
+          provider: "openai-ws",
+          runOpts: {},
+          systemPrompt: defaultAgentSystemPrompt(agentPath),
+        }),
+        ...agentProcessorSubscriptionConfiguredEvents({
+          agentPath,
+          processorSlugs: defaultAgentProcessorSlugs("openai-ws"),
+          projectId: project.id,
+        }),
+      ]);
+      await itx.agents.sendMessage({ agentPath, message: content, channel: "web" });
+      return agentPath;
     },
-    onSuccess: (preview) => {
+    onSuccess: (agentPath) => {
       void navigate({
         to: "/projects/$projectSlug/agents/streams/$",
         params: {
           ...params,
-          _splat: preview.agentPath,
+          _splat: agentPath,
         },
       });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+    onError: (mutationError) => {
+      const message =
+        mutationError instanceof Error ? mutationError.message : String(mutationError);
+      setError(message);
+      toast.error(message);
+    },
   });
 
+  function submit(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    const content = message.trim();
+    if (content === "" || createAgent.isPending) return;
+    setError(undefined);
+    createAgent.mutate(content);
+  }
+
+  function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    submit();
+  }
+
+  const canSubmit = message.trim() !== "" && !createAgent.isPending;
+
   return (
-    <AgentSetupFormPage
-      title="New Agent"
-      description="Assemble the events that will be appended to the agent stream."
-      idPrefix="agent"
-      pathLabel="Agent path"
-      pathPlaceholder="/agents/assistant"
-      initialPathInput="/agents/assistant"
-      customEventsDescription="YAML array of EventInput objects appended before tool-provider registrations."
-      buildPreview={(values) => buildPreviewEvents({ projectId: project.id, values })}
-      previewTitle="Event preview"
-      previewDescription={(preview) =>
-        `YAML preview of events appendBatch will append to ${preview.agentPath}.`
-      }
-      submitIcon={<Play className="size-4" />}
-      submitIdleLabel="Create agent"
-      submitPendingLabel="Creating..."
-      isPending={createAgent.isPending}
-      onSubmit={({ preview }) => createAgent.mutate(preview)}
-    />
+    <main className="flex min-h-full flex-1 items-center justify-center p-4">
+      <form onSubmit={submit} className="w-full max-w-3xl">
+        {error == null ? null : (
+          <p className="mb-2 ml-4 truncate font-mono text-xs text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="flex items-end gap-2 rounded-3xl border bg-background py-2 pl-4 pr-2 shadow-sm">
+          <textarea
+            ref={composerRef}
+            value={message}
+            onChange={(event) => setMessage(event.currentTarget.value)}
+            onKeyDown={onComposerKeyDown}
+            rows={1}
+            placeholder="Message a new agent"
+            className="field-sizing-content max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base leading-snug outline-none"
+          />
+          <Button
+            size="icon-lg"
+            type="submit"
+            title="Create agent"
+            disabled={!canSubmit}
+            className="rounded-full"
+          >
+            {createAgent.isPending ? (
+              <Spinner className="size-4" />
+            ) : (
+              <ArrowUpIcon className="size-4" />
+            )}
+          </Button>
+        </div>
+      </form>
+    </main>
   );
 }
 
-function buildPreviewEvents(input: {
-  projectId: string;
-  values: AgentSetupFormValues;
-}): NewAgentPreview {
-  const { values } = input;
-  let agentPath = StreamPath.parse("/agents/assistant");
-  try {
-    agentPath = agentPathFromInput(values.pathInput);
-    if (values.model.trim() === "") throw new Error("Model is required.");
-    if (values.systemPrompt.trim() === "") throw new Error("System prompt is required.");
-    const customEvents = parseAgentEventInputsYaml(values.customEventsYaml);
-    const runOpts =
-      values.provider === "cloudflare-ai" ? parseAgentRunOptsJson(values.runOpts) : {};
+function newWebAgentPath() {
+  return StreamPath.parse(`/agents/web/${slugifyCreationTime(new Date())}`);
+}
 
-    // Tool capabilities are no longer compiled into stream events here: the
-    // Agent Durable Object provides its tools onto its own itx context (the
-    // itx/capability-provided events) on first wake.
-    return {
-      agentPath,
-      events: [
-        ...configuredAgentSetupEvents({
-          idempotencyKeyPrefix: "os-agent-new:setup",
-          model: values.model.trim(),
-          provider: values.provider,
-          runOpts,
-          systemPrompt: values.systemPrompt.trim(),
-        }),
-        ...agentProcessorSubscriptionConfiguredEvents({
-          agentPath,
-          processorSlugs: defaultAgentProcessorSlugs(values.provider),
-          projectId: input.projectId,
-        }),
-        ...customEvents,
-      ],
-    };
-  } catch (error) {
-    return {
-      agentPath,
-      error: error instanceof Error ? error.message : String(error),
-      events: [],
-    };
-  }
+function slugifyCreationTime(date: Date) {
+  return date
+    .toISOString()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }

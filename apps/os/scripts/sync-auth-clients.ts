@@ -9,24 +9,6 @@ type Target = {
 };
 
 const targets: Target[] = [
-  {
-    dopplerConfig: "dev_jonas",
-    baseUrl: "https://os.iterate-dev-jonas.com",
-    mcpBaseUrl: "https://mcp.iterate-dev-jonas.com",
-    projectHostnameBase: "iterate-dev-jonas.app",
-  },
-  {
-    dopplerConfig: "dev_misha",
-    baseUrl: "https://os.iterate-dev-misha.com",
-    mcpBaseUrl: "https://mcp.iterate-dev-misha.com",
-    projectHostnameBase: "iterate-dev-misha.app",
-  },
-  {
-    dopplerConfig: "dev_rahul",
-    baseUrl: "https://os.iterate-dev-rahul.com",
-    mcpBaseUrl: "https://mcp.iterate-dev-rahul.com",
-    projectHostnameBase: "iterate-dev-rahul.app",
-  },
   ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(
     (previewNumber) =>
       ({

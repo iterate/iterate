@@ -131,20 +131,12 @@ cd apps/os
 doppler run --project os --config dev_jonas -- pnpm exec tsx ./alchemy.run.ts
 ```
 
-OS dev configs usually mirror production with two hostnames:
-
-| Role               | Pattern                            | Example                      |
-| ------------------ | ---------------------------------- | ---------------------------- |
-| Dashboard          | `os.iterate-dev-<user>.com`        | `os.iterate-dev-jonas.com`   |
-| MCP server         | `mcp.iterate-dev-<user>.com`       | `mcp.iterate-dev-jonas.com`  |
-| Project subdomains | `<project>.iterate-dev-<user>.app` | `demo.iterate-dev-jonas.app` |
-
-When `APP_CONFIG_BASE_URL` points at a real hostname, Alchemy creates the
-Cloudflare Tunnel, DNS records, and local `cloudflared` process. If
-`APP_CONFIG_BASE_URL` is absent or points at a loopback hostname, Vite runs
-locally without a tunnel. For fully-local dev, OS defaults MCP to `/api/__mcp`
-on the configured app base URL, such as `http://localhost:5176/api/__mcp`;
-`mcp.localhost` is not portable across local resolvers.
+OS dev configs run fully locally on `http://localhost:<port>`. Personal configs
+such as `dev_jonas`, `dev_misha`, and `dev_rahul` may still carry personal
+integration secrets, but they should not carry app/MCP/project-host URL
+overrides. OS writes the selected localhost URL to
+`apps/os/.alchemy/dev-server.json`, and local MCP is path-mounted at
+`<baseUrl>/api/__mcp`; `mcp.localhost` is not portable across local resolvers.
 
 ## Environment Configs
 
@@ -154,7 +146,7 @@ can deploy into the same environment config; for example a PR preview can deploy
 
 | Config      | Typical effect                                                 |
 | ----------- | -------------------------------------------------------------- |
-| `dev_<you>` | Local dev server and tunnel (`ALCHEMY_LOCAL=true`)             |
+| `dev_<you>` | Fully-local dev server (`ALCHEMY_LOCAL=true`)                  |
 | `preview_N` | Deploy to `os.iterate-preview-N.com` and preview project hosts |
 | `prd`       | Deploy to `os.iterate.com` and `*.iterate.app`                 |
 

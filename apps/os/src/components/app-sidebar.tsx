@@ -4,11 +4,11 @@ import {
   ArrowLeft,
   Bug,
   Check,
+  ChevronsLeft,
   ChevronsUpDown,
-  CircleDot,
+  MessageCircle,
   ExternalLink,
   GitBranch,
-  House,
   KeyRound,
   LogOut,
   Network,
@@ -18,6 +18,7 @@ import {
   ScrollText,
   Settings2,
   Shield,
+  SquarePen,
   SquareTerminal,
   UserCircle,
   type LucideIcon,
@@ -82,13 +83,19 @@ export function AppSidebar({ routeConfig }: AppSidebarProps) {
   // https://ui.shadcn.com/blocks/sidebar
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader>
+      {/* Collapsed: nudge the logo down 4px (pt-2 → pt-3) so its center lines up
+          with the stream path pill in the page header (h-9 pill, pt-2.5 → center 28px).
+          Transition padding with Tailwind's default timing — the same curve the
+          SidebarMenuButton uses for its width/height/padding — so the padding offset
+          and the button's height change move the logo together instead of drifting. */}
+      <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
         <AppSidebarHeader />
       </SidebarHeader>
       <SidebarContent>
         <AppSidebarNav routeConfig={routeConfig} />
       </SidebarContent>
       <SidebarFooter>
+        <AppSidebarCollapseButton />
         <AppSidebarUser />
       </SidebarFooter>
       <SidebarRail />
@@ -152,7 +159,10 @@ function AppSidebarHeader() {
                     key={project.id}
                     className="gap-2 p-2"
                     render={
-                      <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} />
+                      <Link
+                        to="/projects/$projectSlug/agents/new"
+                        params={{ projectSlug: project.slug }}
+                      />
                     }
                   >
                     <span className="flex size-6 items-center justify-center rounded-md border text-xs font-medium text-muted-foreground">
@@ -168,8 +178,37 @@ function AppSidebarHeader() {
                 </DropdownMenuItem>
               )}
             </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuItem render={<Link to="/projects" />}>
+                <ArrowLeft />
+                <span>View all projects</span>
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
+      </SidebarMenuItem>
+    </SidebarMenu>
+  );
+}
+
+function AppSidebarCollapseButton() {
+  const { state, toggleSidebar } = useSidebar();
+  const isCollapsed = state === "collapsed";
+
+  return (
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          type="button"
+          size="sm"
+          className="text-sidebar-foreground/70"
+          tooltip={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          onClick={toggleSidebar}
+        >
+          <ChevronsLeft className={isCollapsed ? "rotate-180" : undefined} />
+          <span>Collapse sidebar</span>
+        </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>
   );
@@ -391,7 +430,10 @@ function AppSidebarNav({ routeConfig }: { routeConfig: PublicRouteConfig }) {
                         }),
                       )}
                       render={
-                        <Link to="/projects/$projectSlug" params={{ projectSlug: project.slug }} />
+                        <Link
+                          to="/projects/$projectSlug/agents/new"
+                          params={{ projectSlug: project.slug }}
+                        />
                       }
                     >
                       <span>{project.slug}</span>
@@ -448,6 +490,13 @@ function ProjectSidebarGroup({
   appBaseUrl?: string;
 }) {
   const matchRoute = useMatchRoute();
+  const isNewChatActive = Boolean(
+    matchRoute({
+      to: "/projects/$projectSlug/agents/new",
+      params: { projectSlug },
+      fuzzy: false,
+    }),
+  );
   const customWorkerUrl = buildProjectWorkerUrl({
     projectSlug,
     customHostname,
@@ -460,23 +509,41 @@ function ProjectSidebarGroup({
       <SidebarGroup>
         <SidebarGroupContent>
           <SidebarMenu>
-            {PROJECT_STREAM_NAV_ITEMS.map((item) => (
-              <ProjectStreamNavItem
-                key={item.label}
-                icon={item.icon}
-                isActive={Boolean(
-                  matchRoute({
-                    to: item.to,
-                    params: { projectSlug },
-                    fuzzy: item.fuzzy,
-                  }),
-                )}
-                label={item.label}
-                projectSlug={projectSlug}
-                streamPath={item.streamPath}
-                to={item.to}
+            <ProjectSidebarMenuItem
+              icon={SquarePen}
+              label="New Chat"
+              render={<Link to="/projects/$projectSlug/agents/new" params={{ projectSlug }} />}
+              isActive={isNewChatActive}
+            />
+            <ProjectSidebarMenuItem
+              icon={Settings2}
+              label="Settings"
+              render={<Link to="/projects/$projectSlug" params={{ projectSlug }} />}
+              isActive={Boolean(
+                matchRoute({
+                  to: "/projects/$projectSlug",
+                  params: { projectSlug },
+                  fuzzy: false,
+                }),
+              )}
+            />
+            {customWorkerUrl ? (
+              <ProjectSidebarMenuItem
+                icon={ExternalLink}
+                label="Homepage"
+                render={
+                  <a
+                    aria-label={`Open ${projectSlug} project homepage`}
+                    href={customWorkerUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  />
+                }
+                isActive={false}
               />
-            ))}
+            ) : (
+              <ProjectSidebarMenuItem icon={ExternalLink} label="Homepage" disabled />
+            )}
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
@@ -484,63 +551,31 @@ function ProjectSidebarGroup({
       <SidebarGroup>
         <SidebarGroupContent>
           <SidebarMenu>
-            <ProjectSidebarMenuItem
-              icon={Settings2}
-              label="Settings"
-              render={<Link to="/projects/$projectSlug/settings" params={{ projectSlug }} />}
-              isActive={Boolean(
+            {PROJECT_STREAM_NAV_ITEMS.map((item) => {
+              const itemActive = Boolean(
                 matchRoute({
-                  to: "/projects/$projectSlug/settings",
+                  to: item.to,
                   params: { projectSlug },
+                  fuzzy: item.fuzzy,
                 }),
-              )}
-            />
-            <ProjectSidebarMenuItem
-              icon={SquareTerminal}
-              label="Repl"
-              render={<Link to="/projects/$projectSlug/repl" params={{ projectSlug }} />}
-              isActive={Boolean(
-                matchRoute({
-                  to: "/projects/$projectSlug/repl",
-                  params: { projectSlug },
-                }),
-              )}
-            />
-            {customWorkerUrl ? (
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  tooltip="Project worker"
-                  render={
-                    <a
-                      aria-label={`Open ${projectSlug} project worker`}
-                      href={customWorkerUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                    />
+              );
+
+              return (
+                <ProjectStreamNavItem
+                  key={item.label}
+                  icon={item.icon}
+                  isActive={
+                    item.to === "/projects/$projectSlug/agents" && isNewChatActive
+                      ? false
+                      : itemActive
                   }
-                >
-                  <ExternalLink />
-                  <span>Project worker</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ) : null}
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
-      <SidebarGroup className="mt-auto">
-        <SidebarGroupContent>
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                size="sm"
-                className="text-sidebar-foreground/70"
-                tooltip="View all projects"
-                render={<Link to="/projects" />}
-              >
-                <ArrowLeft />
-                <span>View all projects</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
+                  label={item.label}
+                  projectSlug={projectSlug}
+                  streamPath={item.streamPath}
+                  to={item.to}
+                />
+              );
+            })}
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
@@ -554,7 +589,6 @@ type ProjectStreamNavItemConfig = {
   label: string;
   streamPath: StreamPathType;
   to:
-    | "/projects/$projectSlug"
     | "/projects/$projectSlug/agents"
     | "/projects/$projectSlug/integrations"
     | "/projects/$projectSlug/secrets"
@@ -565,15 +599,8 @@ type ProjectStreamNavItemConfig = {
 
 const PROJECT_STREAM_NAV_ITEMS: readonly ProjectStreamNavItemConfig[] = [
   {
-    fuzzy: false,
-    icon: House,
-    label: "/",
-    streamPath: StreamPath.parse("/"),
-    to: "/projects/$projectSlug",
-  },
-  {
     fuzzy: true,
-    icon: CircleDot,
+    icon: MessageCircle,
     label: "/agents",
     streamPath: StreamPath.parse("/agents"),
     to: "/projects/$projectSlug/agents",
@@ -645,19 +672,21 @@ function ProjectStreamNavItem({
 }
 
 function ProjectSidebarMenuItem({
+  disabled = false,
   icon: Icon,
   isActive,
   label,
   render,
 }: {
+  disabled?: boolean;
   icon: LucideIcon;
-  isActive: boolean;
+  isActive?: boolean;
   label: string;
-  render: ReactElement;
+  render?: ReactElement;
 }) {
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton render={render} isActive={isActive} tooltip={label}>
+      <SidebarMenuButton disabled={disabled} render={render} isActive={isActive} tooltip={label}>
         <Icon />
         <span>{label}</span>
       </SidebarMenuButton>

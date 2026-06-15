@@ -175,11 +175,10 @@ const env: Record<string, string | undefined> = {
     process.env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ?? process.env.ITERATE_AUTH_SERVICE_TOKEN,
 };
 
-// Fully-local default dev (config `dev`): no tunnel, no per-user domain. Picks
-// a free port, bakes APP_CONFIG_BASE_URL=http://localhost:<port>, and writes
+// Fully-local dev: no tunnel, no per-user domain. Picks a free port, bakes
+// APP_CONFIG_BASE_URL=http://localhost:<port>, and writes
 // .alchemy/dev-server.json so CLIs can find the running server. No-op for
-// configs that set APP_CONFIG_BASE_URL (tunnel-backed dev_<user>, deploys, or
-// explicit one-off overrides).
+// deploy/preview configs and explicit APP_CONFIG_BASE_URL overrides.
 const localDevServer = await prepareLocalDevServer(env);
 if (localDevServer && !env.APP_CONFIG_PROJECT_HOSTNAME_BASES) {
   // Project hosts resolve as <proj-slug>.localhost:<port> in browsers. The app

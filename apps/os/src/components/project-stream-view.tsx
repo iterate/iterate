@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -38,7 +37,6 @@ import {
 import type { Event, StreamPath } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
-import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import {
   Select,
   SelectContent,
@@ -46,6 +44,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@iterate-com/ui/components/select";
+import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import type { EventsStreamViewState } from "@iterate-com/ui/components/events/feed-items";
 import {
@@ -54,7 +53,11 @@ import {
   type EventsStreamRendererMode,
 } from "@iterate-com/ui/components/events/stream-feed";
 import { StreamViewProcessorContract } from "@iterate-com/ui/components/events/stream-view-processor/contract";
-import type { AgentUiState } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import type {
+  AgentUiLlmStep,
+  AgentUiState,
+  AgentUiStep,
+} from "@iterate-com/ui/components/events/agent-ui-reducer";
 import {
   AGENT_UI_FEED_TABLE,
   AGENT_UI_SCHEMA_VERSION,
@@ -65,14 +68,17 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import { parse as parseYaml } from "yaml";
 import { AgentFeedView } from "~/components/agent-feed.tsx";
 import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pill-composer.tsx";
+import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
+import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
-import { StreamSwitcherDialog } from "~/components/stream-switcher-dialog.tsx";
-import { sparklinePoints, useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
-import type { StreamNavigator } from "~/lib/stream-navigation.ts";
+import { presenceLabel, sparklinePoints, useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
 import { projectStreamRpcPath } from "~/lib/stream-links.ts";
+import { useStreamViewSearch } from "~/lib/stream-view-search.ts";
+import { useVirtualizedTailScroll } from "~/lib/use-virtualized-tail-scroll.ts";
 
 type ProjectStreamMessageComposer = {
   placeholder?: string;
+  onInterrupt?: (llmRequestId: number) => Promise<void>;
   onSubmit: (message: string) => Promise<void>;
 };
 
@@ -89,6 +95,7 @@ const DEFAULT_RAW_EVENT_YAML =
 const MAX_PRESENCE_AVATARS = 4;
 
 export function ProjectStreamView({
+  autoFocusMessageComposer = false,
   defaultComposerMode,
   emptyLabel = "No events in this stream yet.",
   headerAccessory,
@@ -96,10 +103,11 @@ export function ProjectStreamView({
   projectSlug,
   projectSlugOrId,
   renderStreamPathLink,
-  streamNavigator,
+  showCommandPaletteTrigger = false,
   streamUrl,
   streamPath,
 }: {
+  autoFocusMessageComposer?: boolean;
   defaultComposerMode?: "message" | "raw";
   emptyLabel?: string;
   headerAccessory?: ReactNode;
@@ -107,7 +115,7 @@ export function ProjectStreamView({
   projectSlug: string;
   projectSlugOrId: string;
   renderStreamPathLink?: StreamPathLinkRenderer;
-  streamNavigator?: StreamNavigator;
+  showCommandPaletteTrigger?: boolean;
   streamUrl?: string;
   streamPath: StreamPath;
 }) {
@@ -163,6 +171,7 @@ export function ProjectStreamView({
         streamUrl: streamUrl ?? projectStreamRpcPath(projectSlugOrId, streamPathText),
         slug: AgentUiProcessorContract.slug,
         schemaVersion: AGENT_UI_SCHEMA_VERSION,
+        resetOnSchemaVersionChange: true,
         tables: [AGENT_UI_FEED_TABLE],
         createProcessor({ stream, sql, subscriptionKey }) {
           const storage = browserProcessorStateStorage<AgentUiState>({
@@ -188,22 +197,33 @@ export function ProjectStreamView({
   const agentUiState = useAgentUiReducedState(store.streamDatabase);
   const metrics = useSimulatedRttMetrics();
 
-  // Each stream's default tab: Agent for /agents streams, Feed otherwise.
+  // Tab, filter, and processor-sidebar state all live in the URL so any view is
+  // shareable (see ~/lib/stream-view-search.ts). The component stays mounted
+  // across stream navigations (e.g. ⌘K); each stream switch resets these params
+  // (the switcher navigates with an empty search), so a new stream shows its own
+  // default tab and fresh filters.
+  const { search, setSearch } = useStreamViewSearch();
+
+  // Each stream's default tab: Agent for /agents streams, Feed otherwise. A
+  // hand-edited `?tab=agent` on a non-agent stream falls back to the default.
   const defaultTab: ProjectStreamViewTab = isAgentStream ? "agent" : "feed";
-  // The selection is scoped to the path it was made on: this component stays
-  // mounted across stream navigations (e.g. ⌘K), and a new stream should show
-  // ITS default — but an explicit tab choice on the current stream must stick.
-  const [tabSelection, setTabSelection] = useState<{ path: string; tab: ProjectStreamViewTab }>({
-    path: streamPathText,
-    tab: defaultTab,
-  });
-  const activeTab = tabSelection.path === streamPathText ? tabSelection.tab : defaultTab;
+  const activeTab: ProjectStreamViewTab =
+    search.tab == null || (search.tab === "agent" && !isAgentStream) ? defaultTab : search.tab;
+  // Omit the tab from the URL while it equals the stream's default.
   const setActiveTab = (tab: ProjectStreamViewTab) =>
-    setTabSelection({ path: streamPathText, tab });
-  const [toolsOpen, setToolsOpen] = useState(false);
-  const [feedSearch, setFeedSearch] = useState("");
-  const [switcherOpen, setSwitcherOpen] = useState(false);
-  const [procPanelOpen, setProcPanelOpen] = useState(false);
+    setSearch({ tab: tab === defaultTab ? undefined : tab });
+
+  const toolsOpen = search.filter === true;
+  const feedSearch = search.q ?? "";
+  const focusedProcessorKey = search.processor ?? null;
+  const procPanelOpen = search.panel === true || focusedProcessorKey != null;
+  // Focusing a processor implies the sidebar is open; the metrics button opens
+  // it on the overview (no focus); closing clears both.
+  const focusProcessor = (subscriptionKey: string) =>
+    setSearch({ panel: true, processor: subscriptionKey });
+  const openProcessorsOverview = () => setSearch({ panel: true, processor: undefined });
+  const closeProcessors = () => setSearch({ panel: undefined, processor: undefined });
+
   const feedSearchInputRef = useRef<HTMLInputElement>(null);
   const [composerMode, setComposerMode] = useState<AgentComposerMode>(
     defaultComposerMode ?? (messageComposer ? "message" : "raw"),
@@ -212,35 +232,14 @@ export function ProjectStreamView({
   const [rawText, setRawText] = useState(DEFAULT_RAW_EVENT_YAML);
   const [submitError, setSubmitError] = useState<string | undefined>();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  // Only auto-scroll the raw view to the bottom when the viewport is already
-  // pinned there. Yanking a scrolled-up reader back to the bottom on every
-  // append shifts the virtualized window far enough that the whole visible
-  // range re-queries and flashes grey skeletons before SQLite returns the new
-  // rows. Lives here (not in the raw view) so the composer can re-pin it.
-  const rawStickToBottomRef = useRef(true);
-
+  const [isInterrupting, setIsInterrupting] = useState(false);
   useEffect(() => {
     if (toolsOpen) feedSearchInputRef.current?.focus();
   }, [toolsOpen]);
 
-  useEffect(() => {
-    if (streamNavigator == null) return;
-    function onKeyDown(event: KeyboardEvent) {
-      if ((event.metaKey || event.ctrlKey) && (event.key === "k" || event.key === "K")) {
-        event.preventDefault();
-        setSwitcherOpen((previous) => !previous);
-      }
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [streamNavigator]);
-
   async function runSubmit(action: () => Promise<void>) {
     setIsSubmitting(true);
     setSubmitError(undefined);
-    // The user just appended from the composer at the bottom, so follow the
-    // new event down even if they had scrolled up earlier.
-    rawStickToBottomRef.current = true;
     try {
       await action();
     } catch (error) {
@@ -268,6 +267,30 @@ export function ProjectStreamView({
     });
   }
 
+  const runningLlmRequestId =
+    agentUiState?.live?.steps.find(isRunningLlmStep)?.llmRequestId ?? null;
+
+  async function interruptMessage() {
+    if (messageComposer?.onInterrupt == null || isInterrupting) return;
+    if (runningLlmRequestId == null) return;
+    setIsInterrupting(true);
+    setSubmitError(undefined);
+    try {
+      await messageComposer.onInterrupt(runningLlmRequestId);
+      nudgeDeliveries();
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsInterrupting(false);
+    }
+  }
+
+  async function clearClientDatabases() {
+    await agentStore.clearLocalDatabase();
+    await store.clearLocalDatabase();
+    window.location.reload();
+  }
+
   async function submitRawEvents() {
     const trimmed = rawText.trim();
     if (!trimmed) return;
@@ -290,63 +313,87 @@ export function ProjectStreamView({
   const agentBusy = agentUiState?.live?.status === "running";
   const presence = agentUiState?.presence ?? [];
 
+  // Picking an example drops the user into the raw editor with the YAML loaded.
+  function loadRawExample(yaml: string) {
+    setRawText(yaml);
+    setComposerMode("raw");
+  }
+
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-background">
       <header className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1 pt-2.5">
-        <SidebarTrigger className="-ml-1" />
+        <SidebarTrigger className="-ml-1 md:hidden" />
         <button
           type="button"
           aria-haspopup="dialog"
           title={
-            streamNavigator == null
-              ? streamPathText
-              : `${streamPathText} — click or ⌘K to switch streams`
+            showCommandPaletteTrigger
+              ? `${streamPathText} — click or ⌘K to switch streams`
+              : streamPathText
           }
-          onClick={() => streamNavigator != null && setSwitcherOpen(true)}
+          onClick={() => showCommandPaletteTrigger && openGlobalCommandPalette()}
           className={cn(
             "flex h-9 min-w-0 items-center gap-2 rounded-full bg-muted px-3.5",
-            streamNavigator != null && "cursor-pointer hover:bg-muted/70",
+            showCommandPaletteTrigger && "cursor-pointer hover:bg-muted/70",
           )}
         >
           <span className="truncate font-mono text-sm">{streamPathText}</span>
-          {streamNavigator == null ? null : (
+          {showCommandPaletteTrigger ? (
             <>
               <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
               <kbd className="hidden shrink-0 rounded bg-background px-1.5 py-px text-[10px] text-muted-foreground sm:inline">
                 ⌘K
               </kbd>
             </>
-          )}
+          ) : null}
         </button>
 
         <div className="ml-auto flex items-center gap-3">
           {presence.length === 0 ? null : (
-            <button
-              type="button"
-              title="Stream processors & presence"
-              onClick={() => setProcPanelOpen(true)}
-              className="flex items-center pl-1.5"
-            >
-              {presence.slice(0, MAX_PRESENCE_AVATARS).map((entry) => (
-                <PresenceAvatar
-                  key={entry.subscriptionKey}
-                  entry={entry}
-                  busy={agentBusy}
-                  className="-ml-1.5 border-2 border-background"
-                />
-              ))}
+            <div className="flex items-center pl-1.5">
+              {presence.slice(0, MAX_PRESENCE_AVATARS).map((entry) => {
+                const selected = entry.subscriptionKey === focusedProcessorKey;
+                return (
+                  <button
+                    key={entry.subscriptionKey}
+                    type="button"
+                    title={`${presenceLabel(entry)} — open processor`}
+                    onClick={() => focusProcessor(entry.subscriptionKey)}
+                    // The selected ring renders outside the avatar; lift it above
+                    // the overlapping siblings so it isn't clipped.
+                    className={cn("-ml-1.5 rounded-full", selected && "relative z-10")}
+                  >
+                    <PresenceAvatar
+                      entry={entry}
+                      busy={agentBusy}
+                      // The avatar already reserves a 2px border to separate
+                      // overlapping siblings; recolor that same border for the
+                      // selected one instead of stacking a ring outside it.
+                      className={cn(
+                        "border-2",
+                        selected ? "border-foreground" : "border-background",
+                      )}
+                    />
+                  </button>
+                );
+              })}
               {presence.length > MAX_PRESENCE_AVATARS ? (
-                <span className="-ml-1.5 grid size-6 place-items-center rounded-full border-2 border-background bg-muted font-mono text-[9px] font-bold text-muted-foreground">
+                <button
+                  type="button"
+                  title="All processors"
+                  onClick={openProcessorsOverview}
+                  className="-ml-1.5 grid size-6 place-items-center rounded-full border-2 border-background bg-muted font-mono text-[9px] font-bold text-muted-foreground"
+                >
                   +{presence.length - MAX_PRESENCE_AVATARS}
-                </span>
+                </button>
               ) : null}
-            </button>
+            </div>
           )}
           <Button
             variant="ghost"
             size="sm"
             title="Stream health & metrics"
-            onClick={() => setProcPanelOpen(true)}
+            onClick={openProcessorsOverview}
             className="font-mono text-xs font-normal text-muted-foreground"
           >
             <svg width="24" height="11" viewBox="0 0 26 12" className="shrink-0">
@@ -386,7 +433,7 @@ export function ProjectStreamView({
             size="icon"
             title="Search & filter"
             aria-expanded={toolsOpen}
-            onClick={() => setToolsOpen((previous) => !previous)}
+            onClick={() => setSearch({ filter: toolsOpen ? undefined : true })}
             className="rounded-full text-muted-foreground"
           >
             <FilterIcon className="size-3.5" />
@@ -404,7 +451,7 @@ export function ProjectStreamView({
               <input
                 ref={feedSearchInputRef}
                 value={feedSearch}
-                onChange={(event) => setFeedSearch(event.target.value)}
+                onChange={(event) => setSearch({ q: event.target.value || undefined })}
                 placeholder="Search feed…"
                 className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
               />
@@ -423,6 +470,12 @@ export function ProjectStreamView({
             liveState={agentUiState}
             search={feedSearch}
             emptyLabel={connectionLabel}
+            isInterruptingQueuedMessages={isInterrupting}
+            {...(runningLlmRequestId != null &&
+            (agentUiState?.queuedUserMessages ?? []).length > 0 &&
+            messageComposer?.onInterrupt != null
+              ? { onInterruptQueuedMessages: interruptMessage }
+              : {})}
             // The reduced-state row only exists once the processor has
             // checkpointed; an already-subscribed empty stream is "nothing
             // here yet", not "connecting".
@@ -438,6 +491,9 @@ export function ProjectStreamView({
                 <Link
                   to="/projects/$projectSlug/streams/$"
                   params={{ projectSlug, _splat: path }}
+                  // Switching to another stream starts fresh: drop this stream's
+                  // tab/filter/processor params rather than carrying them over.
+                  search={{}}
                   {...(className == null ? {} : { className })}
                 >
                   {children}
@@ -450,7 +506,8 @@ export function ProjectStreamView({
           <ProjectStreamRawView
             database={store.streamDatabase}
             emptyLabel={connectionLabel}
-            stickToBottomRef={rawStickToBottomRef}
+            typeFilter={search.type ?? null}
+            onTypeFilterChange={(value) => setSearch({ type: value ?? undefined })}
           />
         ) : (
           <ProjectStreamStateView store={store} />
@@ -461,7 +518,11 @@ export function ProjectStreamView({
             metrics={metrics}
             eventCount={eventCount}
             busy={agentBusy}
-            onClose={() => setProcPanelOpen(false)}
+            focusedKey={focusedProcessorKey}
+            onFocus={focusProcessor}
+            onBack={openProcessorsOverview}
+            onClose={closeProcessors}
+            onClearClientDatabase={clearClientDatabases}
           />
         ) : null}
       </div>
@@ -471,6 +532,8 @@ export function ProjectStreamView({
           <AgentPillComposer
             mode={composerMode}
             onModeChange={setComposerMode}
+            autoFocusMessage={autoFocusMessageComposer}
+            examples={<ExampleEventsPanel presence={presence} onLoadExample={loadRawExample} />}
             {...(messageComposer == null
               ? {}
               : {
@@ -482,6 +545,9 @@ export function ProjectStreamView({
                       ? {}
                       : { placeholder: messageComposer.placeholder }),
                   },
+                  ...(runningLlmRequestId != null && messageComposer.onInterrupt != null
+                    ? { onInterrupt: interruptMessage, isInterrupting }
+                    : {}),
                 })}
             raw={{
               value: rawText,
@@ -493,18 +559,12 @@ export function ProjectStreamView({
           />
         </div>
       )}
-
-      {streamNavigator == null ? null : (
-        <StreamSwitcherDialog
-          open={switcherOpen}
-          onOpenChange={setSwitcherOpen}
-          currentPath={streamPath}
-          navigator={streamNavigator}
-          scope={projectSlugOrId}
-        />
-      )}
     </section>
   );
+}
+
+function isRunningLlmStep(step: AgentUiStep): step is AgentUiLlmStep {
+  return step.kind === "llm" && step.status === "running";
 }
 
 // ---------------------------------------------------------------------------
@@ -727,14 +787,16 @@ const ALL_EVENT_TYPES = "__all__";
 function ProjectStreamRawView({
   database,
   emptyLabel,
-  stickToBottomRef,
+  typeFilter,
+  onTypeFilterChange,
 }: {
   database: StreamBrowserDatabase;
   emptyLabel: string;
-  stickToBottomRef: RefObject<boolean>;
+  /** The event-type filter (URL-backed); null = all types. */
+  typeFilter: string | null;
+  onTypeFilterChange: (value: string | null) => void;
 }) {
-  const [eventTypeFilter, setEventTypeFilter] = useState<string>(ALL_EVENT_TYPES);
-  const typeFilter = eventTypeFilter === ALL_EVENT_TYPES ? null : eventTypeFilter;
+  const eventTypeFilter = typeFilter ?? ALL_EVENT_TYPES;
   const typesResult = useStreamQuery(
     database,
     `SELECT type, COUNT(*) AS count FROM events GROUP BY type ORDER BY type ASC`,
@@ -749,19 +811,6 @@ function ProjectStreamRawView({
   const eventCount = Number(countResult.data[0]?.count ?? 0);
   const [expandedOffsets, setExpandedOffsets] = useState<ReadonlySet<number>>(new Set());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-
-  useLayoutEffect(() => {
-    if (!stickToBottomRef.current) return;
-    const frame = window.requestAnimationFrame(() => {
-      const scrollContainer = scrollContainerRef.current;
-      if (scrollContainer == null) return;
-      scrollContainer.scrollTop = scrollContainer.scrollHeight;
-    });
-
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [eventCount, stickToBottomRef]);
 
   function toggleOffset(offset: number) {
     setExpandedOffsets((previous) => {
@@ -780,7 +829,9 @@ function ProjectStreamRawView({
       <div className="flex shrink-0 items-center justify-between gap-3 px-4 py-2">
         <Select
           value={eventTypeFilter}
-          onValueChange={(value) => setEventTypeFilter(value ?? ALL_EVENT_TYPES)}
+          onValueChange={(value) =>
+            onTypeFilterChange(value == null || value === ALL_EVENT_TYPES ? null : value)
+          }
         >
           <SelectTrigger size="sm" className="min-w-0 max-w-full font-mono text-xs">
             <SelectValue />
@@ -802,16 +853,7 @@ function ProjectStreamRawView({
           {eventCount.toLocaleString()} events
         </span>
       </div>
-      <div
-        ref={scrollContainerRef}
-        className="min-h-0 flex-1 overflow-y-auto"
-        onScroll={(event) => {
-          const el = event.currentTarget;
-          // Within ~80px of the bottom counts as "pinned"; expanding a row or a
-          // late virtualizer measurement can leave a few px of slack.
-          stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-        }}
-      >
+      <div ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto">
         {countResult.status !== "ok" ? (
           <Centered>
             {countResult.status === "error"
@@ -826,6 +868,7 @@ function ProjectStreamRawView({
             eventCount={eventCount}
             expandedOffsets={expandedOffsets}
             onToggleOffset={toggleOffset}
+            resetKey={database}
             scrollElementRef={scrollContainerRef}
             typeFilter={typeFilter}
           />
@@ -841,6 +884,7 @@ function VirtualEventRows({
   eventCount,
   expandedOffsets,
   onToggleOffset,
+  resetKey,
   scrollElementRef,
   typeFilter,
 }: {
@@ -849,6 +893,7 @@ function VirtualEventRows({
   eventCount: number;
   expandedOffsets: ReadonlySet<number>;
   onToggleOffset: (offset: number) => void;
+  resetKey: unknown;
   scrollElementRef: RefObject<HTMLDivElement | null>;
   typeFilter: string | null;
 }) {
@@ -856,7 +901,18 @@ function VirtualEventRows({
     count: eventCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize: () => 36,
+    getItemKey: (index) => index,
+    anchorTo: "end",
+    followOnAppend: true,
+    scrollEndThreshold: 80,
     overscan: 24,
+    directDomUpdates: true,
+  });
+  useVirtualizedTailScroll({
+    count: eventCount,
+    resetKey,
+    scrollElementRef,
+    virtualizer,
   });
 
   const virtualItems = virtualizer.getVirtualItems();

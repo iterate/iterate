@@ -116,6 +116,7 @@ export const OpenAiWsProcessorContract = defineProcessorContract({
     "events.iterate.com/openai-ws/llm-request-started",
     "events.iterate.com/openai-ws/llm-request-completed",
     "events.iterate.com/agent/llm-request-requested",
+    "events.iterate.com/agent/llm-request-cancelled",
     // The reconcile trigger: a fresh subscriber connection means some host's
     // runtime state was reset — check for started-but-not-executing requests.
     "events.iterate.com/stream/subscriber-connected",

@@ -1,14 +1,20 @@
-import { Suspense, useMemo } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
+import { Suspense } from "react";
+import { createFileRoute } from "@tanstack/react-router";
+import { StreamPath } from "@iterate-com/shared/streams/types";
 import { ProjectStreamView } from "~/components/project-stream-view.lazy.tsx";
 import { connectItx } from "~/itx/itx-react.tsx";
-import type { StreamTreeSource } from "~/components/stream-tree-browser.tsx";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
+import { StreamViewSearch } from "~/lib/stream-view-search.ts";
+
+const AGENTS_ROOT = StreamPath.parse("/agents");
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams/$")({
-  staticData: { hideAppHeader: true },
+  staticData: {
+    hideAppHeader: true,
+    commandPalette: { stream: { mode: "agent", rootPath: AGENTS_ROOT } },
+  },
+  validateSearch: StreamViewSearch,
   params: {
     parse: (raw) => ({
       _splat: streamPathFromSplat(raw._splat),
@@ -49,22 +55,7 @@ function ProjectAgentDetailPage() {
 
 function ProjectAgentDetailContent() {
   const params = Route.useParams();
-  const navigate = useNavigate();
   const { project, streamPath } = Route.useLoaderData();
-  // itx backs ONLY the ⌘K stream tree, and is dialed lazily when the tree
-  // subscribes (via connectItx, NOT the suspending useItx hook) so itx being
-  // slow or down degrades just the navigator, never the feed. Keying on
-  // the slug lands on the SAME pooled socket the project provider already
-  // warmed, instead of opening a second one.
-  const source = useMemo<StreamTreeSource>(
-    () => (path: StreamPathType) => ({
-      async onStateChange(onState) {
-        const itx = await connectItx({ projectId: params.projectSlug });
-        return itx.streams.get(path).onStateChange(onState);
-      },
-    }),
-    [params.projectSlug],
-  );
   // The stream view subscribes live, so a send needs no cache invalidation —
   // the new events arrive over the socket. agents.sendMessage routes through
   // the agent DO's own sendMessage, which force-wakes it
@@ -75,27 +66,31 @@ function ProjectAgentDetailContent() {
     await itx.agents.sendMessage({ agentPath: streamPath, message, channel: "web" });
   }
 
-  function openStream(path: StreamPathType) {
-    void navigate({
-      to: "/projects/$projectSlug/agents/streams/$",
-      params: {
-        projectSlug: params.projectSlug,
-        _splat: path,
+  async function interruptAgentMessage(llmRequestId: number) {
+    const itx = await connectItx({ projectId: params.projectSlug });
+    await itx.streams.get(streamPath).append({
+      type: "events.iterate.com/agent/llm-request-cancelled",
+      payload: {
+        phase: "requested",
+        llmRequestId,
+        reason: "interrupted-by-user-input",
       },
     });
   }
 
   return (
     <ProjectStreamView
+      autoFocusMessageComposer
       emptyLabel="No events on this agent stream yet."
       messageComposer={{
+        onInterrupt: interruptAgentMessage,
         onSubmit: submitAgentMessage,
         placeholder: "Message this agent",
       }}
       projectSlug={params.projectSlug}
       projectSlugOrId={project.id}
+      showCommandPaletteTrigger
       streamPath={streamPath}
-      streamNavigator={{ source, onOpenPath: openStream }}
     />
   );
 }

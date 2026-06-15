@@ -62,12 +62,12 @@ can be destroyed and recreated.
    for localhost project bases.
    3a. **One dev server per worktree (invariant) + discovery file.** Exactly one running dev
    server is allowed per git worktree. On boot, the alchemy script writes a discovery file in
-   the worktree (e.g. `.alchemy/dev-server.json`: `{pid, port, baseUrl, startedAt}`); on a
-   second `pnpm dev` it refuses (or offers takeover) if the recorded pid is alive; stale
-   files are cleaned automatically. CLIs and scripts that target "the local dev server"
-   resolve the base URL from this file by default — no guessing which random port, no
-   `--base-url` ceremony. This is the localhost analogue of "the Doppler config knows the
-   base URL".
+   the worktree (e.g. `.alchemy/dev-server.json`: `{pid, port, baseUrl, startedAt,
+stoppedAt?}`); on a second `pnpm dev` it refuses (or offers takeover) if the recorded pid
+   is alive. Stopped records remain as last-port memory. CLIs and scripts that target "the
+   local dev server" resolve the base URL from this file by default — no guessing which random
+   port, no `--base-url` ceremony. This is the localhost analogue of "the Doppler config knows
+   the base URL".
 4. **The external dependency is the dev-global auth: `auth.iterate-dev.com`** on the
    dev/preview Cloudflare account. Every merge to `main` deploys prd auth AND the dev-global
    auth. Humans sign in there (Google/OTP) with real identities — once per browser profile,

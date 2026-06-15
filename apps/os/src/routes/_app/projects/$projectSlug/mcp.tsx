@@ -15,7 +15,7 @@ const MCP_SESSIONS_ROOT = StreamPath.parse("/mcp-server-sessions");
 export const Route = createFileRoute("/_app/projects/$projectSlug/mcp")({
   ssr: false,
   loader: async ({ context }) => ({
-    breadcrumb: "MCP",
+    breadcrumb: "/mcp",
     project: context.project,
     routeConfig: await getPublicRouteConfig(),
   }),

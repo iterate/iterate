@@ -243,6 +243,25 @@ export class StreamBrowserDatabase implements Disposable {
     );
   }
 
+  async readMirrorSchemaVersion(slug: string): Promise<number | undefined> {
+    await this.#ensureMirrorMetaSchema();
+    const [row] = await this.exec(`SELECT value FROM mirror_meta WHERE key = ? LIMIT 1`, [
+      `schema-version:${slug}`,
+    ]);
+    if (typeof row?.value !== "string") return undefined;
+    const version = Number(row.value);
+    return Number.isFinite(version) ? version : undefined;
+  }
+
+  async writeMirrorSchemaVersion(slug: string, schemaVersion: number): Promise<void> {
+    await this.#ensureMirrorMetaSchema();
+    await this.exec(
+      `INSERT INTO mirror_meta (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      [`schema-version:${slug}`, String(schemaVersion)],
+    );
+  }
+
   async #ensureMirrorMetaSchema(): Promise<void> {
     await this.exec(
       `CREATE TABLE IF NOT EXISTS mirror_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,

@@ -159,7 +159,7 @@ function ProjectsIndexContent() {
 function ProjectSlugCell({ project }: { project: ProjectSummary }) {
   return (
     <Link
-      to="/projects/$projectSlug"
+      to="/projects/$projectSlug/agents/new"
       params={{
         projectSlug: project.slug,
       }}

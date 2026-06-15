@@ -11,7 +11,9 @@ import {
   RepoDurableObject as RealRepoDurableObject,
   type RepoInfo,
 } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import type { CommitRepoFilesInput, CommitRepoFilesResult } from "~/domains/repos/repo-git.ts";
 import { PROJECT_REPO_SLUG } from "~/domains/repos/project-repo.ts";
+import { PROJECT_REPO_AGENTS_MD } from "~/domains/repos/project-repo-template.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import {
   dispatchFetchCallable,
@@ -83,6 +85,17 @@ export { ProjectDurableObject } from "~/domains/projects/durable-objects/project
  * the loader — runs for real.
  */
 export class RepoDurableObject extends RealRepoDurableObject {
+  override async commitFiles(input: CommitRepoFilesInput): Promise<CommitRepoFilesResult> {
+    if (!(await this.#isMockRemote())) return super.commitFiles(input);
+    return {
+      branch: input.branch ?? "main",
+      changedPaths: input.changes.map((change) => change.path),
+      commitOid: MOCK_TREE_COMMIT,
+      createdBranch: false,
+      noChanges: false,
+    };
+  }
+
   override async readTree(input = {}) {
     if (!(await this.#isMockRemote())) return super.readTree(input);
     return {
@@ -90,6 +103,7 @@ export class RepoDurableObject extends RealRepoDurableObject {
       files: [
         { content: TEST_APP_ONE_WORKER_SOURCE, path: "apps/app1/worker.js" },
         { content: TEST_APP_TWO_WORKER_SOURCE, path: "apps/app2/worker.js" },
+        { content: PROJECT_REPO_AGENTS_MD, path: "AGENTS.md" },
         { content: '{\n  "version": 1\n}\n', path: "iterate.config.jsonc" },
         { content: '{\n  "type": "module"\n}\n', path: "package.json" },
         { content: TEST_PROJECT_WORKER_SOURCE, path: "worker.js" },
@@ -103,8 +117,15 @@ export class RepoDurableObject extends RealRepoDurableObject {
   }
 
   async #isMockRemote() {
-    const info = await this.getInfo();
-    return info.remote.startsWith(MOCK_ARTIFACT_REMOTE_BASE);
+    try {
+      const info = await this.getInfo();
+      return info.remote.startsWith(MOCK_ARTIFACT_REMOTE_BASE);
+    } catch (error) {
+      if (error instanceof Error && error.name === "NotInitializedError") {
+        return true;
+      }
+      throw error;
+    }
   }
 }
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
@@ -252,6 +273,23 @@ export default {
       });
       const n = Number(url.searchParams.get("n") ?? "0");
       const appended = await stream.append({ type: "test.project/ping", payload: { n } });
+      return Response.json({ appended });
+    }
+
+    if (url.pathname === "/__test/append-onboarding-completed") {
+      const stream = await getInitializedStreamStub({
+        durableObjectNamespace: env.STREAM as unknown as StreamDurableObjectNamespace,
+        namespace: "proj__local__test",
+        path: PROJECT_STREAM_PATH,
+      });
+      const appended = await stream.append({
+        type: "events.iterate.com/project/onboarding-completed",
+        payload: {
+          agentPath: "/agents/onboarding",
+          commitOid: MOCK_TREE_COMMIT,
+          projectId: "proj__local__test",
+        },
+      });
       return Response.json({ appended });
     }
 

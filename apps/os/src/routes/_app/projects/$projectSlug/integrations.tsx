@@ -30,7 +30,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/integrations")
   validateSearch: Search,
   ssr: false,
   loader: ({ context }) => ({
-    breadcrumb: "Integrations",
+    breadcrumb: "/integrations",
     project: context.project,
   }),
   component: ProjectIntegrationsPage,

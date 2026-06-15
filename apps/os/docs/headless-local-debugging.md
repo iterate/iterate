@@ -10,22 +10,21 @@ a _deployed_ preview against _production_ auth.
 
 - **Deployed preview** (`os.iterate-preview-N.com`): uses production auth. No
   test OTP — you sign in as a real allowlisted user. Best for final proof.
-- **Local stack** (this doc): `pnpm dev` runs OS on the `os.iterate-dev-<you>`
-  Cloudflare dev tunnel and Auth on `http://localhost:7101`, against a local D1
-  (miniflare) you can read and write directly. Best for fast iteration and for
-  bugs that need many synthetic events / fresh orgs.
+- **Local stack** (this doc): `pnpm dev` runs OS on a random localhost port
+  and Auth on `http://localhost:7101`, against a local D1 (miniflare) you can
+  read and write directly. Best for fast iteration and for bugs that need many
+  synthetic events / fresh orgs.
 
 ## Bring up the local stack
 
 ```bash
-pnpm dev   # monorepo root: starts apps/auth (localhost:7101) AND apps/os (dev tunnel)
+pnpm dev   # monorepo root: starts apps/auth (localhost:7101) AND apps/os (localhost)
 ```
 
 `pnpm dev` exports `ITERATE_OAUTH_ISSUER=http://localhost:7101/api/auth` and
-points OS at it. OS still serves on its **dev tunnel hostname**
-(`https://os.iterate-dev-<you>.com`), not `localhost` — the OAuth `redirect_uri`
-is the tunnel callback, so drive the browser against the tunnel host, not
-`localhost:5173`.
+points OS at it. OS writes its chosen base URL to
+`apps/os/.alchemy/dev-server.json`; drive the browser against that localhost
+URL.
 
 Gotchas:
 
@@ -51,7 +50,7 @@ nohup "$BIN" --headless=new --remote-debugging-port=9444 --user-data-dir=/tmp/ab
 # Use an isolated --session so refs/cookies don't collide with other work.
 export AGENT_BROWSER_AUTO_CONNECT=0
 ab() { agent-browser --session dbg --cdp 9444 "$@"; }
-ab open https://os.iterate-dev-<you>.com/
+ab open "$(node -p 'require("./apps/os/.alchemy/dev-server.json").baseUrl')"
 ```
 
 - The browser keeps its profile in `--user-data-dir`, so an `iterate_session`
@@ -76,7 +75,7 @@ Local/non-prod auth enables email OTP and a deterministic code:
 Flow (snapshot between steps; refs go stale on every navigation):
 
 ```bash
-ab open https://os.iterate-dev-<you>.com/
+ab open "$(node -p 'require("./apps/os/.alchemy/dev-server.json").baseUrl')"
 ab find role button click --name "Continue with Iterate"     # OS -> auth /login
 ab find role button click --name "Continue with email"
 ab fill "input[type=email]" "testuser+dbg@gmail.com"

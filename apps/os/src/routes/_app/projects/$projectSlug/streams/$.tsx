@@ -1,13 +1,14 @@
-import { Suspense, useMemo } from "react";
-import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Suspense } from "react";
+import { createFileRoute } from "@tanstack/react-router";
 import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
 import { useItx } from "~/itx/itx-react.tsx";
 import { breadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
+import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/streams/$")({
-  staticData: { hideAppHeader: true },
+  staticData: { hideAppHeader: true, commandPalette: { stream: { mode: "stream" } } },
+  validateSearch: StreamViewSearch,
   params: {
     parse: (raw) => ({
       _splat: streamPathFromSplat(raw._splat),
@@ -47,10 +48,8 @@ function ProjectStreamDetailPage() {
 
 function ProjectStreamDetailContent() {
   const params = Route.useParams();
-  const navigate = useNavigate();
   const { project, streamPath } = Route.useLoaderData();
   const itx = useItx();
-  const source = useMemo(() => (path: StreamPathType) => itx.streams.get(path), [itx]);
 
   async function submitMessage(message: string) {
     await itx.streams.get(streamPath).appendBatch([
@@ -61,21 +60,10 @@ function ProjectStreamDetailContent() {
     ]);
   }
 
-  function openStream(path: StreamPathType) {
-    void navigate({
-      to: "/projects/$projectSlug/streams/$",
-      params: {
-        projectSlug: params.projectSlug,
-        _splat: path,
-      },
-    });
-  }
-
   return (
     <StreamExplorerDetail
       currentPath={streamPath}
-      onOpenPath={openStream}
-      source={source}
+      showCommandPaletteTrigger
       streamView={{
         defaultComposerMode: "raw",
         messageComposer: {

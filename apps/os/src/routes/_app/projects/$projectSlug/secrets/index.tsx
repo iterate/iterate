@@ -36,7 +36,7 @@ const DEFAULT_SECRET_FORM_VALUES = {
 export const Route = createFileRoute("/_app/projects/$projectSlug/secrets/")({
   ssr: false,
   loader: ({ context }) => ({
-    breadcrumb: "Secrets",
+    breadcrumb: "/secrets",
     project: context.project,
   }),
   component: ProjectSecretsIndexPage,
