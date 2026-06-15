@@ -1,9 +1,9 @@
 # Step 10 — the Project Durable Object, and `itx.fetch`
 
-**Adds:** a real platform Durable Object, and the first **root capability**. Every
+**Adds:** a real platform Durable Object, and the first **built-in capability**. Every
 project has a **Project Durable Object** (`ProjectDO`) that owns the project's
 egress. A project-scoped itx (the `prj:<id>` context from Step 08) is born with
-`fetch` wired as a root capability backed by that DO, so `itx.fetch(url)` egresses
+`fetch` wired as a built-in capability backed by that DO, so `itx.fetch(url)` egresses
 through the project.
 
 ```ts

@@ -612,17 +612,20 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
 }
 ```
 
-### Root capabilities are injected at construction, not appended
+### Built-in capabilities are injected at construction, not appended
 
-`fetch`/`streams`/`ai` are not special-cased in a handle — but they're also _not_ provided as events on every context's stream. Appending a `capability-provided` for each root would mean rewriting thousands of streams (one per project) every time we change what the roots are. Instead the `Itx` StreamProcessor takes its **root capabilities as a constructor argument**: the host wires them in when it builds the context, `invoke` falls back to them on a miss (after the fold, before the parent), and they appear in `describe`/`list` so they're self-describing.
+`fetch`/`streams`/`ai` are not special-cased in a handle — but they're also _not_ provided as events on every context's stream. Appending a `capability-provided` for each one would mean rewriting thousands of streams (one per project) every time we change what the built-ins are. Instead the `Itx` StreamProcessor takes its **built-in capabilities as a constructor argument**: the host wires them in when it builds the context, `invoke` falls back to them on a miss (after the fold, before the parent), and they appear in `describe`/`list` so they're self-describing.
 
 ```ts
-// the host builds a context with its roots wired in — no events appended:
-new Itx({ ...deps, roots: { fetch: (url) => env.PROJECT.getByName(id).egress(url) } });
-// invoke resolution order: own fold (provides) → roots (these) → parent (Step 11).
+// the host builds a context with its built-in capabilities wired in — no events appended:
+new Itx({
+  ...deps,
+  builtinCapabilities: { fetch: (url) => env.PROJECT.getByName(id).egress(url) },
+});
+// invoke resolution order: own fold (provides) → built-in capabilities → parent (Step 11).
 ```
 
-Changing a root is then a **code change** — re-injected on the next boot — not a stream rewrite. The cost is honest: a root isn't in the durable fold, and if you've already told an agent what its roots are, changing them still means updating what you told it; but you never rewrite the logs. (Step 12's chain — project → agent — decides which context gets which roots; a child inherits the parent's by climbing on a miss.)
+Changing a built-in is then a **code change** — re-injected on the next boot — not a stream rewrite. The cost is honest: a built-in isn't in the durable fold, and if you've already told an agent what capabilities it has, changing them still means updating what you told it; but you never rewrite the logs. (Step 12's chain — project → agent — decides which context gets which built-ins; a child inherits the parent's by climbing on a miss.)
 
 ### Where it actually runs
 
@@ -685,7 +688,7 @@ All real, all in the actual files; none of it changes the inner model. Each entr
 
 - **Live-stub retention** — `dup()` provided stubs (deep-walk plain-object providers); teardown appends a `capability-disconnected` event so `describe()` shows it offline.
 
-- **The handle is more than the proxy** — today's `ItxHandle` also carries built-ins (`projects`, `streams`, `fetch`, `extend`, `super`) that don't fall through to `invoke`, plus reserved-name gating; it's what the Worker serves (a thin wrapper dialing the DO node's `itx()`). 🔄 **we want to change this** — those roots shouldn't be privileged names baked into a handle; they should be _provided_ like any other capability (Step 11), injected by whoever sets up the context. The clean version has no special handle, just `provideCapability`.
+- **The handle is more than the proxy** — today's `ItxHandle` also carries built-ins (`projects`, `streams`, `fetch`, `extend`, `super`) that don't fall through to `invoke`, plus reserved-name gating; it's what the Worker serves (a thin wrapper dialing the DO node's `itx()`). 🔄 **we want to change this** — those shouldn't be privileged names baked into a handle; they're **built-in capabilities** handed to the `Itx` constructor by whoever builds the context (Step 11), resolved as an `invoke` fallback. No special handle.
 
 - **The ref taxonomy and dial's reach** — beyond `source`, a ref's `worker` can be `binding`, `loopback`, or `durable-object`; `dial` handles Worker-Loader isolate caching (by content, per origin), facets, and allowlists.
 

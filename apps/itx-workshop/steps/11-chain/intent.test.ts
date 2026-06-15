@@ -1,6 +1,6 @@
 // Intent: a context chain. An agent context's parent is its project context. On
 // a capability MISS the agent climbs to the project (super); the agent's OWN caps
-// (and roots) SHADOW the project's; and the project is unaffected by the agent.
+// (and built-in capabilities) SHADOW the project's; and the project is unaffected by the agent.
 //
 //   npm run dev
 //   node --experimental-strip-types steps/11-chain/intent.test.ts

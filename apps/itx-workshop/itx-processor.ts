@@ -7,11 +7,11 @@
 // address — is the fold of the event log; the only non-durable state is the
 // in-memory bridge of live stubs, which is precisely the live-vs-sturdy line.
 //
-// Root capabilities are NOT built in. There is no special handle carrying
-// `fetch`/`streams`/etc. — whoever sets up a context just calls
-// `provideCapability(...)`, the same verb used for everything else. (A context
-// that should have defaults from birth can be handed them at construction and
-// provide them in its setup; that's a convenience, not a separate mechanism.)
+// Built-in capabilities (e.g. `itx.fetch`) are NOT special-cased in a handle and
+// are NOT appended to the stream as events — they're handed to the constructor by
+// whoever builds the context (the host). `invoke` falls back to them after the
+// fold; own provides shadow them; they show up in describe/list. Changing them is
+// a code change, not a rewrite of every project's stream.
 
 import { StreamProcessor } from "@iterate-com/streams/stream-processor";
 import { ITX_EVENTS, ItxContract } from "./itx-contract.ts";
@@ -64,21 +64,20 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   // with only live caps never needs it.
   #dial: (address: any) => any;
 
-  // Root capabilities (Step 10): name → live stub, injected at CONSTRUCTION, not
-  // provided through the event log. There is no privileged handle — `itx.fetch`
-  // is just a root the host seeded (e.g. a project context's `fetch`, backed by
-  // its Project DO). Own provides (the fold) shadow roots of the same name.
-  #roots: Record<string, any>;
+  // Built-in capabilities (Step 10): name → live stub, handed to the constructor,
+  // NOT provided through the event log. e.g. a project context's `fetch`, backed
+  // by its Project DO. Own provides (the fold) shadow a built-in of the same name.
+  #builtinCapabilities: Record<string, any>;
 
   // The chain (Step 11): a child context (e.g. an agent) climbs to its parent
   // (e.g. its project) on a capability MISS. Returns the parent's processor stub,
-  // or null at the top of the chain. A child's own caps + roots shadow the parent.
+  // or null at the top of the chain. A child's own caps + built-ins shadow the parent.
   #parentItx: () => { invoke(input: { path: string[]; args: unknown[] }): any } | null;
 
   constructor(
     args: ConstructorParameters<typeof StreamProcessor<typeof ItxContract>>[0] & {
       dial?: (address: any) => any;
-      roots?: Record<string, any>;
+      builtinCapabilities?: Record<string, any>;
       parentItx?: () => { invoke(input: { path: string[]; args: unknown[] }): any } | null;
     },
   ) {
@@ -88,7 +87,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
       (() => {
         throw new Error("this context has no dial configured (no sturdy capabilities)");
       });
-    this.#roots = (args as any).roots ?? {};
+    this.#builtinCapabilities = (args as any).builtinCapabilities ?? {};
     this.#parentItx = (args as any).parentItx ?? (() => null);
   }
 
@@ -172,9 +171,14 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
     }
   }
 
-  /** The capability table is the fold — plus the injected roots (Step 10). */
+  /** The capability table is the fold — plus the constructor's built-in capabilities (Step 10). */
   listCapabilities(): string[] {
-    return [...new Set([...Object.keys(this.#roots), ...Object.keys(this.state.capabilities)])];
+    return [
+      ...new Set([
+        ...Object.keys(this.#builtinCapabilities),
+        ...Object.keys(this.state.capabilities),
+      ]),
+    ];
   }
 
   async revokeCapability({ path }: { path: string[] }) {
@@ -185,7 +189,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
   }
 
   // invoke resolves over the FOLD (this.state) first — own caps win — then falls
-  // back to the injected roots. Then it borrows: a live entry's stub from the
+  // back to the constructor's built-in capabilities. Then it borrows: a live entry's stub from the
   // bridge, a sturdy entry's address via dial; the remaining path is replayed.
   async invoke({ path, args = [] }: { path: string[]; args?: unknown[] }) {
     const hit = resolveLongestPrefix(this.state.capabilities, path);
@@ -198,10 +202,11 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
       }
       return await replayPath(this.#dial(hit.record.address), hit.rest, args);
     }
-    // root fallback (Step 10): itx.fetch and friends, seeded at construction.
+    // built-in capabilities fallback (Step 10): itx.fetch and friends, handed in at construction.
     for (let i = path.length; i >= 1; i--) {
       const name = path.slice(0, i).join(".");
-      if (this.#roots[name]) return await replayPath(this.#roots[name], path.slice(i), args);
+      if (this.#builtinCapabilities[name])
+        return await replayPath(this.#builtinCapabilities[name], path.slice(i), args);
     }
     // chain (Step 11): climb to the parent context on a miss (super).
     const parent = this.#parentItx();

@@ -1,9 +1,9 @@
-// Intent: a project-scoped itx is born with `itx.fetch` — a root capability,
-// provided (not built in), backed by that project's own Project Durable Object.
-// Calling itx.fetch(url) egresses THROUGH the Project DO, tagged with the project.
+// Intent: a project-scoped itx is born with `itx.fetch` — a built-in capability
+// handed to the Itx constructor, backed by that project's own Project Durable
+// Object. Calling itx.fetch(url) egresses THROUGH the Project DO, tagged with it.
 //
 // We get a project context the real way (Step 08 auth: token + project), then
-// call itx.fetch on the NAKED stub (it resolves to the injected `fetch` root).
+// call itx.fetch on the NAKED stub (it resolves to the injected `fetch` built-in).
 //
 //   npm run dev
 //   node --experimental-strip-types steps/10-project-fetch/intent.test.ts

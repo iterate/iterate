@@ -134,7 +134,7 @@ is a stub whose `.apply` is a path segment, not a function.
   state. Step 8's "it's just a durable event log."
 - `itx-processor.ts` — `Itx extends StreamProcessor<ItxContract>`, the REAL base class:
   one pure `reduce` (the fold), the verbs, the in-memory live-stub bridge. Step 11.
-  Root capabilities are just provided — no built-in handle.
+  Built-in capabilities (e.g. `itx.fetch`) are handed to the `Itx` constructor — no special handle.
 - `client.ts` — the client library: **`withItx({ baseUrl, context })`**, the Node
   entry point that opens an itx context and returns the bare, Disposable stub
   (`using itx = withItx(...)`). Mirrors production's `apps/os/src/itx/client.ts`

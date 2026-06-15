@@ -183,7 +183,7 @@ export class ItxDO extends DurableObject<Env> {
         ...deps,
         iterateContext: { stream: this.#log() },
         dial: (address) => this.#dial(address), // Step 09: restore a sturdy ref
-        roots: this.#projectRoots(), // Step 10: itx.fetch on a project context
+        builtinCapabilities: this.#projectBuiltinCapabilities(), // Step 10: itx.fetch on a project context
         parentItx: () => this.#parentContext(), // Step 11: climb to the parent
       }),
   );
@@ -198,9 +198,9 @@ export class ItxDO extends DurableObject<Env> {
   }
 
   // Step 10: ONLY the project-root context ("prj:<id>", no sub-path) is born with
-  // `fetch` as a root capability — provided, not built in — backed by that
-  // project's Project DO. Agent/sub-contexts inherit `fetch` via the chain.
-  #projectRoots(): Record<string, any> {
+  // `fetch` as a built-in capability — handed to the Itx constructor, backed by
+  // that project's Project DO. Agent/sub-contexts inherit `fetch` via the chain.
+  #projectBuiltinCapabilities(): Record<string, any> {
     const name = this.ctx.id.name ?? "";
     const projectId = this.#project();
     if (!projectId || name !== `prj:${projectId}`) return {};
@@ -415,7 +415,7 @@ class WorkerHandle extends RpcTarget {
 // Step 10 — the Project Durable Object. One per project; it owns the project's
 // egress. Its `egress` method does the actual outbound fetch (named `egress`, not
 // `fetch`, because a DO's `fetch` is its HTTP entrypoint). A project-scoped itx is
-// born with this wired as the `fetch` root (see ItxDO.#projectRoots), so
+// born with this wired as the `fetch` root (see ItxDO.#projectBuiltinCapabilities), so
 // `itx.fetch(url)` routes here — egress is the project's, tagged with its id.
 export class ProjectDO extends DurableObject<Env> {
   async egress(
