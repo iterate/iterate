@@ -21,6 +21,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug")({
   loader: ({ context }) => {
     return {
       breadcrumb: context.project.slug,
+      project: context.project,
     };
   },
   component: ProjectLayout,

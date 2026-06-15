@@ -1,18 +1,21 @@
+import type { Event } from "@iterate-com/shared/streams/types";
+import { planAgentUiOps, type AgentUiOp } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { StreamProcessor } from "../../stream-processor.ts";
 import { createSchemaEnsurer } from "../../browser/ensure-schema-once.ts";
 import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
-import { BrowserEventFeedContract } from "./contract.ts";
-import { planFeedOps, type FeedOp, type FeedState } from "./grouping.ts";
+import { BrowserEventFeedContract, type BrowserEventFeedState } from "./contract.ts";
+import { planFeedOps, type FeedOp } from "./grouping.ts";
 export { BrowserEventFeedContract } from "./contract.ts";
+export type { BrowserEventFeedState } from "./contract.ts";
 
 /** The table this processor owns. */
 export const BROWSER_EVENT_FEED_TABLE = "feed_items";
+export const AGENT_UI_FEED_TABLE = "agent_feed_items";
 
 /** Bumped into the writer-lock name so a feed_items schema change lets a fresh tab take over. */
-export const BROWSER_EVENT_FEED_SCHEMA_VERSION = 2;
+export const BROWSER_EVENT_FEED_SCHEMA_VERSION = 3;
 
 export type BrowserEventFeedContract = typeof BrowserEventFeedContract;
-export type BrowserEventFeedState = FeedState;
 
 export type BrowserEventFeedProcessorDeps = {
   sql: SqlClient;
@@ -37,17 +40,25 @@ export class BrowserEventFeedProcessor extends StreamProcessor<
 
   protected override reduce(
     args: Parameters<StreamProcessor<BrowserEventFeedContract>["reduce"]>[0],
-  ): FeedState {
-    return planFeedOps(args.state, [args.event]).endState;
+  ): BrowserEventFeedState {
+    return {
+      feed: planFeedOps(args.state.feed, [args.event]).endState,
+      agentUi: planAgentUiOps(args.state.agentUi, [args.event as unknown as Event]).endState,
+    };
   }
 
   protected override async processEventBatch(
     args: Parameters<StreamProcessor<BrowserEventFeedContract>["processEventBatch"]>[0],
   ): Promise<void> {
-    const { ops } = planFeedOps(args.previousState, args.events);
+    const feed = planFeedOps(args.previousState.feed, args.events);
+    const agentUi = planAgentUiOps(args.previousState.agentUi, args.events as unknown as Event[]);
+    const statements = [
+      ...feed.ops.map(feedOpToStatement),
+      ...agentUi.ops.map(agentUiOpToStatement),
+    ];
 
-    if (ops.length > 0) {
-      await this.deps.sql.batch(ops.map(feedOpToStatement), { transaction: true });
+    if (statements.length > 0) {
+      await this.deps.sql.batch(statements, { transaction: true });
     }
 
     await super.processEventBatch(args);
@@ -81,6 +92,15 @@ function feedOpToStatement(op: FeedOp): { sql: string; params: SqlValue[] } {
   };
 }
 
+function agentUiOpToStatement(op: AgentUiOp): { sql: string; params: SqlValue[] } {
+  return {
+    sql: `INSERT INTO agent_feed_items (local_index, kind, data)
+          VALUES (?, ?, jsonb(?))
+          ON CONFLICT(local_index) DO UPDATE SET kind = excluded.kind, data = excluded.data`,
+    params: [op.localIndex, op.item.kind, JSON.stringify(op.item)],
+  };
+}
+
 const ensureBrowserEventFeedSchema = createSchemaEnsurer({
   run: async (sql) => {
     // No PRAGMA user_version here: feed_items shares the per-stream OPFS database with the
@@ -99,6 +119,18 @@ const ensureBrowserEventFeedSchema = createSchemaEnsurer({
               first_offset INTEGER NOT NULL,
               last_offset INTEGER NOT NULL,
               event_count INTEGER NOT NULL,
+              data BLOB NOT NULL
+            )
+          `,
+        },
+        {
+          sql: `
+            -- One row per settled agent feed item (user message, assistant
+            -- message, or completed activity). The live in-flight activity is
+            -- kept in this processor's reduced state.
+            CREATE TABLE IF NOT EXISTS agent_feed_items (
+              local_index INTEGER PRIMARY KEY,
+              kind TEXT NOT NULL,
               data BLOB NOT NULL
             )
           `,

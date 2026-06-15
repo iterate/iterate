@@ -10,19 +10,14 @@ export type RouteBreadcrumbStaticData = {
   hideAppHeader?: boolean;
 };
 
-export type RouteCommandPaletteStaticData = {
-  commandPalette?: {
-    stream?: {
-      mode: "stream" | "agent";
-      rootPath?: StreamPath;
-    };
-  };
-};
-
-export type AppRouteStaticData = RouteBreadcrumbStaticData & RouteCommandPaletteStaticData;
+export type AppRouteStaticData = RouteBreadcrumbStaticData;
 
 export type RouteBreadcrumbLoaderData = {
   breadcrumb?: string;
+  project?: {
+    id: string;
+    slug: string;
+  };
   streamBreadcrumb?: {
     projectId: string;
     projectSlug: string;

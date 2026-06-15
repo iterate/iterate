@@ -4,14 +4,8 @@ import { StreamPath } from "@iterate-com/shared/streams/types";
 import { StreamSwitcherDialog } from "./stream-switcher-dialog.tsx";
 import { connectItx } from "~/itx/itx-react.tsx";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
-import type {
-  AppRouteStaticData,
-  RouteBreadcrumbLoaderData,
-  RouteCommandPaletteStaticData,
-} from "~/lib/route-breadcrumbs.ts";
+import type { RouteBreadcrumbLoaderData } from "~/lib/route-breadcrumbs.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
-
-const AGENTS_ROOT = StreamPath.parse("/agents");
 
 export function GlobalCommandPalette() {
   const [open, setOpen] = useState(false);
@@ -57,21 +51,6 @@ export function GlobalCommandPalette() {
       }),
       onOpenPath(path) {
         setOpen(false);
-        if (
-          activeStream.mode === "agent" &&
-          path !== AGENTS_ROOT &&
-          path.startsWith(`${AGENTS_ROOT}/`)
-        ) {
-          void navigate({
-            to: "/projects/$projectSlug/agents/streams/$",
-            params: { projectSlug: activeStream.projectSlug, _splat: path },
-            // Open the new stream with its own default tab and fresh filters
-            // rather than carrying the previous stream's view state across.
-            search: {},
-          });
-          return;
-        }
-
         void navigate({
           to: "/projects/$projectSlug/streams/$",
           params: { projectSlug: activeStream.projectSlug, _splat: path },
@@ -89,14 +68,16 @@ export function GlobalCommandPalette() {
       onOpenChange={setOpen}
       currentPath={activeStream.streamPath}
       navigator={streamNavigator}
-      rootPath={activeStream.rootPath}
       scope={activeStream.projectId}
     />
   );
 }
 
-type ActiveStreamCommandContext = NonNullable<RouteBreadcrumbLoaderData["streamBreadcrumb"]> &
-  NonNullable<NonNullable<RouteCommandPaletteStaticData["commandPalette"]>["stream"]>;
+type ActiveStreamCommandContext = {
+  projectId: string;
+  projectSlug: string;
+  streamPath: StreamPath;
+};
 
 function getActiveStreamCommandContext(
   matches: ReturnType<typeof useMatches>,
@@ -107,21 +88,20 @@ function getActiveStreamCommandContext(
       Boolean(value),
     )
     .at(-1);
-  const streamCommand = matches
-    .map((match) => (match.staticData as AppRouteStaticData | undefined)?.commandPalette?.stream)
-    .filter(
-      (
-        value,
-      ): value is NonNullable<
-        NonNullable<RouteCommandPaletteStaticData["commandPalette"]>["stream"]
-      > => Boolean(value),
-    )
+  const project = matches
+    .map((match) => (match.loaderData as RouteBreadcrumbLoaderData | undefined)?.project)
+    .filter((value): value is NonNullable<RouteBreadcrumbLoaderData["project"]> => Boolean(value))
     .at(-1);
 
-  if (streamBreadcrumb == null || streamCommand == null) return null;
+  if (streamBreadcrumb == null && project == null) return null;
+
+  const projectId = streamBreadcrumb?.projectId ?? project!.id;
+  const projectSlug = streamBreadcrumb?.projectSlug ?? project!.slug;
+  const streamPath = streamBreadcrumb?.streamPath ?? StreamPath.parse("/");
+
   return {
-    ...streamBreadcrumb,
-    ...streamCommand,
-    rootPath: streamCommand.rootPath ?? StreamPath.parse("/"),
+    projectId,
+    projectSlug,
+    streamPath,
   };
 }

@@ -45,10 +45,12 @@ import { cn } from "@iterate-com/ui/lib/utils";
 import { parse as parseYaml } from "yaml";
 import {
   AGENT_UI_FEED_TABLE,
-  AGENT_UI_SCHEMA_VERSION,
-  AgentUiProcessor,
-  AgentUiProcessorContract,
-} from "~/domains/streams/browser-processors/agent-ui-processor.ts";
+  BROWSER_EVENT_FEED_TABLE,
+  BROWSER_EVENT_FEED_SCHEMA_VERSION,
+  BrowserEventFeedContract,
+  BrowserEventFeedProcessor,
+  type BrowserEventFeedState,
+} from "~/domains/streams/engine/processors/browser-event-feed/implementation.ts";
 import { useStreamQuery } from "~/domains/streams/engine/browser/hooks/use-stream-query.ts";
 import { browserProcessorStateStorage } from "~/domains/streams/engine/browser/processor-state-storage.ts";
 import type {
@@ -177,27 +179,27 @@ export function ProjectStreamView({
   const reductionKey = `${projectSlugOrId}:${streamPathText}`;
 
   // A second browser-hosted processor on the same stream (and same per-path
-  // SQLite database): folds agent events into settled `agent_feed_items` rows
-  // plus a live in-flight activity persisted in its reduced state. Runs at
-  // this level (not inside the agent tab) because the header chrome —
-  // presence avatars, busy indicator — derives from the same state.
-  const agentStore = useMemo(
+  // SQLite database): folds events into feed item projections, including the
+  // settled agent chat rows plus the live in-flight activity persisted in its
+  // reduced state. Runs at this level (not inside a tab) because the header
+  // chrome — presence avatars, busy indicator — derives from the same state.
+  const feedStore = useMemo(
     () =>
       acquireStreamRuntime({
         createStreamClient: streamClientFactory,
         namespace: projectSlugOrId,
         streamPath: streamPathText,
-        slug: AgentUiProcessorContract.slug,
-        schemaVersion: AGENT_UI_SCHEMA_VERSION,
+        slug: BrowserEventFeedContract.slug,
+        schemaVersion: BROWSER_EVENT_FEED_SCHEMA_VERSION,
         resetOnSchemaVersionChange: true,
-        tables: [AGENT_UI_FEED_TABLE],
+        tables: [BROWSER_EVENT_FEED_TABLE, AGENT_UI_FEED_TABLE],
         createProcessor({ stream, sql, subscriptionKey }) {
-          const storage = browserProcessorStateStorage<AgentUiState>({
+          const storage = browserProcessorStateStorage<BrowserEventFeedState>({
             sql,
-            processorSlug: AgentUiProcessorContract.slug,
+            processorSlug: BrowserEventFeedContract.slug,
             subscriptionKey,
           });
-          return new AgentUiProcessor({
+          return new BrowserEventFeedProcessor({
             iterateContext: { stream },
             sql,
             readState: storage.readState,
@@ -207,10 +209,10 @@ export function ProjectStreamView({
       }),
     [projectSlugOrId, streamClientFactory, streamPathText],
   );
-  const agentSnapshot = useSyncExternalStore(
-    agentStore.subscribe,
-    agentStore.getSnapshot,
-    agentStore.getServerSnapshot,
+  const feedSnapshot = useSyncExternalStore(
+    feedStore.subscribe,
+    feedStore.getSnapshot,
+    feedStore.getServerSnapshot,
   );
   const agentUiState = useAgentUiReducedState(store.streamDatabase);
   const metrics = useSimulatedRttMetrics();
@@ -272,7 +274,7 @@ export function ProjectStreamView({
   // the user's message not appearing until the next paced probe (or a reload).
   function nudgeDeliveries() {
     void store.nudge();
-    void agentStore.nudge();
+    void feedStore.nudge();
   }
 
   async function submitMessage() {
@@ -304,7 +306,7 @@ export function ProjectStreamView({
   }
 
   async function clearClientDatabases() {
-    await agentStore.clearLocalDatabase();
+    await feedStore.clearLocalDatabase();
     await store.clearLocalDatabase();
     window.location.reload();
   }
@@ -511,7 +513,7 @@ export function ProjectStreamView({
             // The reduced-state row only exists once the processor has
             // checkpointed; an already-subscribed empty stream is "nothing
             // here yet", not "connecting".
-            isPending={agentUiState == null && agentSnapshot.connectionStatus !== "subscribed"}
+            isPending={agentUiState == null && feedSnapshot.connectionStatus !== "subscribed"}
           />
         ) : activeTab === "feed" ? (
           <ProjectStreamFeedView
@@ -703,13 +705,13 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
     // for the slug (e.g. after a key-format change); read the most advanced one.
     `SELECT reduced_state FROM processor_state WHERE processor_slug = ?
      ORDER BY max_offset DESC LIMIT 1`,
-    [AgentUiProcessorContract.slug],
+    [BrowserEventFeedContract.slug],
   );
   return useMemo(() => {
     const raw = result.data[0]?.reduced_state;
     if (typeof raw !== "string") return null;
     try {
-      return JSON.parse(raw) as AgentUiState;
+      return (JSON.parse(raw) as BrowserEventFeedState).agentUi;
     } catch {
       return null;
     }
