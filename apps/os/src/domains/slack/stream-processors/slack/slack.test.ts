@@ -43,19 +43,8 @@ describe("SlackProcessor", () => {
     expect(processor.state.connection).toMatchObject({ status: "disconnected" });
   });
 
-  it("creates a route and forwards the first thread webhook with bootstrap events", async () => {
-    const bootstrapEvent: StreamEventInput = {
-      type: "events.iterate.com/stream/subscription-configured",
-      idempotencyKey: "bootstrap:slack-agent",
-      payload: { subscriptionKey: "slack-agent:project-1", subscriber: { type: "callable" } },
-    };
-    const bootstrapCalls: unknown[] = [];
-    const { appended, processor } = createProcessor({
-      createRoutedStreamBootstrapEvents: (input) => {
-        bootstrapCalls.push(input);
-        return [bootstrapEvent];
-      },
-    });
+  it("creates a route and forwards the first thread webhook", async () => {
+    const { appended, processor } = createProcessor();
 
     await processor.ingest({
       events: [webhookEvent({ offset: 7, text: "hello" })],
@@ -64,13 +53,6 @@ describe("SlackProcessor", () => {
     await flushBackgroundWork();
 
     const expectedStreamPath = "/agents/slack/c123/ts-1772136258-963519";
-    expect(bootstrapCalls).toEqual([
-      {
-        channel: "C123",
-        streamPath: expectedStreamPath,
-        threadTs: "1772136258.963519",
-      },
-    ]);
 
     const routeEvent = {
       type: "events.iterate.com/slack/thread-route-configured",
@@ -84,11 +66,8 @@ describe("SlackProcessor", () => {
     expect(appended).toEqual([
       // Route memory on /integrations/slack itself.
       { streamPath: undefined, event: routeEvent },
-      // Bootstrap + route + forwarded webhook on the routed stream, in order.
-      {
-        streamPath: expectedStreamPath,
-        event: bootstrapEvent,
-      },
+      // Route + forwarded webhook on the routed stream, in order. Agent setup
+      // is owned by ProjectProcessor when this child stream is created.
       { streamPath: expectedStreamPath, event: routeEvent },
       {
         streamPath: expectedStreamPath,
@@ -102,11 +81,7 @@ describe("SlackProcessor", () => {
   });
 
   it("forwards webhooks for known routes without re-bootstrapping", async () => {
-    const { appended, processor } = createProcessor({
-      createRoutedStreamBootstrapEvents: () => {
-        throw new Error("must not bootstrap an already-routed thread");
-      },
-    });
+    const { appended, processor } = createProcessor();
 
     await processor.ingest({
       events: [
@@ -138,6 +113,66 @@ describe("SlackProcessor", () => {
         },
       },
     ]);
+  });
+
+  it("replays the webhook when the forward append fails instead of dropping it", async () => {
+    // Regression for the prd 2026-06-15 loss: the first message on a fresh
+    // project reached the project stream but the agent never saw it. The router
+    // forwarded it with fire-and-forget `runInBackground`, so when the (cold,
+    // cross-worker) append threw, the error was swallowed, the checkpoint
+    // advanced, and the only copy of the message was dropped.
+    //
+    // The forward must be a durable obligation: a failed append rejects the
+    // batch and HOLDS the checkpoint so the host replays the webhook. This test
+    // fails against the old `runInBackground` wiring (ingest resolves, message
+    // lost) and passes under `blockProcessorWhile`.
+    const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
+    let failNextAppend = true;
+    const processor = new SlackProcessor({
+      iterateContext: {
+        stream: {
+          append: async ({ event, streamPath }) => {
+            if (failNextAppend) {
+              failNextAppend = false;
+              throw new Error("cold StreamsCapability RPC failed");
+            }
+            appended.push({ event, streamPath });
+            return committedEvent({ ...event, offset: appended.length });
+          },
+          appendBatch: async ({ events, streamPath }) =>
+            events.map((event) => {
+              appended.push({ event, streamPath });
+              return committedEvent({ ...event, offset: appended.length });
+            }),
+        },
+      },
+    });
+
+    // First delivery: the append throws. ingest MUST reject and the checkpoint
+    // MUST stay at 0 — otherwise the webhook is gone for good.
+    await expect(
+      processor.ingest({
+        events: [webhookEvent({ offset: 7, text: "hello" })],
+        streamMaxOffset: 7,
+      }),
+    ).rejects.toThrow(/StreamsCapability/);
+    expect(processor.checkpointOffset).toBe(0);
+    expect(appended).toEqual([]);
+
+    // The host replays the same webhook from the un-advanced checkpoint; the
+    // append now succeeds, the forward lands, and the checkpoint advances.
+    await processor.ingest({
+      events: [webhookEvent({ offset: 7, text: "hello" })],
+      streamMaxOffset: 7,
+    });
+    expect(processor.checkpointOffset).toBe(7);
+    expect(
+      appended.some(
+        (entry) =>
+          entry.streamPath === "/agents/slack/c123/ts-1772136258-963519" &&
+          entry.event.type === "events.iterate.com/slack/webhook-received",
+      ),
+    ).toBe(true);
   });
 
   it("ignores webhooks that cannot be keyed as channel:thread_ts", async () => {
@@ -186,16 +221,11 @@ describe("SlackProcessor", () => {
     expect(appended).toEqual([]);
   });
 
-  it("acknowledges routed webhooks and pre-warms hosts for new routes", async () => {
+  it("acknowledges routed webhooks for new routes", async () => {
     const acknowledged: unknown[] = [];
-    const prewarmed: string[] = [];
     const { processor } = createProcessor({
-      createRoutedStreamBootstrapEvents: () => [],
       acknowledgeRoutedWebhook: ({ payload }) => {
         acknowledged.push(payload);
-      },
-      prewarmRoutedStreamHosts: ({ streamPath }) => {
-        prewarmed.push(streamPath);
       },
     });
 
@@ -206,18 +236,13 @@ describe("SlackProcessor", () => {
     await flushBackgroundWork();
 
     expect(acknowledged).toEqual([webhookEvent({ offset: 7, text: "hello" }).payload]);
-    expect(prewarmed).toEqual(["/agents/slack/c123/ts-1772136258-963519"]);
   });
 
-  it("acknowledges webhooks on existing routes without pre-warming again", async () => {
+  it("acknowledges webhooks on existing routes", async () => {
     const acknowledged: unknown[] = [];
-    const prewarmed: string[] = [];
     const { processor } = createProcessor({
       acknowledgeRoutedWebhook: ({ payload }) => {
         acknowledged.push(payload);
-      },
-      prewarmRoutedStreamHosts: ({ streamPath }) => {
-        prewarmed.push(streamPath);
       },
     });
 
@@ -239,7 +264,6 @@ describe("SlackProcessor", () => {
     await flushBackgroundWork();
 
     expect(acknowledged).toHaveLength(1);
-    expect(prewarmed).toEqual([]);
   });
 
   it("does not acknowledge unroutable webhooks", async () => {
@@ -264,31 +288,9 @@ describe("SlackProcessor", () => {
 
     expect(acknowledged).toEqual([]);
   });
-
-  it("skips side effects for events at or below the side-effect anchor", async () => {
-    const { appended, processor } = createProcessor({ sideEffectsAfterOffset: () => 10 });
-
-    await processor.ingest({
-      events: [webhookEvent({ offset: 9, text: "historical" })],
-      streamMaxOffset: 12,
-    });
-    await flushBackgroundWork();
-
-    // Reduced (no route table change for plain messages) but no forwarding.
-    expect(appended).toEqual([]);
-
-    await processor.ingest({
-      events: [webhookEvent({ offset: 11, text: "live" })],
-      streamMaxOffset: 12,
-    });
-    await flushBackgroundWork();
-    expect(appended.length).toBeGreaterThan(0);
-  });
 });
 
-function createProcessor(
-  deps: SlackProcessorDeps & { sideEffectsAfterOffset?: () => number } = {},
-) {
+function createProcessor(deps: SlackProcessorDeps = {}) {
   const appended: Array<{ streamPath?: string; event: StreamEventInput }> = [];
   const processor = new SlackProcessor({
     iterateContext: {

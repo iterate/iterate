@@ -16,6 +16,7 @@
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 import { StreamPath } from "@iterate-com/shared/streams/types";
+import { CoreProcessorContract } from "~/domains/streams/engine/processors/core/contract.ts";
 import { normalizeIngressHost } from "~/ingress/host-routing.ts";
 import type { AppConfig } from "~/config.ts";
 
@@ -63,6 +64,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     phase: "none",
     project: null,
   },
+  processorDeps: [CoreProcessorContract],
   events: {
     "events.iterate.com/project/create-requested": {
       description: "Project creation was requested with these form values.",
@@ -103,6 +105,7 @@ export const ProjectProcessorContract = defineProcessorContract({
     "events.iterate.com/project/created",
     "events.iterate.com/project/create-completed",
     "events.iterate.com/project/onboarding-completed",
+    "events.iterate.com/stream/child-stream-created",
   ],
   emits: [
     "events.iterate.com/project/created",

@@ -21,6 +21,7 @@ import { StreamPath } from "@iterate-com/shared/streams/types";
 import { getInitializedDoStub } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
 import { projectFacts, ProjectProcessorContract, type ProjectProcessorState } from "./contract.ts";
 import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
+import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,
@@ -29,9 +30,15 @@ import {
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import {
   AGENTS_STREAM_PATH,
+  agentProcessorSubscriptionConfiguredEvents,
+  OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
   getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
-import { jsonataReactorEventTypes } from "~/domains/agents/stream-processors/jsonata-reactor/contract.ts";
+import {
+  getSlackAgentDurableObjectName,
+  type SlackAgentDurableObject,
+} from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
+import { SlackAgentProcessorContract } from "~/domains/slack/stream-processors/slack-agent/contract.ts";
 import { getSecretsCapability } from "~/domains/secrets/entrypoints/secrets-capability.ts";
 import {
   EXAMPLE_EGRESS_SECRET_KEY,
@@ -51,6 +58,8 @@ export { PROJECT_STREAM_PATH, projectFacts, ProjectProcessorContract } from "./c
 export type { ProjectFacts, ProjectProcessorState } from "./contract.ts";
 
 const ONBOARDING_AGENT_PATH = StreamPath.parse("/agents/onboarding");
+const DEFAULT_OPENAI_AGENT_MODEL = "gpt-5.5";
+const DEFAULT_AGENT_DEBOUNCE_MS = 200;
 
 /**
  * High-level deps from the hosting DO: bindings, its loopback exports, and
@@ -61,6 +70,7 @@ export type ProjectProcessorDeps = {
     AGENT: DurableObjectNamespace<AgentDurableObject>;
     DB: D1Database;
     REPO: DurableObjectNamespace<RepoDurableObject>;
+    SLACK_AGENT: DurableObjectNamespace<SlackAgentDurableObject>;
     STREAM: DurableObjectNamespace<StreamDurableObject>;
   };
   /** The hosting DO's `ctx.exports` (loopback entrypoints, e.g. secrets). */
@@ -113,6 +123,19 @@ export class ProjectProcessor extends StreamProcessor<
     args: Parameters<StreamProcessor<ProjectProcessorContract>["processEvent"]>[0],
   ): void {
     const { event } = args;
+    if (event.type === "events.iterate.com/stream/child-stream-created") {
+      const childPath = StreamPath.safeParse(event.payload.childPath);
+      if (!childPath.success) return;
+      if (!isAgentStreamPath(childPath.data)) return;
+      args.blockProcessorWhile(() =>
+        this.#ensureAgentStreamSetup({
+          agentPath: childPath.data,
+          projectId: this.deps.projectId(),
+        }),
+      );
+      return;
+    }
+
     if (event.type !== "events.iterate.com/project/create-requested") return;
     if (!this.#ownEvent(event.payload)) {
       console.warn(
@@ -138,8 +161,8 @@ export class ProjectProcessor extends StreamProcessor<
       await this.#seedOnboardingBootstrap({ projectId, slug });
       await this.#ensureExampleEgressSecret(projectId);
       await this.#ensureAgentsRoot(projectId);
-      await this.#writeAgentsRootRule(projectId);
       await this.#ensureOnboardingAgent(projectId);
+      await this.#ensureAgentStreamSetup({ agentPath: ONBOARDING_AGENT_PATH, projectId });
       await this.#appendOnboardingAgentInput(projectId);
       await this.ctx.stream.append({
         event: {
@@ -288,21 +311,90 @@ export class ProjectProcessor extends StreamProcessor<
     });
   }
 
-  async #writeAgentsRootRule(projectId: string) {
-    const stream = await getInitializedStreamStub({
-      durableObjectNamespace: this.deps.env.STREAM as unknown as StreamDurableObjectNamespace,
-      namespace: projectId,
-      path: AGENTS_STREAM_PATH,
-    });
-
-    await stream.append({
-      type: jsonataReactorEventTypes.ruleConfigured,
-      idempotencyKey: `agents-child-stream-setup:${projectId}`,
-      payload: {
-        slug: "agents-child-stream-setup",
-        matcher: "type = 'events.iterate.com/stream/child-stream-created'",
-        reactions: [],
-      },
+  async #ensureAgentStreamSetup(input: { agentPath: StreamPath; projectId: string }) {
+    await this.ctx.stream.appendBatch({
+      streamPath: input.agentPath,
+      events: [
+        {
+          type: OS_AGENT_LLM_PROVIDER_SELECTED_EVENT_TYPE,
+          idempotencyKey: "project-agent-setup:provider",
+          payload: { provider: "openai-ws" },
+        },
+        {
+          type: "events.iterate.com/openai-ws/config-updated",
+          idempotencyKey: "project-agent-setup:openai-ws-config",
+          payload: { model: DEFAULT_OPENAI_AGENT_MODEL },
+        },
+        {
+          type: "events.iterate.com/agent/llm-config-updated",
+          idempotencyKey: "project-agent-setup:llm-config",
+          payload: {
+            debounceMs: DEFAULT_AGENT_DEBOUNCE_MS,
+            model: DEFAULT_OPENAI_AGENT_MODEL,
+            runOpts: {},
+          },
+        },
+        {
+          type: "events.iterate.com/agent/system-prompt-updated",
+          idempotencyKey: "project-agent-setup:system-prompt",
+          payload: {
+            systemPrompt: defaultAgentSystemPrompt(input.agentPath),
+          },
+        },
+        ...agentProcessorSubscriptionConfiguredEvents({
+          agentPath: input.agentPath,
+          processorSlugs: ["agent-chat", "agent", "openai-ws", "agent-host"],
+          projectId: input.projectId,
+        }),
+        ...(isSlackAgentPath(input.agentPath)
+          ? [slackAgentProcessorSubscriptionConfiguredEvent(input)]
+          : []),
+      ],
     });
   }
+}
+
+function isAgentStreamPath(path: string) {
+  return path.startsWith("/agents/") && path !== AGENTS_STREAM_PATH;
+}
+
+function isSlackAgentPath(agentPath: string) {
+  const normalized = agentPath.toLowerCase();
+  return normalized === "/agents/slack" || normalized.startsWith("/agents/slack/");
+}
+
+function defaultAgentSystemPrompt(agentPath: string) {
+  const isSlack = isSlackAgentPath(agentPath);
+  return [
+    `You are the iterate AI agent running on stream ${agentPath}.`,
+    "Respond with exactly one fenced JavaScript code block and no surrounding prose.",
+    "The code block must contain a single async arrow function: async (itx) => { ... }.",
+    "Use capabilities announced as itx/capability-provided events.",
+    isSlack
+      ? "For Slack, reply only when mentioned, directly asked, or clearly needed. Use itx.slack.chat.postMessage({ channel, thread_ts, text }) on the same thread."
+      : "For web chat, reply with itx.chat.sendMessage({ message }).",
+    "Use itx.streams.get(path) to read and append project stream events.",
+    "Use the project repo as durable memory for stable project knowledge.",
+  ].join("\n\n");
+}
+
+function slackAgentProcessorSubscriptionConfiguredEvent(input: {
+  agentPath: StreamPath;
+  projectId: string;
+}) {
+  return {
+    type: "events.iterate.com/stream/subscription-configured",
+    idempotencyKey: `slack-agent-subscription:${input.projectId}:${input.agentPath}:workers-rpc:callable`,
+    payload: {
+      subscriptionKey: `slack-agent:${input.projectId}:${input.agentPath}`,
+      subscriber: durableObjectProcessorSubscriber({
+        bindingName: "SLACK_AGENT",
+        durableObjectName: getSlackAgentDurableObjectName({
+          projectId: input.projectId,
+          streamPath: input.agentPath,
+        }),
+        processorName: SlackAgentProcessorContract.slug,
+      }),
+    },
+  };
 }

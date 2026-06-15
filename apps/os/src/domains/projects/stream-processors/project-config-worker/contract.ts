@@ -4,13 +4,7 @@
 // processor: this contract subscribes it to the project root stream ("/") and
 // every committed event is forwarded to its exported `processEvent` hook. That
 // is the project-code composition surface — config workers react to facts and
-// append facts. The motivating example is per-project agent context: the root
-// stream carries `stream/child-stream-created` for every new stream in the
-// project (including agent streams), so a config worker can watch for new
-// `/agents/...` paths and append its own system prompt, capability notes, or
-// llm config to them — last-wins reducers and the platform's
-// defaults-yield-to-existing-events behavior do the rest. No bespoke hook
-// protocol, no merge logic: just events.
+// append facts. No bespoke hook protocol, no merge logic: just events.
 
 import { z } from "zod";
 import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";

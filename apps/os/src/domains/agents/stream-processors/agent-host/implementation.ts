@@ -163,13 +163,10 @@ export async function ensureChildAgentRunner(args: {
   await stub.initialize({ name });
 }
 
-// Ensures the AgentDurableObject for the stream the host processor is running on is initialized.
-//
-// Agent streams created by routing (e.g. Slack-routed `/agents/slack/<channel>/<ts>` streams) are
-// bootstrapped with only the `slack-agent` and `agent-host` subscriptions. Unlike the UI new-agent
-// flow, nothing registers the LLM processors (`agent-chat`/`agent`/the provider processor) or seeds
-// the agent setup events. Waking the AgentDurableObject here runs its `onInstanceWake` hook, which
-// registers those processors and setup events.
+// Ensures the AgentDurableObject for the stream this host processor is running
+// on is initialized. The processor subscriptions and setup events are stream
+// facts, normally appended by the project processor; this only wakes the host
+// that serves those subscriptions.
 export async function ensureAgentRunnerForOwnStream(args: {
   agentNamespace: DurableObjectNamespace<AgentDurableObject> | undefined;
   projectId: string;

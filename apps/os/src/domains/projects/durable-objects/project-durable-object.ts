@@ -51,6 +51,7 @@ import {
   loadProjectWorker,
 } from "~/domains/projects/project-worker-runtime.ts";
 import { type RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
+import type { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import { createContext } from "~/itx/coordinates.ts";
 import { PLATFORM_PROJECT_CONTEXT_ADDRESS } from "~/itx/platform-context.ts";
 import { DEFAULTS_DESCRIBE_FROM } from "~/itx/types.ts";
@@ -78,6 +79,7 @@ type ProjectEnv = {
   APP_CONFIG: string;
   DB: D1Database;
   REPO: DurableObjectNamespace<RepoDurableObject>;
+  SLACK_AGENT: DurableObjectNamespace<SlackAgentDurableObject>;
   STREAM: DurableObjectNamespace<StreamDurableObject>;
 };
 

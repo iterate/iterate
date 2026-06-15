@@ -50,7 +50,6 @@ import { Route as AppProjectsProjectSlugAgentsIndexRouteImport } from './routes/
 import { Route as AppProjectsProjectSlugStreamsSplatRouteImport } from './routes/_app/projects/$projectSlug/streams/$'
 import { Route as AppProjectsProjectSlugSecretsSecretIdRouteImport } from './routes/_app/projects/$projectSlug/secrets/$secretId'
 import { Route as AppProjectsProjectSlugReposRepoSlugRouteImport } from './routes/_app/projects/$projectSlug/repos/$repoSlug'
-import { Route as AppProjectsProjectSlugAgentsNewPresetRouteImport } from './routes/_app/projects/$projectSlug/agents/new-preset'
 import { Route as AppProjectsProjectSlugAgentsNewRouteImport } from './routes/_app/projects/$projectSlug/agents/new'
 import { Route as DocsStreamsProcessorsProcessorSlugEventsSplatRouteImport } from './routes/docs.streams.processors.$processorSlug.events.$'
 import { Route as AppProjectsProjectSlugAgentsStreamsSplatRouteImport } from './routes/_app/projects/$projectSlug/agents/streams/$'
@@ -280,12 +279,6 @@ const AppProjectsProjectSlugReposRepoSlugRoute =
     path: '/repos/$repoSlug',
     getParentRoute: () => AppProjectsProjectSlugRouteRoute,
   } as any)
-const AppProjectsProjectSlugAgentsNewPresetRoute =
-  AppProjectsProjectSlugAgentsNewPresetRouteImport.update({
-    id: '/new-preset',
-    path: '/new-preset',
-    getParentRoute: () => AppProjectsProjectSlugAgentsRouteRoute,
-  } as any)
 const AppProjectsProjectSlugAgentsNewRoute =
   AppProjectsProjectSlugAgentsNewRouteImport.update({
     id: '/new',
@@ -340,7 +333,6 @@ export interface FileRoutesByFullPath {
   '/admin/streams/$namespace/': typeof AdminStreamsNamespaceIndexRoute
   '/docs/streams/processors/': typeof DocsStreamsProcessorsIndexRoute
   '/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
-  '/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
   '/projects/$projectSlug/repos/$repoSlug': typeof AppProjectsProjectSlugReposRepoSlugRoute
   '/projects/$projectSlug/secrets/$secretId': typeof AppProjectsProjectSlugSecretsSecretIdRoute
   '/projects/$projectSlug/streams/$': typeof AppProjectsProjectSlugStreamsSplatRoute
@@ -378,7 +370,6 @@ export interface FileRoutesByTo {
   '/admin/streams/$namespace': typeof AdminStreamsNamespaceIndexRoute
   '/docs/streams/processors': typeof DocsStreamsProcessorsIndexRoute
   '/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
-  '/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
   '/projects/$projectSlug/repos/$repoSlug': typeof AppProjectsProjectSlugReposRepoSlugRoute
   '/projects/$projectSlug/secrets/$secretId': typeof AppProjectsProjectSlugSecretsSecretIdRoute
   '/projects/$projectSlug/streams/$': typeof AppProjectsProjectSlugStreamsSplatRoute
@@ -426,7 +417,6 @@ export interface FileRoutesById {
   '/admin/streams/$namespace/': typeof AdminStreamsNamespaceIndexRoute
   '/docs/streams/processors/': typeof DocsStreamsProcessorsIndexRoute
   '/_app/projects/$projectSlug/agents/new': typeof AppProjectsProjectSlugAgentsNewRoute
-  '/_app/projects/$projectSlug/agents/new-preset': typeof AppProjectsProjectSlugAgentsNewPresetRoute
   '/_app/projects/$projectSlug/repos/$repoSlug': typeof AppProjectsProjectSlugReposRepoSlugRoute
   '/_app/projects/$projectSlug/secrets/$secretId': typeof AppProjectsProjectSlugSecretsSecretIdRoute
   '/_app/projects/$projectSlug/streams/$': typeof AppProjectsProjectSlugStreamsSplatRoute
@@ -474,7 +464,6 @@ export interface FileRouteTypes {
     | '/admin/streams/$namespace/'
     | '/docs/streams/processors/'
     | '/projects/$projectSlug/agents/new'
-    | '/projects/$projectSlug/agents/new-preset'
     | '/projects/$projectSlug/repos/$repoSlug'
     | '/projects/$projectSlug/secrets/$secretId'
     | '/projects/$projectSlug/streams/$'
@@ -512,7 +501,6 @@ export interface FileRouteTypes {
     | '/admin/streams/$namespace'
     | '/docs/streams/processors'
     | '/projects/$projectSlug/agents/new'
-    | '/projects/$projectSlug/agents/new-preset'
     | '/projects/$projectSlug/repos/$repoSlug'
     | '/projects/$projectSlug/secrets/$secretId'
     | '/projects/$projectSlug/streams/$'
@@ -559,7 +547,6 @@ export interface FileRouteTypes {
     | '/admin/streams/$namespace/'
     | '/docs/streams/processors/'
     | '/_app/projects/$projectSlug/agents/new'
-    | '/_app/projects/$projectSlug/agents/new-preset'
     | '/_app/projects/$projectSlug/repos/$repoSlug'
     | '/_app/projects/$projectSlug/secrets/$secretId'
     | '/_app/projects/$projectSlug/streams/$'
@@ -874,13 +861,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppProjectsProjectSlugReposRepoSlugRouteImport
       parentRoute: typeof AppProjectsProjectSlugRouteRoute
     }
-    '/_app/projects/$projectSlug/agents/new-preset': {
-      id: '/_app/projects/$projectSlug/agents/new-preset'
-      path: '/new-preset'
-      fullPath: '/projects/$projectSlug/agents/new-preset'
-      preLoaderRoute: typeof AppProjectsProjectSlugAgentsNewPresetRouteImport
-      parentRoute: typeof AppProjectsProjectSlugAgentsRouteRoute
-    }
     '/_app/projects/$projectSlug/agents/new': {
       id: '/_app/projects/$projectSlug/agents/new'
       path: '/new'
@@ -921,7 +901,6 @@ const EventDocsProcessorSlugRouteWithChildren =
 
 interface AppProjectsProjectSlugAgentsRouteRouteChildren {
   AppProjectsProjectSlugAgentsNewRoute: typeof AppProjectsProjectSlugAgentsNewRoute
-  AppProjectsProjectSlugAgentsNewPresetRoute: typeof AppProjectsProjectSlugAgentsNewPresetRoute
   AppProjectsProjectSlugAgentsIndexRoute: typeof AppProjectsProjectSlugAgentsIndexRoute
   AppProjectsProjectSlugAgentsStreamsSplatRoute: typeof AppProjectsProjectSlugAgentsStreamsSplatRoute
 }
@@ -929,8 +908,6 @@ interface AppProjectsProjectSlugAgentsRouteRouteChildren {
 const AppProjectsProjectSlugAgentsRouteRouteChildren: AppProjectsProjectSlugAgentsRouteRouteChildren =
   {
     AppProjectsProjectSlugAgentsNewRoute: AppProjectsProjectSlugAgentsNewRoute,
-    AppProjectsProjectSlugAgentsNewPresetRoute:
-      AppProjectsProjectSlugAgentsNewPresetRoute,
     AppProjectsProjectSlugAgentsIndexRoute:
       AppProjectsProjectSlugAgentsIndexRoute,
     AppProjectsProjectSlugAgentsStreamsSplatRoute:

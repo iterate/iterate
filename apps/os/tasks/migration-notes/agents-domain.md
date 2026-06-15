@@ -45,9 +45,8 @@ processorName })`; the idempotency-key suffix changed `:workers-rpc` →
   a failed append.
 - **agent-host** — exactly the legacy split: `ensureAgentRunnerForOwnStream`
   in `runInBackground` (blocking it would deadlock against the agent's
-  onInstanceWake catch-up wait, which waits on agent-host itself), everything
-  else (`ensureChildAgentRunner`, codemode bridging) under
-  `blockProcessorWhile`.
+  onInstanceWake catch-up wait, which waits on agent-host itself), codemode
+  bridging under `blockProcessorWhile`.
 
 ## openai-ws connection lifecycle
 
@@ -106,8 +105,7 @@ instance.
   (for `codemode/tool-provider-registered`). Repoint it when the codemode
   domain migrates and the legacy tree is deleted.
 - **Module layout to avoid an import cycle.** The agent-host handlers
-  (`ensureAgentRunnerForOwnStream`, `ensureChildAgentRunner`,
-  `handleAgentOutputAddedForCodemode`,
+  (`ensureAgentRunnerForOwnStream`, `handleAgentOutputAddedForCodemode`,
   `handleCodemodeScriptExecutionCompletedForAgent`, `extractCodemodeScript`,
   `codemodeCompletionInputBlock`) moved from `agent-durable-object.ts` into
   `stream-processors/agent-host/implementation.ts`; agent DO naming
@@ -133,9 +131,8 @@ instance.
   expression cache (apps/os has no direct jsonata dependency).
 - **JSONata rules no longer see `streamPath` on the event.** The legacy
   adapter evaluated rules against the legacy event shape (with `streamPath`
-  injected); the class processor evaluates the raw new-runtime event. The only
-  seeded rule (`agents-child-stream-setup`, matcher on `type`) is unaffected,
-  but a rule matching on `streamPath` would silently stop matching.
+  injected); the class processor evaluates the raw new-runtime event. A rule
+  matching on `streamPath` would silently stop matching.
 - **Stream-level side effects of unconsumed events.** `getEvents`-based
   helpers (`readStreamEvents`) parse consumed events strictly
   (`getEventSchema` is a strict object); any historical consumed-type event

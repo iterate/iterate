@@ -53,22 +53,13 @@ function ProjectAgentsIndexContent() {
   }
 
   const header = (
-    <div className="flex items-center gap-2">
-      <Link
-        to="/projects/$projectSlug/agents/new"
-        params={{ projectSlug: params.projectSlug }}
-        className={buttonVariants({ size: "sm" })}
-      >
-        New agent
-      </Link>
-      <Link
-        to="/projects/$projectSlug/agents/new-preset"
-        params={{ projectSlug: params.projectSlug }}
-        className={buttonVariants({ size: "sm", variant: "outline" })}
-      >
-        New preset
-      </Link>
-    </div>
+    <Link
+      to="/projects/$projectSlug/agents/new"
+      params={{ projectSlug: params.projectSlug }}
+      className={buttonVariants({ size: "sm" })}
+    >
+      New agent
+    </Link>
   );
 
   return (
