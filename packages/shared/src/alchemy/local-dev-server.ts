@@ -13,10 +13,10 @@ import { join } from "node:path";
  *
  * The port is picked at startup. `.alchemy/dev-server.json` records
  * {pid, port, baseUrl, logPath, stoppedAt?} so CLIs and scripts can find
- * "the" dev server without flags. When no public app URL is configured, the
- * local URL is also exposed as `APP_CONFIG_BASE_URL`; when a public app URL is
- * configured in `APP_CONFIG.baseUrl`, runtime config keeps that public URL and
- * the discovery file remains the source of truth for the local target.
+ * "the" dev server without flags. `APP_CONFIG_BASE_URL` is the public app URL:
+ * `APP_CONFIG.baseUrl` wins, then `CAPTUN_TUNNEL_NAME` derives a captun URL,
+ * then the local URL. The discovery file remains the source of truth for the
+ * local target.
  * One dev server per worktree: a second `pnpm dev` refuses to start while the
  * recorded pid is alive.
  */
@@ -123,9 +123,8 @@ async function pickFreePort(preferred?: number) {
  *
  * Mutates `env`: sets `PORT` and `HOST`, writes the discovery file, and
  * installs exit handlers that mark the server stopped while preserving the
- * last port. Also sets `APP_CONFIG_BASE_URL` to `http://localhost:<port>` when
- * no explicit base URL exists in either `APP_CONFIG_BASE_URL` or
- * `APP_CONFIG.baseUrl`.
+ * last port. Also sets `APP_CONFIG_BASE_URL`: `APP_CONFIG.baseUrl` wins, then
+ * `CAPTUN_TUNNEL_NAME` derives a captun URL, then the local URL.
  */
 export async function prepareLocalDevServer(
   env: Record<string, string | undefined>,
@@ -155,7 +154,15 @@ export async function prepareLocalDevServer(
   env.PORT = String(port);
   env.HOST ||= "127.0.0.1";
   const rawAppConfig = JSON.parse(env.APP_CONFIG ?? "{}") as { baseUrl?: string };
-  env.APP_CONFIG_BASE_URL = rawAppConfig.baseUrl || baseUrl;
+  if (rawAppConfig.baseUrl) {
+    env.APP_CONFIG_BASE_URL = rawAppConfig.baseUrl;
+  } else if (env.CAPTUN_TUNNEL_NAME) {
+    const tunnelGatewayUrl = new URL(env.CAPTUN_GATEWAY?.trim() || "https://tunnels.iterate.com");
+    env.APP_CONFIG_BASE_URL = `https://${env.CAPTUN_TUNNEL_NAME}.${tunnelGatewayUrl.hostname}`;
+  } else {
+    env.APP_CONFIG_BASE_URL = baseUrl;
+  }
+
   // The vite dev command is spawned with the real process env, which may not
   // be the same object as `env` — keep them in sync for the port/host.
   process.env.PORT = env.PORT;

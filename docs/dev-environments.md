@@ -314,8 +314,9 @@ CAPTUN_TUNNEL_NAME=jonas pnpm dev     # https://jonas.tunnels.iterate.com
 ```
 
 The captun Vite plugin (`apps/os/vite.config.ts`) activates when
-`CAPTUN_TUNNEL_NAME` is set. `APP_CONFIG.baseUrl` is still the app's public URL;
-it does not start a tunnel by itself. The plugin forwards public **HTTP** to
+`CAPTUN_TUNNEL_NAME` is set. Local dev also uses that name to derive
+`APP_CONFIG_BASE_URL` (`https://<name>.tunnels.iterate.com`) unless
+`APP_CONFIG.baseUrl` is set explicitly. The plugin forwards public **HTTP** to
 your local dev server. Its forwarder is plain `fetch`, so it does **not** carry
 WebSockets — HMR and itx (`/api/itx`, capnweb-over-WS) stay on the local URL.
 

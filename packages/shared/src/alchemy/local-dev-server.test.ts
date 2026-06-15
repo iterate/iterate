@@ -72,4 +72,26 @@ describe("prepareLocalDevServer", () => {
       port: info!.port,
     });
   });
+
+  it("uses a captun tunnel name for the public base URL while preserving local discovery", async () => {
+    const appDir = mkdtempSync(join(tmpdir(), "iterate-local-dev-"));
+    tempDirs.push(appDir);
+    const env: Record<string, string | undefined> = {
+      ALCHEMY_LOCAL: "true",
+      CAPTUN_TUNNEL_NAME: "misha",
+    };
+
+    const info = await prepareLocalDevServer(env, { appDir });
+
+    expect(env).toMatchObject({
+      APP_CONFIG_BASE_URL: "https://misha.tunnels.iterate.com",
+      HOST: "127.0.0.1",
+      PORT: String(info!.port),
+    });
+    expect(readLocalDevServerInfo(appDir)).toMatchObject({
+      baseUrl: info!.baseUrl,
+      port: info!.port,
+    });
+    expect(info!.baseUrl).toBe(`http://localhost:${info!.port}`);
+  });
 });
