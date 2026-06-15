@@ -183,7 +183,7 @@ export class ItxDO extends DurableObject<Env> {
         ...deps,
         iterateContext: { stream: this.#log() },
         dial: (address) => this.#dial(address), // Step 09: restore a sturdy ref
-        builtinCapabilities: this.#projectBuiltinCapabilities(), // Step 10: itx.fetch on a project context
+        builtinCapabilities: this.#contextBuiltinCapabilities(), // Step 10: from the ProjectDO
         parentItx: () => this.#parentContext(), // Step 11: climb to the parent
       }),
   );
@@ -198,16 +198,14 @@ export class ItxDO extends DurableObject<Env> {
   }
 
   // Step 10: ONLY the project-root context ("prj:<id>", no sub-path) is born with
-  // `fetch` as a built-in capability — handed to the Itx constructor, backed by
-  // that project's Project DO. Agent/sub-contexts inherit `fetch` via the chain.
-  #projectBuiltinCapabilities(): Record<string, any> {
+  // the project's built-in capabilities. The ItxDO decides WHICH contexts get them
+  // (the root); the ProjectDO defines WHAT they are. Agent/sub-contexts inherit
+  // them via the chain (Step 11).
+  #contextBuiltinCapabilities(): Record<string, any> {
     const name = this.ctx.id.name ?? "";
     const projectId = this.#project();
     if (!projectId || name !== `prj:${projectId}`) return {};
-    return {
-      fetch: (url: string, init?: RequestInit) =>
-        this.env.PROJECT.getByName(projectId).egress(url, init),
-    };
+    return ProjectDO.builtinCapabilities(this.env.PROJECT.getByName(projectId));
   }
 
   // Step 11: the parent context. An agent ("prj:<id>/agents/<name>") climbs to
@@ -413,10 +411,9 @@ class WorkerHandle extends RpcTarget {
 }
 
 // Step 10 — the Project Durable Object. One per project; it owns the project's
-// egress. Its `egress` method does the actual outbound fetch (named `egress`, not
-// `fetch`, because a DO's `fetch` is its HTTP entrypoint). A project-scoped itx is
-// born with this wired as the `fetch` root (see ItxDO.#projectBuiltinCapabilities), so
-// `itx.fetch(url)` routes here — egress is the project's, tagged with its id.
+// egress AND defines the built-in capabilities a context scoped to it is born
+// with. `egress` does the actual outbound fetch (named `egress`, not `fetch`,
+// because a DO's `fetch` is its HTTP entrypoint).
 export class ProjectDO extends DurableObject<Env> {
   async egress(
     url: string,
@@ -428,6 +425,14 @@ export class ProjectDO extends DurableObject<Env> {
       body: await response.text(),
       viaProject: this.ctx.id.name ?? "?",
     };
+  }
+
+  // The capabilities a context scoped to THIS project is born with — the project
+  // decides what it offers (here: `fetch`, wired to its own egress). The ItxDO
+  // decides WHICH contexts get them (the project root, Step 11); the project
+  // decides WHAT they are. Returns forwarders to this DO's methods.
+  static builtinCapabilities(project: DurableObjectStub<ProjectDO>): Record<string, any> {
+    return { fetch: (url: string, init?: RequestInit) => project.egress(url, init) };
   }
 }
 

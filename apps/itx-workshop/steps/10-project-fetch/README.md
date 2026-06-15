@@ -14,10 +14,11 @@ await itx.fetch("https://example.com/thing");
 
 - `ProjectDO.egress(url, init)` does the actual outbound `fetch` (named `egress`,
   not `fetch`, because a DO's `fetch` is its HTTP entrypoint). One DO per project.
-- `ItxDO.#projectRoots()` injects `fetch` **at construction** for any `prj:<id>`
-  context — provided, not a built-in handle (Step 11's principle, here for real):
-  `fetch: (url) => env.PROJECT.getByName(id).egress(url)`. `itx.fetch` is just a
-  root the host seeded; own provides shadow it.
+- `ProjectDO.builtinCapabilities(stub)` **defines what a project context is born
+  with** — `{ fetch: (url) => stub.egress(url) }`. The project owns _what_ it offers.
+- The `ItxDO` decides _which_ contexts get them — only the project-root context
+  (`prj:<id>`) — and hands them to the `Itx` constructor as built-in capabilities.
+  Agent/sub-contexts inherit `fetch` via the chain (Step 11); own provides shadow it.
 
 We deliberately keep it plain — no egress membrane, no secret substitution. The
 point is the **shape**: project egress lives in the Project DO and is handed to the

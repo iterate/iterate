@@ -617,10 +617,11 @@ export class Itx extends StreamProcessor<typeof ItxContract> {
 `fetch`/`streams`/`ai` are not special-cased in a handle — but they're also _not_ provided as events on every context's stream. Appending a `capability-provided` for each one would mean rewriting thousands of streams (one per project) every time we change what the built-ins are. Instead the `Itx` StreamProcessor takes its **built-in capabilities as a constructor argument**: the host wires them in when it builds the context, `invoke` falls back to them on a miss (after the fold, before the parent), and they appear in `describe`/`list` so they're self-describing.
 
 ```ts
-// the host builds a context with its built-in capabilities wired in — no events appended:
+// the host builds a context with its built-in capabilities wired in — no events appended.
+// For a project context they come from the ProjectDO, which defines what it offers (Step 10):
 new Itx({
   ...deps,
-  builtinCapabilities: { fetch: (url) => env.PROJECT.getByName(id).egress(url) },
+  builtinCapabilities: ProjectDO.builtinCapabilities(env.PROJECT.getByName(id)),
 });
 // invoke resolution order: own fold (provides) → built-in capabilities → parent (Step 11).
 ```
