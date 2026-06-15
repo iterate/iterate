@@ -2,7 +2,7 @@
  * Deployment-targeted test for disposable admin projects driven through itx.
  * Replaces the oRPC original preserved as admin-project.orpc-legacy.ts: the
  * admin handle has access "all", so it creates a throwaway project and exercises
- * project streams (create/append/read/subscribe) the same way the dashboard,
+ * project streams (create/append/getEvents/subscribe) the same way the dashboard,
  * REPL, and CLI reach them.
  */
 import { expect, test } from "vitest";
@@ -28,8 +28,9 @@ test("creates a disposable project and uses project streams through itx", async 
 
   // The one subscription primitive replays history and tails live appends.
   const seen: Event[] = [];
-  const subscription = await stream.subscribe((batch) => seen.push(...batch.events), {
-    afterOffset: "start",
+  const subscription = await stream.subscribe({
+    replayAfterOffset: 0,
+    processEventBatch: (batch) => seen.push(...(batch.events as never as Event[])),
   });
 
   // append returns the bare appended Event (offset, createdAt, …) — the Stream
@@ -37,8 +38,10 @@ test("creates a disposable project and uses project streams through itx", async 
   // not). The cast is only needed because capnweb's stub-type mapper projects
   // the branded Event type down to a lossy record at the callsite.
   const appended = (await stream.append({
-    type: eventType,
-    payload: { marker },
+    event: {
+      type: eventType,
+      payload: { marker },
+    },
   })) as unknown as Event;
   expect(appended).toMatchObject({
     offset: expect.any(Number),
@@ -46,8 +49,8 @@ test("creates a disposable project and uses project streams through itx", async 
     type: eventType,
   });
 
-  // read() likewise returns the Event[] directly (no { events } wrapper).
-  const read = (await stream.read({ afterOffset: "start" })) as Event[];
+  // getEvents() likewise returns the Event[] directly (no { events } wrapper).
+  const read = (await stream.getEvents({ afterOffset: 0 })) as unknown as Event[];
   expect(read).toEqual(
     expect.arrayContaining([
       expect.objectContaining({

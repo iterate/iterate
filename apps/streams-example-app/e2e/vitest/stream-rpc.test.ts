@@ -4,7 +4,7 @@ import {
   parseStreamRpcRequest,
   streamDurableObjectName,
   streamRpcPath,
-} from "./connect.ts";
+} from "../../src/lib/stream-rpc.ts";
 
 describe("stream RPC URL helpers", () => {
   it("builds default-namespace stream RPC paths from query params", () => {

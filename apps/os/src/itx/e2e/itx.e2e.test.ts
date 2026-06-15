@@ -195,7 +195,7 @@ test("the five-step capability flow: provide live, call, promote durable, call f
   // one included (the record outlives the session; only the stub is
   // in-memory) — are capability-provided events on the project context's
   // own stream (the project root, "/"), readable like any other stream.
-  const journalEvents = (await projectItx.streams.get("/").read()) as Array<{
+  const journalEvents = (await projectItx.streams.get("/").getEvents()) as Array<{
     payload: { path?: string[]; kind?: string };
     type: string;
   }>;
@@ -576,14 +576,16 @@ test("absolute stream refs are sugar through the one access check", async () => 
   // into the project's namespace…
   const marker = crypto.randomUUID().slice(0, 8);
   await itx.streams.get(`${project.id}:/itx-e2e/refs`).append({
-    payload: { marker },
-    type: "events.iterate.test/itx/e2e",
+    event: {
+      payload: { marker },
+      type: "events.iterate.test/itx/e2e",
+    },
   });
 
   // …and the structured form on the project handle reads it back.
   const events = (await projectItx.streams
     .get({ namespace: project.id, path: "/itx-e2e/refs" })
-    .read()) as Array<{ payload: { marker?: string } }>;
+    .getEvents()) as Array<{ payload: { marker?: string } }>;
   expect(events.map((event) => event.payload.marker)).toContain(marker);
 
   // A project handle cannot fully-qualify its way out of its access set —
@@ -593,7 +595,7 @@ test("absolute stream refs are sugar through the one access check", async () => 
   // replace the real error with a local follow-up one.
   const probe = async ({ itx: scriptItx }: { itx: Record<string, any> }) => {
     try {
-      await scriptItx.streams.get("global:/anything").describe();
+      await scriptItx.streams.get("global:/anything").runtimeState();
       return { threw: false };
     } catch (error) {
       return { code: (error as { code?: string }).code ?? null, threw: true };
@@ -633,7 +635,7 @@ test(
     expect(typeof body.executionId).toBe("string");
 
     using projectItx = await itx.projects.get(project.id);
-    const events = (await projectItx.streams.get("/").read()) as Array<{
+    const events = (await projectItx.streams.get("/").getEvents()) as Array<{
       payload: Record<string, unknown>;
       type: string;
     }>;
@@ -682,7 +684,7 @@ test("worker caps hold a correctly scoped itx of their own", async () => {
   // The cap's events went through ITS itx onto the project's streams —
   // visible to any other holder of a project handle. (Streams also carry
   // platform lifecycle events, so filter to the cap's event type.)
-  const events = (await projectItx.streams.get("/itx-e2e/todos").read()) as Array<{
+  const events = (await projectItx.streams.get("/itx-e2e/todos").getEvents()) as Array<{
     payload: { text?: string };
     type: string;
   }>;

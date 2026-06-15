@@ -52,11 +52,6 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "iterate",
       "miniflare",
     ],
-    ignoreFiles: [
-      // Public helper kept with the stream engine for Worker/DO callers even
-      // though OS currently uses direct in-process helpers.
-      "src/domains/streams/engine/workers/connect.ts",
-    ],
   };
 }
 
@@ -83,6 +78,9 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
     ignore: [
       // TanStack Start client entry, referenced by framework convention.
       "src/client.ts",
+      // Kept as the Worker/DO counterpart to the browser and Node stream
+      // Cap'n Web helpers in the example app.
+      "src/lib/workers-stream-connection.ts",
     ],
     vite: false,
     paths: {

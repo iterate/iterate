@@ -11,14 +11,15 @@ import {
 import { ClientOnly, useNavigate } from "@tanstack/react-router";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { streamViewSearch, type StreamViewSearch } from "../lib/stream-view-search.ts";
+import { createCapnwebStreamClient } from "../lib/capnweb-stream-browser-client.ts";
 import {
   shouldSuppressUnreadBadgeDuringInitialTail,
   useInitialTailScroll,
 } from "../lib/use-initial-tail-scroll.ts";
+import { DEFAULT_STREAM_NAMESPACE } from "../lib/stream-rpc.ts";
 import { EventFeedView } from "./-event-feed-view.tsx";
 import { StreamStateView } from "./-stream-state-view.tsx";
 import { ViewSwitcher } from "./-view-switcher.tsx";
-import { DEFAULT_STREAM_NAMESPACE } from "~/domains/streams/engine/browser/connect.ts";
 import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
 import {
   acquireStreamRuntime,
@@ -189,6 +190,7 @@ function useStreamProcessor(
       acquireStreamRuntime({
         streamPath,
         ...(streamNamespace === undefined ? {} : { namespace: streamNamespace }),
+        createStreamClient: createCapnwebStreamClient,
         slug,
         schemaVersion,
         tables,

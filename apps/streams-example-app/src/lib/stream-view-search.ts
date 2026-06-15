@@ -1,8 +1,5 @@
 import { STREAM_VIEWS } from "../routes/-stream-views.ts";
-import {
-  DEFAULT_STREAM_NAMESPACE,
-  normalizeStreamPath,
-} from "~/domains/streams/engine/browser/connect.ts";
+import { DEFAULT_STREAM_NAMESPACE, normalizeStreamPath } from "./stream-rpc.ts";
 
 export type StreamViewSearch = {
   path: string;

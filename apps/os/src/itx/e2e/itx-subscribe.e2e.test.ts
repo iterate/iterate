@@ -5,6 +5,7 @@
 
 import { expect, test } from "vitest";
 import { connectGlobal, registerCreatedProjectCleanup } from "./e2e-env.ts";
+import { coreStateToStreamState } from "~/domains/streams/stream-runtime.ts";
 
 const RUN_SUFFIX = crypto.randomUUID().slice(0, 8);
 const PROJECT_SLUG = `itx-sub-e2e-${RUN_SUFFIX}`;
@@ -21,14 +22,15 @@ test("subscribe replays history, tails live appends, and unsubscribes", async ()
 
   const stream = projectItx.streams.get(STREAM_PATH);
   const before = `before-${RUN_SUFFIX}`;
-  await stream.append({ type: EVENT_TYPE, payload: { marker: before } });
+  await stream.append({ event: { type: EVENT_TYPE, payload: { marker: before } } });
 
   // The callback lives in THIS Node process; batches are pushed to it.
   const seen: { marker: string; offset: number }[] = [];
   const batchStates: { eventCount: number; namespace: string; path: string }[] = [];
-  const subscription = await stream.subscribe(
-    (batch) => {
-      batchStates.push(batch.state);
+  const subscription = await stream.subscribe({
+    replayAfterOffset: 0,
+    processEventBatch: (batch) => {
+      batchStates.push(coreStateToStreamState(batch.state));
       for (const event of batch.events) {
         seen.push({
           marker: (event.payload as { marker?: string }).marker ?? "",
@@ -36,11 +38,10 @@ test("subscribe replays history, tails live appends, and unsubscribes", async ()
         });
       }
     },
-    { afterOffset: "start" },
-  );
+  });
 
   const during = `during-${RUN_SUFFIX}`;
-  await stream.append({ type: EVENT_TYPE, payload: { marker: during } });
+  await stream.append({ event: { type: EVENT_TYPE, payload: { marker: during } } });
 
   await waitFor(
     () => seen.some((e) => e.marker === before) && seen.some((e) => e.marker === during),
@@ -63,7 +64,7 @@ test("subscribe replays history, tails live appends, and unsubscribes", async ()
 
   await subscription.unsubscribe();
   const countAtUnsubscribe = seen.length;
-  await stream.append({ type: EVENT_TYPE, payload: { marker: `after-${RUN_SUFFIX}` } });
+  await stream.append({ event: { type: EVENT_TYPE, payload: { marker: `after-${RUN_SUFFIX}` } } });
   // No delivery should arrive after unsubscribe; give a misbehaving
   // subscription a moment to prove us wrong.
   await new Promise((resolve) => setTimeout(resolve, 750));
@@ -77,11 +78,14 @@ test("onStateChange pushes initial state immediately, then state after appends",
   using projectItx = await itx.projects.get(project.id);
 
   const stream = projectItx.streams.get(STREAM_PATH);
-  await stream.append({ type: EVENT_TYPE, payload: { marker: `seed-${RUN_SUFFIX}` } });
+  await stream.append({ event: { type: EVENT_TYPE, payload: { marker: `seed-${RUN_SUFFIX}` } } });
 
   const states: { eventCount: number; namespace: string; path: string }[] = [];
-  const subscription = await stream.onStateChange((state) => {
-    states.push(state);
+  const subscription = await stream.subscribe({
+    events: false,
+    processEventBatch: (batch) => {
+      states.push(coreStateToStreamState(batch.state));
+    },
   });
 
   // The initial push: state arrives with NO post-subscribe append, so the
@@ -92,7 +96,7 @@ test("onStateChange pushes initial state immediately, then state after appends",
   const initialEventCount = states[0]!.eventCount;
   expect(initialEventCount).toBeGreaterThanOrEqual(3); // created + woken + seed
 
-  await stream.append({ type: EVENT_TYPE, payload: { marker: `bump-${RUN_SUFFIX}` } });
+  await stream.append({ event: { type: EVENT_TYPE, payload: { marker: `bump-${RUN_SUFFIX}` } } });
   await waitFor(
     () => (states.at(-1)?.eventCount ?? 0) > initialEventCount,
     `a state delivery after the append; saw ${JSON.stringify(states)}`,

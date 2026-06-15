@@ -11,6 +11,8 @@ import { Button } from "@iterate-com/ui/components/button";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@iterate-com/ui/components/empty";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { coreStateToStreamState } from "~/domains/streams/stream-runtime.ts";
+import type { StreamCoreProcessorState } from "~/domains/streams/engine/types.ts";
 
 /**
  * Where tree nodes get their state: path → stream handle. Project pages pass
@@ -23,7 +25,10 @@ import { cn } from "@iterate-com/ui/lib/utils";
 type StreamSubscription = { unsubscribe(): unknown };
 
 export type StreamTreeSource = (streamPath: StreamPathType) => {
-  onStateChange(onState: (state: StreamStateType) => void): Promise<StreamSubscription>;
+  subscribe(args: {
+    events?: boolean;
+    processEventBatch(batch: { state: StreamCoreProcessorState }): unknown;
+  }): Promise<StreamSubscription>;
 };
 
 /** Tear down one live stream subscription (best-effort unsubscribe + dispose). */
@@ -60,9 +65,15 @@ function useLiveStreamState(input: {
     let disposed = false;
     let release: (() => void) | null = null;
     source(streamPath)
-      .onStateChange((next) => {
-        if (disposed) return;
-        setNode({ status: "live", state: StreamState.parse(next) });
+      .subscribe({
+        events: false,
+        processEventBatch: (batch) => {
+          if (disposed) return;
+          setNode({
+            status: "live",
+            state: StreamState.parse(coreStateToStreamState(batch.state)),
+          });
+        },
       })
       .then((subscription) => {
         if (disposed) disposeStreamSubscription(subscription);

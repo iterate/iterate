@@ -48,25 +48,25 @@ export const itxAgentSmokeScript = os
 
     const stream = await itx.streams.get(input.agentPath);
     const userEvent = await stream.append({
-      type: USER_MESSAGE_TYPE,
-      payload: {
-        content: input.message,
-        origin: "web",
+      event: {
+        type: USER_MESSAGE_TYPE,
+        payload: {
+          content: input.message,
+          origin: "web",
+        },
       },
     });
 
-    const responseEvent = await stream.waitForEvent(
-      (event) => {
+    const responseEvent = await stream.waitForEvent({
+      afterOffset: userEvent.offset,
+      timeoutMs: input.timeoutMs,
+      predicate: (event) => {
         if (event.type.endsWith("error-occurred")) {
           throw new Error(`Agent stream reported an error: ${JSON.stringify(event)}`);
         }
         return event.type === ASSISTANT_RESPONSE_TYPE;
       },
-      {
-        afterOffset: userEvent.offset,
-        timeoutMs: input.timeoutMs,
-      },
-    );
+    });
     const assistantMessage = (responseEvent.payload as { message?: unknown }).message;
 
     process.stdout.write(

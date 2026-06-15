@@ -210,10 +210,12 @@ export function reduceItxEvent(
 
 // ---- the class ------------------------------------------------------------------
 
-/** The context's stream as the core consumes it: append + read. */
+/** The context's stream as the core consumes it: append + getEvents. */
 export type ContextStream = {
-  append(event: { type: string; payload: Record<string, unknown> }): Promise<{ offset: number }>;
-  read(input: { afterOffset: number }): Promise<StreamEvent[]>;
+  append(args: {
+    event: { type: string; payload: Record<string, unknown> };
+  }): Promise<{ offset: number }>;
+  getEvents(input: { afterOffset: number }): Promise<StreamEvent[]>;
 };
 
 export type ItxIterateContext = {
@@ -504,7 +506,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
    * ingesting just the appended event) keeps consumption contiguous when
    * concurrent writers interleave offsets. */
   async #append(type: string, payload: Record<string, unknown>): Promise<void> {
-    await this.ctx.stream.append({ payload, type });
+    await this.ctx.stream.append({ event: { payload, type } });
     this.#appendCount += 1;
     await this.#catchUp();
   }
@@ -537,7 +539,7 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     const done = (async () => {
       try {
         const { offset } = await this.snapshot();
-        const events = await this.ctx.stream.read({ afterOffset: offset });
+        const events = await this.ctx.stream.getEvents({ afterOffset: offset });
         if (events.length > 0) {
           await this.ingest({ events, streamMaxOffset: events.at(-1)!.offset });
         }
@@ -583,8 +585,10 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     if (opts.record) {
       void this.ctx.stream
         .append({
-          payload: { path: name.split(".") },
-          type: ITX_EVENT_TYPES.capabilityDisconnected,
+          event: {
+            payload: { path: name.split(".") },
+            type: ITX_EVENT_TYPES.capabilityDisconnected,
+          },
         })
         .catch((error) => {
           console.error(`[itx] capability-disconnected append failed for "${name}":`, error);

@@ -7,6 +7,7 @@ import type {
 import type { ItxRuntime } from "~/itx/handle.ts";
 import { ItxStream } from "~/itx/capabilities/streams.ts";
 import { getStreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
+import { coreStateToStreamState } from "~/domains/streams/stream-runtime.ts";
 
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 export { Stream as StreamDurableObject } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
@@ -26,15 +27,16 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
     path: string;
     event: { type: string; payload: Record<string, unknown> };
   }): Promise<StreamEvent> {
-    return (await this.#stream(input.path).append(input.event)) as StreamEvent;
+    return (await this.#stream(input.path).append({ event: input.event })) as StreamEvent;
   }
 
   async read(input: { path: string }): Promise<StreamEvent[]> {
-    return (await this.#stream(input.path).read()) as StreamEvent[];
+    return (await this.#stream(input.path).getEvents()) as StreamEvent[];
   }
 
   async getState(input: { path: string }): Promise<unknown> {
-    return await this.#stream(input.path).getState();
+    const state = await this.#stream(input.path).runtimeState();
+    return coreStateToStreamState(state.coreProcessorState);
   }
 
   async subscribe(
@@ -45,15 +47,29 @@ export class ItxStreamHarness extends WorkerEntrypoint<Env> {
       streamMaxOffset: number;
     }) => unknown,
   ) {
-    return await this.#stream(input.path).subscribe(onEventBatch, {
-      afterOffset: input.afterOffset,
+    return await this.#stream(input.path).subscribe({
+      replayAfterOffset:
+        input.afterOffset === "start"
+          ? 0
+          : typeof input.afterOffset === "number"
+            ? input.afterOffset
+            : undefined,
       events: input.events,
+      processEventBatch: (batch) =>
+        onEventBatch({
+          events: batch.events as never,
+          state: coreStateToStreamState(batch.state),
+          streamMaxOffset: batch.streamMaxOffset,
+        }),
     });
   }
 
   /** The state-only sugar, end-to-end through the same capability loopback. */
   async onStateChange(input: { path: string }, onState: (state: StreamState) => unknown) {
-    return await this.#stream(input.path).onStateChange(onState);
+    return await this.#stream(input.path).subscribe({
+      events: false,
+      processEventBatch: (batch) => onState(coreStateToStreamState(batch.state)),
+    });
   }
 
   /**

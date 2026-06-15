@@ -44,8 +44,8 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/streams
 
 function ProjectAgentDetailPage() {
   // The boundary is only for the lazily-loaded ProjectStreamView chunk. The
-  // feed itself does NOT depend on itx — it mirrors the project-streams socket
-  // directly — so a dropped itx connection must never blank this page.
+  // feed runtime dials itx imperatively, so a reconnect is handled inside the
+  // stream mirror without blanking the whole page.
   return (
     <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading…</div>}>
       <ProjectAgentDetailContent />
@@ -69,11 +69,13 @@ function ProjectAgentDetailContent() {
   async function interruptAgentMessage(llmRequestId: number) {
     const itx = await connectItx({ projectId: params.projectSlug });
     await itx.streams.get(streamPath).append({
-      type: "events.iterate.com/agent/llm-request-cancelled",
-      payload: {
-        phase: "requested",
-        llmRequestId,
-        reason: "interrupted-by-user-input",
+      event: {
+        type: "events.iterate.com/agent/llm-request-cancelled",
+        payload: {
+          phase: "requested",
+          llmRequestId,
+          reason: "interrupted-by-user-input",
+        },
       },
     });
   }

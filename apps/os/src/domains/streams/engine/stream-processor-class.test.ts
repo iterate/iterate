@@ -95,6 +95,33 @@ function ignored(offset: number): StreamEvent {
   return { type: "test/ignored", payload: {}, offset, createdAt: iso };
 }
 
+const SameStateContract = defineProcessorContract({
+  slug: "test.same-state",
+  version: "0.1.0",
+  description: "Returns the same state object for subscription behavior tests.",
+  stateSchema: z.object({ seen: z.number().default(0) }),
+  initialState: {},
+  events: {
+    "test/same": { payloadSchema: z.object({}) },
+  },
+  consumes: ["test/same"],
+  emits: [],
+});
+type SameStateContract = typeof SameStateContract;
+type SameState = { seen: number };
+
+class SameStateProcessor extends StreamProcessor<SameStateContract> {
+  readonly contract = SameStateContract;
+
+  protected override reduce(args: Parameters<StreamProcessor<SameStateContract>["reduce"]>[0]) {
+    return args.state;
+  }
+}
+
+function sameStateEvent(offset: number): StreamEvent {
+  return { type: "test/same", payload: {}, offset, createdAt: iso };
+}
+
 describe("reduce and checkpoint", () => {
   it("reduces consumed events into state and checkpoints once per batch", async () => {
     const writes: CounterSnapshot[] = [];
@@ -159,6 +186,64 @@ describe("reduce and checkpoint", () => {
     expect(processor.checkpointOffset).toBe(1);
     expect(writes).toEqual([{ offset: 1, state: { total: 0 } }]);
     expect(onProcessEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("state change subscriptions", () => {
+  it("pushes the loaded current state immediately", async () => {
+    const processor = new CounterProcessor({
+      iterateContext: iterateContext(),
+      readState: () => ({ offset: 5, state: { total: 9 } }),
+    });
+    const states: CounterState[] = [];
+
+    const unsubscribe = await processor.onStateChange((state) => states.push(state));
+
+    expect(states).toEqual([{ total: 9 }]);
+    unsubscribe();
+  });
+
+  it("notifies after ingest only when the reduced state reference changes", async () => {
+    const processor = new CounterProcessor({ iterateContext: iterateContext() });
+    const states: CounterState[] = [];
+    const unsubscribe = await processor.onStateChange((state) => states.push(state));
+
+    await processor.ingest({ events: [ignored(1)], streamMaxOffset: 1 });
+    await processor.ingest({ events: [add(2, 3)], streamMaxOffset: 2 });
+    await processor.ingest({ events: [add(2, 3)], streamMaxOffset: 2 });
+
+    expect(states).toEqual([{ total: 0 }, { total: 3 }]);
+    unsubscribe();
+  });
+
+  it("does not notify when a reducer returns the same state object", async () => {
+    const processor = new SameStateProcessor({ iterateContext: iterateContext() });
+    const states: SameState[] = [];
+    const unsubscribe = await processor.onStateChange((state) => states.push(state));
+
+    await processor.ingest({ events: [sameStateEvent(1)], streamMaxOffset: 1 });
+
+    expect(states).toEqual([{ seen: 0 }]);
+    unsubscribe();
+  });
+
+  it("unsubscribes and disposes a retained callback stub", async () => {
+    const disposeOriginal = vi.fn();
+    const disposeRetained = vi.fn();
+    const original = Object.assign(vi.fn(), {
+      [Symbol.dispose]: disposeOriginal,
+      dup: () => Object.assign(vi.fn(), { [Symbol.dispose]: disposeRetained }),
+    });
+    const processor = new CounterProcessor({ iterateContext: iterateContext() });
+
+    const unsubscribe = await processor.onStateChange(original);
+    await processor.ingest({ events: [add(1, 1)], streamMaxOffset: 1 });
+    unsubscribe();
+    await processor.ingest({ events: [add(2, 1)], streamMaxOffset: 2 });
+
+    expect(original).not.toHaveBeenCalled();
+    expect(disposeOriginal).not.toHaveBeenCalled();
+    expect(disposeRetained).toHaveBeenCalledTimes(1);
   });
 });
 

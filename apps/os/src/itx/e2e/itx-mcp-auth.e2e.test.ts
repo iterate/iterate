@@ -119,7 +119,7 @@ test.skipIf(!CLOUDFLARE_API_TOKEN)(
     expect(describedJson).toContain("mcp.cloudflare");
     expect(describedJson).not.toContain(CLOUDFLARE_API_TOKEN);
 
-    const journal = (await projectItx.streams.get("/").read()) as Array<{
+    const journal = (await projectItx.streams.get("/").getEvents()) as Array<{
       payload: Record<string, unknown>;
       type: string;
     }>;
