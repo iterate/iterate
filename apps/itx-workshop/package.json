@@ -1,0 +1,21 @@
+{
+  "name": "itx-workshop-repro",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A small, runnable reproduction that empirically tests the claims in the itx workshop against real Cloudflare workerd + real capnweb clients.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "node --experimental-strip-types harness.ts"
+  },
+  "dependencies": {
+    "capnweb": "^0.8.0",
+    "ws": "^8.18.0",
+    "@slack/web-api": "^7.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "wrangler": "^4.85.0",
+    "typescript": "^5.6.0"
+  }
+}
