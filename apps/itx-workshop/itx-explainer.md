@@ -562,14 +562,18 @@ The whole thing is one idea seen from a few angles: a name → a stub or an addr
 
 ---
 
-## Step 12 — the application layer 🚧 TODO (skeleton)
+## Step 12 — the platform layers (built incrementally in `steps/`)
 
-> **not built yet** — the steps above derive the _core_. This step makes it _complete_: the application-level wiring that turns the core into the platform.
+> The steps above derive the _core_. The platform layers that make it a real, multi-tenant system are built as **runnable step folders** ([`steps/README.md`](./steps/README.md)), each with an intent test green over real workerd:
 
-- [ ] **An itx is just a project id + a path.** That's the whole identity — `<projectId>/<path>` names the context, the host DO, and the dial address. `<projectId>/` (the root path) is the **project itx**; `<projectId>/agents/foo` is an **agent itx**; you can nest as many as you want under a project. There's no separate "session" or "namespace" concept — those are just paths.
-- [ ] **The inheritance chain follows the path** — an agent itx (`<projectId>/agents/foo`) extends the project itx (`<projectId>/`); shadow/super climb the path across real Durable Objects.
-- [ ] **The platform capability root** — where the platform defaults come from, and how a context bottoms out at a code-rooted read-only root above the project.
-- [ ] **Root capabilities are provided, not built in** — `fetch`/`streams`/`extend`/`super` arrive via `provideCapability` (injected at construction), not special-cased in a handle. _(open question: exactly where the root caps get provided — likely passed into the constructor.)_
+- [x] **A context is a project id + a path.** That's the whole identity — `<projectId>/<path>` names the context, the host DO, and the dial address. `prj:<id>` is the **project itx**; `prj:<id>/agents/<name>` is an **agent itx** under it; nest freely. No separate "session" or "namespace" — those are just paths.
+- [x] **Auth & access** ([`steps/08-auth`](./steps/08-auth)) — a bearer token names a principal → the projects it may access → an itx scoped to one project; others refused at the door.
+- [x] **dial / code-loading** ([`steps/09-dial`](./steps/09-dial)) — a sturdy ref is restored by **building + running its worker** via the Worker Loader (`env.LOADER`), `props` → `this.ctx.props`.
+- [x] **Project DO + `itx.fetch`** ([`steps/10-project-fetch`](./steps/10-project-fetch)) — a **Project Durable Object** owns egress, provided to a project context as the `fetch` root.
+- [x] **The context chain** ([`steps/11-chain`](./steps/11-chain)) — an agent itx extends its project itx; on a miss it climbs to super across real DOs; a child shadow wins (late binding).
+- [x] **Codemode** ([`steps/12-codemode`](./steps/12-codemode)) — `script-execution-requested`/`-completed`; run an `async (itx) => …` program in a loaded isolate with the context's itx in scope.
+- [x] **Root capabilities are provided, not built in** — injected at construction (e.g. `itx.fetch`), not special-cased in a handle; own provides shadow them.
+- [ ] **The platform capability root above the project** — where defaults bottom out at a code-rooted read-only root. _(still TODO.)_
 
 ---
 
