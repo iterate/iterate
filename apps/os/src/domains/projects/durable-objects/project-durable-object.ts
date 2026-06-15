@@ -10,8 +10,8 @@
 // The project's WORKER does not live here either: it is an ordinary
 // repo-sourced capability (PROJECT_WORKER_SOURCE, itx/platform-context.ts)
 // built through the generic per-commit R2 memo (itx/source-build.ts).
-// Ingress loads it in the stateless ProjectIngressEntrypoint; this DO only
-// forwards root-stream events to its processEvent hook
+// Ingress loads it in the stateless ProjectIngressEntrypoint; ProjectProcessor
+// asks this DO to forward project-root facts to its processEvent hook
 // (project-worker-runtime.ts).
 //
 // State lives in the project's root event stream, projected by
@@ -42,10 +42,6 @@ import {
   type ProjectFacts,
 } from "~/domains/projects/stream-processors/project/contract.ts";
 import { ProjectProcessor } from "~/domains/projects/stream-processors/project/implementation.ts";
-import {
-  ProjectConfigWorkerProcessor,
-  ProjectConfigWorkerProcessorContract,
-} from "~/domains/projects/stream-processors/project-config-worker/implementation.ts";
 import {
   isMissingProjectWorkerError,
   loadProjectWorker,
@@ -98,19 +94,8 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
         appConfig: () => this.getAppConfig(),
         env: this.env,
         exports: this.ctx.exports,
+        forwardToProjectWorker: (event) => this.forwardEventToWorker(event),
         projectId: () => this.projectId,
-      }),
-  );
-  // The worker as a stream processor: every root-stream event is forwarded
-  // to its processEvent export, checkpointed (project-config-worker/
-  // contract.ts has the composition story — per-project agent context etc.).
-  workerForwarder = this.host.add(
-    ProjectConfigWorkerProcessorContract.slug,
-    (deps) =>
-      new ProjectConfigWorkerProcessor({
-        ...deps,
-        forwardToConfigWorker: (event) =>
-          this.forwardEventToWorker({ event, streamPath: PROJECT_STREAM_PATH }),
       }),
   );
 
@@ -216,18 +201,18 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
   }
 
   /**
-   * Checkpointed delivery to the worker's processEvent export, dialed by the
-   * project-config-worker processor under blockProcessorWhile. The worker is
-   * loaded EXACTLY (latestMaxAgeMs 0 probes the repo head): an event can be
-   * the direct consequence of a config push — a new agent created right
-   * after its config landed — and serving the previous worker would consume
-   * the very trigger the new config exists to handle. USER failures (the
-   * project's hook throwing) are swallowed — an author's bug must never
-   * wedge root-stream delivery; a MISSING worker (no repo, no worker.js yet)
-   * is a normal skip; PLATFORM failures (build/git errors) throw so the
-   * checkpoint holds and the event is redelivered rather than dropped.
+   * Checkpointed delivery to the worker's processEvent export, dialed by
+   * ProjectProcessor while handling the root stream. The worker is loaded
+   * EXACTLY (latestMaxAgeMs 0 probes the repo head): an event can be the
+   * direct consequence of a config push — a new agent created right after its
+   * config landed — and serving the previous worker would consume the very
+   * trigger the new config exists to handle. USER failures (the project's hook
+   * throwing) are swallowed — an author's bug must never wedge root-stream
+   * delivery; a MISSING worker (no repo, no worker.js yet) is a normal skip;
+   * PLATFORM failures (build/git errors) throw so the checkpoint holds and the
+   * event is redelivered rather than dropped.
    */
-  private async forwardEventToWorker(input: { event: StreamEvent; streamPath: string }) {
+  private async forwardEventToWorker(event: StreamEvent) {
     const summary = await this.currentSummary();
     if (summary === null) return;
     let entrypoint;
@@ -244,8 +229,8 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
     }
     try {
       await entrypoint.processEvent?.({
-        event: input.event as unknown as Event,
-        streamPath: input.streamPath,
+        event: event as unknown as Event,
+        streamPath: PROJECT_STREAM_PATH,
       });
     } catch (error) {
       console.error("Project worker processEvent failed.", error);
@@ -294,18 +279,6 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
           bindingName: "PROJECT",
           durableObjectName: getProjectDurableObjectName(projectId),
           processorName: ProjectProcessorContract.slug,
-        }),
-      },
-    });
-    await stream.append({
-      type: "events.iterate.com/stream/subscription-configured",
-      idempotencyKey: `project-config-worker-subscription:${projectId}`,
-      payload: {
-        subscriptionKey: `project-config-worker:${projectId}`,
-        subscriber: durableObjectProcessorSubscriber({
-          bindingName: "PROJECT",
-          durableObjectName: getProjectDurableObjectName(projectId),
-          processorName: ProjectConfigWorkerProcessorContract.slug,
         }),
       },
     });

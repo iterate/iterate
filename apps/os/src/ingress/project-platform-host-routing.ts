@@ -1,65 +1,10 @@
-import type { FetchCallable } from "@iterate-com/shared/callable/types.ts";
 import { normalizeIngressHost } from "./host-headers.ts";
-import type { ExactHostIngressRule } from "./types.ts";
 import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
-
-type ProjectPlatformHostRow = {
-  id: string;
-  slug: string;
-};
 
 type ParsedProjectPlatformHost = {
   appSlug: string | null;
   projectIdentifier: string;
 };
-
-export async function getProjectPlatformHostIngressRule(input: {
-  appHostname?: string | null;
-  bases: readonly string[];
-  db: D1Database;
-  host: string;
-}): Promise<ExactHostIngressRule | null> {
-  const host = normalizeIngressHost(input.host);
-  const appHostname = input.appHostname ? normalizeIngressHost(input.appHostname) : null;
-  if (appHostname !== null && host === appHostname) return null;
-
-  const parsedHosts = parseProjectPlatformHosts({
-    bases: input.bases,
-    host,
-  });
-  if (parsedHosts.length === 0) return null;
-
-  let project: ProjectPlatformHostRow | null = null;
-  for (const parsed of parsedHosts) {
-    project = await input.db
-      .prepare(`SELECT id, slug FROM projects WHERE slug = ? OR id = ? LIMIT 1`)
-      .bind(parsed.projectIdentifier, parsed.projectIdentifier)
-      .first<ProjectPlatformHostRow>();
-    if (project) break;
-  }
-  if (!project) return null;
-
-  const callable = {
-    type: "fetch",
-    via: {
-      type: "loopback-binding",
-      bindingType: "service",
-      exportName: "ProjectIngressEntrypoint",
-      props: { projectId: project.id },
-    },
-  } satisfies FetchCallable;
-
-  return {
-    id: `platform-host:${project.id}:${host}`,
-    host,
-    projectId: project.id,
-    priority: 50,
-    notes: "Project platform hostname",
-    callable,
-    createdAt: new Date(0).toISOString(),
-    updatedAt: new Date(0).toISOString(),
-  };
-}
 
 export function parseProjectPlatformHost(input: {
   bases: readonly string[];

@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -16,7 +17,7 @@ import {
   runProcessorReduce,
   type StreamEvent,
 } from "@iterate-com/shared/streams/stream-processors";
-import type { Event, StreamPath } from "@iterate-com/shared/streams/types";
+import { StreamPath, type Event } from "@iterate-com/shared/streams/types";
 import { Button } from "@iterate-com/ui/components/button";
 import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import {
@@ -71,8 +72,12 @@ import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pi
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
 import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
+import { useItx } from "~/itx/itx-react.tsx";
+import {
+  itxStreamBrowserClient,
+  type ItxStreamForBrowserRuntime,
+} from "~/lib/itx-stream-browser-client.ts";
 import { presenceLabel, sparklinePoints, useSimulatedRttMetrics } from "~/lib/stream-presence.ts";
-import { projectStreamRpcPath } from "~/lib/stream-links.ts";
 import { useStreamViewSearch } from "~/lib/stream-view-search.ts";
 import { useVirtualizedTailScroll } from "~/lib/use-virtualized-tail-scroll.ts";
 
@@ -88,6 +93,9 @@ type StreamPathLinkRenderer = (input: {
   className?: string;
   path: StreamPath;
 }) => ReactNode;
+type ItxStreamSource = (
+  streamPath: StreamPath,
+) => ItxStreamForBrowserRuntime | Promise<ItxStreamForBrowserRuntime>;
 
 const DEFAULT_RAW_EVENT_YAML =
   "type: events.iterate.com/os/manual-event\npayload:\n  message: Hello from OS\n";
@@ -104,7 +112,7 @@ export function ProjectStreamView({
   projectSlugOrId,
   renderStreamPathLink,
   showCommandPaletteTrigger = false,
-  streamUrl,
+  streamSource,
   streamPath,
 }: {
   autoFocusMessageComposer?: boolean;
@@ -116,20 +124,30 @@ export function ProjectStreamView({
   projectSlugOrId: string;
   renderStreamPathLink?: StreamPathLinkRenderer;
   showCommandPaletteTrigger?: boolean;
-  streamUrl?: string;
+  streamSource?: ItxStreamSource;
   streamPath: StreamPath;
 }) {
+  const itx = useItx();
   const streamPathText = streamPath.toString();
   // The agent-ui processor (presence, live state) runs on every stream; the
   // chat-shaped Agent view only makes sense for streams under /agents — those
   // default to it, everything else defaults to the plain feed.
   const isAgentStream = streamPathText.startsWith("/agents/");
+  const resolvedStreamSource = useMemo<ItxStreamSource>(
+    () => streamSource ?? ((path) => itx.streams.get(path)),
+    [itx, streamSource],
+  );
+  const streamClientFactory = useMemo(
+    () => async (input: { streamPath: string }) =>
+      itxStreamBrowserClient(await resolvedStreamSource(StreamPath.parse(input.streamPath))),
+    [resolvedStreamSource],
+  );
   const store = useMemo(
     () =>
       acquireStreamRuntime({
+        createStreamClient: streamClientFactory,
         namespace: projectSlugOrId,
         streamPath: streamPathText,
-        streamUrl: streamUrl ?? projectStreamRpcPath(projectSlugOrId, streamPathText),
         slug: BrowserRawEventsContract.slug,
         schemaVersion: BROWSER_RAW_EVENTS_SCHEMA_VERSION,
         tables: ["events"],
@@ -147,7 +165,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [projectSlugOrId, streamPathText, streamUrl],
+    [projectSlugOrId, streamClientFactory, streamPathText],
   );
   const snapshot = useSyncExternalStore(
     store.subscribe,
@@ -166,9 +184,9 @@ export function ProjectStreamView({
   const agentStore = useMemo(
     () =>
       acquireStreamRuntime({
+        createStreamClient: streamClientFactory,
         namespace: projectSlugOrId,
         streamPath: streamPathText,
-        streamUrl: streamUrl ?? projectStreamRpcPath(projectSlugOrId, streamPathText),
         slug: AgentUiProcessorContract.slug,
         schemaVersion: AGENT_UI_SCHEMA_VERSION,
         resetOnSchemaVersionChange: true,
@@ -187,7 +205,7 @@ export function ProjectStreamView({
           });
         },
       }),
-    [projectSlugOrId, streamPathText, streamUrl],
+    [projectSlugOrId, streamClientFactory, streamPathText],
   );
   const agentSnapshot = useSyncExternalStore(
     agentStore.subscribe,
@@ -290,6 +308,20 @@ export function ProjectStreamView({
     await store.clearLocalDatabase();
     window.location.reload();
   }
+
+  const getProcessorRuntimeState = useCallback(
+    async (subscriptionKey: string) => {
+      const [runtimeState, streamRuntimeState] = await Promise.all([
+        store.getProcessorRuntimeState({ subscriptionKey }),
+        store.runtimeState(),
+      ]);
+      return {
+        runtimeState,
+        streamMaxOffset: streamRuntimeState.coreProcessorState.maxOffset,
+      };
+    },
+    [store],
+  );
 
   async function submitRawEvents() {
     const trimmed = rawText.trim();
@@ -523,6 +555,7 @@ export function ProjectStreamView({
             onBack={openProcessorsOverview}
             onClose={closeProcessors}
             onClearClientDatabase={clearClientDatabases}
+            getProcessorRuntimeState={getProcessorRuntimeState}
           />
         ) : null}
       </div>

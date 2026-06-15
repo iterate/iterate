@@ -45,13 +45,3 @@ function normalizeStreamSegment(value: string) {
 
   return segment;
 }
-
-/** The browser→Stream-DO RPC/WebSocket URL for a project stream (the live
- * data door the stream runtime subscribes to). */
-export function projectStreamRpcPath(projectSlugOrId: string, streamPath: string) {
-  const normalized =
-    streamPath === "" ? "/" : streamPath.startsWith("/") ? streamPath : `/${streamPath}`;
-  return normalized === "/"
-    ? `/api/project-streams/${encodeURIComponent(projectSlugOrId)}`
-    : `/api/project-streams/${encodeURIComponent(projectSlugOrId)}/${encodeURIComponent(normalized)}`;
-}

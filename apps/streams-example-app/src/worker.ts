@@ -1,10 +1,7 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { newWorkersRpcResponse } from "capnweb";
 import { env } from "cloudflare:workers";
-import {
-  parseStreamRpcRequest,
-  streamDurableObjectName,
-} from "~/domains/streams/engine/browser/connect.ts";
+import { parseStreamRpcRequest, streamDurableObjectName } from "./lib/stream-rpc.ts";
 import { PublicStreamRpcTarget } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 
 export { Stream } from "~/domains/streams/engine/workers/durable-objects/stream.ts";

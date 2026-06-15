@@ -1,6 +1,6 @@
 /**
  * The app worker: the OS dashboard — TanStack Start (SSR + server functions),
- * static assets, debug routes, stream RPC, and app-host itx.
+ * static assets, debug routes, and app-host itx.
  *
  * In the per-DO worker topology (docs/worker-topology.md) this worker has no
  * routes and no Durable Objects: the ingress worker forwards app-host
@@ -20,8 +20,6 @@ import { ROUTED_LANE_HEADER, routeOsRequest } from "./shared/router.ts";
 import { AppConfig, parseConfig } from "~/config.ts";
 import type { RequestContext } from "~/request-context.ts";
 import { handleDebugRoutes, handleDurableObjectDebugFetch } from "~/debug-routes.ts";
-import { handleAdminStreamRpcFetch } from "~/domains/streams/admin-stream-rpc.ts";
-import { handleProjectStreamRpcFetch } from "~/domains/streams/project-stream-rpc.ts";
 import { handleItxFetch } from "~/itx/fetch.ts";
 import { handleDocsMarkdownFetch } from "~/lib/docs-markdown.ts";
 
@@ -77,17 +75,6 @@ export default {
           waitUntil: (promise) => ctx.waitUntil(promise),
           workerExports: ctx.exports,
         };
-
-        const streamRpcResponse = await handleProjectStreamRpcFetch({ context, env, request });
-        if (streamRpcResponse) return streamRpcResponse;
-
-        const adminStreamRpcResponse = await handleAdminStreamRpcFetch({
-          config: requestConfig,
-          context,
-          env,
-          request,
-        });
-        if (adminStreamRpcResponse) return adminStreamRpcResponse;
 
         const itxResponse = await handleItxFetch({ config, context, env, request });
         if (itxResponse) return itxResponse;

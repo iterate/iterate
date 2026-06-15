@@ -1,18 +1,13 @@
 # Ingress Domain
 
-Ingress owns host routing and fetch-callable dispatch: mapping public request
-hostnames to project-bound runtime behavior.
+Ingress maps public request hostnames to one of the OS lanes:
 
-This domain folder currently holds no code. The ingress implementation lives
-elsewhere:
+- known OS host -> app worker
+- MCP host/path -> MCP worker
+- project platform/custom host -> project-host worker
+- anything else -> 404
 
-- `apps/os/src/ingress/` — `matchIngressRequest` / `dispatchFetchCallable`
-  (`host-routing.ts`) and `lookupIngressRule` (`lookup.ts`), which resolves a
-  request host in priority order: explicit D1 ingress-route row, itx
-  capability host, project platform host (`<slug>.iterate.app` and friends),
-  project custom hostname.
-- `apps/os/src/worker.ts` — dispatches project-host traffic through the above
-  before falling through to the dashboard app.
-- `~/domains/projects/entrypoints/project-ingress-entrypoint.ts` — the
-  project-bound ingress entrypoint; ingress remains partly intertwined with
-  Projects until the boundary grows clearer.
+The implementation lives in `apps/os/src/workers/shared/router.ts`. The D1
+lookup is intentionally narrow: once the hostname shape is known to be project
+ingress, the router resolves `projects.slug`, `projects.id`, or
+`projects.custom_hostname` to a project id and optional app slug.

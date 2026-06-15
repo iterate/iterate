@@ -7,39 +7,32 @@
  * worker runs the same function first with its own service bindings — one
  * code path, no dev/prod fork. See docs/worker-topology.md.
  *
- * Lanes, in priority order (mirrors the old single-worker dispatch):
+ * Lanes, in priority order:
  *
- *  1. MCP host (config.mcp.baseUrl hostname)  → MCP worker
- *  2. Ingress-rule match (projects table, D1) → project-host worker
- *  3. Everything else                         → the app (caller handles)
+ *  1. Known OS hosts                          → app worker
+ *  2. MCP host/path                           → MCP worker
+ *  3. Project platform/custom host            → project-host worker
+ *  4. Everything else                         → 404
  *
- * A matched ingress rule rides to the project worker on an internal header
- * so the lookup isn't repeated. The header is trustworthy because the
- * project worker has no routes of its own — it is reachable only via
- * service bindings from workers that just resolved the rule.
+ * A matched project target rides to the project worker on an internal header
+ * so the lookup isn't repeated. The header is trustworthy because the project
+ * worker is reachable only through service bindings from workers that just
+ * resolved the target.
  */
 
 import type { AppConfig } from "~/config.ts";
-import {
-  matchMcpRequestUrl,
-  publicMcpRequestUrl,
-} from "~/domains/inbound-mcp-server/mcp-url-routing.ts";
-import { lookupIngressRule } from "~/ingress/lookup.ts";
-import { ingressHostnameFromRequest, normalizeIngressHost } from "~/ingress/host-headers.ts";
-import type { ExactHostIngressRule } from "~/ingress/types.ts";
+import { matchMcpRequestUrl } from "~/domains/inbound-mcp-server/mcp-url-routing.ts";
+import { normalizeIngressHost } from "~/ingress/host-headers.ts";
+import { parseProjectPlatformHosts } from "~/ingress/project-platform-host-routing.ts";
+import { eventDocsHostnameForAppBaseUrl } from "~/lib/event-docs-host.ts";
+import { normalizeProjectHostnameBase } from "~/lib/project-host-routing.ts";
 
-/** Internal header carrying the resolved ingress rule across the service
- * binding hop. JSON: {@link ResolvedIngressHeader}. */
+/** Internal header carrying the resolved project target across the service binding hop. */
 export const RESOLVED_INGRESS_HEADER = "x-iterate-resolved-ingress";
 
 /** Set by the ingress worker when it has already classified the request
  * (value: the lane name). The app worker skips re-routing when present. */
 export const ROUTED_LANE_HEADER = "x-iterate-routed-lane";
-
-export type ResolvedIngressHeader = {
-  requestHost: string;
-  rule: ExactHostIngressRule;
-};
 
 type RouteTargets = {
   /** MCP worker service binding (handleMcpFetch lives there). */
@@ -59,50 +52,193 @@ export async function routeOsRequest(input: {
   request: Request;
   targets: RouteTargets;
 }): Promise<Response | null> {
-  const { config, request, targets } = input;
+  const { request, targets } = input;
+
+  const decision = await decideIngressRoute({
+    config: input.config,
+    db: input.db,
+    headers: request.headers,
+    method: request.method,
+    url: request.url,
+  });
+
+  if (decision.lane === "mcp") {
+    if (!targets.MCP) return null; // no MCP lane wired (tests) — let the caller decide
+    return await targets.MCP.fetch(request);
+  }
+
+  if (decision.lane === "project" || decision.lane === "itx") {
+    if (!targets.PROJECT_HOST) return null;
+    const headers = new Headers(request.headers);
+    if ("headers" in decision && decision.headers) {
+      for (const [name, value] of Object.entries(decision.headers)) headers.set(name, value);
+    }
+    headers.set(RESOLVED_INGRESS_HEADER, JSON.stringify(decision.resolved));
+    return await targets.PROJECT_HOST.fetch(new Request(request, { headers }));
+  }
+
+  if (decision.lane === "notFound") return new Response("Not Found", { status: 404 });
+
+  return null;
+}
+
+export async function decideIngressRoute(input: {
+  config: {
+    baseUrl?: string;
+    mcp?: { baseUrl: string };
+    projectHostnameBases?: readonly string[];
+  };
+  db: D1Database;
+  headers?: HeadersInit;
+  method: string;
+  url: string;
+}) {
+  const headers = new Headers(input.headers);
+  const publicUrl = new URL(input.url);
+  const forwardedHost = headers.get("x-forwarded-host");
+  const forwardedProto = headers.get("x-forwarded-proto")?.replace(/:$/, "");
+  if (forwardedProto) publicUrl.protocol = `${forwardedProto}:`;
+  if (forwardedHost) {
+    publicUrl.host = forwardedHost;
+    const trimmedForwardedHost = forwardedHost.trim();
+    const hasPort = trimmedForwardedHost.startsWith("[")
+      ? /\]:\d+$/.test(trimmedForwardedHost)
+      : /:\d+$/.test(trimmedForwardedHost);
+    if (!hasPort) publicUrl.port = "";
+  }
 
   // The same gate handleMcpFetch uses — covers both the dedicated MCP
   // hostname (config.mcp.baseUrl) and the localhost path-mounted endpoint
   // (/api/__mcp) used when no explicit MCP base URL is configured.
   const mcpMatch = matchMcpRequestUrl({
-    appBaseUrl: config.baseUrl,
-    mcpBaseUrl: config.mcp?.baseUrl,
-    requestUrl: publicMcpRequestUrl(request),
+    appBaseUrl: input.config.baseUrl,
+    mcpBaseUrl: input.config.mcp?.baseUrl,
+    requestUrl: publicUrl.toString(),
   });
-  if (mcpMatch) {
-    if (!targets.MCP) return null; // no MCP lane wired (tests) — let the caller decide
-    return await targets.MCP.fetch(request);
+  if (mcpMatch) return { lane: "mcp" } as const;
+
+  const requestHost = normalizeIngressHost(
+    headers.get("x-iterate-ingress-hostname") ??
+      headers.get("x-forwarded-host")?.replace(/:\d+$/, "") ??
+      new URL(input.url).hostname,
+  );
+  const appHostname = normalizeIngressHost(new URL(input.config.baseUrl ?? input.url).hostname);
+  const eventDocsHostname = eventDocsHostnameForAppBaseUrl(input.config.baseUrl);
+  if (requestHost === appHostname || requestHost === eventDocsHostname) {
+    return { lane: "os" } as const;
   }
 
-  const requestHost = normalizeIngressHost(ingressHostnameFromRequest(request));
-
-  // When baseUrl is not configured (dev tunnels, previews), the request
-  // origin is the app's own URL — same fallback the app pipeline uses.
-  const appHostname = new URL(config.baseUrl ?? request.url).hostname;
-
-  const rule = await lookupIngressRule({
-    appHostname,
-    db: input.db,
+  const itx = parseItxCapabilityHost({
+    bases: input.config.projectHostnameBases ?? [],
     host: requestHost,
-    projectHostnameBases: config.projectHostnameBases ?? [],
   });
-  if (rule) {
-    if (!targets.PROJECT_HOST) return null;
-    const headers = new Headers(request.headers);
-    headers.set(
-      RESOLVED_INGRESS_HEADER,
-      JSON.stringify({ requestHost, rule } satisfies ResolvedIngressHeader),
-    );
-    return await targets.PROJECT_HOST.fetch(new Request(request, { headers }));
+  if (itx) {
+    const project = await lookupProject(input.db, itx.projectIdentifier);
+    if (!project) return { lane: "notFound" } as const;
+    return {
+      lane: "itx",
+      requestHost,
+      resolved: {
+        target: "itx",
+        capability: itx.capability,
+        projectId: project.id,
+      },
+    } as const;
   }
 
-  return null;
+  const platformHosts = parseProjectPlatformHosts({
+    bases: input.config.projectHostnameBases ?? [],
+    host: requestHost,
+  });
+  for (const platformHost of platformHosts) {
+    const project = await lookupProject(input.db, platformHost.projectIdentifier);
+    if (!project) continue;
+    return {
+      lane: "project",
+      ...(platformHost.appSlug ? { headers: { "x-iterate-app-slug": platformHost.appSlug } } : {}),
+      requestHost,
+      resolved: {
+        target: "project",
+        projectId: project.id,
+        appSlug: platformHost.appSlug,
+      },
+    } as const;
+  }
+
+  const customHostnameProject = await lookupCustomHostnameProject(input.db, requestHost);
+  if (customHostnameProject) {
+    return {
+      lane: "project",
+      ...(customHostnameProject.appSlug
+        ? { headers: { "x-iterate-app-slug": customHostnameProject.appSlug } }
+        : {}),
+      requestHost,
+      resolved: {
+        target: "project",
+        projectId: customHostnameProject.id,
+        appSlug: customHostnameProject.appSlug,
+      },
+    } as const;
+  }
+
+  return { lane: "notFound" } as const;
 }
 
 /** Parse the resolved-rule header set by {@link routeOsRequest}; null when
  * the request arrived without one (direct invocation, tests). */
-export function readResolvedIngressHeader(request: Request): ResolvedIngressHeader | null {
+export function readResolvedIngressHeader(request: Request) {
   const raw = request.headers.get(RESOLVED_INGRESS_HEADER);
   if (!raw) return null;
-  return JSON.parse(raw) as ResolvedIngressHeader;
+  return JSON.parse(raw) as
+    | { target: "project"; projectId: string; appSlug?: string | null }
+    | { target: "itx"; projectId: string; capability: string };
+}
+
+function parseItxCapabilityHost(input: { bases: readonly string[]; host: string }) {
+  const host = normalizeIngressHost(input.host);
+  for (const rawBase of input.bases) {
+    const base = normalizeIngressHost(normalizeProjectHostnameBase(rawBase));
+    if (host === base || !host.endsWith(`.${base}`)) continue;
+
+    const prefix = host.slice(0, host.length - base.length - 1);
+    if (prefix.includes(".")) continue;
+
+    const parts = prefix.split("--");
+    if (parts.length !== 2) continue;
+    const [capability, projectIdentifier] = parts;
+    if (!capability || !projectIdentifier) continue;
+    return { capability, projectIdentifier };
+  }
+  return null;
+}
+
+async function lookupProject(db: D1Database, identifier: string) {
+  return await db
+    .prepare(`SELECT id, slug FROM projects WHERE slug = ? OR id = ? LIMIT 1`)
+    .bind(identifier, identifier)
+    .first<{ id: string; slug: string }>();
+}
+
+async function lookupCustomHostnameProject(db: D1Database, host: string) {
+  const row = await db
+    .prepare(
+      `SELECT id, custom_hostname
+       FROM projects
+       WHERE custom_hostname IS NOT NULL
+         AND custom_hostname != ''
+         AND (custom_hostname = ? OR ? LIKE '%.' || custom_hostname)
+       ORDER BY length(custom_hostname) DESC
+       LIMIT 1`,
+    )
+    .bind(host, host)
+    .first<{ id: string; custom_hostname: string | null }>();
+  if (!row?.custom_hostname) return null;
+
+  const customHostname = normalizeIngressHost(row.custom_hostname);
+  if (host === customHostname) return { id: row.id, appSlug: null };
+  if (!host.endsWith(`.${customHostname}`)) return null;
+
+  const prefix = host.slice(0, host.length - customHostname.length - 1);
+  if (!prefix || prefix.includes(".")) return null;
+  return { id: row.id, appSlug: prefix };
 }

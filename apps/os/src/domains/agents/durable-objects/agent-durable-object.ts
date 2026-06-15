@@ -432,7 +432,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
 
   /** Resolves the stream a hosted processor is subscribed to on this instance. */
   private subscribedStreamContext(processorSlug: string) {
-    const subscription = this.host.runtimeState(processorSlug).subscription;
+    const subscription = this.host.runtimeState(processorSlug).runtime.subscription;
     if (subscription === undefined) {
       throw new Error(
         `Stream processor "${processorSlug}" has no stream subscription on this instance yet.`,

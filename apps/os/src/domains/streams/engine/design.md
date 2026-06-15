@@ -69,6 +69,13 @@ subscription start or to a UI/test for introspection. This is the union of persi
 interesting runtime state such as connected subscription callbacks. It does not include event rows; use
 `getEvent()` / `getEvents()` for events.
 
+Processor snapshot: A processor replay checkpoint: `{ offset, state }`, where `state` is that
+processor's reduced state at the offset. Snapshots are the narrow resume primitive.
+
+Processor runtime state: The live inspection value a connected processor can expose to the stream.
+It contains the processor snapshot plus optional runtime/health/metrics data. It is observational
+and may disappear with the subscription connection.
+
 Stream reduced state: The stream durable object's persisted projection over its own event log. The
 stream uses this state for core bookkeeping such as created time, max offset / event count, event
 schemas, and the latest `subscription-configured` event for each `subscriptionKey`.
@@ -353,6 +360,11 @@ active capnweb sessions, active subscription connections, subscription keys, dir
 transports, and connection status. Event rows are not included; callers use `getEvent()` or
 `getEvents()` for event data.
 
+Processors mirror this with `getRuntimeState()`: a connected processor hands the stream an optional
+live capability under `subscriber.processor.getRuntimeState`. The stream stores that capability in
+the in-memory connection, persists only `subscriber.processor.announcement` into presence facts, and
+serves on-demand reads through `getProcessorRuntimeState({ subscriptionKey })`.
+
 The subscription callback should expose a batch-shaped delivery method:
 
 ```ts
@@ -551,7 +563,7 @@ appendedAtMs`. No correlation map, no await — `append` stays fire-and-forget. 
 
 > **Superseded.** This scratchpad sketches a `connectStream` / `createStreamSubscription`
 > / `processorRunner.run` client library that never shipped under those names. The real
-> surfaces are `withStreamConnectionFromBrowser` + `acquireStreamRuntime` (browser) and
+> surfaces are `acquireStreamRuntime` with an injected stream client (browser) and
 > `createStreamProcessorHost` (workers); connections are synchronously `Disposable`, not
 > `AsyncDisposable`. Retained as history.
 
@@ -765,7 +777,7 @@ What the caller wants:
 - catch up from `replayAfterOffset`
 - reduce matching events into state
 - run `afterAppend` for live/relevant events
-- inspect the current processor snapshot
+- inspect the current processor runtime state, including its snapshot
 - stop the runner with async disposal
 
 ```ts

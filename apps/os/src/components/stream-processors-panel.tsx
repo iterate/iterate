@@ -1,8 +1,10 @@
-import { useState } from "react";
-import { ChevronLeftIcon, DatabaseZapIcon, XIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronLeftIcon, DatabaseZapIcon, RefreshCwIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import type { AgentUiPresenceEntry } from "@iterate-com/ui/components/events/agent-ui-reducer";
+import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { cn } from "@iterate-com/ui/lib/utils";
+import type { ProcessorRuntimeState } from "~/domains/streams/engine/types.ts";
 import {
   hashString,
   presenceColorClasses,
@@ -64,6 +66,7 @@ export function StreamProcessorsPanel({
   onBack,
   onClose,
   onClearClientDatabase,
+  getProcessorRuntimeState,
 }: {
   presence: readonly AgentUiPresenceEntry[];
   metrics: RttMetrics;
@@ -75,10 +78,70 @@ export function StreamProcessorsPanel({
   onBack: () => void;
   onClose: () => void;
   onClearClientDatabase: () => Promise<void>;
+  getProcessorRuntimeState: (subscriptionKey: string) => Promise<ProcessorRuntimeStateResult>;
 }) {
   // A stale or never-connected key (e.g. after a reconnect) falls back to the
   // overview rather than a blank detail pane.
   const focused = presence.find((entry) => entry.subscriptionKey === focusedKey) ?? null;
+  const focusedSubscriptionKey = focused?.subscriptionKey ?? null;
+  const focusedConnected = focused?.connected ?? false;
+  const [runtimeStateLoad, setRuntimeStateLoad] = useState<ProcessorRuntimeStateLoad>({
+    status: "idle",
+  });
+  const [refreshKey, setRefreshKey] = useState(0);
+  const focusedRuntimeStateLoad =
+    focusedSubscriptionKey == null ||
+    runtimeStateLoad.status === "idle" ||
+    runtimeStateLoad.subscriptionKey === focusedSubscriptionKey
+      ? runtimeStateLoad
+      : ({
+          status: "loading",
+          subscriptionKey: focusedSubscriptionKey,
+        } satisfies ProcessorRuntimeStateLoad);
+
+  useEffect(() => {
+    if (focusedSubscriptionKey == null) {
+      setRuntimeStateLoad({ status: "idle" });
+      return;
+    }
+
+    if (!focusedConnected) {
+      setRuntimeStateLoad({
+        status: "loaded",
+        subscriptionKey: focusedSubscriptionKey,
+        runtimeState: null,
+        streamMaxOffset: null,
+      });
+      return;
+    }
+
+    let disposed = false;
+    setRuntimeStateLoad({ status: "loading", subscriptionKey: focusedSubscriptionKey });
+    void getProcessorRuntimeState(focusedSubscriptionKey)
+      .then(({ runtimeState, streamMaxOffset }) => {
+        if (!disposed) {
+          setRuntimeStateLoad({
+            status: "loaded",
+            subscriptionKey: focusedSubscriptionKey,
+            runtimeState,
+            streamMaxOffset,
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (!disposed) {
+          setRuntimeStateLoad({
+            status: "error",
+            subscriptionKey: focusedSubscriptionKey,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [focusedConnected, focusedSubscriptionKey, getProcessorRuntimeState, refreshKey]);
 
   return (
     <aside className="absolute inset-y-0 right-0 z-30 flex w-full max-w-sm flex-col rounded-tl-2xl bg-background shadow-2xl">
@@ -94,11 +157,34 @@ export function StreamProcessorsPanel({
           onClearClientDatabase={onClearClientDatabase}
         />
       ) : (
-        <ProcessorDetail entry={focused} busy={busy} onBack={onBack} onClose={onClose} />
+        <ProcessorDetail
+          entry={focused}
+          busy={busy}
+          runtimeStateLoad={focusedRuntimeStateLoad}
+          onRefreshRuntimeState={() => setRefreshKey((key) => key + 1)}
+          onBack={onBack}
+          onClose={onClose}
+        />
       )}
     </aside>
   );
 }
+
+type ProcessorRuntimeStateLoad =
+  | { status: "idle" }
+  | { status: "loading"; subscriptionKey: string }
+  | {
+      status: "loaded";
+      subscriptionKey: string;
+      runtimeState: ProcessorRuntimeState | null;
+      streamMaxOffset: number | null;
+    }
+  | { status: "error"; subscriptionKey: string; message: string };
+
+type ProcessorRuntimeStateResult = {
+  runtimeState: ProcessorRuntimeState | null;
+  streamMaxOffset: number;
+};
 
 function ProcessorsOverview({
   presence,
@@ -279,11 +365,15 @@ function MetricStat({ label, value }: { label: string; value: string }) {
 function ProcessorDetail({
   entry,
   busy,
+  runtimeStateLoad,
+  onRefreshRuntimeState,
   onBack,
   onClose,
 }: {
   entry: AgentUiPresenceEntry;
   busy: boolean;
+  runtimeStateLoad: ProcessorRuntimeStateLoad;
+  onRefreshRuntimeState: () => void;
   onBack: () => void;
   onClose: () => void;
 }) {
@@ -350,6 +440,10 @@ function ProcessorDetail({
             </div>
           </>
         )}
+        <ProcessorRuntimeStateView
+          runtimeStateLoad={runtimeStateLoad}
+          onRefresh={onRefreshRuntimeState}
+        />
         <div>
           <SectionHeading>Subscription</SectionHeading>
           <div className="rounded-xl bg-muted/40 px-3 py-2 font-mono text-xs text-muted-foreground">
@@ -358,6 +452,96 @@ function ProcessorDetail({
         </div>
       </div>
     </>
+  );
+}
+
+function ProcessorRuntimeStateView({
+  runtimeStateLoad,
+  onRefresh,
+}: {
+  runtimeStateLoad: ProcessorRuntimeStateLoad;
+  onRefresh: () => void;
+}) {
+  const runtimeState = runtimeStateLoad.status === "loaded" ? runtimeStateLoad.runtimeState : null;
+  const streamMaxOffset =
+    runtimeStateLoad.status === "loaded" ? runtimeStateLoad.streamMaxOffset : null;
+  const snapshot = runtimeState?.snapshot;
+  const lag =
+    snapshot == null || streamMaxOffset == null
+      ? null
+      : Math.max(0, streamMaxOffset - snapshot.offset);
+
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <SectionHeading>Reduced state</SectionHeading>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          title="Refresh reduced state"
+          disabled={runtimeStateLoad.status === "loading"}
+          onClick={onRefresh}
+          className="size-6 text-muted-foreground"
+        >
+          <RefreshCwIcon
+            className={cn("size-3.5", runtimeStateLoad.status === "loading" && "animate-spin")}
+          />
+        </Button>
+      </div>
+      {runtimeStateLoad.status === "loading" || runtimeStateLoad.status === "idle" ? (
+        <RuntimeStateMessage>Loading reduced state…</RuntimeStateMessage>
+      ) : runtimeStateLoad.status === "error" ? (
+        <RuntimeStateMessage tone="error">{runtimeStateLoad.message}</RuntimeStateMessage>
+      ) : runtimeState == null ? (
+        <RuntimeStateMessage>
+          Runtime state is not available for this connection.
+        </RuntimeStateMessage>
+      ) : snapshot == null ? (
+        <RuntimeStateMessage>Runtime state did not include a snapshot.</RuntimeStateMessage>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <div className="grid grid-cols-2 gap-2">
+            <RuntimeStateStat label="offset" value={`#${snapshot.offset}`} />
+            <RuntimeStateStat label="lag" value={lag === 0 ? "0" : `+${lag}`} />
+          </div>
+          <SerializedObjectCodeBlock className="max-h-80" data={snapshot.state} />
+          {runtimeState.runtime == null ? null : (
+            <div>
+              <SectionHeading>Runtime</SectionHeading>
+              <SerializedObjectCodeBlock className="max-h-60" data={runtimeState.runtime} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RuntimeStateMessage({
+  children,
+  tone = "muted",
+}: {
+  children: React.ReactNode;
+  tone?: "muted" | "error";
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-xl bg-muted/40 px-3 py-2 text-xs",
+        tone === "error" ? "text-destructive" : "text-muted-foreground",
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+function RuntimeStateStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl bg-muted/40 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground/70">{label}</div>
+      <div className="mt-0.5 font-mono text-sm">{value}</div>
+    </div>
   );
 }
 

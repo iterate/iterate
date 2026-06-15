@@ -2,9 +2,9 @@ import {
   streamConnectionFromWebSocket,
   toWebSocketUrl,
   type StreamConnection,
-} from "../connection.ts";
+} from "./stream-connection.ts";
 
-export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
+type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
 
 /** Connects browser JavaScript to one stream URL over capnweb-WebSocket. */
 export async function withStreamConnectionFromBrowser(args: {
@@ -14,7 +14,8 @@ export async function withStreamConnectionFromBrowser(args: {
     error: string | undefined,
   ) => void;
 }): Promise<StreamConnection> {
-  const webSocket = new WebSocket(toWebSocketUrl(args.url));
+  const browserUrl = new URL(args.url, window.location.href);
+  const webSocket = new WebSocket(toWebSocketUrl(browserUrl));
   args.onConnectionStatusChange?.("connecting", undefined);
   webSocket.addEventListener("open", () => args.onConnectionStatusChange?.("connected", undefined));
   webSocket.addEventListener("close", (event) =>
@@ -44,7 +45,7 @@ export function streamDurableObjectName(args: { namespace: string; path: string 
   return `${args.namespace}:${args.path}`;
 }
 
-/** Parse `/api/streams?path=…&namespace=…` into stream DO identity parts. */
+/** Parse `/api/streams?path=...&namespace=...` into stream DO identity parts. */
 export function parseStreamRpcRequest(args: { url: URL }) {
   if (args.url.pathname !== "/api/streams") {
     throw new Error(`Unexpected stream RPC path: ${args.url.pathname}`);

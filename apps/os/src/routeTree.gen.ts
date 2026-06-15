@@ -21,6 +21,7 @@ import { Route as SignInSplatRouteImport } from './routes/sign-in.$'
 import { Route as PosthogProxySplatRouteImport } from './routes/posthog-proxy.$'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as ApiSplatRouteImport } from './routes/api.$'
+import { Route as AdminReplRouteImport } from './routes/admin/repl'
 import { Route as AdminProjectsRouteImport } from './routes/admin/projects'
 import { Route as AppNewProjectRouteImport } from './routes/_app/new-project'
 import { Route as AppItxReplRouteImport } from './routes/_app/itx-repl'
@@ -38,6 +39,7 @@ import { Route as DocsStreamsProcessorsProcessorSlugRouteImport } from './routes
 import { Route as AdminStreamsNamespaceSplatRouteImport } from './routes/admin/streams/$namespace/$'
 import { Route as AppProjectsProjectSlugSettingsRouteImport } from './routes/_app/projects/$projectSlug/settings'
 import { Route as AppProjectsProjectSlugReplRouteImport } from './routes/_app/projects/$projectSlug/repl'
+import { Route as AppProjectsProjectSlugReactivityRouteImport } from './routes/_app/projects/$projectSlug/reactivity'
 import { Route as AppProjectsProjectSlugMcpRouteImport } from './routes/_app/projects/$projectSlug/mcp'
 import { Route as AppProjectsProjectSlugIntegrationsRouteImport } from './routes/_app/projects/$projectSlug/integrations'
 import { Route as AppProjectsProjectSlugStreamsRouteRouteImport } from './routes/_app/projects/$projectSlug/streams/route'
@@ -111,6 +113,11 @@ const ApiSplatRoute = ApiSplatRouteImport.update({
   id: '/api/$',
   path: '/api/$',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminReplRoute = AdminReplRouteImport.update({
+  id: '/repl',
+  path: '/repl',
+  getParentRoute: () => AdminRoute,
 } as any)
 const AdminProjectsRoute = AdminProjectsRouteImport.update({
   id: '/projects',
@@ -205,6 +212,12 @@ const AppProjectsProjectSlugReplRoute =
   AppProjectsProjectSlugReplRouteImport.update({
     id: '/repl',
     path: '/repl',
+    getParentRoute: () => AppProjectsProjectSlugRouteRoute,
+  } as any)
+const AppProjectsProjectSlugReactivityRoute =
+  AppProjectsProjectSlugReactivityRouteImport.update({
+    id: '/reactivity',
+    path: '/reactivity',
     getParentRoute: () => AppProjectsProjectSlugRouteRoute,
   } as any)
 const AppProjectsProjectSlugMcpRoute =
@@ -303,6 +316,7 @@ export interface FileRoutesByFullPath {
   '/itx-repl': typeof AppItxReplRoute
   '/new-project': typeof AppNewProjectRoute
   '/admin/projects': typeof AdminProjectsRoute
+  '/admin/repl': typeof AdminReplRoute
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
@@ -318,6 +332,7 @@ export interface FileRoutesByFullPath {
   '/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/mcp': typeof AppProjectsProjectSlugMcpRoute
+  '/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
   '/admin/streams/$namespace/$': typeof AdminStreamsNamespaceSplatRoute
@@ -343,6 +358,7 @@ export interface FileRoutesByTo {
   '/itx-repl': typeof AppItxReplRoute
   '/new-project': typeof AppNewProjectRoute
   '/admin/projects': typeof AdminProjectsRoute
+  '/admin/repl': typeof AdminReplRoute
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
@@ -354,6 +370,7 @@ export interface FileRoutesByTo {
   '/admin/streams': typeof AdminStreamsIndexRoute
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/projects/$projectSlug/mcp': typeof AppProjectsProjectSlugMcpRoute
+  '/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
   '/admin/streams/$namespace/$': typeof AdminStreamsNamespaceSplatRoute
@@ -385,6 +402,7 @@ export interface FileRoutesById {
   '/_app/itx-repl': typeof AppItxReplRoute
   '/_app/new-project': typeof AppNewProjectRoute
   '/admin/projects': typeof AdminProjectsRoute
+  '/admin/repl': typeof AdminReplRoute
   '/api/$': typeof ApiSplatRoute
   '/api/health': typeof ApiHealthRoute
   '/posthog-proxy/$': typeof PosthogProxySplatRoute
@@ -400,6 +418,7 @@ export interface FileRoutesById {
   '/_app/projects/$projectSlug/streams': typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
   '/_app/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
   '/_app/projects/$projectSlug/mcp': typeof AppProjectsProjectSlugMcpRoute
+  '/_app/projects/$projectSlug/reactivity': typeof AppProjectsProjectSlugReactivityRoute
   '/_app/projects/$projectSlug/repl': typeof AppProjectsProjectSlugReplRoute
   '/_app/projects/$projectSlug/settings': typeof AppProjectsProjectSlugSettingsRoute
   '/admin/streams/$namespace/$': typeof AdminStreamsNamespaceSplatRoute
@@ -431,6 +450,7 @@ export interface FileRouteTypes {
     | '/itx-repl'
     | '/new-project'
     | '/admin/projects'
+    | '/admin/repl'
     | '/api/$'
     | '/api/health'
     | '/posthog-proxy/$'
@@ -446,6 +466,7 @@ export interface FileRouteTypes {
     | '/projects/$projectSlug/streams'
     | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/mcp'
+    | '/projects/$projectSlug/reactivity'
     | '/projects/$projectSlug/repl'
     | '/projects/$projectSlug/settings'
     | '/admin/streams/$namespace/$'
@@ -471,6 +492,7 @@ export interface FileRouteTypes {
     | '/itx-repl'
     | '/new-project'
     | '/admin/projects'
+    | '/admin/repl'
     | '/api/$'
     | '/api/health'
     | '/posthog-proxy/$'
@@ -482,6 +504,7 @@ export interface FileRouteTypes {
     | '/admin/streams'
     | '/projects/$projectSlug/integrations'
     | '/projects/$projectSlug/mcp'
+    | '/projects/$projectSlug/reactivity'
     | '/projects/$projectSlug/repl'
     | '/projects/$projectSlug/settings'
     | '/admin/streams/$namespace/$'
@@ -512,6 +535,7 @@ export interface FileRouteTypes {
     | '/_app/itx-repl'
     | '/_app/new-project'
     | '/admin/projects'
+    | '/admin/repl'
     | '/api/$'
     | '/api/health'
     | '/posthog-proxy/$'
@@ -527,6 +551,7 @@ export interface FileRouteTypes {
     | '/_app/projects/$projectSlug/streams'
     | '/_app/projects/$projectSlug/integrations'
     | '/_app/projects/$projectSlug/mcp'
+    | '/_app/projects/$projectSlug/reactivity'
     | '/_app/projects/$projectSlug/repl'
     | '/_app/projects/$projectSlug/settings'
     | '/admin/streams/$namespace/$'
@@ -645,6 +670,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/repl': {
+      id: '/admin/repl'
+      path: '/repl'
+      fullPath: '/admin/repl'
+      preLoaderRoute: typeof AdminReplRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/projects': {
       id: '/admin/projects'
       path: '/projects'
@@ -762,6 +794,13 @@ declare module '@tanstack/react-router' {
       path: '/repl'
       fullPath: '/projects/$projectSlug/repl'
       preLoaderRoute: typeof AppProjectsProjectSlugReplRouteImport
+      parentRoute: typeof AppProjectsProjectSlugRouteRoute
+    }
+    '/_app/projects/$projectSlug/reactivity': {
+      id: '/_app/projects/$projectSlug/reactivity'
+      path: '/reactivity'
+      fullPath: '/projects/$projectSlug/reactivity'
+      preLoaderRoute: typeof AppProjectsProjectSlugReactivityRouteImport
       parentRoute: typeof AppProjectsProjectSlugRouteRoute
     }
     '/_app/projects/$projectSlug/mcp': {
@@ -922,6 +961,7 @@ interface AppProjectsProjectSlugRouteRouteChildren {
   AppProjectsProjectSlugStreamsRouteRoute: typeof AppProjectsProjectSlugStreamsRouteRouteWithChildren
   AppProjectsProjectSlugIntegrationsRoute: typeof AppProjectsProjectSlugIntegrationsRoute
   AppProjectsProjectSlugMcpRoute: typeof AppProjectsProjectSlugMcpRoute
+  AppProjectsProjectSlugReactivityRoute: typeof AppProjectsProjectSlugReactivityRoute
   AppProjectsProjectSlugReplRoute: typeof AppProjectsProjectSlugReplRoute
   AppProjectsProjectSlugSettingsRoute: typeof AppProjectsProjectSlugSettingsRoute
   AppProjectsProjectSlugIndexRoute: typeof AppProjectsProjectSlugIndexRoute
@@ -940,6 +980,8 @@ const AppProjectsProjectSlugRouteRouteChildren: AppProjectsProjectSlugRouteRoute
     AppProjectsProjectSlugIntegrationsRoute:
       AppProjectsProjectSlugIntegrationsRoute,
     AppProjectsProjectSlugMcpRoute: AppProjectsProjectSlugMcpRoute,
+    AppProjectsProjectSlugReactivityRoute:
+      AppProjectsProjectSlugReactivityRoute,
     AppProjectsProjectSlugReplRoute: AppProjectsProjectSlugReplRoute,
     AppProjectsProjectSlugSettingsRoute: AppProjectsProjectSlugSettingsRoute,
     AppProjectsProjectSlugIndexRoute: AppProjectsProjectSlugIndexRoute,
@@ -1018,12 +1060,14 @@ const AdminStreamsRouteRouteWithChildren =
 interface AdminRouteChildren {
   AdminStreamsRouteRoute: typeof AdminStreamsRouteRouteWithChildren
   AdminProjectsRoute: typeof AdminProjectsRoute
+  AdminReplRoute: typeof AdminReplRoute
   AdminIndexRoute: typeof AdminIndexRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminStreamsRouteRoute: AdminStreamsRouteRouteWithChildren,
   AdminProjectsRoute: AdminProjectsRoute,
+  AdminReplRoute: AdminReplRoute,
   AdminIndexRoute: AdminIndexRoute,
 }
 

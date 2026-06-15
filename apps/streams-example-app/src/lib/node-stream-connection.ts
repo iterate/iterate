@@ -2,7 +2,7 @@ import {
   streamConnectionFromWebSocket,
   toWebSocketUrl,
   type StreamConnection,
-} from "../connection.ts";
+} from "./stream-connection.ts";
 
 /**
  * Connects from Node.js using the runtime's global WebSocket. Synchronous: capnweb

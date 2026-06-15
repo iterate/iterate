@@ -3,7 +3,6 @@ import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
 import { useItx } from "~/itx/itx-react.tsx";
-import { adminStreamRpcPath } from "~/lib/stream-rpc-paths.ts";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 
 export const Route = createFileRoute("/admin/streams/$namespace/$")({
@@ -53,7 +52,7 @@ function AdminStreamDetailPage() {
             {children}
           </Link>
         ),
-        streamUrl: adminStreamRpcPath(namespace, streamPath),
+        streamSource: (path) => itx.streams.namespace(namespace).get(path),
       }}
     />
   );

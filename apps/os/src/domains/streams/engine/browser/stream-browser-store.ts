@@ -12,17 +12,16 @@
 // connection (so a follower can still append / read runtimeState) and — only as leader —
 // hosts the processor over a fresh subscription, mirroring StreamProcessorRunner.
 
-import type { RpcStub } from "capnweb";
+import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
 import type { StreamEvent, StreamEventInput } from "../shared/event.ts";
-import type { ProcessorStream } from "../types.ts";
-import type { StreamProcessorSnapshot } from "../stream-processor.ts";
-import type { StreamCoreProcessorState, StreamRpc } from "../types.ts";
-import {
-  DEFAULT_STREAM_NAMESPACE,
-  withStreamConnectionFromBrowser,
-  streamRpcPath,
-  type StreamBrowserConnectionStatus,
-} from "./connect.ts";
+import type {
+  LiveStreamSubscriberDescriptor,
+  ProcessorRuntimeState,
+  ProcessorStream,
+  StreamCoreProcessorState,
+  SubscriptionKey,
+} from "../types.ts";
+import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "../stream-processor.ts";
 import { deleteBrowserProcessorState } from "./processor-state-storage.ts";
 import { acquireWriterRole, streamWriterLockName, type WriterRole } from "./stream-leader.ts";
 import {
@@ -32,6 +31,8 @@ import {
 } from "./stream-browser-db.ts";
 
 const LIVE_PROGRESS_NOTIFICATION_MS = 16;
+export const DEFAULT_STREAM_NAMESPACE = "default";
+export type StreamBrowserConnectionStatus = "connecting" | "connected" | "closed" | "error";
 
 /**
  * The slice of `StreamProcessor` the browser runtime drives: read the
@@ -39,7 +40,16 @@ const LIVE_PROGRESS_NOTIFICATION_MS = 16;
  * `ingest`. Structural so views construct whatever processor class they like.
  */
 type BrowserHostedProcessor = {
+  contract: {
+    slug: string;
+    version?: string;
+    description?: string;
+    consumes: readonly string[];
+    emits?: readonly string[];
+    events: Record<string, { description?: string; payloadSchema?: unknown }>;
+  };
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
+  getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>>;
   ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void>;
 };
 
@@ -75,6 +85,7 @@ export type BrowserProcessorConfig = {
 
 export type BrowserStreamConnectionConfig = {
   namespace?: string;
+  createStreamClient?: BrowserStreamClientFactory;
   streamUrl?: string | URL | ((args: { namespace: string; streamPath: string }) => string | URL);
 };
 
@@ -93,10 +104,42 @@ export type StreamRuntimeState = {
  */
 export type StreamRpcResult<T> = Promise<T> & Disposable;
 
+export type BrowserStreamClient = Disposable &
+  ProcessorStream & {
+    runtimeState(): Promise<StreamRuntimeState>;
+    getProcessorRuntimeState(args: {
+      subscriptionKey: SubscriptionKey;
+    }): Promise<ProcessorRuntimeState | null>;
+    subscribe(args: {
+      subscriptionKey?: string;
+      processEventBatch: (batch: {
+        events: readonly StreamEvent[];
+        streamMaxOffset: number;
+      }) => unknown;
+      replayAfterOffset?: number;
+      subscriber?: LiveStreamSubscriberDescriptor;
+    }): Promise<{ unsubscribe(): void }>;
+    kill(): Promise<void> | void;
+    reset(): Promise<void>;
+  };
+
+export type BrowserStreamClientFactory = (args: {
+  namespace: string;
+  streamPath: string;
+  streamUrl?: string | URL;
+  onConnectionStatusChange?: (
+    status: StreamBrowserConnectionStatus,
+    error: string | undefined,
+  ) => void;
+}) => Promise<BrowserStreamClient>;
+
 export type StreamBrowserStore = Disposable & {
   readonly streamDatabase: StreamBrowserDatabase;
   appendBatch(args: { events: StreamEventInput[] }): StreamRpcResult<StreamEvent[]>;
   runtimeState(): StreamRpcResult<StreamRuntimeState>;
+  getProcessorRuntimeState(args: {
+    subscriptionKey: SubscriptionKey;
+  }): StreamRpcResult<ProcessorRuntimeState | null>;
   clearLocalDatabase(): Promise<void>;
   kill(): Promise<void>;
   reset(): Promise<void>;
@@ -204,7 +247,7 @@ function createStreamRuntime(
   };
 
   const listeners = new Set<() => void>();
-  let stream: Awaited<ReturnType<typeof withStreamConnectionFromBrowser>> | undefined;
+  let stream: BrowserStreamClient | undefined;
   let subscriptionHandle: { unsubscribe(): void } | undefined;
   let writerRole: WriterRole | undefined;
   let connectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -406,7 +449,7 @@ function createStreamRuntime(
   // re-emits `created`, restarting offsets from 1). If our recorded incarnation differs from
   // the server's, the offset comparison is meaningless — rebuild the mirror. Otherwise fall
   // back to the offset check: discard when the server has fewer committed events than we do.
-  async function reconcileLocalMirrorWithServer(rpc: RpcStub<StreamRpc>) {
+  async function reconcileLocalMirrorWithServer(rpc: BrowserStreamClient) {
     // Deliberately a throwaway instance: processors memoize their checkpoint on
     // first read, so the real instance must be created after any discard below.
     const processor = args.createProcessor({ stream: rpc, sql, subscriptionKey });
@@ -470,14 +513,26 @@ function createStreamRuntime(
 
   function connect() {
     if (stream !== undefined || disposed) return;
-    const streamUrl = new URL(resolveStreamUrl(args), window.location.href);
+    const streamUrl =
+      args.streamUrl === undefined
+        ? undefined
+        : new URL(
+            resolveStreamUrl({
+              namespace: args.namespace,
+              streamPath: args.streamPath,
+              streamUrl: args.streamUrl,
+            }),
+            window.location.href,
+          );
     // Identity for THIS connect attempt. A late callback from a previously-redialed
     // connection compares against this and bails if it no longer matches (B1).
     connectionEpoch += 1;
     const epoch = connectionEpoch;
 
-    void withStreamConnectionFromBrowser({
-      url: streamUrl,
+    void createBrowserStreamClient(args)({
+      namespace: args.namespace,
+      streamPath: args.streamPath,
+      streamUrl,
       onConnectionStatusChange(connectionStatus, connectionError) {
         // Ignore status callbacks that belong to a superseded connection: after a
         // reconnect/redial a stale connection's late "closed"/"error" could otherwise
@@ -512,10 +567,7 @@ function createStreamRuntime(
       });
   }
 
-  function startSubscriptionElection(election: {
-    connection: Awaited<ReturnType<typeof withStreamConnectionFromBrowser>>;
-    epoch: number;
-  }) {
+  function startSubscriptionElection(election: { connection: BrowserStreamClient; epoch: number }) {
     snapshot = { ...snapshot, subscriptionStatus: "electing" };
     emitSnapshot();
 
@@ -561,13 +613,13 @@ function createStreamRuntime(
         if (!ownsRuntime()) return undefined;
         snapshot = { ...snapshot, subscriptionStatus: "leader" };
         emitSnapshot();
-        await withDeadline("reconcile", reconcileLocalMirrorWithServer(election.connection.stream));
+        await withDeadline("reconcile", reconcileLocalMirrorWithServer(election.connection));
         // Re-check after every await: a step that settles late (after this
         // election was superseded) must not write runtime-wide fields like
         // lastDeliveredOffset over the current election's values.
         if (!ownsRuntime()) return undefined;
         const processor = args.createProcessor({
-          stream: election.connection.stream,
+          stream: election.connection,
           sql,
           subscriptionKey,
         });
@@ -579,6 +631,13 @@ function createStreamRuntime(
         lastDeliveredOffset = checkpoint.offset;
         return {
           replayAfterOffset: checkpoint.offset,
+          subscriber: {
+            description: "browser",
+            processor: {
+              announcement: announceContract(processor.contract),
+              getRuntimeState: () => processor.getRuntimeState(),
+            },
+          },
           // Counters are bumped inside ingestWithSelfHeal, AFTER its
           // supersede guard: a batch delivered to a replaced election is
           // dropped and must not count as progress (it never advances
@@ -592,11 +651,11 @@ function createStreamRuntime(
         if (ready === undefined || !ownsRuntime()) return undefined;
         return withDeadline(
           "subscribe",
-          election.connection.stream.subscribe({
+          election.connection.subscribe({
             subscriptionKey,
             processEventBatch: ready.processEventBatch,
             replayAfterOffset: ready.replayAfterOffset,
-            subscriber: { description: "browser" },
+            subscriber: ready.subscriber,
           }),
         );
       })
@@ -637,7 +696,7 @@ function createStreamRuntime(
   async function ingestWithSelfHeal(
     processor: BrowserHostedProcessor,
     batch: { events: readonly StreamEvent[]; streamMaxOffset: number },
-    election: { connection: Awaited<ReturnType<typeof withStreamConnectionFromBrowser>> },
+    election: { connection: BrowserStreamClient },
   ): Promise<void> {
     // A batch delivered to a superseded election must not be applied: its
     // processor's queued ingests would interleave with (and can regress the
@@ -688,7 +747,7 @@ function createStreamRuntime(
     if (stream === undefined) throw new Error("stream connection is disposed");
     const controlledStream = stream;
     try {
-      await controlledStream.stream[control]();
+      await controlledStream[control]();
     } finally {
       if (stream === controlledStream) {
         scheduleReconnect(`stream ${control} requested`, 1_000);
@@ -737,7 +796,7 @@ function createStreamRuntime(
           let coreProcessorState;
           try {
             ({ coreProcessorState } = await raceWithTimeout(
-              Promise.resolve(connection.stream.runtimeState()),
+              Promise.resolve(connection.runtimeState()),
               LIVENESS_PROBE_TIMEOUT_MS,
               "liveness probe timed out",
             ));
@@ -806,7 +865,7 @@ function createStreamRuntime(
     try {
       const arrivalsBefore = deliveryArrivals;
       const { coreProcessorState } = await raceWithTimeout(
-        Promise.resolve(connection.stream.runtimeState()),
+        Promise.resolve(connection.runtimeState()),
         LIVENESS_PROBE_TIMEOUT_MS,
         "delivery nudge timed out",
       );
@@ -892,16 +951,16 @@ function createStreamRuntime(
   // kick a reconnect and await readiness instead of throwing — only a disposed runtime (or a
   // reconnect that never lands within the bound) rejects (B2). The wrapped awaitable carries
   // a no-op [Symbol.dispose] so callers that dispose un-awaited results keep working.
-  function callWhenReady<T>(call: (rpc: RpcStub<StreamRpc>) => Promise<T>): StreamRpcResult<T> {
+  function callWhenReady<T>(call: (rpc: BrowserStreamClient) => Promise<T>): StreamRpcResult<T> {
     if (disposed) throw new Error("stream runtime is disposed");
     reconnectNow();
     const ready = stream;
-    if (ready !== undefined) return call(ready.stream) as StreamRpcResult<T>;
+    if (ready !== undefined) return call(ready) as StreamRpcResult<T>;
     const promise = (async () => {
       await whenStreamReady();
       const reconnected = stream;
       if (reconnected === undefined) throw new Error("stream runtime is disposed");
-      return await call(reconnected.stream);
+      return await call(reconnected);
     })();
     return Object.assign(promise, { [Symbol.dispose]() {} });
   }
@@ -913,6 +972,11 @@ function createStreamRuntime(
     },
     runtimeState() {
       return callWhenReady((rpc) => rpc.runtimeState() as Promise<StreamRuntimeState>);
+    },
+    getProcessorRuntimeState(args) {
+      return callWhenReady(
+        (rpc) => rpc.getProcessorRuntimeState(args) as Promise<ProcessorRuntimeState | null>,
+      );
     },
     async clearLocalDatabase() {
       stopSubscriptionElection();
@@ -957,6 +1021,16 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+function createBrowserStreamClient(args: {
+  createStreamClient?: BrowserStreamClientFactory;
+  streamUrl?: BrowserStreamConnectionConfig["streamUrl"];
+}): BrowserStreamClientFactory {
+  if (args.createStreamClient === undefined) {
+    throw new Error("acquireStreamRuntime requires createStreamClient.");
+  }
+  return args.createStreamClient;
+}
+
 /**
  * Promise.race against a deadline, with the loser's timer cleared when the
  * race settles — a bare setTimeout-rejection branch would otherwise fire an
@@ -976,19 +1050,29 @@ function isWriteStatement(sql: string) {
   return /^\s*(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|REPLACE|PRAGMA\s+user_version)/i.test(sql);
 }
 
+function announceContract(
+  contract: BrowserHostedProcessor["contract"],
+): ProcessorContractAnnouncement {
+  return {
+    slug: contract.slug,
+    version: contract.version ?? "0",
+    description: contract.description ?? "",
+    consumes: [...contract.consumes],
+    emits: [...(contract.emits ?? [])],
+    ownedEvents: Object.entries(contract.events).map(([type, definition]) => ({
+      type,
+      ...(definition.description === undefined ? {} : { description: definition.description }),
+    })),
+  };
+}
+
 function resolveStreamUrl(args: {
   namespace: string;
   streamPath: string;
-  streamUrl?: BrowserStreamConnectionConfig["streamUrl"];
+  streamUrl: NonNullable<BrowserStreamConnectionConfig["streamUrl"]>;
 }) {
   if (typeof args.streamUrl === "function") {
     return args.streamUrl({ namespace: args.namespace, streamPath: args.streamPath });
   }
-  return (
-    args.streamUrl ??
-    streamRpcPath({
-      path: args.streamPath,
-      namespace: args.namespace === DEFAULT_STREAM_NAMESPACE ? undefined : args.namespace,
-    })
-  );
+  return args.streamUrl;
 }

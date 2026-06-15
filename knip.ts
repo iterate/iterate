@@ -28,6 +28,7 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "e2e/tui-test/run.ts",
       // Mounted into the CLI by packages/iterate/src/os/router.ts, which knip
       // doesn't traverse (the iterate package isn't a knip workspace).
+      "scripts/itx-agent-smoke.ts",
       "scripts/itx-run.ts",
       "scripts/seed-iterate-config-base-repo.ts",
       "scripts/setup-artifact-event-subscriptions.ts",
@@ -50,11 +51,6 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "@opentui/react",
       "iterate",
       "miniflare",
-    ],
-    ignoreFiles: [
-      // Public helper kept with the stream engine for Worker/DO callers even
-      // though OS currently uses direct in-process helpers.
-      "src/domains/streams/engine/workers/connect.ts",
     ],
   };
 }
@@ -82,6 +78,9 @@ function makeStreamsExampleAppWorkspace(): WorkspaceConfig {
     ignore: [
       // TanStack Start client entry, referenced by framework convention.
       "src/client.ts",
+      // Kept as the Worker/DO counterpart to the browser and Node stream
+      // Cap'n Web helpers in the example app.
+      "src/lib/workers-stream-connection.ts",
     ],
     vite: false,
     paths: {

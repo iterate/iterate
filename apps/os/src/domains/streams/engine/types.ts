@@ -1,5 +1,10 @@
 import type { StreamEvent, StreamEventInput } from "./shared/event.ts";
-import type { CoreProcessorState, StreamSubscriberDescriptor } from "./processors/core/contract.ts";
+import type {
+  CoreProcessorState,
+  ProcessorContractAnnouncement,
+  StreamSubscriberDescriptor,
+} from "./processors/core/contract.ts";
+import type { StreamProcessorRuntimeState } from "./stream-processor.ts";
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -35,6 +40,22 @@ export type StreamEventBatch = {
 
 export type ProcessEventBatch = (batch: StreamEventBatch) => unknown;
 
+export type ProcessorRuntimeState = StreamProcessorRuntimeState<unknown>;
+
+export type GetProcessorRuntimeState = () => MaybePromise<ProcessorRuntimeState>;
+
+export type LiveStreamSubscriberDescriptor = Omit<StreamSubscriberDescriptor, "processor"> & {
+  processor?: {
+    announcement: ProcessorContractAnnouncement;
+    /**
+     * Live-only capability retained for the subscription lifetime. It is not
+     * persisted into presence facts; the stream calls it on demand from
+     * getProcessorRuntimeState({ subscriptionKey }).
+     */
+    getRuntimeState?: GetProcessorRuntimeState;
+  };
+};
+
 /** The minimal append surface a processor's iterate context exposes. */
 export type ProcessorStream = {
   append(args: { streamPath?: string; event: StreamEventInput }): unknown;
@@ -60,6 +81,16 @@ export type StreamRpc = {
     limit?: number;
   }): MaybePromise<StreamEvent[]>;
   /**
+   * Waits for the first event after `afterOffset` whose predicate returns true.
+   * Omitting `afterOffset` waits from the live edge; pass 0 to include history.
+   */
+  waitForEvent(args: {
+    afterOffset?: number;
+    eventTypes?: readonly string[];
+    predicate: (event: StreamEvent) => MaybePromise<boolean>;
+    timeoutMs: number;
+  }): MaybePromise<StreamEvent>;
+  /**
    * Subscribes to catch-up then live event batches. Every subscription
    * immediately receives one batch carrying the current `state` and
    * `streamMaxOffset` (plus the replayed events when `replayAfterOffset`
@@ -79,9 +110,12 @@ export type StreamRpc = {
      * `replayAfterOffset` is ignored. Defaults to `true`.
      */
     events?: boolean;
-    /** Who is subscribing; lands on the stream's presence roster. */
-    subscriber?: StreamSubscriberDescriptor;
+    /** Who is subscribing; serializable fields land on the presence roster. */
+    subscriber?: LiveStreamSubscriberDescriptor;
   }): MaybePromise<StreamSubscriptionHandle>;
+  getProcessorRuntimeState(args: {
+    subscriptionKey: SubscriptionKey;
+  }): MaybePromise<ProcessorRuntimeState | null>;
   runtimeState(): MaybePromise<{
     coreProcessorState: StreamCoreProcessorState;
     runtime: {

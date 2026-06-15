@@ -151,7 +151,7 @@ export function dialCodeContext(input: {
 
 // ---- the context's stream --------------------------------------------------------
 
-/** The context's stream as the core consumes it: append + read. */
+/** The context's stream as the core consumes it: append + getEvents. */
 export function contextStream(env: Env, coordinate: ItxCoordinate): ContextStream {
   const stub = () =>
     getInitializedStreamStub({
@@ -160,10 +160,10 @@ export function contextStream(env: Env, coordinate: ItxCoordinate): ContextStrea
       path: StreamPath.parse(coordinate.path),
     });
   return {
-    async append(event) {
-      return await (await stub()).append(event);
+    async append(args) {
+      return await (await stub()).append(args.event);
     },
-    async read(input) {
+    async getEvents(input) {
       return await (
         await stub()
       ).history({ after: input.afterOffset === 0 ? "start" : input.afterOffset });

@@ -106,11 +106,13 @@ const result = await itx.repos.get({ slug: "project" }).commitFiles({
 })
 
 await itx.streams.get("/").append({
-  type: "events.iterate.com/project/onboarding-completed",
-  payload: {
-    projectId: ${JSON.stringify(input.projectId)},
-    agentPath: "/agents/onboarding",
-    commitOid: result.commitOid,
+  event: {
+    type: "events.iterate.com/project/onboarding-completed",
+    payload: {
+      projectId: ${JSON.stringify(input.projectId)},
+      agentPath: "/agents/onboarding",
+      commitOid: result.commitOid,
+    },
   },
 })
 \`\`\`

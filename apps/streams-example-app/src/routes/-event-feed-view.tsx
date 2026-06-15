@@ -8,6 +8,7 @@ import { Link } from "@tanstack/react-router";
 import { useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { streamViewSearch, type StreamViewSearch } from "../lib/stream-view-search.ts";
+import { createCapnwebStreamClient } from "../lib/capnweb-stream-browser-client.ts";
 import {
   shouldSuppressUnreadBadgeDuringInitialTail,
   useInitialTailScroll,
@@ -49,6 +50,7 @@ export function EventFeedView({ streamView }: { streamView: StreamViewSearch }) 
       acquireStreamRuntime({
         streamPath: streamView.path,
         namespace: streamView.namespace,
+        createStreamClient: createCapnwebStreamClient,
         slug: BrowserEventFeedContract.slug,
         schemaVersion: BROWSER_EVENT_FEED_SCHEMA_VERSION,
         tables: [BROWSER_EVENT_FEED_TABLE],

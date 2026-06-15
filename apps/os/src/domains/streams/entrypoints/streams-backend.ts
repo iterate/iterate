@@ -3,14 +3,13 @@ import {
   type Event,
   type EventInput,
   type StreamCursor,
-  type StreamState,
   StreamPath,
 } from "@iterate-com/shared/streams/types";
+import type { StreamEvent, StreamEventInput } from "~/domains/streams/engine/shared/event.ts";
 import { createStreamSubscription } from "~/domains/streams/engine/subscription.ts";
 import type { StreamRpc, StreamSubscriptionHandle } from "~/domains/streams/engine/types.ts";
 import { ItxError } from "~/itx/errors.ts";
 import {
-  coreStateToStreamState,
   getStreamDurableObjectName,
   getInitializedStreamStub,
   withStreamPath,
@@ -42,11 +41,11 @@ export type StreamPathInput = {
 };
 
 export type StreamAppendInput = StreamPathInput & {
-  event: EventInput;
+  event: StreamEventInput;
 };
 
 export type StreamAppendBatchInput = StreamPathInput & {
-  events: EventInput[];
+  events: StreamEventInput[];
 };
 
 export type StreamReadInput = StreamPathInput & {
@@ -59,27 +58,15 @@ type StreamEventsInput = StreamPathInput & {
   beforeOffset?: StreamCursor;
 };
 
-export type StreamSubscribeInput = StreamPathInput & {
-  /**
-   * "start" replays everything, a number replays after it, "end" is
-   * live-only. Ignored when `events` is false — state-only subscriptions are
-   * implicitly live-from-now (replay without events is meaningless).
-   */
-  afterOffset: StreamCursor;
-  /**
-   * `false` = state-only mode: every batch carries `state` and
-   * `streamMaxOffset` but `events` is always `[]`. Defaults to true.
-   */
-  events?: boolean;
-};
-
-/** What every subscription delivery carries; `state` is the same public
- * {@link StreamState} shape `getState()` returns. */
-export type StreamSubscribeBatch = {
-  events: Event[];
-  state: StreamState;
-  streamMaxOffset: number;
-};
+export type StreamGetEventInput = StreamPathInput & Parameters<StreamRpc["getEvent"]>[0];
+export type StreamGetEventsInput = StreamPathInput &
+  NonNullable<Parameters<StreamRpc["getEvents"]>[0]>;
+export type StreamWaitForEventInput = StreamPathInput & Parameters<StreamRpc["waitForEvent"]>[0];
+export type StreamSubscribeInput = StreamPathInput & Parameters<StreamRpc["subscribe"]>[0];
+export type StreamSubscribeBatch = Parameters<StreamSubscribeInput["processEventBatch"]>[0];
+export type StreamReduceInput = StreamPathInput & Parameters<StreamRpc["reduce"]>[0];
+export type StreamGetProcessorRuntimeStateInput = StreamPathInput &
+  Parameters<StreamRpc["getProcessorRuntimeState"]>[0];
 
 export type StreamListChildrenInput = StreamPathInput;
 type StreamsBackendClient = Pick<
@@ -87,11 +74,19 @@ type StreamsBackendClient = Pick<
   | "append"
   | "appendBatch"
   | "create"
+  | "getEvent"
+  | "getEvents"
+  | "getProcessorRuntimeState"
   | "getState"
+  | "kill"
   | "listChildren"
   | "read"
+  | "reduce"
+  | "reset"
+  | "runtimeState"
   | "stream"
   | "subscribe"
+  | "waitForEvent"
 >;
 
 /**
@@ -163,6 +158,26 @@ export class StreamsBackend extends WorkerEntrypoint<StreamsBackendEnv, StreamsB
     });
   }
 
+  async getEvent(input: StreamGetEventInput): Promise<StreamEvent | undefined> {
+    return await namespaceStreamRpc({
+      durableObjectNamespace: this.env.STREAM,
+      path: this.resolveNamespacePath(input),
+      namespace: this.ctx.props.projectId,
+    }).getEvent(input);
+  }
+
+  async getEvents(input: StreamGetEventsInput = {}): Promise<StreamEvent[]> {
+    return await namespaceStreamRpc({
+      durableObjectNamespace: this.env.STREAM,
+      path: this.resolveNamespacePath(input),
+      namespace: this.ctx.props.projectId,
+    }).getEvents({
+      afterOffset: input.afterOffset,
+      beforeOffset: input.beforeOffset,
+      limit: input.limit,
+    });
+  }
+
   async stream(input: StreamEventsInput = {}): Promise<Response> {
     const path = this.resolveNamespacePath(input);
     const events =
@@ -190,42 +205,19 @@ export class StreamsBackend extends WorkerEntrypoint<StreamsBackendEnv, StreamsB
   }
 
   /**
-   * Live tail: catch-up from `afterOffset`, then every committed batch,
-   * pushed to `onEventBatch` until the returned handle's unsubscribe() is
-   * called. The Stream DO only ever sees a plain Workers RPC stub held by
-   * this worker (Law 7 — Cap'n Web never terminates in a DO); if the
-   * callback's far end goes away, the subscription is torn down on the next
-   * failed delivery — durability is the stream itself, re-subscribe from the
-   * last offset you saw.
-   *
-   * Every batch carries `state`: the stream's public {@link StreamState} as
-   * of `streamMaxOffset`, projected by the exact mapping `getState()` uses.
-   * Every subscription receives an immediate first batch (current state plus
-   * any replayed events), so subscribers paint their first render without a
-   * separate getState call. `events: false` selects state-only mode — same
-   * batches with `events: []`, implicitly live-from-now.
+   * Exact public Stream DO RPC subscribe shape, with this backend only
+   * resolving namespace/path and retaining the callback across the boundary.
    */
-  async subscribe(
-    input: StreamSubscribeInput,
-    onEventBatch: (batch: StreamSubscribeBatch) => unknown,
-  ): Promise<{ unsubscribe(): void }> {
+  async subscribe(input: StreamSubscribeInput): Promise<{ unsubscribe(): void }> {
     const path = this.resolveNamespacePath(input);
     const streamStub = (this.env.STREAM as unknown as StreamDurableObjectNamespace).getByName(
       getStreamDurableObjectName({ namespace: this.ctx.props.projectId, path }),
     ) as unknown as StreamRpc;
 
-    // "end" is live-only — replayAfterOffset must be ABSENT for that
-    // (toAfterOffset's MAX_SAFE_INTEGER sentinel would filter live
-    // batches out forever; it has history-read semantics). State-only
-    // subscriptions never replay: replay without events is meaningless.
-    const replayAfterOffset =
-      input.events === false || input.afterOffset === "end"
-        ? undefined
-        : toAfterOffset(input.afterOffset);
-
     // RPC param stubs are implicitly disposed when this call completes; the
     // wrapper below outlives it, so retain the callback with dup() (no-op
     // for plain in-process functions) and release it on unsubscribe.
+    const onEventBatch = input.processEventBatch;
     const callback = (onEventBatch as { dup?(): typeof onEventBatch }).dup?.() ?? onEventBatch;
     let released = false;
     const releaseCallback = () => {
@@ -247,20 +239,13 @@ export class StreamsBackend extends WorkerEntrypoint<StreamsBackendEnv, StreamsB
     handle = await streamStub.subscribe({
       events: input.events,
       processEventBatch: (batch) => {
-        // The state projection runs inside the promise chain so a mapping
-        // failure tears the subscription down like a broken callback would,
-        // instead of rejecting the DO's fire-and-forget delivery call.
         void Promise.resolve()
-          .then(() =>
-            callback({
-              events: batch.events.map((event) => withStreamPath(event, path)),
-              state: coreStateToStreamState(batch.state),
-              streamMaxOffset: batch.streamMaxOffset,
-            }),
-          )
+          .then(() => callback(batch))
           .catch(teardown);
       },
-      replayAfterOffset,
+      replayAfterOffset: input.replayAfterOffset,
+      eventTypes: input.eventTypes,
+      subscriber: input.subscriber,
     });
     if (callbackBroken) handle.unsubscribe();
     const settled = handle;
@@ -270,6 +255,20 @@ export class StreamsBackend extends WorkerEntrypoint<StreamsBackendEnv, StreamsB
         releaseCallback();
       },
     };
+  }
+
+  async waitForEvent(input: StreamWaitForEventInput): Promise<StreamEvent> {
+    const path = this.resolveNamespacePath(input);
+    const streamStub = (this.env.STREAM as unknown as StreamDurableObjectNamespace).getByName(
+      getStreamDurableObjectName({ namespace: this.ctx.props.projectId, path }),
+    ) as unknown as StreamRpc;
+
+    return await streamStub.waitForEvent({
+      afterOffset: input.afterOffset,
+      eventTypes: input.eventTypes,
+      timeoutMs: input.timeoutMs,
+      predicate: input.predicate,
+    });
   }
 
   async getState(input: StreamPathInput = {}) {
@@ -293,6 +292,51 @@ export class StreamsBackend extends WorkerEntrypoint<StreamsBackendEnv, StreamsB
         createdAt: new Date(0).toISOString(),
       }))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  async runtimeState(input: StreamPathInput = {}) {
+    return await namespaceStreamRpc({
+      durableObjectNamespace: this.env.STREAM,
+      namespace: this.ctx.props.projectId,
+      path: this.resolveNamespacePath(input),
+    }).runtimeState();
+  }
+
+  async getProcessorRuntimeState(input: StreamGetProcessorRuntimeStateInput) {
+    return await namespaceStreamRpc({
+      durableObjectNamespace: this.env.STREAM,
+      namespace: this.ctx.props.projectId,
+      path: this.resolveNamespacePath(input),
+    }).getProcessorRuntimeState({
+      subscriptionKey: input.subscriptionKey,
+    });
+  }
+
+  async reduce(input: StreamReduceInput) {
+    return await namespaceStreamRpc({
+      durableObjectNamespace: this.env.STREAM,
+      namespace: this.ctx.props.projectId,
+      path: this.resolveNamespacePath(input),
+    }).reduce({
+      event: input.event,
+      coreProcessorState: input.coreProcessorState,
+    });
+  }
+
+  async kill(input: StreamPathInput = {}) {
+    return await namespaceStreamRpc({
+      durableObjectNamespace: this.env.STREAM,
+      namespace: this.ctx.props.projectId,
+      path: this.resolveNamespacePath(input),
+    }).kill();
+  }
+
+  async reset(input: StreamPathInput = {}) {
+    return await namespaceStreamRpc({
+      durableObjectNamespace: this.env.STREAM,
+      namespace: this.ctx.props.projectId,
+      path: this.resolveNamespacePath(input),
+    }).reset();
   }
 
   private resolveNamespacePath(input: StreamPathInput): StreamPath {
@@ -415,6 +459,16 @@ async function getInitializedNamespaceStreamStub(args: {
     namespace: args.namespace,
     path: args.path,
   });
+}
+
+function namespaceStreamRpc(args: {
+  durableObjectNamespace: DurableObjectNamespace<StreamDurableObject>;
+  namespace: string;
+  path: StreamPath;
+}) {
+  return (args.durableObjectNamespace as unknown as StreamDurableObjectNamespace).getByName(
+    getStreamDurableObjectName({ namespace: args.namespace, path: args.path }),
+  ) as unknown as StreamRpc;
 }
 
 async function appendNamespaceStreamEvent(args: {

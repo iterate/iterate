@@ -10,12 +10,9 @@ import type { StreamSubscriptionHandshake } from "../stream-processor-host.ts";
 import { getInitialProcessorState } from "../../shared/stream-processors.ts";
 import type { ProcessEventBatch, StreamCoreProcessorState } from "../../types.ts";
 import { CoreStreamProcessor } from "../../processors/core/implementation.ts";
-import {
-  CoreProcessorContract,
-  type CoreProcessorState,
-  type StreamSubscriberDescriptor,
-} from "../../processors/core/contract.ts";
-import type { StreamRpc } from "../../types.ts";
+import { CoreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
+import type { LiveStreamSubscriberDescriptor, StreamRpc } from "../../types.ts";
+import { createStreamSubscription } from "../../subscription.ts";
 import { makeRpcTargetClass, type RpcTargetClass } from "../../shared/rpc-target.ts";
 import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecycle.ts";
 
@@ -555,6 +552,70 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     });
   }
 
+  /**
+   * One-shot convenience over `subscribe()`: replay from the requested cursor,
+   * then live-tail until a caller predicate accepts an event.
+   *
+   * This is intentionally not a durable waiter. If the RPC caller or this DO
+   * incarnation dies, the wait dies too; callers that need retry semantics
+   * should call again with the same `afterOffset`.
+   */
+  async waitForEvent(args: {
+    afterOffset?: number;
+    eventTypes?: readonly string[];
+    predicate: (event: StreamEvent) => boolean | Promise<boolean>;
+    timeoutMs: number;
+  }): Promise<StreamEvent> {
+    if (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) {
+      throw new Error("waitForEvent timeoutMs must be a positive number.");
+    }
+    if (
+      args.afterOffset !== undefined &&
+      (!Number.isInteger(args.afterOffset) || args.afterOffset < 0)
+    ) {
+      throw new Error("waitForEvent afterOffset must be a non-negative integer.");
+    }
+
+    const seenEvents: StreamEvent[] = [];
+    const subscription = createStreamSubscription();
+    const timeout = Promise.withResolvers<never>();
+    const timer = setTimeout(() => {
+      timeout.reject(
+        new Error(`Timed out waiting for stream event. Saw: ${JSON.stringify(seenEvents)}`),
+      );
+    }, args.timeoutMs);
+    let handle: { unsubscribe(): void } | undefined;
+
+    try {
+      handle = this.subscribe({
+        eventTypes: args.eventTypes,
+        replayAfterOffset: args.afterOffset,
+        subscriber: { description: "waitForEvent" },
+        processEventBatch: subscription.processEventBatch,
+      });
+
+      const match = (async () => {
+        // Batches are queued synchronously; async predicate work happens here
+        // so stream delivery is never blocked on caller code.
+        for await (const batch of subscription) {
+          seenEvents.push(...batch.events);
+          for (const event of batch.events) {
+            if (await args.predicate(event)) return event;
+          }
+        }
+        throw new Error("Stream subscription closed before matching event.");
+      })();
+
+      // If timeout wins, cleanup closes the iterator; observe that loser too.
+      void match.catch(() => {});
+      return await Promise.race([match, timeout.promise]);
+    } finally {
+      clearTimeout(timer);
+      handle?.unsubscribe();
+      await subscription[Symbol.asyncDispose]();
+    }
+  }
+
   reduce(args: {
     event: StreamEvent;
     coreProcessorState?: StreamCoreProcessorState;
@@ -597,7 +658,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     /** `false` = state-only batches (`events: []`, live-from-now). Default `true`. */
     events?: boolean;
     /** Who is subscribing; lands on the stream's presence roster. */
-    subscriber?: StreamSubscriberDescriptor;
+    subscriber?: LiveStreamSubscriberDescriptor;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
     return this.coreProcessor.openConnection({ ...args, subscriptionKey, direction: "inbound" });
@@ -610,9 +671,13 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     /** Only deliver these event types. Omit (or include `"*"`) for everything. */
     eventTypes?: readonly string[];
     /** Who is subscribing; lands on the stream's presence roster. */
-    subscriber?: StreamSubscriberDescriptor;
+    subscriber?: LiveStreamSubscriberDescriptor;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     return this.coreProcessor.openConnection({ ...args, direction: "outbound" });
+  }
+
+  getProcessorRuntimeState(args: { subscriptionKey: string }) {
+    return this.coreProcessor.getProcessorRuntimeState(args);
   }
 
   runtimeState() {
@@ -710,6 +775,8 @@ const STREAM_RPC_METHODS = [
   "appendBatch",
   "getEvent",
   "getEvents",
+  "waitForEvent",
+  "getProcessorRuntimeState",
   "runtimeState",
   "reduce",
   "kill",

@@ -18,16 +18,12 @@
 // itx.agents.create().doThing() already proves out.
 
 import { RpcTarget, WorkerEntrypoint } from "cloudflare:workers";
-import type {
-  StreamCursor,
-  Event as StreamEvent,
-  StreamState,
-} from "@iterate-com/shared/streams/types";
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
 import { ItxError } from "../errors.ts";
 import { replayPathCall, type PathCall } from "../itx.ts";
 import type { ProjectAccess } from "../refs.ts";
 import { getStreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 
 type StreamsClient = ReturnType<typeof getStreamsBackend>;
 type StreamsExports = Parameters<typeof getStreamsBackend>[0]["exports"];
@@ -157,87 +153,49 @@ export class ItxStream extends RpcTarget {
     super();
   }
 
-  describe() {
-    return { namespace: this.namespaceId, path: this.path };
+  async append(input: Parameters<StreamRpc["append"]>[0]) {
+    return await this.client().append(input as never);
   }
 
-  async append(event: unknown) {
-    return await this.client().append({ event } as never);
+  async appendBatch(input: Parameters<StreamRpc["appendBatch"]>[0]) {
+    return await this.client().appendBatch(input as never);
   }
 
-  async appendBatch(events: unknown[]) {
-    return await this.client().appendBatch({ events } as never);
+  async getEvent(input: Parameters<StreamRpc["getEvent"]>[0]) {
+    return await this.client().getEvent(input as never);
   }
 
-  async read(input: Record<string, unknown> = {}) {
-    return await this.client().read(input as never);
+  async getEvents(input: Parameters<StreamRpc["getEvents"]>[0] = {}) {
+    return await this.client().getEvents(input as never);
   }
 
-  async getState() {
-    return await this.client().getState({} as never);
+  async runtimeState() {
+    return await this.client().runtimeState({} as never);
   }
 
-  async listChildren() {
-    return await this.client().listChildren({} as never);
+  async getProcessorRuntimeState(input: Parameters<StreamRpc["getProcessorRuntimeState"]>[0]) {
+    return await this.client().getProcessorRuntimeState(input as never);
   }
 
-  /**
-   * Live tail: catch-up from `afterOffset` ("start" replays everything,
-   * "end" is live-only), then every committed batch, pushed to `onEventBatch`
-   * until unsubscribed. The callback crosses whatever boundary the caller
-   * came in over (capnweb from a browser/Node session, Workers RPC from a cap
-   * isolate); the streams capability holds the actual DO subscription, so the
-   * same append-policy props gate it. If the callback's far end goes away,
-   * the subscription is torn down on the next failed delivery — offline means
-   * offline; durability is the stream itself, re-subscribe from the last
-   * offset you saw.
-   *
-   * The ONE reactive primitive: every batch also carries `state` — the same
-   * public shape `getState()` returns, as of `streamMaxOffset` — and every
-   * subscription gets an immediate first batch (current state plus any
-   * replayed events), so a subscriber paints its first render from the
-   * subscription alone. `events: false` is state-only mode: batches arrive
-   * with `events: []` on every state change, implicitly live-from-now
-   * (`afterOffset` is ignored — replay without events is meaningless).
-   */
-  async subscribe(
-    onEventBatch: (batch: {
-      events: StreamEvent[];
-      state: StreamState;
-      streamMaxOffset: number;
-    }) => unknown,
-    opts: { afterOffset: StreamCursor; events?: boolean },
-  ): Promise<ItxStreamSubscription> {
-    // Callback retention lives in StreamsBackend.subscribe: RPC layers
-    // implicitly dispose stubs received as parameters when the call
-    // completes, so the capability dup()s the callback its wrapper outlives
-    // — without that, replay (delivered in-call) works but the first LIVE
-    // batch hits a disposed stub. Verified both ways by
-    // itx-subscribe.e2e.test.ts against a live deployment.
-    const handle = await this.client().subscribe(
-      { afterOffset: opts.afterOffset, events: opts.events },
-      onEventBatch,
-    );
+  async waitForEvent(input: Parameters<StreamRpc["waitForEvent"]>[0]) {
+    return await this.client().waitForEvent(input as never);
+  }
+
+  async kill() {
+    return await this.client().kill({} as never);
+  }
+
+  async reset() {
+    return await this.client().reset({} as never);
+  }
+
+  async reduce(input: Parameters<StreamRpc["reduce"]>[0]) {
+    return await this.client().reduce(input as never);
+  }
+
+  async subscribe(input: Parameters<StreamRpc["subscribe"]>[0]): Promise<ItxStreamSubscription> {
+    const handle = await this.client().subscribe(input as never);
     return new ItxStreamSubscription(handle);
-  }
-
-  /**
-   * Reactive sugar over {@link subscribe}: a state-only subscription that
-   * calls `onState` with the stream's public state (the `getState()` shape)
-   * once immediately on open — the first render — and again after every
-   * append. `stream.onStateChange(setState)` is the whole browser story.
-   */
-  async onStateChange(onState: (state: StreamState) => unknown): Promise<ItxStreamSubscription> {
-    // `onState` is an RPC parameter stub disposed when THIS call returns, but
-    // deliveries (including the initial push) arrive later through the local
-    // wrapper below. dup() it (no-op for plain functions) and hand the
-    // wrapper a Symbol.dispose so the capability's unsubscribe/teardown
-    // releases the retained stub with everything else.
-    const retained = (onState as { dup?(): typeof onState }).dup?.() ?? onState;
-    const forwardState = Object.assign((batch: { state: StreamState }) => retained(batch.state), {
-      [Symbol.dispose]: () => (retained as Partial<Disposable>)[Symbol.dispose]?.(),
-    });
-    return await this.subscribe(forwardState, { afterOffset: "end", events: false });
   }
 
   private client(): StreamsClient {

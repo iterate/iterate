@@ -14,12 +14,22 @@
 
 import type { StreamEvent, StreamEventInput } from "../../shared/event.ts";
 import type { ConsumedEvent } from "../../shared/stream-processors.ts";
-import type { ProcessEventBatch } from "../../types.ts";
+import type {
+  LiveStreamSubscriberDescriptor,
+  ProcessEventBatch,
+  ProcessorRuntimeState,
+} from "../../types.ts";
 import { StreamProcessor } from "../../stream-processor.ts";
-import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../../workers/rpc-lifecycle.ts";
+import {
+  disposeIgnoredRpcResult,
+  retainGetProcessorRuntimeState,
+  retainProcessEventBatch,
+} from "../../workers/rpc-lifecycle.ts";
 import {
   CoreProcessorContract,
+  ProcessorContractAnnouncement as ProcessorContractAnnouncementSchema,
   type CoreProcessorState,
+  type ProcessorContractAnnouncement,
   type StreamSubscriberDescriptor,
   type StreamSubscriberDisconnectReason,
 } from "./contract.ts";
@@ -204,14 +214,15 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
         };
         // A processor announcement on the connect event feeds the stream's
         // contract documentation registry (replaces processor-registered).
-        if (subscriber?.processor !== undefined) {
+        const announcement = processorAnnouncementFromSubscriber(subscriber);
+        if (announcement !== undefined) {
           next = {
             ...next,
             processorsBySlug: {
               ...next.processorsBySlug,
-              [subscriber.processor.slug]: {
+              [announcement.slug]: {
                 announcedAtOffset: args.event.offset,
-                announcement: subscriber.processor,
+                announcement,
               },
             },
           };
@@ -438,6 +449,13 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     );
   }
 
+  async getProcessorRuntimeState(args: {
+    subscriptionKey: string;
+  }): Promise<ProcessorRuntimeState | null> {
+    const connection = this.#connections.get(args.subscriptionKey);
+    return (await connection?.getProcessorRuntimeState?.()) ?? null;
+  }
+
   /** Fire-and-forget outbound reconciliation; never blocks the append path. */
   reconcileConnections(): void {
     try {
@@ -530,7 +548,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     eventTypes?: readonly string[];
     /** `false` = state-only batches. Default `true`. */
     events?: boolean;
-    subscriber?: StreamSubscriberDescriptor;
+    subscriber?: LiveStreamSubscriberDescriptor;
     onClose?: () => void;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     const subscriptionKey = args.subscriptionKey.trim();
@@ -657,6 +675,9 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
     const connection: Connection = {
       direction: args.direction,
       startedAt: new Date().toISOString(),
+      getProcessorRuntimeState: retainGetProcessorRuntimeState(
+        args.subscriber?.processor?.getRuntimeState,
+      ),
       get cursor() {
         return cursor;
       },
@@ -670,6 +691,7 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
           this.#connections.delete(subscriptionKey);
         }
         processEventBatch[Symbol.dispose]();
+        connection.getProcessorRuntimeState?.[Symbol.dispose]();
         this.#appendPresenceFact({
           type: "events.iterate.com/stream/subscriber-disconnected",
           payload: { subscriptionKey, reason },
@@ -688,7 +710,9 @@ export class CoreStreamProcessor extends StreamProcessor<CoreProcessorContract, 
       payload: {
         subscriptionKey,
         direction: args.direction,
-        ...(args.subscriber === undefined ? {} : { subscriber: args.subscriber }),
+        ...(args.subscriber === undefined
+          ? {}
+          : { subscriber: serializableSubscriber(args.subscriber) }),
       },
     });
     processEventBatch.onRpcBroken?.(() => {
@@ -748,8 +772,39 @@ type Connection = {
   batchesSent: number;
   eventsSent: number;
   lastDeliveredAt?: string;
+  getProcessorRuntimeState?: (() => ProcessorRuntimeState | Promise<ProcessorRuntimeState>) &
+    Disposable;
   /** Re-arm the delivery pump after events are committed. Idempotent while draining. */
   wake(): void;
   /** Stop the pump, dispose the callback, append the disconnect fact, drop from the map. Idempotent. */
   close(reason: StreamSubscriberDisconnectReason): void;
 };
+
+function serializableSubscriber(
+  subscriber: LiveStreamSubscriberDescriptor,
+): StreamSubscriberDescriptor {
+  const processor =
+    subscriber.processor === undefined
+      ? undefined
+      : { announcement: subscriber.processor.announcement };
+  return {
+    ...(subscriber.incarnationId === undefined ? {} : { incarnationId: subscriber.incarnationId }),
+    ...(subscriber.description === undefined ? {} : { description: subscriber.description }),
+    ...(processor === undefined ? {} : { processor }),
+  };
+}
+
+function processorAnnouncementFromSubscriber(
+  subscriber: StreamSubscriberDescriptor | undefined,
+): ProcessorContractAnnouncement | undefined {
+  const processor = subscriber?.processor;
+  if (processor === undefined) return undefined;
+  const candidate =
+    isRecord(processor) && isRecord(processor.announcement) ? processor.announcement : processor;
+  const parsed = ProcessorContractAnnouncementSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}

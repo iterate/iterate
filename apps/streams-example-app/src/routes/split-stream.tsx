@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { normalizeStreamPath } from "../lib/stream-rpc.ts";
 import { StreamCompactView } from "./-stream-page.tsx";
-import { normalizeStreamPath } from "~/domains/streams/engine/browser/connect.ts";
 
 export const Route = createFileRoute("/split-stream")({
   validateSearch: (search) => ({

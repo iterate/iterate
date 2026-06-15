@@ -7,6 +7,7 @@ import {
   type StreamState as StreamStateType,
 } from "@iterate-com/shared/streams/types";
 import type { StreamTreeSource } from "~/components/stream-tree-browser.tsx";
+import { coreStateToStreamState } from "~/domains/streams/stream-runtime.ts";
 
 /**
  * Everything the ⌘K stream switcher needs from its host: a live state source
@@ -44,15 +45,18 @@ export function readStreamStateOnce(
       finish();
     }, READ_STATE_TIMEOUT_MS);
     source(streamPath)
-      .onStateChange((state) => {
-        if (done) return;
-        done = true;
-        try {
-          resolve(StreamState.parse(state));
-        } catch (error) {
-          reject(error instanceof Error ? error : new Error(String(error)));
-        }
-        finish();
+      .subscribe({
+        events: false,
+        processEventBatch: (batch) => {
+          if (done) return;
+          done = true;
+          try {
+            resolve(StreamState.parse(coreStateToStreamState(batch.state)));
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+          finish();
+        },
       })
       .then((subscription) => {
         release = () => void Promise.resolve(subscription.unsubscribe()).catch(() => {});

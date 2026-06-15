@@ -40,8 +40,10 @@ function NewAgentPage() {
       await itx.streams.create({ streamPath: agentPath });
       await waitForProjectAgentSetup(itx, agentPath);
       await itx.streams.get(agentPath).append({
-        type: "events.iterate.com/agent/input-added",
-        payload: { content },
+        event: {
+          type: "events.iterate.com/agent/input-added",
+          payload: { content },
+        },
       });
       return agentPath;
     },
@@ -125,8 +127,7 @@ async function waitForProjectAgentSetup(
 ) {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    // itx's streams.read returns the Event[] directly (no { events } wrapper).
-    const events = await itx.streams.get(streamPath).read({ beforeOffset: "end" });
+    const events = await itx.streams.get(streamPath).getEvents();
     if (
       events.some(
         (event) =>

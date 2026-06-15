@@ -1,12 +1,297 @@
 import { SELF, env } from "cloudflare:test";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   EXAMPLE_EGRESS_SECRET_KEY,
   EXAMPLE_EGRESS_SECRET_MATERIAL,
 } from "~/domains/secrets/example-secret.ts";
+import { decideIngressRoute } from "~/workers/shared/router.ts";
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("decideIngressRoute", () => {
+  const config = {
+    baseUrl: "https://os.iterate.com",
+    mcp: { baseUrl: "https://mcp.iterate.com" },
+    projectHostnameBases: ["iterate.app"],
+  };
+
+  beforeEach(async () => {
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY NOT NULL,
+        slug TEXT NOT NULL UNIQUE,
+        custom_hostname TEXT UNIQUE,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`,
+    ).run();
+    await env.DB.prepare(`DELETE FROM projects`).run();
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO projects (id, slug, custom_hostname) VALUES (?, ?, ?)`).bind(
+        "prj_demo",
+        "demo",
+        "demo.example.com",
+      ),
+      env.DB.prepare(`INSERT INTO projects (id, slug, custom_hostname) VALUES (?, ?, ?)`).bind(
+        "prj_other",
+        "other",
+        null,
+      ),
+    ]);
+  });
+
+  afterEach(async () => {
+    await env.DB.prepare(`DELETE FROM projects WHERE id IN (?, ?)`)
+      .bind("prj_demo", "prj_other")
+      .run();
+  });
+
+  test.each([
+    {
+      name: "app host routes to the OS lane",
+      config,
+      method: "GET",
+      url: "https://os.iterate.com/projects",
+      expectedDecision: { lane: "os" },
+    },
+    {
+      name: "event docs host routes to the OS lane",
+      config,
+      method: "GET",
+      url: "https://events.iterate.com/core",
+      expectedDecision: { lane: "os" },
+    },
+    {
+      name: "configured MCP host routes to the MCP lane",
+      config,
+      method: "GET",
+      url: "https://mcp.iterate.com/.well-known/oauth-protected-resource",
+      expectedDecision: { lane: "mcp" },
+    },
+    {
+      name: "localhost app config routes path-mounted MCP to the MCP lane",
+      config: {
+        ...config,
+        baseUrl: "http://localhost:5176",
+        mcp: undefined,
+        projectHostnameBases: ["localhost"],
+      },
+      method: "GET",
+      url: "http://localhost:5176/api/__mcp",
+      expectedDecision: { lane: "mcp" },
+    },
+    {
+      name: "project slug platform host routes to project ingress",
+      config,
+      method: "GET",
+      url: "https://demo.iterate.app/",
+      expectedDecision: {
+        lane: "project",
+        requestHost: "demo.iterate.app",
+        projectId: "prj_demo",
+        appSlug: null,
+      },
+    },
+    {
+      name: "project id platform host routes to project ingress",
+      config,
+      method: "GET",
+      url: "https://prj_demo.iterate.app/",
+      expectedDecision: {
+        lane: "project",
+        requestHost: "prj_demo.iterate.app",
+        projectId: "prj_demo",
+        appSlug: null,
+      },
+    },
+    {
+      name: "dotted app slug platform host routes to project ingress",
+      config,
+      method: "GET",
+      url: "https://app1.demo.iterate.app/",
+      expectedDecision: {
+        lane: "project",
+        requestHost: "app1.demo.iterate.app",
+        projectId: "prj_demo",
+        appSlug: "app1",
+        headers: { "x-iterate-app-slug": "app1" },
+      },
+    },
+    {
+      name: "__ app slug platform host routes to project ingress",
+      config,
+      method: "GET",
+      url: "https://app1__demo.iterate.app/",
+      expectedDecision: {
+        lane: "project",
+        requestHost: "app1__demo.iterate.app",
+        projectId: "prj_demo",
+        appSlug: "app1",
+        headers: { "x-iterate-app-slug": "app1" },
+      },
+    },
+    {
+      name: "localhost dotted app host routes to project ingress",
+      config: {
+        ...config,
+        baseUrl: "http://localhost:5176",
+        projectHostnameBases: ["localhost"],
+      },
+      method: "GET",
+      url: "http://app1.demo.localhost:5176/",
+      expectedDecision: {
+        lane: "project",
+        requestHost: "app1.demo.localhost",
+        projectId: "prj_demo",
+        appSlug: "app1",
+        headers: { "x-iterate-app-slug": "app1" },
+      },
+    },
+    {
+      name: "dev tunnel base host routes to the OS lane",
+      config: {
+        ...config,
+        baseUrl: "https://jonas.tunnels.iterate.com",
+        projectHostnameBases: ["jonas.tunnels.iterate.com"],
+      },
+      method: "GET",
+      url: "https://jonas.tunnels.iterate.com/projects",
+      expectedDecision: { lane: "os" },
+    },
+    {
+      name: "dev tunnel project subdomain routes to project ingress",
+      config: {
+        ...config,
+        baseUrl: "https://jonas.tunnels.iterate.com",
+        projectHostnameBases: ["jonas.tunnels.iterate.com"],
+      },
+      method: "GET",
+      url: "https://demo.jonas.tunnels.iterate.com/",
+      expectedDecision: {
+        lane: "project",
+        requestHost: "demo.jonas.tunnels.iterate.com",
+        projectId: "prj_demo",
+        appSlug: null,
+      },
+    },
+    {
+      name: "dev tunnel app host routes to project ingress",
+      config: {
+        ...config,
+        baseUrl: "https://jonas.tunnels.iterate.com",
+        projectHostnameBases: ["jonas.tunnels.iterate.com"],
+      },
+      method: "GET",
+      url: "https://app1__demo.jonas.tunnels.iterate.com/",
+      expectedDecision: {
+        lane: "project",
+        requestHost: "app1__demo.jonas.tunnels.iterate.com",
+        projectId: "prj_demo",
+        appSlug: "app1",
+        headers: { "x-iterate-app-slug": "app1" },
+      },
+    },
+    {
+      name: "itx capability host routes to capability ingress before project ingress",
+      config,
+      method: "GET",
+      url: "https://hello--demo.iterate.app/",
+      expectedDecision: {
+        lane: "itx",
+        requestHost: "hello--demo.iterate.app",
+        projectId: "prj_demo",
+        capability: "hello",
+      },
+    },
+    {
+      name: "custom hostname routes to project ingress",
+      config,
+      method: "GET",
+      url: "https://demo.example.com/",
+      expectedDecision: {
+        lane: "project",
+        requestHost: "demo.example.com",
+        projectId: "prj_demo",
+        appSlug: null,
+      },
+    },
+    {
+      name: "single-label custom hostname app routes to project ingress",
+      config,
+      method: "POST",
+      url: "https://webhooks.demo.example.com/github",
+      expectedDecision: {
+        lane: "project",
+        requestHost: "webhooks.demo.example.com",
+        projectId: "prj_demo",
+        appSlug: "webhooks",
+        headers: { "x-iterate-app-slug": "webhooks" },
+      },
+    },
+    {
+      name: "forwarded host is the public routing host",
+      config,
+      headers: {
+        "x-forwarded-host": "demo.iterate.app",
+        "x-forwarded-proto": "https",
+      },
+      method: "GET",
+      url: "http://localhost:5173/",
+      expectedDecision: {
+        lane: "project",
+        requestHost: "demo.iterate.app",
+        projectId: "prj_demo",
+        appSlug: null,
+      },
+    },
+    {
+      name: "unknown project platform host is not found",
+      config,
+      method: "GET",
+      url: "https://missing.iterate.app/",
+      expectedDecision: { lane: "notFound" },
+    },
+    {
+      name: "unrecognized host is not found",
+      config,
+      method: "GET",
+      url: "https://unknown.example.net/",
+      expectedDecision: { lane: "notFound" },
+    },
+  ])("$name", async ({ config, expectedDecision, headers, method, url }) => {
+    const decision = await decideIngressRoute({
+      config,
+      db: env.DB,
+      headers,
+      method,
+      url,
+    });
+
+    if (decision.lane !== "project" && decision.lane !== "itx") {
+      expect(decision).toEqual(expectedDecision);
+      return;
+    }
+
+    if (decision.lane === "itx") {
+      expect({
+        lane: decision.lane,
+        requestHost: decision.requestHost,
+        projectId: decision.resolved.projectId,
+        capability: decision.resolved.capability,
+      }).toEqual(expectedDecision);
+      return;
+    }
+
+    expect({
+      lane: decision.lane,
+      requestHost: decision.requestHost,
+      projectId: decision.resolved.projectId,
+      appSlug: decision.resolved.appSlug,
+      headers: decision.headers,
+    }).toEqual(expectedDecision);
+  });
 });
 
 // Regression: a brand-new stream announces itself to every ancestor stream so
@@ -393,11 +678,11 @@ test("project config worker receives root-stream events and appends facts back",
     expect.objectContaining({ type: "events.iterate.com/project/create-completed" }),
   ]);
 
-  // Append a fact to the project root stream. The project-config-worker
-  // processor (subscribed to "/") forwards it to the config worker's
-  // afterAppend export, which echoes it onto /config-worker-saw — proving the
-  // whole chain: subscription wiring, blocking forward, entrypoint
-  // resolution, and the object-export env argument, all in real workerd.
+  // Append a fact to the project root stream. ProjectProcessor forwards it to
+  // the config worker's processEvent export, which echoes it onto
+  // /config-worker-saw — proving the whole chain: subscription wiring,
+  // checkpointed forward, entrypoint resolution, and the object-export env
+  // argument, all in real workerd.
   const appendResponse = await SELF.fetch(
     "https://os.iterate.localhost/__test/append-project-event?n=42",
   );

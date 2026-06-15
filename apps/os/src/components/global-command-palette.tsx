@@ -49,10 +49,10 @@ export function GlobalCommandPalette() {
     if (activeStream == null) return null;
     return {
       source: (path) => ({
-        async onStateChange(onState) {
+        async subscribe(args) {
           // Key by slug so we share the project provider's pooled socket.
           const itx = await connectItx({ projectId: activeStream.projectSlug });
-          return itx.streams.get(path).onStateChange(onState);
+          return itx.streams.get(path).subscribe(args);
         },
       }),
       onOpenPath(path) {
