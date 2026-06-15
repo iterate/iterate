@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
-// One-time/idempotent provisioning of per-slot auth preview configs.
+// One-time/idempotent provisioning of per-slot preview configs.
 //
 // Each preview slot N gets its own auth deployment (auth.iterate-preview-N.com)
 // for a completely clean, controlled e2e slate. Doppler is the source of truth
@@ -81,9 +81,11 @@ for (const slot of SLOTS) {
   const config = `preview_${slot}`;
   const authOrigin = `https://auth.iterate-preview-${slot}.com`;
   const osOrigin = `https://os.iterate-preview-${slot}.com`;
+  const streamsExampleOrigin = `https://streams-example-app-preview-${slot}.iterate-dev-preview.workers.dev`;
   const clientId = `os-preview-${slot}`;
 
   ensureConfig("auth", config);
+  ensureConfig("streams-example-app", config);
 
   const existingSeed = rotate ? null : getSecret("auth", config, "AUTH_SEED_OAUTH_CLIENTS");
   const existingSecret = existingSeed
@@ -124,7 +126,13 @@ for (const slot of SLOTS) {
     APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: serviceToken,
   });
 
-  console.log(`slot ${slot}: auth/${config} + os/${config} ensured (client ${clientId})`);
+  setSecrets("streams-example-app", config, {
+    APP_CONFIG_BASE_URL: streamsExampleOrigin,
+  });
+
+  console.log(
+    `slot ${slot}: auth/${config} + os/${config} + streams-example-app/${config} ensured (client ${clientId})`,
+  );
 }
 
 console.log("done");
