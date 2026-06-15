@@ -21,7 +21,7 @@
 // stub, reads the processor's checkpoint, and calls back `subscribeOutbound` so
 // the stream pumps batches into `processor.ingest`.
 
-import type { StreamProcessorSnapshot } from "../stream-processor.ts";
+import type { StreamProcessorRuntimeState, StreamProcessorSnapshot } from "../stream-processor.ts";
 import type { ProcessorContractAnnouncement } from "../processors/core/contract.ts";
 import type { StreamEvent } from "../shared/event.ts";
 import type { StreamCoreProcessorState, StreamRpc, StreamSubscriptionHandle } from "../types.ts";
@@ -64,7 +64,9 @@ export type HostedProcessorDeps = {
 export type HostedProcessorRuntimeState = {
   processorName: string;
   snapshot: StreamProcessorSnapshot<unknown> | undefined;
-  subscription: { subscriptionKey: string; namespace: string; path: string } | undefined;
+  runtime: {
+    subscription: { subscriptionKey: string; namespace: string; path: string } | undefined;
+  };
 };
 
 // Structural: the host drives the processor's public surface only. (A
@@ -81,6 +83,7 @@ type AnyHostedProcessor = {
   };
   ingest(args: { events: readonly StreamEvent[]; streamMaxOffset: number }): Promise<void>;
   snapshot(): Promise<StreamProcessorSnapshot<unknown>>;
+  getRuntimeState(): Promise<StreamProcessorRuntimeState<unknown>>;
 };
 
 type HostedEntry = {
@@ -265,7 +268,10 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       // genuinely is a new connection and re-lands on the roster.
       subscriber: {
         incarnationId: hostIncarnationId,
-        processor: announceContract(entry.processor.contract),
+        processor: {
+          announcement: announceContract(entry.processor.contract),
+          getRuntimeState: () => entry.processor.getRuntimeState(),
+        },
       },
       processEventBatch: (batch) => {
         // A batch arrived — this subscription is active; reset the idle countdown.
@@ -408,14 +414,18 @@ export function createStreamProcessorHost(ctx: DurableObjectState): StreamProces
       return {
         processorName: name,
         snapshot: ctx.storage.kv.get<StreamProcessorSnapshot<unknown>>(snapshotKey(name)),
-        subscription:
-          subscriptionKey === undefined || entry.namespace === undefined || entry.path === undefined
-            ? undefined
-            : {
-                subscriptionKey,
-                namespace: entry.namespace,
-                path: entry.path,
-              },
+        runtime: {
+          subscription:
+            subscriptionKey === undefined ||
+            entry.namespace === undefined ||
+            entry.path === undefined
+              ? undefined
+              : {
+                  subscriptionKey,
+                  namespace: entry.namespace,
+                  path: entry.path,
+                },
+        },
       };
     },
     runIdleDisconnectNow,

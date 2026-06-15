@@ -65,6 +65,8 @@ export type StreamWaitForEventInput = StreamPathInput & Parameters<StreamRpc["wa
 export type StreamSubscribeInput = StreamPathInput & Parameters<StreamRpc["subscribe"]>[0];
 export type StreamSubscribeBatch = Parameters<StreamSubscribeInput["processEventBatch"]>[0];
 export type StreamReduceInput = StreamPathInput & Parameters<StreamRpc["reduce"]>[0];
+export type StreamGetProcessorRuntimeStateInput = StreamPathInput &
+  Parameters<StreamRpc["getProcessorRuntimeState"]>[0];
 
 export type StreamListChildrenInput = StreamPathInput;
 type StreamsBackendClient = Pick<
@@ -74,6 +76,7 @@ type StreamsBackendClient = Pick<
   | "create"
   | "getEvent"
   | "getEvents"
+  | "getProcessorRuntimeState"
   | "getState"
   | "kill"
   | "listChildren"
@@ -297,6 +300,16 @@ export class StreamsBackend extends WorkerEntrypoint<StreamsBackendEnv, StreamsB
       namespace: this.ctx.props.projectId,
       path: this.resolveNamespacePath(input),
     }).runtimeState();
+  }
+
+  async getProcessorRuntimeState(input: StreamGetProcessorRuntimeStateInput) {
+    return await namespaceStreamRpc({
+      durableObjectNamespace: this.env.STREAM,
+      namespace: this.ctx.props.projectId,
+      path: this.resolveNamespacePath(input),
+    }).getProcessorRuntimeState({
+      subscriptionKey: input.subscriptionKey,
+    });
   }
 
   async reduce(input: StreamReduceInput) {

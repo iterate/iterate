@@ -52,7 +52,7 @@ async function outboundConnectionCount(stream: DurableObjectStub<Stream>): Promi
 async function runnerSubscription(runner: DurableObjectStub<StreamProcessorRunner>) {
   return await runInDurableObject(
     runner,
-    (instance) => instance.runtimeState({ processorName: "echo-example" }).subscription,
+    (instance) => instance.runtimeState({ processorName: "echo-example" }).runtime.subscription,
   );
 }
 async function waitFor<T>(
