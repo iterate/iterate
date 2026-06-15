@@ -42,3 +42,37 @@ without `origin` — proving `origin` is load-bearing, not decoration).
 
 These are exploration artifacts, not a merge target — pick the ideas worth landing
 in `../itx-explainer.md`.
+
+---
+
+## `clean-core.md` — the streamlined rewrite (not part of the cumulative chain)
+
+`clean-core.md` is a **from-scratch** rewrite, not the next `vN`. It deliberately
+**drops** the three mechanisms the cumulative chain accumulated and a review found
+cost more than they bought: `origin` tracking, dragging the calling context as an
+argument, and any dependency on capnweb's internal `followPath` (we write our own).
+What's left is the irreducible core — capability/path, live-vs-sturdy + dial, the
+fold, and the inheritance chain with shadow/super-via-captured-reference — and the
+capstone (inheritance + shadow + super) still works end-to-end without origin.
+
+It is validated by its own self-contained, fully-commented model:
+
+```bash
+node clean-core.mjs   # 17 checks, one ✓ per claim in clean-core.md
+```
+
+The doc quotes `clean-core.mjs` directly, so the two cannot drift.
+
+### `clean-core-2.md` — four ways to restore deep shadowing
+
+clean-core's no-ambient-authority core made shadowing _chain-local_ (an inherited
+cap's internal `fetch` resolves on the chain it was provided on, not the chain that
+invoked it). `clean-core-2.md` is a **menu** of four validated mechanisms to buy that
+cross-chain interposition back — factory injection, explicit threading (the
+disqualified yardstick), ambient dynamic scope (a trap), and a membrane on borrow (the
+prod-faithful, least-authority answer = `wireIsolateEnv`). All four are small deltas
+over one shared `BaseItx`, validated against the same petstore capstone:
+
+```bash
+node clean-core-2.mjs   # 11 checks across 4 versions
+```
