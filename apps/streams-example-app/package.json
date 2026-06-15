@@ -1,0 +1,41 @@
+{
+  "name": "@iterate-com/streams-example-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "alchemy:up": "tsx ./alchemy.run.ts",
+    "alchemy:down": "tsx ./alchemy.run.ts --destroy",
+    "dev": "tsx ./alchemy.run.ts",
+    "build": "vite build && tsc --noEmit",
+    "preview": "vite preview",
+    "vitest": "vitest run e2e/vitest",
+    "playwright": "playwright test e2e/playwright",
+    "test:e2e": "pnpm vitest && pnpm playwright",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@iterate-com/shared": "workspace:*",
+    "@journeyapps/wa-sqlite": "^1.7.0",
+    "@tanstack/react-router": "^1.170.10",
+    "@tanstack/react-start": "^1.168.18",
+    "@tanstack/react-virtual": "^3.14.2",
+    "capnweb": "^0.8.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:cloudflare",
+    "@playwright/test": "^1.60.0",
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^24.12.4",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "alchemy": "^0.83.3",
+    "tailwindcss": "^4.3.0",
+    "tsx": "^4.20.6",
+    "undici": "^7.16.0",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.7"
+  }
+}

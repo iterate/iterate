@@ -7,7 +7,7 @@
 // append facts. No bespoke hook protocol, no merge logic: just events.
 
 import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
+import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 
 export const ProjectConfigWorkerProcessorContract = defineProcessorContract({
   slug: "project-config-worker",

@@ -9,7 +9,7 @@ import { StreamPath, type StreamPath as StreamPathType } from "@iterate-com/shar
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
-} from "@iterate-com/streams/workers/stream-processor-host";
+} from "~/domains/streams/engine/workers/stream-processor-host.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,

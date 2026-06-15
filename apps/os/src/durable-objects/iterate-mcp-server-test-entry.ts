@@ -12,7 +12,7 @@ export { RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-
 export { RepoCapability, ReposCapability } from "~/domains/repos/entrypoints/repo-capability.ts";
 export { SlackCapability } from "~/domains/slack/entrypoints/slack-capability.ts";
 export { StreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
-export { Stream as StreamDurableObject } from "@iterate-com/streams/workers/durable-objects/stream";
+export { Stream as StreamDurableObject } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 export { WorkspaceCapability } from "~/domains/workspaces/entrypoints/workspace-capability.ts";
 export { WorkspaceDurableObject } from "~/domains/workspaces/durable-objects/workspace-durable-object.ts";
 export { ItxDurableObject } from "~/itx/itx-durable-object.ts";

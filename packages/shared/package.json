@@ -34,6 +34,8 @@
     "./streams/external-subscriber-types": "./src/streams/external-subscriber-types.ts",
     "./streams/html-renderer-types": "./src/streams/html-renderer-types.ts",
     "./streams/jsonata-expression": "./src/streams/jsonata-expression.ts",
+    "./streams/stream-event": "./src/streams/stream-event.ts",
+    "./streams/stream-processors": "./src/streams/stream-processors.ts",
     "./streams/types": "./src/streams/types.ts",
     "./request-logging": "./src/request-logging.ts",
     "./slugify": "./src/slugify.ts",

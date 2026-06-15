@@ -22,8 +22,8 @@
 
 import { StreamPath } from "@iterate-com/shared/streams/types";
 import { typeid } from "@iterate-com/shared/typeid";
-import { durableObjectProcessorSubscriber } from "@iterate-com/streams/shared/callable-subscriber";
 import { ItxContract, ITX_EVENT_TYPES, type CapabilityAddress, type ContextStream } from "./itx.ts";
+import { durableObjectProcessorSubscriber } from "~/domains/streams/engine/shared/callable-subscriber.ts";
 import {
   getInitializedStreamStub,
   type StreamDurableObjectNamespace,

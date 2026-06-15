@@ -12,11 +12,13 @@ on:
     branches:
       - main
     paths:
+      - .github/ts-workflows/workflows/deploy-os.ts
+      - .github/workflows/deploy-os.yml
       - apps/os/**
       - apps/os-contract/**
       - apps/auth/**
       - apps/auth-contract/**
-      - packages/streams/**
+      - apps/os/src/domains/streams/**
       - packages/shared/**
       - packages/ui/**
       - packages/mock-http-proxy/**

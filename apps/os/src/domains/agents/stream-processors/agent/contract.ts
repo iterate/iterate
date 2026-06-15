@@ -18,8 +18,8 @@ import {
   getInitialProcessorState,
   type ConsumedEvent,
   type StreamEvent,
-} from "@iterate-com/streams/shared/stream-processors";
-import { CoreProcessorContract } from "@iterate-com/streams/processors/core/contract";
+} from "@iterate-com/shared/streams/stream-processors";
+import { CoreProcessorContract } from "~/domains/streams/engine/processors/core/contract.ts";
 import { ItxContract } from "~/itx/contract.ts";
 
 export const DEFAULT_WORKERS_AI_AGENT_MODEL = "@cf/moonshotai/kimi-k2.6";

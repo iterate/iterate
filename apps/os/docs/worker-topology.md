@@ -180,7 +180,7 @@ under the hood.
   intersection trips TS7022 cycles). Whether a binding exists at runtime
   depends on the worker — narrow per-class Env types remain the precision
   mechanism.
-- **os-streams** (`packages/streams/example-app`) binds the Stream DO
+- **streams-example-app** (`apps/streams-example-app`) binds the Stream DO
   cross-script; its `script_name` is `os-prd-stream` now.
 - The `artifacts` binding type exists only on deployed workers; local dev
   has no Cloudflare Artifacts emulation and repo code feature-checks

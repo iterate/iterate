@@ -64,7 +64,6 @@
     "@iterate-com/auth-contract": "workspace:*",
     "@iterate-com/os-contract": "workspace:*",
     "@iterate-com/shared": "workspace:*",
-    "@iterate-com/streams": "workspace:*",
     "@iterate-com/ui": "workspace:*",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.14",

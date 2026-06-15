@@ -1,8 +1,8 @@
-import type { Stream } from "@iterate-com/streams/workers/durable-objects/stream";
-import type { StreamEvent, StreamEventInput } from "@iterate-com/streams/shared/event";
-import type { StreamRpc } from "@iterate-com/streams/types";
+import type { StreamEvent, StreamEventInput } from "@iterate-com/shared/streams/stream-event";
 import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { StreamPath, StreamState } from "@iterate-com/shared/streams/types";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
+import type { Stream } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 
 export type StreamDurableObject = Stream;
 export type StreamDurableObjectNamespace = DurableObjectNamespace<Stream>;

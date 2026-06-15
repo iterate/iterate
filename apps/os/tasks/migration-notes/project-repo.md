@@ -9,7 +9,7 @@ model per the decision log (`apps/os/tasks/stream-processor-class-migration-log.
 
 - `apps/os/src/domains/projects/stream-processors/project-lifecycle.ts`
   - Contract moves from `@iterate-com/shared/stream-processors` to
-    `@iterate-com/streams/shared/stream-processors`; the reducer moves off the
+    `@iterate-com/shared/streams/stream-processors`; the reducer moves off the
     contract into `ProjectLifecycleProcessor.reduce` (D6). Event wire formats
     unchanged.
   - Dropped `createProjectLifecycleProcessor` / `reduceProjectLifecycleEvents`

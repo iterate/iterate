@@ -1,9 +1,9 @@
 // Implements the "project-config-worker" processor: the bridge that makes the
 // project's config worker behave like a stream processor. See contract.ts.
 
-import { StreamProcessor } from "@iterate-com/streams/stream-processor";
-import type { StreamEvent } from "@iterate-com/streams/shared/event";
+import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
 import { ProjectConfigWorkerProcessorContract } from "./contract.ts";
+import { StreamProcessor } from "~/domains/streams/engine/stream-processor.ts";
 
 export { ProjectConfigWorkerProcessorContract } from "./contract.ts";
 

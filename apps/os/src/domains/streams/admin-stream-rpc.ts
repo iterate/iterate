@@ -1,6 +1,6 @@
 import { newWorkersRpcResponse } from "capnweb";
-import { PublicStreamRpcTarget } from "@iterate-com/streams/workers/durable-objects/stream";
 import { StreamNamespace } from "@iterate-com/shared/streams/types";
+import { PublicStreamRpcTarget } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 import { authenticateCapnwebAdmin } from "~/itx/admin-auth-cookie.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import { principalIsAdmin } from "~/auth/principal.ts";

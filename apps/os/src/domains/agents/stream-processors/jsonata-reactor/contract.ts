@@ -4,7 +4,7 @@
 // filter (unfiltered delivery).
 
 import { z } from "zod";
-import { defineProcessorContract } from "@iterate-com/streams/shared/stream-processors";
+import { defineProcessorContract } from "@iterate-com/shared/streams/stream-processors";
 
 export const jsonataReactorEventTypes = {
   ruleConfigured: "events.iterate.com/jsonata-reactor/rule-configured",

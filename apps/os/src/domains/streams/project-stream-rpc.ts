@@ -1,5 +1,5 @@
 import { newWorkersRpcResponse } from "capnweb";
-import { PublicStreamRpcTarget } from "@iterate-com/streams/workers/durable-objects/stream";
+import { PublicStreamRpcTarget } from "~/domains/streams/engine/workers/durable-objects/stream.ts";
 import { getStreamDurableObjectName } from "~/domains/streams/stream-runtime.ts";
 import { createOsIterateAuth, resolveRequestAuth } from "~/auth/middleware.ts";
 import { requireProjectScopedAccess } from "~/orpc/project-access.ts";

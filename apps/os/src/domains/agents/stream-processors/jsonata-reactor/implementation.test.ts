@@ -3,9 +3,9 @@
 // (including cross-stream reactions via `streamPath`).
 
 import { describe, expect, it } from "vitest";
-import type { StreamEvent } from "@iterate-com/streams/shared/event";
-import type { StreamProcessorIterateContext } from "@iterate-com/streams/stream-processor";
+import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
 import { JsonataReactorProcessor } from "./implementation.ts";
+import type { StreamProcessorIterateContext } from "~/domains/streams/engine/stream-processor.ts";
 
 describe("JsonataReactorProcessor", () => {
   it("appends configured reactions for matching events", async () => {

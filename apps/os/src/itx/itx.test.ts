@@ -7,7 +7,7 @@
 
 import { describe, expect, test, vi } from "vitest";
 import { newMessagePortRpcSession, RpcTarget } from "capnweb";
-import type { StreamEvent } from "@iterate-com/streams/shared/event";
+import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
 import {
   ITX_EVENT_TYPES,
   Itx,

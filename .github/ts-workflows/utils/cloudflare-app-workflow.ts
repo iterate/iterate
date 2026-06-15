@@ -10,6 +10,13 @@ declare const shortSha: string;
 declare const slackChannelName: string;
 
 export async function createCloudflareAppWorkflow(meta: ImportMeta, app: CloudflareApp) {
+  const workflowName = meta.url.split("/").pop()?.replace(/\.ts$/, "");
+  if (!workflowName) throw new Error("Unable to resolve workflow name");
+  const workflowDefinitionPaths = [
+    `.github/ts-workflows/workflows/${workflowName}.ts`,
+    `.github/workflows/${workflowName}.yml`,
+  ];
+
   return workflow({
     name: `Deploy ${app.displayName}`,
     permissions: {
@@ -23,7 +30,7 @@ export async function createCloudflareAppWorkflow(meta: ImportMeta, app: Cloudfl
     on: {
       push: {
         branches: ["main"],
-        paths: [...app.paths, ...cloudflareAppSharedPaths],
+        paths: [...workflowDefinitionPaths, ...app.paths, ...cloudflareAppSharedPaths],
       },
       workflow_dispatch: {
         inputs: {

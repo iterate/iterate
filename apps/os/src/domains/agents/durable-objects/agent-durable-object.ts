@@ -7,15 +7,15 @@ import {
   getInitializedDoStub,
   NotInitializedError,
 } from "@iterate-com/shared/durable-object-utils/mixins/with-lifecycle-hooks";
-import type { ProcessorStreamApi } from "@iterate-com/streams/shared/stream-processors";
+import type { ProcessorStreamApi } from "@iterate-com/shared/streams/stream-processors";
 import type { Event, EventInput, StreamCursor } from "@iterate-com/shared/streams/types";
 import { StreamPath } from "@iterate-com/shared/streams/types";
-import type { StreamEvent } from "@iterate-com/streams/shared/event";
-import type { StreamRpc } from "@iterate-com/streams/types";
+import type { StreamEvent } from "@iterate-com/shared/streams/stream-event";
+import type { StreamRpc } from "~/domains/streams/engine/types.ts";
 import {
   createStreamProcessorHost,
   type RequestStreamSubscriptionArgs,
-} from "@iterate-com/streams/workers/stream-processor-host";
+} from "~/domains/streams/engine/workers/stream-processor-host.ts";
 import type { ItxDurableObject } from "~/itx/itx-durable-object.ts";
 import type { CapabilityAddress } from "~/itx/itx.ts";
 import {

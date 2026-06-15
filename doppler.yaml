@@ -16,6 +16,8 @@ setup:
     path: apps/os/
   - project: semaphore
     path: apps/semaphore/
+  - project: streams-example-app
+    path: apps/streams-example-app/
   - project: auth
     path: apps/auth/
   - project: auth

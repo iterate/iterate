@@ -1,6 +1,4 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { createStreamSubscription } from "@iterate-com/streams/subscription";
-import type { StreamRpc, StreamSubscriptionHandle } from "@iterate-com/streams/types";
 import {
   type Event,
   type EventInput,
@@ -8,6 +6,8 @@ import {
   type StreamState,
   StreamPath,
 } from "@iterate-com/shared/streams/types";
+import { createStreamSubscription } from "~/domains/streams/engine/subscription.ts";
+import type { StreamRpc, StreamSubscriptionHandle } from "~/domains/streams/engine/types.ts";
 import { ItxError } from "~/itx/errors.ts";
 import {
   coreStateToStreamState,
