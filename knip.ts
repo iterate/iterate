@@ -12,6 +12,10 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       // Reached only through the vitest.config.ts `cloudflare:workers` alias,
       // which knip does not traverse.
       "src/test/cloudflare-workers-shim.ts",
+      // Preserved oRPC e2e reference (imports the removed oRPC stack;
+      // intentionally not `.test.ts`, never imported by active code). See
+      // e2e/AGENTS.md.
+      "e2e/**/*.orpc-legacy.ts",
     ],
     entry: [
       ...(base.entry ?? []).filter(
