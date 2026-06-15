@@ -533,6 +533,33 @@ describe("AgentProcessor", () => {
     ]);
   });
 
+  it("recovers a triggering input whose schedule append was not reduced before restart", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({
+      stream,
+      snapshot: {
+        offset: 42,
+        state: {
+          ...initialState(),
+          history: [{ role: "user", content: "hi" }],
+          pendingTriggerOffset: 42,
+        },
+      },
+    });
+
+    await processor.ingest({
+      events: [subscriberConnectedEvent({ offset: 43 })],
+      streamMaxOffset: 43,
+    });
+
+    expect(appended).toEqual([
+      expect.objectContaining({
+        type: "events.iterate.com/agent/llm-request-scheduled",
+        idempotencyKey: "agent/llm-request-scheduled@42",
+      }),
+    ]);
+  });
+
   it("does not re-request when the scheduled phase was already cancelled in history", async () => {
     const { stream, appended } = memoryStream();
     const processor = newAgentProcessor({

@@ -67,14 +67,12 @@ export const AgentProcessorContract = defineProcessorContract({
     pendingTriggerCount: z.number().int().nonnegative().default(0),
     /**
      * Offset of the latest model-visible input that asked for an LLM request
-     * but is not yet covered by a durable request fact. Set by a triggering
-     * `input-added`, cleared by `llm-request-scheduled` / `llm-request-requested`
-     * / `llm-request-queued`. In live operation the window between set and
-     * clear is brief; if it survives in reduced state it means the input's
-     * scheduling side effect never ran — e.g. the input landed at or below the
-     * host's side-effect anchor because it was appended before this processor's
-     * subscription was configured — and the `subscriber-connected`
-     * reconciliation owes the stream a schedule for it.
+     * but is not yet covered by a durable scheduling/queueing fact. Set by a
+     * triggering `input-added`, cleared by `llm-request-scheduled` /
+     * `llm-request-requested` / `llm-request-queued`. In live operation the
+     * window between set and clear is brief; if it survives in reduced state
+     * after a restart, `subscriber-connected` reconciliation can re-run the
+     * idempotent scheduling append for that input.
      */
     pendingTriggerOffset: z.number().int().positive().nullable().default(null),
   }),
@@ -319,6 +317,10 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
       return {
         ...state,
         history: [...state.history, { role: "user" as const, content: event.payload.content }],
+        pendingTriggerOffset:
+          event.payload.llmRequestPolicy.behaviour === "dont-trigger-request"
+            ? state.pendingTriggerOffset
+            : event.offset,
       };
     case "events.iterate.com/agent/output-added":
       if (
@@ -343,11 +345,13 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
           scheduledOffset: event.offset,
         },
         pendingTriggerCount: 0,
+        pendingTriggerOffset: null,
       };
     case "events.iterate.com/agent/llm-request-requested":
       return {
         ...state,
         currentRequest: { phase: "requested" as const, llmRequestId: event.offset },
+        pendingTriggerOffset: null,
       };
     case "events.iterate.com/agent/llm-request-completed":
       return state.currentRequest?.phase === "requested" &&
@@ -374,6 +378,7 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
       return {
         ...state,
         pendingTriggerCount: state.pendingTriggerCount + 1,
+        pendingTriggerOffset: null,
       };
     // Consumed for side effects only; no state change.
     case "events.iterate.com/agent/status-updated":

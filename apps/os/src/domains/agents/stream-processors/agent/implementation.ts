@@ -74,6 +74,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
    */
   #scheduledLlmRequest: ScheduledLlmRequest | null = null;
   #llmRequestSeq = 0;
+  #triggerSchedulingInProgress = new Set<number>();
 
   protected override reduce(
     args: Parameters<StreamProcessor<AgentProcessorContract>["reduce"]>[0],
@@ -167,6 +168,21 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
             this.#requestLlmWorkForSchedule({
               requestId: scheduled.requestId,
               scheduledEvent: { offset: scheduled.scheduledOffset },
+            }),
+          );
+          return;
+        }
+        if (
+          state.currentRequest === null &&
+          state.pendingTriggerOffset !== null &&
+          this.#scheduledLlmRequest === null &&
+          !this.#triggerSchedulingInProgress.has(state.pendingTriggerOffset)
+        ) {
+          const pendingTriggerOffset = state.pendingTriggerOffset;
+          args.blockProcessorWhile(() =>
+            this.#appendLlmRequestScheduled({
+              sourceEvent: { offset: pendingTriggerOffset },
+              state,
             }),
           );
           return;
@@ -291,39 +307,44 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
     const { event, state, policy } = args;
     if (policy.behaviour === "dont-trigger-request") return;
 
-    if (state.currentRequest == null) {
-      await this.#appendLlmRequestScheduled({ sourceEvent: event, state });
-      return;
-    }
+    this.#triggerSchedulingInProgress.add(event.offset);
+    try {
+      if (state.currentRequest == null) {
+        await this.#appendLlmRequestScheduled({ sourceEvent: event, state });
+        return;
+      }
 
-    if (state.currentRequest.phase === "scheduled") {
-      if (policy.behaviour === "interrupt-current-request") {
-        await this.#cancelCurrentScheduledRequest({
+      if (state.currentRequest.phase === "scheduled") {
+        if (policy.behaviour === "interrupt-current-request") {
+          await this.#cancelCurrentScheduledRequest({
+            requestId: state.currentRequest.requestId,
+            sourceEvent: event,
+          });
+          await this.#appendLlmRequestScheduled({ sourceEvent: event, state });
+          return;
+        }
+
+        this.#resetScheduledLlmRequestTimer({
           requestId: state.currentRequest.requestId,
+          debounceMs: state.llmConfig.debounceMs,
+          scheduledOffset: state.currentRequest.scheduledOffset,
+        });
+        return;
+      }
+
+      if (policy.behaviour === "interrupt-current-request") {
+        await this.#cancelCurrentInFlightRequest({
+          llmRequestId: state.currentRequest.llmRequestId,
           sourceEvent: event,
         });
         await this.#appendLlmRequestScheduled({ sourceEvent: event, state });
         return;
       }
 
-      this.#resetScheduledLlmRequestTimer({
-        requestId: state.currentRequest.requestId,
-        debounceMs: state.llmConfig.debounceMs,
-        scheduledOffset: state.currentRequest.scheduledOffset,
-      });
-      return;
+      await this.#emitQueued({ sourceEvent: event });
+    } finally {
+      this.#triggerSchedulingInProgress.delete(event.offset);
     }
-
-    if (policy.behaviour === "interrupt-current-request") {
-      await this.#cancelCurrentInFlightRequest({
-        llmRequestId: state.currentRequest.llmRequestId,
-        sourceEvent: event,
-      });
-      await this.#appendLlmRequestScheduled({ sourceEvent: event, state });
-      return;
-    }
-
-    await this.#emitQueued({ sourceEvent: event });
   }
 
   async #enqueueScriptFromAgentOutput(
