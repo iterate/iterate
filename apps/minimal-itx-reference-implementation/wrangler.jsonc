@@ -2,22 +2,34 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "minimal-itx-reference-implementation",
   "main": "server.ts",
-  "compatibility_date": "2025-04-27",
+  "compatibility_date": "2026-05-01",
   "compatibility_flags": ["nodejs_compat"],
   "durable_objects": {
     "bindings": [
       // The itx context host: one DO per context coordinate ("prj:<id>" or
       // "prj:<id>/agents/<name>"). Hosts the Itx StreamProcessor.
-      { "name": "ITX", "class_name": "ItxDO" },
+      { "name": "ITX", "class_name": "ItxDurableObject" },
       // The domain objects a context attaches to (they define its built-in caps).
-      { "name": "PROJECT", "class_name": "Project" },
-      { "name": "AGENT", "class_name": "Agent" },
+      { "name": "PROJECT", "class_name": "ProjectDurableObject" },
+      { "name": "AGENT", "class_name": "AgentDurableObject" },
+      { "name": "REPO", "class_name": "RepoDurableObject" },
       // The real durable event log from apps/os — a context's capability table
       // is the fold of one of these streams.
       { "name": "STREAM", "class_name": "Stream" },
     ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ItxDO", "Project", "Agent", "Stream"] }],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "ItxDurableObject",
+        "ProjectDurableObject",
+        "AgentDurableObject",
+        "RepoDurableObject",
+        "Stream",
+      ],
+    },
+  ],
   // dial + codemode build and run workers from a sturdy address at runtime.
   "worker_loaders": [{ "binding": "LOADER" }],
   "dev": {

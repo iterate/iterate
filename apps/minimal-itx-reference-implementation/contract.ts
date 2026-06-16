@@ -43,6 +43,15 @@ export const CapabilityRecord = z.object({
 });
 export type CapabilityRecord = z.infer<typeof CapabilityRecord>;
 
+const ScriptExecutionRecord = z.object({
+  executionId: z.string(),
+  code: z.string().nullable().default(null),
+  status: z.enum(["requested", "completed"]).default("requested"),
+  result: z.unknown().optional(),
+  error: z.string().nullable().default(null),
+});
+export type ScriptExecutionRecord = z.infer<typeof ScriptExecutionRecord>;
+
 export const ItxContract = defineProcessorContract({
   slug: "itx",
   version: "0.1.0",
@@ -57,8 +66,9 @@ export const ItxContract = defineProcessorContract({
   // not folded from the log. Nothing read the folded copy, so it does not exist.
   stateSchema: z.object({
     capabilities: z.array(CapabilityRecord).default([]),
+    scriptExecutions: z.array(ScriptExecutionRecord).default([]),
   }),
-  initialState: { capabilities: [] },
+  initialState: { capabilities: [], scriptExecutions: [] },
   events: {
     "events.iterate.com/itx/capability-provided": {
       description:
@@ -85,12 +95,18 @@ export const ItxContract = defineProcessorContract({
     },
     "events.iterate.com/itx/script-execution-completed": {
       description: "A codemode run settled. With the requested event, this is the durable record.",
-      payloadSchema: z.looseObject({ executionId: z.string() }),
+      payloadSchema: z.looseObject({
+        error: z.string().optional(),
+        executionId: z.string(),
+        result: z.unknown().optional(),
+      }),
     },
   },
   consumes: [
     "events.iterate.com/itx/capability-provided",
     "events.iterate.com/itx/capability-revoked",
+    "events.iterate.com/itx/script-execution-requested",
+    "events.iterate.com/itx/script-execution-completed",
   ],
   emits: [
     "events.iterate.com/itx/capability-provided",

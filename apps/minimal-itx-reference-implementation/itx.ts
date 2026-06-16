@@ -1,6 +1,6 @@
-// itx.ts — the itx core. `Itx` IS a real StreamProcessor.
+// itx.ts — the itx core. `ItxProcessor` IS a real StreamProcessor.
 //
-// `Itx extends StreamProcessor<ItxContract>` from the platform streams engine
+// `ItxProcessor extends StreamProcessor<ItxContract>` from the platform streams engine
 // (apps/os/src/domains/streams/engine). We override exactly one pure method —
 // `reduce` (the fold) — and add the verbs. Everything DURABLE (what names exist,
 // each one's address) is the fold of the event log; the only non-durable state
@@ -9,11 +9,16 @@
 //
 // This file also holds the small shared vocabulary every itx implementation
 // uses: the capability-descriptor types, path matching, `retain`, and
-// `replayPath`. `GlobalContext` (global-context.ts) reuses them so the two
+// `replayPath`. `GlobalItx` (global-itx.ts) reuses them so the two
 // implementations of the protocol cannot drift in how they resolve a path.
 
 import { StreamProcessor } from "@iterate-com/os/src/domains/streams/engine/stream-processor.ts";
-import { ItxContract, type CapabilityAddress, type CapabilityRecord } from "./contract.ts";
+import {
+  ItxContract,
+  type CapabilityAddress,
+  type CapabilityRecord,
+  type ScriptExecutionRecord,
+} from "./contract.ts";
 
 // ---------------------------------------------------------------------------
 // The protocol every context answers, and the one capability-descriptor shape.
@@ -40,13 +45,14 @@ export type ProvideArgs = {
 export type DescribeResult = {
   capabilities: CapabilityRecord[];
   builtins: CapabilityRecord[];
+  scriptExecutions: ScriptExecutionRecord[];
   parentCapabilities?: DescribeResult;
 };
 
 /**
  * The itx context protocol. A served context AND a dialable parent both answer
- * it. `Itx` and `GlobalContext` each `implements` this, so the two cannot drift
- * apart: change one method's shape and the other stops compiling.
+ * it. `ItxProcessor` and `GlobalItx` each `implements` this, so the two
+ * cannot drift apart: change one method's shape and the other stops compiling.
  *
  * Every verb takes a single bag-of-props argument (no positional parameters) —
  * this is the one calling convention across the wire, the bridge, the chain and
@@ -63,12 +69,20 @@ export interface ItxContext {
 // Shared vocabulary.
 // ---------------------------------------------------------------------------
 
+const CAPABILITY_ADDRESS_TYPES = new Set([
+  "rpc",
+  "dynamic-worker",
+  "dynamic-durable-object",
+  "durable-object",
+]);
+
 /** Structural live-vs-sturdy test: a sturdy provided capability is plain
- *  `{ type: "rpc", … }` data; anything else (a function, a nested object) is a
- *  live stub. (Parent addresses use other `type`s and are never provided as
- *  capabilities, so this stays specific to `"rpc"`.) */
+ *  address data; anything else (a function, a nested object) is a live stub. */
 export const isCapabilityAddress = (c: unknown): c is CapabilityAddress =>
-  !!c && typeof c === "object" && (c as { type?: unknown }).type === "rpc";
+  !!c &&
+  typeof c === "object" &&
+  typeof (c as { type?: unknown }).type === "string" &&
+  CAPABILITY_ADDRESS_TYPES.has((c as { type: string }).type);
 
 /** Project a live or sturdy `capability` into the `address` the table stores. */
 const addressOf = (capability: unknown): CapabilityAddress | null =>
@@ -92,6 +106,13 @@ export function retain(target: any): any {
   }
   return target;
 }
+
+/** The bridge (live-stub map) is keyed by path. A Map needs a primitive key,
+ *  so we derive one from the path ARRAY — `JSON.stringify` is unambiguous even
+ *  if a segment contains the separator we'd otherwise pick. ONE definition, used
+ *  at every set/get/delete site, so a live provide and its later invoke can
+ *  never disagree on the key. */
+const bridgeKey = (path: string[]): string => JSON.stringify(path);
 
 /** Two capability paths are equal iff their segments match exactly. */
 const samePath = (a: string[], b: string[]) =>
@@ -131,16 +152,17 @@ export async function replayPath(target: any, rest: string[], args: unknown[]) {
 }
 
 // ---------------------------------------------------------------------------
-// The core: Itx.
+// The core: ItxProcessor.
 // ---------------------------------------------------------------------------
 
-export class Itx extends StreamProcessor<typeof ItxContract> implements ItxContext {
+export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements ItxContext {
   readonly contract = ItxContract;
 
-  // The bridge: live stubs, keyed by the capability's path. In memory, NOT
-  // durable — a live cap dies with its provider, which is exactly why the fold
-  // records it with `address: null` while the real stub lives here. Keyed by the
-  // path ARRAY (joined only as a Map key) to stay consistent with the fold.
+  // The bridge: live stubs, keyed by the capability's path (via `bridgeKey`). In
+  // memory, NOT durable — a live cap dies with its provider, which is exactly why
+  // the fold records it with `address: null` while the real stub lives here. The
+  // key is derived from the path ARRAY, the same way at every site, so the fold
+  // and the bridge cannot disagree on what a capability is called.
   #liveCapabilities = new Map<string, any>();
 
   // Injected dialer: a sturdy ADDRESS → a callable stub. ONE dialer serves both
@@ -151,14 +173,19 @@ export class Itx extends StreamProcessor<typeof ItxContract> implements ItxConte
   // unauthed within a connection, so one dial. Auth lives at the connect door.)
   #dial: (address: any) => any;
 
-  // Built-in capabilities: the SAME `ProvideArgs` shape as a provide, but handed
-  // to the constructor as an array instead of appended to the log (e.g. a project
-  // context's `fetch`, backed by its Project DO). Own provides shadow a built-in
-  // at the same path. Changing built-ins is a code change, not a log rewrite.
-  #builtins: ProvideArgs[];
+  // Built-in capabilities, handed to the constructor instead of appended to the
+  // log (e.g. a project context's `fetch`, backed by its Project DO). They arrive
+  // as `ProvideArgs` but we normalize them at construction into the SAME
+  // `CapabilityRecord` shape the fold produces — a live built-in's stub goes into
+  // the same bridge a live provide uses. After that one step a built-in is
+  // indistinguishable from a folded capability except for which list it lives in,
+  // so resolution and describe() treat both identically. Own provides shadow a
+  // built-in at the same path (own list is searched first). Changing built-ins is
+  // a code change, not a log rewrite.
+  #builtins: CapabilityRecord[];
 
   // The chain: an Itx is born with a PARENT address (an agent's parent is its
-  // project; a project's is the global root). On a capability MISS, resolution
+  // project; a project's is the __global__ root). On a capability MISS, resolution
   // falls through to the parent. The parent is a sturdy address — the same plain
   // data a capability uses — dialed by the same `#dial`. null when there is none.
   #parentAddress: any | null;
@@ -176,7 +203,18 @@ export class Itx extends StreamProcessor<typeof ItxContract> implements ItxConte
       (() => {
         throw new Error("this context has no dial configured (no sturdy addresses or parent)");
       });
-    this.#builtins = args.builtinCapabilities ?? [];
+    // Normalize each built-in into a CapabilityRecord, stashing any live one's
+    // stub in the bridge — exactly what provideCapability does for a live provide.
+    this.#builtins = (args.builtinCapabilities ?? []).map((b) => {
+      const address = addressOf(b.capability);
+      if (address === null) this.#liveCapabilities.set(bridgeKey(b.path), retain(b.capability));
+      return {
+        path: b.path,
+        address,
+        instructions: b.instructions ?? null,
+        types: b.types ?? null,
+      };
+    });
     this.#parentAddress = args.parentAddress ?? null;
   }
 
@@ -212,6 +250,44 @@ export class Itx extends StreamProcessor<typeof ItxContract> implements ItxConte
           ),
         };
       }
+      case "events.iterate.com/itx/script-execution-requested": {
+        const { code, executionId } = event.payload;
+        if (typeof executionId !== "string") return state;
+        const row: ScriptExecutionRecord = {
+          code: typeof code === "string" ? code : null,
+          error: null,
+          executionId,
+          status: "requested",
+        };
+        const exists = state.scriptExecutions.some(
+          (execution: ScriptExecutionRecord) => execution.executionId === executionId,
+        );
+        return {
+          ...state,
+          scriptExecutions: exists
+            ? state.scriptExecutions.map((execution: ScriptExecutionRecord) =>
+                execution.executionId === executionId ? row : execution,
+              )
+            : [...state.scriptExecutions, row],
+        };
+      }
+      case "events.iterate.com/itx/script-execution-completed": {
+        const { error, executionId, result } = event.payload;
+        if (typeof executionId !== "string") return state;
+        return {
+          ...state,
+          scriptExecutions: state.scriptExecutions.map((execution: ScriptExecutionRecord) =>
+            execution.executionId === executionId
+              ? {
+                  ...execution,
+                  error: typeof error === "string" ? error : null,
+                  result,
+                  status: "completed",
+                }
+              : execution,
+          ),
+        };
+      }
       default:
         return state;
     }
@@ -225,7 +301,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> implements ItxConte
     const address = addressOf(capability);
     // dup at THIS layer too: the stub arrived as an argument to this call and is
     // disposed when the call returns; the bridge must keep its own retained copy.
-    if (address === null) this.#liveCapabilities.set(path.join(" "), retain(capability));
+    if (address === null) this.#liveCapabilities.set(bridgeKey(path), retain(capability));
     const committed = await this.ctx.stream.append({
       event: {
         type: "events.iterate.com/itx/capability-provided",
@@ -237,7 +313,7 @@ export class Itx extends StreamProcessor<typeof ItxContract> implements ItxConte
   }
 
   async revokeCapability({ path }: { path: string[] }) {
-    this.#liveCapabilities.delete(path.join(" "));
+    this.#liveCapabilities.delete(bridgeKey(path));
     const committed = await this.ctx.stream.append({
       event: { type: "events.iterate.com/itx/capability-revoked", payload: { path } },
     });
@@ -251,41 +327,47 @@ export class Itx extends StreamProcessor<typeof ItxContract> implements ItxConte
   async describe(): Promise<DescribeResult> {
     return {
       capabilities: this.state.capabilities,
-      builtins: this.#builtins.map(builtinToRecord),
+      builtins: this.#builtins,
+      scriptExecutions: this.state.scriptExecutions,
       ...(this.#parentAddress
         ? { parentCapabilities: await this.#dial(this.#parentAddress).describe() }
         : {}),
     };
   }
 
-  // invoke resolves over the FOLD first (own caps win), then the built-ins, then
-  // the parent. A live hit borrows its stub from the bridge; a sturdy hit dials
-  // its address; either way the leftover path is replayed onto the result.
+  // invoke is a precedence cascade: own fold → built-ins → parent → miss. The
+  // first two are the same local lookup over two lists (own shadows a built-in
+  // because it is tried first); the third re-dispatches the whole path UP the
+  // chain, so a child shadows a parent by late binding (re-resolved per call),
+  // not by copy.
   async invokeCapability({ path, args = [] }: { path: string[]; args?: unknown[] }) {
-    // 1. own capabilities (the fold) — longest prefix wins.
-    const hit = resolveLongestPrefix(this.state.capabilities, path);
-    if (hit) {
-      if (hit.record.address === null) {
-        const stub = this.#liveCapabilities.get(hit.record.path.join(" "));
-        if (!stub) {
-          throw new Error(
-            `capability "${hit.record.path.join(".")}" is offline (live provider disconnected)`,
-          );
-        }
-        return await replayPath(stub, hit.rest, args);
-      }
-      return await replayPath(this.#dial(hit.record.address), hit.rest, args);
-    }
-    // 2. built-ins — same longest-prefix match, over the array the host injected.
-    const builtin = resolveLongestPrefix(this.#builtins, path);
-    if (builtin) return await replayPath(builtin.record.capability, builtin.rest, args);
-    // 3. the chain — on a miss, RE-DISPATCH the whole path into the parent's
-    //    invokeCapability (recurse up the chain), so a child shadows by late
-    //    binding (re-resolved per call), not by copy.
+    const local =
+      this.#resolveLocal(this.state.capabilities, path) ?? this.#resolveLocal(this.#builtins, path);
+    if (local) return await replayPath(local.target, local.rest, args);
     if (this.#parentAddress) {
       return await this.#dial(this.#parentAddress).invokeCapability({ path, args });
     }
     throw new Error(`no capability "${path.join(".")}"`);
+  }
+
+  // Resolve a path against ONE capability list — the fold or the built-ins; the
+  // constructor normalized built-ins to the same `CapabilityRecord` shape, so
+  // both resolve identically. Returns the callable target plus the leftover path
+  // to replay on it: a sturdy row dials its address, a live row borrows its stub
+  // from the bridge. Returns null on no match, so `invokeCapability` falls
+  // through to the next source in the cascade.
+  #resolveLocal(caps: CapabilityRecord[], path: string[]): { target: any; rest: string[] } | null {
+    const hit = resolveLongestPrefix(caps, path);
+    if (!hit) return null;
+    const { record, rest } = hit;
+    if (record.address) return { target: this.#dial(record.address), rest };
+    const stub = this.#liveCapabilities.get(bridgeKey(record.path));
+    if (!stub) {
+      throw new Error(
+        `capability "${record.path.join(".")}" is offline (live provider disconnected)`,
+      );
+    }
+    return { target: stub, rest };
   }
 
   // Read-your-writes without self-ingest: after appending, wait for the stream's
@@ -300,15 +382,8 @@ export class Itx extends StreamProcessor<typeof ItxContract> implements ItxConte
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
   }
-}
 
-/** Project a built-in (`ProvideArgs`) into the `CapabilityRecord` describe()
- *  reports — built-ins are not in the fold, so we derive the row on read. */
-function builtinToRecord(b: ProvideArgs): CapabilityRecord {
-  return {
-    path: b.path,
-    address: addressOf(b.capability),
-    instructions: b.instructions ?? null,
-    types: b.types ?? null,
-  };
+  async waitUntilDelivered(offset: number): Promise<void> {
+    await this.#awaitDelivered(offset);
+  }
 }

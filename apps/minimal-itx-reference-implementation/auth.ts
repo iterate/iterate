@@ -14,7 +14,7 @@ export const PRINCIPALS: Record<string, { name: string; projects: string[] }> = 
   "bob-token": { name: "bob", projects: ["bob", "shared"] },
 };
 
-/** Every project any principal could reach — the full catalog the global root
+/** Every project any principal could reach — the full catalog the __global__ root
  *  scopes down to per principal. Derived from the auth map so it never drifts. */
 export const KNOWN_PROJECTS = [...new Set(Object.values(PRINCIPALS).flatMap((p) => p.projects))];
 
@@ -23,7 +23,7 @@ export type AuthResult =
   | { ok: false; status: 401 | 403; message: string };
 
 /** Authenticate the upgrade request to a principal — WITHOUT a project. The
- *  global root is not project-scoped, so it only needs to know WHO you are (and
+ *  __global__ root is not project-scoped, so it only needs to know WHO you are (and
  *  which projects you may reach). */
 export function authenticate(request: Request): { name: string; projects: string[] } | null {
   const token = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "");

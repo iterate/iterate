@@ -8,7 +8,7 @@
 // nothing — it just holds the bare session stub.
 //
 // Node-only by import (it passes a `ws` socket into Cap'n Web). A browser would
-// hit the same `/itx` endpoint and hold the same naked stub.
+// hit the same `/api/itx` endpoint and hold the same naked stub.
 
 import WebSocket from "ws";
 import { newWebSocketRpcSession } from "capnweb";
@@ -27,11 +27,10 @@ export function connect<T>(url: string, headers?: Record<string, string>): T {
 export type WithItxInput = {
   /** Worker base url. Defaults to ITX_BASE or http://127.0.0.1:8788. */
   baseUrl?: string;
-  /**
-   * Which context to open — a coordinate. `prj:<id>` is a project context,
-   * `prj:<id>/agents/<name>` an agent context, `global` the platform root.
-   */
-  context: string;
+  /** Empty means `__global__`; otherwise a project id like "shared". */
+  projectId?: string;
+  /** Context path inside the project. "/" is the project root. */
+  path?: string;
   /** Bearer token naming the principal (auth.ts). Required for any context. */
   token?: string;
 };
@@ -44,7 +43,11 @@ export type WithItxInput = {
 export function withItx<T = any>(input: WithItxInput): T {
   const base = input.baseUrl ?? process.env.ITX_BASE ?? "http://127.0.0.1:8788";
   const wsBase = base.replace(/^http/, "ws");
-  const url = `${wsBase}/itx?context=${encodeURIComponent(input.context)}`;
+  const params = new URLSearchParams({
+    projectId: input.projectId ?? "",
+    path: input.path ?? "/",
+  });
+  const url = `${wsBase}/api/itx?${params}`;
   return connect<T>(url, input.token ? { authorization: `Bearer ${input.token}` } : undefined);
 }
 

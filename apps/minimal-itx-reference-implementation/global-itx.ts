@@ -1,4 +1,4 @@
-// global-context.ts — the platform capability root.
+// global-itx.ts — the __global__ platform capability root.
 //
 // The chain bottoms out here: every project context's parent, and itself
 // parentless. It is the ONE context that is NOT a Durable Object and NOT a
@@ -16,34 +16,50 @@
 // `orgs`, …) is just another entry — which is the whole reason the catalog rides
 // the capability protocol instead of being bespoke handle code.
 //
-// `implements ItxContext` is load-bearing: it forces this hand-written root to
-// answer exactly the same protocol as `Itx`, so the two cannot drift.
+// Extending RpcTarget means the stateless root is already a Cap'n Web-safe main
+// target. Unlike a Durable Object stub, it does not need an extra ItxRpcTarget
+// membrane or the pathCallable proxy.
 
+import { RpcTarget } from "capnweb";
 import { KNOWN_PROJECTS } from "./auth.ts";
 import { type DescribeResult, type ItxContext, replayPath } from "./itx.ts";
 
-export class GlobalContext implements ItxContext {
+class GlobalProjects extends RpcTarget {
+  constructor(readonly reachable: () => string[]) {
+    super();
+  }
+
+  list() {
+    return this.reachable();
+  }
+
+  get(id: string) {
+    if (!this.reachable().includes(id)) throw new Error(`no access to project "${id}"`);
+    // Production narrows to a live project itx HANDLE here; the reference impl
+    // returns the project's context ref (the narrowing target) to stay simple.
+    return { id, ref: `prj:${id}` };
+  }
+}
+
+export class GlobalItx extends RpcTarget implements ItxContext {
   #access: "all" | string[];
-  // The fixed catalog. ONE cap `projects` whose deep path (projects.list /
-  // projects.get(id)) replays onto this plain object — the exact same deep-path
-  // shape any mounted live object uses.
+  #projects: GlobalProjects;
+  // The fixed catalog. The `projects` cap is also exposed as a real RpcTarget
+  // getter so the __global__ Cap'n Web path does not need pathCallable.
   #capabilities: Record<string, unknown>;
 
   constructor(args: { access: "all" | string[] }) {
+    super();
     this.#access = args.access;
     const reachable = () => (this.#access === "all" ? KNOWN_PROJECTS : this.#access);
+    this.#projects = new GlobalProjects(reachable);
     this.#capabilities = {
-      projects: {
-        list: () => reachable(),
-        get: (id: string) => {
-          if (!reachable().includes(id)) throw new Error(`no access to project "${id}"`);
-          // Production narrows to a live project itx HANDLE here; the reference
-          // impl returns the project's context ref (the narrowing target) to stay
-          // naked-stub simple.
-          return { id, ref: `prj:${id}` };
-        },
-      },
+      projects: this.#projects,
     };
+  }
+
+  get projects() {
+    return this.#projects;
   }
 
   // Read side: longest registered prefix wins, then replay the remainder onto the
@@ -54,7 +70,9 @@ export class GlobalContext implements ItxContext {
       const cap = this.#capabilities[path.slice(0, i).join(".")];
       if (cap) return await replayPath(cap, path.slice(i), args);
     }
-    throw new Error(`no capability "${path.join(".")}" (the global root context has no parent)`);
+    throw new Error(
+      `no capability "${path.join(".")}" (the __global__ root context has no parent)`,
+    );
   }
 
   // Same `DescribeResult` shape as any context (enforced by `implements
@@ -74,18 +92,19 @@ export class GlobalContext implements ItxContext {
           types: null,
         },
       ],
+      scriptExecutions: [],
     };
   }
 
   // READ-ONLY — there is no log to append to.
   async provideCapability(): Promise<never> {
     throw new Error(
-      "the global root context is stateless and read-only — you cannot provide a capability into it",
+      "the __global__ root context is stateless and read-only — you cannot provide a capability into it",
     );
   }
   async revokeCapability(): Promise<never> {
     throw new Error(
-      "the global root context is stateless and read-only — there is nothing to revoke",
+      "the __global__ root context is stateless and read-only — there is nothing to revoke",
     );
   }
 }

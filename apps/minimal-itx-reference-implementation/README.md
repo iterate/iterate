@@ -16,20 +16,35 @@ npm run dev              # terminal 1: wrangler dev (real workerd) on :8788
 npm run e2e              # terminal 2: the Node client harness, ✓/✗ per concept
 ```
 
-`npm run e2e` needs `npm run dev` running. It exercises, end to end: live and
-sturdy capabilities, deep dotted paths + longest-prefix shadowing, the parent
-chain (an agent inheriting and shadowing its project's caps), the stateless
-global root, auth at the connect door, and codemode.
+`npm run e2e` needs `npm run dev` running. It exercises, end to end: live
+capabilities, dynamic workers, a repo-backed dynamic Durable Object facet from
+`counter.js`, trusted Durable Object built-ins, deep dotted paths +
+longest-prefix shadowing, the parent chain, the stateless `__global__` root, auth at
+the connect door, and codemode.
 
 ## Connect
 
 ```ts
 import { withItx } from "./client.ts";
 
-using itx = withItx({ context: "prj:shared", token: "alice-token" });
+using itx = withItx({ projectId: "shared", path: "/", token: "alice-token" });
 await itx.provideCapability({ path: ["greeter"], capability: (n) => `hi ${n}` });
 await itx.greeter("alice"); // "hi alice" — naked deep path, no client library
 ```
 
-`context` is a coordinate: `prj:<id>` (project), `prj:<id>/agents/<name>`
-(agent, parented to the project), or `global` (the platform root).
+The HTTP shape is `projectId` plus `path`: `projectId=shared&path=/` opens the
+project context, `projectId=shared&path=/agents/alice` opens an agent context,
+and empty `projectId` opens the `__global__` root.
+
+## Curl
+
+`POST` runs a script against the same selected context and records
+`script-execution-requested` / `script-execution-completed` in the folded state:
+
+```bash
+curl -sS \
+  -H 'authorization: Bearer alice-token' \
+  -H 'content-type: text/plain' \
+  --data 'async () => "hello from curl"' \
+  'http://127.0.0.1:8788/api/itx?projectId=shared&path=/'
+```

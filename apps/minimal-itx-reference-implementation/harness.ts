@@ -5,11 +5,13 @@
 //
 //   1. live capability round-trip: provide → invoke → describe → revoke
 //   2. deep dotted paths into a mounted object + longest-prefix shadow
-//   3. sturdy capability: a dialable address built + run via the Worker Loader
-//   4. the chain: an agent inherits its project's caps and can shadow them
-//   5. the global root: the projects catalog, and provide is read-only
-//   6. auth at the connect door: bad token / no access are refused
-//   7. codemode: a loaded script gets an itx handle and calls back
+//   3. dynamic-worker: a dialable address built + run via the Worker Loader
+//   4. dynamic-durable-object: repo source from counter.js run as a facet
+//   5. the chain: an agent inherits its project's caps and can shadow them
+//   6. the __global__ root: the projects catalog, and provide is read-only
+//   7. auth at the connect door: bad token / no access are refused
+//   8. codemode: a loaded script gets an itx handle and calls back
+//   9. POST /api/itx runs a script and folds requested/completed events
 //
 // Each capability test uses a FRESH agent coordinate (prj:shared/agents/<rand>)
 // so durable state never bleeds between runs. The chain test reuses prj:shared
@@ -19,23 +21,41 @@ import assert from "node:assert";
 import { withItx } from "./client.ts";
 
 const TOKEN = "alice-token"; // principal "alice" → projects ["alice", "shared"]
+const BASE_URL = process.env.ITX_BASE ?? "http://127.0.0.1:8788";
 const rid = Math.random().toString(36).slice(2, 8);
-const agentCtx = (label: string) => `prj:shared/agents/${label}-${rid}`;
+const agentPath = (label: string) => `/agents/${label}-${rid}`;
+const projectItx = () => withItx({ projectId: "shared", path: "/", token: TOKEN });
+const agentItx = (label: string) =>
+  withItx({ projectId: "shared", path: agentPath(label), token: TOKEN });
 
-// A sturdy capability: plain data describing a worker to build + run on demand.
-const sturdyCalc = {
-  type: "rpc",
-  worker: {
-    type: "source",
-    source: `
+// A dynamic-worker capability: plain data describing code to build + run on demand.
+const dynamicCalc = {
+  type: "dynamic-worker",
+  source: {
+    type: "inline",
+    mainModule: "calc.js",
+    modules: {
+      "calc.js": `
       import { WorkerEntrypoint } from "cloudflare:workers";
-      export class Calc extends WorkerEntrypoint {
+      export class CounterEntrypoint extends WorkerEntrypoint {
         add(a, b) { return a + b; }
       }
     `,
+    },
   },
-  entrypoint: "Calc",
+  entrypoint: "CounterEntrypoint",
   props: {},
+};
+
+const repoCounter = {
+  type: "dynamic-durable-object",
+  source: {
+    type: "repo",
+    repo: "shared",
+    commit: "latest",
+    path: "counter.js",
+  },
+  className: "CounterDurableObject",
 };
 
 let pass = 0;
@@ -59,7 +79,7 @@ const dispose = (s: any) => {
 };
 
 await check("1. live capability: provide → invoke → describe → revoke", async () => {
-  const itx = withItx({ context: agentCtx("live"), token: TOKEN });
+  const itx = agentItx("live");
   try {
     await itx.provideCapability({
       path: ["greeter"],
@@ -88,7 +108,7 @@ await check("1. live capability: provide → invoke → describe → revoke", as
 });
 
 await check("2. deep dotted paths + longest-prefix shadow", async () => {
-  const itx = withItx({ context: agentCtx("deep"), token: TOKEN });
+  const itx = agentItx("deep");
   try {
     // Mount a nested object as ONE capability; deep paths pipeline into it.
     await itx.provideCapability({
@@ -107,31 +127,46 @@ await check("2. deep dotted paths + longest-prefix shadow", async () => {
   }
 });
 
-await check("3. sturdy capability: dialed + run via the Worker Loader", async () => {
-  const itx = withItx({ context: agentCtx("sturdy"), token: TOKEN });
+await check("3. dynamic-worker: dialed + run via the Worker Loader", async () => {
+  const itx = agentItx("sturdy");
   try {
-    await itx.provideCapability({ path: ["calc"], capability: sturdyCalc });
+    await itx.provideCapability({ path: ["calc"], capability: dynamicCalc });
     assert.equal(await itx.calc.add(40, 2), 42, "the loaded isolate runs the method");
 
     const d = await itx.describe();
     const row = d.capabilities.find((c: any) => c.path.join(".") === "calc");
     assert.ok(row?.address, "a sturdy capability stores its address (not null)");
-    assert.equal(row.address.type, "rpc");
+    assert.equal(row.address.type, "dynamic-worker");
   } finally {
     dispose(itx);
   }
 });
 
-await check("4. the chain: agent inherits the project's caps and can shadow", async () => {
-  // The project provides a sturdy cap (durable, replace-safe across runs).
-  const proj = withItx({ context: "prj:shared", token: TOKEN });
+await check("4. dynamic-durable-object: repo counter.js runs as a facet", async () => {
+  const itx = agentItx("facet");
   try {
-    await proj.provideCapability({ path: ["calc"], capability: sturdyCalc });
+    const source = await itx.repo.getWorkerSource({ path: "counter.js" });
+    assert.equal(source.mainModule, "counter.js", "the fake repo exposes counter.js");
+
+    await itx.provideCapability({ path: ["counter"], capability: repoCounter });
+    assert.equal(await itx.counter.increment(), 1);
+    assert.equal(await itx.counter.increment(), 2);
+    assert.equal(await itx.counter.current(), 2);
+  } finally {
+    dispose(itx);
+  }
+});
+
+await check("5. the chain: agent inherits the project's caps and can shadow", async () => {
+  // The project provides a sturdy cap (durable, replace-safe across runs).
+  const proj = projectItx();
+  try {
+    await proj.provideCapability({ path: ["calc"], capability: dynamicCalc });
   } finally {
     dispose(proj);
   }
 
-  const agent = withItx({ context: agentCtx("chain"), token: TOKEN });
+  const agent = agentItx("chain");
   try {
     // Inherited from the project via the parent chain (the agent never provided it).
     assert.equal(await agent.calc.add(2, 3), 5, "inherited from the project");
@@ -147,7 +182,7 @@ await check("4. the chain: agent inherits the project's caps and can shadow", as
     dispose(agent);
   }
 
-  const proj2 = withItx({ context: "prj:shared", token: TOKEN });
+  const proj2 = projectItx();
   try {
     assert.equal(await proj2.calc.add(2, 3), 5, "the project is unaffected by the agent's shadow");
   } finally {
@@ -155,8 +190,8 @@ await check("4. the chain: agent inherits the project's caps and can shadow", as
   }
 });
 
-await check("5. the global root: catalog reads, provide is read-only", async () => {
-  const g = withItx({ context: "global", token: TOKEN });
+await check("6. the __global__ root: catalog reads, provide is read-only", async () => {
+  const g = withItx({ projectId: "", path: "/", token: TOKEN });
   try {
     const list = await g.projects.list();
     assert.deepEqual([...list].sort(), ["alice", "shared"], "scoped to the principal's reach");
@@ -173,27 +208,50 @@ await check("5. the global root: catalog reads, provide is read-only", async () 
   }
 });
 
-await check("6. auth at the connect door", async () => {
-  const bad = withItx({ context: "prj:shared", token: "not-a-real-token" });
+await check("7. auth at the connect door", async () => {
+  const bad = withItx({ projectId: "shared", path: "/", token: "not-a-real-token" });
   await assert.rejects(async () => bad.describe(), "a bad token cannot open a context");
   dispose(bad);
 
-  const denied = withItx({ context: "prj:bob", token: TOKEN }); // alice has no access to bob
+  const denied = withItx({ projectId: "bob", path: "/", token: TOKEN }); // alice has no access to bob
   await assert.rejects(async () => denied.describe(), "no access to the project is refused");
   dispose(denied);
 });
 
-await check("7. codemode: a loaded script gets an itx handle and calls back", async () => {
-  const itx = withItx({ context: agentCtx("code"), token: TOKEN });
+await check("8. codemode: a loaded script gets an itx handle and calls back", async () => {
+  const itx = agentItx("code");
   try {
-    await itx.provideCapability({ path: ["calc"], capability: sturdyCalc });
-    const result = await itx.runScript({
+    await itx.provideCapability({ path: ["calc"], capability: dynamicCalc });
+    const output = await itx.runScript({
       code: `async (itx) => itx.invokeCapability({ path: ["calc", "add"], args: [10, 20] })`,
     });
-    assert.equal(result, 30, "the script invoked a capability against its own context");
+    assert.equal(output.result, 30, "the script invoked a capability against its own context");
+    const d = await itx.describe();
+    const execution = d.scriptExecutions.find((x: any) => x.executionId === output.executionId);
+    assert.equal(execution?.status, "completed", "script completion is folded into state");
+    assert.equal(execution?.result, 30, "script result is folded into state");
   } finally {
     dispose(itx);
   }
+});
+
+await check("9. POST /api/itx runs a script and folds requested/completed events", async () => {
+  const response = await fetch(
+    `${BASE_URL}/api/itx?projectId=shared&path=${encodeURIComponent(agentPath("post"))}`,
+    {
+      body: `async () => "curlable"`,
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "text/plain" },
+      method: "POST",
+    },
+  );
+  assert.equal(response.status, 200);
+  const body = (await response.json()) as any;
+  assert.equal(body.result, "curlable");
+  const execution = body.describe.scriptExecutions.find(
+    (x: any) => x.executionId === body.executionId,
+  );
+  assert.equal(execution?.status, "completed");
+  assert.equal(execution?.result, "curlable");
 });
 
 console.log(`\n${pass}/${pass + fail} passed`);
