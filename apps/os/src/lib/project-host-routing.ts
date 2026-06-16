@@ -22,6 +22,7 @@ export function isValidCustomHostname(hostname: string) {
   return hostnamePattern.test(hostname);
 }
 
+/** Project hostname bases may be localhost in dev or a DNS hostname in deployed environments. */
 function isValidProjectHostnameBase(hostname: string) {
   return hostname === "localhost" || hostnamePattern.test(hostname);
 }

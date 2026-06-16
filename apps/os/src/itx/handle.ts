@@ -747,7 +747,7 @@ export class ItxProjects extends RpcTarget {
     try {
       await updateProjectConfig(db, { customHostname: nextCustomHostname }, { id: input.id });
     } catch (error) {
-      if (isUniqueConstraintError(error)) {
+      if (error instanceof Error && error.message.includes("UNIQUE constraint failed")) {
         throw new ItxError({
           code: "CONFLICT",
           message: `Custom hostname ${nextCustomHostname} is already assigned.`,
@@ -837,10 +837,6 @@ export class ItxProjects extends RpcTarget {
   private db() {
     return createD1Client(this.runtime.env.DB);
   }
-}
-
-function isUniqueConstraintError(error: unknown) {
-  return error instanceof Error && error.message.includes("UNIQUE constraint failed");
 }
 
 /** Choose the org to create in: the requested one (must be a member) or, when

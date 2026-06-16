@@ -581,8 +581,7 @@ class BrowserPathTarget extends RpcTarget {
   }
 
   private callable(path: string[]): Function {
-    const fn = (...args: unknown[]) => this.callPath({ args, path });
-    return new Proxy(fn, {
+    return new Proxy((...args: unknown[]) => this.callPath({ args, path }), {
       apply: (_target, _thisArg, args) => this.callPath({ args, path }),
       get: (target, key, receiver) => {
         if (key === "then") return undefined;

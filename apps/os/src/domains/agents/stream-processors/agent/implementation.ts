@@ -764,10 +764,12 @@ function yamlScalar(value: string | number): string {
   return JSON.stringify(value);
 }
 
+/** Render a multi-line YAML field as a block scalar with the indentation expected by the prompt. */
 function yamlBlockScalar(key: string, value: string): string[] {
   return [`  ${key}: |-`, ...value.split("\n").map((line) => `    ${line}`)];
 }
 
+/** Human-readable body for the system event that teaches an agent about a newly provided cap. */
 function capabilityProvidedEventBlock(args: {
   instructions: string;
   name: string;

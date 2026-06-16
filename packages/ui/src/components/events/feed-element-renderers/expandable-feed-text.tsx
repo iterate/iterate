@@ -26,7 +26,8 @@ export function ExpandableFeedText({
   contentClassName?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const canExpand = shouldOfferExpansion(text);
+  const canExpand =
+    text.length > EXPAND_THRESHOLD_CHARS || text.split("\n").length > EXPAND_THRESHOLD_LINES;
 
   return (
     <div
@@ -66,8 +67,4 @@ export function ExpandableFeedText({
       ) : null}
     </div>
   );
-}
-
-function shouldOfferExpansion(text: string) {
-  return text.length > EXPAND_THRESHOLD_CHARS || text.split("\n").length > EXPAND_THRESHOLD_LINES;
 }

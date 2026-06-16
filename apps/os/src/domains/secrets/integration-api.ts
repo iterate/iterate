@@ -504,6 +504,7 @@ async function verifySlackSignature(input: {
   return constantTimeEqual(expected, input.signature);
 }
 
+/** Encode HMAC bytes in the lowercase hex format Slack expects in v0 signatures. */
 function hex(bytes: Uint8Array) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }

@@ -1,4 +1,4 @@
-import alchemy, { type Scope } from "alchemy";
+import alchemy from "alchemy";
 import { DurableObjectNamespace, Worker } from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { slugify } from "@iterate-com/shared/slugify";
@@ -23,15 +23,15 @@ const AlchemyEnv = z.object({
 
 const env = AlchemyEnv.parse(process.env);
 
-const stateStore = (scope: Scope) =>
-  scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
-
 const app = await alchemy(APP_NAME, {
   password: env.ALCHEMY_PASSWORD,
   stage: env.ALCHEMY_STAGE,
   ...(env.ALCHEMY_LOCAL ? { local: true } : {}),
   adopt: true,
-  stateStore,
+  stateStore: (scope) =>
+    scope.local
+      ? new SQLiteStateStore(scope, { engine: "libsql" })
+      : new CloudflareStateStore(scope),
 });
 
 const workerName = slugify(`${APP_NAME}-${app.stage}`);

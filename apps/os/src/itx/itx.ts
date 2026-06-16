@@ -567,10 +567,11 @@ export class Itx extends StreamProcessor<typeof ItxContract, ItxDeps, ItxIterate
     // so on a provider that doesn't implement it the call rejects with "does
     // not implement" instead of reading undefined — swallow that; the
     // connection still dies with the session either way.
-    const teardown = () => {
-      if (this.#liveStubs.get(name) === retained) this.#dropLiveStub(name, { record: true });
-    };
-    void Promise.resolve(onRpcBroken?.(teardown) as unknown).catch(() => {});
+    void Promise.resolve(
+      onRpcBroken?.(() => {
+        if (this.#liveStubs.get(name) === retained) this.#dropLiveStub(name, { record: true });
+      }) as unknown,
+    ).catch(() => {});
   }
 
   /** Drop a live stub. `record: true` (session teardown) appends the

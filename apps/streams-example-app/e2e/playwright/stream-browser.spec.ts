@@ -252,7 +252,7 @@ test("event feed view starts at the bottom on first visit while replay fills the
     timeout: 30_000,
   });
   await expect(page.getByTestId("stream-status")).toHaveText("subscribed", { timeout: 30_000 });
-  await expectAtFeedEnd(page);
+  await expect.poll(() => feedDistanceFromEnd(page)).toBeLessThanOrEqual(2);
   await expect(page.getByTestId("feed-scroll-to-bottom-affordance")).toHaveCount(0);
   await freshContext.close();
 });
@@ -985,10 +985,6 @@ async function feedDistanceFromEnd(page: Page) {
       throw new Error("event feed scroller must be an HTMLElement");
     return Math.round(element.scrollHeight - element.clientHeight - element.scrollTop);
   });
-}
-
-async function expectAtFeedEnd(page: Page) {
-  await expect.poll(() => feedDistanceFromEnd(page)).toBeLessThanOrEqual(2);
 }
 
 async function composerDistanceFromScrollerBottom(page: Page) {

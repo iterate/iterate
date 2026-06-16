@@ -79,10 +79,8 @@ export default {
             );
             mergedToday.sort((a, b) => (a.pr.merged_at || "").localeCompare(b.pr.merged_at || ""));
 
-            const escape = (text: string) =>
-              text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
             const link = (item: { number: number; title: string; html_url: string }) =>
-              `<${item.html_url}|#${item.number} ${escape(item.title)}>`;
+              `<${item.html_url}|#${item.number} ${item.title.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")}>`;
             const by = (login: string | undefined) => {
               const slackUser = slackUsers.find(
                 (u) => u.github.toLowerCase() === (login || "").toLowerCase(),

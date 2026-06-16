@@ -277,16 +277,14 @@ function getBaseConfigEnvKey(prefix: string) {
   return baseKey;
 }
 
-function formatEnvSegment(segment: string) {
-  return segment.replace(/([A-Z])/g, "_$1").toUpperCase();
-}
-
 function formatEnvOverrideKey(prefix: string, path: AppConfigPath) {
   if (path.length === 0) {
     return getBaseConfigEnvKey(prefix);
   }
 
-  return `${prefix}${path.map(formatEnvSegment).join(ENV_PATH_SEPARATOR)}`;
+  return `${prefix}${path
+    .map((segment) => segment.replace(/([A-Z])/g, "_$1").toUpperCase())
+    .join(ENV_PATH_SEPARATOR)}`;
 }
 
 function formatConfigPath(path: AppConfigPath) {

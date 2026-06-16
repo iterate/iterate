@@ -661,6 +661,7 @@ function outboundFrames(messages: WebSocketFrame[], afterFrameIndex: number) {
     .map((frame) => frame.data);
 }
 
+/** Protocol predicate for inbound frames that are allowed during subscribe teardown. */
 function isPushOrReleaseFrame(value: unknown) {
   return isPushFrame(value) || (Array.isArray(value) && value[0] === "release");
 }

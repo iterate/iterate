@@ -287,6 +287,7 @@ function cloudflareErrorMessage(payload: CloudflareApiEnvelope<unknown>) {
   return messages.length > 0 ? messages.join("; ") : JSON.stringify(payload);
 }
 
+/** Strip undefined before JSON serialization so Cloudflare sees omitted fields, not null-ish noise. */
 function dropUndefinedValues(input: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }

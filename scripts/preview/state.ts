@@ -212,10 +212,12 @@ function renderStatusLabel(status: CloudflarePreviewAppEntry["status"]) {
   }
 }
 
+/** Escape command output before embedding it in the preview status markdown block. */
 function escapeHtml(value: string) {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
+/** Pair with unwrapHiddenStateBlock: serialize preview state into a hidden markdown comment. */
 function wrapHiddenStateBlock(state: CloudflarePreviewState) {
   return ["<!--", JSON.stringify(state, null, 2), "-->"].join("\n");
 }

@@ -27,7 +27,9 @@ export type WriterRole = {
 };
 
 export function acquireWriterRole(args: { lockName: string }): WriterRole {
-  let release = () => {};
+  let release = () => {
+    // Replaced when the lock-holding promise is wired below.
+  };
   // The lock is held until this promise resolves; resolving it === resigning.
   const held = new Promise<void>((resolve) => {
     release = resolve;

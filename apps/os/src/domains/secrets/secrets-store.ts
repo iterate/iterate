@@ -56,6 +56,7 @@ export function projectSecretId(input: { typeIdPrefix: string }) {
   });
 }
 
+/** Project connections still use the pre-TypeID dashless UUID id shape. */
 function legacyId(prefix: string) {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`;
 }

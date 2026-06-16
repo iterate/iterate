@@ -118,10 +118,6 @@ class SameStateProcessor extends StreamProcessor<SameStateContract> {
   }
 }
 
-function sameStateEvent(offset: number): StreamEvent {
-  return { type: "test/same", payload: {}, offset, createdAt: iso };
-}
-
 describe("reduce and checkpoint", () => {
   it("reduces consumed events into state and checkpoints once per batch", async () => {
     const writes: CounterSnapshot[] = [];
@@ -221,7 +217,10 @@ describe("state change subscriptions", () => {
     const states: SameState[] = [];
     const unsubscribe = await processor.onStateChange((state) => states.push(state));
 
-    await processor.ingest({ events: [sameStateEvent(1)], streamMaxOffset: 1 });
+    await processor.ingest({
+      events: [{ type: "test/same", payload: {}, offset: 1, createdAt: iso }],
+      streamMaxOffset: 1,
+    });
 
     expect(states).toEqual([{ seen: 0 }]);
     unsubscribe();

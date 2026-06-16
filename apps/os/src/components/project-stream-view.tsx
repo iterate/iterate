@@ -227,10 +227,6 @@ export function ProjectStreamView({
   const defaultTab: ProjectStreamViewTab = isAgentStream ? "agent" : "feed";
   const activeTab: ProjectStreamViewTab =
     search.tab == null || (search.tab === "agent" && !isAgentStream) ? defaultTab : search.tab;
-  // Omit the tab from the URL while it equals the stream's default.
-  const setActiveTab = (tab: ProjectStreamViewTab) =>
-    setSearch({ tab: tab === defaultTab ? undefined : tab });
-
   const toolsOpen = search.filter === true;
   const feedSearch = search.q ?? "";
   const focusedProcessorKey = search.processor ?? null;
@@ -240,8 +236,6 @@ export function ProjectStreamView({
   const focusProcessor = (subscriptionKey: string) =>
     setSearch({ panel: true, processor: subscriptionKey });
   const openProcessorsOverview = () => setSearch({ panel: true, processor: undefined });
-  const closeProcessors = () => setSearch({ panel: undefined, processor: undefined });
-
   const feedSearchInputRef = useRef<HTMLInputElement>(null);
   const [composerMode, setComposerMode] = useState<AgentComposerMode>(
     defaultComposerMode ?? (messageComposer ? "message" : "raw"),
@@ -441,7 +435,11 @@ export function ProjectStreamView({
           </Button>
           <Tabs
             value={activeTab}
-            onValueChange={(value) => setActiveTab(value as ProjectStreamViewTab)}
+            // Omit the tab from the URL while it equals the stream's default.
+            onValueChange={(value) => {
+              const tab = value as ProjectStreamViewTab;
+              setSearch({ tab: tab === defaultTab ? undefined : tab });
+            }}
           >
             <TabsList className="h-8">
               {isAgentStream ? (
@@ -553,7 +551,7 @@ export function ProjectStreamView({
             focusedKey={focusedProcessorKey}
             onFocus={focusProcessor}
             onBack={openProcessorsOverview}
-            onClose={closeProcessors}
+            onClose={() => setSearch({ panel: undefined, processor: undefined })}
             onClearClientDatabase={clearClientDatabases}
             getProcessorRuntimeState={getProcessorRuntimeState}
           />
@@ -716,10 +714,6 @@ function useAgentUiReducedState(database: StreamBrowserDatabase): AgentUiState |
   }, [result.data]);
 }
 
-function initialStreamViewState(): EventsStreamViewState {
-  return getInitialProcessorState(StreamViewProcessorContract);
-}
-
 function reduceStreamViewEvent(state: EventsStreamViewState, event: Event): EventsStreamViewState {
   const reduction = runProcessorReduce({
     processor: { contract: StreamViewProcessorContract },
@@ -748,7 +742,7 @@ function ProjectStreamFeedView({
     database,
     reductionKey,
     cacheScope: StreamViewProcessorContract.slug,
-    initialState: initialStreamViewState,
+    initialState: () => getInitialProcessorState(StreamViewProcessorContract),
     reduceEvent: reduceStreamViewEvent,
   });
   const [rendererMode, setRendererMode] = useState<EventsStreamRendererMode>("raw-pretty");

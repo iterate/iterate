@@ -47,6 +47,7 @@ function wrap(db: DatabaseSync): SqlClient {
   };
 }
 
+/** Minimal stream context mock; leaving it named avoids contextual typing of the no-op methods. */
 const iterateContext = () => ({ stream: { append() {}, appendBatch() {} } });
 
 function rawEvent(offset: number): StreamEvent {

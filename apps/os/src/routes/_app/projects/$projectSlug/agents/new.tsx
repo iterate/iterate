@@ -31,7 +31,7 @@ function NewAgentPage() {
 
   const createAgent = useMutation({
     mutationFn: async (content: string) => {
-      const agentPath = newWebAgentPath();
+      const agentPath = StreamPath.parse(`/agents/web/${slugifyCreationTime(new Date())}`);
       // connectItx (imperative, not the suspending hook) lands on the project
       // provider's socket. Agent setup is seeded server-side now (#1524): create
       // the stream, wait for the project-agent-setup processor to write the
@@ -115,10 +115,6 @@ function NewAgentPage() {
       </form>
     </main>
   );
-}
-
-function newWebAgentPath() {
-  return StreamPath.parse(`/agents/web/${slugifyCreationTime(new Date())}`);
 }
 
 async function waitForProjectAgentSetup(

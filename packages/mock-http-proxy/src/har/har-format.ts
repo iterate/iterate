@@ -52,10 +52,6 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
-function extractTimestamp(startedDateTime: string): string {
-  return startedDateTime.slice(11, 19);
-}
-
 function truncateDisplay(text: string, maxLen: number): string {
   if (text.length <= maxLen) return text;
   return `${text.slice(0, maxLen)}... (${formatSize(text.length)})`;
@@ -71,10 +67,6 @@ function tryPrettyJson(text: string, maxLen: number): string | null {
   } catch {
     return null;
   }
-}
-
-function isSSE(mimeType: string): boolean {
-  return mimeType.startsWith("text/event-stream");
 }
 
 function formatSSEBody(text: string, opts: FormatHarEntryOptions): string {
@@ -209,8 +201,9 @@ export function formatHarEntry(
   const meta = entry._iterateMetadata;
   const sanitizedHeaders = new Set(meta?.sanitizedHeaders ?? []);
 
+  // slice(11, 19) extracts HH:MM:SS from the ISO startedDateTime
   const prefix = opts.timestamp
-    ? `${c(DIM, extractTimestamp(entry.startedDateTime), opts.color)} `
+    ? `${c(DIM, entry.startedDateTime.slice(11, 19), opts.color)} `
     : "";
   lines.push(`${prefix}${formatHarEntryOneLine(entry, { color: opts.color })}`);
 
@@ -271,7 +264,7 @@ export function formatHarEntry(
             : "";
         lines.push(c(DIM, `  -- Response body (${sizeLabel}${truncLabel}) --`, opts.color));
 
-        if (isSSE(entry.response.content.mimeType)) {
+        if (entry.response.content.mimeType.startsWith("text/event-stream")) {
           const sseText = truncateDisplay(entry.response.content.text, opts.maxBodyLength);
           lines.push(indentBlock(formatSSEBody(sseText, opts), "    "));
         } else {

@@ -307,9 +307,6 @@ const base64Url = (buffer: Buffer) => buffer.toString("base64url");
 
 const randomBase64Url = (byteLength = 32) => base64Url(randomBytes(byteLength));
 
-const pkceChallenge = (verifier: string) =>
-  base64Url(createHash("sha256").update(verifier).digest());
-
 const openUrlInBrowser = async (url: string) => {
   try {
     const { execFile } = await import("node:child_process");
@@ -447,12 +444,11 @@ const startOAuthCallbackServer = async (): Promise<{
 
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
-  const close = () => new Promise<void>((resolve) => server.close(() => resolve()));
 
   return {
     redirectUri: `http://${LOOPBACK_HOST}:${port}${LOOPBACK_CALLBACK_PATH}`,
     wait: () => callbackPromise.finally(() => clearTimeout(timeout)),
-    close,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 };
 
@@ -565,7 +561,10 @@ const oauthLogin = async (config: Config): Promise<StoredSession> => {
   authorizeUrl.searchParams.set("scope", OAUTH_SCOPE);
   authorizeUrl.searchParams.set("resource", config.osBaseUrl);
   authorizeUrl.searchParams.set("state", state);
-  authorizeUrl.searchParams.set("code_challenge", pkceChallenge(codeVerifier));
+  authorizeUrl.searchParams.set(
+    "code_challenge",
+    base64Url(createHash("sha256").update(codeVerifier).digest()),
+  );
   authorizeUrl.searchParams.set("code_challenge_method", "S256");
 
   console.error(`\nOpening browser to authenticate with Iterate:\n`);

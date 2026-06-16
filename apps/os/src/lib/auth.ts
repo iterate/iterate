@@ -75,11 +75,7 @@ function redirectToSignIn(location: RouteLocation): never {
 }
 
 function redirectToProjectAccess(issuer: string | undefined): never {
-  throw redirect({ href: authWorkerUrl("/project-access", issuer) });
-}
-
-function authWorkerUrl(path: string, issuer: string | undefined) {
-  return new URL(path, `${authWorkerOrigin(issuer)}/`).toString();
+  throw redirect({ href: new URL("/project-access", `${authWorkerOrigin(issuer)}/`).toString() });
 }
 
 function authWorkerOrigin(issuer: string | undefined) {

@@ -53,7 +53,7 @@ export async function ensureLocalDevOAuthClient(env: Record<string, string | und
     return;
   }
 
-  const authClient = createAuthClient(authOrigin, serviceToken);
+  const authClient = createAuthContractClient({ baseUrl: authOrigin, serviceToken });
   const redirectURI = `${baseUrl.replace(/\/+$/, "")}/api/iterate-auth/callback`;
   const existingClientId =
     env.APP_CONFIG_ITERATE_AUTH__CLIENT_ID ?? env.ITERATE_OAUTH_CLIENT_ID ?? undefined;
@@ -85,15 +85,11 @@ export async function ensureLocalDevOAuthClient(env: Record<string, string | und
           { cause: error },
         );
       }
-      await sleep(RETRY_DELAY_MS);
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
     }
   }
 
   throw new Error(`Failed to bootstrap local OAuth client for ${target}`, { cause: lastError });
-}
-
-function createAuthClient(authOrigin: string, serviceToken: string) {
-  return createAuthContractClient({ baseUrl: authOrigin, serviceToken });
 }
 
 function isLoopbackOrigin(origin: string) {
@@ -111,8 +107,4 @@ function isRetryableBootstrapError(error: unknown) {
     message.includes("socket") ||
     message.includes("timed out")
   );
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
