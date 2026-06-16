@@ -8,7 +8,7 @@ import {
   uiErrorReporter,
   videoMode,
 } from "middlewright";
-import { REPO_ROOT, waitForLocalOsBaseUrl } from "./local-dev.ts";
+import { OS_APP_ROOT, REPO_ROOT, waitForLocalOsBaseUrl } from "./local-dev.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -39,35 +39,35 @@ export function uniqueSlug(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`.toLowerCase();
 }
 
-export async function signInWithMintedOrg(page: Page) {
-  const baseUrl = await waitForLocalOsBaseUrl();
+export async function signInWithLocalAuth(page: Page) {
   const suffix = uniqueSlug("pw");
-  const email = `${suffix}+test@nustom.com`;
-  const organization = {
-    id: `org_${suffix.replace(/-/g, "_")}`,
-    name: `Playwright ${suffix}`,
-    role: "admin",
-    slug: suffix,
-  };
-  const browserSignInUrl = await mintBrowserSignInUrl({
-    baseUrl,
+  const email = `testuser+${suffix}test@gmail.com`;
+  const seed = await seedLocalAuth({
+    bootstrapProjectSlug: uniqueSlug("playwright-bootstrap"),
     email,
-    organization,
-    returnTo: "/projects",
+    organizationName: `Playwright ${suffix}`,
+    organizationSlug: suffix,
   });
 
   await page.context().clearCookies();
-  await page.goto(browserSignInUrl);
-  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+  await page.goto("/api/iterate-auth/login?return_to=/projects");
+  await expect(page.getByRole("button", { name: "Continue with email" })).toBeEnabled();
+  await page.getByRole("button", { name: "Continue with email" }).click();
+  await page.getByTestId("email-input").fill(email);
+  await page.getByTestId("email-submit-button").click();
+  await page.getByTestId("email-otp-input").fill("424242");
+  await page.getByTestId("email-verify-button").click();
+  await continueOAuthProjectAccess(page);
+  await expect(page.getByRole("heading", { exact: true, name: "Projects" })).toBeVisible();
   await expect(page.getByText(email)).toBeVisible();
 
-  return { email, organization };
+  return seed;
 }
 
 export async function createProject(page: Page, projectSlug: string) {
   await page
-    .getByRole("link", { name: "Create new project" })
-    .or(page.getByRole("link", { name: "New project" }))
+    .getByRole("button", { name: "Create new project" })
+    .or(page.getByRole("button", { name: "New project" }))
     .first()
     .click();
   await page.getByLabel("Slug").fill(projectSlug);
@@ -77,47 +77,78 @@ export async function createProject(page: Page, projectSlug: string) {
   );
 }
 
-async function mintBrowserSignInUrl(input: {
-  baseUrl: string;
+async function seedLocalAuth(input: {
+  bootstrapProjectSlug: string;
   email: string;
-  organization: { id: string; name: string; role: string; slug: string };
-  returnTo: string;
+  organizationName: string;
+  organizationSlug: string;
 }) {
-  const authMintArgs = [
-    "auth:mint",
-    "--browser-url",
-    "--base-url",
-    input.baseUrl,
+  const seedArgs = [
+    "exec",
+    "tsx",
+    "./e2e/playwright/seed-local-auth.ts",
     "--email",
     input.email,
-    "--orgs",
-    JSON.stringify([input.organization]),
-    "--return-to",
-    input.returnTo,
+    "--organization-name",
+    input.organizationName,
+    "--organization-slug",
+    input.organizationSlug,
+    "--project-slug",
+    input.bootstrapProjectSlug,
   ];
-  const env = { ...process.env };
-  const command = env.AUTH_FORGE_PRIVATE_JWK ? "pnpm" : "doppler";
-  const args = env.AUTH_FORGE_PRIVATE_JWK
-    ? authMintArgs
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    APP_CONFIG_ITERATE_AUTH__ISSUER: "http://localhost:7101/api/auth",
+    SERVICE_AUTH_TOKEN:
+      process.env.OS_PLAYWRIGHT_LOCAL_AUTH_SERVICE_TOKEN ||
+      "os-playwright-local-auth-service-token",
+    ITERATE_OAUTH_ISSUER: "http://localhost:7101/api/auth",
+  };
+  const direct =
+    env.APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN ||
+    env.ITERATE_AUTH_SERVICE_TOKEN ||
+    env.SERVICE_AUTH_TOKEN;
+  const command = direct ? "pnpm" : "doppler";
+  const args = direct
+    ? seedArgs
     : [
         "run",
-        "--project",
-        "os",
-        "--config",
-        env.OS_PLAYWRIGHT_DOPPLER_CONFIG || env.DOPPLER_CONFIG || "dev",
+        "--preserve-env=APP_CONFIG_ITERATE_AUTH__ISSUER,ITERATE_OAUTH_ISSUER,SERVICE_AUTH_TOKEN",
         "--",
         "pnpm",
-        ...authMintArgs,
+        "--dir",
+        "../os",
+        ...seedArgs,
       ];
 
   const { stdout } = await execFileAsync(command, args, {
-    cwd: REPO_ROOT,
+    cwd: direct ? OS_APP_ROOT : `${REPO_ROOT}/apps/auth`,
     env,
     maxBuffer: 10 * 1024 * 1024,
   });
-  const url = stdout.trim();
-  if (!URL.canParse(url)) {
-    throw new Error(`auth:mint did not return a browser URL: ${url}`);
+  const json = stdout
+    .trim()
+    .split("\n")
+    .findLast((line) => line.trim().startsWith("{"));
+  if (!json) {
+    throw new Error(`local auth seed did not return JSON: ${stdout.trim()}`);
   }
-  return url;
+  return JSON.parse(json) as {
+    email: string;
+    organization: { id: string; name: string; slug: string };
+    project: { id: string; slug: string };
+    user: { id: string; email: string };
+  };
+}
+
+async function continueOAuthProjectAccess(page: Page) {
+  const projectAccessContinue = page.getByRole("button", { exact: true, name: "Continue" });
+  if (await projectAccessContinue.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    await expect(projectAccessContinue).toBeEnabled();
+    await projectAccessContinue.click();
+  }
+
+  const allowAccess = page.getByRole("button", { name: "Allow access" });
+  await expect(allowAccess).toBeEnabled();
+  await allowAccess.click();
 }

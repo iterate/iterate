@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { parseArgs } from "node:util";
-import { readLocalDevServerInfo } from "@iterate-com/shared/alchemy/local-dev-server";
-import { OS_APP_ROOT, waitForLocalOsBaseUrl } from "./test-support/local-dev.ts";
+import { createAuthContractClient } from "@iterate-com/auth-contract";
+import { OS_APP_ROOT, REPO_ROOT, waitForLocalOsBaseUrl } from "./test-support/local-dev.ts";
 
 const { values } = parseArgs({
   options: {
@@ -15,24 +15,49 @@ if (!Number.isInteger(readyPort) || readyPort <= 0) {
   throw new Error(`Invalid --ready-port: ${String(values["ready-port"])}`);
 }
 
-let child: ChildProcess | undefined;
+const localAuthServiceToken =
+  process.env.OS_PLAYWRIGHT_LOCAL_AUTH_SERVICE_TOKEN || "os-playwright-local-auth-service-token";
+
+const children: ChildProcess[] = [];
 let server: Server | undefined;
 
-const existing = readLocalDevServerInfo(OS_APP_ROOT, { requireLive: true });
-if (!existing) {
-  child = spawn("pnpm", ["dev"], {
+if (!process.env.OS_PLAYWRIGHT_BASE_URL) {
+  startDevProcess("auth", {
+    args: [
+      "run",
+      "--preserve-env=APP_CONFIG_ITERATE_AUTH__ISSUER,SERVICE_AUTH_TOKEN,VITE_AUTH_APP_ORIGIN,VITE_PUBLIC_URL",
+      "--",
+      "pnpm",
+      "dev:local",
+      "--inspect=false",
+    ],
+    cwd: `${REPO_ROOT}/apps/auth`,
+    env: {
+      ...process.env,
+      APP_CONFIG_ITERATE_AUTH__ISSUER: "http://localhost:7101/api/auth",
+      SERVICE_AUTH_TOKEN: localAuthServiceToken,
+      VITE_AUTH_APP_ORIGIN: "http://localhost:7101",
+      VITE_PUBLIC_URL: "http://localhost:7101",
+    },
+  });
+  await waitForLocalAuthService(localAuthServiceToken);
+  startDevProcess("os", {
+    args: [
+      "run",
+      "--preserve-env=APP_CONFIG_ITERATE_AUTH__ISSUER,APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN,DEV_TUNNEL,ITERATE_AUTH_SERVICE_TOKEN,ITERATE_OAUTH_ISSUER",
+      "--",
+      "pnpm",
+      "dev:local",
+      "--inspect=false",
+    ],
     cwd: OS_APP_ROOT,
     env: {
       ...process.env,
+      APP_CONFIG_ITERATE_AUTH__ISSUER: "http://localhost:7101/api/auth",
+      APP_CONFIG_ITERATE_AUTH__SERVICE_TOKEN: localAuthServiceToken,
+      ITERATE_AUTH_SERVICE_TOKEN: localAuthServiceToken,
+      ITERATE_OAUTH_ISSUER: "http://localhost:7101/api/auth",
     },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout?.on("data", (chunk) => process.stdout.write(chunk));
-  child.stderr?.on("data", (chunk) => process.stderr.write(chunk));
-  child.once("exit", (code, signal) => {
-    if (!server?.listening) {
-      process.exit(code ?? exitCodeForSignal(signal) ?? 1);
-    }
   });
 }
 
@@ -56,9 +81,49 @@ console.log(`OS Playwright ready at http://127.0.0.1:${readyPort}/ready for ${ba
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     server?.close();
-    child?.kill(signal);
-    if (!child) process.exit(exitCodeForSignal(signal) ?? 0);
+    for (const child of children) {
+      child.kill(signal);
+    }
+    if (children.length === 0) process.exit(exitCodeForSignal(signal) ?? 0);
   });
+}
+
+function startDevProcess(
+  label: string,
+  input: { args: string[]; cwd: string; env: NodeJS.ProcessEnv },
+) {
+  const child = spawn("doppler", input.args, {
+    cwd: input.cwd,
+    env: input.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  children.push(child);
+  child.stdout?.on("data", (chunk) => process.stdout.write(`[${label}] ${chunk}`));
+  child.stderr?.on("data", (chunk) => process.stderr.write(`[${label}] ${chunk}`));
+  child.once("exit", (code, signal) => {
+    process.exit(code ?? exitCodeForSignal(signal) ?? 1);
+  });
+}
+
+async function waitForLocalAuthService(serviceToken: string) {
+  const authClient = createAuthContractClient({
+    baseUrl: "http://localhost:7101",
+    serviceToken,
+  });
+  const deadline = Date.now() + 120_000;
+  let lastError: unknown;
+
+  while (Date.now() < deadline) {
+    try {
+      await authClient.internal.project.mintProjectId();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+
+  throw new Error(`Timed out waiting for local auth service: ${String(lastError)}`);
 }
 
 function exitCodeForSignal(signal: NodeJS.Signals | null) {

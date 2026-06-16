@@ -1,13 +1,13 @@
 import {
   createProject,
   expect,
-  signInWithMintedOrg,
+  signInWithLocalAuth,
   test,
   uniqueSlug,
 } from "./test-support/test.ts";
 
 test("can enter the dashboard and create a project", async ({ page }) => {
-  await signInWithMintedOrg(page);
+  await signInWithLocalAuth(page);
 
   const projectSlug = uniqueSlug("playwright-project");
   await createProject(page, projectSlug);
