@@ -79,9 +79,8 @@ const rpcTarget = {
 // resolves to the verb on rpcTarget; any other name extends the path; the
 // terminal call funnels into rpcTarget.invoke({ path, args }).
 function dynamicTarget({ rpcTarget, path = [] }) {
-  const verbAt = (key) => path.length === 0 && key in rpcTarget; // provide / invoke / list
   const valueFor = (key) =>
-    verbAt(key)
+    path.length === 0 && key in rpcTarget // provide / invoke / list
       ? rpcTarget[key].bind(rpcTarget)
       : dynamicTarget({ rpcTarget, path: [...path, key] });
   return new Proxy(function () {}, {

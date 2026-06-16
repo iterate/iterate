@@ -117,10 +117,8 @@ function dynamicHandle({ rpcTarget, path = [] }: { rpcTarget: any; path?: string
   // (provideCapability / invoke / revokeCapability / list / …); anything else
   // extends the accumulating path. Deriving this from the target keeps the proxy
   // agnostic to which handle it wraps.
-  const verbAt = (key: string) =>
-    path.length === 0 && !RESERVED.has(key) && typeof rpcTarget[key] === "function";
   const valueFor = (key: string) =>
-    verbAt(key)
+    path.length === 0 && !RESERVED.has(key) && typeof rpcTarget[key] === "function"
       ? (rpcTarget as any)[key].bind(rpcTarget)
       : dynamicHandle({ rpcTarget, path: [...path, key] });
   return new Proxy(function () {}, {

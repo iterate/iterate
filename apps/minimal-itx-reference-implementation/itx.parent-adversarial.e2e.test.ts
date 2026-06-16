@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { connect } from "./e2e-env.ts";
 
 const rid = Math.random().toString(36).slice(2, 8);
-const agentPath = (label: string) => `/agents/itxParent-adversarial-${label}-${rid}`;
-const agentItx = (label: string) => connect({ path: agentPath(label) });
+const agentItx = (label: string) =>
+  connect({ path: `/agents/itxParent-adversarial-${label}-${rid}` });
 
 /** Cap'n Web returns an RpcPromise (thenable, not `instanceof Promise`). Wrap a
  *  call in a real async fn so vitest's `.rejects` can await it. */

@@ -13,7 +13,6 @@ function check(name, cond, detail = "") {
   console.log(`${cond ? "PASS" : "FAIL"}  ${name}${detail ? `  — ${detail}` : ""}`);
   if (!cond) failures++;
 }
-const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // ===========================================================================
 // STEP 7 — a capability is a name → a target that is EITHER live OR a sturdy ref.
@@ -85,7 +84,10 @@ const foldStream = (events) => events.reduce(reduceItxEvent, new Map());
   );
   // determinism: replaying the SAME stream yields an identical registry.
   const replay = foldStream(stream);
-  check("Step 8: replaying the stream reproduces the registry", eq([...reg], [...replay]));
+  check(
+    "Step 8: replaying the stream reproduces the registry",
+    JSON.stringify([...reg]) === JSON.stringify([...replay]),
+  );
 }
 
 // ===========================================================================

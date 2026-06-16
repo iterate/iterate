@@ -15,8 +15,6 @@ import { withItx } from "../../client.ts";
 
 const BASE = process.env.ITX_BASE ?? "http://127.0.0.1:8787";
 const CTX = `step07-${Date.now()}`;
-const open = () => withItx<any>({ baseUrl: BASE, context: CTX });
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let failures = 0;
 const check = (name: string, ok: boolean, detail = "") => {
@@ -25,7 +23,7 @@ const check = (name: string, ok: boolean, detail = "") => {
 };
 
 async function main() {
-  using itx = open();
+  using itx = withItx<any>({ baseUrl: BASE, context: CTX });
 
   // Baseline: provide folds into the table and is immediately invokable
   // (read-your-writes through the processor).
@@ -57,7 +55,7 @@ async function main() {
       deliveredAfterMs = i * 100;
       break;
     }
-    await sleep(100);
+    await new Promise((r) => setTimeout(r, 100));
   }
   check(
     "an external append reaches the fold via SUBSCRIPTION delivery (no provide, no self-ingest)",

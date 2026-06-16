@@ -33,9 +33,6 @@ function record(step: string, verdict: Result["verdict"], note: string) {
   results.push({ step, verdict, note });
   console.log(`\n[${verdict}] ${step}\n  ${note.replace(/\n/g, "\n  ")}`);
 }
-const sameSet = (a: string[], b: string[]) =>
-  a.length === b.length && [...a].sort().join("|") === [...b].sort().join("|");
-
 // ---- types matching server.ts targets ----
 interface Server {
   whoami(): Promise<string>;
@@ -357,7 +354,8 @@ async function main() {
     const ok =
       listed.includes("db") &&
       listed.includes("mailer") &&
-      sameSet(listed, replayed) && // replay rebuilds the SAME table
+      listed.length === replayed.length &&
+      [...listed].sort().join("|") === [...replayed].sort().join("|") && // replay rebuilds the SAME table
       JSON.stringify(dbCall) === JSON.stringify({ rows: ["select 1"] }) &&
       afterRevoke.includes("db") &&
       !afterRevoke.includes("mailer");

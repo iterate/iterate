@@ -6,7 +6,7 @@
   "description": "A single, minimal, coherent reference implementation of itx (Iterate's Cap'n Web capability layer): a capability context is the fold of a durable event log, served over a naked Cap'n Web stub.",
   "scripts": {
     "dev": "wrangler dev",
-    "test": "vitest run",
+    "test": "pnpm typecheck",
     "e2e": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

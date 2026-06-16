@@ -10,7 +10,6 @@ import { withItx } from "../../client.ts";
 
 const BASE = process.env.ITX_BASE ?? "http://127.0.0.1:8787";
 const CTX = `step09-${Date.now()}`;
-const open = () => withItx<any>({ baseUrl: BASE, context: CTX });
 
 let failures = 0;
 const check = (name: string, ok: boolean, detail = "") => {
@@ -29,7 +28,7 @@ const CALC_SOURCE = `
 `;
 
 async function main() {
-  using itx = open();
+  using itx = withItx<any>({ baseUrl: BASE, context: CTX });
 
   // Provide a STURDY capability: not a live stub, just a serializable ref.
   await itx.provideCapability({

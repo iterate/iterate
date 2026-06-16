@@ -10,7 +10,6 @@ import { withItx } from "../../client.ts";
 
 const BASE = process.env.ITX_BASE ?? "http://127.0.0.1:8787";
 const CTX = `step12-${Date.now()}`;
-const open = () => withItx<any>({ baseUrl: BASE, context: CTX });
 
 let failures = 0;
 const check = (name: string, ok: boolean, detail = "") => {
@@ -19,7 +18,7 @@ const check = (name: string, ok: boolean, detail = "") => {
 };
 
 async function main() {
-  using itx = open();
+  using itx = withItx<any>({ baseUrl: BASE, context: CTX });
 
   // A capability the script will call.
   await itx.provideCapability({

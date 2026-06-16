@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 import { connect } from "./e2e-env.ts";
 
 const rid = Math.random().toString(36).slice(2, 8);
-const agentPath = (label: string) => `/agents/dynamic-adversarial-${label}-${rid}`;
-const agentItx = (label: string) => connect({ path: agentPath(label) });
-
-const expectRejects = (fn: () => unknown) => expect((async () => await fn())()).rejects;
+const agentItx = (label: string) =>
+  connect({ path: `/agents/dynamic-adversarial-${label}-${rid}` });
 
 const storageBox = ({
   className,
@@ -136,7 +134,9 @@ describe("itx dynamic durable object adversarial lifecycle", () => {
     expect(await itx.ephemeral.increment()).toBe(1);
 
     await itx.revokeCapability({ path: ["ephemeral"] });
-    await expectRejects(() => itx.ephemeral.read("private")).toThrow(/no capability "ephemeral"/);
+    await expect((async () => await itx.ephemeral.read("private"))()).rejects.toThrow(
+      /no capability "ephemeral"/,
+    );
 
     await itx.provideCapability({ path: ["ephemeral"], capability });
     expect(await itx.ephemeral.read("private")).toBeNull();
