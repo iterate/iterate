@@ -30,6 +30,7 @@ Status summary: Complete. `apps/os` now has a localhost-only Playwright lane tha
 - q1 reference checked before implementation: root `playwright.config.ts`, `spec/test-helpers.ts`, and the login/org/project specs.
 - Current OS dev startup writes `.alchemy/dev-server.json`; `apps/os/e2e/test-support/dev-server.ts` already wraps that reader for Vitest e2e.
 - The first implementation used forged auth URLs, but the final lane now starts `apps/auth` locally and drives the real local auth email OTP/OAuth flow with seeded local auth data.
+- The local `../middlewright` checkout was used to inspect the API, but the committed dependency is the published `middlewright@^0.1.0`; CI cannot install from a sibling checkout path.
 - `apps/os/src/auth/dev-oauth-client-bootstrap.ts` now treats underscore `dev_*` Alchemy stages as local OAuth sync targets, so `dev:local` can register the OS OAuth client correctly.
 - `apps/os/src/routes/_app/projects/index.tsx` uses `nativeButton={false}` for Base UI buttons rendered as TanStack links, removing the invalid nested-button warning surfaced by Playwright.
 - Verification run:
