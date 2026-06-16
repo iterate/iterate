@@ -9,7 +9,7 @@ env:
 jobs:
   setup:
     name: Measure preview cache disk setup
-    runs-on: depot-ubuntu-24.04-16
+    runs-on: depot-ubuntu-24.04-64
     steps:
       - name: First step timestamp
         run: date -u +"first-step-utc=%Y-%m-%dT%H:%M:%SZ"
