@@ -327,7 +327,9 @@ export function reduceAgentEvent(args: { state: AgentState; event: AgentConsumed
     case "events.iterate.com/agents/tui-message-sent":
       return state;
     case "events.iterate.com/agent/config-updated":
-      return state;
+      return event.payload.systemPrompt === undefined
+        ? state
+        : { ...state, systemPrompt: event.payload.systemPrompt };
     case "events.iterate.com/agent/system-prompt-updated":
       return { ...state, systemPrompt: event.payload.systemPrompt };
     case "events.iterate.com/agent/input-added":

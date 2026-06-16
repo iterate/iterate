@@ -119,6 +119,43 @@ describe("AgentProcessor", () => {
     ]);
   });
 
+  it("uses config-updated system prompts for inputs delivered in the same batch", async () => {
+    const { stream, appended } = memoryStream();
+    const processor = newAgentProcessor({ stream });
+
+    await processor.ingest({
+      events: [
+        agentEvent({
+          type: "events.iterate.com/agent/config-updated",
+          payload: { systemPrompt: "Onboard the project from ONBOARDING.md." },
+          offset: 10,
+        }),
+        providerSelectedEvent({ offset: 11 }),
+        agentEvent({
+          type: "events.iterate.com/agent/input-added",
+          payload: {
+            content: "Start onboarding now.",
+            llmRequestPolicy: { behaviour: "after-current-request" },
+          },
+          offset: 12,
+        }),
+      ],
+      streamMaxOffset: 12,
+    });
+
+    await expect(processor.snapshot()).resolves.toMatchObject({
+      state: { systemPrompt: "Onboard the project from ONBOARDING.md." },
+    });
+    expect(appended).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "events.iterate.com/agent/llm-request-scheduled",
+          idempotencyKey: "agent/llm-request-scheduled@12",
+        }),
+      ]),
+    );
+  });
+
   it("does not render received chat messages on the agents root stream", async () => {
     const { stream, appended } = memoryStream();
     const processor = newAgentProcessor({
