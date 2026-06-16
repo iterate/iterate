@@ -56,6 +56,7 @@ import {
   type AgentDurableObjectName,
   agentLlmProcessorSlug,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
+import { AGENT_CHAT_CAPABILITY_INSTRUCTIONS } from "~/domains/agents/agent-prompt-guidance.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
 import { formatDurableObjectName, parseDurableObjectName } from "~/domains/durable-object-names.ts";
 
@@ -649,8 +650,7 @@ export class AgentDurableObject extends DurableObject<AgentDurableObjectEnv> {
             type: "rpc",
             worker: { type: "loopback" },
           } satisfies CapabilityAddress,
-          instructions:
-            "itx.chat.sendMessage({ message }) sends a visible reply to the user in the web chat.",
+          instructions: AGENT_CHAT_CAPABILITY_INSTRUCTIONS,
           name: "chat",
         };
 

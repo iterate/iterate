@@ -722,7 +722,7 @@ function eventTypeExplanation(eventType: string): string | null {
     return eventTypeExplanationBlock({
       type: eventType,
       meaning:
-        "A capability is now available to your scripts. Call it as `itx.<name>.<method>(args)` in a code block. If you're not sure about the shape of a result, just return it and you'll be shown it on your next turn. The event below shows the capability's name and usage instructions.",
+        "A capability is now available to your scripts. Call it as `itx.<name>.<method>(args)` in a code block. Return a value only when you need to inspect it on your next turn. For side-effect-only calls such as `itx.chat.sendMessage(...)`, await the call but do not return it. The event below shows the capability's name and usage instructions.",
     });
   }
   return null;

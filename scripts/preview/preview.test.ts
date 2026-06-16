@@ -5,19 +5,34 @@ import {
   cloudflarePreviewSharedPaths,
 } from "./apps.ts";
 import {
+  expandPreviewDependencies,
   orderPreviewDeployBatches,
   resolvePreviewReadinessUrls,
   resolvePreviewCompareBaseSha,
   selectPreviewAppsNeedingRetry,
 } from "./preview.ts";
 
+describe("preview app dependency expansion", () => {
+  it("expands os to include its auth dependency", () => {
+    expect(expandPreviewDependencies(["os"])).toEqual(["os", "auth"]);
+  });
+
+  it("keeps independent apps as-is", () => {
+    expect(expandPreviewDependencies(["semaphore"])).toEqual(["semaphore"]);
+  });
+
+  it("deduplicates dependencies", () => {
+    expect(expandPreviewDependencies(["os", "os", "auth"])).toEqual(["os", "auth"]);
+  });
+});
+
 describe("preview deploy ordering", () => {
-  it("keeps OS-only deploys in the first batch", () => {
+  it("keeps independent apps in the same batch", () => {
     expect(
-      orderPreviewDeployBatches([cloudflarePreviewApps.os]).map((batch) =>
+      orderPreviewDeployBatches([cloudflarePreviewApps.semaphore]).map((batch) =>
         batch.map((app) => app.slug),
       ),
-    ).toEqual([["os"]]);
+    ).toEqual([["semaphore"]]);
   });
 
   it("deploys auth before OS when both are selected", () => {
@@ -87,7 +102,7 @@ describe("preview compare base", () => {
 });
 
 describe("preview retry selection", () => {
-  it("retries current-head failed apps", () => {
+  it("retries current-head failed apps and their dependencies", () => {
     expect(
       selectPreviewAppsNeedingRetry({
         previousState: {
@@ -104,7 +119,7 @@ describe("preview retry selection", () => {
         },
         pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
-    ).toEqual(["os"]);
+    ).toEqual(["os", "auth"]);
   });
 
   it("does not retry previously failed apps from older commits", () => {

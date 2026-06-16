@@ -39,6 +39,7 @@ import {
 } from "~/domains/streams/stream-runtime.ts";
 import type { AgentDurableObject } from "~/domains/agents/durable-objects/agent-durable-object.ts";
 import { agentProcessorSubscriptionConfiguredEvents } from "~/domains/agents/agent-stream-subscriptions.ts";
+import { SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE } from "~/domains/agents/agent-prompt-guidance.ts";
 import {
   getSlackAgentDurableObjectName,
   type SlackAgentDurableObject,
@@ -360,7 +361,7 @@ function isSlackAgentPath(agentPath: string) {
   return normalized === "/agents/slack" || normalized.startsWith("/agents/slack/");
 }
 
-function defaultAgentSystemPrompt(agentPath: string) {
+export function defaultAgentSystemPrompt(agentPath: string) {
   const isSlack = isSlackAgentPath(agentPath);
   return [
     `You are the iterate AI agent running on stream ${agentPath}.`,
@@ -368,8 +369,8 @@ function defaultAgentSystemPrompt(agentPath: string) {
     "The code block must contain a single async arrow function: async (itx) => { ... }.",
     "Use capabilities announced as itx/capability-provided events.",
     isSlack
-      ? "For Slack, reply only when mentioned, directly asked, or clearly needed. Use itx.slack.chat.postMessage({ channel, thread_ts, text }) on the same thread."
-      : "For web chat, reply with itx.chat.sendMessage({ message }).",
+      ? `For Slack, reply only when mentioned, directly asked, or clearly needed. Use await itx.slack.chat.postMessage({ channel, thread_ts, text }) on the same thread. ${SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE}`
+      : `For web chat, reply with await itx.chat.sendMessage({ message }). ${SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE}`,
     "Use itx.streams.get(path) to read and append project stream events.",
     "Use the project repo as durable memory for stable project knowledge.",
   ].join("\n\n");
