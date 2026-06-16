@@ -400,11 +400,11 @@ longest-prefix provider resolution IS registry dispatch.
 
 The plan:
 
-- A session = `itx.fork()` → a `ctx_…` context.
+- A session = `itx.extend()` → a child context on a stream path.
 - Tool providers = caps on that context. The three codemode provider families
   map exactly onto §1:
-  - `ctx.ai` → `{ type: "rpc", worker: { type: "binding" | "loopback" } }` (§2),
-  - `ctx.mcp.*` / `connectToMcpServer` → first-party `McpClient` entrypoint
+  - `itx.ai` → `{ type: "rpc", worker: { type: "binding" | "loopback" } }` (§2),
+  - `itx.mcp.*` / `connectToMcpServer` → first-party `McpClient` entrypoint
     via `{ type: "rpc", worker: { type: "loopback" }, props: { serverUrl, headers } }`,
   - OpenAPI providers → user-space `OpenApiClient` exported from the
     project worker, via `{ type: "rpc", worker: { type: "project-worker" } }`.

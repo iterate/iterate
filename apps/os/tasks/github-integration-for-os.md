@@ -16,7 +16,7 @@ Add a GitHub integration to OS that mirrors the Slack integration shape:
 - GitHub App installation and connection state are project-scoped.
 - Inbound GitHub webhooks are verified, resolved to the claimed project, and
   appended to a project integration stream.
-- Codemode and agents get a GitHub API tool provider backed by Octokit and a
+- itx scripts and agents get a GitHub API capability backed by Octokit and a
   GitHub App installation.
 
 ## Current Findings
@@ -34,7 +34,7 @@ Relevant OS foundations already exist:
   Slack webhooks.
 - Slack appends raw webhooks to `/integrations/slack` as
   `events.iterate.com/slack/webhook-received`.
-- `SlackCapability` exposes `ctx.slack.*` by reading a project Slack token and
+- `SlackCapability` exposes `itx.slack.*` by reading a project Slack token and
   calling the Slack Web API.
 
 ## Target Shape
@@ -58,7 +58,7 @@ Route inbound GitHub webhooks by `payload.installation.id`. This is the GitHub
 equivalent of Slack routing by `team_id`.
 
 Do not persist GitHub installation access tokens as long-lived project secrets.
-GitHub App installation tokens expire quickly, so the GitHub codemode provider
+GitHub App installation tokens expire quickly, so the GitHub itx capability
 should mint fresh installation-scoped Octokit clients from runtime GitHub App
 config.
 
@@ -131,9 +131,9 @@ Suggested raw webhook event:
 }
 ```
 
-## Project RPC and UI
+## Project UI
 
-Add contract and router methods next to Slack/Google:
+Add integrations capability methods next to Slack/Google:
 
 - `getGithubConnection`
 - `startGithubInstallFlow`
@@ -150,21 +150,22 @@ For install start, return:
 https://github.com/apps/{appSlug}/installations/new?state={state}
 ```
 
-## Codemode Provider
+## itx Capability
 
-Add a GitHub capability entrypoint and export it from `entry.workerd.ts`.
+Add a GitHub capability entrypoint under the GitHub domain and wire it into the
+current worker/domain entrypoint pattern.
 
 Recommended first provider API:
 
 ```ts
-ctx.github.request({
+itx.github.request({
   route: "GET /repos/{owner}/{repo}/issues",
   owner,
   repo,
   per_page: 20,
 });
 
-ctx.github.paginate({
+itx.github.paginate({
   route: "GET /repos/{owner}/{repo}/pulls",
   owner,
   repo,
@@ -185,10 +186,9 @@ Capability behavior:
 
 Register the provider in:
 
-- `createDefaultCodemodeProviderRegistrations`
-- `createExampleCapabilityProviders`
-- `AgentDurableObject.createCodemodeToolProviders`
-- codemode tests where provider lists are asserted
+- the platform project capability set
+- any agent-local capability set that should expose GitHub
+- itx and agent tests where capability lists are asserted
 
 ## Optional GitHub Processor
 

@@ -5,35 +5,27 @@ import {
   cloudflarePreviewSharedPaths,
 } from "./apps.ts";
 import {
-  batchPreviewAppsByDependencies,
-  expandPreviewDependencies,
+  orderPreviewDeployBatches,
   resolvePreviewReadinessUrls,
   resolvePreviewCompareBaseSha,
   selectPreviewAppsNeedingRetry,
 } from "./preview.ts";
 
-describe("preview app dependency expansion", () => {
-  it("expands os to include its auth dependency", () => {
-    expect(expandPreviewDependencies(["os"])).toEqual(["os", "auth"]);
-  });
-
-  it("keeps independent apps as-is", () => {
-    expect(expandPreviewDependencies(["semaphore"])).toEqual(["semaphore"]);
-  });
-
-  it("deduplicates dependencies", () => {
-    expect(expandPreviewDependencies(["os", "os", "auth"])).toEqual(["os", "auth"]);
-  });
-});
-
-describe("preview app dependency batches", () => {
-  it("keeps independent apps in the same batch", () => {
+describe("preview deploy ordering", () => {
+  it("keeps OS-only deploys in the first batch", () => {
     expect(
-      batchPreviewAppsByDependencies([
-        cloudflarePreviewApps.os,
-        cloudflarePreviewApps.semaphore,
-      ]).map((batch) => batch.map((app) => app.slug)),
-    ).toEqual([["os", "semaphore"]]);
+      orderPreviewDeployBatches([cloudflarePreviewApps.os]).map((batch) =>
+        batch.map((app) => app.slug),
+      ),
+    ).toEqual([["os"]]);
+  });
+
+  it("deploys auth before OS when both are selected", () => {
+    expect(
+      orderPreviewDeployBatches([cloudflarePreviewApps.os, cloudflarePreviewApps.auth]).map(
+        (batch) => batch.map((app) => app.slug),
+      ),
+    ).toEqual([["auth"], ["os"]]);
   });
 });
 
@@ -95,7 +87,7 @@ describe("preview compare base", () => {
 });
 
 describe("preview retry selection", () => {
-  it("retries current-head failed apps and their dependencies", () => {
+  it("retries current-head failed apps", () => {
     expect(
       selectPreviewAppsNeedingRetry({
         previousState: {
@@ -112,7 +104,7 @@ describe("preview retry selection", () => {
         },
         pullRequestHeadSha: "current-head",
       }).map((app) => app.slug),
-    ).toEqual(["os", "auth"]);
+    ).toEqual(["os"]);
   });
 
   it("does not retry previously failed apps from older commits", () => {

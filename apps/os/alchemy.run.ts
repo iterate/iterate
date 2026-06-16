@@ -335,11 +335,12 @@ const itxBuildCache = await R2Bucket("itx-build-cache", {
 const missingScripts = ctx.app.local
   ? new Set<string>()
   : await findMissingWorkerScripts(
-      // debugSubscriber is local-only and never deploys — counting it as
-      // missing would put every deploy into (harmless but pointless)
-      // bootstrap double-pass mode forever.
+      // Only cross-script Durable Object target workers need bootstrap
+      // probing. app/ingress are service-bound downstream workers, and
+      // debugSubscriber is local-only; counting any of them here makes a fresh
+      // stage do app/route work in a throwaway first pass.
       Object.entries(workerNames)
-        .filter(([id]) => id !== "debugSubscriber")
+        .filter(([id]) => id !== "app" && id !== "debugSubscriber" && id !== "ingress")
         .map(([, name]) => name),
     );
 if (missingScripts.size > 0) {
@@ -554,14 +555,27 @@ const [
   }),
 ]);
 
-if (!ctx.app.local) {
-  const cloudflareApi = await createCloudflareApi({});
-  await waitForCloudflareWorkerScript({ cloudflareApi, workerName: workerNames.repo });
-  await ensureCloudflareQueueConsumer({
-    cloudflareApi,
-    queueId: artifactEventsQueue.id,
-    scriptName: workerNames.repo,
-  });
+const artifactEventsQueueConsumerReady = ctx.app.local
+  ? Promise.resolve()
+  : (async () => {
+      const cloudflareApi = await createCloudflareApi({});
+      await waitForCloudflareWorkerScript({ cloudflareApi, workerName: workerNames.repo });
+      await ensureCloudflareQueueConsumer({
+        cloudflareApi,
+        queueId: artifactEventsQueue.id,
+        scriptName: workerNames.repo,
+      });
+    })();
+void artifactEventsQueueConsumerReady.catch(() => {});
+
+// Second bootstrap pass (fresh stages only): the cross-script Durable Object
+// target workers now exist, so re-running wires the bindings omitted above.
+// Do this before the dashboard app, ingress, and routes so a fresh preview
+// builds/routes them once instead of once per bootstrap pass.
+if (missingScripts.size > 0 && !process.env.OS_BOOTSTRAP_SECOND_PASS) {
+  await artifactEventsQueueConsumerReady;
+  await ctx.app.finalize();
+  await runBootstrapSecondPass();
 }
 
 // ---- The app worker (TanStack Start dashboard) -------------------------------
@@ -671,20 +685,9 @@ export const workers = {
   workspace: workspaceWorker,
 };
 
+await artifactEventsQueueConsumerReady;
 await ctx.app.finalize();
 await afterFinalize();
-
-// Second bootstrap pass (fresh stages only): every script now exists, so
-// re-running wires the cross-script bindings that were omitted above.
-if (missingScripts.size > 0 && !process.env.OS_BOOTSTRAP_SECOND_PASS) {
-  console.warn("[alchemy.run] Bootstrap: re-running to wire deferred cross-script bindings…");
-  const result = spawnSync("pnpm", ["exec", "tsx", fileURLToPath(import.meta.url)], {
-    cwd: fileURLToPath(new URL(".", import.meta.url)),
-    env: { ...process.env, OS_BOOTSTRAP_SECOND_PASS: "1" },
-    stdio: "inherit",
-  });
-  process.exit(result.status ?? 1);
-}
 
 if (!ctx.app.local) process.exit(0);
 
@@ -707,6 +710,16 @@ function requireEnv(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required.`);
   return value;
+}
+
+function runBootstrapSecondPass(): never {
+  console.warn("[alchemy.run] Bootstrap: re-running to wire deferred cross-script bindings…");
+  const result = spawnSync("pnpm", ["exec", "tsx", fileURLToPath(import.meta.url)], {
+    cwd: fileURLToPath(new URL(".", import.meta.url)),
+    env: { ...process.env, OS_BOOTSTRAP_SECOND_PASS: "1" },
+    stdio: "inherit",
+  });
+  process.exit(result.status ?? 1);
 }
 
 /** Which of the given worker scripts do not exist on the account yet. */
@@ -749,7 +762,7 @@ async function waitForCloudflareWorkerScript(input: {
     if (response.ok) {
       visibleChecks += 1;
       if (visibleChecks >= 2) return;
-      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
       continue;
     }
 
@@ -762,7 +775,7 @@ async function waitForCloudflareWorkerScript(input: {
       );
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
 
   throw new Error(
@@ -784,7 +797,7 @@ async function ensureCloudflareQueueConsumer(input: {
       const updated = await updateCloudflareQueueConsumer({ ...input, consumerId: existing.id });
       if (updated) return;
       lastError = `consumer ${existing.id} disappeared before it could be updated`;
-      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
       continue;
     }
 
@@ -804,7 +817,7 @@ async function ensureCloudflareQueueConsumer(input: {
       );
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 5_000));
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
 
   throw new Error(

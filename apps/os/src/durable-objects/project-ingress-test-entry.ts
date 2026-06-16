@@ -211,7 +211,7 @@ export default {
       // The explicit door: itx.fetch dispatches the `fetch` capability, whose
       // default target is the stateless EgressPipe (the DO has no fetch
       // surface at all).
-      const target = url.searchParams.get("target") ?? "https://os.iterate.localhost/__test/echo";
+      const target = url.searchParams.get("target") ?? "https://postman-echo.com/get";
       const itx = await resolveItx({
         env: env as never,
         exports: ctx.exports as never,
@@ -252,13 +252,6 @@ export default {
       } finally {
         await itx.revokeCapability({ name: "fetch" });
       }
-    }
-
-    if (url.pathname === "/__test/echo" || url.pathname.startsWith("/__test/proxy/")) {
-      return Response.json({
-        headers: Object.fromEntries(request.headers),
-        url: request.url,
-      });
     }
 
     if (url.pathname === "/__test/append-project-event") {

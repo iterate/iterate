@@ -33,9 +33,9 @@ export async function runExampleCode(
 ): Promise<unknown> {
   // Worker-heavy examples (worker-to-worker, facets) running while the other
   // e2e files load their own dynamic workers can trip the deployment's loader
-  // concurrency cap. That's shared-load contention, not a behavior bug — back
-  // off and retry that one error; anything else fails immediately.
-  return await retryOnLoaderContention(async () => {
+  // or RPC startup path. That's shared-load contention, not a behavior bug —
+  // back off and retry those exact transients; anything else fails immediately.
+  return await retryOnWorkerStartupContention(runtime, async () => {
     switch (runtime) {
       case "node":
         return await runInNode(input);
@@ -50,9 +50,13 @@ export async function runExampleCode(
 }
 
 const LOADER_CONTENTION_MESSAGE = "Too many concurrent dynamic workers";
+const CONFIG_WORKER_RPC_DISCONNECT_MESSAGE = "Network connection lost.";
 const LOADER_CONTENTION_BACKOFF_MS = [2_000, 5_000, 10_000];
 
-async function retryOnLoaderContention<T>(run: () => Promise<T>): Promise<T> {
+async function retryOnWorkerStartupContention<T>(
+  runtime: MatrixRuntime,
+  run: () => Promise<T>,
+): Promise<T> {
   for (const backoffMs of LOADER_CONTENTION_BACKOFF_MS) {
     try {
       return await run();
@@ -63,7 +67,10 @@ async function retryOnLoaderContention<T>(run: () => Promise<T>): Promise<T> {
         error instanceof Error ? error.message : String(error),
         String((error as { stderr?: unknown }).stderr ?? ""),
       ].join("\n");
-      if (!message.includes(LOADER_CONTENTION_MESSAGE)) throw error;
+      const isLoaderContention = message.includes(LOADER_CONTENTION_MESSAGE);
+      const isConfigWorkerRpcDisconnect =
+        runtime === "config-worker" && message.includes(CONFIG_WORKER_RPC_DISCONNECT_MESSAGE);
+      if (!isLoaderContention && !isConfigWorkerRpcDisconnect) throw error;
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
     }
   }

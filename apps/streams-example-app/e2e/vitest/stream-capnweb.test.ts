@@ -44,7 +44,7 @@ describe("stream capnweb protocol", () => {
     });
   });
 
-  e2eIt("appends events after the stream-created event over capnweb", async () => {
+  e2eIt("appends events after the stream-created event over capnweb @preview", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-append");
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });
 
@@ -483,7 +483,7 @@ describe("stream capnweb protocol", () => {
     expect(callbackA.batches.length).toBe(callbackABatchesBeforeUnsubscribe);
   });
 
-  e2eIt("runs a hosted outbound processor from subscription-configured", async () => {
+  e2eIt("runs a hosted outbound processor from subscription-configured @preview", async () => {
     const path = e2eStreamPathLabel("stream-capnweb-processor");
     const subscriptionKey = `hosted-echo-${crypto.randomUUID()}`;
     using stream = withStreamConnectionFromNode({ url: toStreamWebSocketUrl({ path }) });

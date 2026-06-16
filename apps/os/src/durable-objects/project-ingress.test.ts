@@ -602,7 +602,7 @@ describe("Project ingress routing", () => {
     );
 
     const response = await SELF.fetch(
-      `https://os.iterate.localhost/__test/egress?target=${encodeURIComponent("https://httpbingo.org/anything")}`,
+      `https://os.iterate.localhost/__test/egress?target=${encodeURIComponent("https://postman-echo.com/get")}`,
       {
         headers: {
           "x-iterate-test-secret": `getSecret('openai')`,
@@ -715,7 +715,7 @@ function mockPublicEchoFetch() {
   const originalFetch = globalThis.fetch;
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
-    if (new URL(request.url).hostname !== "httpbingo.org") {
+    if (new URL(request.url).hostname !== "postman-echo.com") {
       return await originalFetch(input, init);
     }
 

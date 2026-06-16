@@ -22,6 +22,8 @@ describe("cloudflare preview state helpers", () => {
       publicUrl: "https://os.iterate-preview-2.com",
       runUrl: "https://github.com/iterate/iterate/actions/runs/123",
       shortSha: "abcdef0",
+      deployDurationMs: 12_345,
+      testDurationMs: 678,
       status: "deployed",
       updatedAt: "2026-04-02T10:00:00.000Z",
     });
@@ -46,6 +48,8 @@ describe("cloudflare preview state helpers", () => {
     expect(body).toContain("<!--\n{");
     expect(body).toContain("\n-->\n<!-- /CLOUDFLARE_PREVIEW_STATE -->");
     expect(body).toContain("Preview: https://os.iterate-preview-2.com");
+    expect(body).toContain("Deploy duration: 12.3s");
+    expect(body).toContain("Test duration: 678ms");
   });
 
   it("updates only the managed block and preserves surrounding PR body content", () => {

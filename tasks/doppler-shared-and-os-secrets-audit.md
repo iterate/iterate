@@ -15,7 +15,7 @@ During `apps/os2` → `apps/os` rename:
 - Doppler `os` → `os` (product app configs).
 - Legacy monorepo bucket `os` → `os-legacy-backup`.
 
-Audit **`_shared`** and the **renamed product `os`** project for stale keys, duplicate inheritance, prd/dev leakage, and secrets that no longer match `apps/os/src/app.ts` `AppConfig`.
+Audit **`_shared`** and the **renamed product `os`** project for stale keys, duplicate inheritance, prd/dev leakage, and secrets that no longer match `apps/os/src/config.ts` `AppConfig`.
 
 ## Projects in scope
 
@@ -43,7 +43,7 @@ SEMAPHORE_API_TOKEN, SEMAPHORE_BASE_URL
 
 ### `os` / `prd` — 28 keys (aligned with AppConfig)
 
-Expected product keys (compare to `AppConfig` in `apps/os/src/app.ts`):
+Expected product keys (compare to `AppConfig` in `apps/os/src/config.ts`):
 
 | Key                                           | Required for prd                                                    |
 | --------------------------------------------- | ------------------------------------------------------------------- |

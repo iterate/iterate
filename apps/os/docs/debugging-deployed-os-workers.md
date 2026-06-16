@@ -6,96 +6,56 @@ Assume we are debugging:
 2. project ingress under `iterate.app`
 3. project slug `iterate`
 
-The same patterns work for `preview_N` and `dev_<user>` Doppler configs by swapping the Doppler config. For CLI commands, run from `apps/os`: plain `pnpm cli ...` uses local Doppler setup, and `doppler run --config <config> -- pnpm cli ...` targets a specific deployment.
+The same patterns work for `preview_N` and `dev_<user>` Doppler configs by
+swapping the Doppler config. Run CLI commands from `apps/os`; plain
+`pnpm cli ...` uses local Doppler setup, and
+`doppler run --config <config> -- pnpm cli ...` targets a specific deployment.
 
-Common target modes:
+## Common CLI Targets
 
 ```bash
 # Local dev through your configured tunnel. Requires `pnpm dev` and a healthy tunnel.
-pnpm cli rpc --help
+pnpm cli itx --help
 
-# Fully-local dev server. Requires `doppler run --config dev -- pnpm dev`;
-# the CLI reads .alchemy/dev-server.json for the selected port.
-doppler run --config dev -- pnpm cli rpc --help
+# Fully-local dev server. Requires `doppler run --config dev -- pnpm dev`.
+doppler run --config dev -- pnpm cli itx --help
 
 # Explicit local override, if you are not using the discovery file.
-doppler run --config dev -- pnpm cli --base-url http://localhost:<port> rpc --help
+doppler run --config dev -- pnpm cli --base-url http://localhost:<port> itx --help
 
 # Production.
-doppler run --config prd -- pnpm cli rpc --help
+doppler run --config prd -- pnpm cli itx --help
 
 # Active preview slot. Use a healthy leased preview, not a stale slot number.
-doppler run --config preview_3 -- pnpm cli rpc --help
+doppler run --config preview_3 -- pnpm cli itx --help
 ```
 
 ## Project Interaction Paths
 
-### oRPC CLI
+### itx CLI
 
-Prefer this first. It is typed, discoverable, and avoids hand-assembling URLs.
-Run from `apps/os`.
+Prefer this first. It is typed through the live project capability handle and
+avoids hand-assembling URLs.
 
 ```bash
-doppler run --config prd -- pnpm cli rpc project streams read \
-      --project-slug-or-id iterate \
-      --stream-path /debugging-docs/example \
-      --before-offset end
+doppler run --config prd -- pnpm cli itx run \
+  --context iterate \
+  -e 'const stream = await itx.streams.get("/debugging-docs/example"); return await stream.getEvents({ beforeOffset: "end", limit: 100 })'
 ```
 
-List available procedures:
+Append and read in one script:
 
 ```bash
-pnpm cli rpc --help
-pnpm cli rpc project --help
+doppler run --config prd -- pnpm cli itx run \
+  --context iterate \
+  -e 'const stream = await itx.streams.get("/debugging-docs/example"); const appended = await stream.append({ event: { type: "events.iterate.com/debugging-docs/example", payload: { source: "itx" } } }); const history = await stream.getEvents({ afterOffset: appended.offset - 1, beforeOffset: "end" }); return { appended, history }'
 ```
 
-`trpc-cli` generates flags from each input object property. For these project
-procedures, pass flags such as `--project-slug-or-id` and `--stream-path`; a
-whole JSON object via `--input` is not accepted for the flattened inputs. JSON is
-still useful for option values whose schema is an object or array.
-
-### cURL
-
-Use `curl` when you want the exact HTTP request for the same operation:
+List projects from the global admin handle:
 
 ```bash
-doppler run --config prd -- \
-  sh -c 'curl -fsS \
-    -H "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET" \
-    "$APP_CONFIG_BASE_URL/api/projects/iterate/streams/events/debugging-docs/example?beforeOffset=end"'
-```
-
-### Code Mode Through oRPC
-
-Code Mode can call project tools directly. `execute-script` returns the script request event immediately; inspect the target stream or Code Mode session stream to verify the script's later side effects.
-
-```bash
-doppler run --config prd -- pnpm cli rpc project codemode execute-script \
-      --project-slug-or-id iterate \
-      --code "async (itx) => {
-        const streamPath = \"/debugging-docs/example\";
-        const appended = await itx.streams.append({
-          streamPath,
-          event: {
-            type: \"events.iterate.com/debugging-docs/example\",
-            payload: { source: \"codemode\" },
-          },
-        });
-        const history = await itx.streams.read({
-          streamPath,
-          afterOffset: appended.offset - 1,
-        });
-        return { appended, history };
-      }"
-```
-
-Then verify the append:
-
-```bash
-doppler run --config prd -- pnpm cli rpc project streams read \
-      --project-slug-or-id iterate \
-      --stream-path /debugging-docs/example \
-      --before-offset end
+doppler run --config prd -- pnpm cli itx run \
+  -e 'return await itx.projects.list({ limit: 20 })'
 ```
 
 ### Project MCP
@@ -103,7 +63,7 @@ doppler run --config prd -- pnpm cli rpc project streams read \
 The OS MCP resource is served by the OS app at `/mcp`. Admin-token sessions
 expose all projects and the `exec_js` tool requires a project slug when it runs.
 
-```txt
+```text
 https://mcp.iterate.com
 ```
 
@@ -114,12 +74,11 @@ cd apps/os
 doppler run --config prd -- pnpm cli claude-mcp
 ```
 
-For previews, run under the preview Doppler config.
+For previews, run under the preview Doppler config:
 
 ```bash
-doppler run --config preview_3 -- pnpm cli rpc projects list
-doppler run --config preview_3 -- \
-  pnpm cli claude-mcp
+doppler run --config preview_3 -- pnpm cli itx run -e 'return await itx.projects.list({ limit: 20 })'
+doppler run --config preview_3 -- pnpm cli claude-mcp
 ```
 
 Or leave it running in tmux:
@@ -130,219 +89,64 @@ tmux new -s os-iterate-mcp 'cd apps/os && doppler run --config prd -- pnpm cli c
 
 ## Authentication
 
-Most operator paths use the OS admin bearer token from the deployment's Doppler config:
-
-```bash
-doppler run --config prd -- \
-  sh -c 'curl -fsS \
-    -H "Authorization: Bearer $APP_CONFIG_ADMIN_API_SECRET" \
-    "$APP_CONFIG_BASE_URL/api/project/iterate"'
-```
+Most operator paths use the OS admin bearer token from the deployment's Doppler
+config. The `pnpm cli itx ...` commands read `APP_CONFIG_BASE_URL` and
+`APP_CONFIG_ADMIN_API_SECRET` from Doppler.
 
 Browser debugging can also authenticate through the Iterate Auth Worker.
 
-For `pnpm cli rpc`, prefer the CLI from `apps/os`:
+For a preview, change the config and discover a current project first. Avoid
+hard-coding disposable preview projects.
 
 ```bash
-pnpm cli rpc --help
-doppler run --config prd -- pnpm cli rpc --help
+doppler run --config preview_3 -- pnpm cli itx run \
+  -e 'return await itx.projects.list({ limit: 20 })'
 ```
 
-For a preview, change the config and discover a current project first. Avoid hard-coding disposable preview projects.
-
-```bash
-doppler run --config preview_3 -- pnpm cli rpc projects list
-doppler run --config preview_3 -- \
-  pnpm cli rpc project get --project-slug-or-id <existing-preview-project-slug>
-```
-
-## Most Useful OS APIs
-
-These are usually the first project APIs to try:
+## Useful itx Snippets
 
 ```bash
 # Confirm the project resolves.
-doppler run --config prd -- pnpm cli rpc project get --project-slug-or-id iterate
+doppler run --config prd -- pnpm cli itx run \
+  -e 'return await itx.projects.get("iterate")'
 
-# List initialized streams.
-doppler run --config prd -- pnpm cli rpc project streams list --project-slug-or-id iterate
+# List initialized child streams under root.
+doppler run --config prd -- pnpm cli itx run \
+  --context iterate \
+  -e 'return await itx.streams.get("/").runtimeState()'
 
 # Read a stream.
-doppler run --config prd -- pnpm cli rpc project streams read \
-      --project-slug-or-id iterate \
-      --stream-path /debugging-docs/example \
-      --before-offset end
+doppler run --config prd -- pnpm cli itx run \
+  --context iterate \
+  -e 'return await itx.streams.get("/debugging-docs/example").getEvents({ beforeOffset: "end", limit: 100 })'
 
-# Inspect Code Mode sessions.
-doppler run --config prd -- pnpm cli rpc project codemode list-sessions --project-slug-or-id iterate
-
-# Inspect inbound MCP sessions for the project.
-doppler run --config prd -- pnpm cli rpc project inbound-mcp-server list-sessions --project-slug-or-id iterate
+# Inspect an agent runtime state.
+doppler run --config prd -- pnpm cli itx run \
+  --context iterate \
+  -e 'return await itx.agents.create().getRuntimeState({ agentPath: "/agents/default" })'
 ```
 
 ## Cloudflare Debugging
 
 ### Cloudflare MCP Server
 
-Use the Cloudflare API MCP server for Workers traces, routes, bindings, D1, Durable Objects, and other Cloudflare state. Docs: [Cloudflare MCP servers](https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/).
+Use the Cloudflare API MCP server for Workers traces, routes, bindings, D1,
+Durable Objects, and other Cloudflare state. Docs:
+[Cloudflare MCP servers](https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/).
 
-The deployed worker name is derived in `packages/shared/src/alchemy/init.ts` as `${manifest.slug}-${app.stage}` and then used by `apps/os/alchemy.run.ts` as `ctx.workerName`. For production OS, `os-prd` is the **ingress router**; the app worker is `os-prd-app` and each Durable Object class has its own worker (`os-prd-stream`, `os-prd-agent`, `os-prd-project`, `os-prd-slack-integration`, …) — see [worker-topology.md](./worker-topology.md). Pick the worker that owns the code you are debugging: dashboard/API traffic is `os-prd-app`, Slack event routing is `os-prd-slack-integration`, agent turns are `os-prd-agent`, stream appends are `os-prd-stream`.
+The deployed worker name is derived in `packages/shared/src/alchemy/init.ts` as
+`${manifest.slug}-${app.stage}` and then used by `apps/os/alchemy.run.ts` as
+`ctx.workerName`. For production OS, `os-prd` is the ingress router; the app
+worker is `os-prd-app` and each Durable Object class has its own worker
+(`os-prd-stream`, `os-prd-agent`, `os-prd-project`,
+`os-prd-slack-integration`, ...). See [worker-topology.md](./worker-topology.md).
+Pick the worker that owns the code you are debugging.
 
-OS workers have persistent Workers Logs and traces enabled in `packages/shared/src/alchemy/iterate-app.ts`.
+OS workers have persistent Workers Logs and traces enabled in
+`packages/shared/src/alchemy/iterate-app.ts`.
 
-Ray IDs are especially useful. If you have a Ray ID, first find the matching log event, then use its `traceId` to fetch the trace and all span events.
+Ray IDs are especially useful. If you have a Ray ID, first find the matching
+log event, then use its `traceId` to fetch the trace and all span events.
 
-With the general Cloudflare API MCP server, use `search` to find endpoint shapes, then `execute` with code like:
-
-```ts
-async () => {
-  const from = Date.parse("2026-05-19T13:55:00.000Z");
-  const to = Date.parse("2026-05-19T14:10:00.000Z");
-  const rayId = "REPLACE_WITH_RAY_ID";
-
-  return cloudflare.request({
-    method: "POST",
-    path: `/accounts/${accountId}/workers/observability/telemetry/query`,
-    body: {
-      queryId: "find-ray-id",
-      timeframe: { from, to },
-      view: "events",
-      limit: 20,
-      parameters: {
-        datasets: ["logs", "otel"],
-        needle: { value: rayId, matchCase: false },
-      },
-    },
-  });
-};
-```
-
-Then fetch the trace summary:
-
-```ts
-async () => {
-  return cloudflare.request({
-    method: "POST",
-    path: `/accounts/${accountId}/workers/observability/telemetry/query`,
-    body: {
-      queryId: "trace-summary",
-      timeframe: {
-        from: Date.parse("2026-05-19T13:55:00.000Z"),
-        to: Date.parse("2026-05-19T14:10:00.000Z"),
-      },
-      view: "traces",
-      limit: 20,
-      parameters: {
-        datasets: ["otel"],
-        filters: [
-          {
-            key: "traceId",
-            operation: "eq",
-            type: "string",
-            value: "REPLACE_WITH_TRACE_ID",
-          },
-        ],
-      },
-    },
-  });
-};
-```
-
-Fetch all spans with the same filter and `view: "events"`:
-
-```ts
-async () => {
-  return cloudflare.request({
-    method: "POST",
-    path: `/accounts/${accountId}/workers/observability/telemetry/query`,
-    body: {
-      queryId: "trace-spans",
-      timeframe: {
-        from: Date.parse("2026-05-19T13:55:00.000Z"),
-        to: Date.parse("2026-05-19T14:10:00.000Z"),
-      },
-      view: "events",
-      limit: 1000,
-      parameters: {
-        datasets: ["otel"],
-        filters: [
-          {
-            key: "traceId",
-            operation: "eq",
-            type: "string",
-            value: "REPLACE_WITH_TRACE_ID",
-          },
-        ],
-      },
-    },
-  });
-};
-```
-
-For broader log searches, use full text first, then add field filters:
-
-```ts
-async () => {
-  return cloudflare.request({
-    method: "POST",
-    path: `/accounts/${accountId}/workers/observability/telemetry/query`,
-    body: {
-      queryId: "search-os-logs",
-      timeframe: {
-        from: Date.now() - 15 * 60 * 1000,
-        to: Date.now(),
-      },
-      view: "events",
-      limit: 100,
-      parameters: {
-        datasets: ["logs"],
-        needle: { value: "Project iterate not found", matchCase: false },
-        filters: [
-          {
-            key: "$metadata.service",
-            operation: "eq",
-            type: "string",
-            value: "os-prd-app", // or os-prd-agent, os-prd-stream, … (worker-topology.md)
-          },
-        ],
-      },
-    },
-  });
-};
-```
-
-Useful dashboard search queries:
-
-```txt
-REPLACE_WITH_RAY_ID
-"Project iterate not found"
-$metadata.service = "os-prd-app" AND $workers.outcome = "exception"
-$metadata.service = "os-prd-app" AND $workers.wallTimeMs > 1000
-exists($metadata.error)
-```
-
-### cf CLI
-
-Use `cf` for resource and infrastructure checks when MCP access is not enough. If it is not installed or authenticated, fix that first rather than guessing from code.
-
-### wrangler CLI
-
-Use `wrangler` for Worker-specific operations, for example:
-
-```bash
-# Live logs, optionally filtered.
-doppler run --config prd -- wrangler tail os-prd
-doppler run --config prd -- wrangler tail os-prd --status error
-doppler run --config prd -- wrangler tail os-prd --search "REPLACE_WITH_RAY_ID" --format json
-
-# Deployment/version checks.
-doppler run --config prd -- wrangler deployments list --name os-prd-app
-doppler run --config prd -- wrangler versions list --name os-prd-app
-
-# D1 spot checks.
-doppler run --config prd -- \
-  wrangler d1 execute os-prd-db --remote \
-    --command "select id, slug, created_at from projects where slug = 'iterate';"
-```
-
-Resource names usually follow `ctx.workerName`; examples include `os-prd-db` and `os-prd-repos`.
+With the general Cloudflare API MCP server, use `search` to find endpoint
+shapes, then `execute` with a Workers Observability telemetry query.
