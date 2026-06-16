@@ -47,8 +47,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     slug: "os",
     displayName: "OS",
     appPath: "apps/os",
-    deployCommandArgs: ["pnpm", "run", "deploy"],
-    destroyCommandArgs: ["pnpm", "run", "destroy"],
+    deployCommandArgs: ["pnpm", "run-script", "deploy"],
+    destroyCommandArgs: ["pnpm", "run-script", "destroy"],
     dopplerProject: "os",
     // oRPC's /api/__internal/health is gone with the teardown — readiness now
     // probes the plain /api/health route that replaced it. Without this, the

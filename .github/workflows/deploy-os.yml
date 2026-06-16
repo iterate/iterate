@@ -85,7 +85,7 @@ jobs:
         working-directory: apps/os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm run deploy
+        run: doppler run -- pnpm run-script deploy
   slack-success:
     needs:
       - variables
