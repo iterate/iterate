@@ -23,6 +23,10 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       ),
       // One entry module per deployed worker (docs/worker-topology.md).
       "src/workers/*.ts!",
+      "playwright.config.ts",
+      "e2e/playwright/**/*.spec.ts",
+      "e2e/playwright/seed-local-auth.ts",
+      "e2e/playwright/start-local-dev.ts",
       "e2e/vitest.config.ts",
       "e2e/tui-test/tui-test.config.ts",
       "e2e/tui-test/run.ts",
