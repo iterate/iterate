@@ -94,11 +94,11 @@ The Worker environment binding used by server code to obtain Project Durable Obj
 _Avoid_: project context, resolved project
 
 **Durable Object Name**:
-The canonical OS Durable Object identity string, encoded as `${projectId ?? "__global__"}:${path}` from required object-form `{ projectId, path }`.
+The canonical OS Durable Object identity string, encoded as `${projectId ?? "__null__"}:${path}` from required object-form `{ projectId, path }`.
 _Avoid_: namespace name, JSON structured name, Durable Object catalog name
 
 **Durable Object Name Codec**:
-The small OS module that converts between object-form `{ projectId, path }` names and encoded string names such as `proj_123:/repos/project` or `__global__:/repos/project`.
+The small OS module that converts between object-form `{ projectId, path }` names and encoded string names such as `proj_123:/repos/project` or `__null__:/repos/project`.
 _Avoid_: domain-specific name helper, structured JSON name, namespace parser
 
 **Project MCP Route**:

@@ -1,10 +1,11 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
 
 export const Route = createFileRoute("/admin/")({
   beforeLoad: () => {
     throw redirect({
       to: "/admin/streams/$projectId",
-      params: { projectId: "__global__" },
+      params: { projectId: NULL_DURABLE_OBJECT_PROJECT_ID },
     });
   },
 });

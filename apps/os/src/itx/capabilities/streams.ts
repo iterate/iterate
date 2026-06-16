@@ -23,7 +23,11 @@ import { replayPathCall, type PathCall } from "../itx.ts";
 import type { ProjectAccess } from "../refs.ts";
 import { getStreamsBackend } from "~/domains/streams/entrypoints/streams-backend.ts";
 import type { StreamRpc } from "~/domains/streams/engine/types.ts";
-import { parseDurableObjectName } from "~/domains/durable-object-names.ts";
+import {
+  formatDurableObjectName,
+  normalizeDurableObjectProjectId,
+  parseDurableObjectName,
+} from "~/domains/durable-object-names.ts";
 
 type StreamsClient = ReturnType<typeof getStreamsBackend>;
 type StreamsExports = Parameters<typeof getStreamsBackend>[0]["exports"];
@@ -97,21 +101,22 @@ export class ItxStreams extends RpcTarget {
   }
 
   project(projectId: string | null): ItxStreams {
+    const normalizedProjectId = normalizeDurableObjectProjectId(projectId);
     // Resolution checks access (§3 rule 2): refs are pure names, restoring
     // them is the capability. Masked as NOT_FOUND like projects.get — a
     // caller can never probe which projects exist. A project-scoped
     // surface cannot fully-qualify its way out of its access set.
     if (
-      projectId === null
+      normalizedProjectId === null
         ? this.scope.access !== "all"
-        : this.scope.access !== "all" && !this.scope.access.includes(projectId)
+        : this.scope.access !== "all" && !this.scope.access.includes(normalizedProjectId)
     ) {
       throw new ItxError({
         code: "NOT_FOUND",
-        message: `No stream project ${JSON.stringify(projectId)} for this handle.`,
+        message: `No stream project ${JSON.stringify(normalizedProjectId)} for this handle.`,
       });
     }
-    return new ItxStreams(this.scope, projectId);
+    return new ItxStreams(this.scope, normalizedProjectId);
   }
 
   async create(input: { streamPath: string }) {
@@ -137,7 +142,7 @@ function parseStreamRef(ref: string | { projectId: string | null; path: string }
   path: string;
 } {
   if (typeof ref !== "string") {
-    return { projectId: ref.projectId, path: ref.path };
+    return parseDurableObjectName(formatDurableObjectName(ref));
   }
   if (ref.startsWith("/")) return { path: ref };
   try {

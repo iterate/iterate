@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { StreamExplorerDetail } from "~/components/stream-explorer.tsx";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 import { streamPathFromSplat, streamPathToSplat } from "~/lib/stream-links.ts";
 
@@ -22,7 +23,7 @@ function AdminStreamDetailPage() {
   const { projectId, _splat: streamPath } = Route.useParams();
   const itx = useItx();
   const navigate = useNavigate();
-  const streamProjectId = projectId === "__global__" ? null : projectId;
+  const streamProjectId = projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? null : projectId;
   const source = useMemo(
     () => (path: StreamPathType) => itx.streams.project(streamProjectId).get(path),
     [itx, streamProjectId],

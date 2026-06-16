@@ -11,6 +11,7 @@ import {
 } from "@iterate-com/ui/components/field";
 import { Input } from "@iterate-com/ui/components/input";
 import { toast } from "@iterate-com/ui/components/sonner";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
 
 export const Route = createFileRoute("/admin/streams/")({
   component: AdminStreamsProjectPicker,
@@ -18,7 +19,7 @@ export const Route = createFileRoute("/admin/streams/")({
 
 function AdminStreamsProjectPicker() {
   const navigate = useNavigate();
-  const [projectId, setProjectId] = useState("__global__");
+  const [projectId, setProjectId] = useState(NULL_DURABLE_OBJECT_PROJECT_ID);
   const [error, setError] = useState<string | null>(null);
 
   function submit() {
@@ -41,7 +42,7 @@ function AdminStreamsProjectPicker() {
       <div className="flex flex-col gap-1">
         <h1 className="text-base font-semibold">Streams explorer</h1>
         <p className="text-sm text-muted-foreground">
-          Open streams by project id. Use __global__ for deployment-wide streams.
+          Open streams by project id. Use __null__ for deployment-wide streams.
         </p>
       </div>
       <form
@@ -58,7 +59,7 @@ function AdminStreamsProjectPicker() {
               id="admin-stream-project-id"
               value={projectId}
               onChange={(event) => setProjectId(event.currentTarget.value)}
-              placeholder="__global__ or prj_..."
+              placeholder="__null__ or prj_..."
               aria-invalid={error != null}
               className="font-mono"
             />

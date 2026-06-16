@@ -40,6 +40,7 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@iterate-com/ui/components/sidebar";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
 import { reconnectItx, useItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/admin")({
@@ -272,9 +273,12 @@ function AdminSidebar() {
               <SidebarMenuItem>
                 <SidebarMenuButton
                   tooltip="Global streams"
-                  isActive={pathname.startsWith("/admin/streams/__global__")}
+                  isActive={pathname.startsWith(`/admin/streams/${NULL_DURABLE_OBJECT_PROJECT_ID}`)}
                   render={
-                    <Link to="/admin/streams/$projectId" params={{ projectId: "__global__" }} />
+                    <Link
+                      to="/admin/streams/$projectId"
+                      params={{ projectId: NULL_DURABLE_OBJECT_PROJECT_ID }}
+                    />
                   }
                 >
                   <RadioTowerIcon aria-hidden="true" />

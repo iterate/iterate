@@ -72,6 +72,7 @@ import { AgentPillComposer, type AgentComposerMode } from "~/components/agent-pi
 import { ExampleEventsPanel } from "~/components/example-events-panel.tsx";
 import { openGlobalCommandPalette } from "~/components/global-command-palette-events.ts";
 import { PresenceAvatar, StreamProcessorsPanel } from "~/components/stream-processors-panel.tsx";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 import {
   itxStreamBrowserClient,
@@ -129,7 +130,7 @@ export function ProjectStreamView({
 }) {
   const itx = useItx();
   const streamPathText = streamPath.toString();
-  const streamRuntimeProjectKey = projectId ?? "__global__";
+  const streamRuntimeProjectKey = projectId ?? NULL_DURABLE_OBJECT_PROJECT_ID;
   // The agent-ui processor (presence, live state) runs on every stream; the
   // chat-shaped Agent view only makes sense for streams under /agents — those
   // default to it, everything else defaults to the plain feed.

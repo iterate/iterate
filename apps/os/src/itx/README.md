@@ -243,7 +243,7 @@ coordinate** — `{ projectId, path }`, written as the REF `<projectId>:<path>`
 — and that stream is the ONLY authority:
 
 - **Identity is the coordinate.** The project context is the project's root
-  stream (`prj_x:/`); deployment-wide contexts use `__global__:/...`;
+  stream (`prj_x:/`); deployment-wide contexts use `__null__:/...`;
   an agent's context is the agent's own stream
   (`prj_x:/agents/…`); an MCP session's is its session stream; anonymous
   extends default to `/itx/<generated>` — a plain convention, not a

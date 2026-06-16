@@ -4,6 +4,7 @@ import { ArrowLeftIcon, RadioTowerIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import type { StreamPath as StreamPathType } from "@iterate-com/shared/streams/types";
 import { StreamExplorerTreePage } from "~/components/stream-explorer.tsx";
+import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/domains/durable-object-names.ts";
 import { useItx } from "~/itx/itx-react.tsx";
 
 export const Route = createFileRoute("/admin/streams/$projectId/")({
@@ -14,7 +15,7 @@ function AdminStreamProjectPage() {
   const { projectId } = Route.useParams();
   const itx = useItx();
   const navigate = useNavigate();
-  const streamProjectId = projectId === "__global__" ? null : projectId;
+  const streamProjectId = projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? null : projectId;
   const source = useMemo(
     () => (streamPath: StreamPathType) => itx.streams.project(streamProjectId).get(streamPath),
     [itx, streamProjectId],
@@ -46,14 +47,17 @@ function AdminStreamProjectPage() {
               <ArrowLeftIcon data-icon="inline-start" aria-hidden="true" />
               Project
             </Button>
-            {projectId === "__global__" ? null : (
+            {projectId === NULL_DURABLE_OBJECT_PROJECT_ID ? null : (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 nativeButton={false}
                 render={
-                  <Link to="/admin/streams/$projectId" params={{ projectId: "__global__" }} />
+                  <Link
+                    to="/admin/streams/$projectId"
+                    params={{ projectId: NULL_DURABLE_OBJECT_PROJECT_ID }}
+                  />
                 }
               >
                 <RadioTowerIcon data-icon="inline-start" aria-hidden="true" />
