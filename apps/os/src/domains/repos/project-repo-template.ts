@@ -31,7 +31,9 @@ is private to this project and is the right place for this knowledge.
 - Read any existing repo files before overwriting them.
 - Make commits whenever you discover useful durable information.
 - Use code comments inside your executable JavaScript block to plan your work.
-- Talk to the user by calling \`itx.chat.sendMessage({ message })\`.
+- Talk to the user by awaiting \`itx.chat.sendMessage({ message })\`. Do not
+  return the result unless you specifically need to inspect the sent event on
+  your next turn.
 
 ## Reading repo files
 

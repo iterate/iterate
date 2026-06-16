@@ -44,8 +44,9 @@ import {
 import { ProjectProcessor } from "~/domains/projects/stream-processors/project/implementation.ts";
 import {
   isMissingProjectWorkerError,
-  loadProjectWorker,
-} from "~/domains/projects/project-worker-runtime.ts";
+  isMissingProjectWorkerProcessEventError,
+} from "~/domains/projects/project-worker-errors.ts";
+import { loadProjectWorker } from "~/domains/projects/project-worker-runtime.ts";
 import { type RepoDurableObject } from "~/domains/repos/durable-objects/repo-durable-object.ts";
 import type { SlackAgentDurableObject } from "~/domains/slack/durable-objects/slack-agent-durable-object.ts";
 import { createContext } from "~/itx/coordinates.ts";
@@ -233,6 +234,7 @@ export class ProjectDurableObject extends DurableObject<ProjectEnv> {
         streamPath: PROJECT_STREAM_PATH,
       });
     } catch (error) {
+      if (isMissingProjectWorkerProcessEventError(error)) return;
       console.error("Project worker processEvent failed.", error);
     }
   }
