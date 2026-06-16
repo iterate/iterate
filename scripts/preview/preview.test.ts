@@ -62,8 +62,9 @@ describe("preview readiness URLs", () => {
       resolvePreviewReadinessUrls({
         publicUrl: "https://os.iterate-preview-2.com",
         projectHostnameBases: ["iterate-preview-2.app", "*.iterate-preview-2.app"],
+        readyUrlPath: cloudflarePreviewApps.os.previewReadyUrlPath,
       }).map((url) => url.toString()),
-    ).toEqual(["https://os.iterate-preview-2.com/api/__internal/health"]);
+    ).toEqual(["https://os.iterate-preview-2.com/api/health"]);
   });
 });
 

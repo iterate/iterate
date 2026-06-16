@@ -27,15 +27,12 @@ function readAuxiliaryWorkers(command: string) {
 const host = process.env.HOST ?? "127.0.0.1";
 const port = process.env.PORT ? Number(process.env.PORT) : 5173;
 
-// Public tunnel for the dev server, driven entirely by env vars (Doppler):
-// CAPTUN_ENABLED=true gives a random tunnel name on the default gateway;
-// CAPTUN_TUNNEL_NAME pins a stable name (implies enabled); CAPTUN_GATEWAY +
-// CAPTUN_TOKEN target a self-hosted gateway. Plain HTTP only (webhooks,
-// previews, e2e) — HMR and WebSockets stay on the local URL. See
-// docs/dev-environments.md.
-const captunEnabled =
-  ["1", "true", "yes"].includes((process.env.CAPTUN_ENABLED ?? "").trim().toLowerCase()) ||
-  !!process.env.CAPTUN_TUNNEL_NAME?.trim();
+// Public local URL for the dev server, driven by Doppler. CAPTUN_TUNNEL_NAME
+// pins the stable URL name; CAPTUN_GATEWAY + CAPTUN_TOKEN target a self-hosted
+// gateway. HTTP and WebSockets both route through Captun, including Vite HMR.
+// See docs/dev-environments.md.
+const captunGateway = process.env.CAPTUN_GATEWAY?.trim() || "https://tunnels.iterate.com";
+const captunName = process.env.CAPTUN_TUNNEL_NAME?.trim();
 
 export default defineConfig(({ command }) => ({
   // wa-sqlite ships an Emscripten `.mjs` + `.wasm` pair that must stay together.
@@ -73,11 +70,11 @@ export default defineConfig(({ command }) => ({
     tanstackStart(),
     viteReact(),
     tailwindcss(),
-    ...(captunEnabled
+    ...(captunName
       ? [
           captunVite({
-            gateway: process.env.CAPTUN_GATEWAY?.trim() || undefined,
-            name: process.env.CAPTUN_TUNNEL_NAME?.trim() || undefined,
+            gateway: captunGateway,
+            name: captunName,
             token: process.env.CAPTUN_TOKEN?.trim() || undefined,
           }),
         ]

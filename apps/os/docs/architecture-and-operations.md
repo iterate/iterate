@@ -10,7 +10,7 @@ a tiny ingress router owns all routes, the dashboard app is its own worker,
 and every Durable Object class is its own worker. Three kinds of traffic are
 dispatched on hostname and path:
 
-1. Infrastructure routes that bypass the app entirely: the captun tunnel relay
+1. Infrastructure routes that bypass the app entirely: the Captun public relay
    at `/__iterate/captun` and admin-token debug routes.
 2. Project ingress: requests to project hosts (`<slug>.iterate.app`, custom
    hostnames) route to the project's callable, never the dashboard.
@@ -246,9 +246,9 @@ everywhere else), a `WorkerLoader`, the Workers AI binding, and routes on the
 ingress worker for the app base URL, the MCP base URL, the event-docs host,
 and each project hostname base. Fresh stages bootstrap with an automatic
 two-pass deploy (cross-script bindings to not-yet-existing scripts are wired
-by the second pass). The ambient Doppler config selects the stage: `pnpm cf:deploy`
-deploys to whatever stage your environment points at; `pnpm deploy` is the
-production wrapper (`doppler run --config prd`).
+by the second pass). Deploys must name the Doppler config explicitly, for
+example `doppler run --project os --config preview_9 -- pnpm run deploy` or
+`doppler run --project os --config prd -- pnpm run deploy`.
 
 ## Smoke Tests
 

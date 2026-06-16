@@ -1,7 +1,7 @@
 # os e2e test infrastructure
 
 Use this folder for Vitest end-to-end tests that exercise OS through public routes against a live
-deployment (dev tunnel, preview, or prod).
+deployment (local dev, preview, or prod).
 
 ## Shape
 
@@ -23,12 +23,12 @@ REPL, and CLI use. The oRPC product surface is gone; nothing here talks to oRPC 
 All Vitest lanes require a base URL plus an admin credential (one of
 `OS_E2E_ADMIN_API_SECRET`, `OS_ADMIN_API_SECRET`, `APP_CONFIG_ADMIN_API_SECRET`; some helpers also
 accept `OS_E2E_BEARER_TOKEN` or `OS_E2E_COOKIE`). The usual invocation is
-`doppler run --config <config> -- pnpm e2e [-t <filter>]` from `apps/os` — the config supplies the
-base URL: `prd` → `os.iterate.com`, `preview_N` → `os.iterate-preview-N.com`, `dev_<you>` → your
-tunnel. For fully-local `dev`, the helpers read `.alchemy/dev-server.json` from the running
-`pnpm dev` process.
+`doppler run --config <config> -- pnpm e2e [-t <filter>]` from `apps/os`. Deployed configs supply
+the base URL: `prd` → `os.iterate.com`, `preview_N` → `os.iterate-preview-N.com`. Local configs
+(`dev` and `dev_<you>`) read `.alchemy/dev-server.json` from the running CLI-managed dev server
+(`pnpm dev` or `pnpm cli dev start --detach`).
 
-If you need to target something other than the discovered local server, override explicitly:
+If you need to target captun or another custom target, override explicitly:
 `OS_ITX_E2E_BASE_URL=http://localhost:<port> doppler run --config dev -- pnpm e2e`.
 
 - Live deployment tests: `pnpm e2e` (agents, admin-project suites).

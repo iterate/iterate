@@ -54,8 +54,8 @@ export default {
           if (routed) return routed;
         }
 
-        // When baseUrl is not configured (dev tunnels, previews), the request
-        // origin is the app's own URL. After this, baseUrl is always set.
+        // When baseUrl is not configured (for example workers.dev previews),
+        // the request origin is the app's own URL. After this, baseUrl is always set.
         const requestConfig: AppConfig = config.baseUrl
           ? config
           : { ...config, baseUrl: new URL(request.url).origin as AppConfig["baseUrl"] };

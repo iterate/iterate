@@ -183,21 +183,21 @@ _Avoid_: OS App Worker, Project Durable Object, itx worker
 A direct `fetch` call against the Project Worker, bypassing public Project Ingress classification.
 _Avoid_: Project Ingress, Project Egress, OS App fetch
 
-**Project Egress Intercept Tunnel**:
-An ephemeral Project-owned tunnel that can intercept outbound Project Egress fetches while connected.
+**Project Egress Fetch Shadow**:
+A live itx-provided `fetch` capability that intercepts outbound Project Egress fetches while connected.
 _Avoid_: external egress proxy, egress gateway, intercept egress traffic
 
-**Project Egress Tunnel**:
-Short form for Project Egress Intercept Tunnel.
+**Project Egress Shadow**:
+Short form for Project Egress Fetch Shadow.
 _Avoid_: project proxy, mock internet proxy
 
-**Project Egress Intercept Route**:
-The reserved Project-owned HTTP route used to connect a Project Egress Intercept Tunnel.
+**Project Egress Shadow Session**:
+The itx session that provides the live `fetch` capability shadow.
 _Avoid_: mock route, test-only route, proxy URL
 
 **Project Egress Intercept Test Helper**:
-An e2e fixture helper that opens a Project Egress Intercept Tunnel for a test-owned Project.
-_Avoid_: semaphore tunnel helper, external proxy fixture, mock internet proxy
+An e2e fixture helper that provides a live `fetch` capability shadow for a test-owned Project.
+_Avoid_: external proxy fixture, mock internet proxy
 
 **itx Fetch Capability**:
 The default Project Egress capability used for `itx.fetch(...)` and bare
@@ -575,7 +575,7 @@ _Avoid_: Project MCP Server Connection, project MCP route, inbound MCP
 - **Project Egress** is future work. Until it is implemented, itx Script
   `fetch(...)` and `itx.fetch(...)` calls go through the default **itx Fetch
   Capability**.
-- The **Project Egress Intercept Tunnel** (and its `/__iterate/intercept-project-egress` route) is deleted; egress interception is a live `fetch` capability shadow on the project's itx context, session-bound and scoped to exactly one **Project**.
+- The old Project Egress intercept route is deleted; egress interception is a live `fetch` capability shadow on the project's itx context, session-bound and scoped to exactly one **Project**.
 - A live `fetch` shadow dispatches BEFORE the default egress pipe, so it sees `getSecret(...)` references unsubstituted; without a shadow, Project Egress header Secret references are replaced with raw **Secret Material** before public fetch.
 - Project-scoped Secret CRUD goes through the **D1-backed Secrets Capability**;
   UI and script callers must not reimplement Secret storage behavior directly.
@@ -891,9 +891,9 @@ context while the provider remains connected.
 - "MCP authorization" could become a one-off Project Durable Object method. Resolved: avoid MCP-specific Project DO auth methods; model future auth as generic **Project Route Authorization**.
 - "project access" and "route authorization" are different depths of policy. Resolved: v1 can use a generic **Project Access Check**; richer destination-specific policy belongs to future **Project Route Authorization**.
 - "egress proxy", "egress gateway", and **Project Ingress** were used around outbound traffic. Resolved for current code: use **Project Egress** only as a pointer to future outbound policy work.
-- "external egress proxy", "intercept egress traffic", and "mock internet proxy" were used for test-time outbound interception. Resolved: use **Project Egress Intercept Tunnel**, or **Project Egress Tunnel** as the short form.
-- `externalEgressProxyUrl` was a persisted Project configuration field for test-time outbound interception. Resolved: remove it instead of preserving backwards compatibility; the **Project Egress Intercept Tunnel** is ephemeral runtime state.
-- `"/__intercept-egress-fetch"` and `"/__iterate/intercept-project-egress"` were both considered as the tunnel connection path. Resolved: use the namespaced **Project Egress Intercept Route** `"/__iterate/intercept-project-egress"`.
+- "external egress proxy", "intercept egress traffic", and "mock internet proxy" were used for test-time outbound interception. Resolved: use **Project Egress Fetch Shadow**, or **Project Egress Shadow** as the short form.
+- `externalEgressProxyUrl` was a persisted Project configuration field for test-time outbound interception. Resolved: remove it instead of preserving backwards compatibility; interception is a live itx-provided `fetch` capability shadow.
+- `"/__intercept-egress-fetch"` and `"/__iterate/intercept-project-egress"` were both considered as connection paths. Resolved: there is no reserved HTTP connection path; the live shadow is provided over itx.
 - "Cloudflare Artifacts repo" introduced a second repo concept. Resolved: use **Repo** for the OS domain object and **Cloudflare Artifacts** for the backing service.
 - "namespace" was used in OS code for the first component of stream and Durable Object identity. Resolved: object-form APIs should require a `projectId` field, using `null` for global scope, and encode Durable Object identity with a **Durable Object Name**.
 - Earlier Repo identifiers and relative repo paths made a Project-local stream child look like it had an identifier separate from its stream. Resolved: use **Repo Path** for the full Event Stream Path that identifies the Repo.

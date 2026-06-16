@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatAppCliError,
+  isLocalRouterRootCommand,
   normalizePermissiveInputArgv,
   normalizePermissiveInputValue,
 } from "./cli.ts";
@@ -122,5 +123,15 @@ describe("normalizePermissiveInputArgv", () => {
       '{"event":{"type":"123"}}',
       '--input={"event":{"type":"abc"}}',
     ]);
+  });
+});
+
+describe("isLocalRouterRootCommand", () => {
+  it("matches own local router commands", () => {
+    expect(isLocalRouterRootCommand({ dev: {} }, "dev")).toBe(true);
+  });
+
+  it("does not match inherited object properties", () => {
+    expect(isLocalRouterRootCommand({}, "toString")).toBe(false);
   });
 });

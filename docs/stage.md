@@ -7,7 +7,7 @@
 For `os` and `semaphore`, stage is selected by choosing a Doppler
 config. Do not pass `--stage` to these
 deploys. `_shared` sets `ALCHEMY_STAGE=${DOPPLER_CONFIG}`, so `prd`,
-`preview_2`, and `dev_jonas_2` are just different bags of environment config
+`preview_2`, and `dev_<you>` are just different bags of environment config
 for the same `alchemy.run.ts` primitive.
 
 Repo-managed PR previews lease numbered `preview_N` configs through Semaphore
@@ -44,13 +44,15 @@ For `apps/iterate-com`, replace `os` with `www`.
 
 ## Usage
 
-```bash
-# Deploy to a numbered preview stage
-pnpm deploy --stage preview_2
+For current OS deploys, choose the Doppler config explicitly:
 
-# Local dev with your stage
-pnpm dev --stage dev-jonas
+```bash
+doppler run --project os --config preview_2 -- pnpm run deploy
+doppler run --project os --config prd -- pnpm run deploy
 ```
+
+Older Alchemy-only tooling used explicit `--stage` flags; do not use that path
+for current OS deploys.
 
 ## Principles
 
@@ -108,18 +110,21 @@ Secrets come from Doppler configs. While stage and secrets are conceptually inde
 
 Use Doppler branch configs for isolation:
 
-| Config pattern | Purpose                              |
-| -------------- | ------------------------------------ |
-| `dev`          | Base dev config (don't use directly) |
-| `dev_jonas`    | Engineer-specific dev config         |
-| `dev_rahul`    | Engineer-specific dev config         |
-| `preview`      | Base preview config                  |
-| `preview_2`    | Repo-managed PR preview config 2     |
-| `preview_9`    | Repo-managed PR preview config 9     |
-| `preview_N`    | Repo-managed PR preview config N     |
-| `prd`          | Production                           |
+| Config pattern | Purpose                          |
+| -------------- | -------------------------------- |
+| `dev`          | Shared fully-local OS dev config |
+| `dev_jonas`    | Engineer-specific dev config     |
+| `dev_rahul`    | Engineer-specific dev config     |
+| `preview`      | Base preview config              |
+| `preview_2`    | Repo-managed PR preview config 2 |
+| `preview_9`    | Repo-managed PR preview config 9 |
+| `preview_N`    | Repo-managed PR preview config N |
+| `prd`          | Production                       |
 
-Engineers should use `dev_{name}` configs. Repo-managed PR previews use numbered `preview_N` configs that correspond to Semaphore environment config leases.
+Use shared `dev` for normal fully-local OS development. Personal `dev_{name}`
+configs are only for personal integration secrets or explicit experiments.
+Repo-managed PR previews use numbered `preview_N` configs that correspond to
+Semaphore environment config leases.
 
 **Never use `dev_personal`**. It's a Doppler built-in that makes it impossible for others to fix secrets. We've banned it.
 

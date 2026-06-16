@@ -28,6 +28,7 @@ function makeOsCloudflareAppWorkspace(workerEnvShim: string): WorkspaceConfig {
       "e2e/tui-test/run.ts",
       // Mounted into the CLI by packages/iterate/src/os/router.ts, which knip
       // doesn't traverse (the iterate package isn't a knip workspace).
+      "scripts/dev-server.ts",
       "scripts/itx-agent-smoke.ts",
       "scripts/itx-run.ts",
       "scripts/seed-iterate-config-base-repo.ts",
@@ -161,7 +162,6 @@ const config: KnipConfig = {
     // TanStack Start resolves the router factory by convention from the
     // entrypoint, so there is no direct import Knip can follow.
     "apps/semaphore/src/router.tsx": ["exports"],
-    "apps/semaphore/scripts/seed-cloudflare-tunnel-pool.ts": ["exports"],
     "packages/shared/src/callable/entry.workerd.vitest.ts": ["exports"],
     "packages/shared/src/durable-object-utils/test-harness/initialize-fronting-worker.ts": [
       "exports",

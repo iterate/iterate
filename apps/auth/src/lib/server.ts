@@ -495,6 +495,10 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
   const authHandlerBasePath = normalizeAuthHandlerBasePath(config.authHandlerBasePath);
   const app = new Hono().basePath(authHandlerBasePath);
 
+  function allowedReturnToOrigins(requestURL: URL) {
+    return [...new Set([...(config.logoutReturnToOrigins ?? []), requestURL.origin])];
+  }
+
   app.get("/login", async (c) => {
     const requestURL = new URL(c.req.url);
     const canonicalLoginURL = localLoopbackCanonicalLoginURL(requestURL, config.redirectURI);
@@ -505,10 +509,10 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     const as = await getAuthorizationServer();
     if (!as.authorization_endpoint) throw new Error("No authorization_endpoint in server metadata");
 
-    const returnTo = resolveAllowedReturnTo(requestURL.searchParams.get("return_to"), [
-      requestURL.origin,
-      ...(config.logoutReturnToOrigins ?? []),
-    ]);
+    const returnTo = resolveAllowedReturnTo(
+      requestURL.searchParams.get("return_to"),
+      allowedReturnToOrigins(requestURL),
+    );
     const state = oauth.generateRandomState();
     const verifier = oauth.generateRandomCodeVerifier();
     const nonce = oauth.generateRandomNonce();
@@ -673,10 +677,10 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
       tokenType: "bearer",
     });
 
-    const returnTo = resolveAllowedReturnTo(requestURL.searchParams.get("return_to"), [
-      requestURL.origin,
-      ...(config.logoutReturnToOrigins ?? []),
-    ]);
+    const returnTo = resolveAllowedReturnTo(
+      requestURL.searchParams.get("return_to"),
+      allowedReturnToOrigins(requestURL),
+    );
     return c.redirect(returnTo);
   });
 
@@ -690,10 +694,10 @@ export function createAuthHandler(config: IterateAuthConfig, infra: OAuthInfra) 
     }
 
     const requestURL = new URL(c.req.url);
-    const returnTo = resolveAllowedReturnTo(requestURL.searchParams.get("return_to"), [
-      requestURL.origin,
-      ...(config.logoutReturnToOrigins ?? []),
-    ]);
+    const returnTo = resolveAllowedReturnTo(
+      requestURL.searchParams.get("return_to"),
+      allowedReturnToOrigins(requestURL),
+    );
     if (requestURL.searchParams.get("global") === "false") {
       return c.redirect(returnTo);
     }

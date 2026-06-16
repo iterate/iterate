@@ -6,12 +6,9 @@ describe("event docs host", () => {
     expect(eventDocsHostnameForAppBaseUrl("https://os.iterate.com")).toBe("events.iterate.com");
   });
 
-  it("derives sibling event docs hosts for preview and dev OS hosts", () => {
+  it("derives sibling event docs hosts for preview OS hosts", () => {
     expect(eventDocsHostnameForAppBaseUrl("https://os.iterate-preview-3.com")).toBe(
       "events.iterate-preview-3.com",
-    );
-    expect(eventDocsHostnameForAppBaseUrl("https://os.iterate-dev-jonas.com")).toBe(
-      "events.iterate-dev-jonas.com",
     );
   });
 

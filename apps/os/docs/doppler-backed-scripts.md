@@ -17,10 +17,12 @@ Keep `package.json` simple:
 
 Put the environment bootstrap in a small, documented TypeScript script:
 
-- If `DOPPLER_CONFIG` is already set, run the tool directly.
+- If the process is already inside `doppler run` (`DOPPLER_CONFIG` is present),
+  run the tool directly.
 - If not, run `doppler run -- ...` with no `--project` and no `--config`.
 - Let local `doppler setup` choose the default project/config.
 - Let explicit wrappers choose production or preview.
+- Do not set `DOPPLER_CONFIG` by hand; that does not hydrate Doppler secrets.
 
 ## Usage
 
@@ -43,7 +45,7 @@ Artifact repair command runs through the local script router:
 
 ```bash
 pnpm cli artifacts seed-config-base
-doppler run --project os --config dev_jonas -- pnpm cli artifacts seed-config-base
+doppler run --project os --config dev -- pnpm cli artifacts seed-config-base
 ```
 
 Do not put `--project os` or `--config prd` in the default script. That makes

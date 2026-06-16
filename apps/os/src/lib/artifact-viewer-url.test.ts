@@ -5,11 +5,11 @@ describe("buildArtifactViewerUrl", () => {
   it("derives the artifact viewer host from the OS app base URL", () => {
     expect(
       buildArtifactViewerUrl({
-        appBaseUrl: "https://os.iterate-dev-jonas.com",
+        appBaseUrl: "https://os.iterate-preview-3.com",
         artifactName: "proj__os__01krnehrkefqdrpxksbm9t4kxy--project",
       }),
     ).toBe(
-      "https://os-artifacts.iterate-dev-jonas.com/proj__os__01krnehrkefqdrpxksbm9t4kxy--project",
+      "https://os-artifacts.iterate-preview-3.com/proj__os__01krnehrkefqdrpxksbm9t4kxy--project",
     );
   });
 
