@@ -616,4 +616,42 @@ describe("waitUntilEvent", () => {
     await waited;
     expect(resolved).toBe(true);
   });
+
+  it("rejects only the waiter when a predicate throws", async () => {
+    const processor = new CounterProcessor({ iterateContext: iterateContext() });
+
+    const broken = processor.waitUntilEvent({
+      predicate: () => {
+        throw new Error("bad waiter");
+      },
+    });
+    const healthy = processor.waitUntilEvent({ offset: 1 });
+
+    await expect(
+      processor.ingest({ events: [add(1, 5)], streamMaxOffset: 1 }),
+    ).resolves.toBeUndefined();
+    await expect(broken).rejects.toThrow("bad waiter");
+    await expect(healthy).resolves.toBeUndefined();
+    expect(processor.state).toEqual({ total: 5 });
+    expect(processor.checkpointOffset).toBe(1);
+  });
+
+  it("rejects after timeoutMs when no matching event is delivered", async () => {
+    const processor = new CounterProcessor({ iterateContext: iterateContext() });
+
+    await expect(processor.waitUntilEvent({ offset: 99, timeoutMs: 10 })).rejects.toThrow(
+      /timed out after 10ms/,
+    );
+  });
+
+  it("clears the timeout when the event arrives before timeoutMs", async () => {
+    const processor = new CounterProcessor({ iterateContext: iterateContext() });
+
+    // A generous timeout that must NOT fire: the event arrives first, and the
+    // waiter clears its timer on resolution, so there is no late rejection.
+    const waited = processor.waitUntilEvent({ offset: 1, timeoutMs: 10_000 });
+    await processor.ingest({ events: [add(1, 5)], streamMaxOffset: 1 });
+
+    await expect(waited).resolves.toBeUndefined();
+  });
 });

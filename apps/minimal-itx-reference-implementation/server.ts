@@ -393,13 +393,22 @@ export class ItxDurableObject extends DurableObject<Env> {
     this.#ensureSubscriptionConfigured();
     const executionId = crypto.randomUUID();
     const log = this.#log();
+    const appendCompleted = async (payload: Record<string, unknown>) => {
+      const completed = await log.append({
+        event: {
+          type: "events.iterate.com/itx/script-execution-completed",
+          payload: { executionId, ...payload },
+        },
+      } as any);
+      await this.#itx.waitUntilEvent({ offset: (completed as any).offset });
+    };
     const requested = await log.append({
       event: {
         type: "events.iterate.com/itx/script-execution-requested",
         payload: { executionId, code },
       },
     } as any);
-    await this.#itx.waitUntilDelivered((requested as any).offset);
+    await this.#itx.waitUntilEvent({ offset: (requested as any).offset });
     const source = `
       import { WorkerEntrypoint } from "cloudflare:workers";
       const program = ${code};
@@ -421,22 +430,10 @@ export class ItxDurableObject extends DurableObject<Env> {
     const itxHandle = pathCallable(this.#itx);
     try {
       const result = await loaded.getEntrypoint("ScriptEntrypoint").run(itxHandle);
-      const completed = await log.append({
-        event: {
-          type: "events.iterate.com/itx/script-execution-completed",
-          payload: { executionId, result },
-        },
-      } as any);
-      await this.#itx.waitUntilDelivered((completed as any).offset);
+      await appendCompleted({ result });
       return { executionId, result };
     } catch (error: any) {
-      const completed = await log.append({
-        event: {
-          type: "events.iterate.com/itx/script-execution-completed",
-          payload: { error: error?.message ?? String(error), executionId },
-        },
-      } as any);
-      await this.#itx.waitUntilDelivered((completed as any).offset);
+      await appendCompleted({ error: error?.message ?? String(error) });
       throw error;
     }
   }

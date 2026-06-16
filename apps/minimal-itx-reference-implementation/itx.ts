@@ -91,10 +91,6 @@ export const isCapabilityAddress = (c: unknown): c is CapabilityAddress =>
   typeof (c as { type?: unknown }).type === "string" &&
   CAPABILITY_ADDRESS_TYPES.has((c as { type: string }).type);
 
-/** Project a live or sturdy `capability` into the `address` the table stores. */
-const addressOf = (capability: unknown): CapabilityAddress | null =>
-  isCapabilityAddress(capability) ? capability : null;
-
 // A live capability can be provided in two shapes:
 //
 // 1. A normal object graph, e.g. `{ chat: { postMessage() {} } }`. For this
@@ -191,11 +187,9 @@ export async function replayPath(target: any, rest: string[], args: unknown[]) {
 
 const liveInvoker = (capability: unknown) => {
   const retained = retain(capability);
-  return {
-    invoke: isPathCallProvider(capability)
-      ? (rest: string[], args: unknown[]) => retained.invokeCapability({ path: rest, args })
-      : (rest: string[], args: unknown[]) => replayPath(retained, rest, args),
-  };
+  return isPathCallProvider(capability)
+    ? (rest: string[], args: unknown[]) => retained.invokeCapability({ path: rest, args })
+    : (rest: string[], args: unknown[]) => replayPath(retained, rest, args);
 };
 
 // ---------------------------------------------------------------------------
@@ -242,12 +236,12 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     this.#dial =
       args.dial ??
       (() => {
-        throw new Error("this context has no dial configured (no sturdy addresses or parent)");
+        throw new Error("this context has no dial configured for sturdy addresses");
       });
     // Normalize each built-in into a CapabilityRecord, stashing any live one's
     // stub in the bridge — exactly what provideCapability does for a live provide.
     this.#builtins = (args.builtinCapabilities ?? []).map((b) => {
-      const address = addressOf(b.capability);
+      const address = isCapabilityAddress(b.capability) ? b.capability : null;
       if (address === null) {
         this.#liveCapabilities.set(bridgeKey(b.path), liveInvoker(b.capability));
       }
@@ -342,7 +336,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
   // so the write is immediately readable (read-your-writes).
   async provideCapability({ path, capability, instructions, types }: ProvideArgs) {
     this.#assertUserCapabilityPath(path);
-    const address = addressOf(capability);
+    const address = isCapabilityAddress(capability) ? capability : null;
     const key = bridgeKey(path);
     if (address === null) {
       this.#liveCapabilities.set(key, liveInvoker(capability));
@@ -355,7 +349,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
         payload: { path, address, instructions, types },
       },
     });
-    await this.#awaitDelivered((committed as any).offset);
+    await this.waitUntilEvent({ offset: (committed as any).offset });
     return { path };
   }
 
@@ -365,7 +359,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     const committed = await this.ctx.stream.append({
       event: { type: "events.iterate.com/itx/capability-revoked", payload: { path } },
     });
-    await this.#awaitDelivered((committed as any).offset);
+    await this.waitUntilEvent({ offset: (committed as any).offset });
   }
 
   // describe() is the ONE read verb (there is no separate `list`). It hands back
@@ -409,7 +403,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
 
     const local =
       this.#resolveLocal(this.state.capabilities, path) ?? this.#resolveLocal(this.#builtins, path);
-    if (local) return await local.invoke(args);
+    if (local) return await local(args);
     if (this.#parent) {
       return await this.#parent.invokeCapability({ path, args });
     }
@@ -418,10 +412,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
 
   // Resolve one capability list — folded rows or built-ins. Sturdy rows are
   // dialed and property-replayed; live rows use their retained invoker.
-  #resolveLocal(
-    caps: CapabilityRecord[],
-    path: string[],
-  ): { invoke: (args: unknown[]) => unknown } | null {
+  #resolveLocal(caps: CapabilityRecord[], path: string[]): ((args: unknown[]) => unknown) | null {
     const hit = resolveLongestPrefix(caps, path);
     if (!hit) return null;
     const { record, rest } = hit;
@@ -436,7 +427,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
           ? { ...record.address, mountPath: record.path }
           : record.address;
       const target = this.#dial(address);
-      return { invoke: (args) => replayPath(target, rest, args) };
+      return (args) => replayPath(target, rest, args);
     }
     const target = this.#liveCapabilities.get(bridgeKey(record.path));
     if (!target) {
@@ -444,7 +435,7 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
         `capability "${record.path.join(".")}" is offline (live provider disconnected)`,
       );
     }
-    return { invoke: (args) => target.invoke(rest, args) };
+    return (args) => target(rest, args);
   }
 
   #assertUserCapabilityPath(path: string[]) {
@@ -452,22 +443,5 @@ export class ItxProcessor extends StreamProcessor<typeof ItxContract> implements
     if (control && ITX_CONTROL_NAMES.has(control)) {
       throw new Error(`reserved ITX control path "${control}" cannot be provided as a capability`);
     }
-  }
-
-  // Read-your-writes without self-ingest: after appending, wait for the stream's
-  // subscription to deliver our own event back into the fold (the checkpoint
-  // catches up to the appended offset). The stream is the single source of truth.
-  //
-  // TODO(deferred): this is a spin-poll on `checkpointOffset`. It works but is a
-  // wart — replace with a proper "delivered to offset N" await once the streams
-  // engine exposes one. Tracked as a known follow-up, not load-bearing design.
-  async #awaitDelivered(offset: number): Promise<void> {
-    for (let i = 0; i < 400 && this.checkpointOffset < offset; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-  }
-
-  async waitUntilDelivered(offset: number): Promise<void> {
-    await this.#awaitDelivered(offset);
   }
 }

@@ -103,8 +103,8 @@ tests first for anything where production already taught us a failure mode.
 ### Double-click separately
 
 - **Read-your-writes**: investigate production's append-then-catch-up model
-  before changing the reference. The current spin-poll is a known wart, but we
-  should understand how to preserve the StreamProcessor shape cleanly.
+  before promoting this reference shape. The reference now uses the shared
+  StreamProcessor delivered-offset wait instead of a local polling loop.
 - **Parent as capability**: explore whether parent traversal is actually just a
   special built-in capability/address behind the scenes, e.g. `parent` or
   `parentItx`, instead of a separate injected `#parent` concept. This might

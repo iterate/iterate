@@ -122,6 +122,16 @@ type RetainableStateChangeCallback<State> = StateChangeCallback<State> &
   };
 export type StreamProcessorStateUnsubscribe = (() => void) & Disposable;
 
+/** A pending `waitUntilEvent` waiter: the match predicate, the resolver to fire
+ *  when a delivered event matches, and an optional timeout handle to clear on
+ *  resolution (so a satisfied waiter never later rejects). */
+type EventWaiter = {
+  predicate: (event: StreamEvent) => boolean;
+  reject: (error: unknown) => void;
+  resolve: () => void;
+  timer?: ReturnType<typeof setTimeout>;
+};
+
 /**
  * Where checkpoints live. Hosts inject these; when omitted the processor keeps
  * an in-memory snapshot, which is enough for tests and stateless experiments.
@@ -196,10 +206,7 @@ export abstract class StreamProcessor<
     snapshot: StreamProcessorSnapshot<ProcessorState<Contract>>,
   ) => MaybePromise<void>;
   readonly #stateChangeCallbacks = new Set<RetainedStateChangeCallback<ProcessorState<Contract>>>();
-  readonly #eventWaiters = new Set<{
-    predicate: (event: StreamEvent) => boolean;
-    resolve: () => void;
-  }>();
+  readonly #eventWaiters = new Set<EventWaiter>();
 
   constructor(args: StreamProcessorConstructorArgs<Contract, Deps, IterateContext>) {
     super();
@@ -300,24 +307,43 @@ export abstract class StreamProcessor<
    * ones `reduce` ignores, so this resolves even when the matched event produced
    * no state change (where waiting on `onStateChange` would hang).
    *
-   * `predicate` runs on every newly delivered event (consumed or not) inside the
-   * ingest loop, so keep it cheap and total — a throw would fail the batch.
+   * `predicate` runs on every newly delivered event (consumed or not). If it
+   * throws, only that waiter rejects; the already-checkpointed ingest continues.
+   *
+   * `timeoutMs` bounds the wait: if no matching event is delivered in time the
+   * promise REJECTS (and the waiter is dropped), turning an indefinitely-stalled
+   * subscription into a loud, catchable error instead of a hang. Omit it to wait
+   * forever. A waiter that resolves normally clears its timer, so it can never
+   * both resolve and later reject.
    */
-  waitUntilEvent(args: { predicate: (event: StreamEvent) => boolean }): Promise<void>;
-  waitUntilEvent(args: { offset: number }): Promise<void>;
+  waitUntilEvent(args: {
+    predicate: (event: StreamEvent) => boolean;
+    timeoutMs?: number;
+  }): Promise<void>;
+  waitUntilEvent(args: { offset: number; timeoutMs?: number }): Promise<void>;
   async waitUntilEvent(
-    args: { predicate: (event: StreamEvent) => boolean } | { offset: number },
+    args:
+      | { predicate: (event: StreamEvent) => boolean; timeoutMs?: number }
+      | { offset: number; timeoutMs?: number },
   ): Promise<void> {
     if ("offset" in args) {
       await this.#loadState();
       if (this.#checkpointOffset >= args.offset) return;
-      const { offset } = args;
+      const { offset, timeoutMs } = args;
       // No await between the check above and registering the waiter below, so a
       // batch cannot advance the checkpoint past `offset` in the gap and be missed.
-      return await this.waitUntilEvent({ predicate: (event) => event.offset >= offset });
+      return await this.waitUntilEvent({ predicate: (event) => event.offset >= offset, timeoutMs });
     }
-    await new Promise<void>((resolve) => {
-      this.#eventWaiters.add({ predicate: args.predicate, resolve });
+    const { predicate, timeoutMs } = args;
+    await new Promise<void>((resolve, reject) => {
+      const waiter: EventWaiter = { predicate, reject, resolve };
+      this.#eventWaiters.add(waiter);
+      if (timeoutMs !== undefined) {
+        waiter.timer = setTimeout(() => {
+          this.#eventWaiters.delete(waiter);
+          reject(new Error(`waitUntilEvent timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }
     });
   }
 
@@ -458,8 +484,18 @@ export abstract class StreamProcessor<
   // current when a waiter's promise resolves (the read-your-writes guarantee).
   #resolveEventWaiters(events: readonly StreamEvent[]): void {
     for (const waiter of this.#eventWaiters) {
-      if (events.some(waiter.predicate)) {
+      let matched = false;
+      try {
+        matched = events.some(waiter.predicate);
+      } catch (error) {
         this.#eventWaiters.delete(waiter);
+        if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+        waiter.reject(error);
+        continue;
+      }
+      if (matched) {
+        this.#eventWaiters.delete(waiter);
+        if (waiter.timer !== undefined) clearTimeout(waiter.timer);
         waiter.resolve();
       }
     }

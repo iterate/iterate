@@ -33,7 +33,7 @@ One field discriminates, and it is not a `kind` enum — it is the `address`:
 `CapabilityRecord` (`contract.ts`) is `{ path, address, instructions, types }`.
 A live provide records `address: null` and stashes the real stub in the bridge;
 a sturdy provide records the address and stashes nothing. `address === null` is
-the entire test (`itx.ts`'s `isCapabilityAddress` / `addressOf`).
+the entire test (`itx.ts`'s `isCapabilityAddress`).
 
 Paths are **arrays of segments** (`["slack", "chat", "postMessage"]`), matched
 by **longest registered prefix** so a deep shadow beats a broad mount. There is
@@ -188,7 +188,7 @@ exposed as the `itx` getter for internal Workers RPC use.
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `contract.ts`   | the itx event log: event schemas + reduced state (`defineProcessorContract`)                                                                                                   |
 | `itx.ts`        | `ItxProcessor extends StreamProcessor` (the fold + verbs + bridge + chain), the shared vocabulary (`replayPath`, `retain`, prefix matching), the `ItxContext` protocol         |
-| `global-itx.ts` | `GlobalItx` — the stateless, read-only root (`RpcTarget` + `implements ItxContext`)                                                                                            |
+| `global-itx.ts` | `GlobalItx` — the stateless, read-only root (`implements ItxContext`)                                                                                                          |
 | `auth.ts`       | the connect-door access map and checks                                                                                                                                         |
 | `server.ts`     | the Worker: `pathCallable`, `ItxDurableObject`, `ProjectDurableObject`/`AgentDurableObject`/`RepoDurableObject`, `dial`, the `/api/itx` route; re-exports the real `Stream` DO |
 | `client.ts`     | `withItx` + `connect` — socket opener, naked path calls, and provide-time normalization for raw local SDK objects                                                              |
@@ -200,6 +200,5 @@ The capability model is complete; the surface is trimmed. No incremental "steps"
 (this is the end state), no Swift/native-dialog or real-SDK demos, no
 durability/replay proofs baked into the implementation (that the table is the
 fold of the log is StreamProcessor's contract, not ours to re-prove). The
-read-your-writes wait in `ItxProcessor.#awaitDelivered` is a known spin-poll wart, flagged
-in-code to be replaced once the streams engine exposes a delivered-to-offset
-await.
+read-your-writes wait uses the shared StreamProcessor delivered-offset await; no
+local polling loop is needed.

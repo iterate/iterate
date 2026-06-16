@@ -11,55 +11,25 @@
 //     root" is structural, not a guard someone must remember.
 //   • NO PARENT: a capability miss has nowhere left to climb, so it throws.
 //
-// Its capabilities are fixed, project-agnostic "catalog" caps wired in as code:
-// a single `projects` cap (a `{ list, get }`). Adding a sibling (`users`,
-// `orgs`, …) is just another entry — which is the whole reason the catalog rides
-// the capability protocol instead of being bespoke handle code.
+// Its capabilities are fixed, project-agnostic "catalog" caps wired in as code.
+// A single `projects` cap exposes `{ list, get }`.
 //
 // The WebSocket route still serves it through pathCallable so the global root,
 // project contexts, agent contexts, and codemode handles all share one dotted
 // call rule: every terminal call becomes invokeCapability({ path, args }).
 
-import { RpcTarget } from "capnweb";
 import { KNOWN_PROJECTS } from "./auth.ts";
 import { ITX_CONTROL_NAMES, type DescribeResult, type ItxContext, replayPath } from "./itx.ts";
 
-class GlobalProjects extends RpcTarget {
-  constructor(readonly reachable: () => string[]) {
-    super();
-  }
-
-  list() {
-    return this.reachable();
-  }
-
-  get(id: string) {
-    if (!this.reachable().includes(id)) throw new Error(`no access to project "${id}"`);
-    // Production narrows to a live project itx HANDLE here; the reference impl
-    // returns the project's context ref (the narrowing target) to stay simple.
-    return { id, ref: `prj:${id}` };
-  }
-}
-
-export class GlobalItx extends RpcTarget implements ItxContext {
+export class GlobalItx implements ItxContext {
   #access: "all" | string[];
-  #projects: GlobalProjects;
-  // The fixed catalog. The `projects` cap is also exposed as a real RpcTarget
-  // getter so the __global__ Cap'n Web path does not need pathCallable.
-  #capabilities: Record<string, unknown>;
 
   constructor(args: { access: "all" | string[] }) {
-    super();
     this.#access = args.access;
-    const reachable = () => (this.#access === "all" ? KNOWN_PROJECTS : this.#access);
-    this.#projects = new GlobalProjects(reachable);
-    this.#capabilities = {
-      projects: this.#projects,
-    };
   }
 
-  get projects() {
-    return this.#projects;
+  #reachable() {
+    return this.#access === "all" ? KNOWN_PROJECTS : this.#access;
   }
 
   // Read side: longest registered prefix wins, then replay the remainder onto the
@@ -87,9 +57,20 @@ export class GlobalItx extends RpcTarget implements ItxContext {
       }
     }
 
-    for (let i = path.length; i >= 1; i--) {
-      const cap = this.#capabilities[path.slice(0, i).join(".")];
-      if (cap) return await replayPath(cap, path.slice(i), args);
+    if (path[0] === "projects") {
+      return await replayPath(
+        {
+          list: () => this.#reachable(),
+          get: (id: string) => {
+            if (!this.#reachable().includes(id)) throw new Error(`no access to project "${id}"`);
+            // Production narrows to a live project itx HANDLE here; the reference
+            // impl returns the project's context ref to stay simple.
+            return { id, ref: `prj:${id}` };
+          },
+        },
+        path.slice(1),
+        args,
+      );
     }
     throw new Error(
       `no capability "${path.join(".")}" (the __global__ root context has no parent)`,

@@ -115,31 +115,6 @@ const reportWorker = {
   props: {},
 };
 
-const scopedRunnerWorker = {
-  type: "dynamic-worker",
-  source: {
-    type: "inline",
-    mainModule: "runner.js",
-    modules: {
-      "runner.js": `
-        import { WorkerEntrypoint } from "cloudflare:workers";
-        export class RunnerEntrypoint extends WorkerEntrypoint {
-          async run() {
-            const itx = await this.env.ITX.get();
-            return {
-              hasIterate: "ITERATE" in this.env,
-              props: this.ctx.props,
-              whoami: await itx.whoami(),
-            };
-          }
-        }
-      `,
-    },
-  },
-  entrypoint: "RunnerEntrypoint",
-  props: { userConfig: "ok" },
-};
-
 let pass = 0;
 let fail = 0;
 async function check(name: string, fn: () => Promise<void>) {
@@ -159,6 +134,13 @@ const dispose = (s: any) => {
     /* already closed */
   }
 };
+
+const postScript = (path: string, code: string) =>
+  fetch(`${BASE_URL}/api/itx?projectId=shared&path=${encodeURIComponent(path)}`, {
+    body: code,
+    headers: { authorization: `Bearer ${TOKEN}`, "content-type": "text/plain" },
+    method: "POST",
+  });
 
 await check("1. live capability: provide → invoke → describe → revoke", async () => {
   const itx = agentItx("live");
@@ -305,13 +287,9 @@ await check("8. codemode: a loaded script gets an itx handle and calls back", as
   const itx = agentItx("code");
   try {
     await itx.provideCapability({ path: ["calc"], capability: dynamicCalc });
-    const response = await fetch(
-      `${BASE_URL}/api/itx?projectId=shared&path=${encodeURIComponent(path)}`,
-      {
-        body: `async (itx) => itx.invokeCapability({ path: ["calc", "add"], args: [10, 20] })`,
-        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "text/plain" },
-        method: "POST",
-      },
+    const response = await postScript(
+      path,
+      `async (itx) => itx.invokeCapability({ path: ["calc", "add"], args: [10, 20] })`,
     );
     assert.equal(response.status, 200);
     const output = (await response.json()) as any;
@@ -326,14 +304,7 @@ await check("8. codemode: a loaded script gets an itx handle and calls back", as
 });
 
 await check("9. POST /api/itx runs a script and folds requested/completed events", async () => {
-  const response = await fetch(
-    `${BASE_URL}/api/itx?projectId=shared&path=${encodeURIComponent(agentPath("post"))}`,
-    {
-      body: `async () => "curlable"`,
-      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "text/plain" },
-      method: "POST",
-    },
-  );
+  const response = await postScript(agentPath("post"), `async () => "curlable"`);
   assert.equal(response.status, 200);
   const body = (await response.json()) as any;
   assert.equal(body.result, "curlable");
@@ -518,14 +489,7 @@ await check("19. failed scripts still fold a completed error record", async () =
   try {
     // Script executions are durable audit records even when the code throws.
     const code = `async () => { throw new Error("boom"); }`;
-    const response = await fetch(
-      `${BASE_URL}/api/itx?projectId=shared&path=${encodeURIComponent(path)}`,
-      {
-        body: code,
-        headers: { authorization: `Bearer ${TOKEN}`, "content-type": "text/plain" },
-        method: "POST",
-      },
-    );
+    const response = await postScript(path, code);
     assert.equal(response.status, 400);
     assert.match(await response.text(), /boom/);
     const execution = (await itx.describe()).scriptExecutions.find((x: any) => x.code === code);
@@ -538,19 +502,15 @@ await check("19. failed scripts still fold a completed error record", async () =
 
 await check("20. codemode can durably provide a capability for later callers", async () => {
   const path = agentPath("script-provide");
-  const response = await fetch(
-    `${BASE_URL}/api/itx?projectId=shared&path=${encodeURIComponent(path)}`,
-    {
-      body: `async (itx) => {
+  const response = await postScript(
+    path,
+    `async (itx) => {
         await itx.provideCapability({
           path: ["calc2"],
           capability: ${JSON.stringify(dynamicCalc)},
         });
         return "provided";
       }`,
-      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "text/plain" },
-      method: "POST",
-    },
   );
   assert.equal(response.status, 200);
   const body = (await response.json()) as any;
