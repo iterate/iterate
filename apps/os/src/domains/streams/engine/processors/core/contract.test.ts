@@ -228,16 +228,24 @@ describe("core processor contract", () => {
             subscriber: {
               incarnationId: "host-incarnation-1",
               processor: {
-                slug: "echo-example",
-                version: "0.1.0",
-                description:
-                  "Counts received inputs and echoes each back as an output carrying the running count.",
-                consumes: ["events.iterate.com/echo-example/input-received"],
-                emits: ["events.iterate.com/echo-example/output-echoed"],
-                ownedEvents: [
-                  { type: "events.iterate.com/echo-example/input-received", description: "Input." },
-                  { type: "events.iterate.com/echo-example/output-echoed", description: "Output." },
-                ],
+                announcement: {
+                  slug: "echo-example",
+                  version: "0.1.0",
+                  description:
+                    "Counts received inputs and echoes each back as an output carrying the running count.",
+                  consumes: ["events.iterate.com/echo-example/input-received"],
+                  emits: ["events.iterate.com/echo-example/output-echoed"],
+                  ownedEvents: [
+                    {
+                      type: "events.iterate.com/echo-example/input-received",
+                      description: "Input.",
+                    },
+                    {
+                      type: "events.iterate.com/echo-example/output-echoed",
+                      description: "Output.",
+                    },
+                  ],
+                },
               },
             },
           },
@@ -272,6 +280,42 @@ describe("core processor contract", () => {
     });
     expect(after.processorsBySlug["echo-example"]).toBeDefined();
     expect(after.connectionsByKey).toEqual({});
+  });
+
+  it("folds legacy direct processor announcements from connect events", () => {
+    const state = reduceEvents({
+      events: [
+        {
+          offset: 1,
+          type: "events.iterate.com/stream/subscriber-connected",
+          payload: {
+            subscriptionKey: "host:legacy-example",
+            direction: "outbound",
+            subscriber: {
+              incarnationId: "host-incarnation-1",
+              processor: {
+                slug: "legacy-example",
+                version: "0.1.0",
+                description: "Legacy unwrapped announcement.",
+                consumes: ["events.iterate.com/legacy/input"],
+                emits: ["events.iterate.com/legacy/output"],
+                ownedEvents: [{ type: "events.iterate.com/legacy/output" }],
+              },
+            },
+          },
+          createdAt: "2026-06-01T12:00:00.000Z",
+        },
+      ],
+    });
+
+    expect(state.processorsBySlug["legacy-example"]).toMatchObject({
+      announcedAtOffset: 1,
+      announcement: {
+        slug: "legacy-example",
+        version: "0.1.0",
+        ownedEvents: [{ type: "events.iterate.com/legacy/output" }],
+      },
+    });
   });
 
   it("owns pause/resume and append validation", () => {

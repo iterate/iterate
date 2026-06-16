@@ -5,9 +5,9 @@ Runtime internals for the OS streams domain. `apps/os` binds the `Stream` class 
 The pieces:
 
 - a stream processor abstraction with typed event contracts and reducer state
-  (`src/stream-processor.ts`, `src/shared/stream-processors.ts`)
+  (`stream-processor.ts`, `shared/stream-processors.ts`)
 - the stream Durable Object and the stream processor runner Durable Object
-  (`src/workers/durable-objects/`)
+  (`workers/durable-objects/`)
 - CapnWeb-over-WebSocket RPC between streams and subscribers
 - browser, Node.js, and Workers client entry points
 - a tiny TanStack Start React app in `apps/streams-example-app/`, served by the same Worker
@@ -19,7 +19,7 @@ The pieces:
 pnpm --dir apps/os typecheck
 pnpm --dir apps/streams-example-app build
 pnpm --dir apps/os test
-pnpm --dir apps/os test:e2e
+pnpm --dir apps/os e2e
 ```
 
 Run the local TanStack Start + Cloudflare dev server:
@@ -51,7 +51,7 @@ reset/reconcile behavior.
 Run the same browser tests against a deployed worker:
 
 ```sh
-WORKER_URL=https://streams-example-app.iterate-preview-2.com pnpm --dir apps/os test:e2e
+WORKER_URL=https://streams-example-app.iterate-preview-2.com pnpm --dir apps/os e2e
 ```
 
 Use the browser client library with a full stream URL:
@@ -85,7 +85,7 @@ Virtual. The important reads are ordinary SQL in the route code: a row count and
 
 Deploy with Wrangler through the TanStack Start Vite build (requires Cloudflare auth via
 `wrangler login` or a `CLOUDFLARE_API_TOKEN`; the worker deploys to the account in
-`apps/streams-apps/streams-example-app/alchemy.run.ts`):
+`apps/streams-example-app/alchemy.run.ts`):
 
 ```sh
 doppler run --project streams-example-app --config prd -- pnpm --dir apps/streams-example-app alchemy:up
@@ -182,6 +182,15 @@ Host-provided constructor deps (`StreamProcessorBaseDeps`):
 - `keepAliveWhile(work)` — keeps the host runtime alive while detached async
   work is in flight (e.g. a Durable Object's `ctx.waitUntil`).
 
+Terminology:
+
+- A **processor snapshot** is the replay checkpoint: `{ offset, state }`, where
+  `state` is the processor's reduced state at that stream offset.
+- A **processor runtime state** is the broad live inspection value returned by
+  `processor.getRuntimeState()`. It contains the snapshot plus optional runtime
+  data such as health or metrics. Runtime state is observational; the snapshot
+  remains the replay cursor.
+
 Catch-up replay runs side effects for every delivered event past the durable
 checkpoint. Side effects must therefore be idempotency-keyed and safe to retry.
 
@@ -190,8 +199,11 @@ Hosting:
 - Workers: `createStreamProcessorHost(this.ctx)` in
   `src/workers/stream-processor-host.ts` hosts named processors inside a
   Durable Object. The host passes each processor's contract announcement in
-  its subscribe call; the stream appends it as part of the
-  `events.iterate.com/stream/subscriber-connected` presence fact — there is no
+  its subscribe call as `subscriber.processor.announcement`, alongside an
+  optional live `subscriber.processor.getRuntimeState` capability; the stream
+  appends the serializable announcement as part of the
+  `events.iterate.com/stream/subscriber-connected` presence fact and retains the
+  runtime-state capability only while the connection is live. There is no
   per-processor `standardProcessorBehavior` self-registration anymore.
 - Browser: `acquireStreamRuntime` in `src/browser/stream-browser-store.ts`
   hosts a processor over an injected stream client with a Web Locks writer

@@ -1,4 +1,4 @@
-import type { ProcessEventBatch } from "../types.ts";
+import type { GetProcessorRuntimeState, ProcessEventBatch } from "../types.ts";
 
 type RetainedProcessEventBatch = ProcessEventBatch &
   Disposable & {
@@ -9,6 +9,13 @@ type RetainableProcessEventBatch = ProcessEventBatch &
   Partial<Disposable> & {
     dup?(): RetainedProcessEventBatch;
     onRpcBroken?(callback: (error: unknown) => void): void;
+  };
+
+type RetainedGetProcessorRuntimeState = GetProcessorRuntimeState & Disposable;
+
+type RetainableGetProcessorRuntimeState = GetProcessorRuntimeState &
+  Partial<Disposable> & {
+    dup?(): RetainedGetProcessorRuntimeState;
   };
 
 export function retainProcessEventBatch(
@@ -85,6 +92,30 @@ export function retainProcessEventBatch(
     };
   }
   return callback;
+}
+
+export function retainGetProcessorRuntimeState(
+  getRuntimeState: GetProcessorRuntimeState | undefined,
+): RetainedGetProcessorRuntimeState | undefined {
+  if (getRuntimeState === undefined) return undefined;
+  const retainable = getRuntimeState as RetainableGetProcessorRuntimeState;
+  const retained = retainable.dup?.() ?? retainable;
+  const dispose = retained[Symbol.dispose]?.bind(retained);
+  return Object.assign(
+    () => {
+      const result = retained();
+      if (isThenable(result)) {
+        return Promise.resolve(result).finally(() => disposeIgnoredRpcResult(result));
+      }
+      disposeIgnoredRpcResult(result);
+      return result;
+    },
+    {
+      [Symbol.dispose]() {
+        dispose?.();
+      },
+    },
+  );
 }
 
 function isThenable(value: unknown): value is PromiseLike<unknown> {

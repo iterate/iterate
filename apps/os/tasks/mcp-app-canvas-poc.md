@@ -7,11 +7,14 @@ dependsOn: []
 
 # MCP App live canvas POC
 
-Explore adding an MCP App "canvas" surface to the os MCP server. The idea is that an MCP client invokes `open_canvas`, gets an inline UI resource, then later tool/provider/codemode activity emits `canvas-updated` events that replace the canvas contents with sanitized HTML.
+Explore adding an MCP App "canvas" surface to the OS MCP server. The idea is
+that an MCP client invokes `open_canvas`, gets an inline UI resource, then later
+tool/provider/itx activity emits `canvas-updated` events that replace the
+canvas contents with sanitized HTML.
 
 ## Why
 
-This would give codemode and provider tools a durable visual sidecar:
+This would give itx scripts and provider tools a durable visual sidecar:
 
 - multiple canvases per MCP session
 - each canvas can be updated independently
@@ -75,7 +78,8 @@ A throwaway local prototype exists at `/tmp/mcp-canvas-poc` in this work session
 - Should canvas updates be stored in `/mcp-server-sessions/<sessionSlug>` or a separate `/mcp-canvases/<canvasId>` stream?
 - Should `update_canvas` be model-visible, app-only, or both?
 - Should arbitrary HTML be accepted, or should providers emit a stricter block schema that we render to HTML?
-- Do we want one canvas per codemode block by default, or explicit canvas creation only?
+- Do we want one canvas per script execution by default, or explicit canvas
+  creation only?
 - How should old canvases expire?
 - How much of the canvas state should be visible to the model versus widget-private metadata?
 

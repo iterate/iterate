@@ -8,8 +8,8 @@ Runs as a thin bootstrapper that:
 
 1. Resolves an `iterate/iterate` checkout.
 2. Clones/install deps when needed.
-3. Loads `apps/os/src/orpc/root.ts` from that checkout.
-4. Exposes commands like `iterate os ...` and `iterate orgs list`.
+3. Loads local command routers from that checkout.
+4. Exposes commands like `iterate os itx ...` and `iterate orgs list`.
 
 ## Requirements
 

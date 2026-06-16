@@ -78,39 +78,32 @@ We want to have _few_ abstractions.
 
 # Services
 
-Before changing a service, consult first-party docs for the actual libraries in use. In practice that usually means TanStack Start / Router / Query / Form, Hono, oRPC, Vite, shadcn/ui, and Zod.
+Before changing a service, consult first-party docs for the actual libraries in use. In practice that usually means TanStack Start / Router / Query / Form, Hono, itx, oRPC where still used, Vite, shadcn/ui, and Zod.
 
 Canonical service stack:
 
 - Hono for worker HTTP routing where the app has one (e.g. `apps/auth`, `apps/iterate-com`)
 - TanStack Start in SPA mode
 - TanStack Router file-based routes
-- oRPC + `@orpc/tanstack-query`
+- itx capability handles for OS project runtime surfaces
+- oRPC only where the service still has an oRPC API
 - TanStack Form + shadcn field components from `packages/ui`
 - DB: sqlfu + D1 (`apps/os`, `apps/auth`), raw SQL migrations on D1 (`apps/semaphore`), or DO-local SQLite
 
 Service patterns that should stay true:
 
 - Keep a single `QueryClient` instance and share it between router context and `QueryClientProvider`
-- Use `ORPCError` for API failures instead of plain `Error`
+- Use the service's existing typed error shape for API failures instead of plain `Error`
 - Use `throw redirect()` in `beforeLoad` instead of render-time navigation
 - Import shadcn components from `@iterate-com/ui/components/*`, not local copies
 - For TanStack Form, prefer `validators: { onChange, onSubmit }`, `FieldError errors={field.state.meta.errors}`, and `Select` `onValueChange`
 - For JSON columns, parse in the Zod schema via `.transform(...)`, not in the handler
 
-**Everything that can be, should be an orpc procedure**
+Prefer the service's current typed remote surface over one-off scripts.
 
-Even things you might think should be scripts
-
-The good thing about orpc procedures is
-
-- you get typesafe inputs/outputs and docs
-- you can call the script across the network
-- with our cli you can call them from the terminal
-
-For example, if a service has some database seeding logic, you can just stick in in an orpc procedure called "seedDatabase" and then call that from wherever you'd call your seed script.
-
-ESPECIALLY code that runs inside a project deployment machine (e.g. fly or docker container) should be an orpc procedure.
+For OS project runtime work, that usually means an itx capability or a small
+script that runs through `pnpm cli itx run`. For services that still expose
+oRPC, keep procedure inputs and outputs typed and callable from the CLI.
 
 **Avoid Chesterton's fence: When you're doing somethign because you found a primary source that said so, you MUST link to it**
 When you use a particular configuration or approach to something, because you saw it mentioned in first party docs, blog posts, github issues, example code etc, you MUST link to it

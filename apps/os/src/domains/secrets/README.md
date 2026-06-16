@@ -44,7 +44,7 @@ Google is project-scoped for this slice:
 OAuth callbacks append `events.iterate.com/slack/connected` and
 `events.iterate.com/google-integration/connected`; disconnect actions append
 the matching `/disconnected` events (`integration-api.ts`,
-`integration-streams.ts`, and the integrations oRPC router). The `slack`
+`integration-streams.ts`, and `IntegrationsCapability`). The `slack`
 stream processor (`~/domains/slack/stream-processors/slack`) exists and
 declares `slack/connected` and `slack/disconnected` in its contract. A
 `google-integration` processor does not exist yet; only its slug and event

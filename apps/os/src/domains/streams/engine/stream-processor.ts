@@ -103,6 +103,16 @@ export type StreamProcessorSnapshot<State> = {
   state: State;
 };
 
+/**
+ * A processor's inspectable live state. `snapshot` is the durable checkpoint:
+ * reduced state at a known stream offset. `runtime` is for operational data
+ * that is useful to UIs and operators but is not part of replay correctness.
+ */
+export type StreamProcessorRuntimeState<State> = {
+  snapshot: StreamProcessorSnapshot<State>;
+  runtime?: Record<string, unknown>;
+};
+
 type MaybePromise<T> = T | Promise<T>;
 type StateChangeCallback<State> = (state: State) => unknown;
 type RetainedStateChangeCallback<State> = StateChangeCallback<State> & Disposable;
@@ -219,6 +229,11 @@ export abstract class StreamProcessor<
       offset: this.#checkpointOffset,
       state: this.#getState(),
     };
+  }
+
+  /** Returns the broad processor runtime view; subclasses may add operational `runtime` data. */
+  async getRuntimeState(): Promise<StreamProcessorRuntimeState<ProcessorState<Contract>>> {
+    return { snapshot: await this.snapshot() };
   }
 
   /**

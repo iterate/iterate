@@ -182,12 +182,14 @@ describe("agent-ui reducer", () => {
           subscriber: {
             incarnationId: "i1",
             processor: {
-              slug: "agent",
-              version: "0.1.0",
-              description: "Drives the LLM loop.",
-              consumes: ["a"],
-              emits: ["b"],
-              ownedEvents: [{ type: "events.iterate.com/agent/input-added" }],
+              announcement: {
+                slug: "agent",
+                version: "0.1.0",
+                description: "Drives the LLM loop.",
+                consumes: ["a"],
+                emits: ["b"],
+                ownedEvents: [{ type: "events.iterate.com/agent/input-added" }],
+              },
             },
           },
         },

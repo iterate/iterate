@@ -10,12 +10,8 @@ import type { StreamSubscriptionHandshake } from "../stream-processor-host.ts";
 import { getInitialProcessorState } from "../../shared/stream-processors.ts";
 import type { ProcessEventBatch, StreamCoreProcessorState } from "../../types.ts";
 import { CoreStreamProcessor } from "../../processors/core/implementation.ts";
-import {
-  CoreProcessorContract,
-  type CoreProcessorState,
-  type StreamSubscriberDescriptor,
-} from "../../processors/core/contract.ts";
-import type { StreamRpc } from "../../types.ts";
+import { CoreProcessorContract, type CoreProcessorState } from "../../processors/core/contract.ts";
+import type { LiveStreamSubscriberDescriptor, StreamRpc } from "../../types.ts";
 import { createStreamSubscription } from "../../subscription.ts";
 import { makeRpcTargetClass, type RpcTargetClass } from "../../shared/rpc-target.ts";
 import { disposeIgnoredRpcResult, retainProcessEventBatch } from "../rpc-lifecycle.ts";
@@ -662,7 +658,7 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     /** `false` = state-only batches (`events: []`, live-from-now). Default `true`. */
     events?: boolean;
     /** Who is subscribing; lands on the stream's presence roster. */
-    subscriber?: StreamSubscriberDescriptor;
+    subscriber?: LiveStreamSubscriberDescriptor;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     const subscriptionKey = args.subscriptionKey?.trim() || crypto.randomUUID();
     return this.coreProcessor.openConnection({ ...args, subscriptionKey, direction: "inbound" });
@@ -675,9 +671,13 @@ export class Stream extends DurableObject<Env> implements StreamRpc {
     /** Only deliver these event types. Omit (or include `"*"`) for everything. */
     eventTypes?: readonly string[];
     /** Who is subscribing; lands on the stream's presence roster. */
-    subscriber?: StreamSubscriberDescriptor;
+    subscriber?: LiveStreamSubscriberDescriptor;
   }): { subscriptionKey: string; streamMaxOffset: number; unsubscribe(): void } {
     return this.coreProcessor.openConnection({ ...args, direction: "outbound" });
+  }
+
+  getProcessorRuntimeState(args: { subscriptionKey: string }) {
+    return this.coreProcessor.getProcessorRuntimeState(args);
   }
 
   runtimeState() {
@@ -776,6 +776,7 @@ const STREAM_RPC_METHODS = [
   "getEvent",
   "getEvents",
   "waitForEvent",
+  "getProcessorRuntimeState",
   "runtimeState",
   "reduce",
   "kill",

@@ -44,12 +44,12 @@ array).
 
 ## Scope
 
-- `apps/os/src/app.ts` — schema + rename
+- `apps/os/src/config.ts` — schema + rename
 - `apps/os/alchemy.run.ts` — `projectRouteHostnamesForBase(projectHostnameBase)`
-- Ingress / routing: `project-host-routing.ts`, `entry.workerd.ts`,
+- Ingress / routing: `project-host-routing.ts`, worker entrypoints,
   `project-platform-host-routing.ts`, `project-durable-object.ts`
 - oRPC context, `auth.ts`, UI (`settings`, `app-sidebar`, project list)
-- `apps/os/scripts/claude-mcp.ts`, `sync-clerk-apps.ts`
+- `packages/iterate/src/os/claude-mcp.ts`, `apps/os/scripts/sync-auth-clients.ts`
 - `scripts/preview/preview.ts` parse helpers
 - Tests: replace array fixtures with a single string
 - Doppler: migrate all `os` configs from JSON array to string (prd, preview*N,

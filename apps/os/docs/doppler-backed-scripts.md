@@ -27,14 +27,14 @@ Put the environment bootstrap in a small, documented TypeScript script:
 From an app directory that has Doppler setup:
 
 ```bash
-pnpm cli rpc --help
+pnpm cli itx --help
 ```
 
 Target a specific config explicitly:
 
 ```bash
-doppler run --config prd -- pnpm cli rpc --help
-doppler run --config preview_3 -- pnpm cli rpc --help
+doppler run --config prd -- pnpm cli itx --help
+doppler run --config preview_3 -- pnpm cli itx --help
 ```
 
 Local operational commands should also live under `pnpm cli`, not as
