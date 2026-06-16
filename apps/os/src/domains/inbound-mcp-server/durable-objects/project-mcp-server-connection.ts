@@ -207,7 +207,7 @@ export class ProjectMcpServerConnection extends McpAgent<
           "Execute JavaScript in an isolated sandbox. The code MUST be a single async arrow function: `async (itx) => { ... }`.",
           "",
           "The function receives `itx`, a handle on this session's iterate context. Use `Promise.all([...])` for concurrent operations. Use `fetch` for HTTP (project egress, secret substitution). The return value (or thrown error) is sent back as the tool result.",
-          "If you're not sure about the shape of the result of a call, just return it and you'll be shown it on your next turn.",
+          "Return a value only when you need to inspect it in the tool result. For side-effect-only calls, await the call but do not return its result.",
           "",
           "Available capabilities on itx:",
           providerDocs,
@@ -527,7 +527,7 @@ export class ProjectMcpServerConnection extends McpAgent<
       code: z
         .string()
         .describe(
-          "JavaScript async arrow function to execute, e.g. `async (itx) => { return await itx.describe(); }`",
+          "JavaScript async arrow function to execute. Return a value only when you need to inspect it, e.g. `async (itx) => { return await itx.describe(); }`",
         ),
       ...(options.requireProjectInput
         ? {

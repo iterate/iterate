@@ -11,6 +11,7 @@ import type {
   StreamProcessorIterateContext,
   StreamProcessorSnapshot,
 } from "~/domains/streams/engine/stream-processor.ts";
+import { AGENT_CHAT_CAPABILITY_INSTRUCTIONS } from "~/domains/agents/agent-prompt-guidance.ts";
 
 describe("AgentProcessor", () => {
   afterEach(() => {
@@ -464,7 +465,7 @@ describe("AgentProcessor", () => {
           type: "events.iterate.com/itx/capability-provided",
           payload: {
             path: ["chat"],
-            meta: { instructions: "Use itx.chat.sendMessage({ message }) for chat output." },
+            meta: { instructions: AGENT_CHAT_CAPABILITY_INSTRUCTIONS },
           },
           offset: 44,
         }),
@@ -480,9 +481,12 @@ describe("AgentProcessor", () => {
         llmRequestPolicy: { behaviour: "dont-trigger-request" },
       },
     });
+    const explainerPayload = appended[0]?.payload as { content: string };
+    expect(explainerPayload.content).toContain("await the call but do not return it");
     const payload = appended[1]?.payload as { content: string };
     expect(payload.content).toContain("itx.chat");
     expect(payload.content).toContain("itx.chat.sendMessage({ message })");
+    expect(payload.content).toContain("Do not return the result");
     expect(payload.content).toContain("offset 44");
   });
 

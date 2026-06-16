@@ -20,7 +20,38 @@ vi.mock("~/domains/slack/durable-objects/slack-agent-durable-object.ts", () => (
     `${input.projectId}:${input.streamPath}`,
 }));
 
-import { ProjectProcessor } from "./implementation.ts";
+import { SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE } from "~/domains/agents/agent-prompt-guidance.ts";
+import { projectOnboardingBootstrapMarkdown } from "~/domains/repos/project-repo-template.ts";
+import { ProjectProcessor, defaultAgentSystemPrompt } from "./implementation.ts";
+
+describe("project agent prompts", () => {
+  it("tells web agents to await chat sends without returning side-effect results", () => {
+    const prompt = defaultAgentSystemPrompt("/agents/onboarding");
+
+    expect(prompt).toContain("await itx.chat.sendMessage({ message })");
+    expect(prompt).toContain(SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE);
+    expect(prompt).not.toContain("return await itx.chat.sendMessage");
+  });
+
+  it("tells slack agents to await replies without returning side-effect results", () => {
+    const prompt = defaultAgentSystemPrompt("/agents/slack/C123/ts-456");
+
+    expect(prompt).toContain("await itx.slack.chat.postMessage");
+    expect(prompt).toContain(SIDE_EFFECT_ONLY_CALL_RESULT_GUIDANCE);
+    expect(prompt).not.toContain("return await itx.slack.chat.postMessage");
+  });
+
+  it("onboarding bootstrap tells agents not to return chat-send results by default", () => {
+    const markdown = projectOnboardingBootstrapMarkdown({
+      projectId: "prj_test",
+      slug: "test-project",
+    });
+
+    expect(markdown).toContain("awaiting `itx.chat.sendMessage({ message })`");
+    expect(markdown).toContain("Do not\n  return the result");
+    expect(markdown).not.toContain("return await itx.chat.sendMessage");
+  });
+});
 
 describe("ProjectProcessor worker forwarding", () => {
   it("forwards project worker-visible root-stream events after project identity exists", async () => {

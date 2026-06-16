@@ -68,6 +68,7 @@ import {
   agentProcessorSubscriptionConfiguredEvents,
   getAgentDurableObjectName,
 } from "~/domains/agents/agent-stream-subscriptions.ts";
+import { AGENT_CHAT_CAPABILITY_INSTRUCTIONS } from "~/domains/agents/agent-prompt-guidance.ts";
 import { buildProjectStreamViewerUrl } from "~/lib/stream-viewer-url.ts";
 
 export {
@@ -704,8 +705,7 @@ export class AgentDurableObject extends AgentLifecycleBase<AgentDurableObjectEnv
             type: "rpc",
             worker: { type: "loopback" },
           } satisfies CapabilityAddress,
-          instructions:
-            "itx.chat.sendMessage({ message }) sends a visible reply to the user in the web chat.",
+          instructions: AGENT_CHAT_CAPABILITY_INSTRUCTIONS,
           name: "chat",
         };
 
