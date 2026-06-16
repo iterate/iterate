@@ -115,13 +115,11 @@ export async function runDevServerCommand(argv: string[]): Promise<number> {
     return 0;
   }
 
-  if (parsed.action === "restart") {
-    await killDevServer();
-  }
-
   // `scripts/dev.ts` is kept as a compatibility entrypoint for dev:local and
   // direct script invocations. It re-enters itself inside Doppler for starts,
   // preserving the user's local `doppler setup` unless a config was explicit.
+  // For restart, do this before killing the current server: if Doppler cannot
+  // start, the already-running server should be left alone.
   if (parsed.useDoppler && !process.env.DOPPLER_CONFIG) {
     const dopplerArgs = [
       "run",
@@ -133,6 +131,10 @@ export async function runDevServerCommand(argv: string[]): Promise<number> {
       ...parsed.forwardedArgv,
     ];
     return spawnSyncExitCode("doppler", dopplerArgs);
+  }
+
+  if (parsed.action === "restart") {
+    await killDevServer();
   }
 
   const result = await startDevServer(parsed.start);
