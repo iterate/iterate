@@ -7,8 +7,6 @@ import {
 import {
   batchPreviewAppsByDependencies,
   expandPreviewDependencies,
-  mapPreviewAppsByDependencyReadiness,
-  resolvePreviewAppsWithReadyDependencies,
   resolvePreviewReadinessUrls,
   resolvePreviewCompareBaseSha,
   selectPreviewAppsNeedingRetry,
@@ -17,24 +15,6 @@ import {
 describe("preview app dependency expansion", () => {
   it("expands os to include its auth dependency", () => {
     expect(expandPreviewDependencies(["os"])).toEqual(["os", "auth"]);
-  });
-
-  it("does not add an already-routed dependency to the deploy set", () => {
-    expect(
-      expandPreviewDependencies(["os"], {
-        apps: {
-          auth: {
-            appDisplayName: "Auth",
-            appSlug: "auth",
-            headSha: "previous-head",
-            publicUrl: "https://auth.iterate-preview-1.com",
-            status: "deployed",
-            updatedAt: "2026-06-16T00:00:00.000Z",
-          },
-        },
-        environmentConfigLease: null,
-      }),
-    ).toEqual(["os"]);
   });
 
   it("keeps independent apps as-is", () => {
@@ -54,89 +34,6 @@ describe("preview app dependency batches", () => {
         cloudflarePreviewApps.semaphore,
       ]).map((batch) => batch.map((app) => app.slug)),
     ).toEqual([["os", "semaphore"]]);
-  });
-
-  it("starts dependents as soon as their own dependency finishes", async () => {
-    const semaphore = deferred<void>();
-    const streams = deferred<void>();
-    const started: string[] = [];
-    const completed: string[] = [];
-
-    const run = mapPreviewAppsByDependencyReadiness(
-      [
-        cloudflarePreviewApps.os,
-        cloudflarePreviewApps.semaphore,
-        cloudflarePreviewApps.auth,
-        cloudflarePreviewApps["streams-example-app"],
-      ],
-      5,
-      async (app) => {
-        started.push(app.slug);
-        if (app.slug === "semaphore") await semaphore.promise;
-        if (app.slug === "streams-example-app") await streams.promise;
-        completed.push(app.slug);
-        return app.slug;
-      },
-    );
-
-    await waitFor(() => started.includes("os"));
-    expect(completed).toContain("auth");
-    expect(completed).not.toContain("semaphore");
-    expect(completed).not.toContain("streams-example-app");
-
-    semaphore.resolve();
-    streams.resolve();
-    await expect(run).resolves.toEqual(["os", "semaphore", "auth", "streams-example-app"]);
-  });
-});
-
-describe("preview deploy dependencies", () => {
-  it("does not serialize a dependent app behind an already-routed dependency", () => {
-    expect(
-      resolvePreviewAppsWithReadyDependencies([cloudflarePreviewApps.os], {
-        apps: {
-          auth: {
-            appDisplayName: "Auth",
-            appSlug: "auth",
-            headSha: "previous-head",
-            publicUrl: "https://auth.iterate-preview-1.com",
-            status: "deployed",
-            updatedAt: "2026-06-16T00:00:00.000Z",
-          },
-        },
-        environmentConfigLease: null,
-      })[0]?.previewDependencies,
-    ).toEqual([]);
-  });
-
-  it("keeps serialization when the dependency is redeploying in this run", () => {
-    expect(
-      resolvePreviewAppsWithReadyDependencies(
-        [cloudflarePreviewApps.os, cloudflarePreviewApps.auth],
-        {
-          apps: {
-            auth: {
-              appDisplayName: "Auth",
-              appSlug: "auth",
-              headSha: "previous-head",
-              publicUrl: "https://auth.iterate-preview-1.com",
-              status: "deployed",
-              updatedAt: "2026-06-16T00:00:00.000Z",
-            },
-          },
-          environmentConfigLease: null,
-        },
-      )[0]?.previewDependencies,
-    ).toEqual(["auth"]);
-  });
-
-  it("keeps the dependency for first-time preview bootstrap", () => {
-    expect(
-      resolvePreviewAppsWithReadyDependencies([cloudflarePreviewApps.os], {
-        apps: {},
-        environmentConfigLease: null,
-      })[0]?.previewDependencies,
-    ).toEqual(["auth"]);
   });
 });
 
@@ -238,22 +135,3 @@ describe("preview retry selection", () => {
     ).toEqual([]);
   });
 });
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  return { promise, reject, resolve };
-}
-
-async function waitFor(predicate: () => boolean) {
-  const deadline = Date.now() + 1_000;
-  while (Date.now() < deadline) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-  expect(predicate()).toBe(true);
-}

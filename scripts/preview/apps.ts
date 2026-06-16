@@ -98,7 +98,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
   // so e2e starts from a completely clean, controlled slate. OAuth client
   // credentials are constants in Doppler (provision-auth-preview-configs.ts);
   // the auth deploy reseeds them into its database on every run, so auth and
-  // OS deploy concurrently with nothing minted at deploy time.
+  // OS tests can run after both apps have finished deploying.
   auth: {
     slug: "auth",
     displayName: "Auth",

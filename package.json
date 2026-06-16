@@ -13,7 +13,6 @@
     "skills:sync": "npx skills add . --skill '*' -a claude-code -a opencode -g -y",
     "skills:list": "npx skills list -g -a claude-code -a opencode",
     "iterate": "node ./packages/iterate/bin/iterate.js",
-    "depot-ci": "node ./packages/iterate/bin/iterate.js --local-router ./scripts/depot-ci/router.ts local-router depot-ci",
     "preview": "node ./packages/iterate/bin/iterate.js --local-router ./scripts/preview/router.ts local-router preview",
     "lint": "oxlint . --threads 1 --deny-warnings",
     "lint:check": "pnpm lint",
