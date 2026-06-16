@@ -10,8 +10,10 @@ and appends setup/subscription facts to matching `/agents/...` streams.
 
 - `durable-objects/agent-durable-object.ts` — `AgentDurableObject`, named
   `{ projectId, agentPath }`. Hosts the agent processors via
-  `createStreamProcessorHost`, owns the codemode session for the stream, and
-  registers tool providers (`itx.slack`, `itx.repos`, `itx.gmail`, ...).
+  `createStreamProcessorHost`, owns the agent-local itx context for the stream,
+  and registers agent capabilities (`itx.slack` or `itx.chat`, `itx.debug`,
+  `itx.ai`, `itx.gmail`, `itx.agents`, `itx.workspace`). Project defaults such
+  as `itx.repos` are provided by the platform project context.
 - `stream-processors/` — the processor contracts + implementations:
   - `agent/` — the agent core: chat ingress, inputs, outputs, script
     enqueue/completion rendering, and LLM request lifecycle.
@@ -22,6 +24,6 @@ and appends setup/subscription facts to matching `/agents/...` streams.
 - `agent-stream-subscriptions.ts` — structured DO name, default processor
   slugs per LLM provider, and the `stream/subscription-configured` events that
   attach the processors to an agent stream.
-- `entrypoints/agent-capability.ts` — small codemode capability exposing
+- `entrypoints/agent-capability.ts` — small itx capability exposing
   `itx.agents.create()`, which returns an RpcTarget handle for sending
   messages to a Durable Object-backed subagent.

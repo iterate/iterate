@@ -2,7 +2,7 @@
 state: in-progress
 priority: high
 size: large
-dependsOn: [os-codemode-to-itx-processor.md]
+dependsOn: []
 tags: [os, itx, orpc, cutover]
 ---
 
@@ -28,8 +28,8 @@ rollback plan.
   connected, no SSR, no reconnect machinery; reads ride TanStack Query via
   `useItxQuery`). Streams tree/detail, breadcrumb navigators, and
   `ItxActivityTail` converted.
-- Codemode → itx processor is `tasks/os-codemode-to-itx-processor.md`
-  (separate effort; its oRPC procedures die there).
+- Codemode has been removed from `apps/os/src`; script execution now uses itx
+  request/completion events and project handles.
 
 ## Remaining
 
@@ -81,11 +81,13 @@ rollback plan.
 
 ### Delete
 
-- [ ] `apps/os/src/orpc/`, routes `api.$.ts` / `api.orpc.$.ts` /
-      `api.orpc-ws.ts`, `apps/os-contract`, `@orpc/*` deps,
-      `createTanstackQueryUtils` usage, the crossws/NitroWebSocketResponse
-      upgrade branch in worker.ts
-- [ ] Plain `/api/health` (+ `/api/public-config` if anything needs it)
+- [x] `apps/os/src/orpc/`, routes `api.orpc.$.ts` / `api.orpc-ws.ts`,
+      `apps/os-contract`, and `createTanstackQueryUtils` usage are gone.
+- [ ] Remove OS-local `@orpc/server` dependency if the remaining CLI/TUI
+      command router no longer needs it. Shared packages still use oRPC for
+      non-OS app CLIs.
+- [ ] Keep `api.$.ts` for integration callbacks and `api.health.ts` for the
+      health endpoint unless those surfaces get separate replacement tasks.
 - [ ] Doc sweep: CLAUDE.md "Talking to OS", apps/os/AGENTS.md, architecture
       docs, doppler-backed-scripts (all reference `cli rpc` / `/api/orpc`);
       worker.ts header comment

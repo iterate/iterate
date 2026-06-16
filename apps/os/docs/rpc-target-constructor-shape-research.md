@@ -284,8 +284,8 @@ less aligned with hibernation and custom binding goals.
 For the current global hierarchy, split singular and plural:
 
 ```ts
-ctx.streams.get({ namespace, path }) -> StreamCapability
-ctx.projects.get("p").streams.get("/") -> StreamCapability
+itx.streams.get({ namespace, path }) -> StreamCapability
+itx.projects.get("p").streams.get("/") -> StreamCapability
 ```
 
 The bindable exported form should carry `props: { namespace, path?, scopes? }`.

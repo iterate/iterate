@@ -14,15 +14,16 @@ dispatched on hostname and path:
    at `/__iterate/captun` and admin-token debug routes.
 2. Project ingress: requests to project hosts (`<slug>.iterate.app`, custom
    hostnames) route to the project's callable, never the dashboard.
-3. The OS dashboard: a TanStack Start app (SSR + oRPC API).
+3. The OS dashboard: a TanStack Start app, itx endpoint, integration
+   callbacks, and debug routes.
 
 The ingress worker (`src/workers/ingress.ts`) forwards the MCP hostname to
 the MCP worker and ingress-rule matches to the project worker; everything
 else lands on the app worker (`src/workers/app.ts`), whose evlog-wrapped
 pipeline tries handlers in order before falling through to TanStack Start:
-docs markdown, project stream RPC, `/api/itx`, and the `/__durable-objects`
-debug proxy. Runtime config is parsed from `env` per
-request (never at module scope — isolates can outlive binding-only deploys).
+docs markdown, `/api/itx`, and the `/__durable-objects` debug proxy. Runtime
+config is parsed from `env` per request (never at module scope — isolates can
+outlive binding-only deploys).
 
 The TanStack handler receives a `RequestContext` (`src/request-context.ts`)
 with request-scoped state only: `config`, `db` (sqlfu over D1), `log`,
@@ -30,19 +31,19 @@ with request-scoped state only: `config`, `db` (sqlfu over D1), `log`,
 through context — server code imports `env` from `cloudflare:workers`.
 
 Authentication uses the Iterate Auth Worker (no Clerk; see
-[ADR 0001](../../docs/adr/0001-replace-clerk-with-auth-worker.md)).
+[ADR 0001](../../../docs/adr/0001-replace-clerk-with-auth-worker.md)).
 `iterateAuthMiddleware` (`src/auth/middleware.ts`, registered as Start request
 middleware in `src/start.ts`) serves the auth-worker callback routes and
 resolves the caller into a `principal`: the admin API secret, an OAuth bearer
 token, or a session cookie. Users without an organization are redirected to
 the auth worker's project-access flow.
 
-Project-scoped oRPC procedures stay thin. The worker authenticates the caller,
-resolves project slug or ID to the stable Project ID, checks project access
-(signed Auth project claims; admin API callers bypass for operator work), and
-calls the Project Durable Object for lifecycle behavior. D1 tables such as
-`projects` and ingress rules are queryable projections, not the lifecycle
-authority.
+Project-scoped browser surfaces use itx handles. `/api/itx/:projectIdOrSlug`
+authenticates the caller, resolves project slug or ID to the stable Project ID,
+checks project access (signed Auth project claims; admin API callers bypass
+for operator work), and returns a project-scoped capability handle. D1 tables
+such as `projects` and ingress rules are queryable projections, not the
+lifecycle authority.
 
 ## API And Routing
 
@@ -54,39 +55,25 @@ The main app routes (`src/routes/`):
                                    otherwise -> /projects
 /projects
 /projects/:projectSlug             ProjectHomePage (lifecycle state + stream view)
-/projects/:projectSlug/codemode-sessions[/new, /:name]
 /projects/:projectSlug/streams[/*]
-/projects/:projectSlug/agents, /repos, /secrets, /integrations, /mcp, /repl, /settings
+/projects/:projectSlug/agents, /integrations, /mcp, /reactivity, /repl,
+                                   /repos, /settings
+/itx-repl
 /new-project
+/admin[/projects, /repl, /streams]
 /sign-in, /sign-up
 ```
 
 There are no organization routes; organization membership and selection live
 in the auth worker.
 
-The browser talks to oRPC at `/api/orpc` (and `/api/orpc-ws` for WebSocket).
-The same router is served as OpenAPI under `/api`, with Scalar docs at
-`/api/docs` and the spec at `/api/openapi.json`. The unauthenticated
-`__internal.*` operator subtree (health, publicConfig, CLI procedure listing)
-is served at `/api/__internal/*` and is what `pnpm cli rpc` discovers.
+The browser talks to itx over `/api/itx`: `/api/itx` is the global handle,
+`/api/itx/:projectIdOrSlug` is a project handle over Cap'n Web/WebSocket, and
+`POST /api/itx/run` runs an itx script in a loader isolate. The catch-all
+TanStack API route `src/routes/api.$.ts` handles integration callbacks under
+`/api/*`; otherwise it returns 404. Public browser config is loaded through the
+TanStack server function in `src/lib/public-route-config.ts`.
 
-Project-scoped procedures live under the singular `project` router; the plural
-`projects` router is for collection operations. Project-scoped procedures
-accept `projectSlugOrId` — a globally unique slug for curlable requests or a
-stable Project ID:
-
-```text
-os.projects.list()
-os.projects.create(...)
-os.project.get({ projectSlugOrId })
-os.project.streams.read({ projectSlugOrId, streamPath: "/" })
-os.project.codemode.listSessions({ projectSlugOrId })
-os.project.inboundMcpServer.listSessions({ projectSlugOrId })
-```
-
-itx — the capability handle system — has its own endpoints: `/api/itx`
-(global handle), `/api/itx/:projectIdOrSlug` (project handle, capnweb over
-WebSocket), and `POST /api/itx/run` (run an itx script in a loader isolate).
 See [`../src/itx/README.md`](../src/itx/README.md) and
 [itx-next.md](./itx-next.md).
 
@@ -117,7 +104,7 @@ canonical MCP endpoint (below).
 `StreamDurableObject` is supplied by the OS streams domain. It knows about
 `namespace` and `path`, not projects. OS uses the stable Project ID as the
 stream namespace, which means OS stream paths are project-local, such as
-`/codemode-sessions/<id>`.
+`/agents/default` or `/integrations/slack`.
 
 The stream explorer lives at `/projects/:projectSlug/streams`. Detail pages
 are splat routes: `/streams/foo/bar` opens stream path `/foo/bar` inside the
@@ -141,10 +128,11 @@ Durable Object's fetch handler:
 /__durable-objects/<kind>/<name>/<path>
 ```
 
-where `<kind>` is one of `project`, `codemode-session`,
-`project-mcp-server-connection`, `stream` (`src/debug-routes.ts`). Other debug
-routes there: `/__debug/append-chain`, `/__debug/seed-iterate-config-base`,
-and the itx egress echo at `/api/itx/egress-echo`.
+where `<kind>` is one of the Durable Object kinds handled by
+`src/debug-routes.ts` (for example `project`, `project-mcp-server-connection`,
+and `stream`). Other debug routes there: `/__debug/append-chain`,
+`/__debug/seed-iterate-config-base`, and the itx egress echo at
+`/api/itx/egress-echo`.
 
 ## MCP Directionality
 
@@ -156,12 +144,11 @@ OS has two MCP flows:
   `https://mcp.iterate.com`; fully-local dev defaults to
   `<baseUrl>/api/__mcp`) and delegates session state to the
   `ProjectMcpServerConnection` Durable Object via `McpAgent.serve`.
-- Outbound MCP: a codemode session uses an external MCP server as a Tool
-  Provider. `OutboundMcpFromOurClientCapability` owns the client connection
-  and exposes `executeCodemodeFunctionCall(...)`.
+- Outbound MCP: an itx capability can connect to an external MCP server and
+  expose that remote server's tools through the same path-call surface.
 
-Keep these separate in naming and code. Inbound MCP may execute codemode, but
-it is not itself a codemode Tool Provider.
+Keep these separate in naming and code. Inbound MCP may execute itx scripts
+through `exec_js`, but it is not itself an outbound MCP capability.
 
 Inbound MCP requests authenticate two ways, tried in order:
 
@@ -175,29 +162,19 @@ The MCP endpoint exposes RFC 9728 protected-resource metadata at
 issuer (`iterateAuth.issuer`, default `https://auth.iterate.com/api/auth`) as
 the authorization server.
 
-## Codemode
+## itx Scripts
 
-Codemode executes JavaScript in isolated dynamic Worker sandboxes through oRPC
-or MCP.
+itx executes JavaScript in isolated dynamic Worker sandboxes through
+`POST /api/itx/run`, the browser REPL, agents, and MCP `exec_js`. The runner
+accepts one script shape, `async (itx) => { ... }`; the MCP and HTTP surfaces
+wrap their own variables into that shape before execution.
 
-Primary surfaces:
-
-- UI: project codemode session pages.
-- oRPC: `project.codemode.createSession`, `project.codemode.executeScript`,
-  and `project.streams` reads.
-- MCP: `exec_js` on the canonical MCP endpoint.
-
-Sessions are seeded with capabilities at context creation (see
-`SEEDED_CAPS` in
-`src/domains/inbound-mcp-server/durable-objects/project-mcp-server-connection.ts`
-and the agent defaults in
-`src/domains/agents/durable-objects/agent-durable-object.ts`): `itx.ai`,
-`itx.gmail`, and for agents also `itx.slack`, `itx.agents`, `itx.workspace`,
-and more.
-
-Slack and other event-mediated providers can append function-call completions
-from outside the codemode processor. RPC providers return through
-`executeCodemodeFunctionCall(...)`.
+Capabilities are visible through `itx.describe()`. Project contexts inherit
+the platform project capabilities from `src/itx/platform-context.ts`, including
+`itx.fetch`, `itx.streams`, `itx.secrets`, `itx.integrations`, `itx.repos`,
+`itx.agents`, `itx.workspace`, `itx.worker`, and `itx.ai`. Agent and MCP
+contexts add their own capabilities, such as `itx.slack`, `itx.chat`,
+`itx.debug`, and `itx.gmail`.
 
 ## Database
 
@@ -241,7 +218,7 @@ APP_CONFIG_INTEGRATIONS__GOOGLE='{"oauthClientId":"...","oauthClientSecret":"...
 Fields marked `redacted(...)` in the schema parse into `Redacted` wrappers
 that must be unwrapped with `.exposeSecret()` and never serialize. Fields
 marked `publicValue(...)` are the only ones exposed to the browser, through
-the unauthenticated `__internal.publicConfig` oRPC procedure.
+the TanStack server function in `src/lib/public-route-config.ts`.
 
 `integrations.slack` and `integrations.google` are grouped JSON values in
 Doppler so each provider's OAuth client values update atomically. Slack uses
@@ -287,7 +264,7 @@ Browser smoke with `agent-browser`:
 
 - [Preview Agent Browser Smoke](./preview-agent-browser-smoke.md)
 
-Codemode MCP provider-stack smoke:
+MCP `exec_js` smoke:
 
 ```bash
 OS_E2E_MCP_URL=https://mcp.iterate-preview-2.com \
@@ -302,6 +279,6 @@ The MCP smoke accepts either:
   `APP_CONFIG_ADMIN_API_SECRET`: an OS admin token for deployment-level smoke
   tests that do not need user/project membership setup.
 
-When `APP_CONFIG_SLACK_BOT_TOKEN` is present in the test process, the codemode
-MCP test discovers `#slack-agent-e2e-test` and includes a real
-`ctx.slack.chat.postMessage(...)` call.
+When `APP_CONFIG_SLACK_BOT_TOKEN` is present in the test process, the MCP
+script test discovers `#slack-agent-e2e-test` and includes a real
+`itx.slack.chat.postMessage(...)` call.

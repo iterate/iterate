@@ -17,28 +17,30 @@ for `apps/os`. Wrap in `doppler run --config <config> -- ...` to target a
 specific environment; the config supplies URLs and secrets. More on this script
 pattern: [Doppler-backed scripts](apps/os/docs/doppler-backed-scripts.md).
 
-### oRPC API
+### itx API
 
-OS exposes oRPC at `/api/orpc/`. The app CLI discovers procedures remotely and authenticates with the config's admin API secret:
+OS exposes project capability handles through `/api/itx`. The app CLI
+authenticates with the config's admin API secret and can run scripts against a
+project's itx surface:
 
 ```bash
 # your local Doppler setup, normally dev_<you>
-pnpm cli rpc --help
+pnpm cli itx --help
 
 # production
-doppler run --config prd -- pnpm cli rpc --help
+doppler run --config prd -- pnpm cli itx --help
 
 # preview slot 3
-doppler run --config preview_3 -- pnpm cli rpc --help
+doppler run --config preview_3 -- pnpm cli itx --help
 
 # local dev server (while pnpm dev is running)
-doppler run --config dev_jonas -- pnpm cli --base-url http://localhost:5173 rpc --help
+doppler run --config dev_jonas -- pnpm cli --base-url http://localhost:5173 itx --help
 
 # localhost-oriented config (while pnpm dev:localhost is running)
-doppler run --config dev_localhost -- pnpm cli rpc --help
+doppler run --config dev_localhost -- pnpm cli itx --help
 ```
 
-Replace `--help` with a procedure path to call it.
+Use `pnpm cli itx run --help` to run a script against a project.
 
 ### Claude + project MCP
 

@@ -1,199 +1,94 @@
 # Smoke-testing a real agent in a deployed environment
 
-How to verify that an agent works **end-to-end** in a deployed OS environment
-(prd, a preview slot, or your dev tunnel). The quick path uses the ITX
-single-turn smoke command; the manual oRPC steps below are useful when you need
-to inspect intermediate events.
-
-This exercises the full live path — Project DO → agent stream → Agent Durable
-Object → cross-script stream subscription → LLM turn → streamed response — so
-it's the truest check that a deploy didn't break agents (CI unit tests don't
-drive a real LLM turn).
-
-It's the same flow used to confirm PR #1518 (the DO-duration idle-teardown fix)
-didn't regress agents in prd.
+Use this to verify that an agent works end-to-end in prd, a preview slot, or a
+dev tunnel. The smoke uses the current itx CLI path rather than the removed
+project oRPC procedures.
 
 ## Prerequisites
 
 - The target environment is deployed and healthy.
-- You can run the app CLI against it. The pattern is:
+- Run commands from `apps/os`.
+- Use `--project os` with Doppler so `APP_CONFIG_BASE_URL` and
+  `APP_CONFIG_ADMIN_API_SECRET` are available.
 
-  ```bash
-  doppler run --project os --config <cfg> -- pnpm --dir apps/os cli rpc <procedure> [--flags]
-  ```
+```bash
+doppler run --project os --config prd -- pnpm cli itx --help
+```
 
-  - `<cfg>` selects the environment: `prd`, `preview_3`, `dev_<you>`, …
-  - **Use `--project os`** (not just `--config`) so the os `APP_CONFIG` —
-    including the admin API secret the CLI authenticates with — is loaded.
-  - Discover procedures/flags with `... cli rpc --help`, `... cli rpc project
-agents --help`, `... cli rpc project agents configure-preset --help`.
-
-See also [Doppler-backed scripts](./doppler-backed-scripts.md) and the
-[OS app README](../AGENTS.md).
+Swap `prd` for `preview_N` or `dev_<you>` as needed.
 
 ## Procedure
-
-All commands below target prd; swap `--config prd` for another environment.
 
 ### 1. Create a throwaway project
 
 ```bash
-doppler run --project os --config prd -- pnpm --dir apps/os cli rpc \
-  projects create --slug agent-smoke-$(date +%s)
+doppler run --project os --config prd -- pnpm cli itx run \
+  -e 'return await itx.projects.create({ slug: `agent-smoke-${Date.now()}` })'
 ```
 
-Note the returned `id` (`prj_…`) and `slug`. Use a clearly disposable slug.
+Note the returned `id` and `slug`.
 
-### 2. Configure an agent preset
-
-```bash
-doppler run --project os --config prd -- pnpm --dir apps/os cli rpc \
-  project agents configure-preset \
-  --project-slug-or-id <slug> \
-  --base-path /agents/smoke \
-  --provider cloudflare-ai \
-  --model "@cf/meta/llama-3.1-8b-instruct" \
-  --system-prompt "You are a smoke-test agent. When the user says PING, reply with exactly the single word PONG and nothing else."
-```
-
-- **`--base-path` MUST be `/agents` or start with `/agents/`.** Anything else
-  (e.g. `/smoke`) is rejected server-side — see the gotcha below.
-- `--provider`: `cloudflare-ai` (keyless, uses Workers AI / the AI gateway) or
-  `openai-ws` (needs the env's OpenAI config). Start with `cloudflare-ai`.
-- Success returns `{ "basePath": "/agents/smoke", "eventCount": N }`.
-
-### 3. Run the quick ITX smoke command
+### 2. Run the one-turn agent smoke
 
 ```bash
-doppler run --project os --config prd -- pnpm --dir apps/os cli \
-  itx agent-smoke \
+doppler run --project os --config prd -- pnpm cli itx agent-smoke \
   --project <slug> \
   --agent-path /agents/smoke \
   --message "PING"
 ```
 
-The command connects to the project over ITX, appends a
-`events.iterate.com/agent-chat/user-message-added` event directly to the agent
-stream, then waits with `itx.streams.get(...).waitForEvent(...)` until an
-`events.iterate.com/agent-chat/assistant-response-added` event arrives. On
-success it prints one JSON object containing the appended user event and the
-assistant response event. On agent errors or timeout it exits non-zero.
+The command connects to the project over itx, appends
+`events.iterate.com/agents/user-message-received` to the agent stream, then
+waits with `itx.streams.get(...).waitForEvent(...)` until
+`events.iterate.com/agents/web-message-sent` arrives. On success it prints one
+JSON object containing the appended user event and the assistant response event.
+On agent errors or timeout it exits non-zero.
 
 For a custom timeout:
 
 ```bash
-... itx agent-smoke --project <slug> --agent-path /agents/smoke \
-  --message "PING" --timeout-ms 180000
-```
-
-### 4. Manual fallback: send the agent a message
-
-```bash
-doppler run --project os --config prd -- pnpm --dir apps/os cli rpc \
-  project agents send-message \
-  --project-slug-or-id <slug> \
+doppler run --project os --config prd -- pnpm cli itx agent-smoke \
+  --project <slug> \
   --agent-path /agents/smoke \
-  --message "PING"
+  --message "PING" \
+  --timeout-ms 180000
 ```
 
-Returns the appended `user-message-added` event with its `offset` — note it; the
-reply lands at higher offsets. The LLM turn runs **asynchronously**; give it a few
-seconds.
-
-### 5. Manual fallback: read and verify the reply
-
-Read the agent stream (use `--after-offset <the user-message offset>` to skip past
-the setup events and the default read window):
+### 3. Inspect the stream manually
 
 ```bash
-doppler run --project os --config prd -- pnpm --dir apps/os cli rpc \
-  project streams read --project-slug-or-id <slug> \
-  --stream-path /agents/smoke --after-offset <offset>
+doppler run --project os --config prd -- pnpm cli itx run \
+  --context <slug> \
+  -e 'const stream = await itx.streams.get("/agents/smoke"); return await stream.getEvents({ beforeOffset: "end", limit: 100 })'
 ```
 
-A healthy turn shows this event sequence (no `error-occurred`):
-
-- `events.iterate.com/agent/input-added`
-- `events.iterate.com/openai-ws/llm-request-started`
-- `events.iterate.com/openai-ws/llm-request-completed`
-- many `response.output_text.delta` (the streamed reply)
-- `events.iterate.com/agent/output-added`
-
-OS agents run in **code-mode**: the reply is an itx JS script, not plain prose.
-For the PING prompt above a correct reply looks like:
+A healthy turn should include the user-message event, LLM request lifecycle
+events, the generated itx script execution events, and the web-message-sent
+event. Agent replies are itx JavaScript scripts; for the PING prompt a correct
+reply usually calls:
 
 ```js
-async (itx) => {
-  await itx.chat.sendMessage({ message: "PONG" });
-};
+await itx.chat.sendMessage({ message: "PONG" });
 ```
 
-Assemble the streamed reply text from the deltas:
+### 4. Clean up
 
 ```bash
-... project streams read --project-slug-or-id <slug> --stream-path /agents/smoke --after-offset <offset> \
-  | python3 -c '
-import sys, json, re
-d = sys.stdin.read()
-print("".join(json.loads("\""+x+"\"") for x in re.findall(r"\"delta\"\s*:\s*\"((?:[^\"\\\\]|\\\\.)*)\"', d)))'
+doppler run --project os --config prd -- pnpm cli itx run \
+  -e 'return await itx.projects.remove({ id: "<prj_id>" })'
 ```
-
-### 6. Clean up
-
-```bash
-doppler run --project os --config prd -- pnpm --dir apps/os cli rpc \
-  projects remove --id <prj_id>
-```
-
-(`remove` takes `--id`, the `prj_…`, not the slug.)
 
 ## Gotchas
 
-### The CLI swallows server errors into an opaque throw
-
-A failed RPC often prints only:
-
-```
-Non-error of type undefined thrown: undefined
-```
-
-This hides the real server-side error. To get it, query **Workers
-Observability** for the os workers around the time of the call (the RPC ingress
-is `os-prd`, the app logic is `os-prd-app`). See
-[Debugging deployed OS workers](./debugging-deployed-os-workers.md), or run a
-telemetry query filtered to your project id / `configurePreset`. For example, the
-"agent preset path" rule above surfaced only as a logged
-`Error: Agent preset path must be /agents or start with /agents/.` in
-`os-prd-app` — never in the terminal.
-
-Quick recipe (general Cloudflare MCP, prd account
-`04b3b57291ef2626c6a8daa9d47065a7`): `POST /accounts/{id}/workers/observability/telemetry/query`
-with `view: "events"`, a tight `timeframe`, and filters like
-`$metadata.message includes "configurePreset"` or `… includes "<your prj_ id>"`.
-
-### `--base-path` / `--agent-path` must live under `/agents`
-
-`configure-preset` rejects any base path that isn't `/agents` or under
-`/agents/…`. The agent's stream is then at `/agents/<name>` and `send-message`
-uses the same `--agent-path`.
-
-### Use `--project os --config <cfg>`
-
-Without `--project os` the CLI can't find the admin API secret and fails with
-`RPC commands require OS_API_KEY, …`. `--config` alone is only enough for local
-help output.
-
-### Don't talk to real product agents
-
-Use a fresh throwaway project. Messaging a real agent (or a Slack-connected one)
-sends a real, user-visible message. (Related: agent-browser auto-connect can
-attach to real prod Chrome — keep smoke tests on disposable projects.)
+- `--agent-path` must live under `/agents`.
+- Use a fresh throwaway project. Messaging a real agent, especially a
+  Slack-connected one, can send real user-visible messages.
+- If the CLI cannot find the admin API secret, make sure the command is wrapped
+  with `doppler run --project os --config <cfg> -- ...`.
 
 ## What this validates
 
-- The Project/Agent/Stream Durable Objects wake and serve under the deployed code.
-- Cross-script stream subscriptions deliver events (Agent DO ↔ Stream DO).
-- A real LLM turn starts, completes, and produces output with no errors.
-
-If all five event types in step 4 appear and there's no `error-occurred`, agents
-are healthy in that environment.
+- Project, Agent, Stream, and itx Durable Objects wake under the deployed code.
+- Cross-script stream subscriptions deliver events.
+- A real LLM turn starts, completes, runs the generated itx script, and sends a
+  visible web-channel response.

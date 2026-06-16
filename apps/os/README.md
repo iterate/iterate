@@ -6,12 +6,13 @@ project-scoped runtime APIs.
 It combines:
 
 - TanStack Start, TanStack Router, and TanStack Query for the authenticated UI.
-- oRPC over HTTP/OpenAPI at `/api`.
+- itx capability handles over `/api/itx` for browser, CLI, MCP, and script
+  execution.
 - Iterate Auth Worker for first-party sessions, organizations, project claims,
   and MCP OAuth.
 - sqlfu and Cloudflare D1 for app projections.
-- Durable Objects for project lifecycle, ingress, MCP sessions, codemode
-  sessions, and shared streams.
+- Durable Objects for project lifecycle, ingress, MCP sessions, agents, repos,
+  workspaces, itx contexts, and shared streams.
 
 ## How To Use It
 
@@ -23,7 +24,11 @@ project-scoped:
 ```text
 /projects
 /projects/:projectSlug
-/projects/:projectSlug/codemode-sessions
+/projects/:projectSlug/agents
+/projects/:projectSlug/integrations
+/projects/:projectSlug/mcp
+/projects/:projectSlug/repl
+/projects/:projectSlug/repos
 /projects/:projectSlug/streams
 /projects/:projectSlug/settings
 /new-project
@@ -32,7 +37,7 @@ project-scoped:
 Project slugs are globally unique and exist for readable URLs. Runtime work uses
 stable project IDs. OS binds shared stream capabilities to a stream
 `namespace`; today that namespace is the project ID, so stream paths stay
-project-local, such as `/codemode-sessions/<id>`.
+project-local, such as `/agents/default` or `/integrations/slack`.
 
 ## Common Commands
 
@@ -150,12 +155,11 @@ The script pattern is documented in
   workers (tiny ingress router, the TanStack app, one worker per Durable
   Object class). See [docs/worker-topology.md](./docs/worker-topology.md).
 - `src/config.ts` holds the `AppConfig` runtime config schema.
-- `src/domains` contains domain-local Durable Objects, WorkerEntrypoints, tool
-  providers, and focused README/AGENTS notes.
+- `src/itx` contains the itx handle system, browser hooks, script runner, and
+  capability dispatch.
+- `src/domains` contains domain-local Durable Objects, WorkerEntrypoints,
+  capabilities, and focused README/AGENTS notes.
 - `src/start.ts` installs the auth-worker request middleware.
-- `src/orpc/root.ts` composes the server router.
-- `src/orpc/routers/projects.ts` owns `os.projects` collection APIs and the
-  singular `os.project.*` project-scoped router.
 - `src/db/definitions.sql` is the sqlfu schema source of truth.
 - `src/routes/_app` contains authenticated app routes.
 - `alchemy.run.ts` defines Cloudflare deployment resources.
@@ -168,7 +172,6 @@ The script pattern is documented in
 - [Architecture And Operations](./docs/architecture-and-operations.md)
 - [Preview Agent Browser Smoke](./docs/preview-agent-browser-smoke.md)
 - [Headless Local Debugging](./docs/headless-local-debugging.md)
-- [Codemode Subrequest Depth](./docs/codemode-subrequest-depth.md)
 - [ADR: Replace Clerk With Auth Worker](../../docs/adr/0001-replace-clerk-with-auth-worker.md)
 - [Domain Context](./CONTEXT.md)
 

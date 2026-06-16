@@ -73,12 +73,10 @@ OS no longer imports anything from `@iterate-com/shared/apps/*`:
   `src/domains/streams/project-stream-rpc.ts`, ingress rule lookup to
   `src/ingress/lookup.ts`. `IterateApp` got a `main` option (default
   unchanged for semaphore).
-- **`__internal` oRPC namespace implemented inline** in `src/orpc/root.ts`
-  instead of via `createAppRouterWithInternal`. The endpoints stay because
-  `pnpm cli rpc` discovery (`trpc-cli-procedures`) and the browser's
-  public-config bootstrap depend on them. The contract still comes from
-  `@iterate-com/os-contract`, which legitimately shares the internal contract
-  shape with the CLI.
+- **Historical note:** this phase briefly kept an inline `__internal` oRPC
+  namespace for CLI discovery and browser public-config bootstrap. That surface
+  has since been removed from OS; current operator work uses `pnpm cli itx ...`
+  and `/api/itx`.
 - **Deliberate exception:** `scripts/cli.ts` keeps using the shared CLI
   harness (`@iterate-com/shared/apps/cli`) — it is cross-app tooling, not
   runtime code, and inlining it would be bloat, not simplification.
@@ -156,12 +154,9 @@ Two findings worth keeping:
   sign-in fixes it, and the same procedures succeed over direct RPC with a fresh
   cookie throughout. Cost me a long debugging detour — documented so the next
   person doesn't repeat it.
-- **Live stream display needs WebSocket, which 500'd on the preview host**
-  (`/api/orpc-ws`; `[stream /] subscribe failed`). The conversation completes
-  server-side regardless. The worker's WS-upgrade path (`NitroWebSocketResponse`
-  → `crossws.handleUpgrade` in `worker.ts`) is byte-identical to main, so this
-  is almost certainly preview-infra (WS on preview wildcard hosts), not the
-  refactor — flagged for follow-up confirmation, not claimed fixed.
+- **Live stream display needs WebSocket.** The current browser live path is
+  `/api/itx`; if preview live rendering fails while agent turns still complete
+  server-side, debug the itx WebSocket path and stream subscription state.
 
 - **`Preview / deploy` red was `apps/semaphore`, not `apps/os` — a dropped
   `baseUrl` in the migrated config.** On PR #1411 the deploy job failed at

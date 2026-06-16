@@ -266,7 +266,7 @@ processors are co-hosted on the same DO. The Stream DO's subscription
 handshake (`requestStreamSubscription`) and event delivery are _inbound_ calls
 into that DO, which the closed input gate queues, so the local checkpoints the
 wait polls can never advance: the wait burned its full 5s on every instance
-wake. The test's script does `ctx.agents.create().sendMessage(...)`, whose
+wake. The test's script does `itx.agents.create().sendMessage(...)`, whose
 `initialize` triggered the wake hook; the 5s stall pushed
 script-execution-completed past the test's own 5s `waitFor`.
 

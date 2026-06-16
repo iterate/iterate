@@ -7,7 +7,7 @@ size: medium
 
 Replace the Cloudflare Tunnel + cloudflared setup that `pnpm dev` uses with captun (../captun, npm `captun`): a captun gateway worker deployed once for `*.iterate-dev-<user>.com`, with `pnpm dev` creating a named tunnel (`os`) at runtime in ~200ms instead of waiting ~8.5s for cloudflared.
 
-**Scope: `.com` only.** Project hostnames on `*.iterate-dev-<user>.app` stay on cloudflared for now — they need catch-all tunnel routing (arbitrary project slugs) and are where the heavier WebSocket usage lives. On `.com` the tunnel names are fixed (`os`, `mcp`, …) so no catch-all feature is needed, and the only WebSocket consumer through the tunnel is the dashboard's log-stream route (`apps/os/src/routes/_app/log-stream.tsx` via `createBrowserWebSocketClient`, `apps/os/src/orpc/client.ts:73`) — browser-local, so it can bridge to localhost in dev or temporarily degrade. The iterate CLI/TUI opens no WebSockets; stream events arrive over HTTP streaming, which captun handles.
+**Scope: `.com` only.** Project hostnames on `*.iterate-dev-<user>.app` stay on cloudflared for now — they need catch-all tunnel routing (arbitrary project slugs) and are where the heavier WebSocket usage lives. On `.com` the tunnel names are fixed (`os`, `mcp`, …) so no catch-all feature is needed. Current dashboard live data uses the itx browser connection (`apps/os/src/itx/itx-react.tsx`) over `/api/itx`; if WebSocket passthrough is still missing when this migration lands, dev can bridge that connection to localhost or temporarily degrade it. The iterate CLI/TUI opens no WebSockets; stream events arrive over HTTP streaming, which captun handles.
 
 ## Motivation
 
@@ -20,11 +20,11 @@ Replace the Cloudflare Tunnel + cloudflared setup that `pnpm dev` uses with capt
 - `pnpm dev` → `apps/os` `doppler run -- tsx alchemy.run.ts` → vite on `127.0.0.1:5173`.
 - `packages/shared/src/alchemy/iterate-app.ts:134-179` creates a named Cloudflare Tunnel resource (`dev-tunnel-${stage}`, adopted across sessions) + wildcard CNAME records, then `start-cloudflared.ts` spawns `cloudflared` against `localhost:5173`.
 - Two domains per dev: `os.iterate-dev-<user>.com` (OS base URL) and `*.iterate-dev-<user>.app` (project hostnames). Hostname-based routing in apps/os means the tunnel must preserve the original Host.
-- `force-public-url-vite-plugin.ts` redirects localhost browsing to the tunnel URL, so _all_ dev traffic — page assets, oRPC, `/api/orpc-ws` WebSocket — flows through the tunnel. Vite HMR stays local.
+- `force-public-url-vite-plugin.ts` redirects localhost browsing to the tunnel URL, so _all_ dev traffic — page assets and `/api/itx` — flows through the tunnel. Vite HMR stays local.
 
 ## Feasibility summary
 
-Feasible. HTTP, streaming bodies, and SSE all work through captun today (capnweb merged ReadableStream + Request/Response serialization in cloudflare/capnweb#132/#135). The one real gap is **WebSocket passthrough**: stock capnweb 0.8.0 explicitly cannot serialize WebSockets, and `/api/orpc-ws` + DO stream subscriptions traverse the tunnel. Jonas's fork PR **iterate/capnweb#1** (open, unmerged; upstream interest tracked in cloudflare/capnweb#187; his upstream PRs #188/#189 were self-closed, not rejected) adds exactly this — tunnelling upgrade Responses' `.webSocket` as a capability, validated against the full Autobahn suite. Known caveats: no flow control on tunneled frames, ping/pong not forwarded, base64 framing overhead.
+Feasible. HTTP, streaming bodies, and SSE all work through captun today (capnweb merged ReadableStream + Request/Response serialization in cloudflare/capnweb#132/#135). The remaining gap for full dashboard parity is **WebSocket passthrough**: stock capnweb 0.8.0 explicitly cannot serialize WebSockets, and itx browser connections traverse `/api/itx`. Jonas's fork PR **iterate/capnweb#1** (open, unmerged; upstream interest tracked in cloudflare/capnweb#187; his upstream PRs #188/#189 were self-closed, not rejected) adds exactly this — tunnelling upgrade Responses' `.webSocket` as a capability, validated against the full Autobahn suite. Known caveats: no flow control on tunneled frames, ping/pong not forwarded, base64 framing overhead.
 
 ## Required captun changes
 
@@ -39,18 +39,18 @@ Feasible. HTTP, streaming bodies, and SSE all work through captun today (capnweb
 - [ ] Replace the `.com` Tunnel ingress + `startCloudflared` in `packages/shared/src/alchemy/iterate-app.ts` with `createCaptunTunnel({ name: 'os', fetch })` forwarding to `http://localhost:${vitePort}` preserving the original Host (captun forwards the full public URL — verified `../captun/src/server/worker.ts:156-167`).
 - [ ] Keep cloudflared for `.app` project hostnames (possibly started lazily, only when project work needs it) and behind a flag for `.com` fallback during transition.
 - [ ] Adjust wildcard CNAME provisioning (`ensureDevTunnelWildcardDnsRecord`) — `.com` DNS becomes static, set once at gateway deploy; `.app` keeps the existing flow.
-- [ ] Decide what log-stream does in dev until WS passthrough lands: connect `/api/orpc-ws` direct to `localhost:5173` when on a dev tunnel host, or show a "not available through captun yet" notice.
+- [ ] Decide what the itx browser connection does in dev until WS passthrough lands: connect `/api/itx` direct to `localhost:5173` when on a dev tunnel host, or show a "not available through captun yet" notice.
 
 ## Phases
 
-- [ ] Phase 0 — spike (~half day): standalone captun worker on a scratch wildcard domain, hand-wired fetch-forwarder to a running `pnpm dev` vite. Measure full page load vs cloudflared (all assets cross capnweb RPC as base64 JSON — captun's README flags large streams as slower; need to confirm vite dev page loads are acceptable). Confirm SSE/MCP works; confirm log-stream is the only WS casualty.
+- [ ] Phase 0 — spike (~half day): standalone captun worker on a scratch wildcard domain, hand-wired fetch-forwarder to a running `pnpm dev` vite. Measure full page load vs cloudflared (all assets cross capnweb RPC as base64 JSON — captun's README flags large streams as slower; need to confirm vite dev page loads are acceptable). Confirm SSE/MCP works; confirm the itx browser connection is the only WS casualty.
 - [ ] Phase 1 — captun: reconnect loop, release via pkg.pr.new.
 - [ ] Phase 2 — iterate: gateway deploy + swap `startCloudflared` for captun client on `.com`, flag-guarded; cloudflared stays for `.app`.
 - [ ] Phase 3 — WebSockets: adopt iterate/capnweb#1 in captun (or push it upstream via cloudflare/capnweb#187), add upgrade passthrough; unlocks log-stream parity and the future `.app` migration (which also needs catch-all tunnel names).
 
 ## Open questions (grill me)
 
-1. Log-stream in dev until WS lands: localhost bridge or degrade with a notice?
+1. itx browser connection in dev until WS lands: localhost bridge or degrade with a notice?
 2. Should the gateway deploy live in alchemy (adopted resource) or a one-time setup script outside the alchemy graph?
 3. Is the base64/no-flow-control throughput profile acceptable for serving the whole vite dev experience, or do we only tunnel "externally-reachable" flows and browse on localhost?
 4. When `.app` follows later: catch-all tunnel mode in captun + WS passthrough are the prerequisites — separate task when we get there.

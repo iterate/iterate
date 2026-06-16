@@ -47,16 +47,16 @@ Leave `os.iterate-preview-N.com/*` on `os-preview-N` (Alchemy / `APP_CONFIG_BASE
 Add `apps/os/e2e/vitest/iterate-custom-apex-hostname.e2e.test.ts` (name flexible) run via existing preview e2e lane:
 
 ```bash
-OS_BASE_URL=https://os.iterate-preview-2.com pnpm --dir apps/os test:e2e
+OS_BASE_URL=https://os.iterate-preview-2.com pnpm --dir apps/os e2e
 ```
 
 ### Env
 
-| Var                       | Purpose                                                                                         |
-| ------------------------- | ----------------------------------------------------------------------------------------------- |
-| `OS_BASE_URL`             | Preview dashboard URL (`https://os.iterate-preview-2.com`)                                      |
-| `OS_E2E_CUSTOM_APEX_HOST` | Preview `.com` apex, e.g. `iterate-preview-2.com`                                               |
-| Admin secret              | Same as `admin-project.e2e.test.ts` (`OS_E2E_ADMIN_API_SECRET` / `APP_CONFIG_ADMIN_API_SECRET`) |
+| Var                       | Purpose                                                                                             |
+| ------------------------- | --------------------------------------------------------------------------------------------------- |
+| `OS_BASE_URL`             | Preview dashboard URL (`https://os.iterate-preview-2.com`)                                          |
+| `OS_E2E_CUSTOM_APEX_HOST` | Preview `.com` apex, e.g. `iterate-preview-2.com`                                                   |
+| Admin secret              | Same as `admin-project.itx.e2e.test.ts` (`OS_E2E_ADMIN_API_SECRET` / `APP_CONFIG_ADMIN_API_SECRET`) |
 
 Derive `OS_E2E_CUSTOM_APEX_HOST` from `OS_BASE_URL` when possible (`os.iterate-preview-2.com` → `iterate-preview-2.com`) so one env var is enough.
 
@@ -74,7 +74,7 @@ Use `createTestProject` from `apps/os/e2e/test-support/create-test-project.ts`:
 2. **Dashboard unchanged** — `GET https://os.iterate-preview-N.com/` still OS (login redirect or known dashboard marker; not project worker body).
 3. **Single-label app host** — `GET https://app-smoke.{apex}/` hits same project (optional if config worker exposes a stable test path).
 
-Skip suite when `OS_BASE_URL` or admin secret missing (same pattern as `admin-project.e2e.test.ts`).
+Skip suite when `OS_BASE_URL` or admin secret missing (same pattern as `admin-project.itx.e2e.test.ts`).
 
 ## Non-goals
 

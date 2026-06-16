@@ -1,6 +1,6 @@
 # Slack Domain
 
-Slack owns OS's Slack Web API codemode tool provider and the project-local
+Slack owns OS's Slack Web API itx capability and the project-local
 Slack event bridge.
 
 The incoming flow is:
@@ -12,7 +12,7 @@ The incoming flow is:
   routing state and forwards raw webhook events to the routed stream.
 - Routed Slack streams run both `SlackAgentDurableObject` and
   `AgentDurableObject`. `slack-agent` owns Slack route context, bang commands,
-  Slack status/reaction side effects, and `ctx.slack.agent.threadInfo()`.
+  Slack status/reaction side effects, and `itx.slack.agent.threadInfo()`.
 - The platform `ProjectProcessor` owns Slack-specific agent setup for
   `/agents/slack/...` streams. The Slack router only forwards route and webhook
   facts to those streams; hosted processors replay from their checkpoint and run

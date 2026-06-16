@@ -18,10 +18,10 @@ a _deployed_ preview against _production_ auth.
 ## Bring up the local stack
 
 ```bash
-pnpm dev   # monorepo root: starts apps/auth (localhost:7101) AND apps/os (localhost)
+pnpm dev-all   # monorepo root: starts apps/auth (localhost:7101) AND apps/os (localhost)
 ```
 
-`pnpm dev` exports `ITERATE_OAUTH_ISSUER=http://localhost:7101/api/auth` and
+`pnpm dev-all` exports `ITERATE_OAUTH_ISSUER=http://localhost:7101/api/auth` and
 points OS at it. OS writes its chosen base URL to
 `apps/os/.alchemy/dev-server.json`; drive the browser against that localhost
 URL.
@@ -117,26 +117,15 @@ EOF
 - **Org**: the post-login `/project-access` page has a "Create organization"
   form; fill it and submit. Or call the auth contract
   (`internal.organization.createForUser`) with a service token.
-- **Project**: the OS UI route is `/new-project`, but you can create directly
-  against the OS oRPC REST surface from the authenticated page:
-
-```bash
-cat <<'EOF' | ab eval --stdin
-(async () => {
-  const res = await fetch("/api/projects", {
-    method: "POST", headers: { "content-type": "application/json" }, credentials: "include",
-    body: JSON.stringify({ slug: "dbgproj" }),
-  });
-  return { status: res.status, body: await res.text() };
-})()
-EOF
-```
+- **Project**: use the OS UI route `/new-project`, fill the slug form, and
+  submit. The dashboard create flow runs through the current itx-backed server
+  function and refreshes the auth session before navigating to the project.
 
 Project claims only land in the JWT on token refresh (or a fresh sign-in), so
 the OS create-project UI forces an auth session refresh after creation before it
-navigates to the project. If you create directly through `fetch`, call
-`/api/iterate-auth/session?refresh=force` afterward before testing cold reloads
-or WebSocket-backed project routes.
+navigates to the project. If you bypass the UI in a one-off debugging script,
+call `/api/iterate-auth/session?refresh=force` afterward before testing cold
+reloads or WebSocket-backed project routes.
 
 ## Read local server state directly
 
